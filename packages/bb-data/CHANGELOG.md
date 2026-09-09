@@ -1,5 +1,213 @@
 # @aws-blocks/bb-data
 
+## 0.2.7
+
+### Patch Changes
+
+- ed158cf: fix(bb-data): apply migrations to a scale-to-zero Aurora cluster instead of failing the deploy
+  
+  A `Database` configured with `minCapacity: 0` auto-pauses after ~5 minutes idle.
+  The first Data API call of a deploy wakes the cluster and fails with
+  `DatabaseResumingException` while it resumes, which made the migration custom
+  resource fail and roll the stack back. Any deploy made more than ~5 minutes
+  after the last database activity hit this — it was deterministic, not a race.
+  
+  The migration Lambda already retried with exponential backoff (1s → 30s, 8
+  attempts) while Aurora was coming up, but two things kept the resume error out
+  of that path:
+  
+  - `DataApiEngine` classified it as `QueryFailed`. Errors carrying no SQLState
+    are classified by SDK exception name, and `DatabaseResumingException` was not
+    in that list. It now maps to `ConnectionFailed`, alongside
+    `ServiceUnavailableException` and `InternalServerErrorException`. Application
+    code that queries a paused cluster sees the same, more accurate name — which
+    is transient and safe to retry, unlike `QueryFailed`.
+  - The Lambda's retry predicate only matched raw SDK error names, which the
+    engine has already rewritten by the time the error reaches it. It now retries
+    on `ConnectionFailed`, so a transient connection failure during a deploy is
+    retried rather than failing the stack. The raw SDK names are still matched for
+    errors raised outside the engine, and the retry log line now names the error.
+  
+  Backoff limits are unchanged: ~2 minutes total, against a resume that typically
+  completes in well under a minute.
+- c45eb92: Extend stack-wide `BlocksDefaults` (introduced in the Infrastructure Options work) with three additive fields, and adopt them across the Blocks-managed infrastructure. Each field is read independently via `option ?? scope.defaults.field` — a per-block option always wins, and no field is derived from another.
+  
+  `@aws-blocks/core/cdk` now adds to `BlocksDefaults` (and both `BlocksPresets`):
+  
+  - `logRetention: RetentionDays` — how long Blocks-managed CloudWatch log groups keep events. Preset sandbox `ONE_WEEK`, production `ONE_YEAR`.
+  - `throttling: { rateLimit, burstLimit }` — request-rate limits applied to every Blocks API Gateway stage. Preset sandbox `200 / 400`, production `1000 / 2000`.
+  - `accessLogging: boolean` — structured JSON access logs on every Blocks API Gateway stage. **Off by default in both presets** (opt-in), because enabling it mutates the account/region-level API Gateway CloudWatch role singleton.
+  
+  Also newly exported from `@aws-blocks/core/cdk`: the `BlocksThrottling` type and `ensureApiGatewayAccount()` (provisions the account-level API Gateway CloudWatch Logs role once per stack). `Scope` gains a `handlerLogGroup` getter for the shared handler log group.
+  
+  **Log retention** — Blocks-managed log groups now follow `defaults.logRetention` instead of AWS's infinite default: the shared handler Lambda (now owned by `BlocksStack`/`BlocksBackend` as `scope.handlerLogGroup`), the `bb-distributed-table` GSI-manager Lambdas, the `bb-distributed-data` DSQL migration Lambda, the `bb-data` Aurora migration Lambda, and the `bb-app-setting` secret-init Lambda. `bb-logger` reconfigures the shared handler group's retention — **only when an explicit per-Logger `retention` is set** (a bare `Logger` no longer writes it back, so it can't clobber another Logger's value) — rather than creating its own `/aws/lambda/<fn>` group. (Note: the framework `custom-resources.Provider` Lambdas these BBs wrap still use AWS's default retention — the L2 `Provider` exposes no log-group/retention override.)
+  
+  **Throttling** — applied to the core REST API stage and the `bb-realtime` WebSocket stage. On a WebSocket stage the throttle unit is messages/second across the connection.
+  
+  **Access logging** — when enabled, each stage writes structured JSON access logs to a dedicated CloudWatch log group (retention = `defaults.logRetention`, removal policy = `defaults.removalPolicy` so production **RETAIN**s the audit trail on teardown). The account-level API Gateway CloudWatch Logs role is provisioned once per stack and shared across stages.
+  
+  **⚠️ Behavior changes on upgrade:**
+  - **Throttling now caps the core REST API and WebSocket stages.** Before this change these stages had no stage-level throttle (they ran at the API Gateway account default, ~10k rps). After upgrade, sandbox is capped at 200 rps / 400 burst and production at 1000 rps / 2000 burst. Apps serving above the production ceiling will see `429`s — raise it with a per-stack `throttling` override (`defaults: { ...BlocksPresets.production, throttling: { rateLimit, burstLimit } }`).
+  - **The shared handler Lambda log group changes.** The handler previously logged to Lambda's auto-created `/aws/lambda/<fn>` group (infinite retention); it now logs to a framework-owned group with the default retention. On upgrade the old auto group is left orphaned in CloudWatch (unmanaged, still infinite) — delete it manually if you want its history/cost gone. Likewise a `bb-logger`-created retention group from a prior version is replaced.
+  - **Access logging** is **opt-in (off in both presets)**. When enabled it requires the account-level API Gateway CloudWatch Logs role — an account/region-level singleton, so enabling it is safe for **one Blocks stack per region** (see `ensureApiGatewayAccount()` for the multi-stack teardown caveat). It defaults off (rather than on for production) so an upgrade never mutates that account-wide singleton without an explicit opt-in.
+  - **`BlocksDefaults` gains three required fields** (`logRetention`, `throttling`, `accessLogging`). Apps that spread a `BlocksPresets` preset (the documented path) are unaffected; code that hand-rolls a literal `BlocksDefaults` object will need to add the new fields to compile.
+  
+  `bb-dashboard` now points its log widgets at the framework-owned handler log
+  group (`scope.handlerLogGroup.logGroupName`) instead of reconstructing
+  `/aws/lambda/<fn>` — the handler now writes to a dedicated group with a
+  CDK-generated name, so the old convention would leave the "Recent Errors" /
+  "Log Volume" widgets querying an empty group.
+  
+  Hosting adoption of these defaults (SSR REST API + compute log groups) ships in a separate change.
+- Updated dependencies [df667c5]
+- Updated dependencies [df667c5]
+- Updated dependencies [64ddd74]
+- Updated dependencies [df667c5]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [4a830a6]
+- Updated dependencies [f2f186c]
+- Updated dependencies [46b7c89]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+  - @aws-blocks/bb-app-setting@0.2.1
+
+## 0.2.6
+
+### Patch Changes
+
+- 309a236: refactor(bb): attach IAM grants to the shared execution role
+  
+  Data and auth blocks now grant permissions to the shared Blocks execution role
+  (`this.executionRole`) instead of the handler function directly. Grants land on
+  the same role the handler assumes, so the effective runtime permissions are
+  identical — this decouples IAM wiring from the concrete Lambda function ahead of
+  the multi-compute model.
+  
+  For `bb-distributed-data`, the DSQL endpoint and region now flow through the
+  config registry (loaded into `process.env` at cold start, like every other
+  block) rather than being set as direct handler environment variables, and the
+  migration Lambda maps the shared execution role's ARN.
+- Updated dependencies [1ff9d03]
+- Updated dependencies [5798492]
+- Updated dependencies [f00adb0]
+- Updated dependencies [f00adb0]
+- Updated dependencies [309a236]
+- Updated dependencies [08ab129]
+- Updated dependencies [9d4ccea]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [0ac3879]
+- Updated dependencies [e4dac4a]
+  - @aws-blocks/bb-app-setting@0.2.0
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/bb-logger@0.1.5
+
+## 0.2.5
+
+### Patch Changes
+
+- 7b4c62d: Add infrastructure `defaults` chosen once at the app entry point, replacing the per-block `sandboxMode` logic and the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin dance for removal-policy and deletion-protection.
+  
+  `@aws-blocks/core/cdk` now exports `BlocksDefaults` and the `BlocksPresets.sandbox` / `BlocksPresets.production` starting points. `BlocksStack.create` / `BlocksBackend.create` take a required `defaults` prop; start from a preset and override individual fields with a spread. `defaults` is anchored on the owning `BlocksStack`/`BlocksBackend` (resolved by walking up the construct tree, like `handler`/`executionRole`), so multiple backends in one stack each keep their own posture. Building Blocks read the resolved values via `scope.defaults`, and a per-block option always wins (`option ?? scope.defaults.field`).
+  
+  Adopted across the stateful Building Blocks: `bb-kv-store`, `bb-data`, `bb-distributed-data`, `bb-distributed-table`, and `bb-knowledge-base` now take their removal policy and deletion protection from `defaults` instead of reading the `sandboxMode` context themselves. (`bb-distributed-table` reads `defaults` directly for now; a richer per-block `protection` override lands with #282.)
+  
+  The `create-blocks-app` scaffolding templates are updated to pass `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production` (replacing the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin), so newly-generated apps satisfy the required prop.
+  
+  **Breaking:** `BlocksStack.create` / `BlocksBackend.create` now require a `defaults` field — pass `BlocksPresets.sandbox` or `BlocksPresets.production` (typically `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`). The previously-shipped experimental `hardening` prop and its `resolve*` helpers are removed; log-retention, API throttling, access-logging and point-in-time-recovery move into `defaults` in follow-up, per-feature changes.
+- 6df9e2d: fix(data): declare the `data-common` TypeScript project reference in `bb-data` and `bb-distributed-data`
+  
+  Both packages depend on `@aws-blocks/data-common` in `package.json`, but neither
+  listed it in its `tsconfig.json` `references`. Because `src/` ships in these
+  tarballs, `data-common`'s declarations have to already exist for the compiler to
+  resolve `@aws-blocks/data-common` — and nothing in the project-reference graph
+  guaranteed that.
+  
+  Correct build order was therefore supplied by the position of `data-common` in
+  the root `workspaces` array (index 8, ahead of `bb-data` at 10 and
+  `bb-distributed-data` at 11) rather than by the dependency graph. Any build that
+  does not follow that array order fails with:
+  
+  ```
+  packages/bb-distributed-data/src/validation.ts(12,54): error TS2307:
+    Cannot find module '@aws-blocks/data-common' or its corresponding type declarations.
+  ```
+  
+  That was already reachable from the repo's own scripts: the former
+  `npm run build:packages` resolved its `-w` targets in a different order and hit
+  exactly this, which is why `scripts/agent-bench/steps/1-init-bench-app.sh`
+  carried the comment "`build:packages` runs alphabetically and trips over
+  bb-data". Adding the two missing references fixes the root cause, so build order
+  now comes from the project-reference graph rather than from the ordering of the
+  root `workspaces` array.
+  
+  No API, runtime, or packaged-output change — `tsconfig.json` is not in either
+  package's `files`, so the published tarballs are unchanged.
+- 3614a09: Bundle the migration lambdas through `blocksNodejsBundling()` so `import.meta.url` used anywhere in the bundled migration handler is shimmed to its CommonJS equivalent instead of throwing at Lambda load. Consistent with the backend handler; no behavior change for existing migration lambdas. Also documents in the README that `migrationsPath` is simplest as a path relative to your project root, and that `import.meta.url` inside the bundle resolves to the bundled output (not your source tree).
+- e4b1498: Retry PGlite's WASM initialization on the intermittent `_pg_initdb` `unreachable` trap.
+  
+  PGlite defers `initdb` to the first query, which can trap with `unreachable` under memory pressure (notably on CI when several PGlite-backed dev servers boot concurrently) and kill the dev server mid-`runMigrations`. `PGliteEngine` (bb-data) and `DsqlMockEngine` (bb-distributed-data) now force initialization through a shared bounded retry (`initializePgliteWithRetry` in data-common) that closes the aborted WASM instance and boots a fresh one, so a transient init trap recovers instead of crashing the process.
+- Updated dependencies [7b4c62d]
+- Updated dependencies [5262062]
+- Updated dependencies [3614a09]
+- Updated dependencies [5262062]
+- Updated dependencies [bfb9a63]
+- Updated dependencies [e4b1498]
+- Updated dependencies [5071079]
+- Updated dependencies [8966cfb]
+- Updated dependencies [b11a75b]
+  - @aws-blocks/core@0.2.0
+  - @aws-blocks/data-common@0.1.4
+  - @aws-blocks/bb-app-setting@0.1.4
+  - @aws-blocks/bb-logger@0.1.4
+
+## 0.2.4
+
+### Patch Changes
+
+- 49b3bd9: Make the unconfigured-connection error in the Database runtime intent-aware. When neither an Aurora cluster is provisioned nor an external `connectionString` connection is supplied, the error now names both paths — the provisioned Aurora database (`BLOCKS_*_CLUSTER_ARN` / `SECRET_ARN`) and `Database.fromExisting({ connectionString })` for external databases (Supabase/Neon/etc.) — instead of surfacing an Aurora-only message.
+- a584007: fix(data-common): defer getEngine() in createKyselyAdapter so adapters are safe at module scope
+
+  `createKyselyAdapter()` eagerly called `db.getEngine()` at construction. Backend
+  `index.ts` is also loaded during `cdk synth`, where the infra-only (cdk) builds of
+  `DistributedDatabase` / `Database` expose no engine — so creating the adapter at
+  module scope crashed synth with `db.getEngine is not a function`.
+
+  - **data-common** — the adapter now passes a thunk (`() => db.getEngine()`) into
+    the Kysely dialect and resolves the engine lazily on the first query (still
+    memoized per connection, preserving the one-engine-per-transaction guarantee
+    the handle-based transaction API relies on). Adapter creation is now
+    side-effect free and safe at module scope. Public API and runtime behavior are
+    unchanged.
+  - **bb-distributed-data / bb-data** — the cdk builds gain a `getEngine()` that
+    throws a clear, actionable message if a query is ever reached during synth,
+    replacing the cryptic "is not a function".
+
+- Updated dependencies [b48aaec]
+- Updated dependencies [ac0966a]
+- Updated dependencies [9de27dd]
+- Updated dependencies [8e96d87]
+- Updated dependencies [58f77dd]
+- Updated dependencies [a584007]
+- Updated dependencies [2d3dfdc]
+- Updated dependencies [3c56267]
+  - @aws-blocks/core@0.1.17
+  - @aws-blocks/data-common@0.1.3
+  - @aws-blocks/bb-logger@0.1.3
+
+## 0.2.3
+
+### Patch Changes
+
+- 09b94b8: Bump the Database block's Aurora PostgreSQL engine version from the retired `16.4` to `16.13`, and make the engine version configurable.
+
+  AWS retired Aurora PostgreSQL `16.4` in us-east-1, after which `CreateDBCluster` failed with `Cannot find version 16.4 for aurora-postgresql`, blocking every deployment of a `Database` block. The default now points at the latest available `16.x` minor (`16.13`) for the longest deprecation runway.
+
+  A new optional `postgresVersion` option on `DatabaseOptions` lets callers override the engine version (e.g. `postgresVersion: '16.13'`), so the next AWS retirement is a configuration change rather than a framework code fix. Overrides are validated at synth time (must be `MAJOR.MINOR`, e.g. `16.13`), so a malformed value fails fast with a clear error instead of an opaque `CreateDBCluster` failure.
+
+  The `@aws-blocks/blocks` umbrella package receives a `patch` because its published `docs/` folder is assembled from sibling block READMEs at build time (`scripts/sync-block-docs.mjs`), so this `bb-data` README update changes `@aws-blocks/blocks` packaged content.
+
 ## 0.2.2
 
 ### Patch Changes

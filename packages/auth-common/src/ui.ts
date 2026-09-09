@@ -280,11 +280,12 @@ export function onAuthChange(
 /**
  * Container that renders content only when the user is signed in.
  * Automatically re-renders when auth state changes (same window + cross-tab).
- * Shows nothing when signed out.
+ * Shows the optional `fallback` when signed out, or nothing if no fallback is provided.
  *
  * @param api - The state machine API from `auth.createApi()`
  * @param render - Called with the authenticated user. Return the content to display.
- * @returns An HTMLElement that shows content when signed in, empty when signed out.
+ * @param fallback - Optional. A DOM node to display when the user is NOT signed in.
+ * @returns An HTMLElement that shows content when signed in, the fallback (or nothing) when signed out.
  *
  * @example
  * ```typescript
@@ -296,17 +297,34 @@ export function onAuthChange(
  *   })
  * );
  * ```
+ *
+ * @example
+ * ```typescript
+ * // With a fallback for unauthenticated users
+ * const loginPrompt = document.createElement('p');
+ * loginPrompt.textContent = 'Please sign in to continue.';
+ *
+ * document.body.appendChild(
+ *   AuthenticatedContent(authApi, (user) => {
+ *     const el = document.createElement('div');
+ *     el.textContent = `Welcome, ${user.username}`;
+ *     return el;
+ *   }, loginPrompt)
+ * );
+ * ```
  */
 export function AuthenticatedContent(
 	api: AuthStateApi,
 	render: (user: AuthUser) => Node,
+	fallback?: Node,
 ): HTMLElement {
 	const container = document.createElement('div');
+	container.setAttribute('data-testid', 'authenticated-content');
 	onAuthChange(api, (user) => {
 		if (user) {
 			container.replaceChildren(render(user));
 		} else {
-			container.replaceChildren();
+			container.replaceChildren(...(fallback ? [fallback] : []));
 		}
 	});
 	return container;
@@ -439,6 +457,13 @@ export interface AuthenticatorOptions {
  * - Broadcasts auth changes via `broadcastAuthChange()` so other components
  *   (`AuthenticatedContent`, `onAuthChange` subscribers) react automatically
  * - Listens for auth changes from other tabs and re-renders
+ * - Renders stable `data-testid` hooks on every interactive element
+ *   (`authenticator`, `authenticator-action-<action>`, `authenticator-<field>`,
+ *   `authenticator-submit`, `authenticator-error`, `authenticator-signed-in`)
+ *   for e2e suites. Federated action names keep their provider suffix, so
+ *   `signIn:google` gives `authenticator-action-signIn:google`. Presentational
+ *   markup (hint text, layout wrappers) carries no hook. The full contract is
+ *   in CUSTOMIZING-AUTH-UI.md; treat the names as public API.
  *
  * @param api - The state machine API from `auth.createApi()`
  * @param options - Optional customization. See {@link AuthenticatorOptions}.
@@ -471,6 +496,7 @@ export interface AuthenticatorOptions {
  */
 export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions): HTMLElement {
 	const container = document.createElement('div');
+	container.setAttribute('data-testid', 'authenticator');
 	container.style.cssText = 'max-width: 400px; font-family: system-ui, sans-serif;';
 
 	const opts: AuthenticatorOptions = options ?? {};
@@ -564,6 +590,7 @@ function renderState(
 
 	if (state.state === 'signedIn') {
 		const heading = document.createElement('h3');
+		heading.setAttribute('data-testid', 'authenticator-signed-in');
 		heading.style.cssText = 'margin-top: 0;';
 		heading.textContent = `Signed in as: ${state.user!.username}`;
 		div.appendChild(heading);
@@ -579,6 +606,7 @@ function renderState(
 			: undefined;
 		const stateHeading = options.headings?.[state.state];
 		const heading = document.createElement('h3');
+		heading.setAttribute('data-testid', 'authenticator-heading');
 		heading.style.cssText = 'margin-top: 0;';
 		heading.textContent = actionHeading ?? stateHeading ?? 'Authentication';
 		div.appendChild(heading);
@@ -586,6 +614,7 @@ function renderState(
 
 	if (state.error) {
 		const err = document.createElement('div');
+		err.setAttribute('data-testid', 'authenticator-error');
 		err.style.cssText = 'color: red; font-size: 14px; margin-bottom: 12px;';
 		err.textContent = state.error;
 		div.appendChild(err);
@@ -637,6 +666,7 @@ function renderInternalAction(
 	override?: AuthActionOverride,
 ): Node {
 	const wrapper = document.createElement('div');
+	wrapper.setAttribute('data-testid', `authenticator-action-${action.name}`);
 	wrapper.style.cssText = 'margin-bottom: 16px;';
 
 	const inputs: Record<string, HTMLInputElement> = {};
@@ -691,6 +721,7 @@ function renderInternalAction(
 			hidden.type = 'hidden';
 			hidden.name = field.name;
 			hidden.value = field.defaultValue ?? '';
+			hidden.setAttribute('data-testid', `authenticator-${field.name}`);
 			inputs[field.name] = hidden;
 			wrapper.appendChild(hidden);
 			continue;
@@ -705,6 +736,7 @@ function renderInternalAction(
 				hidden.type = 'hidden';
 				hidden.name = field.name;
 				hidden.value = field.defaultValue;
+				hidden.setAttribute('data-testid', `authenticator-${field.name}`);
 				inputs[field.name] = hidden;
 				wrapper.appendChild(hidden);
 			}
@@ -720,6 +752,7 @@ function renderInternalAction(
 		input.name = field.name;
 		input.placeholder = placeholder;
 		input.type = inputType;
+		input.setAttribute('data-testid', `authenticator-${field.name}`);
 		// `autocomplete` is typed as `AutoFill` (a literal-union) in lib.dom
 		// but the override accepts an arbitrary string for forward-compat
 		// with future hint values. Cast at the assignment boundary.
@@ -738,6 +771,7 @@ function renderInternalAction(
 	}
 
 	const btn = document.createElement('button');
+	btn.setAttribute('data-testid', 'authenticator-submit');
 	btn.textContent = override?.submitLabel ?? action.label;
 	btn.style.cssText = 'padding: 8px 16px; cursor: pointer; margin-right: 8px;';
 
@@ -956,6 +990,7 @@ function b64urlToBuf(s: string): ArrayBuffer {
 
 function renderExternalAction(action: AuthAction): Node {
 	const form = document.createElement('form');
+	form.setAttribute('data-testid', `authenticator-action-${action.name}`);
 	form.method = action.method ?? 'GET';
 	form.action = action.url!;
 	form.style.cssText = 'margin-bottom: 8px;';
@@ -965,10 +1000,12 @@ function renderExternalAction(action: AuthAction): Node {
 		input.type = 'hidden';
 		input.name = field.name;
 		input.value = field.defaultValue ?? '';
+		input.setAttribute('data-testid', `authenticator-${field.name}`);
 		form.appendChild(input);
 	}
 
 	const btn = document.createElement('button');
+	btn.setAttribute('data-testid', 'authenticator-submit');
 	btn.type = 'submit';
 	btn.textContent = action.label;
 	btn.style.cssText = 'padding: 8px 16px; cursor: pointer; width: 100%;';
@@ -1002,6 +1039,7 @@ function renderExternalAction(action: AuthAction): Node {
  */
 export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 	const container = document.createElement('div');
+	container.setAttribute('data-testid', 'account-menu');
 
 	function render(user: AuthUser | null) {
 		const bar = document.createElement('div');
@@ -1009,10 +1047,12 @@ export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 
 		if (user) {
 			const username = document.createElement('span');
+			username.setAttribute('data-testid', 'account-menu-username');
 			username.textContent = `👤 ${user.username}`;
 			username.style.cssText = 'font-size: 14px;';
 
 			const signOutBtn = document.createElement('button');
+			signOutBtn.setAttribute('data-testid', 'account-menu-signout');
 			signOutBtn.textContent = 'Sign Out';
 			signOutBtn.style.cssText = 'padding: 8px 16px; cursor: pointer;';
 			signOutBtn.addEventListener('click', async () => {
@@ -1025,17 +1065,20 @@ export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 			bar.appendChild(signOutBtn);
 		} else {
 			const signInBtn = document.createElement('button');
+			signInBtn.setAttribute('data-testid', 'account-menu-signin');
 			signInBtn.textContent = 'Sign In';
 			signInBtn.style.cssText = 'padding: 8px 16px; cursor: pointer;';
 
 			signInBtn.addEventListener('click', () => {
 				const modal = document.createElement('div');
+				modal.setAttribute('data-testid', 'account-menu-modal');
 				modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;';
 
 				const content = document.createElement('div');
 				content.style.cssText = 'background: white; border-radius: 8px; padding: 20px; max-width: 400px; position: relative;';
 
 				const closeBtn = document.createElement('button');
+				closeBtn.setAttribute('data-testid', 'account-menu-modal-close');
 				closeBtn.textContent = '✕';
 				closeBtn.style.cssText = 'position: absolute; top: 8px; right: 8px; border: none; background: none; font-size: 20px; cursor: pointer; padding: 0; width: 24px; height: 24px;';
 				closeBtn.addEventListener('click', () => modal.remove());

@@ -15,6 +15,7 @@ import { transactionWithRetry } from './transaction.js';
 import type { DistributedDatabaseOptions, TransactionOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 export class DistributedDatabase extends Scope {
   private base: DatabaseBase;
@@ -25,7 +26,7 @@ export class DistributedDatabase extends Scope {
   protected log: ChildLogger;
 
   constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
-    super(id, { parent: scope });
+    super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
     this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
     this.mockEngine = new DsqlMockEngine(`.bb-data/${this.fullId}`);
     this.base = new DatabaseBase(this.mockEngine);
@@ -50,6 +51,9 @@ export class DistributedDatabase extends Scope {
    *
    * DSQL uses Optimistic Concurrency Control. Commit may fail with
    * SerializationFailureException if another transaction modified the same rows.
+   * That conflict is an `ApiError` with status 409 (Conflict), flagged retriable,
+   * so it serializes to JSON-RPC code 409 (not 500); `isBlocksError(e,
+   * DistributedDatabaseErrors.SerializationFailure)` still matches by name.
    */
   async transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
     await this.ready();

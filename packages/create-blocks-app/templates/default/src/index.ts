@@ -5,7 +5,7 @@
  * Imports the typed backend API via `aws-blocks` (auto-generated proxy).
  */
 import { api, authApi } from 'aws-blocks';
-import { AccountMenuBar, AuthenticatedContent, onAuthChange } from '@aws-blocks/blocks/ui';
+import { AccountMenuBar, AuthenticatedContent } from '@aws-blocks/blocks/ui';
 import { html, render } from 'lit-html';
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
@@ -13,11 +13,10 @@ import { html, render } from 'lit-html';
 const menuBarEl = document.getElementById('menu-bar')!;
 menuBarEl.appendChild(AccountMenuBar(authApi));
 
-onAuthChange(authApi, user => {
-  document.getElementById('signInMessage')!.style.display = user == null ? '' : 'none';
-});
+// ─── App (shown when authenticated, fallback when not) ──────────────────────
+const signInMessage = document.createElement('p');
+signInMessage.textContent = 'Sign in to get started.';
 
-// ─── App (shown when authenticated) ─────────────────────────────────────────
 document.getElementById('app')!.appendChild(
   AuthenticatedContent(authApi, (user) => {
     const container = document.createElement('div');
@@ -109,5 +108,5 @@ document.getElementById('app')!.appendChild(
 
     load();
     return container;
-  })
+  }, signInMessage)
 );

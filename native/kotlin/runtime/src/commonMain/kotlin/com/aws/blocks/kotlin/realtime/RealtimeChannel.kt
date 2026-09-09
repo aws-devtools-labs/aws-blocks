@@ -60,7 +60,9 @@ class RealtimeChannel<T>(
                         if (type != "message") return@mapNotNull null
                         val msgChannel = obj["channel"]?.let { (it as? JsonPrimitive)?.content }
                         if (msgChannel != channel) return@mapNotNull null
-                        val payload = obj["payload"] ?: return@mapNotNull null
+                        // AWS API Gateway emits the body under `data`; the mock/dev
+                        // server uses `payload`. Accept both.
+                        val payload = obj["data"] ?: obj["payload"] ?: return@mapNotNull null
                         deserializer(payload)
                     }.collect { emit(it) }
                 } finally {

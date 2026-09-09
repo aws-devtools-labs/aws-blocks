@@ -11,7 +11,10 @@ void main() async {
   group('Realtime: get channel descriptor');
   final channel = await blocks.api.realtimeGetChannel();
   check(channel.channel.isNotEmpty, 'channel name: ${channel.channel}');
-  check(channel.wsUrl.startsWith('ws'), 'wsUrl starts with ws: ${channel.wsUrl}');
+  check(
+    channel.wsUrl.startsWith('ws'),
+    'wsUrl starts with ws: ${channel.wsUrl}',
+  );
   check(channel.token.isNotEmpty, 'token is not empty');
 
   group('Realtime: publish cursor');
@@ -23,7 +26,7 @@ void main() async {
   group('Realtime: subscribe and receive');
   final ch = await blocks.api.realtimeGetChannel(channel: 'dart-test');
   final stream = ch.subscribe();
-  final completer = Completer<dynamic>();
+  final completer = Completer<Cursor>();
 
   final sub = stream.listen((msg) {
     if (!completer.isCompleted) completer.complete(msg);
@@ -38,13 +41,10 @@ void main() async {
 
   try {
     final msg = await completer.future.timeout(Duration(seconds: 5));
-    check(msg != null, 'received message via WebSocket');
-    if (msg is Map<String, dynamic>) {
-      check(msg['userId'] == 'dart-sub-test', 'message userId matches');
-      check(msg['x'] == 42, 'message x matches');
-    } else {
-      check(true, 'received message (type: ${msg.runtimeType})');
-    }
+    check(msg.userId == 'dart-sub-test', 'message userId matches');
+    check(msg.x == 42, 'message x matches');
+    check(msg.y == 99, 'message y matches');
+    check(msg.color == '#00ff00', 'message color matches');
   } on TimeoutException {
     check(false, 'WebSocket message received within 5s (timed out)');
   } finally {

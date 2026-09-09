@@ -7,6 +7,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import type { TracerOptions, Segment as ISegment, AnnotationValue } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 export type { TracerOptions, Segment, AnnotationValue } from './types.js';
 
@@ -50,7 +51,7 @@ export class Tracer extends Scope {
 	protected log: ChildLogger;
 
 	constructor(scope: ScopeParent, id: string, options?: TracerOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.enabled = options?.enabled !== false;
 	}

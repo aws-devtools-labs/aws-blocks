@@ -47,7 +47,7 @@ bb-distributed-data (this package)
 - PGlite wrapped with a validation layer
 - `validateStatement()` rejects unsupported SQL before execution
 - `TransactionTracker` enforces DDL/DML separation and 3,000-row limit
-- `simulateConflict()` test helper for OCC testing
+- `simulateConflict()` test helper for OCC unit testing (mock-only hook, absent from the deployed AWS surface). The `40001`→409 serialization-conflict mapping is covered by translator/engine **unit tests** (mirroring `bb-data`), not an over-the-wire e2e test: `simulateConflict()` is a mock-only trigger with no counterpart on the deployed runtime, and there is no deterministic way to raise a genuine `40001` conflict over the JSON-RPC wire in local e2e.
 - Error translation matches production behavior
 
 ## Validation Layer
@@ -74,6 +74,8 @@ The core insight: PGlite supports everything DSQL doesn't. Without validation, c
 | `CREATE TEMP TABLE` | Temporary tables |
 | `SET TRANSACTION ISOLATION LEVEL` | Fixed Repeatable Read |
 | `COLLATE` | C collation only |
+| `CREATE INDEX ... ASC/DESC` | Sort direction on index keys (NULLS FIRST/LAST is allowed) |
+| `ALTER TABLE ... DROP [COLUMN]` | Not in DSQL's supported ALTER TABLE subset (`DROP CONSTRAINT` and `ALTER COLUMN ... DROP DEFAULT/NOT NULL/EXPRESSION/IDENTITY` are supported) |
 
 ### Transaction Tracking
 

@@ -1,5 +1,111 @@
 # @aws-blocks/bb-knowledge-base
 
+## 0.2.3
+
+### Patch Changes
+
+- 64ddd74: test: adapt CDK tests to the new config-registry finalize signature
+  
+  Test-only change: both packages' CDK tests were updated to call
+  `finalizeConfigRegistry` with its new `(root, executionRole, computes)`
+  signature. No runtime or public API change.
+- Updated dependencies [df667c5]
+- Updated dependencies [df667c5]
+- Updated dependencies [64ddd74]
+- Updated dependencies [df667c5]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [4a830a6]
+- Updated dependencies [f2f186c]
+- Updated dependencies [46b7c89]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+
+## 0.2.2
+
+### Patch Changes
+
+- 309a236: refactor(bb): attach IAM grants to the shared execution role
+  
+  Data and auth blocks now grant permissions to the shared Blocks execution role
+  (`this.executionRole`) instead of the handler function directly. Grants land on
+  the same role the handler assumes, so the effective runtime permissions are
+  identical — this decouples IAM wiring from the concrete Lambda function ahead of
+  the multi-compute model.
+  
+  For `bb-distributed-data`, the DSQL endpoint and region now flow through the
+  config registry (loaded into `process.env` at cold start, like every other
+  block) rather than being set as direct handler environment variables, and the
+  migration Lambda maps the shared execution role's ARN.
+- de4f209: `KnowledgeBase.retrieve`: validate `maxResults` consistently across the mock and AWS runtimes.
+  
+  `maxResults` was normalized with `Math.min(Math.max(v ?? 10, 1), 100)`, which silently passed fractional and non-finite values (`1.5`, `NaN`, `Infinity`) straight through — the mock and the AWS `RetrieveCommand` then diverged, and Bedrock rejects a non-integer `numberOfResults`. A new shared `normalizeMaxResults` helper (used by both runtimes) keeps the documented clamp for finite integers and now rejects fractional/non-finite values up front with `KnowledgeBaseErrors.ValidationError`, before any search or Bedrock request.
+  
+  Fixes #430.
+- Updated dependencies [5798492]
+- Updated dependencies [f00adb0]
+- Updated dependencies [f00adb0]
+- Updated dependencies [08ab129]
+- Updated dependencies [9d4ccea]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [0ac3879]
+- Updated dependencies [e4dac4a]
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/bb-logger@0.1.5
+
+## 0.2.1
+
+### Patch Changes
+
+- 7b4c62d: Add infrastructure `defaults` chosen once at the app entry point, replacing the per-block `sandboxMode` logic and the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin dance for removal-policy and deletion-protection.
+  
+  `@aws-blocks/core/cdk` now exports `BlocksDefaults` and the `BlocksPresets.sandbox` / `BlocksPresets.production` starting points. `BlocksStack.create` / `BlocksBackend.create` take a required `defaults` prop; start from a preset and override individual fields with a spread. `defaults` is anchored on the owning `BlocksStack`/`BlocksBackend` (resolved by walking up the construct tree, like `handler`/`executionRole`), so multiple backends in one stack each keep their own posture. Building Blocks read the resolved values via `scope.defaults`, and a per-block option always wins (`option ?? scope.defaults.field`).
+  
+  Adopted across the stateful Building Blocks: `bb-kv-store`, `bb-data`, `bb-distributed-data`, `bb-distributed-table`, and `bb-knowledge-base` now take their removal policy and deletion protection from `defaults` instead of reading the `sandboxMode` context themselves. (`bb-distributed-table` reads `defaults` directly for now; a richer per-block `protection` override lands with #282.)
+  
+  The `create-blocks-app` scaffolding templates are updated to pass `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production` (replacing the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin), so newly-generated apps satisfy the required prop.
+  
+  **Breaking:** `BlocksStack.create` / `BlocksBackend.create` now require a `defaults` field — pass `BlocksPresets.sandbox` or `BlocksPresets.production` (typically `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`). The previously-shipped experimental `hardening` prop and its `resolve*` helpers are removed; log-retention, API throttling, access-logging and point-in-time-recovery move into `defaults` in follow-up, per-feature changes.
+- edbf1aa: fix(bb-knowledge-base): disable `installLatestAwsSdk` on the ingestion custom resource
+  
+  The `StartIngestion` `AwsCustomResource` left `installLatestAwsSdk` at its default
+  (`true`), so the provider Lambda ran an `npm install` of the AWS SDK on every
+  invocation before it could call the API. That costs roughly 15-30s of extra cold
+  start and raises the shared provider Lambda to 512MB of memory, though that
+  reduction is only realized once every `AwsCustomResource` in the stack opts out —
+  the provider is a stack-level singleton and its `memorySize` is resolved once at
+  synth. The per-resource cold-start saving applies regardless.
+  
+  Nothing needed it. The resource calls `BedrockAgent.startIngestionJob`, a stable
+  API already bundled in the Lambda runtime's AWS SDK v3, so the bundled client is
+  sufficient and the install is pure overhead. Setting `installLatestAwsSdk: false`
+  also silences CDK's `installLatestAwsSdkNotSpecified` synth-time warning for this
+  construct.
+  
+  The tradeoff being accepted: the provider now uses whichever SDK v3 the Lambda
+  runtime bundles at deploy time rather than installing the newest one. That is safe
+  here because `startIngestionJob` is a foundational Bedrock Agent operation present
+  since the client's initial release, not a recent addition.
+  
+  Internal construct wiring only — no public API change. The synthesized
+  `Custom::AWS` resource now renders `InstallLatestAwsSdk: false`.
+  
+  Upgrade note: because `InstallLatestAwsSdk` renders as a property on the
+  `Custom::AWS` resource while the `physicalResourceId` stays stable, the first
+  deploy after upgrading is a CloudFormation *Update* and fires `onUpdate` — so one
+  `startIngestionJob` kicks off. This is harmless (ingestion is idempotent and
+  fire-and-forget), but expect to see an ingestion start right after upgrading.
+- Updated dependencies [7b4c62d]
+- Updated dependencies [5262062]
+- Updated dependencies [3614a09]
+- Updated dependencies [5262062]
+- Updated dependencies [5071079]
+- Updated dependencies [8966cfb]
+- Updated dependencies [b11a75b]
+  - @aws-blocks/core@0.2.0
+  - @aws-blocks/bb-logger@0.1.4
+
 ## 0.2.0
 
 ### Minor Changes

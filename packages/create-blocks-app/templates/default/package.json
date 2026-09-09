@@ -3,10 +3,13 @@
   "version": "0.1.0",
   "type": "module",
   "blocksTemplate": "default",
+  "blocksTemplateDescription": "Vite + lit-html frontend with auth, DynamoDB, and realtime (safe default)",
   "engines": {
     "node": ">=22.0.0"
   },
-  "workspaces": ["aws-blocks"],
+  "workspaces": [
+    "aws-blocks"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "spec": "blocks-generate-spec",
@@ -16,15 +19,19 @@
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "sandbox:console": "tsx aws-blocks/scripts/console.ts",
     "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+    "prebuild": "blocks-generate-client",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
+    "secret": "tsx aws-blocks/scripts/secret.ts",
+    "typegen": "tsx aws-blocks/scripts/typegen.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
+    "@aws-blocks/hosting": "*",
     "lit-html": "^3.2.0",
     "zod": "^4.3.0"
   },

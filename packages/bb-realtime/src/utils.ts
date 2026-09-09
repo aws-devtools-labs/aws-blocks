@@ -10,11 +10,12 @@ import { createHmac } from 'node:crypto';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { RealtimeErrors } from './errors.js';
 
-export function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
+// Shared from core so every block uses one `blocksError` implementation (single
+// source of the name-as-contract rule). Imported for the runtime callers below
+// and re-exported for other modules; core's `errors.ts` is dependency-free, so
+// it's safe in the aws-runtime bundle.
+import { blocksError } from '@aws-blocks/core';
+export { blocksError };
 
 export async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): Promise<void> {
 	const result = schema['~standard'].validate(value);
@@ -79,9 +80,11 @@ export function mintChannelToken(channel: string, secret: string, ttlSeconds = 3
 }
 
 /**
- * Mint a connect token. Scoped to a Realtime instance prefix (not a specific
- * channel). Used to gate WebSocket connection establishment. The connect token
- * validates for any channel that starts with the given scope prefix.
+ * Mint a connect token. Scoped to a Realtime instance prefix with a `$connect`
+ * suffix (e.g., `myapp-rt$connect`). Connect tokens authorize WebSocket
+ * connection establishment but not channel subscriptions — the `$connect`
+ * suffix ensures the token's channel field does not prefix-match real channel
+ * paths (which always contain a `/` separator after the instance prefix).
  *
  * Default TTL is 2 hours (matching API Gateway max connection duration).
  */
@@ -89,7 +92,7 @@ export function mintConnectToken(scopePrefix: string, secret: string, ttlSeconds
 	if (!secret) {
 		throw blocksError(RealtimeErrors.ConnectionFailed, 'Refusing to mint token: signing secret is empty or missing');
 	}
-	return mintChannelToken(scopePrefix, secret, ttlSeconds);
+	return mintChannelToken(scopePrefix + '$connect', secret, ttlSeconds);
 }
 
 /**
@@ -109,7 +112,10 @@ export function validateChannelToken(
 		const expectedSig = createHmac('sha256', secret).update(JSON.stringify(payload)).digest('base64url');
 		if (!constantTimeEquals(sig, expectedSig)) return null;
 		if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
-		if (requestedChannel && payload.channel && requestedChannel !== payload.channel && !requestedChannel.startsWith(payload.channel + '/')) return null;
+		if (requestedChannel) {
+			if (!payload.channel) return null;
+			if (requestedChannel !== payload.channel && !requestedChannel.startsWith(payload.channel + '/')) return null;
+		}
 		return payload;
 	} catch {
 		return null;

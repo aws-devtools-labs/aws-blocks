@@ -78,6 +78,7 @@ const RULES: ValidationRule[] = [
   { pattern: /\b(LISTEN|NOTIFY)\b/i, message: 'DSQL does not support LISTEN/NOTIFY.', severity: 'error' },
   { pattern: /\bCREATE\s+EXTENSION\b/i, message: 'DSQL does not support extensions.', severity: 'error' },
   { pattern: /\bALTER\s+TABLE\b[\s\S]*\bADD\s+COLUMN\b[\s\S]*\bDEFAULT\b/i, message: 'DSQL does not support ADD COLUMN with DEFAULT.', severity: 'error' },
+  { pattern: /\bALTER\s+TABLE\b[^;]*\bDROP\s+(?:COLUMN\b|IF\s+EXISTS\b|(?!(?:DEFAULT|NOT|EXPRESSION|IDENTITY|CONSTRAINT)\b)[\w"])/i, message: 'DSQL does not support ALTER TABLE DROP COLUMN. Leave the column in place and stop referencing it, or rebuild the table (create a new table → INSERT INTO ... SELECT → DROP → RENAME TO). (DSQL: "unsupported ALTER TABLE DROP COLUMN statement")', severity: 'error' },
   { pattern: /\bALTER\s+DEFAULT\s+PRIVILEGES\b/i, message: 'DSQL does not support ALTER DEFAULT PRIVILEGES.', severity: 'error' },
   { pattern: /\b(CREATE\s+POLICY|ENABLE\s+ROW\s+LEVEL\s+SECURITY)\b/i, message: 'DSQL does not support Row Level Security.', severity: 'error' },
   { pattern: /\bCREATE\s+(TEMP|TEMPORARY)\s+TABLE\b/i, message: 'DSQL does not support temporary tables.', severity: 'error' },
@@ -85,6 +86,13 @@ const RULES: ValidationRule[] = [
   { pattern: /\bCOLLATE\b/i, message: 'DSQL only supports C collation.', severity: 'error' },
   { pattern: /(?<!::)\bJSONB\b/i, message: 'DSQL does not support JSONB columns. Use JSON instead (JSONB is available as a query runtime cast via ::jsonb).', severity: 'error' },
   { pattern: /(@>|<@|\?\||\?&)/, message: 'JSONB operators lack GIN index acceleration in DSQL.', severity: 'warn' },
+  // DSQL rejects a sort direction (ASC/DESC) on index keys — it isn't in the
+  // CREATE INDEX ASYNC grammar (only `NULLS FIRST|LAST`, which IS supported, is).
+  // `[^;]*` keeps the match inside a single statement; ASC/DESC cannot otherwise
+  // appear in a CREATE INDEX. Caveat: stripLiteralsAndComments doesn't strip
+  // double-quoted identifiers, so a column literally named "desc"/"asc" would
+  // false-positive — niche, and shared with other single-keyword rules here.
+  { pattern: /\bCREATE\s+(?:UNIQUE\s+)?INDEX\b[^;]*\b(?:ASC|DESC)\b/i, message: 'DSQL does not support sort order (ASC/DESC) on index keys. Remove it — ordering is enforced by ORDER BY in queries (NULLS FIRST/LAST is allowed). (DSQL: "specifying sort order not supported for index keys")', severity: 'error' },
 ];
 
 /** Validate a SQL statement for DSQL compatibility. Throws on unsupported features. */

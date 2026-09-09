@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, ApiError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -19,12 +19,15 @@ export {
 export type {
 	ConditionalWriteOptions,
 	ConditionalDeleteOptions,
+	PutOptions,
 	KVStoreOptions,
 	ExternalTableRef,
+	ScanOptions,
 } from './types.js';
 
-import type { ConditionalWriteOptions, ConditionalDeleteOptions, KVStoreOptions, ExternalTableRef } from './types.js';
+import type { ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ScanOptions } from './types.js';
 import { KVStoreErrors } from './errors.js';
+import { isExpired, nowEpochSeconds, resolveTtlEpochSeconds } from './ttl.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -36,6 +39,30 @@ function blocksError(name: string, message: string): Error {
 	return err;
 }
 
+/**
+ * Build the 409 ApiError for a conditional-write conflict. Maps to HTTP 409
+ * (Conflict) so the JSON-RPC serializer emits code 409 instead of a generic
+ * 500, preserves the `ConditionalCheckFailed` name so `isBlocksError()` keeps
+ * matching on both server and client, and keeps the underlying named error as
+ * `cause` (retained server-side by ApiError).
+ *
+ * `retriable` is scoped to the assertion kind: `true` only for optimistic-lock
+ * value-equals conflicts (`ifValueEquals`), where a re-read and retry can
+ * succeed; `false` for existence/uniqueness assertions (`ifNotExists` on put,
+ * `ifExists` on delete), where a blind identical retry fails identically. This
+ * is the mock's counterpart to the aws-runtime path, which decides retriability
+ * per-operation because DynamoDB collapses every conditional failure under one
+ * `ConditionalCheckFailedException`.
+ */
+function conditionalConflict(retriable: boolean): ApiError {
+	const cause = blocksError(KVStoreErrors.ConditionalCheckFailed, 'The conditional request failed');
+	return new ApiError('The conditional request failed', 409, {
+		name: KVStoreErrors.ConditionalCheckFailed,
+		cause,
+		retriable,
+	});
+}
+
 async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value: unknown): Promise<void> {
 	if (!schema) return;
 	const result = schema['~standard'].validate(value);
@@ -43,6 +70,30 @@ async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value:
 	if (resolved.issues) {
 		throw blocksError('ValidationFailedException', resolved.issues[0].message);
 	}
+}
+
+/**
+ * One stored item. `ttl` mirrors the DynamoDB TTL attribute (Unix epoch
+ * seconds) and is absent for items written without an expiry.
+ */
+interface MockEntry {
+	value: string;
+	ttl?: number;
+}
+
+/**
+ * On-disk shape. Items without a TTL stay bare serialized strings so stores
+ * written by earlier versions load unchanged and non-expiring writes produce
+ * no format churn.
+ */
+type StoredEntry = string | MockEntry;
+
+function toMockEntry(stored: unknown): MockEntry | null {
+	if (typeof stored === 'string') return { value: stored };
+	if (!stored || typeof stored !== 'object') return null;
+	const { value, ttl } = stored as Partial<MockEntry>;
+	if (typeof value !== 'string') return null;
+	return typeof ttl === 'number' ? { value, ttl } : { value };
 }
 
 // ── KVStore (mock) ──────────────────────────────────────────────────────────
@@ -66,7 +117,7 @@ async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value:
  */
 export class KVStore<T = string> extends Scope {
 	private filePath: string;
-	private data: Map<string, string>;
+	private data: Map<string, MockEntry>;
 	private schema?: StandardSchemaV1<T>;
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -83,13 +134,21 @@ export class KVStore<T = string> extends Scope {
 	/**
 	 * Retrieve a value by key.
 	 *
+	 * Items whose TTL has passed are treated as absent, mirroring DynamoDB TTL
+	 * (whose reaper is asynchronous, so reads must filter regardless).
+	 *
 	 * @param key - The key to retrieve.
-	 * @returns The value, or `null` if the key does not exist.
+	 * @returns The value, or `null` if the key does not exist or has expired.
 	 */
 	async get(key: string): Promise<T | null> {
-		const raw = this.data.get(key);
-		if (raw === undefined) return null;
-		return JSON.parse(raw) as T;
+		const entry = this.data.get(key);
+		if (entry === undefined) return null;
+		if (isExpired(entry.ttl)) {
+			this.data.delete(key);
+			this.flushToDisk();
+			return null;
+		}
+		return JSON.parse(entry.value) as T;
 	}
 
 	/**
@@ -98,12 +157,15 @@ export class KVStore<T = string> extends Scope {
 	 *
 	 * @param key - The key to store.
 	 * @param value - The value to store.
-	 * @param conditions - Optional write conditions.
+	 * @param options - Optional write conditions and expiry (`ttlSeconds` / `expiresAt`).
 	 * @throws {KVStoreErrors.ItemTooLarge} If the serialized value exceeds the 400 KB DynamoDB per-item size limit.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is true and the key already exists.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is set (alone) and the key already exists.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set (alone) and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If BOTH `ifNotExists` and `ifValueEquals` are set (they compose with OR), only when the key exists AND its current value does not match.
+	 *   All three ConditionalCheckFailed cases serialize to HTTP 409 (Conflict). `retriable` is true whenever a value check participated (`ifValueEquals` set — a stale-value optimistic-lock conflict; under OR composition the combined failure means the key exists but its value differs, so re-read and retry) and false for a pure `ifNotExists` existence assertion (a blind retry fails identically).
+	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt` are set, or either is not a usable time.
 	 */
-	async put(key: string, value: T, conditions?: ConditionalWriteOptions<T>): Promise<void> {
+	async put(key: string, value: T, options?: PutOptions<T>): Promise<void> {
 		// Schema validation runs first (matches AWS entry which validates client-side before sending)
 		await validateSchema(this.schema, value);
 
@@ -112,17 +174,37 @@ export class KVStore<T = string> extends Scope {
 			throw blocksError(KVStoreErrors.ItemTooLarge, `Item size has exceeded the maximum allowed size of 400 KB`);
 		}
 
-		if (conditions?.ifNotExists && this.data.has(key)) {
-			throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'The conditional request failed');
-		}
-		if (conditions?.ifValueEquals !== undefined) {
-			const current = this.data.get(key);
-			if (current !== JSON.stringify(conditions.ifValueEquals)) {
-				throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'The conditional request failed');
+		const expiresAtEpochSeconds = resolveTtlEpochSeconds(options);
+
+		// Conditional write. `ifNotExists` and `ifValueEquals` compose with OR
+		// (mirrors the AWS `attribute_not_exists(pk) OR value = :expected`): the
+		// write succeeds when the key is absent OR its current value matches, and
+		// fails only when the key exists AND the value differs.
+		//
+		// Retriability mirrors the aws path and both share this single derivation
+		// so mock and aws agree for identical inputs (incl. the combined case).
+		// Under OR composition a failure means every arm failed: if a value arm
+		// participated (`ifValueEquals` set) the failure is the stale-value case
+		// (key exists, value differs) — an optimistic-lock conflict that IS
+		// retriable. A pure `ifNotExists` failure means the key already exists and
+		// is NOT retriable. Uses value presence (`!== undefined`), so an explicit
+		// `undefined` is treated as absent.
+		const wantAbsent = options?.ifNotExists === true;
+		const wantValue = options?.ifValueEquals !== undefined;
+		if (wantAbsent || wantValue) {
+			const exists = this.data.has(key);
+			const current = exists ? this.data.get(key)?.value : undefined;
+			const absentOk = wantAbsent && !exists;
+			const valueOk = wantValue && current === JSON.stringify(options?.ifValueEquals);
+			if (!absentOk && !valueOk) {
+				const retriable = options?.ifValueEquals !== undefined;
+				throw conditionalConflict(retriable);
 			}
 		}
 
-		this.data.set(key, serialized);
+		this.data.set(key, expiresAtEpochSeconds === undefined
+			? { value: serialized }
+			: { value: serialized, ttl: expiresAtEpochSeconds });
 		this.flushToDisk();
 	}
 
@@ -131,17 +213,20 @@ export class KVStore<T = string> extends Scope {
 	 *
 	 * @param key - The key to delete.
 	 * @param conditions - Optional delete conditions.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifExists` is true and the key does not exist.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifExists` is true and the key does not exist. Serializes to HTTP 409 (Conflict), not retriable (a blind retry fails identically).
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match. Serializes to HTTP 409 (Conflict), retriable (optimistic-lock conflict — re-read and retry).
 	 */
 	async delete(key: string, conditions?: ConditionalDeleteOptions<T>): Promise<void> {
+		// Existence assertion wins (see put): `ifExists` makes a conflict
+		// non-retriable even when combined with an `ifValueEquals` value check.
+		const retriable = conditions?.ifValueEquals !== undefined && !conditions?.ifExists;
 		if (conditions?.ifExists && !this.data.has(key)) {
-			throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'The conditional request failed');
+			throw conditionalConflict(retriable);
 		}
 		if (conditions?.ifValueEquals !== undefined) {
-			const current = this.data.get(key);
+			const current = this.data.get(key)?.value;
 			if (current !== JSON.stringify(conditions.ifValueEquals)) {
-				throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'The conditional request failed');
+				throw conditionalConflict(retriable);
 			}
 		}
 		this.data.delete(key);
@@ -150,13 +235,21 @@ export class KVStore<T = string> extends Scope {
 
 	/**
 	 * Enumerate all key-value pairs. Reads every item in the store —
-	 * use sparingly on large datasets.
+	 * use sparingly on large datasets. Expired items are skipped unless
+	 * `includeExpired` is set.
 	 *
 	 * @returns An async iterable of key-value entries.
 	 */
-	async *scan(): AsyncIterable<{ key: string; value: T }> {
-		for (const [key, raw] of this.data) {
-			yield { key, value: JSON.parse(raw) as T };
+	async *scan(options?: ScanOptions): AsyncIterable<{ key: string; value: T }> {
+		if (options?.includeExpired) {
+			for (const [key, entry] of this.data) {
+				yield { key, value: JSON.parse(entry.value) as T };
+			}
+			return;
+		}
+		this.pruneExpired();
+		for (const [key, entry] of this.data) {
+			yield { key, value: JSON.parse(entry.value) as T };
 		}
 	}
 
@@ -172,17 +265,41 @@ export class KVStore<T = string> extends Scope {
 
 	// ── Disk persistence ──────────────────────────────────────────────────
 
-	private loadFromDisk(): Map<string, string> {
+	/**
+	 * Drop every expired item in one sweep. Stands in for DynamoDB's background
+	 * TTL reaper, which the local store has no equivalent of.
+	 */
+	private pruneExpired(): void {
+		const now = nowEpochSeconds();
+		const expired: string[] = [];
+		for (const [key, entry] of this.data) {
+			if (isExpired(entry.ttl, now)) expired.push(key);
+		}
+		if (expired.length === 0) return;
+		for (const key of expired) this.data.delete(key);
+		this.flushToDisk();
+	}
+
+	private loadFromDisk(): Map<string, MockEntry> {
 		if (!existsSync(this.filePath)) return new Map();
 		try {
-			const obj = JSON.parse(readFileSync(this.filePath, 'utf8'));
-			return new Map(Object.entries(obj));
+			const obj = JSON.parse(readFileSync(this.filePath, 'utf8')) as Record<string, unknown>;
+			const entries = new Map<string, MockEntry>();
+			for (const [key, stored] of Object.entries(obj)) {
+				const entry = toMockEntry(stored);
+				if (entry) entries.set(key, entry);
+			}
+			return entries;
 		} catch {
 			return new Map();
 		}
 	}
 
 	private flushToDisk(): void {
-		writeFileSync(this.filePath, JSON.stringify(Object.fromEntries(this.data), null, 2));
+		const obj: Record<string, StoredEntry> = {};
+		for (const [key, entry] of this.data) {
+			obj[key] = entry.ttl === undefined ? entry.value : { value: entry.value, ttl: entry.ttl };
+		}
+		writeFileSync(this.filePath, JSON.stringify(obj, null, 2));
 	}
 }

@@ -6,10 +6,11 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
+import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
-import { runSync } from './run-command.js';
+import { runStreaming, buildCdkDeployArgs } from './deploy-stream.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -24,6 +25,10 @@ export async function deploy(options: DeployOptions) {
     loadProductionEnv();
 
     process.env.BLOCKS_STAGE = 'production';
+
+    // Fail fast if AWS credentials are missing/expired, before generating the
+    // client and spending time in synth only to hit an opaque CDK credential error.
+    await assertAwsCredentials('deploy');
 
     // Provision secrets for production. projectRoot must match the root cdk
     // synth uses (passed as --context below) so the written parameter name
@@ -57,18 +62,18 @@ export async function deploy(options: DeployOptions) {
     console.log('   (This may take a few minutes on first deploy)');
     console.log('   - Backend API (Lambda + API Gateway)');
     console.log('   - Frontend hosting (S3 + CloudFront)');
-    
+    console.log('   Streaming CloudFormation events below; the deploy keeps running if this');
+    console.log('   process is backgrounded (press Ctrl-C, or send SIGTERM twice, to abort).');
+
     try {
-      runSync(
+      await runStreaming(
         "npx",
-        [
-          "cdk", "deploy",
-          "--require-approval", "never",
-          "--outputs-file", ".blocks-sandbox/outputs.json",
-          "--context", `projectRoot=${options.projectRoot}`,
-        ],
+        buildCdkDeployArgs({
+          projectRoot: options.projectRoot,
+          outputsFile: '.blocks-sandbox/outputs.json',
+        }),
         {
-          stdio: 'inherit',
+          label: 'cdk deploy',
           cwd: options.projectRoot,
           env: {
             ...process.env,
@@ -78,7 +83,14 @@ export async function deploy(options: DeployOptions) {
         }
       );
     } catch (error) {
-      console.error('\n❌ Deployment failed.');
+      // Terminal verdict on stdout: a caller that only captures stdout (the case
+      // that produced phantom failures) must still be able to tell a failed
+      // deploy from a killed process. This banner deliberately moved off stderr,
+      // so grepping stderr for this exact string no longer matches — the failure
+      // *reason* is still there. The CDK CLI keeps error-level output on stderr
+      // even under `--ci`, and the entrypoint prints the error itself with
+      // `console.error(error)`.
+      console.log('\n❌ Deployment failed.');
       throw error;
     }
     

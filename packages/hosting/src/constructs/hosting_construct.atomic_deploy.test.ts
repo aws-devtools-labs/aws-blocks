@@ -234,7 +234,7 @@ void describe('Atomic deploy - build-id cutover waits for asset uploads', () => 
           handler: 'index.handler',
           placement: 'regional',
           streaming: true,
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: {

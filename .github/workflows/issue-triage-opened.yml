@@ -1,0 +1,25 @@
+name: Issue Triage - Opened
+on:
+  issues:
+    types: [opened, reopened]
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+
+jobs:
+  add-triage-labels:
+    runs-on: ubuntu-latest
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Add the pending-triage label
+        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --add-label "pending-triage"
+      - name: Add pending-maintainer-response for non-maintainer authors
+        if: ${{ !contains(fromJSON('["MEMBER", "OWNER", "COLLABORATOR"]'), github.event.issue.author_association) }}
+        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --add-label "pending-maintainer-response"

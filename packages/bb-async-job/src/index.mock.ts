@@ -10,14 +10,27 @@ import type {
 	AsyncJobOptions,
 	SubmitOptions,
 	BatchSubmitResult,
+	AsyncJobState,
+	AsyncJobStatus,
+	WaitUntilCompleteOptions,
 } from './types.js';
 import { AsyncJobErrors } from './errors.js';
+import { JobStatusTracker, statusNotTrackedError } from './status.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 
-export { AsyncJobErrors } from './errors.js';
-export type { AsyncJobContext, AsyncJobOptions, SubmitOptions, BatchSubmitResult } from './types.js';
+export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
+export type {
+	AsyncJobContext,
+	AsyncJobOptions,
+	SubmitOptions,
+	BatchSubmitResult,
+	AsyncJobState,
+	AsyncJobStatus,
+	AsyncJobTransition,
+	WaitUntilCompleteOptions,
+} from './types.js';
 
 interface QueueEntry<T> {
 	jobId: string;
@@ -30,7 +43,8 @@ interface QueueEntry<T> {
 }
 
 const MAX_PAYLOAD_BYTES = 256 * 1024;
-const MAX_BATCH_SIZE = 10;
+/** Upper bound on payloads per `submitBatch` call — parity with the AWS runtime. */
+const MAX_BATCH_PAYLOADS = 10_000;
 
 /**
  * Background job processing backed by SQS and Lambda.
@@ -61,12 +75,22 @@ const MAX_BATCH_SIZE = 10;
  *
  * const { jobId } = await emailJob.submit({ to: 'alice@example.com' });
  * ```
+ *
+ * @example Observing state transitions
+ * ```typescript
+ * const job = new AsyncJob(scope, 'ingest', { handler, trackStatus: true });
+ *
+ * const { jobId } = await job.submit({ documentId: 'doc-1' });
+ * const status = await job.waitUntilComplete(jobId);
+ * status.transitions.map(t => t.state); // ['queued', 'processing', 'complete']
+ * ```
  */
 export class AsyncJob<T = unknown> extends Scope {
 	private handler: (payload: T, context: AsyncJobContext) => Promise<void>;
 	private schema?: StandardSchemaV1<T>;
 	private maxRetries: number;
 	private _id: string;
+	private _status?: JobStatusTracker;
 
 	// In-process queue state for dev server inspection
 	public readonly _queue: {
@@ -97,6 +121,57 @@ export class AsyncJob<T = unknown> extends Scope {
 			totalCompleted: 0,
 		};
 		registerSdkIdentifiers(this.fullId, { queueUrl: `mock-queue://${this.fullId}` });
+		if (options.trackStatus) {
+			this._status = new JobStatusTracker(this, this.log);
+		}
+	}
+
+	/** Throws unless this job was created with `trackStatus: true`. */
+	private requireStatus(): JobStatusTracker {
+		if (!this._status) throw statusNotTrackedError(this._id);
+		return this._status;
+	}
+
+	/**
+	 * Read a job's recorded status, including every state it has passed through.
+	 *
+	 * Requires `trackStatus: true`. Because `transitions` is append-only, a single
+	 * read after the job settled still shows the intermediate `processing` state,
+	 * so there is no need to slow the handler down to make it observable.
+	 *
+	 * @param jobId - Job identifier returned by `submit()`.
+	 * @returns The status record, or `null` if nothing is recorded for that id.
+	 * @throws {AsyncJobErrors.StatusNotTracked} If the job was created without `trackStatus: true`.
+	 *
+	 * @example
+	 * ```typescript
+	 * const status = await job.getStatus(jobId);
+	 * if (status?.state === 'failed') console.error(status.error);
+	 * ```
+	 */
+	async getStatus(jobId: string): Promise<AsyncJobStatus | null> {
+		return this.requireStatus().get(jobId);
+	}
+
+	/**
+	 * Wait until a job reaches `complete` or `failed`.
+	 *
+	 * Requires `trackStatus: true`. Resolves on either terminal state — inspect
+	 * `state` and `error` on the returned record to tell them apart.
+	 *
+	 * @param jobId - Job identifier returned by `submit()`.
+	 * @param options - Optional. `timeoutMs` (default 30000), `pollIntervalMs` (default 250), `signal`.
+	 * @returns The final status record.
+	 * @throws {AsyncJobErrors.StatusNotTracked} If the job was created without `trackStatus: true`.
+	 * @throws {AsyncJobErrors.Timeout} If the job does not settle within `timeoutMs`.
+	 *
+	 * @example
+	 * ```typescript
+	 * const status = await job.waitUntilComplete(jobId, { timeoutMs: 60_000 });
+	 * ```
+	 */
+	async waitUntilComplete(jobId: string, options?: WaitUntilCompleteOptions): Promise<AsyncJobStatus> {
+		return this.requireStatus().waitUntilComplete(jobId, options);
 	}
 
 	/**
@@ -130,6 +205,8 @@ export class AsyncJob<T = unknown> extends Scope {
 			lastError: null,
 		};
 
+		await this._status?.recordQueued(jobId, sentAt);
+
 		if (delaySeconds > 0) {
 			console.log(`[AsyncJob:${this._id}] submitted job ${jobId} (delayed ${delaySeconds}s)`);
 			this._queue.delayed.push(entry);
@@ -148,17 +225,19 @@ export class AsyncJob<T = unknown> extends Scope {
 	/**
 	 * Enqueue multiple jobs in a single call.
 	 *
-	 * In AWS, uses SQS's native `SendMessageBatch` for better throughput than
-	 * sequential `submit()` calls. Maximum 10 payloads per call (SQS limit).
+	 * The mock runtime enqueues each payload via `submit()` in turn; the AWS
+	 * runtime instead packs them into SQS `SendMessageBatch` requests. Either way a
+	 * batch of any size up to {@link MAX_BATCH_PAYLOADS} is accepted — larger
+	 * batches are rejected up front.
 	 *
-	 * @param payloads - Array of job payloads. Maximum 10.
+	 * @param payloads - Array of job payloads (at most {@link MAX_BATCH_PAYLOADS}).
 	 * @param options - Optional. `delaySeconds` applied to all messages.
 	 * @returns `{ jobIds, failed }` — `jobIds` in the same order as input payloads (`null` for failed entries); `failed` lists any entries that could not be enqueued.
 	 * @throws {AsyncJobErrors.BatchEmpty} If payloads array is empty.
-	 * @throws {AsyncJobErrors.BatchTooLarge} If more than 10 payloads.
+	 * @throws {AsyncJobErrors.BatchTooLarge} If more than {@link MAX_BATCH_PAYLOADS} payloads.
 	 * @throws {AsyncJobErrors.PayloadTooLarge} If any payload exceeds 256 KB.
 	 * @throws {AsyncJobErrors.ValidationFailed} If any payload fails schema validation.
-	 * @throws {AsyncJobErrors.BatchSubmitFailed} If one or more messages fail to send (AWS only). The error has `failed` and `jobIds` properties with partial results.
+	 * @throws {AsyncJobErrors.BatchSubmitFailed} If one or more messages fail to send (AWS only). A multi-chunk submit is not atomic; the error's `failed` and `jobIds` properties carry the partial results across all chunks.
 	 */
 	async submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult> {
 		if (payloads.length === 0) {
@@ -169,12 +248,18 @@ export class AsyncJob<T = unknown> extends Scope {
 			throw err;
 		}
 
-		if (payloads.length > MAX_BATCH_SIZE) {
+		if (payloads.length > MAX_BATCH_PAYLOADS) {
 			const err = new Error(
-				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, maximum is ${MAX_BATCH_SIZE}`
+				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`
 			);
 			err.name = AsyncJobErrors.BatchTooLarge;
 			throw err;
+		}
+
+		// Validate every payload before enqueuing any, so one bad payload fails the
+		// whole call rather than half-submitting the batch — matching the AWS runtime.
+		for (const payload of payloads) {
+			await this.validatePayload(payload);
 		}
 
 		const jobIds: Array<string | null> = [];
@@ -217,6 +302,8 @@ export class AsyncJob<T = unknown> extends Scope {
 			this._queue.pending = this._queue.pending.filter(e => e.jobId !== entry.jobId);
 			this._queue.processing.push(entry);
 
+			await this._status?.tryRecordTransition(entry.jobId, 'processing', entry.receiveCount);
+
 			const start = Date.now();
 			try {
 				await this.handler(entry.payload, {
@@ -226,6 +313,7 @@ export class AsyncJob<T = unknown> extends Scope {
 				});
 				this._queue.processing = this._queue.processing.filter(e => e.jobId !== entry.jobId);
 				this._queue.totalCompleted++;
+				await this._status?.tryRecordTransition(entry.jobId, 'complete', entry.receiveCount);
 				console.log(`[AsyncJob:${this._id}] completed job ${entry.jobId} (${Date.now() - start}ms)`);
 			} catch (error: any) {
 				this._queue.processing = this._queue.processing.filter(e => e.jobId !== entry.jobId);
@@ -235,6 +323,7 @@ export class AsyncJob<T = unknown> extends Scope {
 					entry.failedAt = new Date().toISOString();
 					entry.lastError = errorMsg;
 					this._queue.failed.push(entry);
+					await this._status?.tryRecordTransition(entry.jobId, 'failed', entry.receiveCount, errorMsg);
 					console.log(`[AsyncJob:${this._id}] job ${entry.jobId} moved to DLQ after ${this.maxRetries} attempts`);
 					console.log(`[AsyncJob:${this._id}] DLQ payload: ${JSON.stringify(entry.payload)}`);
 				} else {

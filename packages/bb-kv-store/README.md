@@ -16,10 +16,10 @@ const store = new KVStore(scope, id, options?)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `get(key)` | `Promise<T \| null>` | Retrieve a value. Returns `null` if absent. |
-| `put(key, value, conditions?)` | `Promise<void>` | Store a value. Overwrites unless conditions are set. |
+| `get(key)` | `Promise<T \| null>` | Retrieve a value. Returns `null` if absent or expired. |
+| `put(key, value, options?)` | `Promise<void>` | Store a value. Overwrites unless conditions are set; accepts an optional expiry. |
 | `delete(key, conditions?)` | `Promise<void>` | Remove a value. |
-| `scan()` | `AsyncIterable<{ key, value }>` | Enumerate all entries. Expensive on large datasets. |
+| `scan(options?)` | `AsyncIterable<{ key, value }>` | Enumerate all entries. Skips expired items unless `{ includeExpired: true }`. Expensive on large datasets. |
 | `KVStore.fromExisting(tableName)` | `ExternalTableRef` | Wrap a pre-existing DynamoDB table. |
 
 **Runtime only.** Data methods (`get`, `put`, `delete`, `scan`) run at request time — call them inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `aws-blocks/index.ts`. Top-level code runs during CDK synth, where the block resolves to its infrastructure construct (no data methods), so a top-level call throws `store.<method> is not a function` (throws `TypeError` at runtime if called during CDK synth). To seed data, do it from inside a handler or a separate runtime script. Constructing the block at module scope is fine; only method calls must move into handlers.
@@ -31,11 +31,38 @@ const store = new KVStore(scope, id, options?)
 | `schema` | `StandardSchemaV1` | Runtime validation schema (Zod, Valibot, ArkType, etc.). When provided, the value type `T` is inferred from the schema and every `put()` validates the value before writing. |
 | `table` | `ExternalTableRef` | Wrap an existing DynamoDB table instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
-| `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying DynamoDB table. When omitted, CDK's default (RETAIN — data preserved on `cdk destroy`) applies; pass `'destroy'` for sandbox / ephemeral stacks. Ignored by the mock and browser runtimes. |
+| `removalPolicy` | `'destroy' \| 'retain'` | Removal behavior for the underlying DynamoDB table. When omitted, the stack-wide `defaults` (from `BlocksPresets.sandbox`/`production`, chosen at `BlocksStack.create`) apply — `production` retains data on `cdk destroy`, `sandbox` destroys it. Pass `'destroy'`/`'retain'` to override for this one store. The table's deletion protection also follows the stack `defaults`. Ignored by the mock and browser runtimes. |
+| `ttl` | `boolean` | Enable DynamoDB Time-to-Live so items written with an expiry are deleted automatically. Defaults to `false`. See [Expiring Items](#expiring-items-ttl). |
+
+### Expiring Items (TTL)
+
+TTL is opt-in in two steps — turn it on for the table, then set an expiry per write:
+
+```typescript
+const cache = new KVStore(scope, 'cache', { ttl: true });
+
+// Relative expiry — delete 5 minutes from now
+await cache.put('otp:alice', code, { ttlSeconds: 300 });
+
+// Absolute expiry — a Date, or Unix epoch time in SECONDS
+await cache.put('session:1', record, { expiresAt: new Date('2027-01-01') });
+
+// No expiry — stored indefinitely (the default)
+await cache.put('config:theme', 'dark');
+```
+
+- **`ttl` defaults to `false`.** Enabling it on a table that already exists is a CloudFormation update to the live table, so it never happens implicitly.
+- **The attribute is named `ttl`.** It is written only when `ttlSeconds` or `expiresAt` is supplied, and it holds Unix epoch **seconds**.
+- **`ttlSeconds` and `expiresAt` are mutually exclusive.** Passing both — or a value that looks like epoch milliseconds — throws `ValidationFailedException` rather than silently storing a year-5138 expiry.
+- **Reads never return expired items.** DynamoDB's reaper is asynchronous (typically within 48 hours), so `get` returns `null` and `scan` skips an item as soon as its expiry passes, in every runtime.
+- **Expiry is per write.** Re-putting a key without expiry options clears any previous expiry; re-putting with them slides it forward.
+- TTL composes with conditional writes: `put(key, value, { ifNotExists: true, ttlSeconds: 60 })`.
+
+TTL is a retention control, not an authorization one. Anything security-sensitive (session validity, token revocation) must still be checked on read.
 
 ### Conditional Operations
 
-Both `put` and `delete` accept an optional conditions object:
+Both `put` and `delete` accept an optional options object:
 
 ```typescript
 // Only write if key doesn't exist (idempotent create)
@@ -44,6 +71,10 @@ await store.put('user:alice', data, { ifNotExists: true });
 // Only write if current value matches (optimistic locking / compare-and-swap)
 await store.put('counter', newVal, { ifValueEquals: oldVal });
 
+// Compose both (OR): create it, or update it only if unchanged — write succeeds
+// if the key is absent OR its current value matches; fails only if it exists and differs.
+await store.put('config', next, { ifNotExists: true, ifValueEquals: prev });
+
 // Only delete if key exists
 await store.delete('temp', { ifExists: true });
 
@@ -51,13 +82,13 @@ await store.delete('temp', { ifExists: true });
 await store.delete('lock', { ifValueEquals: expectedVal });
 ```
 
-All condition failures throw with `error.name === KVStoreErrors.ConditionalCheckFailed`.
+All condition failures throw with `error.name === KVStoreErrors.ConditionalCheckFailed`. They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500), so `error.status === 409` on the client and `isBlocksError` still matches by name. A conflict is flagged **retriable** when a value check participated (a stale-value optimistic-lock conflict — re-read and retry may succeed). For `put`, `ifNotExists` and `ifValueEquals` compose with OR, so a failure whenever `ifValueEquals` was set — including the combined `ifNotExists`+`ifValueEquals` case — is the stale-value case and is retriable; a pure `ifNotExists` `put` conflict is **not** retriable. For `delete` (independent checks, not OR), a pure `ifExists` conflict — or a combined `ifExists`+`ifValueEquals` conflict — is **not** retriable; only a value-only `ifValueEquals` delete conflict is. A blind retry of a non-retriable conflict fails identically.
 
 ### Error Handling
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifValueEquals` condition failed. |
+| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifValueEquals` condition failed. Serializes to HTTP **409 (Conflict)**; retriable when a value check participated (any `put` conflict where `ifValueEquals` was set, since `put` composes with OR; a value-only `ifValueEquals` `delete` conflict) — not retriable for a pure `ifNotExists` `put` or any `ifExists` `delete`. |
 | `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value failed the configured `schema` validation. |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | The serialized item exceeds the 400 KB DynamoDB per-item size limit. (In the AWS layer, DynamoDB raises a generic `ValidationException`; KVStore re-maps the size-specific case to this name.) |
 

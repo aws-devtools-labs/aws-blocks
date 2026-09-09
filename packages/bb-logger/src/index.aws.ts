@@ -5,6 +5,7 @@ import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { LogLevel, LoggingOptions, ChildLogger } from './types.js';
 import { shouldLog, buildEntry } from './serializer.js';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 // ── Public types ────────────────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ export class Logger extends Scope implements ChildLogger {
 	private loggerName: string;
 
 	constructor(scope: ScopeParent, id: string, options?: LoggingOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.loggerName = id;
 		this.level = options?.level
 			?? (process.env.LOG_LEVEL as LogLevel | undefined)

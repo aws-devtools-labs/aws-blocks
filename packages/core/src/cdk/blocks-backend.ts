@@ -2,16 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
-import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import type * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
-import { DEFAULT_NODE_RUNTIME } from './node-version.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
-import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
+import type { BlocksDefaults } from './blocks-defaults.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import type { Compute } from './compute/compute.js';
+import { getComputes } from './compute/compute-registry.js';
+import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 
 /**
  * Validate that the Node.js process was started with `--conditions=cdk`.
@@ -41,66 +43,80 @@ export function assertCdkConditionActive(): void {
   }
 }
 
+/**
+ * Timeout of the shared Blocks handler Lambda, and therefore the ceiling on a
+ * single invocation. Exported because resources that feed the handler have to
+ * size their own timeouts against it (e.g. an SQS queue's visibility timeout).
+ */
+export const SHARED_HANDLER_TIMEOUT_SECONDS = 60 * 15;
+
 export interface BlocksBackendProps {
   backendHandlerPath: string;
   backendCDKPath: string;
+  /**
+   * Stack-wide infrastructure defaults applied to every Building Block (removal
+   * policy, deletion protection, …). See {@link BlocksDefaults}. Start from
+   * `BlocksPresets.sandbox` or `BlocksPresets.production` and override
+   * individual fields as needed. A per-block option always wins over the
+   * corresponding stack default.
+   */
+  defaults: BlocksDefaults;
 }
 
-/** Shared infra setup — creates Lambda + API Gateway on the given scope. */
-export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
-  const handler = new lambda.NodejsFunction(scope, 'Handler', {
-    entry: props.backendHandlerPath,
-    runtime: DEFAULT_NODE_RUNTIME,
-    handler: 'handler',
-    memorySize: 2048,
-    timeout: cdk.Duration.seconds(60 * 15),
-    environment: {
-      NODE_ENV: 'production',
-      /**
-       * BLOCKS_STACK_NAME is used at runtime to derive physical resource names
-       * (DynamoDB table names, env var prefixes). It must match the CDK-time
-       * fullId of the BlocksStack/BlocksBackend so resource lookups work correctly.
-       *
-       * For BlocksStack: this equals the stack name (id).
-       * For BlocksBackend: the caller overrides this after construction to include
-       * the parent stack name for deployment uniqueness.
-       */
-      BLOCKS_STACK_NAME: id ?? cdk.Stack.of(scope).stackName,
-    },
-    bundling: {
-      minify: true,
-      esbuildArgs: { '--conditions': 'aws-runtime' },
-    },
-  });
+/**
+ * Core's `create()` props: the public {@link BlocksBackendProps} plus the
+ * required `defaultComputeFactory`, spread on by the umbrella (`@aws-blocks/blocks`).
+ * Customers use {@link BlocksBackendProps} and never set the factory.
+ *
+ * @internal
+ */
+export interface CoreBlocksBackendProps extends BlocksBackendProps {
+  /** Builds the backend's default compute. Injected by `@aws-blocks/blocks`. */
+  defaultComputeFactory: DefaultComputeFactory;
+}
 
-  // In sandbox mode, allow localhost origins so the local dev frontend can
-  // reach the deployed Lambda API via CORS.
-  const isSandbox =
-    scope.node.tryGetContext('sandboxMode') === 'true' ||
-    scope.node.tryGetContext('sandboxMode') === true;
-  if (isSandbox) {
-    handler.addEnvironment('CORS_ALLOWED_ORIGINS', '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$');
+/**
+ * Shared infra setup — provisions the stack-level resources that are NOT owned
+ * by a compute: the shared execution role, resource groups, and console-redirect
+ * routes.
+ */
+export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
+  // Fail fast with an actionable message at the create() call site if `defaults`
+  // is missing (e.g. a plain-JS caller, `as any`, or a dynamically-built props
+  // object) — otherwise the first Building Block to read `scope.defaults` throws
+  // a cryptic `Cannot read properties of undefined (reading 'removalPolicy')`.
+  if (!props.defaults) {
+    throw new Error(
+      'BlocksStack/BlocksBackend requires a `defaults` field. Pass a posture from ' +
+      '`@aws-blocks/core/cdk` — typically `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.',
+    );
   }
 
-  const api = new apigateway.RestApi(scope, 'API', {
-    restApiName: 'Blocks API',
-    deployOptions: { cachingEnabled: false },
+  // ── Shared execution role ───────────────────────────────────────────────
+  // A single IAM role that every Building Block grants to. Provisioned here so
+  // it exists before the backend module is imported (Building Blocks reach it
+  // via `scope.executionRole`). Block grants sit on the role's default (inline)
+  // policy. AWSLambdaBasicExecutionRole is attached so compute functions retain
+  // CloudWatch Logs permissions.
+  //
+  // INVARIANT: this must be a mutable, framework-owned `iam.Role` — never an
+  // imported role (`Role.fromRoleArn`/`fromRoleName`), which is immutable by
+  // default. On an immutable role, every Building Block's `grant*()` /
+  // `addToPrincipalPolicy()` silently becomes a no-op (returns false, no error),
+  // so permissions would quietly vanish. If a bring-your-own-role option is ever
+  // added, it must resolve to a mutable role (`{ mutable: true }`).
+  const executionRole = new iam.Role(scope, 'BlocksRole', {
+    // CompositePrincipal (rather than a bare ServicePrincipal) so a Building Block
+    // whose compute runs AS this shared role can add its own trust principal here
+    // (e.g. the Agent BB adds bedrock-agentcore in its CDK construct) — core stays
+    // agnostic and only Lambda is trusted by default.
+    assumedBy: new iam.CompositePrincipal(new iam.ServicePrincipal('lambda.amazonaws.com')),
+    managedPolicies: [
+      iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+    ],
   });
 
-  const integration = new apigateway.LambdaIntegration(handler);
-
-  // Build the nested resource tree for /aws-blocks/api.
-  // Intermediate resource gets a proxy so sub-paths (RawRoutes) still reach Lambda.
-  const awsBlocksResource = api.root.addResource(BLOCKS_NAMESPACE.slice(1));
-  awsBlocksResource.addProxy({ defaultIntegration: integration, anyMethod: true });
-  
-  const apiResource = awsBlocksResource.addResource('api');
-  apiResource.addMethod('POST', integration);
-  apiResource.addMethod('OPTIONS', integration);
-
-  api.root.addProxy({ defaultIntegration: integration, anyMethod: true });
-
-  // ── Resource Groups ────────────────────────────────────────────────────
+  // ── Resource Groups ───────────────────────────────────────────────────
   let rootStack = cdk.Stack.of(scope);
   while (rootStack.nestedStackParent) rootStack = rootStack.nestedStackParent;
   const groupPrefix = (id && id !== rootStack.stackName) ? `${rootStack.stackName}-${id}` : rootStack.stackName;
@@ -136,7 +152,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     },
   });
 
-  // ── Console redirect routes ────────────────────────────────────────────
+  // ── Console redirect routes ───────────────────────────────────────────
   const region = cdk.Fn.ref('AWS::Region');
   const resourcesUrl = cdk.Fn.join('', [
     'https://', region, '.console.aws.amazon.com/resource-groups/group/',
@@ -152,7 +168,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 
   registerBuiltinRoutes();
 
-  return { handler, gateway: api, apiUrl: `${api.url}${BLOCKS_RPC_PREFIX.slice(1)}` };
+  return { executionRole };
 }
 
 /**
@@ -173,10 +189,43 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
  * ```
  */
 export class BlocksBackend extends Construct {
-  public readonly apiUrl: string;
-  public readonly gateway: apigateway.RestApi;
-  public readonly handler: cdk.aws_lambda_nodejs.NodejsFunction;
   public readonly backendHandlerPath: string;
+  /**
+   * Path to the app's backend module (`props.backendCDKPath`). Exposed so Building Blocks that
+   * co-bundle the backend at synth (e.g. the Agent BB's AgentCore Runtime) can discover it via
+   * `globalThis.CURRENT_BLOCKS_STACK.backendModulePath`.
+   */
+  public readonly backendModulePath: string;
+  /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
+  public readonly executionRole: iam.IRole;
+  /** Infrastructure defaults for Building Blocks created under this backend. */
+  public readonly defaults: BlocksDefaults;
+  /** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
+  _defaultCompute?: Compute;
+
+  /** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
+  get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
+    return this.requireDefaultCompute().fn;
+  }
+  /** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
+  get gateway(): apigateway.RestApi {
+    return this.requireDefaultCompute().apiGateway;
+  }
+  /** The default compute's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+  get apiUrl(): string {
+    return this.requireDefaultCompute().apiUrl;
+  }
+  /** The default compute's handler CloudWatch log group. `bb-logger` reconfigures its retention. */
+  get handlerLogGroup(): cdk.aws_logs.ILogGroup {
+    return this.requireDefaultCompute().logGroup;
+  }
+
+  private requireDefaultCompute(): LambdaShapedCompute {
+    if (!this._defaultCompute) {
+      throw new Error('Blocks backend not fully initialized — access .handler/.gateway/.apiUrl after BlocksBackend.create() resolves.');
+    }
+    return this._defaultCompute as LambdaShapedCompute;
+  }
 
   /**
    * The fullId used by child Scopes to compute their env var names,
@@ -213,24 +262,32 @@ export class BlocksBackend extends Construct {
     super(scope, id);
 
     this.backendHandlerPath = props.backendHandlerPath;
+    this.backendModulePath = props.backendCDKPath;
 
     // Expose self to Building Blocks at CDK time
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
 
-    const infra = setupBlocksInfra(this, props, id);
-    this.handler = infra.handler;
-    this.gateway = infra.gateway;
-    this.apiUrl = infra.apiUrl;
+    // Store defaults on the backend (not the stack) so several BlocksBackends
+    // in one stack each keep their own posture; Building Blocks resolve them by
+    // walking up to their owning backend (see Scope.defaults).
+    this.defaults = props.defaults;
 
-    // Override BLOCKS_STACK_NAME to include the parent stack name so runtime
-    // resource lookups (DynamoDB table names) match the CDK-time fullId
-    // and are unique per deployment.
-    this.handler.addEnvironment('BLOCKS_STACK_NAME', this.fullId);
+    const infra = setupBlocksInfra(this, props, id);
+    this.executionRole = infra.executionRole;
+    // The default compute (and thus handler/gateway) is created in create(),
+    // after construction — it derives BLOCKS_STACK_NAME from this.fullId.
   }
 
-  static async create(scope: Construct, id: string, props: BlocksBackendProps) {
+  static async create(scope: Construct, id: string, props: CoreBlocksBackendProps) {
     assertCdkConditionActive();
     const backend = new BlocksBackend(scope, id, props);
+    // Create the default compute before importing the backend: it OWNS the
+    // Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
+    // a block reading `this.compute` in its constructor (during that import)
+    // must resolve to it. The factory is supplied by the umbrella
+    // @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
+    // imports the concrete compute class.
+    backend._defaultCompute = props.defaultComputeFactory(backend);
     // file:// URL (not a raw path) so the cache-busting query works on Windows,
     // where an absolute path like `D:\...` is rejected as URL scheme `d:`.
     const backendUrl = pathToFileURL(props.backendCDKPath);
@@ -246,7 +303,7 @@ export class BlocksBackend extends Construct {
     addBlocksStackMetadata(cdk.Stack.of(backend));
 
     // Finalize BB config → S3 (after all BBs have registered their config)
-    finalizeConfigRegistry(backend, backend.handler);
+    finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));
 
     return backend;
   }

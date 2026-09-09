@@ -9,9 +9,8 @@
  * exercised by `test-apps/extending-blocks-guide/`.
  */
 import * as cdk from 'aws-cdk-lib';
-import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { BlocksBackend, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+import { BlocksBackend, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -51,6 +50,10 @@ class MyExistingStack extends cdk.Stack {
     stack.blocks = await BlocksBackend.create(stack, 'BlocksApi', {
       backendHandlerPath: join(__dirname, 'index.handler.ts'),
       backendCDKPath: join(__dirname, 'index.ts'),
+      // Disposable CI test stack: force the sandbox posture (DESTROY, no deletion
+      // protection) so teardown works in every deploy mode. A real app would use
+      // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
+      defaults: BlocksPresets.sandbox,
     });
 
     // Wire IAM + env on the BlocksBackend's handler — same surface as BlocksStack.
@@ -67,7 +70,3 @@ class MyExistingStack extends cdk.Stack {
 }
 
 export const stack = await MyExistingStack.build(app, stackName);
-
-// E2E test stacks must be fully deletable.
-RemovalPolicies.of(stack).destroy();
-Mixins.of(stack).apply(new SandboxDisableDeletionProtection());

@@ -159,6 +159,71 @@ void describe('buildKvsEntries — atomicity & guards', () => {
       /TooManyRoutesError/,
     );
   });
+
+  // ── Tunable route-chunk budget via quotas.maxRouteChunks (issue #8) ──────
+  void it('a RAISED maxChunksPerTable lets a larger table synth (issue #8)', () => {
+    const routes = Array.from({ length: 3000 }, (_, i) => ({
+      pattern: `/section-${i}/page-${i}/item`,
+      target: 'static' as const,
+    }));
+    // The same table that throws at the default 64 succeeds when the cap is
+    // raised well above the chunk count.
+    assert.doesNotThrow(() =>
+      buildKvsEntries({
+        manifest: baseManifest({ routes }),
+        buildId: 'b1',
+        hasServer: false,
+        hasImage: false,
+        maxChunksPerTable: 100000,
+      }),
+    );
+  });
+
+  void it('a LOWERED maxChunksPerTable fails synth sooner', () => {
+    // A modest table that fits in the default 64 chunks throws when the cap is
+    // set to 1.
+    const routes = Array.from({ length: 200 }, (_, i) => ({
+      pattern: `/section-${i}/page-${i}/item`,
+      target: 'static' as const,
+    }));
+    assert.throws(
+      () =>
+        buildKvsEntries({
+          manifest: baseManifest({ routes }),
+          buildId: 'b1',
+          hasServer: false,
+          hasImage: false,
+          maxChunksPerTable: 1,
+        }),
+      /TooManyRoutesError/,
+    );
+  });
+
+  void it('the redirect-table error names trailingSlash + the tunable quota', () => {
+    // A large redirect fan-out (distinct parents → no coalescing) trips the
+    // guard; the message must name the redirects table + suggest the knobs.
+    const redirects = Array.from({ length: 3000 }, (_, i) => ({
+      source: `/old-${i}/page-${i}/x`,
+      destination: `/new-${i}/page-${i}/x`,
+      statusCode: 308 as const,
+    }));
+    try {
+      buildKvsEntries({
+        manifest: baseManifest({ redirects }),
+        buildId: 'b1',
+        hasServer: false,
+        hasImage: false,
+      });
+      assert.fail('expected TooManyRoutesError');
+    } catch (e) {
+      const err = e as { name: string; message: string; resolution?: string };
+      assert.equal(err.name, 'TooManyRoutesError');
+      assert.match(err.message, /redirects table/);
+      const res = err.resolution ?? '';
+      assert.match(res, /trailingSlash/);
+      assert.match(res, /quotas\.maxRouteChunks/);
+    }
+  });
 });
 
 void describe('generated request fn — glob matching (regression: mid-segment wildcards)', () => {
@@ -330,13 +395,16 @@ void describe('request fn — F8 consolidated basePath strip (consistent boundar
 
 void describe('generated request fn — skew cookie gating', () => {
   const manifest = baseManifest({ routes: [{ pattern: '/*', target: 'static' }] });
-  const reqWithCookie = {
-    uri: '/page.html',
+  const assetWithCookie = {
+    uri: '/assets/index-oldhash.js',
     headers: { host: { value: 'x.test' } },
     cookies: { __dpl: { value: 'oldbuild-123' } },
   };
 
-  void it('HONORS __dpl when skew enabled (pins to cookie build)', async () => {
+  void it('HONORS __dpl for ASSETS when skew enabled (pins to cookie build)', async () => {
+    // A content-hashed asset must keep resolving from the cookie's build so a
+    // mid-session visitor's already-loaded page can still fetch its old-build
+    // assets after a new deploy lands (old builds/<id>/ prefixes are retained).
     const entries = buildKvsEntries({
       manifest,
       buildId: 'newbuild',
@@ -347,7 +415,7 @@ void describe('generated request fn — skew cookie gating', () => {
     const { output } = await runRequestFn(
       generateKvsRouterRequestCode(),
       entries,
-      { ...reqWithCookie, cookies: { __dpl: { value: 'oldbuild-123' } } },
+      { ...assetWithCookie, cookies: { __dpl: { value: 'oldbuild-123' } } },
     );
     assert.match(output.uri, /^\/builds\/oldbuild-123\//);
   });
@@ -363,9 +431,173 @@ void describe('generated request fn — skew cookie gating', () => {
     const { output } = await runRequestFn(
       generateKvsRouterRequestCode(),
       entries,
-      { ...reqWithCookie, cookies: { __dpl: { value: 'oldbuild-123' } } },
+      { ...assetWithCookie, cookies: { __dpl: { value: 'oldbuild-123' } } },
     );
     assert.match(output.uri, /^\/builds\/newbuild\//);
+  });
+});
+
+void describe('generated request fn — HTML always resolves from the current build (#245)', () => {
+  // Regression guard for the returning-visitor blank page: the viewer-request
+  // function honored the __dpl cookie for HTML while the viewer-response
+  // function stamped __dpl = current build on every HTML response. A returning
+  // visitor was served the OLD build's HTML but advanced to the new cookie, so
+  // the old HTML's content-hashed assets rewrote to the new build prefix and
+  // 404'd — a blank page. HTML must resolve from the current build so HTML,
+  // cookie, and assets always agree on one generation.
+  const reqWith = (uri: string) => ({
+    uri,
+    headers: { host: { value: 'x.test' } },
+    cookies: { __dpl: { value: 'oldbuild-123' } },
+  });
+
+  void it('serves a static .html doc from the CURRENT build despite an old __dpl cookie', async () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      reqWith('/page.html'),
+    );
+    assert.equal(output.uri, '/builds/newbuild/page.html');
+  });
+
+  void it('serves a non-SPA directory-index doc from the CURRENT build despite an old cookie', async () => {
+    // /about → /about/index.html (directory-index), which must also be current.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      reqWith('/about'),
+    );
+    assert.equal(output.uri, '/builds/newbuild/about/index.html');
+  });
+
+  void it('serves the SPA fallback (/index.html) from the CURRENT build despite an old cookie', async () => {
+    // SPA rewrites an extensionless route to /index.html; the .html suffix
+    // check runs after the fallback, so the SPA shell is current too.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [{ pattern: '/*', target: 'static' }],
+        staticAssets: { directory: 'dist', spaFallback: true },
+      }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      reqWith('/dashboard'),
+    );
+    assert.equal(output.uri, '/builds/newbuild/index.html');
+  });
+
+  void it('does NOT treat a 4-char non-html asset URI (/x.y) as HTML — cookie still honored', async () => {
+    // Guards the suffix-test edge case: `lastIndexOf('.html') === uri.length - 5`
+    // is `-1 === -1` (true) for a 4-char URI like `/x.y`, which would wrongly
+    // force the asset onto the current build and skip its __dpl pin. The
+    // `slice(-5)` form must leave such an asset honoring the cookie.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      reqWith('/x.y'),
+    );
+    assert.match(output.uri, /^\/builds\/oldbuild-123\//);
+  });
+
+  void it('serves HTML from the current build for a first-time visitor (skew on, NO __dpl cookie)', async () => {
+    // Makes the 'first-time/incognito visitor is unaffected' path explicit: with
+    // no cookie there is nothing to honor, so the current build (meta.b) is used
+    // whether or not the HTML override fires.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(generateKvsRouterRequestCode(), entries, {
+      uri: '/page.html',
+      headers: { host: { value: 'x.test' } },
+      cookies: {}, // first-time visitor: no __dpl
+    });
+    assert.equal(output.uri, '/builds/newbuild/page.html');
+  });
+
+  void it('composes basePath strip + .html override: /app/page.html → current build, basePath stripped', async () => {
+    // The .html override runs AFTER stripBasePath, so a basePath-prefixed HTML
+    // request resolves from the current build with the basePath removed from the
+    // S3 key — confirming the two steps compose in the right order.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        basePath: '/app',
+        routes: [{ pattern: '/*', target: 'static' }],
+      }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      reqWith('/app/page.html'),
+    );
+    assert.equal(output.uri, '/builds/newbuild/page.html');
+  });
+});
+
+void describe('generated functions — CloudFront function-size limit', () => {
+  // CloudFront Functions reject code larger than the "Maximum size of the
+  // function code" quota with an opaque HTTP 413 at deploy time ("Internal error
+  // reported from downstream service"), which rolls the whole stack back. The
+  // generated source (including any in-function comments) ships verbatim, so a
+  // verbose comment can silently blow the budget. These guards fail loudly at
+  // unit-test time instead. Regression for the #245 fix, whose first draft added
+  // a multi-line rationale comment INSIDE the function string and pushed it from
+  // ~9.6 KB to ~10.6 KB → 413 on deploy.
+  //
+  // The quota is documented as "10 KB" without disambiguating decimal (10,000)
+  // vs binary (10,240) — so we assert against the CONSERVATIVE decimal value.
+  // Erring low is deliberate: a too-tight guard costs a trivial test fix, while
+  // a too-loose one lets code in the 10,001–10,240 range reach deploy and 413.
+  // https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cloudfront-functions-restrictions.html
+  const LIMIT = 10_000;
+
+  void it('viewer-request function stays under the CloudFront code-size limit', () => {
+    const bytes = Buffer.byteLength(generateKvsRouterRequestCode(), 'utf8');
+    assert.ok(
+      bytes < LIMIT,
+      `viewer-request function is ${bytes} B; must stay under the CloudFront code-size limit (${LIMIT} B)`,
+    );
+  });
+
+  void it('viewer-response function stays under the CloudFront code-size limit', () => {
+    const bytes = Buffer.byteLength(generateKvsRouterResponseCode(86400), 'utf8');
+    assert.ok(
+      bytes < LIMIT,
+      `viewer-response function is ${bytes} B; must stay under the CloudFront code-size limit (${LIMIT} B)`,
+    );
   });
 });
 
@@ -1222,6 +1454,96 @@ void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
     ];
     const out = coalesceRoutes(rows);
     assert.deepEqual(out, [['/stress/*', 's']]);
+  });
+
+  // ── ISR/SWR active: static groups must NOT coalesce (issue #7) ──────────
+  // With Nitro ISR/SWR (manifest.cache), a non-prebuilt child of a prerendered
+  // group must render on-demand at compute, not 404 from the coalesced S3
+  // wildcard. So static groups stay as individual rows when isrActive.
+
+  void it('coalesces a STATIC group into a COMPUTE wildcard when ISR is active (bounded + on-demand)', () => {
+    const rows: [string, 's'][] = [
+      ['/blog/post-1', 's'],
+      ['/blog/post-2', 's'],
+      ['/blog/post-3', 's'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: true });
+    // ONE wildcard row (table stays bounded — no explosion/503), but kind is
+    // COMPUTE so the SSR Lambda serves the whole subtree: prebuilt from ISR
+    // cache, non-prebuilt (/blog/post-99) on-demand — never an S3 404.
+    assert.deepEqual(out, [['/blog/*', 'c']]);
+  });
+
+  void it('does NOT explode the table for a large ISR SSG fan-out (coalesces to one compute row)', () => {
+    // Regression: the naive "skip coalescing under ISR" fix produced N rows →
+    // route-table explosion → CloudFront Function 503. Must stay 1 row.
+    const rows: [string, 's'][] = Array.from({ length: 500 }, (_, i) => [
+      `/blog/post-${i}`,
+      's',
+    ]);
+    const out = coalesceRoutes(rows, { isrActive: true });
+    assert.deepEqual(out, [['/blog/*', 'c']], '500 ISR pages coalesce to ONE compute wildcard');
+  });
+
+  void it('STILL coalesces the same STATIC group when ISR is NOT active (frozen prerender)', () => {
+    const rows: [string, 's'][] = [
+      ['/blog/post-1', 's'],
+      ['/blog/post-2', 's'],
+      ['/blog/post-3', 's'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: false });
+    assert.deepEqual(out, [['/blog/*', 's']]);
+  });
+
+  void it('STILL coalesces a COMPUTE group even when ISR is active (no shadowing risk)', () => {
+    // A compute wildcard equals the default origin, so coalescing it never
+    // shadows an on-demand child — safe to bound the table.
+    const rows: [string, 'c'][] = [
+      ['/api/a', 'c'],
+      ['/api/b', 'c'],
+      ['/api/c', 'c'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: true });
+    assert.deepEqual(out, [['/api/*', 'c']]);
+  });
+
+  void it('end-to-end: ISR manifest routes the whole subtree to compute (prebuilt + non-prebuilt), bounded table (#7)', async () => {
+    // Nuxt prerender + ISR: /blog/post-1..3 prerendered (static) + a server
+    // origin + manifest.cache (nitro-s3) → routeRules { '/blog/**': isr }.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [
+          { pattern: '/blog/post-1', target: 'static' },
+          { pattern: '/blog/post-2', target: 'static' },
+          { pattern: '/blog/post-3', target: 'static' },
+          { pattern: '/*', target: 'compute' },
+        ],
+        // ISR/SWR active → shared S3 cache provisioned.
+        cache: { computeResource: 'default', driver: 'nitro-s3' },
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const code = generateKvsRouterRequestCode();
+
+    // Prebuilt page → COMPUTE (served from the Lambda's ISR cache under the
+    // coalesced /blog/* compute wildcard — not S3-direct, but correct).
+    const prebuilt = await runRequestFn(code, entries, req('/blog/post-1'));
+    assert.equal(prebuilt.selectedOrigin, ORIGIN_ID.server, '/blog/post-1 (prebuilt) → compute');
+
+    // Non-prebuilt ISR child → compute (renders on demand), NOT a hard S3 404.
+    const onDemand = await runRequestFn(code, entries, req('/blog/post-99'));
+    assert.equal(
+      onDemand.selectedOrigin,
+      ORIGIN_ID.server,
+      '/blog/post-99 (non-prebuilt ISR child) → compute, not S3 404',
+    );
+
+    // Table stays bounded: the 3 /blog/post-N rows collapsed to ONE /blog/*
+    // row (meta.rc small) — no explosion that would 503 the edge function.
+    const meta = JSON.parse(entries.meta);
+    assert.equal(meta.rc, 1, 'route table fits in a single chunk (bounded)');
   });
 
   void it('does NOT coalesce when sibling kinds differ (mixed static/compute)', () => {

@@ -270,10 +270,200 @@ export type MfaTypeOf<O extends AuthCognitoOptions> =
 			: 'SMS' | 'TOTP' | 'EMAIL'
 		: 'SMS' | 'TOTP' | 'EMAIL';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin surface (opt-in `auth.admin` handle)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The server-side admin operations (group membership + user lifecycle) live on
+// an opt-in handle, `auth.admin`, rather than a separate class/package. The
+// handle is gated by the `admin` options object so:
+//
+//   - a pool that never opts in gets NO `Admin*` IAM grant (least privilege),
+//     and `auth.admin` is a compile error whose message names the fix;
+//   - `admin.actions` scopes the IAM grant (CDK) to just the group or just the
+//     lifecycle actions.
+//
+// Group names on the admin methods narrow via `GroupOf<O>`, mirroring the
+// literal-tuple projection style of `GroupOf` / `MfaTypeOf` above.
+
+/** The admin action groups that {@link AdminOptions.actions} can scope. */
+export type AdminAction = 'groups' | 'lifecycle';
+
+/**
+ * Opt-in configuration for the admin surface. Presence of this object on
+ * `AuthCognitoOptions.admin` enables `auth.admin` and the matching IAM grant.
+ */
+export interface AdminOptions {
+	/**
+	 * Scopes both the IAM grant and the compile-time method gate. Omit to grant
+	 * everything. `['groups']` grants only the group-membership `Admin*` actions
+	 * (and only the group methods typecheck); `['lifecycle']` grants only the
+	 * user-lifecycle actions.
+	 *
+	 * When `actions` is a narrowed literal (inline or `as const`), calling a
+	 * method whose action group wasn't granted is a **compile error** (see
+	 * {@link AdminActionGate}). The runtime also fast-fails such calls with a
+	 * clear error rather than a cryptic AWS `AccessDenied`.
+	 */
+	actions?: readonly AdminAction[];
+}
+
+/**
+ * Whether pool config `O` grants admin action group `A`. An omitted
+ * `admin.actions` (or a widened `readonly AdminAction[]`) grants everything.
+ */
+export type AdminGrants<O extends AuthCognitoOptions, A extends AdminAction> =
+	O extends { admin: { actions: infer L extends readonly string[] } }
+		? (A extends L[number] ? true : false)
+		: true;
+
+/**
+ * Compile-time gate applied as a trailing rest parameter on each admin method.
+ * When `O` grants action group `A`, this is an empty tuple (the method is
+ * callable normally). When it doesn't, the method requires an extra argument of
+ * type `never`, so the call is a type error whose parameter name explains why.
+ *
+ * This lives in a **parameter** position on individual methods (not as a
+ * conditional over the surface *shape*), which is why it does not make
+ * `AuthCognito<O>` invariant — verified against the same call sites the earlier
+ * shape-narrowing attempt regressed.
+ */
+export type AdminActionGate<O extends AuthCognitoOptions, A extends AdminAction> =
+	AdminGrants<O, A> extends true ? [] : [ERROR_admin_action_not_granted: never];
+
+/**
+ * Group-membership admin operations. Group names narrow via `GroupOf<O>`, so
+ * `addUserToGroup(user, 'typo')` is a compile error on a narrowed pool. Each
+ * method is gated on the `'groups'` action (see {@link AdminActionGate}).
+ */
+export interface GroupAdmin<O extends AuthCognitoOptions = AuthCognitoOptions> {
+	addUserToGroup(username: string, group: GroupOf<O>, ...gate: AdminActionGate<O, 'groups'>): Promise<void>;
+	removeUserFromGroup(username: string, group: GroupOf<O>, ...gate: AdminActionGate<O, 'groups'>): Promise<void>;
+	listGroupsForUser(username: string, ...gate: AdminActionGate<O, 'groups'>): Promise<GroupOf<O>[]>;
+	listUsersInGroup(group: GroupOf<O>, ...gate: AdminActionGate<O, 'groups'>): Promise<AdminUser<O>[]>;
+}
+
+/**
+ * User-lifecycle admin operations — create/delete/enable/disable, password
+ * management, enumeration, and session revocation. Each method is gated on the
+ * `'lifecycle'` action (see {@link AdminActionGate}).
+ */
+export interface LifecycleAdmin<O extends AuthCognitoOptions = AuthCognitoOptions> {
+	createUser(username: string, init?: AdminCreateInit<O>, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<AdminUser<O>>;
+	deleteUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+	disableUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+	enableUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+	resetUserPassword(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+	setUserPassword(username: string, password: string, options?: SetPasswordOptions, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+	getUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<AdminUser<O> | null>;
+	scan(filter?: AdminUserFilter, ...gate: AdminActionGate<O, 'lifecycle'>): AsyncIterable<AdminUser<O>>;
+	revokeUserSessions(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+}
+
+/** Options for {@link LifecycleAdmin.setUserPassword}. */
+export interface SetPasswordOptions {
+	/**
+	 * When `true`, the password is permanent and the user signs in with it
+	 * directly. When `false`/omitted, the password is temporary and the user is
+	 * forced to change it on next sign-in (Cognito `FORCE_CHANGE_PASSWORD`).
+	 */
+	permanent?: boolean;
+}
+
+/**
+ * Server-side filter for {@link LifecycleAdmin.scan}. Maps to Cognito's
+ * `ListUsers` `Filter` expression, so the pool does the filtering rather than
+ * the caller pulling every user and filtering in memory.
+ *
+ * Cognito supports a single filter clause on one attribute; `match: 'startsWith'`
+ * maps to the `^=` prefix operator and `match: 'equals'` to `=`.
+ */
+export interface AdminUserFilter {
+	/** Attribute to filter on — e.g. `'email'`, `'username'`, `'status'`. */
+	attribute: string;
+	/** Comparison operator. Cognito supports prefix (`^=`) and exact (`=`). */
+	match: 'startsWith' | 'equals';
+	/** Value to compare against. */
+	value: string;
+}
+
+/**
+ * The typed `auth.admin` surface for a given pool config — the full set of
+ * group + lifecycle operations, each gated on its action group at compile time
+ * via {@link AdminActionGate}. Group names narrow via `GroupOf<O>` and returned
+ * user shapes narrow via {@link AdminUser}.
+ *
+ * The action gate lives in method **parameter** positions rather than as a
+ * conditional over this surface's *shape*, so `AuthCognito<O>` stays covariant
+ * in `O` (an earlier shape-narrowing attempt made it invariant and regressed 14
+ * call sites). `actions` therefore gates the methods AND scopes the CDK IAM
+ * grant from the same source.
+ */
+export type AdminSurface<O extends AuthCognitoOptions = AuthCognitoOptions> =
+	GroupAdmin<O> & LifecycleAdmin<O>;
+
+/**
+ * Returned by `auth.admin` when the pool did NOT opt in. Touching any member
+ * is a compile error whose key text names the fix — friendlier than a bare
+ * `never`.
+ */
+export type AdminDisabled = {
+	readonly __adminNotEnabled: 'construct AuthCognito with { admin: {} }';
+};
+
+/**
+ * The `auth.admin` getter's return type — the gate.
+ *
+ * - The check is `{ admin: object }`, NOT `{ admin: any }`: a primitive like
+ *   `admin: true` fails the gate, so the opt-in MUST be an object (`admin: {}`).
+ * - The gate condition tests a **fixed shape** and the positive branch is a
+ *   plain generic interface (`AdminSurface<O>`), so `AuthCognito<O>` stays
+ *   covariant in `O`.
+ */
+export type AdminGetterOf<O extends AuthCognitoOptions> =
+	O extends { admin: object } ? AdminSurface<O> : AdminDisabled;
+
+/**
+ * A user as seen by the admin surface (group + lifecycle reads). Mirrors the
+ * client-side {@link CognitoUser} narrowing: `groups` narrows to the configured
+ * group union and `attributes` to the declared attribute keys when `O` is
+ * narrowed (inline literal / `as const`); both fall back to the wide types
+ * otherwise.
+ */
+export interface AdminUser<O extends AuthCognitoOptions = AuthCognitoOptions> {
+	username: string;
+	userSub: string;
+	enabled: boolean;
+	attributes: Partial<Record<ReadAttrOf<O>, string>>;
+	groups?: GroupOf<O>[];
+}
+
+/** Initial state for {@link LifecycleAdmin.createUser}. */
+export interface AdminCreateInit<O extends AuthCognitoOptions = AuthCognitoOptions> {
+	/** Temporary password. When omitted, the runtime generates one. */
+	temporaryPassword?: string;
+	/**
+	 * Attributes to seed on the new user. Narrows to the pool's declared
+	 * attribute keys (standard + `custom:*`) when `O` is narrowed, catching
+	 * typos the same way `signUp`'s attributes do.
+	 */
+	attributes?: Partial<Record<AttrOf<O>, string>>;
+	/** Suppress the Cognito invitation email/SMS (AWS runtime only). */
+	suppressInvite?: boolean;
+}
+
 /**
  * Options for `AuthCognito`.
  */
 export interface AuthCognitoOptions {
+	/**
+	 * Enables the server-side admin surface (`auth.admin`) and grants the
+	 * matching `Admin*` / `List*` IAM on the pool. Omit for the client-only
+	 * surface with no admin grant — the default, byte-identical to today's
+	 * synthesized role. See {@link AdminOptions} to scope which actions are
+	 * exposed and granted.
+	 */
+	admin?: AdminOptions;
 	/** MFA mode. Default: `'off'`. */
 	mfa?: 'off' | 'optional' | 'required';
 	/**

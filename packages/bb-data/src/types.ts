@@ -29,11 +29,23 @@ export interface DatabaseOptions {
    */
   rlsPolicy?: 'enforce';
   /**
-   * CloudFormation removal policy for the Aurora cluster.
-   * Use 'destroy' for dev/sandbox, 'retain' (default) for production to prevent data loss.
-   * @default 'retain'
+   * CloudFormation removal policy for the Aurora cluster. When omitted, the
+   * stack-wide `defaults` apply (`production` → RETAIN so data is preserved on
+   * `cdk destroy`; `sandbox` → DESTROY). Pass `'destroy'`/`'retain'`/`'snapshot'`
+   * to override for this one database. Deletion protection follows: on unless
+   * the cluster is being destroyed.
    */
   removalPolicy?: 'destroy' | 'retain' | 'snapshot';
+  /**
+   * Aurora PostgreSQL engine version, e.g. `'16.13'`.
+   *
+   * Configurable because AWS periodically retires older Aurora PostgreSQL minor
+   * versions: 16.4 was retired in us-east-1, after which `CreateDBCluster` began
+   * failing with `Cannot find version 16.4 for aurora-postgresql`. Surfacing this
+   * as an option means the next retirement is a config change, not a framework fix.
+   * @default '16.13'
+   */
+  postgresVersion?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }

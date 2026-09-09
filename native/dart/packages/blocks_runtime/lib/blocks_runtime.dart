@@ -1,5 +1,5 @@
 /// Blocks Runtime — JSON-RPC 2.0 client, WebSocket realtime, and file transferables.
-library blocks_runtime;
+library;
 
 export 'src/auth_provider.dart';
 export 'src/browser_launcher.dart';

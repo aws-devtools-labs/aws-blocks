@@ -86,8 +86,9 @@ class StatePayload {
     }
     try {
       // Backend emits base64url without padding; Dart requires padding.
-      final jsonStr =
-          utf8.decode(base64Url.decode(base64Url.normalize(encodedPayload)));
+      final jsonStr = utf8.decode(
+        base64Url.decode(base64Url.normalize(encodedPayload)),
+      );
       final decoded = jsonDecode(jsonStr);
       if (decoded is! Map<String, dynamic>) {
         throw OidcCallbackException('Malformed state envelope payload');

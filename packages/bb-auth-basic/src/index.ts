@@ -12,9 +12,12 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { AuthBasicErrors } from './errors.js';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 export type { BlocksAuth, AuthUser, AuthState, AuthActionInput } from '@aws-blocks/auth-common';
 export type { AuthAction, AuthField } from '@aws-blocks/auth-common';
+export { AuthBasicErrors } from './errors.js';
 
 /**
  * User shape returned by AuthBasic. Extends the common `AuthUser`
@@ -83,31 +86,6 @@ export interface AuthBasicOptions {
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
-
-/**
- * Error constants for AuthBasic. Use with `isBlocksError()` for typed error handling.
- *
- * @example
- * ```typescript
- * import { isBlocksError } from '@aws-blocks/core';
- * import { AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
- *
- * try {
- *   await auth.signIn('alice', 'wrong', context);
- * } catch (e) {
- *   if (isBlocksError(e, AuthBasicErrors.InvalidCredentials)) {
- *     // handle bad credentials
- *   }
- * }
- * ```
- */
-export const AuthBasicErrors = {
-	InvalidCredentials: 'InvalidCredentialsException',
-	UserAlreadyExists: 'UserAlreadyExistsException',
-	InvalidCode: 'InvalidCodeException',
-	SessionExpired: 'SessionExpiredException',
-	InvalidPassword: 'InvalidPasswordException',
-} as const;
 
 /** Internal user record stored in KVStore. */
 interface UserRecord {
@@ -183,7 +161,7 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	protected log: ChildLogger;
 
 	constructor(scope: ScopeParent, id: string, options?: AuthBasicOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.users = new KVStore(this, 'users');
 		this.jwtSecret = new AppSetting(this, 'jwt-secret', { secret: true });

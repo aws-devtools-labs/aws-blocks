@@ -9,6 +9,9 @@
   ],
   "references": [
     {
+      "path": "../data-common"
+    },
+    {
       "path": "../bb-logger"
     }
   ]

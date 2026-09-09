@@ -19,7 +19,7 @@
 
 import { ApiNamespace } from '@aws-blocks/core';
 import type { AuthStateApi } from '@aws-blocks/auth-common';
-import { makeExternalUserPoolRef, type AuthCognitoOptions } from './types.js';
+import { makeExternalUserPoolRef, type AuthCognitoOptions, type AdminGetterOf } from './types.js';
 
 export type { BlocksAuth, AuthUser, AuthState, AuthAction, AuthField, AuthActionInput, AuthStateApi } from '@aws-blocks/auth-common';
 export * from './types.js';
@@ -28,8 +28,16 @@ export * from './types.js';
 // that references `AuthCognito<typeof options>` typechecks identically under
 // `--conditions=browser`. The browser stub never executes any method —
 // bundlers scan imports, they don't call anything.
-export class AuthCognito<_O extends AuthCognitoOptions = AuthCognitoOptions> {
+export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> {
 	constructor(..._args: unknown[]) { /* no-op */ }
+	/**
+	 * Server-only admin surface. Present so `auth.admin` typechecks under
+	 * `--conditions=browser`; never reachable at runtime (the browser never
+	 * instantiates `AuthCognito`). Throws if somehow called.
+	 */
+	get admin(): AdminGetterOf<O> {
+		throw new Error('AuthCognito.admin is server-only; the browser should call the generated client');
+	}
 	createApi(): AuthStateApi {
 		// Real state-machine lives on the server. Browsers invoke the typed
 		// generated client, not this stub — these methods only exist so the

@@ -59,11 +59,9 @@ class RealtimeChannel<T> {
     _controller = controller;
 
     // Send subscribe message
-    ws.sink.add(jsonEncode({
-      'action': 'subscribe',
-      'channel': channel,
-      'token': token,
-    }));
+    ws.sink.add(
+      jsonEncode({'action': 'subscribe', 'channel': channel, 'token': token}),
+    );
 
     final subscription = ws.stream.listen(
       (data) {

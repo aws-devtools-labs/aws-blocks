@@ -115,6 +115,26 @@ void describe('detectFramework', () => {
     assert.strictEqual(detectFramework(tmpDir), 'spa');
   });
 
+  void it('detects sveltekit when @sveltejs/kit is in devDependencies', () => {
+    writePackageJson(tmpDir, {
+      devDependencies: { '@sveltejs/kit': '^2.0.0', svelte: '^5.0.0' },
+    });
+    assert.strictEqual(detectFramework(tmpDir), 'sveltekit');
+  });
+
+  void it('returns spa for a plain Svelte + Vite SPA (svelte without @sveltejs/kit)', () => {
+    writePackageJson(tmpDir, {
+      devDependencies: { svelte: '^5.0.0', vite: '^5.0.0' },
+    });
+    assert.strictEqual(detectFramework(tmpDir), 'spa');
+  });
+
+  void it('returns spa when @sveltejs/kit is in node_modules but NOT in project deps', () => {
+    writePackageJson(tmpDir, { dependencies: { react: '^18.0.0' } });
+    installFakePackage(tmpDir, '@sveltejs/kit', '2.0.0');
+    assert.strictEqual(detectFramework(tmpDir), 'spa');
+  });
+
   void it('prefers nitro over astro when both are in deps', () => {
     writePackageJson(tmpDir, {
       dependencies: { astro: '^5.0.0', nitropack: '^2.0.0' },

@@ -1,12 +1,28 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 
 // ── Token helpers ───────────────────────────────────────────────────────────
 
-export const LOCAL_FILE_SECRET = '__blocks_file_bucket_dev_secret__';
+/**
+ * Per-process HMAC secret for signing local presigned-URL tokens.
+ *
+ * The mock bucket (which mints tokens) and the dev file server (which validates
+ * them) both import this module and run in the *same* dev-server process, so a
+ * value generated once at module load is shared between them via the ESM module
+ * cache — no configuration needed.
+ *
+ * This deliberately replaces a previously hardcoded literal. A fixed, source-
+ * visible secret let anyone forge a valid token for any `fullId`/path/method and
+ * hit the dev file server without ever calling `getUrl()`/`putUrl()`, defeating
+ * the point of signing. A random per-process secret makes tokens unforgeable
+ * while keeping the local round-trip working, since both ends share this value.
+ * Tokens do not need to survive a dev-server restart (presigned URLs are short-
+ * lived and re-minted on demand), so per-process randomness is sufficient.
+ */
+export const LOCAL_FILE_SECRET = randomBytes(32).toString('base64url');
 
 interface FileTokenPayload {
 	fullId: string;

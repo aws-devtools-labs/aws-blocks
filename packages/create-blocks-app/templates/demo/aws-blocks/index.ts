@@ -2,6 +2,16 @@ import { ApiNamespace, Scope, KVStore, AuthBasic, DistributedTable } from '@aws-
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
+/**
+ * Reject cookie name/value components that contain CR or LF characters.
+ * Prevents HTTP response-header (Set-Cookie) injection from user-controlled input.
+ */
+function assertNoCrlf(value: string, field: string): void {
+  if (/[\r\n]/.test(value)) {
+    throw new Error(`Invalid cookie ${field}: must not contain CR or LF characters`);
+  }
+}
+
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
@@ -80,6 +90,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   
   // ── Public — cookie round-trip demo ──────────────────────────────────
   async setCookie(name: string, value: string) {
+    assertNoCrlf(name, 'name');
+    assertNoCrlf(value, 'value');
     context.response.headers.set('set-cookie', `${name}=${value}; Max-Age=3600; Secure; SameSite=None; Partitioned`);
     return { success: true };
   },
@@ -91,6 +103,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
   
   async deleteCookie(name: string) {
+    assertNoCrlf(name, 'name');
     context.response.headers.set('set-cookie', `${name}=; Max-Age=0; Secure; SameSite=None; Partitioned`);
     return { success: true };
   },

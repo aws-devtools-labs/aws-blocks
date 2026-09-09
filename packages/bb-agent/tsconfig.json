@@ -18,13 +18,13 @@
       "path": "../bb-realtime"
     },
     {
-      "path": "../bb-async-job"
-    },
-    {
       "path": "../bb-file-bucket"
     },
     {
       "path": "../bb-logger"
+    },
+    {
+      "path": "../bb-lambda-compute"
     }
   ]
 }

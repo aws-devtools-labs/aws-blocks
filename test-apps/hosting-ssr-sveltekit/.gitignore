@@ -1,0 +1,7 @@
+node_modules
+build
+.svelte-kit
+.blocks-sandbox
+test-results
+playwright-report
+*.log

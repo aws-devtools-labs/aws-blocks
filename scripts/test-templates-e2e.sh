@@ -28,7 +28,7 @@ if [[ "${1:-}" == "--skip-publish" ]] && [[ -d "$ROOT/dist-registry" ]]; then
 else
   echo "=== Step 1: Publish to local registry ==="
   cd "$ROOT"
-  npm run publish:dry-run 2>&1
+  npm run publish:local 2>&1
 fi
 
 echo ""

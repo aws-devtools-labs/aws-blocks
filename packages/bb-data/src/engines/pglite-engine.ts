@@ -5,11 +5,14 @@ import { PGlite } from '@electric-sql/pglite';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
-import { DatabaseErrors, wrapError } from '../errors.js';
+import { initializePgliteWithRetry, type DatabaseEngine, type TransactionHandle } from '@aws-blocks/data-common';
+import { DatabaseErrors, wrapError, serializationConflict } from '../errors.js';
 
 /** PostgreSQL error code for unique constraint violations. */
 const PG_UNIQUE_VIOLATION = '23505';
+
+/** PostgreSQL error code for serialization failures — OCC conflict. Class 40 (Transaction Rollback). */
+const PG_SERIALIZATION_FAILURE = '40001';
 
 /** PostgreSQL error code class for connection exceptions. */
 const PG_CONNECTION_EXCEPTION_CLASS = '08';
@@ -30,12 +33,17 @@ const PGLITE_DATA_DIR_MARKERS = [
  *
  * @example
  * // PostgreSQL error code 23505 → UniqueConstraintViolation
+ * // PostgreSQL error code 40001 → SerializationFailure (ApiError, HTTP 409)
  * // PostgreSQL error code 08xxx → ConnectionFailed
  * // All other errors → QueryFailed
  */
 function translateError(e: unknown): never {
   if (e instanceof Error) {
     const code = (e as any).code as string | undefined;
+    if (code === PG_SERIALIZATION_FAILURE) {
+      // OCC conflict: surface as a retriable 409 (Conflict), not a generic 500.
+      throw serializationConflict(e);
+    }
     if (code === PG_UNIQUE_VIOLATION) {
       e.name = DatabaseErrors.UniqueConstraintViolation;
     } else if (code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)) {
@@ -120,20 +128,83 @@ function recoverIncompletePgliteDataDir(dataDir: string): void {
 export class PGliteEngine implements DatabaseEngine {
   private db: PGlite;
   private closed = false;
+  private readonly dataDir: string;
+  private readonly createClient: (dataDir: string) => PGlite;
+  private ready?: Promise<PGlite>;
 
-  constructor(dataDir: string = '.bb-data') {
+  /**
+   * @param dataDir - directory PGlite persists to (nested paths are created).
+   * @param createClient - factory for the underlying PGlite instance; defaults
+   *   to a real `PGlite`. Exposed as a seam so tests can inject an instance
+   *   that simulates a WASM init trap.
+   */
+  constructor(dataDir: string = '.bb-data', createClient: (dataDir: string) => PGlite = (dir) => new PGlite(dir)) {
+    this.dataDir = dataDir;
+    this.createClient = createClient;
+    this.db = this.createDb();
+  }
+
+  /**
+   * Prepare the data directory and construct a fresh PGlite instance. PGlite
+   * defers WASM `initdb` until the first query, so this is cheap and safe to
+   * call again when recovering from an init trap.
+   *
+   * Composes safely with init-trap retry: a mid-`initdb` `unreachable` trap
+   * aborts BEFORE PGlite writes the data-dir markers `recoverIncompletePgliteDataDir`
+   * keys on (`PG_VERSION` + `base`/`global`/`global/pg_control`). So when
+   * `initializePgliteWithRetry` re-runs this factory to recreate the instance,
+   * `recoverIncompletePgliteDataDir` sees either an empty dir (left as-is) or a
+   * partially-written one (quarantined) — the two recovery mechanisms never conflict.
+   */
+  private createDb(): PGlite {
     // PGlite's initdb only creates the leaf directory, not intermediate
     // parents. Because index.mock.ts uses nested paths (e.g. `.bb-data/main`),
     // a fresh checkout or `rm -rf .bb-data` would otherwise ENOENT on first
     // boot. Create the full path up front (matches DsqlMockEngine).
-    mkdirSync(dataDir, { recursive: true });
-    recoverIncompletePgliteDataDir(dataDir);
-    cleanStaleLock(dataDir);
-    this.db = new PGlite(dataDir);
+    mkdirSync(this.dataDir, { recursive: true });
+    recoverIncompletePgliteDataDir(this.dataDir);
+    cleanStaleLock(this.dataDir);
+    return this.createClient(this.dataDir);
+  }
+
+  /**
+   * Force PGlite's lazy WASM initialization, retrying past intermittent
+   * `_pg_initdb` `unreachable` traps by recreating the instance. Runs once per
+   * engine; a permanent failure is not cached, so a later query can retry once
+   * transient memory pressure eases.
+   */
+  private ensureReady(): Promise<PGlite> {
+    if (!this.ready) {
+      this.ready = initializePgliteWithRetry(this.db, () => (this.db = this.createDb()), {
+        onRetry: (attempt, error) =>
+          console.warn(`[PGliteEngine] PGlite init trap on attempt ${attempt}; recreating instance`, error),
+      })
+        // Pin this.db to the settled instance explicitly (not just via the recreate closure).
+        .then((db) => (this.db = db))
+        .catch((error) => {
+          // Init retry is exhausted; initializePgliteWithRetry has already closed
+          // the last trapped instance, so this.db now points at a dead handle.
+          // Reset readiness AND swap in a fresh, un-probed instance. Without the
+          // swap, the next call would re-probe the CLOSED handle, whose error is a
+          // "closed" error (not an `unreachable` trap) and is therefore classified
+          // non-retryable — permanently wedging the engine and defeating the
+          // "a later query can retry" recovery documented above. Recreating here
+          // is best effort; if it throws we keep propagating the original init error.
+          this.ready = undefined;
+          try {
+            this.db = this.createDb();
+          } catch {
+            // Leave the dead handle in place; the original init error is more useful.
+          }
+          throw error;
+        });
+    }
+    return this.ready;
   }
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
     try {
+      await this.ensureReady();
       const result = await this.db.query<T>(sql, params);
       return result.rows;
     } catch (e) {
@@ -143,6 +214,7 @@ export class PGliteEngine implements DatabaseEngine {
 
   async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
     try {
+      await this.ensureReady();
       const result = await this.db.query(sql, params);
       return { rowCount: result.affectedRows ?? 0 };
     } catch (e) {
@@ -152,6 +224,7 @@ export class PGliteEngine implements DatabaseEngine {
 
   async beginTransaction(): Promise<TransactionHandle> {
     try {
+      await this.ensureReady();
       await this.db.query('BEGIN');
       return { active: true };
     } catch (e) {

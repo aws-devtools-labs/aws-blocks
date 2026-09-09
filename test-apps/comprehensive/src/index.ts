@@ -165,7 +165,7 @@ w.jobSubmitBatch = () => {
 };
 
 w.jobSubmitTooLarge = () => run('job-result', () => api.asyncJobSubmitTooLarge());
-w.jobSubmitBatchTooMany = () => run('job-result', () => api.asyncJobSubmitBatchTooMany());
+w.jobSubmitLargeBatch = () => run('job-result', () => api.asyncJobSubmitLargeBatch());
 
 w.jobSubmitDelayed = () => {
   const key = (document.getElementById('job-key') as HTMLInputElement).value;
