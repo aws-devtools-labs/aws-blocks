@@ -29,11 +29,16 @@
  */
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import { Scope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import * as cdk from 'aws-cdk-lib';
+import { CustomResource } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { Provider } from 'aws-cdk-lib/custom-resources';
 
 import type { IDependable } from 'constructs';
 import type { AuthOIDCOptions, CognitoFederatedProvider, ProviderConfig } from './types.js';
@@ -60,6 +65,108 @@ export type {
 	StubAuthorizeRequest,
 	StubUser,
 } from './types.js';
+
+/**
+ * Inline handler for the IdP-registration custom resource. Runs at deploy time:
+ * reads the IdP credential SecureString parameters (by name, with decryption)
+ * and calls Cognito's Create/Update/DeleteIdentityProvider. The secret values
+ * are read here via the SDK and never transit CloudFormation. `@aws-sdk/*` is
+ * provided by the Node.js Lambda runtime, so nothing is bundled.
+ */
+const IDP_REGISTRATION_HANDLER = `
+const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
+const {
+	CognitoIdentityProviderClient,
+	CreateIdentityProviderCommand,
+	UpdateIdentityProviderCommand,
+	DeleteIdentityProviderCommand,
+} = require('@aws-sdk/client-cognito-identity-provider');
+
+const ssm = new SSMClient({});
+const idp = new CognitoIdentityProviderClient({});
+
+// Tolerate the SecureString parameter being created slightly after this resource
+// (the bulk secret-init custom resource and the customer's \`blocks secret\` CLI
+// both feed it). Retry a few times before giving up.
+async function readSecret(name) {
+	for (let i = 0; i < 6; i++) {
+		try {
+			const r = await ssm.send(new GetParameterCommand({ Name: name, WithDecryption: true }));
+			return (r.Parameter && r.Parameter.Value) || '';
+		} catch (e) {
+			if (e.name === 'ParameterNotFound' && i < 5) {
+				await new Promise((res) => setTimeout(res, 2000));
+				continue;
+			}
+			throw e;
+		}
+	}
+	return '';
+}
+
+exports.handler = async (event) => {
+	const p = event.ResourceProperties;
+	const physicalId = p.UserPoolId + '|' + p.ProviderName;
+
+	if (event.RequestType === 'Delete') {
+		try {
+			await idp.send(new DeleteIdentityProviderCommand({ UserPoolId: p.UserPoolId, ProviderName: p.ProviderName }));
+		} catch (e) {
+			if (e.name !== 'ResourceNotFoundException') throw e;
+		}
+		return { PhysicalResourceId: physicalId };
+	}
+
+	const clientId = await readSecret(p.ClientIdParam);
+	const clientSecret = await readSecret(p.ClientSecretParam);
+	if (!clientId || !clientSecret) {
+		throw new Error(
+			'AuthOIDC: IdP credentials for provider "' + p.ProviderName + '" are not set. ' +
+			'Set them with \`blocks secret\` before deploying.',
+		);
+	}
+
+	const details = Object.assign({}, p.ProviderDetails || {}, { client_id: clientId, client_secret: clientSecret });
+	const attributeMapping = p.AttributeMapping || {};
+
+	if (event.RequestType === 'Create') {
+		try {
+			await idp.send(new CreateIdentityProviderCommand({
+				UserPoolId: p.UserPoolId,
+				ProviderName: p.ProviderName,
+				ProviderType: p.ProviderType,
+				ProviderDetails: details,
+				AttributeMapping: attributeMapping,
+			}));
+		} catch (e) {
+			// Idempotent create: an earlier failed run may have left the IdP behind.
+			if (e.name !== 'DuplicateProviderException') throw e;
+			await idp.send(new UpdateIdentityProviderCommand({
+				UserPoolId: p.UserPoolId, ProviderName: p.ProviderName,
+				ProviderDetails: details, AttributeMapping: attributeMapping,
+			}));
+		}
+		return { PhysicalResourceId: physicalId };
+	}
+
+	// Update (same pool + provider name — ProviderType/Name changes force a
+	// replacement via a new PhysicalResourceId). Fall back to Create if the IdP
+	// went missing out of band.
+	try {
+		await idp.send(new UpdateIdentityProviderCommand({
+			UserPoolId: p.UserPoolId, ProviderName: p.ProviderName,
+			ProviderDetails: details, AttributeMapping: attributeMapping,
+		}));
+	} catch (e) {
+		if (e.name !== 'ResourceNotFoundException') throw e;
+		await idp.send(new CreateIdentityProviderCommand({
+			UserPoolId: p.UserPoolId, ProviderName: p.ProviderName, ProviderType: p.ProviderType,
+			ProviderDetails: details, AttributeMapping: attributeMapping,
+		}));
+	}
+	return { PhysicalResourceId: physicalId };
+};
+`;
 
 /**
  * CDK-synth `AuthOIDC`.
@@ -126,28 +233,6 @@ export class AuthOIDC<
 		cognitoProviders: CognitoFederatedProvider[],
 		options: AuthOIDCOptions<readonly ProviderConfig[]>,
 	): void {
-		// `cognitoFederated()` cannot currently be deployed. The IdP registration
-		// below writes the client id/secret into
-		// `AWS::Cognito::UserPoolIdentityProvider.ProviderDetails` as
-		// `{{resolve:ssm-secure:...}}` dynamic references, but CloudFormation only
-		// permits `ssm-secure` references on a small allowlist of properties that
-		// excludes `ProviderDetails`. Without this guard `cdk synth` succeeds and
-		// deploy fails during change-set creation — before any resource is created —
-		// leaving the stack in `REVIEW_IN_PROGRESS`. Surface the limitation at synth
-		// with an actionable message instead of emitting a template that can never
-		// deploy. See DESIGN.md ("Cognito federation credential flow") for the
-		// deploy-time custom-resource fix that would lift this restriction.
-		const names = cognitoProviders.map(p => `'${p.name}'`).join(', ');
-		cdk.Annotations.of(this).addError(
-			`AuthOIDC: cognitoFederated() provider(s) ${names} cannot be deployed. `
-				+ 'CloudFormation rejects the {{resolve:ssm-secure}} dynamic references this '
-				+ 'path writes into AWS::Cognito::UserPoolIdentityProvider ProviderDetails '
-				+ '(client_id / client_secret), so the synthesized template fails at change-set '
-				+ 'creation. Use a self-hosted runtime provider instead — google(), github(), '
-				+ 'customOidc() or customOauth2() resolve IdP credentials at runtime via '
-				+ 'AppSetting.get() rather than through CloudFormation, and deploy cleanly.',
-		);
-
 		const stack = cdk.Stack.of(this);
 
 		const pool = new cognito.UserPool(this, 'cognito-pool', {
@@ -166,9 +251,60 @@ export class AuthOIDC<
 			});
 		}
 
+		// IdP registration runs through a deploy-time custom resource rather than
+		// native `AWS::Cognito::UserPoolIdentityProvider` resources. The native path
+		// would write the IdP client id/secret into `ProviderDetails` as
+		// `{{resolve:ssm-secure:...}}` dynamic references, which CloudFormation does
+		// not permit on that property — deploy fails at change-set creation. Instead,
+		// a Lambda reads the SecureString parameters via the SDK at deploy time and
+		// calls Cognito's `CreateIdentityProvider`, so the credentials reach Cognito
+		// without ever appearing in the CloudFormation template. See DESIGN.md.
+		const idpParamNames: string[] = [];
+		const idpFn = new LambdaFunction(this, 'idp-registration-fn', {
+			runtime: DEFAULT_NODE_RUNTIME,
+			handler: 'index.handler',
+			timeout: cdk.Duration.minutes(2),
+			// Own the log group so its retention follows the stack-wide default
+			// instead of AWS's infinite retention.
+			logGroup: new LogGroup(this, 'idp-registration-logs', {
+				retention: this.defaults.logRetention,
+				removalPolicy: cdk.RemovalPolicy.DESTROY,
+			}),
+			code: Code.fromInline(IDP_REGISTRATION_HANDLER),
+		});
+		// Register / update / deregister the IdP on the pool.
+		idpFn.addToRolePolicy(new PolicyStatement({
+			actions: [
+				'cognito-idp:CreateIdentityProvider',
+				'cognito-idp:UpdateIdentityProvider',
+				'cognito-idp:DeleteIdentityProvider',
+				'cognito-idp:DescribeIdentityProvider',
+			],
+			resources: [pool.userPoolArn],
+		}));
+		// Read the IdP credential SecureString parameters at deploy time. ARNs are
+		// resolved lazily as providers register below.
+		idpFn.addToRolePolicy(new PolicyStatement({
+			actions: ['ssm:GetParameter'],
+			resources: cdk.Lazy.list({
+				produce: () => idpParamNames.map(n =>
+					stack.formatArn({ service: 'ssm', resource: 'parameter', resourceName: n.replace(/^\//, '') }),
+				),
+			}),
+		}));
+		// SecureString decryption goes through KMS via the SSM service. Scoping to
+		// `kms:ViaService = ssm.<region>` covers both the default `aws/ssm` key and
+		// any customer-managed key (whose own key policy must also allow this role).
+		idpFn.addToRolePolicy(new PolicyStatement({
+			actions: ['kms:Decrypt'],
+			resources: ['*'],
+			conditions: { StringEquals: { 'kms:ViaService': `ssm.${stack.region}.amazonaws.com` } },
+		}));
+		const idpProvider = new Provider(this, 'idp-registration-provider', { onEventHandler: idpFn });
+
 		const idpDependencies: IDependable[] = [];
 		for (const provider of cognitoProviders) {
-			const idp = this.registerIdentityProvider(pool, provider);
+			const idp = this.registerIdentityProvider(pool, provider, idpProvider.serviceToken, idpParamNames);
 			if (idp) idpDependencies.push(idp);
 		}
 
@@ -206,70 +342,66 @@ export class AuthOIDC<
 	}
 
 	/**
-	 * Register a federated identity provider on the Cognito User Pool.
-	 * Uses CloudFormation dynamic references to read IdP credentials from
-	 * SSM at deploy time.
+	 * Register a federated identity provider on the Cognito User Pool via a
+	 * deploy-time custom resource. Only the SSM parameter *names* (never the
+	 * secret values) are passed to CloudFormation; the handler reads and
+	 * decrypts the credentials via the SDK at deploy time. Returns the custom
+	 * resource so the app client can depend on it (the IdP must exist before the
+	 * client lists it in `SupportedIdentityProviders`).
 	 */
 	private registerIdentityProvider(
 		pool: cognito.UserPool,
 		provider: CognitoFederatedProvider,
+		serviceToken: string,
+		paramNames: string[],
 	): IDependable | undefined {
-		const idpClientIdParam = `/${provider.idpClientId.fullId}`;
-		const idpClientSecretParam = `/${provider.idpClientSecret.fullId}`;
-		const clientIdRef = `{{resolve:ssm-secure:${idpClientIdParam}}}`;
-		const clientSecretRef = `{{resolve:ssm-secure:${idpClientSecretParam}}}`;
+		const clientIdParam = `/${provider.idpClientId.fullId}`;
+		const clientSecretParam = `/${provider.idpClientSecret.fullId}`;
 
+		// Provider-type-specific, non-secret `ProviderDetails` + `AttributeMapping`.
+		// The handler merges the resolved client_id/client_secret into these.
+		let providerType: string;
+		let providerDetails: Record<string, string>;
+		const attributeMapping: Record<string, string> = { email: 'email', name: 'name' };
 		switch (provider.identityProvider) {
 			case 'Google':
-				return new cognito.UserPoolIdentityProviderGoogle(this, `idp-${provider.name}`, {
-					userPool: pool,
-					clientId: clientIdRef,
-					clientSecretValue: cdk.SecretValue.unsafePlainText(clientSecretRef),
-					scopes: ['openid', 'email', 'profile'],
-					attributeMapping: {
-						email: cognito.ProviderAttribute.GOOGLE_EMAIL,
-						fullname: cognito.ProviderAttribute.GOOGLE_NAME,
-					},
-				});
+				providerType = 'Google';
+				providerDetails = { authorize_scopes: 'openid email profile' };
+				break;
 			case 'Facebook':
-				return new cognito.UserPoolIdentityProviderFacebook(this, `idp-${provider.name}`, {
-					userPool: pool,
-					clientId: clientIdRef,
-					clientSecret: clientSecretRef,
-					scopes: ['public_profile', 'email'],
-					attributeMapping: {
-						email: cognito.ProviderAttribute.FACEBOOK_EMAIL,
-						fullname: cognito.ProviderAttribute.FACEBOOK_NAME,
-					},
-				});
+				providerType = 'Facebook';
+				providerDetails = { authorize_scopes: 'public_profile email' };
+				break;
 			case 'LoginWithAmazon':
-				return new cognito.UserPoolIdentityProviderAmazon(this, `idp-${provider.name}`, {
-					userPool: pool,
-					clientId: clientIdRef,
-					clientSecret: clientSecretRef,
-					attributeMapping: {
-						email: cognito.ProviderAttribute.AMAZON_EMAIL,
-						fullname: cognito.ProviderAttribute.AMAZON_NAME,
-					},
-				});
+				providerType = 'LoginWithAmazon';
+				providerDetails = { authorize_scopes: 'profile' };
+				break;
 			default:
 				// Custom OIDC IdP — requires idpIssuerUrl on the provider config.
-				if (provider.idpIssuerUrl) {
-					return new cognito.UserPoolIdentityProviderOidc(this, `idp-${provider.name}`, {
-						userPool: pool,
-						name: provider.identityProvider,
-						clientId: clientIdRef,
-						clientSecret: clientSecretRef,
-						issuerUrl: provider.idpIssuerUrl,
-						scopes: ['openid', 'email', 'profile'],
-						attributeMapping: {
-							email: cognito.ProviderAttribute.other('email'),
-							fullname: cognito.ProviderAttribute.other('name'),
-						},
-					});
-				}
-				return undefined;
+				if (!provider.idpIssuerUrl) return undefined;
+				providerType = 'OIDC';
+				providerDetails = {
+					authorize_scopes: 'openid email profile',
+					oidc_issuer: provider.idpIssuerUrl,
+					attributes_request_method: 'GET',
+				};
+				break;
 		}
+
+		paramNames.push(clientIdParam, clientSecretParam);
+
+		return new CustomResource(this, `idp-${provider.name}`, {
+			serviceToken,
+			properties: {
+				UserPoolId: pool.userPoolId,
+				ProviderName: provider.identityProvider,
+				ProviderType: providerType,
+				ClientIdParam: clientIdParam,
+				ClientSecretParam: clientSecretParam,
+				ProviderDetails: providerDetails,
+				AttributeMapping: attributeMapping,
+			},
+		});
 	}
 
 	/**

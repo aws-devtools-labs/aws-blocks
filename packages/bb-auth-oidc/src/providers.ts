@@ -287,16 +287,16 @@ export interface CognitoFederatedOpts<N extends string = string> {
  * `identities` claim), not from Cognito's internal UUID.
  *
  * @remarks
- * **Not currently deployable.** The CDK layer registers the IdP by writing the
- * client id/secret into `AWS::Cognito::UserPoolIdentityProvider.ProviderDetails`
- * as `{{resolve:ssm-secure:...}}` dynamic references, but CloudFormation does not
- * allow `ssm-secure` references on that property — `cdk deploy` fails at
- * change-set creation. AuthOIDC therefore surfaces an error at synth if a
- * `cognitoFederated()` provider is configured. Until the deploy-time
- * custom-resource fix lands, use a self-hosted runtime provider instead —
- * {@link google}, {@link github}, {@link customOidc} or {@link customOauth2}
- * resolve IdP credentials at runtime via `AppSetting.get()` (not through
- * CloudFormation) and deploy cleanly.
+ * The IdP is registered on the User Pool by a **deploy-time custom resource**,
+ * not a native `AWS::Cognito::UserPoolIdentityProvider` resource. That native
+ * path would write the client id/secret into `ProviderDetails` as
+ * `{{resolve:ssm-secure:...}}` dynamic references, which CloudFormation rejects
+ * on that property. Instead a Lambda reads and decrypts the credential
+ * SecureString parameters via the SDK at deploy time and calls Cognito's
+ * `CreateIdentityProvider`, so the credentials reach Cognito without ever
+ * appearing in the CloudFormation template. Set the credential values with
+ * `blocks secret` before deploying — a deploy with unset credentials fails fast
+ * with an actionable message.
  *
  * @example
  * ```typescript
