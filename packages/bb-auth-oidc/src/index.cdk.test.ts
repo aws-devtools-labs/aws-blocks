@@ -135,3 +135,60 @@ test('CDK: a self-hosted provider (google) provisions no Cognito resources', () 
 	template.resourceCountIs('AWS::Cognito::UserPool', 0);
 	template.resourceCountIs('AWS::Cognito::UserPoolIdentityProvider', 0);
 });
+
+// Pin the per-provider ProviderType + ProviderDetails so a future edit can't
+// silently drift them away from what the old L2 constructs produced.
+function idpProps(provider: Parameters<typeof cognitoFederated>[0]): any {
+	const { stack, parent } = setup();
+	new AuthOIDC(parent, 'auth', { providers: [cognitoFederated(provider)] });
+	const crs = Template.fromStack(stack).findResources('AWS::CloudFormation::CustomResource');
+	return Object.values(crs).find((r: any) => r.Properties?.ProviderType && r.Properties?.ClientIdParam) as any;
+}
+
+test('CDK: Facebook provider maps to ProviderType=Facebook, scopes "public_profile email"', () => {
+	const cr = idpProps({
+		name: 'fb', identityProvider: 'Facebook', cognitoDomain: 'd1', region: 'us-east-1',
+		clientId: appSettingStub('fb-id'), clientSecret: appSettingStub('fb-secret'),
+	});
+	assert.strictEqual(cr.Properties.ProviderType, 'Facebook');
+	assert.strictEqual(cr.Properties.ProviderDetails.authorize_scopes, 'public_profile email');
+});
+
+test('CDK: LoginWithAmazon provider maps to ProviderType=LoginWithAmazon, scopes "profile"', () => {
+	const cr = idpProps({
+		name: 'amzn', identityProvider: 'LoginWithAmazon', cognitoDomain: 'd2', region: 'us-east-1',
+		clientId: appSettingStub('amzn-id'), clientSecret: appSettingStub('amzn-secret'),
+	});
+	assert.strictEqual(cr.Properties.ProviderType, 'LoginWithAmazon');
+	assert.strictEqual(cr.Properties.ProviderDetails.authorize_scopes, 'profile');
+});
+
+test('CDK: a custom OIDC provider maps to ProviderType=OIDC with oidc_issuer + GET', () => {
+	const cr = idpProps({
+		name: 'corp', identityProvider: 'CorpIdP', idpIssuerUrl: 'https://idp.example.com',
+		cognitoDomain: 'd3', region: 'us-east-1',
+		clientId: appSettingStub('corp-id'), clientSecret: appSettingStub('corp-secret'),
+	});
+	assert.strictEqual(cr.Properties.ProviderType, 'OIDC');
+	assert.strictEqual(cr.Properties.ProviderDetails.oidc_issuer, 'https://idp.example.com');
+	assert.strictEqual(cr.Properties.ProviderDetails.attributes_request_method, 'GET');
+});
+
+test('CDK: two providers with the same identityProvider fail fast at synth', () => {
+	const { parent } = setup();
+	assert.throws(
+		() => new AuthOIDC(parent, 'auth', {
+			providers: [
+				cognitoFederated({
+					name: 'g1', identityProvider: 'Google', cognitoDomain: 'd', region: 'us-east-1',
+					clientId: appSettingStub('g1-id'), clientSecret: appSettingStub('g1-secret'),
+				}),
+				cognitoFederated({
+					name: 'g2', identityProvider: 'Google', cognitoDomain: 'd', region: 'us-east-1',
+					clientId: appSettingStub('g2-id'), clientSecret: appSettingStub('g2-secret'),
+				}),
+			],
+		}),
+		/duplicate cognitoFederated identityProvider 'Google'/,
+	);
+});

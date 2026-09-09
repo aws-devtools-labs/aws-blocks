@@ -242,14 +242,16 @@ export interface CognitoFederatedOpts<N extends string = string> {
 	/**
 	 * The IdP's OAuth client ID as an `AppSetting` instance.
 	 * This is the same credential you'd pass to `google()` — e.g. your Google OAuth client ID.
-	 * CDK reads the parameter name for CloudFormation dynamic references.
+	 * The CDK layer passes the derived SSM parameter name (not the value) to the
+	 * deploy-time IdP-registration custom resource, which reads it via the SDK.
 	 * Runtime calls `.get()` to resolve the value.
 	 */
 	clientId: AppSettingLike;
 	/**
 	 * The IdP's OAuth client secret as an `AppSetting` instance.
-	 * CDK reads the parameter name for CloudFormation dynamic references.
-	 * Runtime calls `.get()` to resolve the value.
+	 * The CDK layer passes the derived SSM parameter name (not the value) to the
+	 * deploy-time IdP-registration custom resource, which reads and decrypts it
+	 * via the SDK. Runtime calls `.get()` to resolve the value.
 	 */
 	clientSecret: AppSettingLike;
 	/**
@@ -294,9 +296,19 @@ export interface CognitoFederatedOpts<N extends string = string> {
  * on that property. Instead a Lambda reads and decrypts the credential
  * SecureString parameters via the SDK at deploy time and calls Cognito's
  * `CreateIdentityProvider`, so the credentials reach Cognito without ever
- * appearing in the CloudFormation template. Set the credential values with
- * `blocks secret` before deploying — a deploy with unset credentials fails fast
- * with an actionable message.
+ * appearing in the CloudFormation template.
+ *
+ * **Setting the credential values.** A `secret: true` `AppSetting` is an SSM
+ * SecureString at `/<appSetting.fullId>`; its value is *not* managed by the
+ * `blocks secret` CLI (that CLI manages AWS Secrets Manager, a different store).
+ * Set it by writing the SecureString directly — e.g.
+ * `aws ssm put-parameter --name /<fullId> --type SecureString --value <secret> --overwrite`
+ * — or through the `AppSetting`'s runtime `put()`. On the first deploy the
+ * framework seeds the parameter with a random placeholder, so if you deploy
+ * before setting the real value the IdP registers with that placeholder and
+ * sign-in fails at the provider; set the real value and redeploy. The
+ * registration re-reads SSM on every `cdk deploy`, so a set or rotation takes
+ * effect on the next deploy.
  *
  * @example
  * ```typescript

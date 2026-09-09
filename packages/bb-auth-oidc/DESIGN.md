@@ -112,24 +112,56 @@ SSM Secure reference is not supported in:
 
 Instead, `provisionCognitoFederation` creates a small Lambda-backed custom
 resource (one handler + `Provider` per AuthOIDC instance, one `CustomResource`
-per provider). The handler:
+per provider). The handler lives in `src/idp-registration-lambda.ts` and is
+bundled to `dist/idp-registration-lambda/` by the `build:lambda` esbuild step
+(`@aws-sdk/*` external — provided by the Lambda runtime), so it is
+type-checked, lint-covered, and unit-tested (`idp-registration-lambda.test.ts`)
+rather than an inline template string. It:
 
 - **Create** — reads + decrypts both SecureString parameters (`ssm:GetParameter`
   `WithDecryption`, with a short retry to tolerate the bulk secret-init resource
-  landing slightly later), merges them into `ProviderDetails`, and calls
-  `CreateIdentityProvider` (falling back to `UpdateIdentityProvider` on
+  landing slightly later, and a terminal `ParameterNotFound` surfaced as an
+  actionable "set the SecureString" message), merges them into `ProviderDetails`,
+  and calls `CreateIdentityProvider` (falling back to `UpdateIdentityProvider` on
   `DuplicateProviderException` for idempotency).
-- **Update** — `UpdateIdentityProvider` (a `ProviderName`/`ProviderType` change
-  forces a replacement via a new `PhysicalResourceId`).
+- **Update** — `UpdateIdentityProvider`, falling back to `CreateIdentityProvider`
+  on `ResourceNotFoundException`. `PhysicalResourceId` is
+  `<pool>|<name>|<type>`, so a `ProviderName`/`ProviderType` change forces a
+  clean replacement.
 - **Delete** — `DeleteIdentityProvider` (ignoring `ResourceNotFoundException`).
 
 Only the parameter **names** cross into CloudFormation; the secret values are
 read via the SDK at deploy time and never appear in the template. The handler's
-role is scoped to `cognito-idp:*IdentityProvider` on the pool ARN,
-`ssm:GetParameter` on the specific parameter ARNs, and `kms:Decrypt` conditioned
-on `kms:ViaService = ssm.<region>` (covers the default `aws/ssm` key and CMKs).
-The app client depends on each custom resource, so the IdP exists before the
-client lists it in `SupportedIdentityProviders`.
+role is scoped to `cognito-idp:{Create,Update,Delete}IdentityProvider` on the
+pool ARN, `ssm:GetParameter` on the specific parameter ARNs, and `kms:Decrypt`
+conditioned on `kms:ViaService = ssm.<region>` (covers the default `aws/ssm` key
+and CMKs). The app client depends on each custom resource, so the IdP exists
+before the client lists it in `SupportedIdentityProviders`. A synth-time check
+rejects two providers that share the same `identityProvider` (Cognito allows
+one provider per name per pool).
+
+### Credential values, placeholders, and rotation
+
+A `secret: true` `AppSetting` is an **SSM SecureString** at `/<fullId>` — not an
+AWS Secrets Manager entry, so the `blocks secret` CLI (Secrets Manager) does not
+populate it. The value is set by writing the SecureString directly
+(`aws ssm put-parameter … --type SecureString --overwrite`) or via the
+`AppSetting` runtime `put()`.
+
+`bb-app-setting`'s bulk secret-init resource seeds every managed secret with a
+random 32-byte placeholder (`Overwrite: false`) on first deploy, so the
+parameter is never empty. Two consequences:
+
+1. Deploying before the real value is set registers the IdP with the placeholder
+   (sign-in then fails at the provider). This is documented, not fatal — set the
+   real value and redeploy.
+2. Because the credential values are read at deploy time and are **not** custom
+   resource properties, an out-of-band value change (a set or rotation) does not
+   by itself change any property, so CloudFormation would not re-invoke the
+   handler. To close that gap the custom resource carries a `Trigger` property
+   that changes every synth, so each `cdk deploy` re-reads SSM and re-registers
+   the IdP with the current value. Trade-off: the resource shows as updated on
+   every deploy; the `UpdateIdentityProvider` call is idempotent.
 
 ## Decisions
 

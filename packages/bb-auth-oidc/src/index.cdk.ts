@@ -39,8 +39,12 @@ import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Provider } from 'aws-cdk-lib/custom-resources';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 import type { IDependable } from 'constructs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 import type { AuthOIDCOptions, CognitoFederatedProvider, ProviderConfig } from './types.js';
 import {
 	DEFAULT_CALLBACK_PATH,
@@ -65,108 +69,6 @@ export type {
 	StubAuthorizeRequest,
 	StubUser,
 } from './types.js';
-
-/**
- * Inline handler for the IdP-registration custom resource. Runs at deploy time:
- * reads the IdP credential SecureString parameters (by name, with decryption)
- * and calls Cognito's Create/Update/DeleteIdentityProvider. The secret values
- * are read here via the SDK and never transit CloudFormation. `@aws-sdk/*` is
- * provided by the Node.js Lambda runtime, so nothing is bundled.
- */
-const IDP_REGISTRATION_HANDLER = `
-const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
-const {
-	CognitoIdentityProviderClient,
-	CreateIdentityProviderCommand,
-	UpdateIdentityProviderCommand,
-	DeleteIdentityProviderCommand,
-} = require('@aws-sdk/client-cognito-identity-provider');
-
-const ssm = new SSMClient({});
-const idp = new CognitoIdentityProviderClient({});
-
-// Tolerate the SecureString parameter being created slightly after this resource
-// (the bulk secret-init custom resource and the customer's \`blocks secret\` CLI
-// both feed it). Retry a few times before giving up.
-async function readSecret(name) {
-	for (let i = 0; i < 6; i++) {
-		try {
-			const r = await ssm.send(new GetParameterCommand({ Name: name, WithDecryption: true }));
-			return (r.Parameter && r.Parameter.Value) || '';
-		} catch (e) {
-			if (e.name === 'ParameterNotFound' && i < 5) {
-				await new Promise((res) => setTimeout(res, 2000));
-				continue;
-			}
-			throw e;
-		}
-	}
-	return '';
-}
-
-exports.handler = async (event) => {
-	const p = event.ResourceProperties;
-	const physicalId = p.UserPoolId + '|' + p.ProviderName;
-
-	if (event.RequestType === 'Delete') {
-		try {
-			await idp.send(new DeleteIdentityProviderCommand({ UserPoolId: p.UserPoolId, ProviderName: p.ProviderName }));
-		} catch (e) {
-			if (e.name !== 'ResourceNotFoundException') throw e;
-		}
-		return { PhysicalResourceId: physicalId };
-	}
-
-	const clientId = await readSecret(p.ClientIdParam);
-	const clientSecret = await readSecret(p.ClientSecretParam);
-	if (!clientId || !clientSecret) {
-		throw new Error(
-			'AuthOIDC: IdP credentials for provider "' + p.ProviderName + '" are not set. ' +
-			'Set them with \`blocks secret\` before deploying.',
-		);
-	}
-
-	const details = Object.assign({}, p.ProviderDetails || {}, { client_id: clientId, client_secret: clientSecret });
-	const attributeMapping = p.AttributeMapping || {};
-
-	if (event.RequestType === 'Create') {
-		try {
-			await idp.send(new CreateIdentityProviderCommand({
-				UserPoolId: p.UserPoolId,
-				ProviderName: p.ProviderName,
-				ProviderType: p.ProviderType,
-				ProviderDetails: details,
-				AttributeMapping: attributeMapping,
-			}));
-		} catch (e) {
-			// Idempotent create: an earlier failed run may have left the IdP behind.
-			if (e.name !== 'DuplicateProviderException') throw e;
-			await idp.send(new UpdateIdentityProviderCommand({
-				UserPoolId: p.UserPoolId, ProviderName: p.ProviderName,
-				ProviderDetails: details, AttributeMapping: attributeMapping,
-			}));
-		}
-		return { PhysicalResourceId: physicalId };
-	}
-
-	// Update (same pool + provider name — ProviderType/Name changes force a
-	// replacement via a new PhysicalResourceId). Fall back to Create if the IdP
-	// went missing out of band.
-	try {
-		await idp.send(new UpdateIdentityProviderCommand({
-			UserPoolId: p.UserPoolId, ProviderName: p.ProviderName,
-			ProviderDetails: details, AttributeMapping: attributeMapping,
-		}));
-	} catch (e) {
-		if (e.name !== 'ResourceNotFoundException') throw e;
-		await idp.send(new CreateIdentityProviderCommand({
-			UserPoolId: p.UserPoolId, ProviderName: p.ProviderName, ProviderType: p.ProviderType,
-			ProviderDetails: details, AttributeMapping: attributeMapping,
-		}));
-	}
-	return { PhysicalResourceId: physicalId };
-};
-`;
 
 /**
  * CDK-synth `AuthOIDC`.
@@ -235,6 +137,21 @@ export class AuthOIDC<
 	): void {
 		const stack = cdk.Stack.of(this);
 
+		// Cognito allows only one identity provider per provider name per pool.
+		// Two `cognitoFederated()` configs with the same `identityProvider` would
+		// otherwise synth two custom resources writing the same Cognito provider —
+		// a silent last-writer-wins overwrite. Fail fast at synth instead.
+		const seen = new Set<string>();
+		for (const p of cognitoProviders) {
+			if (seen.has(p.identityProvider)) {
+				throw new Error(
+					`AuthOIDC: duplicate cognitoFederated identityProvider '${p.identityProvider}'. ` +
+						'Each Cognito identity provider name may be configured only once per user pool.',
+				);
+			}
+			seen.add(p.identityProvider);
+		}
+
 		const pool = new cognito.UserPool(this, 'cognito-pool', {
 			userPoolName: `${this.fullId}-federation`,
 			selfSignUpEnabled: false,
@@ -270,7 +187,7 @@ export class AuthOIDC<
 				retention: this.defaults.logRetention,
 				removalPolicy: cdk.RemovalPolicy.DESTROY,
 			}),
-			code: Code.fromInline(IDP_REGISTRATION_HANDLER),
+			code: Code.fromAsset(join(__dirname, 'idp-registration-lambda')),
 		});
 		// Register / update / deregister the IdP on the pool.
 		idpFn.addToRolePolicy(new PolicyStatement({
@@ -278,7 +195,6 @@ export class AuthOIDC<
 				'cognito-idp:CreateIdentityProvider',
 				'cognito-idp:UpdateIdentityProvider',
 				'cognito-idp:DeleteIdentityProvider',
-				'cognito-idp:DescribeIdentityProvider',
 			],
 			resources: [pool.userPoolArn],
 		}));
@@ -400,6 +316,14 @@ export class AuthOIDC<
 				ClientSecretParam: clientSecretParam,
 				ProviderDetails: providerDetails,
 				AttributeMapping: attributeMapping,
+				// The credential values live in SSM and are read at deploy time, so
+				// they never appear as custom-resource properties. That means a
+				// credential set/rotation (an out-of-band SecureString write) does not
+				// change any property and would not, on its own, re-invoke the handler.
+				// This nonce changes every synth so each `cdk deploy` re-reads SSM and
+				// re-registers the IdP with the current value. Trade-off: the resource
+				// shows as updated on every deploy (the Update is idempotent).
+				Trigger: Date.now().toString(),
 			},
 		});
 	}

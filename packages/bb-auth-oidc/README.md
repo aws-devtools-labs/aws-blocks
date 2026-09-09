@@ -326,7 +326,15 @@ Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so
 
 Delegate the OIDC flow to a Cognito User Pool. Cognito handles PKCE, token verification, MFA, and brute-force protection. Your Lambda only exchanges the code and reads the session.
 
-`cognitoFederated()` takes `AppSetting` instances (not closures) for the IdP credentials. The IdP is registered on the User Pool by a **deploy-time custom resource**: a Lambda reads and decrypts those SecureString parameters via the SDK at deploy time and calls Cognito's `CreateIdentityProvider`. (A native `AWS::Cognito::UserPoolIdentityProvider` resource can't be used — CloudFormation rejects the `{{resolve:ssm-secure}}` dynamic references it would need in `ProviderDetails`.) The credential values therefore never appear in the CloudFormation template. **Set them with `blocks secret` before deploying** — a deploy with unset credentials fails fast with a clear message.
+`cognitoFederated()` takes `AppSetting` instances (not closures) for the IdP credentials. The IdP is registered on the User Pool by a **deploy-time custom resource**: a Lambda reads and decrypts those SecureString parameters via the SDK at deploy time and calls Cognito's `CreateIdentityProvider`. (A native `AWS::Cognito::UserPoolIdentityProvider` resource can't be used — CloudFormation rejects the `{{resolve:ssm-secure}}` dynamic references it would need in `ProviderDetails`.) The credential values therefore never appear in the CloudFormation template.
+
+**Setting the credential values.** A `secret: true` `AppSetting` is an SSM SecureString at `/<appSetting.fullId>` — **not** an AWS Secrets Manager entry, so the `blocks secret` CLI (which manages Secrets Manager) does not apply here. Set the value by writing the SecureString directly, or via the `AppSetting`'s runtime `put()`:
+
+```bash
+aws ssm put-parameter --name /<fullId> --type SecureString --value '<google-client-secret>' --overwrite
+```
+
+On the first deploy the framework seeds each secret parameter with a random placeholder, so if you deploy before setting the real value the IdP registers with that placeholder and sign-in fails at the provider — set the real value and redeploy. The registration re-reads SSM on every `cdk deploy`, so setting or rotating a credential takes effect on the next deploy (the custom resource shows as updated each deploy; the update is idempotent).
 
 ```typescript
 import { AuthOIDC, cognitoFederated } from '@aws-blocks/bb-auth-oidc';
