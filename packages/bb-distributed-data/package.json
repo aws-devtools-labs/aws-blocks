@@ -8,8 +8,7 @@
     "database",
     "sql",
     "dsql",
-    "serverless",
-    "multi-region"
+    "serverless"
   ],
   "repository": {
     "type": "git",

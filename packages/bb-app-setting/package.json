@@ -8,7 +8,7 @@
     "configuration",
     "ssm",
     "parameter-store",
-    "feature-flags"
+    "secrets"
   ],
   "repository": {
     "type": "git",
