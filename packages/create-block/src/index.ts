@@ -702,6 +702,29 @@ Modes (auto-detected):
                 is not modified.
   external      run anywhere else → generates a standalone @<scope>/bb-<name>
                 package (keywords: ["aws-blocks"]), no workspace wiring.
+
+What it generates:
+  A Building Block — a Scope subclass with one strongly-typed API, backed by four
+  conditional-export entries selected per execution context:
+    src/index.mock.ts     local dev + tests (the default + types entry)
+    src/index.aws.ts      deployed Lambda runtime (real AWS SDK calls)
+    src/index.cdk.ts      cdk synth — provisions infra, grants IAM, synthGuard stubs
+    src/index.browser.ts  browser stub (re-exports the public types + errors)
+    src/types.ts, src/errors.ts, README.md, DESIGN.md, package.json, tsconfig.json
+  The code is a storage-agnostic skeleton with one example method and TODO markers —
+  fill it in with your block's real API.
+
+Next steps (for humans and coding agents):
+  1. Implement the API in src/. Keep index.mock.ts and index.aws.ts behaviorally
+     identical, and add a synthGuard stub in index.cdk.ts for every runtime method.
+  2. Return only JSON-serializable values; get()-style reads return null for
+     not-found (don't throw). Derive resource names from this.fullId.
+  3. Fill in README.md / DESIGN.md and the TODOs, then build + test.
+  Reference: packages/bb-kv-store is the canonical worked example.
+
+Examples:
+  npm create @aws-blocks/block@latest SearchIndex
+  npx @aws-blocks/create-block SearchIndex --scope acme --dir ./bb-search-index
 `);
 }
 
