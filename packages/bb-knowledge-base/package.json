@@ -6,7 +6,6 @@
     "aws",
     "cdk",
     "knowledge-base",
-    "rag",
     "bedrock",
     "semantic-search"
   ],

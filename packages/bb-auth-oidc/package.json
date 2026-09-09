@@ -7,8 +7,7 @@
     "cdk",
     "authentication",
     "oidc",
-    "oauth2",
-    "sso"
+    "oauth2"
   ],
   "repository": {
     "type": "git",

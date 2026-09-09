@@ -6,8 +6,7 @@
     "aws",
     "cdk",
     "authentication",
-    "auth-ui",
-    "typescript"
+    "auth-ui"
   ],
   "repository": {
     "type": "git",

@@ -8,7 +8,7 @@
     "metrics",
     "cloudwatch",
     "observability",
-    "monitoring"
+    "emf"
   ],
   "repository": {
     "type": "git",

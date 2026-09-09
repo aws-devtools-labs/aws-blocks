@@ -4,7 +4,6 @@
   "keywords": [
     "aws-blocks",
     "aws",
-    "cdk",
     "database",
     "sql",
     "abstractions"

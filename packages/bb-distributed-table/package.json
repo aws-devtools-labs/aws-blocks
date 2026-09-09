@@ -7,8 +7,7 @@
     "cdk",
     "dynamodb",
     "nosql",
-    "database",
-    "table"
+    "database"
   ],
   "repository": {
     "type": "git",

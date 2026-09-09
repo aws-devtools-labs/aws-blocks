@@ -7,8 +7,7 @@
     "cdk",
     "cloudwatch",
     "dashboard",
-    "observability",
-    "monitoring"
+    "observability"
   ],
   "repository": {
     "type": "git",
