@@ -29,6 +29,47 @@ const API_NS_MOCK = `
 	const ApiNamespace: ApiNamespaceConstructor = class {} as any;
 `;
 
+describe('extractMethodTypes — namespaces sharing a method name (regression: #445)', () => {
+	it('keys methods by namespace, so a shared method name does not cross-assign schemas', () => {
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+
+				// Two namespaces both expose \`create\`, with deliberately incompatible contracts.
+				export const widgets = new ApiNamespace(null, 'widgets', (context) => ({
+					async create(label: string): Promise<{ widgetId: string }> {
+						return { widgetId: 'w' };
+					},
+				}));
+				export const subscriptions = new ApiNamespace(null, 'subscriptions', (context) => ({
+					async create(topicCount: number): Promise<{ subId: number }> {
+						return { subId: 1 };
+					},
+				}));
+			`,
+		});
+
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			// Distinct qualified keys — no collision.
+			assert.ok(types.has('widgets.create'), 'widgets.create should be keyed by namespace');
+			assert.ok(types.has('subscriptions.create'), 'subscriptions.create should be keyed by namespace');
+			assert.ok(!types.has('create'), 'no bare-name entry that could cross-assign');
+
+			// Each keeps its OWN parameter type.
+			assert.strictEqual(types.get('widgets.create')!.params[0].name, 'label');
+			assert.strictEqual(types.get('widgets.create')!.params[0].schema.type, 'string');
+			assert.strictEqual(types.get('subscriptions.create')!.params[0].name, 'topicCount');
+			assert.strictEqual(types.get('subscriptions.create')!.params[0].schema.type, 'number');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe('extractMethodTypes — direct ApiNamespace calls', () => {
 	it('extracts param and return types from inline ApiNamespace', () => {
 		const dir = createTempProject({
@@ -58,15 +99,15 @@ describe('extractMethodTypes — direct ApiNamespace calls', () => {
 
 		try {
 			const types = extractMethodTypes(join(dir, 'index.ts'));
-			assert.ok(types.has('getUser'), 'should find getUser');
-			assert.ok(types.has('createUser'), 'should find createUser');
+			assert.ok(types.has('api.getUser'), 'should find getUser');
+			assert.ok(types.has('api.createUser'), 'should find createUser');
 
-			const getUser = types.get('getUser')!;
+			const getUser = types.get('api.getUser')!;
 			assert.strictEqual(getUser.params.length, 1);
 			assert.strictEqual(getUser.params[0].name, 'id');
 			assert.strictEqual(getUser.params[0].schema.type, 'string');
 
-			const createUser = types.get('createUser')!;
+			const createUser = types.get('api.createUser')!;
 			assert.strictEqual(createUser.params.length, 2);
 			assert.strictEqual(createUser.params[0].schema.type, 'string');
 			assert.strictEqual(createUser.params[1].schema.type, 'number');
@@ -102,9 +143,34 @@ describe('extractSkipCodegenMethods — pure-AST scan', () => {
 		try {
 			const skips = extractSkipCodegenMethods(join(dir, 'index.ts'));
 			assert.strictEqual(skips.size, 1);
-			assert.ok(skips.has('devOnly'));
-			assert.ok(!skips.has('normalMethod'));
-			assert.ok(!skips.has('alsoNormal'));
+			assert.ok(skips.has('api.devOnly'), 'skip set is namespace-qualified');
+			assert.ok(!skips.has('api.normalMethod'));
+			assert.ok(!skips.has('api.alsoNormal'));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('qualifies skip names by namespace so a tag on one namespace does not drop another (regression: #445)', () => {
+		const dir = createTempProject({
+			'index.ts': `
+				class ApiNamespace { constructor(scope: any, name: any, handler: any) {} }
+
+				export const widgets = new ApiNamespace(null, 'widgets', () => ({
+					/** @blocksSkipCodegen */
+					async create() { return null; },
+				}));
+				// subscriptions.create is NOT tagged and must survive.
+				export const subscriptions = new ApiNamespace(null, 'subscriptions', () => ({
+					async create() { return null; },
+				}));
+			`,
+		});
+		try {
+			const skips = extractSkipCodegenMethods(join(dir, 'index.ts'));
+			assert.ok(skips.has('widgets.create'), 'tagged method is skipped, qualified');
+			assert.ok(!skips.has('subscriptions.create'), 'untagged same-named method must NOT be skipped');
+			assert.ok(!skips.has('create'), 'no bare key that would drop both');
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -155,8 +221,8 @@ describe('extractMethodTypes — @blocksSkipCodegen JSDoc tag', () => {
 
 		try {
 			const types = extractMethodTypes(join(dir, 'index.ts'));
-			assert.strictEqual(types.get('normalMethod')?.skipCodegen, undefined);
-			assert.strictEqual(types.get('getLastCode')?.skipCodegen, true);
+			assert.strictEqual(types.get('api.normalMethod')?.skipCodegen, undefined);
+			assert.strictEqual(types.get('api.getLastCode')?.skipCodegen, true);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -217,23 +283,23 @@ describe('extractMethodTypes — indirect ApiNamespace calls (e.g., auth.createA
 			const types = extractMethodTypes(join(dir, 'index.ts'));
 
 			// Direct ApiNamespace methods should still work
-			assert.ok(types.has('greet'), 'should find greet from direct ApiNamespace');
-			const greet = types.get('greet')!;
+			assert.ok(types.has('api.greet'), 'should find greet from direct ApiNamespace');
+			const greet = types.get('api.greet')!;
 			assert.strictEqual(greet.params[0].name, 'name');
 			assert.strictEqual(greet.params[0].schema.type, 'string');
 
 			// Indirect methods from auth.createApi() should now be resolved
-			assert.ok(types.has('getAuthState'), 'should find getAuthState from auth.createApi()');
-			assert.ok(types.has('setAuthState'), 'should find setAuthState from auth.createApi()');
+			assert.ok(types.has('authApi.getAuthState'), 'should find getAuthState from auth.createApi()');
+			assert.ok(types.has('authApi.setAuthState'), 'should find setAuthState from auth.createApi()');
 
-			const getAuthState = types.get('getAuthState')!;
+			const getAuthState = types.get('authApi.getAuthState')!;
 			assert.strictEqual(getAuthState.params.length, 0, 'getAuthState has no params');
 			assert.strictEqual(getAuthState.returnType.type, 'object', 'return type should be object');
 			assert.ok(getAuthState.returnType.properties, 'return type should have properties');
 			assert.ok('isSignedIn' in getAuthState.returnType.properties!, 'should have isSignedIn');
 			assert.ok('username' in getAuthState.returnType.properties!, 'should have username');
 
-			const setAuthState = types.get('setAuthState')!;
+			const setAuthState = types.get('authApi.setAuthState')!;
 			assert.strictEqual(setAuthState.params.length, 2, 'setAuthState has 2 params');
 			assert.strictEqual(setAuthState.params[0].name, 'action');
 			assert.strictEqual(setAuthState.params[0].schema.type, 'string');
@@ -271,9 +337,9 @@ describe('extractMethodTypes — indirect ApiNamespace calls (e.g., auth.createA
 
 		try {
 			const types = extractMethodTypes(join(dir, 'index.ts'));
-			assert.ok(types.has('greet'), 'should find greet');
+			assert.ok(types.has('api.greet'), 'should find greet');
 			// The AST-walk version should be preserved (it has richer info from the declaration)
-			assert.strictEqual(types.get('greet')!.params[0].name, 'name');
+			assert.strictEqual(types.get('api.greet')!.params[0].name, 'name');
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -335,7 +401,7 @@ describe('extractMethodTypes — transferable detection', () => {
 			`,
 		});
 		try {
-			const info = extractMethodTypes(join(dir, 'index.ts')).get('getCursorChannel');
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('api.getCursorChannel');
 			assert.ok(info, 'method should be discovered');
 			assert.ok(info.transferable, 'should be detected as transferable');
 			assert.strictEqual(info.transferable.blocksTag, 'realtime/channel');
@@ -360,7 +426,7 @@ describe('extractMethodTypes — transferable detection', () => {
 			`,
 		});
 		try {
-			const info = extractMethodTypes(join(dir, 'index.ts')).get('getDownload');
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('api.getDownload');
 			assert.ok(info?.transferable);
 			assert.strictEqual(info.transferable.blocksTag, 'file-bucket/download');
 			assert.deepStrictEqual(info.transferable.typeArgs, []);
@@ -382,8 +448,8 @@ describe('extractMethodTypes — transferable detection', () => {
 		});
 		try {
 			const types = extractMethodTypes(join(dir, 'index.ts'));
-			assert.deepStrictEqual(types.get('defaulted')?.transferable?.typeArgs, []);
-			assert.deepStrictEqual(types.get('explicit')?.transferable?.typeArgs, [{}]);
+			assert.deepStrictEqual(types.get('api.defaulted')?.transferable?.typeArgs, []);
+			assert.deepStrictEqual(types.get('api.explicit')?.transferable?.typeArgs, [{}]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -404,8 +470,8 @@ describe('extractMethodTypes — transferable detection', () => {
 		});
 		try {
 			const types = extractMethodTypes(join(dir, 'index.ts'));
-			assert.strictEqual(types.get('plain')?.transferable, undefined);
-			assert.strictEqual(types.get('loose')?.transferable, undefined);
+			assert.strictEqual(types.get('api.plain')?.transferable, undefined);
+			assert.strictEqual(types.get('api.loose')?.transferable, undefined);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -431,7 +497,7 @@ describe('extractMethodTypes — transferable detection', () => {
 			`,
 		});
 		try {
-			const info = extractMethodTypes(join(dir, 'index.ts')).get('getNotifications');
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('api.getNotifications');
 			assert.ok(info?.transferable);
 			assert.strictEqual(info.transferable.blocksTag, 'realtime/channel');
 			assert.strictEqual(info.transferable.typeArgs[0]?.title, 'Notification');
@@ -465,7 +531,7 @@ describe('extractMethodTypes — open-shape intersections', () => {
 			`,
 		});
 		try {
-			const info = extractMethodTypes(join(dir, 'index.ts')).get('signUp');
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('api.signUp');
 			assert.ok(info, 'should find signUp');
 			const inputSchema = info.params[0].schema as any;
 			assert.strictEqual(inputSchema.type, 'object');
@@ -502,7 +568,7 @@ describe('extractMethodTypes — open-shape intersections', () => {
 			`,
 		});
 		try {
-			const info = extractMethodTypes(join(dir, 'index.ts')).get('tag');
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('api.tag');
 			assert.ok(info, 'should find tag');
 			const inputSchema = info.params[0].schema as any;
 			assert.strictEqual(inputSchema.type, 'object');

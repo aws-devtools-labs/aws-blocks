@@ -16,6 +16,7 @@ import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { generateSpec } from './generate-spec.js';
+import { ApiNamespace } from '../api.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // `import.meta.url` lives in dist/scripts/, so `..` is dist/ and the built
@@ -92,6 +93,52 @@ describe('generateSpec — @blocksSkipCodegen', () => {
 			const doc = await generateSpec(join(dir, 'index.js'));
 			const methodNames = doc.methods.map((m) => m.name).sort();
 			assert.deepStrictEqual(methodNames, ['api.echo', 'api.ping']);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe('generateSpec — namespaces sharing a method name (regression: #445)', () => {
+	it('emits each namespace its OWN schema for a same-named method', async () => {
+		const dir = join(tmpdir(), `blocks-spec-test-${Date.now()}-collision`);
+		mkdirSync(dir, { recursive: true });
+		writeTsconfig(dir);
+
+		// Typed foundation for the TS type extractor. `create` has DIFFERENT params
+		// in each namespace; binding names (widgets/subscriptions) match the runtime
+		// module's export names below.
+		writeFileSync(join(dir, 'index.ts'), `
+			interface ApiNamespaceConstructor { new <T>(scope: any, name: string, handler: (ctx: any) => T): T; }
+			const ApiNamespace: ApiNamespaceConstructor = class {} as any;
+
+			export const widgets = new ApiNamespace(null, 'widgets', () => ({
+				async create(label: string): Promise<{ widgetId: string }> { return { widgetId: 'w' }; },
+			}));
+			export const subscriptions = new ApiNamespace(null, 'subscriptions', () => ({
+				async create(topicCount: number): Promise<{ subId: number }> { return { subId: 1 }; },
+			}));
+		`);
+
+		// Runtime module for namespace discovery (types come from the .ts above via
+		// the extractor). Use the real ApiNamespace so the marker symbol matches.
+		const widgets = new ApiNamespace(null as any, 'widgets', () => ({ async create(_label: string) { return { widgetId: 'w' }; } }));
+		const subscriptions = new ApiNamespace(null as any, 'subscriptions', () => ({ async create(_topicCount: number) { return { subId: 1 }; } }));
+		const loader = async () => ({ widgets, subscriptions }) as Record<string, unknown>;
+
+		try {
+			const doc = await generateSpec(join(dir, 'index.ts'), loader);
+			const byName = new Map(doc.methods.map((m) => [m.name, m]));
+
+			const w = byName.get('widgets.create');
+			const s = byName.get('subscriptions.create');
+			assert.ok(w && s, 'both namespace-qualified methods should be present');
+
+			// Each keeps its OWN param — no cross-assignment.
+			assert.strictEqual(w!.params[0]?.name, 'label');
+			assert.strictEqual((w!.params[0] as any)?.schema?.type, 'string');
+			assert.strictEqual(s!.params[0]?.name, 'topicCount');
+			assert.strictEqual((s!.params[0] as any)?.schema?.type, 'number');
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
