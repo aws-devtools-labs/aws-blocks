@@ -6,7 +6,8 @@ import { pathToFileURL, URL } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
 import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createConnection } from 'node:net';
+import { createConnection, type Socket } from 'node:net';
+import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
 import { ApiError } from '../errors.js';
@@ -952,6 +953,10 @@ export async function startDevServer(options: DevServerOptions) {
 
   // WebSocket upgrade — route to frontend (HMR) or dev attachments
   server.on('upgrade', (req, socket, head) => {
+    // A stale client can reset the connection mid-upgrade (ECONNRESET). The raw
+    // socket has no 'error' listener at this point, so Node's default handler
+    // would kill the dev server. Attach one before any parsing/routing.
+    socket.on('error', () => socket.destroy());
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     if (url.pathname === '/realtime') return; // handled by dev attachment (noServer mode)
     if (frontendProxy) {
@@ -1043,6 +1048,12 @@ export async function startDevServer(options: DevServerOptions) {
     onExhausted: () => process.exit(1),
     warn: (msg) => console.error(msg),
   });
+  // Malformed/aborted requests must not become unhandled socket errors.
+  server.on('clientError', (_err: Error, socket: Duplex) => {
+    if ((socket as Socket).writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+    else socket.destroy();
+  });
+
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       // Keep the telemetry signal (unchanged) …

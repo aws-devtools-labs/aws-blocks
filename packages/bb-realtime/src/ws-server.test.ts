@@ -13,7 +13,8 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { connect as netConnect, type AddressInfo } from 'node:net';
+import { PassThrough } from 'node:stream';
 import { WebSocket } from 'ws';
 import { attach, closeWebSocketServer, localRealtimeBus } from './ws-server.js';
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';
@@ -139,6 +140,64 @@ describe('WebSocket server: subscribe authorization', () => {
 
 		publisher.close();
 		subscriber.close();
+	});
+});
+
+describe('WebSocket server: raw-socket errors during upgrade (issue #1108 regression)', () => {
+	it('survives a connection reset in the middle of a /realtime upgrade', async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (err: unknown) => unhandled.push(err);
+		process.on('uncaughtException', onUnhandled);
+
+		try {
+			for (let i = 0; i < 20; i++) {
+				const socket = netConnect({ host: '127.0.0.1', port });
+				await new Promise<void>((resolve, reject) => {
+					socket.once('connect', resolve);
+					socket.once('error', reject);
+				});
+				socket.on('error', () => {}); // client side of the reset — not under test
+
+				// Partial upgrade request: headers arrive, the handshake never completes.
+				socket.write(
+					'GET /realtime HTTP/1.1\r\n' +
+						`Host: localhost:${port}\r\n` +
+						'Upgrade: websocket\r\n' +
+						'Connection: Upgrade\r\n' +
+						'Sec-WebSocket-Version: 13\r\n' +
+						'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
+				);
+
+				// Abort with RST (setNoDelay + destroy after linger 0) during the upgrade window.
+				socket.resetAndDestroy();
+				await new Promise((r) => setTimeout(r, 10));
+			}
+
+			// The event loop must still be alive and the server still serving.
+			const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+			const { ws, reply } = await subscribe({ channel: CHANNEL, token });
+			assert.strictEqual(reply.type, 'subscribe_success');
+			ws.close();
+
+			assert.deepStrictEqual(unhandled, [], 'raw-socket errors during upgrade must not go unhandled');
+		} finally {
+			process.off('uncaughtException', onUnhandled);
+		}
+	});
+
+	it('attaches a socket error listener before routing, and error triggers destroy', async () => {
+		const probe = new PassThrough();
+
+		// Drive the server's own upgrade listeners with a non-/realtime path so the
+		// handler returns immediately after attaching its error listener.
+		const req = { url: '/not-realtime', headers: { host: `localhost:${port}` } };
+		for (const listener of httpServer.listeners('upgrade')) {
+			(listener as (r: unknown, s: unknown, h: unknown) => void)(req, probe, Buffer.alloc(0));
+		}
+
+		assert.ok(probe.listenerCount('error') > 0, 'upgrade handler must attach a socket error listener');
+		assert.doesNotThrow(() => probe.emit('error', new Error('ECONNRESET')));
+		assert.strictEqual(probe.destroyed, true, 'socket error must destroy the socket');
 	});
 });
 
