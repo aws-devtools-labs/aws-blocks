@@ -3,8 +3,6 @@
   "version": "0.1.22",
   "keywords": [
     "aws-blocks",
-    "aws",
-    "cdk",
     "cli",
     "scaffolding",
     "starter",

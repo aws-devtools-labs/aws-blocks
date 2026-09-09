@@ -3,8 +3,6 @@
   "version": "0.1.10",
   "keywords": [
     "aws-blocks",
-    "aws",
-    "cdk",
     "authentication",
     "oidc",
     "oauth2"

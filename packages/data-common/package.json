@@ -3,7 +3,6 @@
   "version": "0.1.4",
   "keywords": [
     "aws-blocks",
-    "aws",
     "database",
     "sql",
     "abstractions"

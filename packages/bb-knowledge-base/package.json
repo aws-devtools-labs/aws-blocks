@@ -3,8 +3,6 @@
   "version": "0.2.3",
   "keywords": [
     "aws-blocks",
-    "aws",
-    "cdk",
     "knowledge-base",
     "bedrock",
     "semantic-search"

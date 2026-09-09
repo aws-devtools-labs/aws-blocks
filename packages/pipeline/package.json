@@ -13,8 +13,6 @@
   "description": "CDK Pipelines-based CI/CD construct for AWS Blocks applications",
   "keywords": [
     "aws-blocks",
-    "aws",
-    "cdk",
     "ci-cd",
     "pipelines",
     "deployment",

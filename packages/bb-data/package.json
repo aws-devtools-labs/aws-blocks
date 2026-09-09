@@ -3,8 +3,6 @@
   "version": "0.2.7",
   "keywords": [
     "aws-blocks",
-    "aws",
-    "cdk",
     "database",
     "postgresql",
     "aurora",

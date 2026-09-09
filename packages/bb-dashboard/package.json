@@ -3,8 +3,6 @@
   "version": "0.1.5",
   "keywords": [
     "aws-blocks",
-    "aws",
-    "cdk",
     "cloudwatch",
     "dashboard",
     "observability"

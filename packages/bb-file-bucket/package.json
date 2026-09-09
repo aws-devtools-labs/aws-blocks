@@ -3,8 +3,6 @@
   "version": "0.2.0",
   "keywords": [
     "aws-blocks",
-    "aws",
-    "cdk",
     "storage",
     "s3",
     "file-upload"

@@ -3,8 +3,6 @@
   "version": "0.1.9",
   "keywords": [
     "aws-blocks",
-    "aws",
-    "cdk",
     "authentication",
     "cognito",
     "mfa",

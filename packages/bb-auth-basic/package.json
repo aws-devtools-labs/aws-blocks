@@ -3,8 +3,6 @@
   "version": "0.1.8",
   "keywords": [
     "aws-blocks",
-    "aws",
-    "cdk",
     "authentication",
     "jwt",
     "password-auth"
