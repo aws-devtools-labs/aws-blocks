@@ -119,11 +119,16 @@ type-checked, lint-covered, and unit-tested (`idp-registration-lambda.test.ts`)
 rather than an inline template string. It:
 
 - **Create** — reads + decrypts both SecureString parameters (`ssm:GetParameter`
-  `WithDecryption`, with a short retry to tolerate the bulk secret-init resource
-  landing slightly later, and a terminal `ParameterNotFound` surfaced as an
-  actionable "set the SecureString" message), merges them into `ProviderDetails`,
-  and calls `CreateIdentityProvider` (falling back to `UpdateIdentityProvider` on
-  `DuplicateProviderException` for idempotency).
+  `WithDecryption`; a terminal `ParameterNotFound` surfaces as an actionable
+  "set the SecureString" message, with a short retry as a secondary guard),
+  merges them into `ProviderDetails`, and calls `CreateIdentityProvider` (falling
+  back to `UpdateIdentityProvider` on `DuplicateProviderException` for idempotency).
+
+Ordering: each IdP custom resource takes an explicit CloudFormation dependency on
+bb-app-setting's shared `BlocksSecretsBulk` resource (located by construct id via
+`Stack.of(this).node.tryFindChild('BlocksSecretsBulk')`, since it is a direct
+child of the stack). That guarantees the SecureString parameters are written
+before the handler reads them, rather than relying on the read-retry.
 - **Update** — `UpdateIdentityProvider`, falling back to `CreateIdentityProvider`
   on `ResourceNotFoundException`. `PhysicalResourceId` is
   `<pool>|<name>|<type>`, so a `ProviderName`/`ProviderType` change forces a

@@ -306,7 +306,7 @@ export class AuthOIDC<
 
 		paramNames.push(clientIdParam, clientSecretParam);
 
-		return new CustomResource(this, `idp-${provider.name}`, {
+		const cr = new CustomResource(this, `idp-${provider.name}`, {
 			serviceToken,
 			properties: {
 				UserPoolId: pool.userPoolId,
@@ -326,6 +326,17 @@ export class AuthOIDC<
 				Trigger: Date.now().toString(),
 			},
 		});
+
+		// A `secret: true` AppSetting's SecureString value is written by the shared
+		// bb-app-setting bulk-init custom resource (`BlocksSecretsBulk`, a direct
+		// child of the stack). Depend on it so the parameter exists before this
+		// handler reads it — a hard ordering guarantee rather than leaving it to the
+		// handler's read-retry. (Skipped only if the customer somehow configured no
+		// secret AppSetting, in which case the retry remains the fallback.)
+		const bulkSecrets = cdk.Stack.of(this).node.tryFindChild('BlocksSecretsBulk');
+		if (bulkSecrets) cr.node.addDependency(bulkSecrets);
+
+		return cr;
 	}
 
 	/**

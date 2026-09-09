@@ -99,6 +99,33 @@ test('CDK: cognitoFederated() registers the IdP via a custom resource that names
 	assert.strictEqual(idpCr.Properties.ProviderDetails.authorize_scopes, 'openid email profile');
 });
 
+test('CDK: the IdP custom resource depends on BlocksSecretsBulk when present (param exists before the read)', () => {
+	// A real BlocksStack has bb-app-setting's shared `BlocksSecretsBulk` resource
+	// (it writes every secret AppSetting's SecureString). The plain test stub does
+	// not model that, so stand one in with the same construct id; AuthOIDC should
+	// wire a dependency onto it so the credential parameters exist before the
+	// handler reads them.
+	const TOKEN = 'arn:aws:lambda:us-east-1:1:function:x';
+	const { stack, parent } = setup();
+	new cdk.CustomResource(stack, 'BlocksSecretsBulk', { serviceToken: TOKEN });
+	new AuthOIDC(parent, 'auth', {
+		providers: [
+			cognitoFederated({
+				name: 'google', identityProvider: 'Google', cognitoDomain: 'myapp-abc123', region: 'us-east-1',
+				clientId: appSettingStub('app-google-client-id'), clientSecret: appSettingStub('app-google-client-secret'),
+			}),
+		],
+	});
+	const template = Template.fromStack(stack);
+	const crs = template.findResources('AWS::CloudFormation::CustomResource');
+	const bulkLogicalId = Object.keys(crs).find((k) => crs[k].Properties?.ServiceToken === TOKEN);
+	assert.ok(bulkLogicalId, 'stand-in BlocksSecretsBulk should be in the template');
+	const idpEntry = Object.entries(crs).find(([, r]: [string, any]) => r.Properties?.ProviderName === 'Google');
+	assert.ok(idpEntry, 'IdP custom resource should exist');
+	const dependsOn: string[] = (idpEntry![1] as any).DependsOn ?? [];
+	assert.ok(dependsOn.includes(bulkLogicalId as string), 'IdP CR must depend on the bulk secret-init resource');
+});
+
 test('CDK: the IdP-registration Lambda is granted cognito-idp, ssm:GetParameter and scoped kms:Decrypt', () => {
 	const template = synthFederated();
 	// The three grants land across the role's managed statements; assert each
