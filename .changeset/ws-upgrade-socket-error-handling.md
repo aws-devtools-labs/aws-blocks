@@ -1,4 +1,5 @@
 ---
+"@aws-blocks/core": patch
 "@aws-blocks/bb-realtime": patch
 "@aws-blocks/blocks": patch
 ---
