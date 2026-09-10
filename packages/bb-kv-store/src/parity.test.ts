@@ -8,6 +8,7 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
+import { isBlocksError } from '@aws-blocks/core';
 import { KVStore, KVStoreErrors } from './index.mock.js';
 import { KVStore as AwsKVStore } from './index.aws.js';
 import { TTL_ATTRIBUTE, nowEpochSeconds } from './ttl.js';
@@ -245,5 +246,80 @@ describe('TTL parity between mock and AWS runtimes', () => {
 				return true;
 			});
 		}
+	});
+});
+
+// Conditional-write composition parity: the AWS runtime must emit an OR-composed
+// ConditionExpression when both ifNotExists and ifValueEquals are set, matching
+// the mock's behavior. A typo in the join or a missing name/value would slip
+// past the mock-only tests.
+describe('conditional-write composition (AWS PutCommand shape)', () => {
+	test('both conditions → attribute_not_exists(#pk) OR #value = :expected', () => {
+		const { store, items } = captureAws('parity-compose-both');
+		return store.put('k', 'next', { ifNotExists: true, ifValueEquals: 'prev' }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, 'attribute_not_exists(#pk) OR #value = :expected');
+			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#pk': 'pk', '#value': 'value' });
+			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': JSON.stringify('prev') });
+		});
+	});
+
+	test('ifNotExists alone → attribute_not_exists(#pk), no value attrs', () => {
+		const { store, items } = captureAws('parity-compose-absent');
+		return store.put('k', 'v', { ifNotExists: true }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, 'attribute_not_exists(#pk)');
+			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#pk': 'pk' });
+			assert.strictEqual(input.ExpressionAttributeValues, undefined);
+		});
+	});
+
+	test('ifValueEquals alone → #value = :expected, no #pk', () => {
+		const { store, items } = captureAws('parity-compose-value');
+		return store.put('k', 'v', { ifValueEquals: 'prev' }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, '#value = :expected');
+			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#value': 'value' });
+			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': JSON.stringify('prev') });
+		});
+	});
+
+	test('no conditions → no ConditionExpression', () => {
+		const { store, items } = captureAws('parity-compose-none');
+		return store.put('k', 'v').then(() => {
+			assert.strictEqual(items()[0].ConditionExpression, undefined);
+		});
+	});
+
+	test('explicit ifValueEquals: undefined is a no-op (matches the mock)', () => {
+		const { store, items } = captureAws('parity-compose-undef');
+		return store.put('k', 'v', { ifValueEquals: undefined }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, undefined);
+			assert.strictEqual(input.ExpressionAttributeValues, undefined);
+		});
+	});
+
+	test('ifValueEquals: null is a real condition → :expected = "null"', () => {
+		const { store, items } = captureAws('parity-compose-null');
+		return store.put('k', 'v', { ifValueEquals: null as unknown as string }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, '#value = :expected');
+			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': 'null' });
+		});
+	});
+
+	test('a rejected conditional write maps to KVStoreErrors.ConditionalCheckFailed', async () => {
+		// Stub DynamoDB to reject like a real failed condition; the compose path must
+		// surface the mapped, isBlocksError-matchable error (not the mock — the real client).
+		const { store } = captureAws('parity-compose-reject', () => {
+			const err = new Error('The conditional request failed');
+			err.name = 'ConditionalCheckFailedException';
+			throw err;
+		});
+		await assert.rejects(
+			() => store.put('k', 'next', { ifNotExists: true, ifValueEquals: 'prev' }),
+			(err: Error) => isBlocksError(err, KVStoreErrors.ConditionalCheckFailed),
+		);
 	});
 });

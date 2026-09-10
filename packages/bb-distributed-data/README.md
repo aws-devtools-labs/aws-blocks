@@ -36,7 +36,7 @@ const { rowCount } = await db.execute(
 DSQL uses OCC — transactions may fail at commit if another transaction modified the same rows. The callback executes exactly once unless you opt into retry.
 
 ```typescript
-// Default: no retry. Throws SerializationFailureException on conflict.
+// Default: no retry. Throws SerializationFailureException (HTTP 409 Conflict, retriable) on conflict.
 await db.transaction(async (tx) => {
   await tx.execute(sql`UPDATE accounts SET balance = balance - ${100} WHERE id = ${fromId}`);
   await tx.execute(sql`UPDATE accounts SET balance = balance + ${100} WHERE id = ${toId}`);
@@ -157,7 +157,8 @@ try {
   await db.transaction(async (tx) => { /* ... */ });
 } catch (e: unknown) {
   if (isBlocksError(e, DistributedDatabaseErrors.SerializationFailure)) {
-    // OCC conflict — transaction was NOT committed. Safe to retry.
+    // OCC conflict — transaction was NOT committed. Serialized as HTTP 409
+    // (Conflict), retriable — safe to retry.
   }
   if (isBlocksError(e, DistributedDatabaseErrors.UniqueConstraintViolation)) {
     // Duplicate key

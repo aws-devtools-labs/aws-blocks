@@ -10,7 +10,7 @@ import {
   type Field,
 } from '@aws-sdk/client-rds-data';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
-import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES, wrapError } from '../errors.js';
+import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES, wrapError, serializationConflict } from '../errors.js';
 
 /**
  * Translate `$1`, `$2`, ... placeholders to `:p1`, `:p2`, ... for Data API.
@@ -101,7 +101,10 @@ function translateError(e: unknown): never {
     if (stateMatch) {
       const code = stateMatch[1];
       if (code === '40001') {
-        e.name = DatabaseErrors.SerializationFailure;
+        // OCC conflict: surface as a retriable 409 (Conflict), not a generic
+        // 500. Preserves the SerializationFailure name and keeps the original
+        // error as cause. Matches the PGlite / pg-client engine paths.
+        throw serializationConflict(e);
       } else if (code === '23505') {
         e.name = DatabaseErrors.UniqueConstraintViolation;
       } else if (code.startsWith('08')) {

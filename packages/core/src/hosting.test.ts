@@ -13,7 +13,7 @@ import { App, Duration, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
 import { type BlocksStackApi, Hosting } from './hosting.js';
-import { clearRouteRegistry, registerRoute } from './raw-route.js';
+import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
 
 // ================================================================
 // Hosting construct tests
@@ -484,6 +484,34 @@ describe('Hosting', () => {
       }
       assert.ok(foundRetain, 'At least one bucket should have Retain deletion policy');
     });
+
+    it('forwards buildRetentionDays to the hosting bucket lifecycle rule (#480)', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'RetentionStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        buildRetentionDays: 90,
+      });
+
+      const template = Template.fromStack(stack);
+      // Before the fix, core dropped buildRetentionDays (only retainOnDelete was
+      // forwarded), so this asserted 30. It must now reach the DeleteOldBuilds
+      // rule as 90.
+      template.hasResourceProperties('AWS::S3::Bucket', {
+        LifecycleConfiguration: Match.objectLike({
+          Rules: Match.arrayWith([
+            Match.objectLike({
+              Id: 'DeleteOldBuilds',
+              ExpirationInDays: 90,
+            }),
+          ]),
+        }),
+      });
+    });
   });
 
   // ── API integration tests ────────────────────────────────────
@@ -706,6 +734,50 @@ describe('Hosting', () => {
       assert.ok(patterns.includes('/aws-blocks/api/*'), 'Should have /aws-blocks/api/* behavior');
       assert.ok(patterns.includes('/health'), 'Should have /health behavior for RawRoute');
       assert.ok(patterns.includes('/users/*'), 'Should have /users/* behavior for parameterized RawRoute');
+    });
+
+    it('adds a CloudFront behavior for a route another core copy registered', () => {
+      createSpaBuildOutput(tmpDir);
+
+      // Synth has the same split as dispatch: a bundle can hold more than one
+      // copy of @aws-blocks/core, and this loop reads whichever route table
+      // its own copy owns. Register the way a second copy would — straight
+      // into the shared state, not through this copy's registerRoute() — and
+      // the behavior must still be emitted. With a module-local registry it
+      // never is, and the route 404s at CloudFront before Lambda is reached.
+      const REGISTRY_KEY = '__AWS_BLOCKS_RAW_ROUTE_REGISTRY_V1__';
+      const state = (globalThis as typeof globalThis & { [REGISTRY_KEY]?: { routes: RegisteredRoute[] } })[
+        REGISTRY_KEY
+      ];
+      assert.ok(state, `route registry state must live on globalThis['${REGISTRY_KEY}']`);
+
+      const { pattern, paramNames } = compilePath('/from-other-copy');
+      state.routes.push({
+        method: 'GET',
+        path: '/from-other-copy',
+        pattern,
+        paramNames,
+        handler: async () => {},
+      });
+
+      const app = new App();
+      const stack = new Stack(app, 'ForeignRouteBehaviorStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+      });
+
+      const template = Template.fromStack(stack);
+      const distributions = template.findResources('AWS::CloudFront::Distribution');
+      const distKeys = Object.keys(distributions);
+      const distConfig = (distributions[distKeys[0]] as any).Properties.DistributionConfig;
+      const patterns = (distConfig.CacheBehaviors ?? []).map((b: any) => b.PathPattern);
+
+      assert.ok(
+        patterns.includes('/from-other-copy'),
+        `synth must see routes from every core copy, got: ${JSON.stringify(patterns)}`,
+      );
     });
 
     it('proxies the reserved /aws-blocks/auth subtree with a single behavior', () => {
