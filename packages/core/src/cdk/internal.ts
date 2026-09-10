@@ -23,11 +23,13 @@
  * @internal
  */
 
-export { Compute } from './compute/compute.js';
-export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
-// Builds a CloudFront origin from a Blocks API URL. Framework/test surface —
-// used by the front-door aspect and reused by Hosting's API behaviors.
-export { httpOriginFromApiUrl } from './front-door.js';
 // Reserved `/aws-blocks` path segment, needed by concrete computes (e.g.
 // LambdaCompute in @aws-blocks/bb-lambda-compute) to build their API route tree.
 export { BLOCKS_NAMESPACE } from '../constants.js';
+export { Compute } from './compute/compute.js';
+export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
+// Front-door helpers — framework-internal seams. `httpOriginFromApiUrl` builds
+// the API origin from an API URL token (shared with Hosting); the others let
+// Hosting publish its distribution and let the `ApiUrl` output read the
+// resolved front-door URL. Not a customer surface.
+export { httpOriginFromApiUrl, registerHostingDistribution, resolvedFrontDoorUrl } from './front-door.js';
