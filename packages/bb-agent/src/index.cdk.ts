@@ -30,7 +30,7 @@ export class Agent extends BuildingBlockScope {
 	 */
 
 	constructor(scope: ScopeParent, id: string, config?: AgentConfig) {
-		super(id, { parent: scope }, { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
 
 		// Session-snapshot bucket. Provisioned here (and granted to the shared execution role that the
 		// AgentCore Runtime runs as); the deployed loop re-derives its name from this bucket's `fullId`

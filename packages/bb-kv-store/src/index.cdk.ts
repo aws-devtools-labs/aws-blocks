@@ -33,7 +33,7 @@ export class KVStore extends BuildingBlockScope {
 	}
 
 	constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<unknown>) {
-		super(id, { parent: scope }, { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] });
+		super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
 
 		if (options?.table) {
 			// `fromExisting`: don't provision; bind to the pre-existing table by name

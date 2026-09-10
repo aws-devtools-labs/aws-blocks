@@ -73,7 +73,7 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 	public readonly dlq: Queue;
 
 	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
-		super(id, { parent: scope }, { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
 
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 10;

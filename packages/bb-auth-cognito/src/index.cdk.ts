@@ -67,7 +67,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	private readonly adminOptions?: AdminOptions;
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
-		super(id, { parent: scope }, { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);

@@ -53,7 +53,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
-		super(id, { parent: scope }, { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.S3] });
+		super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.S3] } });
 
 		if (options?.bucket) {
 			// `fromExisting`: don't provision; bind to the pre-existing bucket and

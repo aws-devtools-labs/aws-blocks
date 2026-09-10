@@ -52,7 +52,7 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 	}
 
 	constructor(scope: ScopeParent, id: string, options: AppSettingOptions<T>) {
-		super(id, { parent: scope }, { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 
 		// `external` is package-internal (set only by fromExisting), not on the
 		// public AppSettingOptions — read it via the internal options type.

@@ -87,7 +87,7 @@ export class AuthOIDC<P extends readonly ProviderConfig[] = readonly ProviderCon
 	public readonly signOutPath: string;
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
-		super(id, { parent: scope }, { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 
 		this.callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
 		this.signOutPath = options.signOutPath ?? DEFAULT_SIGNOUT_PATH;

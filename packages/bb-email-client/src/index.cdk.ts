@@ -17,7 +17,7 @@ import type { EmailOptions } from './types.js';
 
 export class EmailClient extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: EmailOptions) {
-		super(id, { parent: scope }, { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SES] });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SES] } });
 
 		console.warn(
 			`\n⚠️  [Email] Prerequisite: Domain for "${options.fromAddress}" must be verified in SES.\n` +

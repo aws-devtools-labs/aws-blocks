@@ -39,7 +39,7 @@ export class DistributedDatabase extends BuildingBlockScope {
 		// subnets the deploy succeeds but every DSQL call times out at runtime;
 		// declaring requiresEgress makes finalizeVpc validate it against the
 		// runtime's placement and fail synth on a mismatch.
-		super(id, { parent: scope }, { requiresEgress: true });
+		super(id, { parent: scope, vpc: { requiresEgress: true } });
 
 		const stack = cdk.Stack.of(this);
 		const envName = this.fullId.replace(ENV_SANITIZE, '_');

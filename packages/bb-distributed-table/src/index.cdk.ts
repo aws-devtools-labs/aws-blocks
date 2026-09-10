@@ -64,7 +64,7 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 		id: string,
 		public options: any,
 	) {
-		super(id, { parent: scope }, { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] });
+		super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
 
 		const config = options;
 

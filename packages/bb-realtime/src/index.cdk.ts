@@ -186,7 +186,7 @@ function getOrCreateSharedInfra(
  */
 export class Realtime extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
-		super(id, { parent: scope }, { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY] });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY] } });
 
 		// The WebSocket routes are a stack-level singleton (one WS API per stack)
 		// that integrates to a single Lambda target, so bind them to the stack's

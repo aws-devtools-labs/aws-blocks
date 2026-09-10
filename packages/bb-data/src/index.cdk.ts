@@ -77,16 +77,15 @@ export class Database extends BuildingBlockScope {
 		// API is called from the shared runtime over HTTPS (via those endpoints), so
 		// the runtime's own placement is unconstrained. The cluster's placement is
 		// resolved by the Database construct itself via `selectSubnets`, not here.
-		super(
-			id,
-			{ parent: scope },
-			{
+		super(id, {
+			parent: scope,
+			vpc: {
 				interfaceEndpoints: [
 					ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
 					ec2.InterfaceVpcEndpointAwsService.RDS_DATA,
 				],
 			},
-		);
+		});
 
 		if (options?.connection) {
 			// External database — skip provisioning, just grant permissions and inject env vars

@@ -1,18 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import type { ScopeParent } from '@aws-blocks/core';
+import { blocksError, Scope } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
-import { Scope, blocksError } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import type {
-	CronJobEvent,
-	CronJobOptions,
-} from './types.js';
-import { validateSchedule, validateTimezone } from './schedule.js';
 import { CronJobErrors } from './errors.js';
+import { validateSchedule, validateTimezone } from './schedule.js';
+import type { CronJobEvent, CronJobOptions } from './types.js';
 
 export { CronJobErrors } from './errors.js';
 export type { CronJobEvent, CronJobOptions } from './types.js';
@@ -80,10 +77,12 @@ function getOrCreateSchedulerRole(stack: cdk.Stack, handlerArn: string): iam.Rol
 	const role = new iam.Role(stack, 'BlocksSchedulerRole', {
 		assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
 	});
-	role.addToPolicy(new iam.PolicyStatement({
-		actions: ['lambda:InvokeFunction'],
-		resources: [handlerArn],
-	}));
+	role.addToPolicy(
+		new iam.PolicyStatement({
+			actions: ['lambda:InvokeFunction'],
+			resources: [handlerArn],
+		}),
+	);
 
 	(stack as any)[SCHEDULER_ROLE_KEY] = role;
 	return role;

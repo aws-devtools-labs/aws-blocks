@@ -200,7 +200,7 @@ function generateMetadataSidecars(sourceDir: string): string | undefined {
  */
 export class KnowledgeBase extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: KnowledgeBaseOptions) {
-		super(id, { parent: scope }, { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
 
 		const dimensions = options.embeddingDimensions ?? 1024;
 
