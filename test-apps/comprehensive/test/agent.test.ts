@@ -67,6 +67,87 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.ok(chunks.filter((c: any) => c.type === 'text-delta').length > 0, 'should receive text-delta chunks');
         assert.ok(chunks.some((c: any) => c.type === 'done'), 'should receive done chunk');
       });
+
+      test('agentGetRawDescriptor returns a fresh, well-formed chunks-channel descriptor', async () => {
+        const api = getApi();
+        const { conversationId } = await api.agentCreateConversationId();
+
+        const d1 = await api.agentGetRawDescriptor(conversationId);
+        // __blocks is stripped so the response middleware does NOT hydrate this into a
+        // subscribe-only channel client — the raw token fields must be reachable.
+        assert.ok(!('__blocks' in d1), 'raw descriptor must have __blocks stripped');
+        assert.strictEqual(typeof d1.token, 'string', 'descriptor carries a channel token');
+        assert.ok((d1.token as string).length > 0, 'channel token is non-empty');
+        const channel1 = d1.channel;
+        // The descriptor targets the AGENT chunks channel for this conversation.
+        assert.ok(typeof channel1 === 'string' && channel1.includes(conversationId), 'channel path targets the conversation');
+
+        // Each call mints a FRESH channel token. The local mint bakes exp=floor(now/1000)
+        // into the token, so a >1s gap guarantees a distinct token (deterministic in both
+        // local mint and the deployed authorizer, which are also exp-based).
+        await new Promise(r => setTimeout(r, 1100));
+        const d2 = await api.agentGetRawDescriptor(conversationId);
+        assert.notStrictEqual(d2.token, d1.token, 'each call mints a fresh channel token');
+      });
+
+      test('reconnect on the agent chunks channel invokes refresh and resubscribes', { timeout: 120_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.agentCreateConversationId();
+        // Subscribe via the SAME path useChat uses (agentGetChannel → hydrated chunks channel).
+        const { channel } = await api.agentGetChannel(conversationId);
+
+        const chunks: any[] = [];
+        let reconnects = 0;
+        let refreshCalls = 0;
+
+        // Mirror realtime.test.ts's refresh callback, sourced from the AGENT's chunks
+        // channel: agentGetRawDescriptor mints a FRESH token server-side and strips
+        // __blocks so the response middleware won't hydrate it; we re-add the discriminant.
+        // `channel` is set to the concrete conversationId string to satisfy the descriptor's
+        // `channel: string` cast-free (the raw descriptor's channel is typed `unknown`).
+        const sub = channel.subscribe({
+          onMessage: (chunk: any) => { chunks.push(chunk); },
+          onReconnect: () => { reconnects++; },
+          refresh: async () => {
+            refreshCalls++;
+            const fresh = await api.agentGetRawDescriptor(conversationId);
+            return { ...fresh, __blocks: 'realtime/channel', channel: conversationId };
+          },
+        } satisfies import('aws-blocks').SubscribeOptions<any>);
+
+        try {
+          await sub.established;
+          // Start a stream (canned provider in local) so the subscription is live mid-turn.
+          await api.agentStream('Say hello', conversationId, conversationId);
+
+          // Wait for at least one chunk — proves delivery on the agent channel pre-drop.
+          const chunkDeadline = Date.now() + 30_000;
+          while (chunks.length < 1) {
+            if (Date.now() > chunkDeadline) throw new Error('no chunk delivered on the agent channel within 30s');
+            await new Promise(r => setTimeout(r, 100));
+          }
+
+          // Force a mid-stream drop of the underlying socket. Because a refresh fn is
+          // registered, the transport must invoke it before reopening, then resubscribe
+          // the chunks channel and fire onReconnect.
+          sub.connection?.close();
+
+          const reconnectDeadline = Date.now() + 60_000;
+          while (reconnects < 1) {
+            if (Date.now() > reconnectDeadline) throw new Error('onReconnect did not fire within 60s of the forced close on the agent channel');
+            await new Promise(r => setTimeout(r, 100));
+          }
+
+          // PR503 assertion: the refresh path IS exercised on the AGENT chunks channel —
+          // agentGetRawDescriptor is invoked to re-mint credentials before the reconnect.
+          // (Post-reconnect transport-level delivery with fresh creds is covered by the
+          // realtime.test.ts refresh e2e — same transport + refresh mechanism.)
+          assert.ok(refreshCalls >= 1, `refresh callback should be invoked on the agent-channel reconnect, got ${refreshCalls}`);
+          assert.ok(reconnects >= 1, 'onReconnect should fire on the agent channel after the forced close');
+        } finally {
+          sub.unsubscribe();
+        }
+      });
     });
 
     describe('Conversation Persistence', () => {

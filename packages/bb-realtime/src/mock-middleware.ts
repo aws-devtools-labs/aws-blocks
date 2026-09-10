@@ -44,6 +44,14 @@ const connections = new Map<string, {
 	disconnectHandlers: Set<(reason: DisconnectReason) => void>;
 	/** Registered onReconnect callbacks (called after a reconnect resubscribes). */
 	reconnectHandlers: Set<() => void>;
+	/**
+	 * Optional token-refresh fn, set from `SubscribeOptions.refresh`. Called
+	 * before each reconnect (never on the initial connect) to re-mint a fresh
+	 * channel descriptor so the subscription outlives the channel-token TTL
+	 * (~1h). Mirrors aws-middleware; the local dev server validates the channel
+	 * token on (re)subscribe, so the fresh token is applied to `channelTokens`.
+	 */
+	refresh?: () => Promise<RealtimeChannelDescriptor>;
 	/** Pending reconnect timer, tracked so it can be cleared on teardown. */
 	reconnectTimer?: ReturnType<typeof setTimeout>;
 	/**
@@ -82,6 +90,42 @@ function getOrCreateConnection(wsUrl: string) {
 }
 
 function doConnect(wsUrl: string, isReconnect = false) {
+	const conn = getOrCreateConnection(wsUrl);
+	// Refresh-before-open on reconnect: mirror aws-middleware. The local dev
+	// server validates the channel token on (re)subscribe, so a reconnect after
+	// the channel-token TTL (~1h) must resubscribe with a freshly-minted token.
+	// Re-mint via the server-provided `refresh()` and apply it to channelTokens
+	// BEFORE opening the socket, so the resubscribe frame carries the fresh
+	// token. Never called on the initial connect. If refresh throws, don't crash:
+	// surface onDisconnect('error') and fall back to backoff.
+	if (isReconnect && conn.refresh) {
+		const refresh = conn.refresh;
+		refresh()
+			.then((fresh) => {
+				// GUARD (BLOCKING): re-fetch the pooled connection. A teardown
+				// (unsubscribe of the last handler, or __resetConnectionsForTest) can
+				// land while refresh() is in flight. If the connection is gone, torn
+				// down, or has no subscribers, do NOT reopen: openMockSocket →
+				// getOrCreateConnection would otherwise resurrect a fresh pooled entry
+				// (tornDown unset) and re-arm timers, keeping the event loop alive and
+				// hanging `node --test` — the exact leak PR1's teardown guard fixed.
+				const c = connections.get(wsUrl);
+				if (!c || c.tornDown || c.subscriptions.size === 0) { return; }
+				if (isRealtimeDescriptor(fresh) && typeof fresh.token === 'string') {
+					c.channelTokens.set(fresh.channel, fresh.token);
+				}
+				openMockSocket(wsUrl, isReconnect);
+			})
+			.catch(() => {
+				conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
+				scheduleReconnect(wsUrl);
+			});
+		return;
+	}
+	openMockSocket(wsUrl, isReconnect);
+}
+
+function openMockSocket(wsUrl: string, isReconnect = false) {
 	const conn = getOrCreateConnection(wsUrl);
 	try {
 		conn.ws = new WebSocket(wsUrl);
@@ -219,11 +263,15 @@ function ensureConnected(wsUrl: string) {
 	doConnect(wsUrl);
 }
 
-function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, token?: string, onDisconnect?: (reason: DisconnectReason) => void, onReconnect?: () => void): RealtimeSubscription {
+function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, token?: string, onDisconnect?: (reason: DisconnectReason) => void, onReconnect?: () => void, refresh?: () => Promise<RealtimeChannelDescriptor>): RealtimeSubscription {
 	const conn = getOrCreateConnection(wsUrl);
 	ensureConnected(wsUrl);
 	if (onDisconnect) conn.disconnectHandlers.add(onDisconnect);
 	if (onReconnect) conn.reconnectHandlers.add(onReconnect);
+	// Store the token-refresh fn (connection-level; last writer wins) so a
+	// reconnect can re-mint a fresh channel token before reopening. Only set when
+	// provided so a subscriber without `refresh` never clears one another set.
+	if (refresh) conn.refresh = refresh;
 
 	let establishedResolve: () => void;
 	let establishedReject: (err: Error) => void;
@@ -297,7 +345,8 @@ export function hydrate(data: unknown): unknown {
 				const handler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				const onDisconnect = typeof handlerOrOptions === 'function' ? undefined : handlerOrOptions.onDisconnect;
 				const onReconnect = typeof handlerOrOptions === 'function' ? undefined : handlerOrOptions.onReconnect;
-				return subscribeTo(wsUrl, channel, handler, token as string | undefined, onDisconnect, onReconnect);
+				const refresh = typeof handlerOrOptions === 'function' ? undefined : handlerOrOptions.refresh;
+				return subscribeTo(wsUrl, channel, handler, token as string | undefined, onDisconnect, onReconnect, refresh);
 			},
 		} satisfies RealtimeChannelClient;
 	}
