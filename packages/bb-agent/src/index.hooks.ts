@@ -106,20 +106,43 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	let activeSub: { unsubscribe(): void } | null = null;
 	let assistantId: string | null = null;
 	let assistantText = '';
+	let loadingHistory = false;
+	let bufferedChunks: AgentStreamChunk[] = [];
 
 	/** Handle a chunk from the Realtime subscription. */
 	function handleChunk(chunk: AgentStreamChunk) {
+		if (loadingHistory) {
+			bufferedChunks.push(chunk);
+			return;
+		}
+		applyChunk(chunk);
+	}
+
+	function ensureAssistantMessage() {
+		if (assistantId) return;
+		const message: ChatMessage = { id: nextId(), role: 'assistant', content: '' };
+		assistantId = message.id;
+		assistantText = '';
+		messages = [...messages, message];
+		options.onMessagesChange?.(messages);
+	}
+
+	function applyChunk(chunk: AgentStreamChunk, skipTextUpdate = false) {
 		options.onChunk?.(chunk);
 
-		if (chunk.type === 'text-delta' && chunk.text && assistantId) {
+		if (chunk.type === 'text-delta' && chunk.text && !skipTextUpdate) {
+			ensureAssistantMessage();
 			assistantText += chunk.text;
 			messages = messages.map(m => m.id === assistantId ? { ...m, content: assistantText } : m);
 			options.onMessagesChange?.(messages);
 		}
 
 		if (chunk.type === 'done') {
-			if (chunk.text && assistantId) {
-				messages = messages.map(m => m.id === assistantId ? { ...m, content: chunk.text! } : m);
+			const text = chunk.text;
+			if (text && !skipTextUpdate) {
+				ensureAssistantMessage();
+				assistantText = text;
+				messages = messages.map(m => m.id === assistantId ? { ...m, content: text } : m);
 				options.onMessagesChange?.(messages);
 			}
 			loading = false;
@@ -225,22 +248,45 @@ export function useChat(options: UseChatOptions): ChatInstance {
 
 		async loadConversation(id: string) {
 			conversationId = id;
+			assistantId = null;
+			assistantText = '';
+			bufferedChunks = [];
+			loadingHistory = true;
 
-			// 1. Subscribe FIRST — catch any in-flight chunks
-			await ensureSubscribed(id);
+			try {
+				// 1. Subscribe FIRST — catch any in-flight chunks
+				await ensureSubscribed(id);
 
-			// 2. THEN load history from DB
-			// TODO: buffer chunks received between subscribe and history load, then deduplicate/merge
-			const { messages: history } = await options.api.getConversation(id);
-			messages = history
-				.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'approval')
-				.map(m => ({
-					id: nextId(),
-					role: m.role as 'user' | 'assistant' | 'approval',
-					content: m.content,
-					metadata: m.metadata,
-				}));
-			options.onMessagesChange?.(messages);
+				// 2. THEN load history from DB. Chunks can arrive while this request is in flight,
+				// so replay them after the history establishes the message list they extend.
+				const { messages: history } = await options.api.getConversation(id);
+				messages = history
+					.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'approval')
+					.map(m => ({
+						id: nextId(),
+						role: m.role as 'user' | 'assistant' | 'approval',
+						content: m.content,
+						metadata: m.metadata,
+					}));
+				options.onMessagesChange?.(messages);
+
+				const chunks = bufferedChunks;
+				bufferedChunks = [];
+				loadingHistory = false;
+
+				const completion = [...chunks].reverse().find(chunk => chunk.type === 'done' && chunk.text);
+				const latestMessage = messages.at(-1);
+				const historyAlreadyHasCompletion = completion?.text !== undefined
+					&& latestMessage?.role === 'assistant'
+					&& latestMessage.content === completion.text;
+
+				for (const chunk of chunks) {
+					applyChunk(chunk, historyAlreadyHasCompletion && (chunk.type === 'text-delta' || chunk.type === 'done'));
+				}
+			} finally {
+				loadingHistory = false;
+				bufferedChunks = [];
+			}
 
 			// Check for pending interrupts (e.g., user left mid-approval)
 			if (options.api.getPendingInterrupts) {
