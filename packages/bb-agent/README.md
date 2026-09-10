@@ -763,7 +763,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { conversationId: await agent.createConversationId(userId) };
   },
   async sendMessage(conversationId: string, message: string, channelId: string, userId: string) {
-    await agent.stream(message, { conversationId, channelId, userId });
+    const result = await agent.stream(message, { conversationId, channelId, userId });
+    return { channelId: result.channelId };
   },
   async getConversation(conversationId: string) {
     const messages = await agent.getConversation(conversationId);
