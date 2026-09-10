@@ -13,6 +13,8 @@ import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
+import { finalizeDashboards } from './dashboard-registry.js';
+import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
@@ -237,7 +239,9 @@ export class BlocksBackend extends Construct {
 	get apiUrl(): string {
 		return this.requireDefaultCompute().apiUrl;
 	}
-	/** The default compute's handler CloudWatch log group. `bb-logger` reconfigures its retention. */
+	/** The default compute's handler CloudWatch log group. Its retention comes from
+	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
+	 * `bb-logger` CDK construct is a no-op and no longer touches it. */
 	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
 		return this.requireDefaultCompute().logGroup;
 	}
@@ -342,6 +346,14 @@ export class BlocksBackend extends Construct {
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));
+
+		// Tracing is presence-gated: if the app contains a Tracer, enable X-Ray on
+		// every compute. Runs before the dashboard finalize.
+		finalizeTracing(backend, backend.executionRole);
+
+		// Build any deferred Dashboards now that every compute's observability
+		// state is settled — so the dashboard is order-independent.
+		finalizeDashboards(backend);
 
 		// Finalize VPC. Derived resource: use the customer's if provided, else
 		// lazily create one only if a Building Block requires it.

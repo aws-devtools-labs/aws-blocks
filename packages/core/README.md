@@ -76,6 +76,18 @@ The body is JSON-RPC 2.0:
 - `params` is a POSITIONAL array of the method's arguments. A named object also works (its values are used in order).
 - Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status.
 
+Error responses use these JSON-RPC codes:
+
+| Code | Meaning | When Blocks uses it |
+|------|---------|---------------------|
+| `-32700` | Parse error | Request body is not valid JSON. |
+| `-32600` | Invalid Request | Body is not a valid Blocks JSON-RPC request, such as missing `jsonrpc: "2.0"` or a `method` that is not `namespace.method`. |
+| `-32601` | Method not found | The requested namespace or method is not exported by the backend. |
+| `-32602` | Invalid params | Reserved for JSON-RPC parameter validation failures. Application-level validation should throw an `ApiError` with the appropriate HTTP status instead. |
+| `-32603` | Internal error | Reserved for generic JSON-RPC internal errors. Unhandled application errors currently use code `500`. |
+
+Errors thrown with `ApiError` use the positive HTTP status as the JSON-RPC `error.code` (for example, `401`, `404`, or `409`) and include `error.data.name` when an error name is available. The typed client converts JSON-RPC errors back into `ApiError`.
+
 Working example:
 
 ```bash

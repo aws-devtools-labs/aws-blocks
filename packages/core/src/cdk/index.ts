@@ -18,6 +18,8 @@ import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry } from './config-registry.js';
+import { finalizeDashboards } from './dashboard-registry.js';
+import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
 import { registerVpcRequirements } from './vpc-requirements-registry.js';
@@ -39,6 +41,8 @@ export {
 } from './blocks-defaults.js';
 export { blocksNodejsBundling } from './bundling.js';
 export { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
+export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
+export { finalizeTracing, registerTracer } from './tracer-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { synthGuard } from './synth-guard.js';
@@ -89,7 +93,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	get apiUrl(): string {
 		return this.requireDefaultCompute().apiUrl;
 	}
-	/** The default compute's handler CloudWatch log group. `bb-logger` reconfigures its retention. */
+	/** The default compute's handler CloudWatch log group. Its retention comes from
+	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
+	 * `bb-logger` CDK construct is a no-op and no longer touches it. */
 	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
 		return this.requireDefaultCompute().logGroup;
 	}
@@ -160,6 +166,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		}
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
+
+		// Tracing is presence-gated: if the app contains a Tracer, enable X-Ray on
+		// every compute. Runs before the dashboard finalize so tracingEnabled is
+		// set when the dashboard reads it.
+		finalizeTracing(stack, stack.executionRole);
+
+		// Build any deferred Dashboards now that every compute's observability
+		// state is settled — so the dashboard is order-independent.
+		finalizeDashboards(stack);
 
 		// Finalize VPC. A VPC is a derived resource: use the customer's if they
 		// brought one, else lazily create one only if a Building Block genuinely
@@ -323,9 +338,9 @@ export class Scope extends Construct {
 	/**
 	 * The shared handler Lambda's CloudWatch log group (the default compute's).
 	 * Resolves the same way as {@link handler} — via the owning
-	 * BlocksStack/BlocksBackend. `bb-logger` uses this to reconfigure retention on
-	 * the single, framework-owned group rather than creating a second one that
-	 * would collide on the log-group name.
+	 * BlocksStack/BlocksBackend. Its retention comes from the compute's
+	 * `logRetention` (falling back to `defaults.logRetention`); the `bb-logger`
+	 * CDK construct is a no-op and no longer reconfigures it.
 	 */
 	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
 		return this.root.handlerLogGroup;

@@ -12,9 +12,11 @@ import {
 import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
+import { applyXRayTracing, buildHealthWidgets, buildLoggingWidgets, buildTracingWidgets } from './observability.js';
 import type { LambdaComputeProps } from './types.js';
 
 export type { LambdaComputeProps } from './types.js';
@@ -55,10 +57,10 @@ export class LambdaCompute extends Compute {
 	/** The RPC endpoint URL (`{gateway}/aws-blocks/api`). */
 	readonly apiUrl: string;
 	/**
-	 * The handler's CloudWatch log group. `bb-logger` reconfigures its retention.
-	 * Named `logGroup` (not `handlerLogGroup`) to avoid clashing with the
-	 * inherited {@link Scope.handlerLogGroup} accessor, which resolves back to
-	 * the owning stack/backend's default compute (i.e. this).
+	 * The handler's CloudWatch log group. Logs are always captured here; the
+	 * retention comes from this compute's `logRetention` prop, falling back to the
+	 * stack-wide `defaults.logRetention`. Named `logGroup` (not `handlerLogGroup`)
+	 * to avoid clashing with the inherited {@link Scope.handlerLogGroup} accessor.
 	 */
 	readonly logGroup: LogGroup;
 
@@ -67,11 +69,11 @@ export class LambdaCompute extends Compute {
 
 		// The single CloudWatch log group for the handler. Owning it (a real
 		// LogGroup passed as the function's `logGroup`) makes its retention follow
-		// the stack-wide default instead of AWS's infinite default, and gives
-		// bb-logger one group to reconfigure rather than a second, colliding one.
-		// Torn down with the stack (logs are not durable state).
+		// this compute's setting instead of AWS's infinite default. Retention is a
+		// compute-level prop (per-compute override) falling back to the stack-wide
+		// default. Torn down with the stack (logs are not durable state).
 		this.logGroup = new LogGroup(this, 'HandlerLogGroup', {
-			retention: this.defaults.logRetention,
+			retention: options?.logRetention ?? this.defaults.logRetention,
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
 
@@ -139,10 +141,13 @@ export class LambdaCompute extends Compute {
 		if (this.defaults.accessLogging) {
 			apiGatewayAccount = ensureApiGatewayAccount(cdk.Stack.of(this));
 			accessLogGroup = new LogGroup(this, 'ApiAccessLogs', {
-				retention: this.defaults.logRetention,
+				// Same per-compute override / stack-default fallback as the handler log
+				// group, so `logRetention` uniformly governs this compute's log groups.
+				retention: options?.logRetention ?? this.defaults.logRetention,
 				// Access logs are the request audit trail — follow the stack-wide removal
 				// policy (production RETAIN) so they survive a teardown, unlike the
-				// handler's operational stdout log group (always DESTROY).
+				// handler's operational stdout log group (always DESTROY). This removal
+				// asymmetry with the handler group is intentional.
 				removalPolicy: this.defaults.removalPolicy,
 			});
 		}
@@ -208,5 +213,29 @@ export class LambdaCompute extends Compute {
 			x !== null &&
 			(x as { [LAMBDA_COMPUTE_BRAND]?: unknown })[LAMBDA_COMPUTE_BRAND] === true
 		);
+	}
+
+	protected applyTracing(): void {
+		// Flip this function to X-Ray Active mode; the IAM grant to publish
+		// segments is applied once on the shared role by core's finalizeTracing.
+		applyXRayTracing(this.fn);
+	}
+
+	protected healthWidgets(region: string): IWidget[][] {
+		return buildHealthWidgets(this.fn.functionName, region);
+	}
+
+	protected loggingWidgets(region: string): IWidget[][] {
+		// Logs are always captured to this compute's own log group (the one wired
+		// into the function), so this is always available. Query that group's name
+		// (CDK-generated) rather than the AWS default `/aws/lambda/<fn>` name.
+		return buildLoggingWidgets(this.logGroup.logGroupName, region);
+	}
+
+	protected tracingWidgets(region: string): IWidget[][] {
+		if (!this.isTracerEnabled) {
+			throw new Error(`Compute "${this.id}": tracingWidgets requires a Tracer — call enableTracing() first`);
+		}
+		return buildTracingWidgets(this.fn.functionName, region);
 	}
 }
