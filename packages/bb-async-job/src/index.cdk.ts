@@ -1,35 +1,35 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
-import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
-import type { VpcRequirements } from '@aws-blocks/core/cdk';
-import { BuildingBlockScope, registerConfig, SHARED_HANDLER_TIMEOUT_SECONDS, synthGuard } from '@aws-blocks/core/cdk';
 import { Duration } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
-import { AsyncJobErrors, blocksError } from './errors.js';
-import { STATUS_TABLE_ID, statusTableOptions } from './status.js';
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import { registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
+import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
+import type { ScopeParent } from '@aws-blocks/core';
 import type {
 	AsyncJobContext,
 	AsyncJobOptions,
-	AsyncJobStatus,
 	SubmitOptions,
+	AsyncJobStatus,
 	WaitUntilCompleteOptions,
 } from './types.js';
+import { AsyncJobErrors, blocksError } from './errors.js';
+import { STATUS_TABLE_ID, statusTableOptions } from './status.js';
 
 export { AsyncJobErrors } from './errors.js';
 export type {
 	AsyncJobContext,
 	AsyncJobOptions,
+	SubmitOptions,
+	BatchSubmitResult,
 	AsyncJobState,
 	AsyncJobStatus,
 	AsyncJobTransition,
-	BatchSubmitResult,
-	SubmitOptions,
 	WaitUntilCompleteOptions,
 } from './types.js';
 
@@ -43,7 +43,11 @@ const MAX_BATCHING_WINDOW_SECONDS = 300;
  * names the offending option at the AsyncJob call site instead of surfacing as
  * a CloudFormation error minutes into a deployment.
  */
-function validateEventSourceOptions(id: string, batchSize: number, maxBatchingWindowSeconds: number): void {
+function validateEventSourceOptions(
+	id: string,
+	batchSize: number,
+	maxBatchingWindowSeconds: number
+): void {
 	// Validate the window first: the batchSize ceiling below depends on it.
 	if (
 		!Number.isInteger(maxBatchingWindowSeconds) ||
@@ -53,17 +57,18 @@ function validateEventSourceOptions(id: string, batchSize: number, maxBatchingWi
 		throw blocksError(
 			AsyncJobErrors.InvalidOption,
 			`AsyncJob "${id}": maxBatchingWindowSeconds must be an integer between 0 and ` +
-				`${MAX_BATCHING_WINDOW_SECONDS}, got: ${maxBatchingWindowSeconds}`,
+				`${MAX_BATCHING_WINDOW_SECONDS}, got: ${maxBatchingWindowSeconds}`
 		);
 	}
 
-	const maxBatchSize = maxBatchingWindowSeconds > 0 ? MAX_BATCH_SIZE_WITH_WINDOW : MAX_BATCH_SIZE_WITHOUT_WINDOW;
+	const maxBatchSize =
+		maxBatchingWindowSeconds > 0 ? MAX_BATCH_SIZE_WITH_WINDOW : MAX_BATCH_SIZE_WITHOUT_WINDOW;
 	if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > maxBatchSize) {
 		throw blocksError(
 			AsyncJobErrors.InvalidOption,
 			`AsyncJob "${id}": batchSize must be an integer between 1 and ${maxBatchSize} ` +
 				`${maxBatchingWindowSeconds > 0 ? `with a ${maxBatchingWindowSeconds}s batching window` : 'when maxBatchingWindowSeconds is 0'}` +
-				`, got: ${batchSize}`,
+				`, got: ${batchSize}`
 		);
 	}
 }
@@ -150,7 +155,7 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 				batchSize,
 				reportBatchItemFailures: true,
 				maxBatchingWindow: Duration.seconds(maxBatchingWindowSeconds),
-			}),
+			})
 		);
 
 		// Same child id and options as the runtime entry points, so the provisioned

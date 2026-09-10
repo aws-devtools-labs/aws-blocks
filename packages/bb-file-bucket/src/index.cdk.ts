@@ -1,30 +1,17 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import type { ScopeOptions, VpcRequirements } from '@aws-blocks/core/cdk';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
-import * as cdk from 'aws-cdk-lib';
-import { Duration, RemovalPolicy } from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { RetentionDays } from 'aws-cdk-lib/aws-logs';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import type { ScopeParent } from '@aws-blocks/core';
+import type { FileBucketOptions, CorsRule, LifecycleRule, ExternalBucketRef } from './types.js';
 import { validateBucketName } from './bucket-name.js';
-import type { CorsRule, ExternalBucketRef, FileBucketOptions, LifecycleRule } from './types.js';
 
 export { FileBucketErrors } from './errors.js';
-export type {
-	CorsRule,
-	ExternalBucketRef,
-	FileBucketOptions,
-	FileContent,
-	FileInfo,
-	GetUrlOptions,
-	LifecycleRule,
-	PutOptions,
-	PutUrlOptions,
-	ScanOptions,
-} from './types.js';
+export type { FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions, FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef } from './types.js';
 
 const httpMethodMap: Record<string, s3.HttpMethods> = {
 	GET: s3.HttpMethods.GET,
@@ -91,11 +78,11 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		// cross-origin requests. Fail loud here rather than deploying it.
 		for (const rule of options?.corsRules ?? []) {
 			if (rule.allowedOrigins.includes('*')) {
-				const mutating = rule.allowedMethods.filter((m) => MUTATING_CORS_METHODS.includes(m));
+				const mutating = rule.allowedMethods.filter(m => MUTATING_CORS_METHODS.includes(m));
 				if (mutating.length > 0) {
 					throw new Error(
 						`FileBucket "${this.fullId}": CORS rule with wildcard origin '*' must not allow mutating method(s) ${mutating.join(', ')}. ` +
-							`Specify explicit allowedOrigins (e.g. 'https://app.example.com') for ${mutating.join(', ')} instead of '*'.`,
+						`Specify explicit allowedOrigins (e.g. 'https://app.example.com') for ${mutating.join(', ')} instead of '*'.`,
 					);
 				}
 			}
@@ -113,7 +100,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			if (!Number.isInteger(days) || days <= 0) {
 				throw new Error(
 					`FileBucket "${this.fullId}": noncurrentVersionExpirationDays must be a positive integer (got ${days}). ` +
-						`Omit it to use the default of ${DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS} days.`,
+					`Omit it to use the default of ${DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS} days.`,
 				);
 			}
 		}
@@ -173,14 +160,10 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			lifecycleRules.push({
 				prefix: rule.prefix,
 				expiration: rule.expirationDays ? Duration.days(rule.expirationDays) : undefined,
-				transitions: rule.transitionToIaDays
-					? [
-							{
-								storageClass: s3.StorageClass.INFREQUENT_ACCESS,
-								transitionAfter: Duration.days(rule.transitionToIaDays),
-							},
-						]
-					: undefined,
+				transitions: rule.transitionToIaDays ? [{
+					storageClass: s3.StorageClass.INFREQUENT_ACCESS,
+					transitionAfter: Duration.days(rule.transitionToIaDays),
+				}] : undefined,
 			});
 		}
 
@@ -198,7 +181,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			serverAccessLogsPrefix: serverAccessLogsBucket ? 'access-logs/' : undefined,
 			cors: options?.corsRules?.map((rule: CorsRule) => ({
 				allowedOrigins: rule.allowedOrigins,
-				allowedMethods: rule.allowedMethods.map((m) => httpMethodMap[m]),
+				allowedMethods: rule.allowedMethods.map(m => httpMethodMap[m]),
 				allowedHeaders: rule.allowedHeaders,
 				exposedHeaders: rule.exposedHeaders,
 				maxAge: rule.maxAge,

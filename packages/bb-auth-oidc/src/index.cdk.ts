@@ -28,33 +28,35 @@
  *   the provider helpers.
  */
 
+import type { ScopeParent } from '@aws-blocks/core';
+import { BuildingBlockScope, registerConfig } from '@aws-blocks/core/cdk';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
-import type { ScopeParent } from '@aws-blocks/core';
-import type { VpcRequirements } from '@aws-blocks/core/cdk';
-import { BuildingBlockScope, registerConfig } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 
 import type { IDependable } from 'constructs';
-import { DEFAULT_CALLBACK_PATH, DEFAULT_SIGNOUT_PATH } from './auth-oidc.js';
 import type { AuthOIDCOptions, CognitoFederatedProvider, ProviderConfig } from './types.js';
+import {
+	DEFAULT_CALLBACK_PATH,
+	DEFAULT_SIGNOUT_PATH,
+} from './auth-oidc.js';
 import { cookieSecretEnvVar } from './utils.js';
 
-export { type AuthOIDCErrorName, AuthOIDCErrors } from './errors.js';
+export { AuthOIDCErrors, type AuthOIDCErrorName } from './errors.js';
 export {
-	cognitoFederated,
-	customOauth2,
-	customOidc,
-	github,
 	google,
+	github,
+	customOidc,
+	customOauth2,
 	stubIdp,
+	cognitoFederated,
 } from './providers.js';
-export { type RelayOrigin, relayOrigin } from './relay.js';
+export { relayOrigin, type RelayOrigin } from './relay.js';
 export type {
-	MappedClaims,
 	OIDCUser,
+	MappedClaims,
 	OnStubAuthorize,
 	StubAuthorizeRequest,
 	StubUser,
@@ -82,7 +84,9 @@ export type {
  * });
  * ```
  */
-export class AuthOIDC<P extends readonly ProviderConfig[] = readonly ProviderConfig[]> extends BuildingBlockScope {
+export class AuthOIDC<
+	P extends readonly ProviderConfig[] = readonly ProviderConfig[],
+> extends BuildingBlockScope {
 	public readonly callbackPath: string;
 	public readonly signOutPath: string;
 
@@ -155,14 +159,17 @@ export class AuthOIDC<P extends readonly ProviderConfig[] = readonly ProviderCon
 			generateSecret: true,
 			oAuth: {
 				flows: { authorizationCodeGrant: true },
-				scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+				scopes: [
+					cognito.OAuthScope.OPENID,
+					cognito.OAuthScope.EMAIL,
+					cognito.OAuthScope.PROFILE,
+				],
 				callbackUrls: [`https://localhost${callbackPath}`],
 				logoutUrls: ['https://localhost/'],
 			},
-			supportedIdentityProviders:
-				idpDependencies.length > 0
-					? cognitoProviders.map((p) => cognito.UserPoolClientIdentityProvider.custom(p.identityProvider))
-					: undefined,
+			supportedIdentityProviders: idpDependencies.length > 0
+				? cognitoProviders.map(p => cognito.UserPoolClientIdentityProvider.custom(p.identityProvider))
+				: undefined,
 		});
 
 		for (const dep of idpDependencies) {

@@ -1,17 +1,16 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import type { VpcRequirements } from '@aws-blocks/core/cdk';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
-import { Stack } from 'aws-cdk-lib';
+import { CfnConfigurationSet } from 'aws-cdk-lib/aws-ses';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import { CfnConfigurationSet } from 'aws-cdk-lib/aws-ses';
+import { Stack } from 'aws-cdk-lib';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import type { ScopeParent } from '@aws-blocks/core';
 
 // Re-export public types and errors (no runtime dependencies)
 export { EmailErrors } from './errors.js';
-export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from './types.js';
+export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
 
 import type { EmailOptions } from './types.js';
 
@@ -21,7 +20,7 @@ export class EmailClient extends BuildingBlockScope {
 
 		console.warn(
 			`\n⚠️  [Email] Prerequisite: Domain for "${options.fromAddress}" must be verified in SES.\n` +
-				`   Guide: https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html\n`,
+			`   Guide: https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html\n`
 		);
 
 		// TODO: Add a CDK custom resource that validates the SES email identity at deploy time.
@@ -33,21 +32,19 @@ export class EmailClient extends BuildingBlockScope {
 
 		// Grant the Lambda handler permission to send emails
 		// Scoped to this account's SES identities rather than '*'
-		this.executionRole.addToPrincipalPolicy(
-			new PolicyStatement({
-				effect: Effect.ALLOW,
-				actions: [
-					'ses:SendEmail',
-					'ses:SendBulkEmail',
-					'ses:SendRawEmail',
-					'ses:SendTemplatedEmail',
-					'ses:SendBulkTemplatedEmail',
-				],
-				resources: [
-					`arn:aws:ses:*:${Stack.of(this).account}:identity/*`,
-					`arn:aws:ses:*:${Stack.of(this).account}:configuration-set/*`,
-				],
-			}),
-		);
+		this.executionRole.addToPrincipalPolicy(new PolicyStatement({
+			effect: Effect.ALLOW,
+			actions: [
+				'ses:SendEmail',
+				'ses:SendBulkEmail',
+				'ses:SendRawEmail',
+				'ses:SendTemplatedEmail',
+				'ses:SendBulkTemplatedEmail',
+			],
+			resources: [
+				`arn:aws:ses:*:${Stack.of(this).account}:identity/*`,
+				`arn:aws:ses:*:${Stack.of(this).account}:configuration-set/*`,
+			],
+		}));
 	}
 }

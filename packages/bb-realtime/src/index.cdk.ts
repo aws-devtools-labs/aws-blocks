@@ -13,36 +13,30 @@
  * subsequent ones reuse it.
  */
 
+import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { WebSocketApi, WebSocketStage, LogGroupLogDestination } from 'aws-cdk-lib/aws-apigatewayv2';
+import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
+import { BuildingBlockScope, synthGuard, ensureApiGatewayAccount, blocksError } from '@aws-blocks/core/cdk';
+import { registerConfig } from '@aws-blocks/core/cdk';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { VpcRequirements } from '@aws-blocks/core/cdk';
-import {
-	BuildingBlockScope,
-	blocksError,
-	ensureApiGatewayAccount,
-	registerConfig,
-	synthGuard,
-} from '@aws-blocks/core/cdk';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import * as cdk from 'aws-cdk-lib';
-import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
-import { LogGroupLogDestination, WebSocketApi, WebSocketStage } from 'aws-cdk-lib/aws-apigatewayv2';
-import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { LogGroup } from 'aws-cdk-lib/aws-logs';
-import { RealtimeErrors } from './errors.js';
 import type { NamespaceConfig, NamespaceDefs, RealtimeOptions } from './types.js';
+import { RealtimeErrors } from './errors.js';
 
 export { RealtimeErrors } from './errors.js';
 export type {
 	NamespaceConfig,
 	NamespaceDefs,
 	RealtimeChannel,
-	RealtimeOptions,
-	RealtimeServer,
 	RealtimeSubscription,
+	RealtimeServer,
+	RealtimeOptions,
 } from './types.js';
 
 // ── Minimal schema for the connections table (CDK synth-time only) ──────────
@@ -56,14 +50,7 @@ const connectionsSchema: StandardSchemaV1<any> = {
 			if (typeof value === 'object' && value !== null) {
 				for (const v of Object.values(value as Record<string, unknown>)) {
 					if (typeof v === 'number') {
-						return {
-							issues: [
-								{
-									message: 'expected string',
-									path: [Object.keys(value as any).find((k) => (value as any)[k] === v)!],
-								},
-							],
-						};
+						return { issues: [{ message: 'expected string', path: [Object.keys(value as any).find(k => (value as any)[k] === v)!] }] };
 					}
 				}
 			}
@@ -81,11 +68,7 @@ interface SharedInfra {
 	stage: WebSocketStage;
 }
 
-function getOrCreateSharedInfra(
-	stack: cdk.Stack,
-	handler: cdk.aws_lambda.IFunction,
-	parent: BuildingBlockScope,
-): SharedInfra {
+function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunction, parent: BuildingBlockScope): SharedInfra {
 	const existing = (stack as any)[SHARED_KEY] as SharedInfra | undefined;
 	if (existing) return existing;
 
@@ -187,7 +170,6 @@ function getOrCreateSharedInfra(
 export class Realtime extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
 		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY] } });
-
 		// The WebSocket routes are a stack-level singleton (one WS API per stack)
 		// that integrates to a single Lambda target, so bind them to the stack's
 		// DEFAULT compute deterministically — not this block's resolved compute.
@@ -217,13 +199,7 @@ export class Realtime extends BuildingBlockScope {
 	// build; calling them at module top-level (which runs during synth) would
 	// otherwise fail with a cryptic `X is not a function`. These stubs turn that
 	// into an actionable message.
-	publish(..._args: unknown[]): never {
-		return synthGuard('Realtime', 'publish');
-	}
-	subscribe(..._args: unknown[]): never {
-		return synthGuard('Realtime', 'subscribe');
-	}
-	getChannel(..._args: unknown[]): never {
-		return synthGuard('Realtime', 'getChannel');
-	}
+	publish(..._args: unknown[]): never { return synthGuard('Realtime', 'publish'); }
+	subscribe(..._args: unknown[]): never { return synthGuard('Realtime', 'subscribe'); }
+	getChannel(..._args: unknown[]): never { return synthGuard('Realtime', 'getChannel'); }
 }

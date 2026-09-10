@@ -1,15 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
-import { FileBucket } from '@aws-blocks/bb-file-bucket';
-import { Realtime } from '@aws-blocks/bb-realtime';
-import type { ScopeParent } from '@aws-blocks/core';
-import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import type { ScopeParent } from '@aws-blocks/core';
+import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { Realtime } from '@aws-blocks/bb-realtime';
+import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { AgentCoreRuntime } from './agentcore-runtime.cdk.js';
-import { agentStreamChunkSchema, conversationSchema, messageSchema } from './schemas.js';
+import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig } from './types.js';
 
 export { AgentErrors } from './errors.js';
@@ -28,7 +27,6 @@ export class Agent extends BuildingBlockScope {
 	 * The loop runs inside the AgentCore Runtime (not the shared handler Lambda), so the shared
 	 * handler no longer needs Bedrock access — the runtime's own role gets it (see AgentCoreRuntime).
 	 */
-
 	constructor(scope: ScopeParent, id: string, config?: AgentConfig) {
 		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
 

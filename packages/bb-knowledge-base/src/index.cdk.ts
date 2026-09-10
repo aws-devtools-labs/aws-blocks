@@ -1,33 +1,28 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as bedrock from 'aws-cdk-lib/aws-bedrock';
+import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+import * as cr from 'aws-cdk-lib/custom-resources';
+import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import type { ScopeParent } from '@aws-blocks/core';
+import type { KnowledgeBaseOptions, ChunkingConfig } from './types.js';
+import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
-import * as path from 'node:path';
-import type { ScopeParent } from '@aws-blocks/core';
-import type { VpcRequirements } from '@aws-blocks/core/cdk';
-import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
-import * as cdk from 'aws-cdk-lib';
-import * as bedrock from 'aws-cdk-lib/aws-bedrock';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as iam from 'aws-cdk-lib/aws-iam';
-import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
-import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
-import * as cr from 'aws-cdk-lib/custom-resources';
-import type { ChunkingConfig, KnowledgeBaseOptions } from './types.js';
 
-export { KnowledgeBaseErrors } from './errors.js';
 export type {
-	ChunkingConfig,
-	ChunkingStrategy,
-	KnowledgeBaseOptions,
-	MetadataFilter,
-	RetrieveOptions,
-	RetrieveResult,
-	SourceConfig,
-	WaitUntilSyncedOptions,
+	KnowledgeBaseOptions, SourceConfig,
+	ChunkingConfig, ChunkingStrategy,
+	RetrieveOptions, RetrieveResult,
+	MetadataFilter, WaitUntilSyncedOptions,
 } from './types.js';
+export { KnowledgeBaseErrors } from './errors.js';
 
 // ── Env var helpers ────────────────────────────────────────────────────────
 
@@ -64,7 +59,10 @@ function buildChunkingConfig(config?: ChunkingConfig): bedrock.CfnDataSource.Chu
 			return {
 				chunkingStrategy: 'HIERARCHICAL',
 				hierarchicalChunkingConfiguration: {
-					levelConfigurations: [{ maxTokens: 1500 }, { maxTokens: 300 }],
+					levelConfigurations: [
+						{ maxTokens: 1500 },
+						{ maxTokens: 300 },
+					],
 					overlapTokens: 60,
 				},
 			};
@@ -85,17 +83,8 @@ function buildChunkingConfig(config?: ChunkingConfig): bedrock.CfnDataSource.Chu
 // ── Sidecar metadata generation ────────────────────────────────────────────
 
 const SUPPORTED_DOC_EXTENSIONS = new Set([
-	'.md',
-	'.txt',
-	'.html',
-	'.htm',
-	'.csv',
-	'.json',
-	'.pdf',
-	'.doc',
-	'.docx',
-	'.xls',
-	'.xlsx',
+	'.md', '.txt', '.html', '.htm', '.csv', '.json',
+	'.pdf', '.doc', '.docx', '.xls', '.xlsx',
 ]);
 
 /**
@@ -232,7 +221,7 @@ export class KnowledgeBase extends BuildingBlockScope {
 			if (prefix && !prefix.endsWith('/') && /\.\w{1,5}$/.test(prefix)) {
 				console.warn(
 					`[KnowledgeBase] S3 source "${options.source}" looks like a file path. ` +
-						`If this is a folder prefix, consider adding a trailing slash.`,
+					`If this is a folder prefix, consider adding a trailing slash.`
 				);
 			}
 			// Note: Imported buckets have limitations — cross-account access requires
@@ -307,39 +296,38 @@ export class KnowledgeBase extends BuildingBlockScope {
 		dataBucket.grantRead(bedrockRole);
 
 		// S3 Vectors permissions for Bedrock to manage embeddings
-		bedrockRole.addToPolicy(
-			new iam.PolicyStatement({
-				actions: [
-					's3vectors:CreateIndex',
-					's3vectors:GetIndex',
-					's3vectors:ListIndexes',
-					's3vectors:PutVectors',
-					's3vectors:GetVectors',
-					's3vectors:DeleteVectors',
-					's3vectors:QueryVectors',
-				],
-				resources: [vectorBucket.attrVectorBucketArn, vectorIndex.attrIndexArn],
-			}),
-		);
+		bedrockRole.addToPolicy(new iam.PolicyStatement({
+			actions: [
+				's3vectors:CreateIndex',
+				's3vectors:GetIndex',
+				's3vectors:ListIndexes',
+				's3vectors:PutVectors',
+				's3vectors:GetVectors',
+				's3vectors:DeleteVectors',
+				's3vectors:QueryVectors',
+			],
+			resources: [
+				vectorBucket.attrVectorBucketArn,
+				vectorIndex.attrIndexArn,
+			],
+		}));
 
 		// Grant InvokeModel on both the inference profile ARN and the foundation
 		// model ARN — Bedrock may resolve the model through either path depending
 		// on region and account configuration.
-		bedrockRole.addToPolicy(
-			new iam.PolicyStatement({
-				actions: ['bedrock:InvokeModel'],
-				resources: [
-					cdk.Stack.of(this).formatArn({
-						service: 'bedrock',
-						resource: 'inference-profile',
-						resourceName: 'amazon.titan-embed-text-v2:0',
-						arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
-					}),
-					// Foundation model ARNs have no account ID: arn:aws:bedrock:REGION::foundation-model/MODEL
-					`arn:aws:bedrock:${cdk.Stack.of(this).region}::foundation-model/amazon.titan-embed-text-v2:0`,
-				],
-			}),
-		);
+		bedrockRole.addToPolicy(new iam.PolicyStatement({
+			actions: ['bedrock:InvokeModel'],
+			resources: [
+				cdk.Stack.of(this).formatArn({
+					service: 'bedrock',
+					resource: 'inference-profile',
+					resourceName: 'amazon.titan-embed-text-v2:0',
+					arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+				}),
+				// Foundation model ARNs have no account ID: arn:aws:bedrock:REGION::foundation-model/MODEL
+				`arn:aws:bedrock:${cdk.Stack.of(this).region}::foundation-model/amazon.titan-embed-text-v2:0`,
+			],
+		}));
 
 		// ── 4. Bedrock Knowledge Base ──────────────────────────────────────
 
@@ -452,14 +440,12 @@ export class KnowledgeBase extends BuildingBlockScope {
 			policy: cr.AwsCustomResourcePolicy.fromStatements([
 				new iam.PolicyStatement({
 					actions: ['bedrock:StartIngestionJob'],
-					resources: [
-						cdk.Stack.of(this).formatArn({
-							service: 'bedrock',
-							resource: 'knowledge-base',
-							resourceName: knowledgeBase.attrKnowledgeBaseId,
-							arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
-						}),
-					],
+					resources: [cdk.Stack.of(this).formatArn({
+					service: 'bedrock',
+					resource: 'knowledge-base',
+					resourceName: knowledgeBase.attrKnowledgeBaseId,
+					arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
+				})],
 				}),
 			]),
 		});
@@ -486,22 +472,18 @@ export class KnowledgeBase extends BuildingBlockScope {
 			arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
 		});
 
-		this.executionRole.addToPrincipalPolicy(
-			new iam.PolicyStatement({
-				actions: ['bedrock:Retrieve'],
-				resources: [knowledgeBaseArn],
-			}),
-		);
+		this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
+			actions: ['bedrock:Retrieve'],
+			resources: [knowledgeBaseArn],
+		}));
 
 		// Ingestion-job status for isSynced()/waitUntilSynced(). These actions are
 		// authorized at the knowledge-base resource level (the data source and
 		// ingestion jobs are sub-resources of the KB ARN).
-		this.executionRole.addToPrincipalPolicy(
-			new iam.PolicyStatement({
-				actions: ['bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs'],
-				resources: [knowledgeBaseArn],
-			}),
-		);
+		this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
+			actions: ['bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs'],
+			resources: [knowledgeBaseArn],
+		}));
 	}
 
 	// ── Runtime methods are not available during CDK synth ────────────────
@@ -510,13 +492,7 @@ export class KnowledgeBase extends BuildingBlockScope {
 	// isSynced/waitUntilSynced) live in the runtime build. Calling them at module
 	// top-level (which runs during synth) would otherwise fail with a cryptic
 	// `X is not a function`; these stubs turn that into an actionable message.
-	retrieve(..._args: unknown[]): never {
-		return synthGuard('KnowledgeBase', 'retrieve');
-	}
-	isSynced(..._args: unknown[]): never {
-		return synthGuard('KnowledgeBase', 'isSynced');
-	}
-	waitUntilSynced(..._args: unknown[]): never {
-		return synthGuard('KnowledgeBase', 'waitUntilSynced');
-	}
+	retrieve(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'retrieve'); }
+	isSynced(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'isSynced'); }
+	waitUntilSynced(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'waitUntilSynced'); }
 }
