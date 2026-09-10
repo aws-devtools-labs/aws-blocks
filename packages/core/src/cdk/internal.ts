@@ -23,8 +23,12 @@
  * @internal
  */
 
-export { Compute } from './compute/compute.js';
-export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 // Reserved `/aws-blocks` path segment, needed by concrete computes (e.g.
 // LambdaCompute in @aws-blocks/bb-lambda-compute) to build their API route tree.
 export { BLOCKS_NAMESPACE } from '../constants.js';
+export type { ComputeDashboardSection } from './compute/compute.js';
+export { Compute } from './compute/compute.js';
+// Enumerate the computes registered on a stack — the Dashboard BB's default
+// compute selection resolves through this at finalize.
+export { getComputes } from './compute/compute-registry.js';
+export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
