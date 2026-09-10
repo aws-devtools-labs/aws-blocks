@@ -39,7 +39,7 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs LambdaCompute",
     "build": "tsc --build",
-    "test": "node --test dist/index.cdk.test.js dist/compute-resolution.test.js"
+    "test": "node --test dist/index.cdk.test.js dist/compute-resolution.test.js dist/front-door.cdk.test.js"
   },
   "dependencies": {
     "@aws-blocks/core": "^0.4.0"

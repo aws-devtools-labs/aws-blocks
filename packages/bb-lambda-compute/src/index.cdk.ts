@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { BLOCKS_RPC_PREFIX, DEFAULT_NODE_RUNTIME, blocksNodejsBundling, ensureApiGatewayAccount } from '@aws-blocks/core/cdk';
+import {
+	BLOCKS_RPC_PREFIX,
+	blocksNodejsBundling,
+	DEFAULT_NODE_RUNTIME,
+	ensureApiGatewayAccount,
+} from '@aws-blocks/core/cdk';
 import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
@@ -180,6 +185,10 @@ export class LambdaCompute extends Compute {
 	 * app resolve different copies of this package.
 	 */
 	static isLambdaCompute(x: unknown): x is LambdaCompute {
-		return typeof x === 'object' && x !== null && (x as { [LAMBDA_COMPUTE_BRAND]?: unknown })[LAMBDA_COMPUTE_BRAND] === true;
+		return (
+			typeof x === 'object' &&
+			x !== null &&
+			(x as { [LAMBDA_COMPUTE_BRAND]?: unknown })[LAMBDA_COMPUTE_BRAND] === true
+		);
 	}
 }
