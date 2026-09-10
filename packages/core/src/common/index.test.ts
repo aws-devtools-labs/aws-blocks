@@ -27,6 +27,13 @@ class TestBB extends Scope {
 	public testBuildUserAgentChain(): [string, string][] {
 		return this.buildUserAgentChain();
 	}
+
+	/** Expose protected method for testing */
+	public testFormatUserAgentString(maxBytes?: number): string {
+		return maxBytes === undefined
+			? this.formatUserAgentString()
+			: this.formatUserAgentString(maxBytes);
+	}
 }
 
 // ── buildUserAgentChain: standalone BB (no BB parent) ───────────────────────
@@ -238,5 +245,75 @@ describe('buildUserAgentChain', () => {
 
 		assert.strictEqual(chain[0][0], 'aws-blocks');
 		assert.strictEqual(chain[0][1], CORE_VERSION);
+	});
+});
+
+// ── formatUserAgentString: string rendering + Postgres 63-byte limit ────────
+
+describe('formatUserAgentString', () => {
+	test('renders the chain as a space-delimited string', () => {
+		const root = { id: 'my-app' };
+		const bb = new TestBB('db', { parent: root, bbName: 'Database', bbVersion: '0.2.6' });
+
+		assert.strictEqual(
+			bb.testFormatUserAgentString(),
+			`aws-blocks/${CORE_VERSION} bb/Database/0.2.6`,
+		);
+	});
+
+	test('empty chain (no official BB) renders as empty string', () => {
+		const root = { id: 'my-app' };
+		// A Scope with no official bbName produces a chain of just [aws-blocks/x];
+		// force the fully-empty case via a subclass whose chain is empty.
+		class EmptyChainBB extends TestBB {
+			public override testFormatUserAgentString(): string {
+				return this.formatUserAgentString();
+			}
+			protected override buildUserAgentChain(): [string, string][] {
+				return [];
+			}
+		}
+		const bb = new EmptyChainBB('x', { parent: root });
+		assert.strictEqual(bb.testFormatUserAgentString(), '');
+	});
+
+	test('a chain within 63 bytes is returned unchanged', () => {
+		const root = { id: 'my-app' };
+		const auth = new TestBB('auth', { parent: root, bbName: 'AuthBasic', bbVersion: '1.0.1' });
+		const db = new TestBB('db', { parent: auth, bbName: 'Database', bbVersion: '0.2.6' });
+
+		const s = db.testFormatUserAgentString();
+		assert.ok(Buffer.byteLength(s, 'utf8') <= 63);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/AuthBasic/1.0.1 bb/Database/0.2.6`);
+	});
+
+	test('a chain exceeding 63 bytes elides the middle, keeping first and leaf', () => {
+		const root = { id: 'my-app' };
+		// Build a deep nesting whose full render exceeds 63 bytes.
+		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '1.2.3' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '4.5.6' });
+		const p3 = new TestBB('c', { parent: p2, bbName: 'AuthCognito', bbVersion: '7.8.9' });
+		const leaf = new TestBB('db', { parent: p3, bbName: 'Database', bbVersion: '0.2.6' });
+
+		const full = leaf.testBuildUserAgentChain().map(([k, v]) => `${k}/${v}`).join(' ');
+		assert.ok(Buffer.byteLength(full, 'utf8') > 63, 'precondition: full string must exceed 63 bytes');
+
+		const s = leaf.testFormatUserAgentString();
+		assert.ok(Buffer.byteLength(s, 'utf8') <= 63, `result must fit in 63 bytes, got ${Buffer.byteLength(s, 'utf8')}`);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} … bb/Database/0.2.6`);
+	});
+
+	test('never truncates mid-token: result is always a fitting subset', () => {
+		const root = { id: 'my-app' };
+		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '10.20.30' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedDatabase', bbVersion: '10.20.30' });
+		const leaf = new TestBB('db', { parent: p2, bbName: 'Database', bbVersion: '10.20.30' });
+
+		const s = leaf.testFormatUserAgentString();
+		assert.ok(Buffer.byteLength(s, 'utf8') <= 63);
+		// Every space-separated token is a complete, well-formed entry (no partial tail).
+		for (const tok of s.split(' ')) {
+			assert.ok(tok === '…' || /^[a-z-]+\/\S+$/.test(tok), `token "${tok}" is malformed`);
+		}
 	});
 });

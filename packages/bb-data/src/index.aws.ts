@@ -66,8 +66,8 @@ export class Database extends Scope {
       const connStr = typeof conn.connectionString === 'string'
         ? conn.connectionString
         : await conn.connectionString.get();
-      
-      const applicationName = this.buildUserAgentChain().map(([k, v]) => `${k}/${v}`).join(' ');
+
+      const applicationName = this.formatUserAgentString();
       // Verify the server's TLS certificate by default (PgClientEngine defaults to
       // rejectUnauthorized: true when ssl is undefined). The `db pull`-generated
       // wiring supplies an ssl config that pins the provider CA; callers using

@@ -46,7 +46,7 @@ export class DistributedDatabase extends Scope {
         endpoint, region,
         role: dbRole,
         getAuthToken: () => signer.getDbConnectAuthToken(),
-        applicationName: this.buildUserAgentChain().map(([k, v]) => `${k}/${v}`).join(' '),
+        applicationName: this.formatUserAgentString(),
       }));
     }
     return this._base;

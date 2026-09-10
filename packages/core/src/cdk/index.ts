@@ -305,6 +305,10 @@ export class Scope extends Construct {
     return [];
   }
 
+  protected formatUserAgentString(_maxBytes = 63): string {
+    return '';
+  }
+
   // Plugin registration — no-ops in CDK context (plugins are only used at dev/build time)
   registerClientMiddleware(_packageSpecifier: string): void {}
   registerDevAttachment(_packageSpecifier: string): void {}

@@ -78,7 +78,13 @@ describe('DistributedDatabase user-agent integration (DsqlEngine / pg.Pool appli
 		try {
 			const dsql = new DistributedDatabase(auth, 'dsql');
 			const appName = getApplicationName(dsql);
-			assert.strictEqual(appName, `aws-blocks/${CORE_VERSION} bb/AuthBasic/1.0.1 bb/${BB_NAME}/${BB_VERSION}`);
+			// `aws-blocks/<core> bb/AuthBasic/1.0.1 bb/DistributedDatabase/<ver>` is 64
+			// bytes — one over the Postgres `application_name` limit (63). formatUserAgentString
+			// elides the middle entry (the AuthBasic parent) while preserving the origin
+			// (aws-blocks/<core>) and the leaf BB that opened the connection, so the value
+			// stays under the limit instead of being silently truncated mid-token server-side.
+			assert.ok(Buffer.byteLength(appName ?? '', 'utf8') <= 63);
+			assert.strictEqual(appName, `aws-blocks/${CORE_VERSION} … bb/${BB_NAME}/${BB_VERSION}`);
 		} finally {
 			cleanEnvVars(fullId);
 		}

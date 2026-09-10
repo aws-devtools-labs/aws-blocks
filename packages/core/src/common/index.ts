@@ -269,6 +269,51 @@ export class Scope {
     }
     return chain;
   }
+
+  /**
+   * Render {@link buildUserAgentChain} as a single space-delimited string,
+   * suitable for a string-typed field such as the Postgres `application_name`
+   * connection parameter (`aws-blocks/0.2.6 bb/AuthBasic/1.0.1 bb/Database/0.2.6`).
+   *
+   * Postgres silently truncates `application_name` to `NAMEDATALEN - 1` (63 bytes
+   * by default) — and it truncates by raw bytes mid-token, which would leave a
+   * mangled tail in `pg_stat_activity`. To keep the string both under the limit
+   * and self-consistent, we drop whole **middle** entries (intermediate parent
+   * BBs) while always preserving the first entry (`aws-blocks/<core>`) and the
+   * last (the leaf BB — the block that actually opened the connection), since
+   * those two identify the origin. A `…` marker is inserted where entries were
+   * elided so a reader can tell the chain was shortened.
+   *
+   * Returns `''` for an empty chain (e.g. the CDK context), so callers can use a
+   * simple truthiness guard before setting the field.
+   *
+   * @param maxBytes - Byte budget for the rendered string. Defaults to 63, the
+   *   Postgres `application_name` limit. Override for other string sinks.
+   */
+  protected formatUserAgentString(maxBytes = 63): string {
+    const entries = this.buildUserAgentChain().map(([k, v]) => `${k}/${v}`);
+    if (entries.length === 0) return '';
+
+    const byteLen = (s: string): number => Buffer.byteLength(s, 'utf8');
+    const full = entries.join(' ');
+    if (byteLen(full) <= maxBytes) return full;
+
+    // Too long: keep the first and last entries, elide the middle with '…'.
+    // Fall back to just the leaf if even first + last do not fit, and finally
+    // to a hard byte-slice of the leaf if a single entry alone exceeds the limit.
+    const first = entries[0];
+    const last = entries[entries.length - 1];
+
+    if (entries.length >= 2) {
+      const withEllipsis = `${first} … ${last}`;
+      if (byteLen(withEllipsis) <= maxBytes) return withEllipsis;
+      if (byteLen(last) <= maxBytes) return last;
+    }
+
+    // Single over-long entry (pathological): slice by bytes, not chars, so the
+    // result never exceeds the server's limit.
+    return Buffer.from(last, 'utf8').subarray(0, maxBytes).toString('utf8');
+  }
 }
 
 /**
