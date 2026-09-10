@@ -29,6 +29,8 @@ jobs:
       # here instead of as a wrong verdict in the steps below.
       - name: Test the changeset guards
         run: node --test scripts/changeset-guard.test.mjs
+      - name: Test the keyword guard
+        run: node --test scripts/keywords-guard.test.mjs
       # Catches malformed changesets (broken frontmatter, unknown package,
       # invalid bump type) that the regex parser silently ignores and would
       # otherwise fail post-merge at `changeset version`. Validates only the
@@ -49,3 +51,10 @@ jobs:
       # treat removing an existing one as the same failure.
       - name: Verify the umbrella is bumped with its siblings
         run: node --experimental-strip-types scripts/changeset-guard.ts verify-umbrella
+      # `npm search keywords:aws-blocks` is the discovery path the publishing
+      # guide documents, and a package missing the tag still builds, tests and
+      # publishes cleanly — it just never shows up in that search. #491 was
+      # exactly that, across every published package, so assert the tag here
+      # instead of relying on review to spot its absence.
+      - name: Verify every published package carries the aws-blocks keyword
+        run: node --experimental-strip-types scripts/keywords-guard.ts verify-discovery-tag
