@@ -28,6 +28,7 @@ import type {
   SupportTier,
 } from '../plan/types.js';
 import { AlbConstruct } from './alb_construct.js';
+import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
 
 /** ALB's per-capability support — the ALB column of the capability × service matrix. */
 const ALB_SUPPORT: Record<CapabilityId, SupportTier> = {
@@ -62,7 +63,7 @@ export type AlbRenderContext = AdapterContext & {
   degrade?: CapabilityId[];
 };
 
-export class AlbAdapter implements FrontDoorAdapter {
+export class AlbAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter {
   readonly service = 'alb';
 
   supports(capability: CapabilityId): SupportTier {
@@ -70,6 +71,15 @@ export class AlbAdapter implements FrontDoorAdapter {
   }
 
   render(scope: Construct, plan: CapabilityPlan, ctx: AlbRenderContext): FrontDoorResult {
+    return { url: this.renderLayer(scope, plan, ctx).url ?? '' };
+  }
+
+  /**
+   * Render the ALB as a layer. The {@link OriginHandle} is the load balancer's
+   * DNS name — what a parent edge (e.g. CloudFront) would front — with the
+   * protocol reflecting whether an HTTPS listener (a certificate) is configured.
+   */
+  renderLayer(scope: Construct, plan: CapabilityPlan, ctx: AlbRenderContext): LayerHandle {
     // Conscious degradation: fail synth if the plan requires a capability ALB
     // can't do (or degrades without opt-in). Never a silent drop.
     const result = negotiate(plan, this, { degrade: ctx.degrade });
@@ -97,6 +107,12 @@ export class AlbAdapter implements FrontDoorAdapter {
       internal: ctx.internal,
       certificate: ctx.certificate,
     });
-    return { url: alb.url };
+    return {
+      url: alb.url,
+      originHandle: {
+        domainName: alb.loadBalancer.loadBalancerDnsName,
+        protocol: ctx.certificate ? 'https' : 'http',
+      },
+    };
   }
 }

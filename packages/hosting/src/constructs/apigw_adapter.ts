@@ -8,10 +8,12 @@
  * auth works with no CORS). It generalizes the preview `bypass_origin` shape
  * into a first-class adapter.
  */
+import { Fn } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { HostingError } from '../hosting_error.js';
+import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
 import { formatNegotiationErrors, negotiate } from '../plan/negotiate.js';
 import type {
   AdapterContext,
@@ -51,7 +53,7 @@ export type ApiGatewayRenderContext = AdapterContext & {
   degrade?: CapabilityId[];
 };
 
-export class ApiGatewayAdapter implements FrontDoorAdapter {
+export class ApiGatewayAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter {
   readonly service = 'api-gateway';
 
   supports(capability: CapabilityId): SupportTier {
@@ -59,6 +61,14 @@ export class ApiGatewayAdapter implements FrontDoorAdapter {
   }
 
   render(scope: Construct, plan: CapabilityPlan, ctx: ApiGatewayRenderContext): FrontDoorResult {
+    return { url: this.renderLayer(scope, plan, ctx).url ?? '' };
+  }
+
+  /**
+   * Render the HTTP API as a layer. The {@link OriginHandle} is the API endpoint
+   * host (scheme stripped, token-safe) — HTTPS by default.
+   */
+  renderLayer(scope: Construct, plan: CapabilityPlan, ctx: ApiGatewayRenderContext): LayerHandle {
     const result = negotiate(plan, this, { degrade: ctx.degrade });
     if (result.errors.length > 0) {
       throw new HostingError('CapabilityNotSupportedError', {
@@ -81,6 +91,9 @@ export class ApiGatewayAdapter implements FrontDoorAdapter {
       serverComputeName: ctx.serverComputeName,
       imageComputeName: ctx.imageComputeName,
     });
-    return { url: apigw.url };
+    return {
+      url: apigw.url,
+      originHandle: { domainName: Fn.select(1, Fn.split('://', apigw.url)), protocol: 'https' },
+    };
   }
 }
