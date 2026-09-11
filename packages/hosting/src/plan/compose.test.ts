@@ -62,12 +62,6 @@ describe('composeGraph — single-layer topologies (Commit 1: representation onl
     }
   });
 
-  it('function-url → a single static origin front', () => {
-    const g = composeGraph(staticPlan, 'function-url');
-    assert.equal(g.root.role, 'origin');
-    assert.deepEqual(originIds(g.root), ['blocks-s3']);
-  });
-
   it('the graph type admits nesting (edge → router) even though composeGraph does not emit it yet', () => {
     // A hand-built two-layer graph type-checks and traverses — proves the model
     // supports composition the pick-one enum cannot express.

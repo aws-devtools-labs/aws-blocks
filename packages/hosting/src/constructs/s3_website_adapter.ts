@@ -60,7 +60,7 @@ export class S3WebsiteAdapter implements FrontDoorAdapter {
         message: formatNegotiationErrors(this.service, result),
         resolution:
           'The S3 website door serves pure static sites / SPAs over HTTP only. For SSR, an API, ' +
-          'image optimization, HTTPS, or atomic deploys, use { kind: "function-url" | "api-gateway" | "alb" } ' +
+          'image optimization, HTTPS, or atomic deploys, use { kind: "api-gateway" | "alb" } ' +
           'or the CloudFront default.',
       });
     }

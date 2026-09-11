@@ -22,10 +22,10 @@ layer** and a **Ports & Adapters** seam so the front door becomes a swappable ch
   unsupported capability, fails on required + degraded unless the app opts into
   `degrade`, and warns otherwise. `AtomicRelease` / `RunServerRender` are required only
   when the plan has a server origin, so pure-static doors negotiate clean.
-- **Five front doors**, selected via `new Hosting({ frontDoor: { kind } })`:
-  `cloudfront` (default, unchanged), `alb`, `api-gateway` (HTTP API v2),
-  `function-url`, and `s3-website`. The CloudFront path is byte-identical (snapshot
-  tests); the new doors render the same plan and are gated by the negotiator per door.
+- **Four front doors**, selected via `new Hosting({ frontDoor: { kind } })`:
+  `cloudfront` (default, unchanged), `alb`, `api-gateway` (HTTP API v2), and
+  `s3-website`. The CloudFront path is byte-identical (snapshot tests); the new
+  doors render the same plan and are gated by the negotiator per door.
 - **Backend/API routing is a first-class front-door responsibility.** The plan now
   models a service-neutral `backend` (`BackendPlan` / `BackendOrigin` /
   `BackendIngress`): each API namespace routes to its owning compute's ingress
