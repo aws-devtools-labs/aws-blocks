@@ -1,6 +1,13 @@
 {
   "name": "@aws-blocks/bb-tracer",
   "version": "0.1.8",
+  "keywords": [
+    "aws-blocks",
+    "tracing",
+    "distributed-tracing",
+    "xray",
+    "observability"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

@@ -1,6 +1,14 @@
 {
   "name": "@aws-blocks/bb-agent",
   "version": "0.4.0",
+  "keywords": [
+    "aws-blocks",
+    "ai",
+    "agent",
+    "llm",
+    "bedrock",
+    "chatbot"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

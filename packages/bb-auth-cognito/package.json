@@ -1,6 +1,13 @@
 {
   "name": "@aws-blocks/bb-auth-cognito",
   "version": "0.1.9",
+  "keywords": [
+    "aws-blocks",
+    "authentication",
+    "cognito",
+    "mfa",
+    "user-pool"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

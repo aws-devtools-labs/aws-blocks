@@ -1,6 +1,13 @@
 {
   "name": "@aws-blocks/bb-data",
   "version": "0.2.7",
+  "keywords": [
+    "aws-blocks",
+    "database",
+    "postgresql",
+    "aurora",
+    "sql"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

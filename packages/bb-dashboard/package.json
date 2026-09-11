@@ -1,6 +1,12 @@
 {
   "name": "@aws-blocks/bb-dashboard",
   "version": "0.1.5",
+  "keywords": [
+    "aws-blocks",
+    "cloudwatch",
+    "dashboard",
+    "observability"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

@@ -1,6 +1,13 @@
 {
   "name": "@aws-blocks/bb-metrics",
   "version": "0.1.6",
+  "keywords": [
+    "aws-blocks",
+    "metrics",
+    "cloudwatch",
+    "observability",
+    "emf"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

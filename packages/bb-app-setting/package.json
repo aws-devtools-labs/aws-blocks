@@ -1,6 +1,13 @@
 {
   "name": "@aws-blocks/bb-app-setting",
   "version": "0.2.1",
+  "keywords": [
+    "aws-blocks",
+    "configuration",
+    "ssm",
+    "parameter-store",
+    "secrets"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

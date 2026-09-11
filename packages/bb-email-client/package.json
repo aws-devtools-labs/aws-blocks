@@ -1,6 +1,12 @@
 {
   "name": "@aws-blocks/bb-email-client",
   "version": "0.1.6",
+  "keywords": [
+    "aws-blocks",
+    "email",
+    "ses",
+    "transactional-email"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

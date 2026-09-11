@@ -1,6 +1,12 @@
 {
   "name": "@aws-blocks/data-common",
   "version": "0.1.4",
+  "keywords": [
+    "aws-blocks",
+    "database",
+    "sql",
+    "abstractions"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
