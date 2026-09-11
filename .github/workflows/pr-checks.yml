@@ -285,12 +285,20 @@ jobs:
         run: npm run test:e2e:sandbox
 
   e2e-sandbox-vpc:
-    name: E2E Sandbox (VPC Smoke)
+    name: E2E VPC Smoke
     needs: [build-and-test-local, detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: publish
+    # Serialize across PRs: the smoke app provisions private-DNS interface
+    # endpoints into the shared persistent test VPC, and AWS permits only one
+    # per service per VPC. Without this, two open PRs collide on the endpoints
+    # (and the shared stack) and CloudFormation fails the second run. Queue
+    # rather than cancel so an in-flight deploy/destroy isn't interrupted.
+    concurrency:
+      group: blocks-test-vpc
+      cancel-in-progress: false
     env:
       BLOCKS_STACK_SUFFIX: vpc-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
@@ -319,7 +327,15 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: E2E Test Sandbox (VPC Smoke)
+      - name: Ensure persistent test VPC
+        run: cd test-infra && npx cdk deploy --require-approval never --outputs-file outputs.json
+
+      - name: Export VPC ID
+        run: |
+          VPC_ID=$(cat test-infra/outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksTestVpc']['VpcId'])")
+          echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
+
+      - name: E2E VPC Smoke
         run: npm run test:e2e:sandbox:vpc
 
   e2e-production:

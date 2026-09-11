@@ -14,11 +14,12 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { WebSocketApi, WebSocketStage, LogGroupLogDestination } from 'aws-cdk-lib/aws-apigatewayv2';
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
-import { Scope, synthGuard, ensureApiGatewayAccount, blocksError } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard, ensureApiGatewayAccount, blocksError } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -67,7 +68,7 @@ interface SharedInfra {
 	stage: WebSocketStage;
 }
 
-function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunction, parent: Scope): SharedInfra {
+function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunction, parent: BuildingBlockScope): SharedInfra {
 	const existing = (stack as any)[SHARED_KEY] as SharedInfra | undefined;
 	if (existing) return existing;
 
@@ -166,9 +167,9 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
  * Same constructor signature as the mock — `new Realtime(scope, id, options)` —
  * so the user's backend code works unchanged under `--conditions=cdk`.
  */
-export class Realtime extends Scope {
+export class Realtime extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY] } });
 		// The WebSocket routes are a stack-level singleton (one WS API per stack)
 		// that integrates to a single Lambda target, so bind them to the stack's
 		// DEFAULT compute deterministically — not this block's resolved compute.

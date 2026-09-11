@@ -29,7 +29,8 @@
  */
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig } from '@aws-blocks/core/cdk';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import * as cdk from 'aws-cdk-lib';
@@ -85,12 +86,12 @@ export type {
  */
 export class AuthOIDC<
 	P extends readonly ProviderConfig[] = readonly ProviderConfig[],
-> extends Scope {
+> extends BuildingBlockScope {
 	public readonly callbackPath: string;
 	public readonly signOutPath: string;
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 
 		this.callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
 		this.signOutPath = options.signOutPath ?? DEFAULT_SIGNOUT_PATH;

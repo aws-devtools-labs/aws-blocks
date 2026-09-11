@@ -18,6 +18,7 @@ export {
 	type ValueKind,
 } from '@aws-blocks/hosting';
 export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
+export type { BlocksVpcOptions, ScopeOptions, SubnetRole, VpcContext, VpcRequirements } from './cdk/index.js';
 export {
 	BlocksBackend,
 	type BlocksBackendProps,
@@ -25,6 +26,7 @@ export {
 	BlocksPresets,
 	BlocksStack,
 	type BlocksThrottling,
+	BuildingBlockScope,
 	blocksNodejsBundling,
 	type CoreBlocksBackendProps,
 	type CoreBlocksStackProps,
@@ -34,6 +36,7 @@ export {
 	finalizeDashboards,
 	finalizeTracing,
 	getConfigLocation,
+	getVpcContext,
 	registerConfig,
 	registerDashboardFinalizer,
 	registerTracer,

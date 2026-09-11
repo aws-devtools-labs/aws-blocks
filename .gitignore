@@ -36,6 +36,7 @@ cdk.context.json
 
 # generated docs artifacts
 docs/tech-design-output
+docs/offline-drafts
 
 # Local workspace scratch files
 *.local.md

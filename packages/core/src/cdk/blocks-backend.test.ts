@@ -19,6 +19,7 @@ import { BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 import { Scope } from './index.js';
+import { getVpcContext } from './vpc.js';
 
 // A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
 // @aws-blocks/blocks), which core's own tests can't depend on. Use an
@@ -38,6 +39,11 @@ class StubLambdaCompute extends Compute {
 		this.logGroup = new cdk.aws_logs.LogGroup(this, 'HandlerLogGroup', {
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
+		// Discover the shared VPC context from the owning stack/backend, mirroring
+		// LambdaCompute — so the core-side VPC placement plumbing (initializeVpc →
+		// getVpcContext) is exercised by these tests without depending on
+		// @aws-blocks/bb-lambda-compute.
+		const vpcContext = getVpcContext(this);
 		this.fn = new lambda.NodejsFunction(this, 'Handler', {
 			entry: this.backendHandlerPath,
 			runtime: cdk.aws_lambda.Runtime.NODEJS_22_X,
@@ -46,6 +52,13 @@ class StubLambdaCompute extends Compute {
 			logGroup: this.logGroup,
 			environment: { BLOCKS_STACK_NAME: this.backendStackName },
 			bundling: { minify: true, esbuildArgs: { '--conditions': 'aws-runtime' } },
+			...(vpcContext
+				? {
+						vpc: vpcContext.vpc,
+						vpcSubnets: vpcContext.lambdaSubnets,
+						securityGroups: [vpcContext.lambdaSecurityGroup],
+					}
+				: {}),
 		});
 		this.apiGateway = new apigateway.RestApi(this, 'API', { restApiName: 'Blocks API' });
 		this.apiGateway.root.addProxy({
@@ -404,5 +417,59 @@ describe('infrastructure defaults (backend-anchored)', () => {
 		const inner = new Scope('inner', { parent: outer });
 		assert.strictEqual(inner.defaults, backend.defaults);
 		assert.strictEqual(inner.defaults, BlocksPresets.sandbox);
+	});
+});
+
+describe('VPC placement', () => {
+	test('places the handler Lambda in the VPC with a security group when vpc is provided', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'VpcParent', {
+			env: { account: '123456789012', region: 'us-east-1' },
+		});
+		const vpc = new cdk.aws_ec2.Vpc(parent, 'AppVpc', { maxAzs: 2, natGateways: 1 });
+
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: { ...BlocksPresets.production, vpc: { network: vpc } },
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		const template = Template.fromStack(parent);
+		// The handler Lambda is VPC-attached: it has a VpcConfig with subnets + SGs.
+		template.hasResourceProperties('AWS::Lambda::Function', {
+			VpcConfig: Match.objectLike({
+				SubnetIds: Match.anyValue(),
+				SecurityGroupIds: Match.anyValue(),
+			}),
+		});
+		// The VPC-access managed policy is attached to the execution role.
+		const policies = template.findResources('AWS::IAM::Role');
+		const hasVpcManagedPolicy = Object.values(policies).some((role: any) =>
+			JSON.stringify(role.Properties?.ManagedPolicyArns ?? []).includes('AWSLambdaVPCAccessExecutionRole'),
+		);
+		assert.ok(hasVpcManagedPolicy, 'execution role should have the VPC access managed policy');
+	});
+
+	test('no VpcConfig on the handler when vpc is omitted', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'NoVpcParent');
+
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		const template = Template.fromStack(parent);
+		const fns = template.findResources('AWS::Lambda::Function');
+		for (const fn of Object.values(fns)) {
+			assert.strictEqual(
+				(fn as any).Properties?.VpcConfig,
+				undefined,
+				'handler must not have VpcConfig when no VPC is configured',
+			);
+		}
 	});
 });

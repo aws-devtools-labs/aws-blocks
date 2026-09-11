@@ -86,17 +86,19 @@ test('CDK: VPC has isolated subnets and no NAT gateways', () => {
 
 // --- Security group ---
 
-test('CDK: security group allows inbound PostgreSQL from VPC CIDR', () => {
+test('CDK: cluster security group has no ingress rule (reached via Data API, not a socket)', () => {
   const template = synthTemplate({ databaseName: 'mydb' });
-  template.hasResourceProperties('AWS::EC2::SecurityGroup', {
-    SecurityGroupIngress: Match.arrayWith([
-      Match.objectLike({
-        FromPort: 5432,
-        ToPort: 5432,
-        IpProtocol: 'tcp',
-      }),
-    ]),
+  // The cluster is reached over the RDS Data API (HTTPS), never a raw Postgres
+  // socket, so there must be no 5432 (or any) ingress rule on its SG.
+  const sgs = template.findResources('AWS::EC2::SecurityGroup', {
+    Properties: { GroupDescription: Match.stringLikeRegexp('Aurora cluster') },
   });
+  assert.strictEqual(Object.keys(sgs).length, 1, 'exactly one Aurora SG');
+  const sg = Object.values(sgs)[0] as { Properties: { SecurityGroupIngress?: unknown[] } };
+  assert.ok(
+    sg.Properties.SecurityGroupIngress === undefined || sg.Properties.SecurityGroupIngress.length === 0,
+    'Aurora SG should have no ingress rules',
+  );
 });
 
 test('CDK: security group disallows all outbound traffic', () => {
@@ -107,6 +109,64 @@ test('CDK: security group disallows all outbound traffic', () => {
       Match.objectLike({ Description: 'Disallow all traffic' }),
     ]),
   });
+});
+
+// --- Shared-VPC placement (vpcContext path) ---
+
+/** Build a minimal VpcContext over a real bring-your-own VPC for the shared path. */
+function sharedVpcContext(stack: cdk.Stack, opts: { isolated: boolean }) {
+  const subnetConfiguration = [
+    { name: 'public', subnetType: cdk.aws_ec2.SubnetType.PUBLIC, cidrMask: 24 },
+    { name: 'private', subnetType: cdk.aws_ec2.SubnetType.PRIVATE_WITH_EGRESS, cidrMask: 24 },
+    ...(opts.isolated
+      ? [{ name: 'isolated', subnetType: cdk.aws_ec2.SubnetType.PRIVATE_ISOLATED, cidrMask: 24 }]
+      : []),
+  ];
+  const vpc = new cdk.aws_ec2.Vpc(stack, 'SharedVpc', { maxAzs: 2, natGateways: 1, subnetConfiguration });
+  const lambdaSecurityGroup = new cdk.aws_ec2.SecurityGroup(stack, 'LambdaSg', { vpc });
+  const hasRole = (role: string) =>
+    role === 'isolated'
+      ? vpc.isolatedSubnets.length > 0
+      : role === 'public'
+        ? vpc.publicSubnets.length > 0
+        : vpc.privateSubnets.length > 0;
+  const typeFor = (role: string) =>
+    role === 'isolated'
+      ? cdk.aws_ec2.SubnetType.PRIVATE_ISOLATED
+      : role === 'public'
+        ? cdk.aws_ec2.SubnetType.PUBLIC
+        : cdk.aws_ec2.SubnetType.PRIVATE_WITH_EGRESS;
+  return {
+    vpc,
+    lambdaSecurityGroup,
+    lambdaSubnets: { subnetType: cdk.aws_ec2.SubnetType.PRIVATE_WITH_EGRESS },
+    selectSubnets(scope: { fullId: string }, role: string, o?: { fallback?: string }) {
+      if (hasRole(role)) return { subnetType: typeFor(role) };
+      if (o?.fallback && hasRole(o.fallback)) return { subnetType: typeFor(o.fallback) };
+      throw new Error(`${scope.fullId} needs a '${role}' subnet`);
+    },
+  };
+}
+
+test('CDK: shared VPC with an isolated tier places the cluster in isolated subnets', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack', { env: { account: '123456789012', region: 'us-east-1' } });
+  // biome-ignore lint/suspicious/noExplicitAny: minimal VpcContext test double
+  materialize(stack, 'testdb', { databaseName: 'mydb', vpcContext: sharedVpcContext(stack, { isolated: true }) as any });
+  const template = Template.fromStack(stack);
+  // A shared VPC is used (2 VPCs would mean bb-data created its own).
+  template.resourceCountIs('AWS::EC2::VPC', 1);
+  // No new NAT gateway from bb-data (it reuses the shared VPC's).
+  template.resourceCountIs('AWS::RDS::DBCluster', 1);
+});
+
+test('CDK: shared VPC without an isolated tier falls back to private-with-egress (no synth error)', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack', { env: { account: '123456789012', region: 'us-east-1' } });
+  assert.doesNotThrow(() =>
+    // biome-ignore lint/suspicious/noExplicitAny: minimal VpcContext test double
+    materialize(stack, 'testdb', { databaseName: 'mydb', vpcContext: sharedVpcContext(stack, { isolated: false }) as any }),
+  );
 });
 
 // --- Removal policy ---

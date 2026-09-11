@@ -3,6 +3,7 @@
 
 import { Construct } from 'constructs';
 import { Table, type ITable, AttributeType, BillingMode, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
@@ -10,7 +11,7 @@ import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Key, type IKey } from 'aws-cdk-lib/aws-kms';
-import { Scope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +20,7 @@ import { dirname, join } from 'node:path';
 export { DistributedTableErrors } from './errors.js';
 export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions, DeleteOptions, QueryOptions, ScanOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 
-export class DistributedTable<T = any> extends Scope {
+export class DistributedTable<T = any> extends BuildingBlockScope {
 	private table: ITable;
 
 	/**
@@ -47,7 +48,7 @@ export class DistributedTable<T = any> extends Scope {
 	}
 
 	constructor(scope: ScopeParent, id: string, public options: any) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
 
 		const config = options;
 

@@ -7,6 +7,7 @@ import {
 	blocksNodejsBundling,
 	DEFAULT_NODE_RUNTIME,
 	ensureApiGatewayAccount,
+	getVpcContext,
 } from '@aws-blocks/core/cdk';
 import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
@@ -76,6 +77,14 @@ export class LambdaCompute extends Compute {
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
 
+		// Discover the shared VPC context from the owning stack/backend (set by
+		// initializeVpc when the customer passes `vpc`). When present, place the
+		// function in the VPC using the framework-resolved subnets and security
+		// group; when absent, leave these unset so the function runs in the
+		// AWS-managed network. The shared execution role already carries the ENI
+		// permissions (AWSLambdaVPCAccessExecutionRole) in that case.
+		const vpcContext = getVpcContext(this);
+
 		// Entry + BLOCKS_STACK_NAME are derived from the owning stack/backend
 		// (resolved by Compute) — never caller-supplied — so every compute in an
 		// app runs the same backend and agrees on the resource-name namespace the
@@ -104,6 +113,15 @@ export class LambdaCompute extends Compute {
 				minify: true,
 				esbuildArgs: { '--conditions': 'aws-runtime' },
 			}),
+			// VPC placement, when a VPC is configured. Spread conditionally so the
+			// non-VPC path leaves these unset (CDK treats undefined as "no VPC").
+			...(vpcContext
+				? {
+						vpc: vpcContext.vpc,
+						vpcSubnets: vpcContext.lambdaSubnets,
+						securityGroups: [vpcContext.lambdaSecurityGroup],
+					}
+				: {}),
 		});
 
 		// Allowed CORS origins come from the stack's `defaults` (e.g. the sandbox
