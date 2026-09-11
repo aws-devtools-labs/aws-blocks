@@ -789,10 +789,7 @@ export class Hosting extends Construct {
         configDeployment.node.addDependency(dep);
       }
 
-      // The route-table update is the atomic cutover: it makes the new
-      // build prefix reachable at the edge. It must also wait for this
-      // resolved config deployment, otherwise CloudFormation can switch
-      // routes while `config.json` still contains the static placeholder.
+      // Delay route cutover until resolved config replaces the static placeholder.
       hosting.addBuildAssetDependency(configDeployment);
     }
 
