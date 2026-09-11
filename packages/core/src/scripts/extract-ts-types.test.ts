@@ -661,6 +661,56 @@ describe('extractMethodTypes — namespace returned by a factory, then destructu
 			// Each namespace keeps its OWN param type under a distinct qualified key.
 			assert.strictEqual((types.get('widgets.create')?.params[0].schema as any)?.type, 'string');
 			assert.strictEqual((types.get('subscriptions.create')?.params[0].schema as any)?.type, 'number');
+			// The first-pass AST walk still emits a lingering bare `create` for the
+			// factory namespace, but it never overrides a qualified key: the
+			// direct namespace's qualified `widgets.create` is unaffected above, and
+			// `generate-spec` prefers the qualified key (see the collision test in
+			// generate-spec.test.ts, which asserts this end-to-end in the output).
+			// So the bare entry can't reintroduce the #445 cross-assignment here.
+			assert.strictEqual((types.get('widgets.create')?.params[0].schema as any)?.type, 'string');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('array/nested destructuring falls through to the bare key (documented boundary)', () => {
+		// Only a top-level identifier and a shallow object binding pattern are
+		// attributed to a namespace. An array pattern (`const [ns] = factory()`)
+		// falls through to the bare-key path — the schema is still recovered (the
+		// AST walk found `new ApiNamespace(...)`), just under the bare method name,
+		// which generate-spec's #498 fallback resolves when there's no collision.
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+				class Scope { constructor(id: string) {} }
+
+				class Factory {
+					constructor(private readonly scope: Scope) {}
+					build() {
+						return [
+							new ApiNamespace(this.scope, 'tupleNs', () => ({
+								async ping(count: number): Promise<string> { return 'p'; },
+							})),
+						] as const;
+					}
+				}
+				const scope = new Scope('app');
+				const [tupleNs] = new Factory(scope).build();
+				export { tupleNs };
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			// Not attributed to the binding (array pattern), so no qualified key…
+			assert.ok(!types.has('tupleNs.ping'), 'array pattern is not attributed (documented boundary)');
+			// …but the schema is still present under the bare name (soft fallback).
+			const bare = types.get('ping');
+			assert.ok(bare, 'method schema is still recovered under the bare key');
+			assert.strictEqual((bare.params[0].schema as any)?.type, 'number');
+			assert.strictEqual((bare.returnType as any)?.type, 'string');
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

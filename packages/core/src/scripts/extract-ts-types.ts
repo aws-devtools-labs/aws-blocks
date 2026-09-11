@@ -239,6 +239,25 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 			// factory-returned namespace keys qualified (`indirectNamespace.method`)
 			// like a directly-constructed one — instead of landing on a bare key that
 			// collides with same-named methods in other namespaces (#444, #445).
+			//
+			// This adds the qualified key ALONGSIDE the bare key the first-pass AST
+			// walk already emitted for the same `new ApiNamespace(...)` (its
+			// `enclosingBindingName` returns undefined behind the factory, so it keys
+			// bare). Leaving the bare key is harmless: `generate-spec` looks up
+			// `tsTypes.get(qualified) ?? tsTypes.get(bare)`, so the qualified key
+			// added here always wins for an attributable namespace, and the bare
+			// entry never influences the emitted schema (a regression test asserts
+			// this under a name collision). The #498 bare-name fallback is retained
+			// on purpose — it's the last resort for namespaces this pass still can't
+			// attribute (default exports, deeper indirection, the patterns below), so
+			// it is NOT redundant.
+			//
+			// Boundary: only a top-level identifier (a) and a shallow object binding
+			// pattern (b) are attributed. Array patterns (`const [ns] = factory()`)
+			// and nested patterns (`const { a: { b } } = …`) fall through to the
+			// bare-key path, where the #498 fallback still resolves the schema when
+			// there's no collision. These shapes are rare for namespace exports and
+			// fail soft; widening the traversal can come later if a real case appears.
 			if (ts.isObjectBindingPattern(decl.name)) {
 				const initType = checker.getTypeAtLocation(decl.initializer);
 				for (const element of decl.name.elements) {
