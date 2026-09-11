@@ -5,6 +5,7 @@
  * Passes Cognito config so Blocks can verify bearer tokens.
  */
 import { createBlocksBackend } from '../aws-blocks/index.cdk.js';
+import { registerConfig } from '@aws-blocks/blocks/cdk';
 
 export async function initBlocks(backend: any) {
   const blocksStack = backend.createStack('blocks');
@@ -14,9 +15,8 @@ export async function initBlocks(backend: any) {
   // Pass Amplify's Cognito config to the Blocks Lambda (if auth is configured)
   if (backend.auth?.resources?.cfnResources) {
     const { cfnUserPool, cfnUserPoolClient } = backend.auth.resources.cfnResources;
-    blocks.handler.addEnvironment('COGNITO_USER_POOL_ID', cfnUserPool.ref);
-    blocks.handler.addEnvironment('COGNITO_CLIENT_ID', cfnUserPoolClient.ref);
-    blocks.handler.addEnvironment('COGNITO_REGION', blocksStack.region);
+    registerConfig(blocks, 'COGNITO_USER_POOL_ID', cfnUserPool.ref);
+    registerConfig(blocks, 'COGNITO_CLIENT_ID', cfnUserPoolClient.ref);
   }
 
   // Surface Blocks API URL in amplify_outputs.json
