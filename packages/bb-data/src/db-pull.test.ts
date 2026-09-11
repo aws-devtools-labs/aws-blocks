@@ -137,9 +137,12 @@ describe('generateIndexFile', () => {
     assert.ok(output.includes("Auth not configured"));
   });
 
-  test('includes stack-scoped AppSetting name (ref-independent)', () => {
+  test('includes stack-scoped AppSetting name using the CDK project root', () => {
     assert.ok(output.includes("if (!dbParameterName && process.env.BLOCKS_STAGE)"));
-    assert.ok(output.includes("dbConnectionParameterName(getStackName({ sandbox: process.env.BLOCKS_STAGE !== 'production' }))"));
+    assert.ok(output.includes("tryGetContext('projectRoot')"));
+    assert.ok(output.includes("projectRoot: typeof projectRoot === 'string' ? projectRoot : undefined"));
+    assert.ok(output.includes('dbConnectionParameterName(getStackName({'));
+    assert.ok(output.includes("sandbox: process.env.BLOCKS_STAGE !== 'production'"));
     assert.ok(output.includes("from '@aws-blocks/core/db-naming'"));
     assert.ok(output.includes("import { getStackName } from '@aws-blocks/core/scripts'"));
   });
