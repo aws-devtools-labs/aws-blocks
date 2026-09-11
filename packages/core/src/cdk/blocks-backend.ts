@@ -65,14 +65,6 @@ export interface BlocksBackendProps {
 	 * corresponding stack default.
 	 */
 	defaults: BlocksDefaults;
-	/**
-	 * Place the app's compute and VPC-resident resources in a VPC.
-	 * Pass a standard CDK VPC — Blocks handles Lambda placement,
-	 * endpoint provisioning (based on BB requirements), and SG wiring.
-	 *
-	 * Omit for no VPC (default — Lambda runs in AWS-managed network).
-	 */
-	vpc?: BlocksVpcOptions;
 }
 
 /**
@@ -126,7 +118,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 		managedPolicies: [
 			iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
 			// When Lambda is placed in a VPC it needs ENI management permissions
-			...(props.vpc
+			...(props.defaults.vpc
 				? [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')]
 				: []),
 		],
@@ -293,7 +285,7 @@ export class BlocksBackend extends Construct {
 
 		this.backendHandlerPath = props.backendHandlerPath;
 		this.backendModulePath = props.backendCDKPath;
-		this._vpcOptions = props.vpc;
+		this._vpcOptions = props.defaults.vpc;
 
 		// Expose self to Building Blocks at CDK time
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
@@ -307,8 +299,8 @@ export class BlocksBackend extends Construct {
 		// BBs are constructed, so both can discover it: the default compute
 		// (LambdaCompute) reads it via getVpcContext(this) to place its function in
 		// the VPC, and BBs (e.g. bb-data) read it to co-locate their resources.
-		if (props.vpc) {
-			initializeVpc(this, props.vpc);
+		if (this._vpcOptions) {
+			initializeVpc(this, this._vpcOptions);
 		}
 
 		const infra = setupBlocksInfra(this, props, id);
@@ -367,7 +359,7 @@ export class BlocksBackend extends Construct {
 			cdk.Annotations.of(backend).addInfoV2(
 				'blocks:vpc:derived',
 				'A Building Block required a VPC and none was provided, so Blocks created one ' +
-					'(with a NAT gateway, which has an ongoing cost). Pass `vpc: { network }` to ' +
+					'(with a NAT gateway, which has an ongoing cost). Pass `defaults.vpc: { network }` to ' +
 					'bring your own. See packages/blocks/VPC.md.',
 			);
 		}

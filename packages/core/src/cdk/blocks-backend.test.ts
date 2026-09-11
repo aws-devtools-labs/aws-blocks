@@ -431,9 +431,8 @@ describe('VPC placement', () => {
 		await BlocksBackend.create(parent, 'Blocks', {
 			backendHandlerPath: handlerPath,
 			backendCDKPath: sideEffectBackendPath,
-			defaults: BlocksPresets.production,
+			defaults: { ...BlocksPresets.production, vpc: { network: vpc } },
 			defaultComputeFactory: stubComputeFactory,
-			vpc: { network: vpc },
 		});
 
 		const template = Template.fromStack(parent);

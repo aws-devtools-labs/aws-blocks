@@ -117,7 +117,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		this.backendHandlerPath = props.backendHandlerPath;
 		this.backendModulePath = props.backendCDKPath;
 		this.defaults = props.defaults;
-		this._vpcOptions = props.vpc;
+		this._vpcOptions = props.defaults.vpc;
 
 		// Set globalThis so Building Blocks attach directly to this stack
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
@@ -126,8 +126,8 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		// BBs are constructed, so both can discover it: the default compute
 		// (LambdaCompute) reads it via getVpcContext(this) to place its function in
 		// the VPC, and BBs (e.g. bb-data) read it to co-locate their resources.
-		if (props.vpc) {
-			initializeVpc(this, props.vpc);
+		if (this._vpcOptions) {
+			initializeVpc(this, this._vpcOptions);
 		}
 
 		const infra = setupBlocksInfra(this, props, id);
@@ -190,7 +190,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 			cdk.Annotations.of(stack).addInfoV2(
 				'blocks:vpc:derived',
 				'A Building Block required a VPC and none was provided, so Blocks created one ' +
-					'(with a NAT gateway, which has an ongoing cost). Pass `vpc: { network }` to ' +
+					'(with a NAT gateway, which has an ongoing cost). Pass `defaults.vpc: { network }` to ' +
 					'BlocksStack.create to bring your own. See packages/blocks/VPC.md.',
 			);
 		}

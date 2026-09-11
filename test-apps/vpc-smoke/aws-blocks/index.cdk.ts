@@ -48,8 +48,9 @@ const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
-  defaults: BlocksPresets.sandbox,
-  vpc: {
+  defaults: {
+    ...BlocksPresets.sandbox,
+    vpc: {
     // Vpc.fromLookup needs a Stack scope to cache the context lookup, and it must
     // resolve BEFORE this BlocksStack is built (BlocksStack.create wires VPC
     // placement during construction). So we host the lookup in a throwaway sibling
@@ -64,6 +65,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
     // (group: blocks-test-vpc) because AWS permits only one private-DNS
     // interface endpoint per service per VPC.
     provisionEndpoints: true,
+  },
   },
 });
 

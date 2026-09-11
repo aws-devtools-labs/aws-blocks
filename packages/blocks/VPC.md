@@ -46,7 +46,7 @@ const vpc = new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 });
 await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
-  vpc: { network: vpc },
+  defaults: { ...BlocksPresets.production, vpc: { network: vpc } },
 });
 ```
 
@@ -63,7 +63,7 @@ For a shared or separately managed VPC:
 const sharedVpc = ec2.Vpc.fromLookup(app, 'SharedVpc', { vpcId: 'vpc-abc123' });
 await BlocksStack.create(app, stackName, {
   ...,
-  vpc: { network: sharedVpc },  // Blocks provisions endpoints automatically
+  defaults: { ...BlocksPresets.production, vpc: { network: sharedVpc } },  // Blocks provisions endpoints automatically
 });
 ```
 
@@ -74,7 +74,7 @@ If VPC endpoints are managed separately (e.g., in another stack or by another te
 ```typescript
 await BlocksStack.create(app, stackName, {
   ...,
-  vpc: { network: sharedVpc, provisionEndpoints: false },
+  defaults: { ...BlocksPresets.production, vpc: { network: sharedVpc, provisionEndpoints: false } },
 });
 ```
 

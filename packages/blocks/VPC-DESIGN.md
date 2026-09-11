@@ -50,7 +50,7 @@ const vpc = new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 });
 await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
-  vpc: { network: vpc },
+  defaults: { ...BlocksPresets.production, vpc: { network: vpc } },
 });
 
 // Bring existing VPC with pre-provisioned endpoints
@@ -58,7 +58,7 @@ const sharedVpc = ec2.Vpc.fromLookup(app, 'SharedVpc', { vpcId: 'vpc-abc123' });
 await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
-  vpc: { network: sharedVpc, provisionEndpoints: false },
+  defaults: { ...BlocksPresets.production, vpc: { network: sharedVpc, provisionEndpoints: false } },
 });
 ```
 

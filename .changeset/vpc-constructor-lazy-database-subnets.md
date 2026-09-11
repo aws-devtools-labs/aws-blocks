@@ -33,7 +33,7 @@ need a VPC?". All Building Blocks were migrated to pass requirements to `super()
 function without a VPC declares `requiresVpc: true`; when one is needed and the
 customer didn't bring their own, Blocks lazily creates a single shared VPC
 (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
-emits a notice about the NAT cost. Passing `vpc: { network }` remains the
+emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
 bring-your-own override.
 
 **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of

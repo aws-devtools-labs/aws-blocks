@@ -25,7 +25,7 @@ export type SubnetRole = 'private-with-egress' | 'isolated' | 'public';
  * await BlocksStack.create(app, stackName, {
  *   backendHandlerPath: join(__dirname, 'index.handler.ts'),
  *   backendCDKPath: join(__dirname, 'index.ts'),
- *   vpc: { network: vpc },
+ *   defaults: { ...BlocksPresets.production, vpc: { network: vpc } },
  * });
  * ```
  */
