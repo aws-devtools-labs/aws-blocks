@@ -13,7 +13,7 @@ export const AsyncJobErrors = {
 	BatchEmpty: 'BatchEmptyException',
 	/** Thrown when a batch exceeds the per-call payload soft cap (10,000). */
 	BatchTooLarge: 'BatchTooLargeException',
-	/** Thrown when schema validation fails. */
+	/** Thrown when schema or submission-option validation fails. */
 	ValidationFailed: 'ValidationFailedException',
 	/** Thrown when one or more messages in a batch fail to send (AWS only). */
 	BatchSubmitFailed: 'BatchSubmitFailedException',
