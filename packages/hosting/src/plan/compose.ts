@@ -16,7 +16,7 @@
 import type { CapabilityPlan, FrontDoorGraph, FrontDoorLayer, OriginRef } from './types.js';
 
 /** The front-door services a graph can be composed onto (the current door kinds). */
-export type FrontDoorChoice = 'cloudfront' | 's3-website' | 'alb' | 'api-gateway' | 'function-url';
+export type FrontDoorChoice = 'cloudfront' | 's3-website' | 'alb' | 'api-gateway';
 
 /** Map a plan {@link CapabilityPlan.origins} kind to its neutral forward selector. */
 const SELECTOR_FOR_KIND: Record<'static' | 'server' | 'image', string> = {
@@ -45,8 +45,8 @@ const backendForwards = (plan: CapabilityPlan): FrontDoorLayer['forwards'] =>
  * - `cloudfront` → an **edge** over the plan's origins + backend (the current
  *   CF-over-many-origins shape; a static-only plan yields CF → S3 alone).
  * - `alb` / `api-gateway` → a **router** over the same origins + backend.
- * - `s3-website` / `function-url` → a single-**origin** front (static only; no
- *   backend routing — the client reaches the API cross-origin).
+ * - `s3-website` → a single-**origin** front (static only; no backend routing —
+ *   the client reaches the API cross-origin).
  *
  * Every result here is a one-node graph. Nested compositions (an edge whose
  * child is a router) are produced in a later commit; the type already allows a
@@ -63,8 +63,7 @@ export const composeGraph = (plan: CapabilityPlan, choice: FrontDoorChoice): Fro
     case 'api-gateway':
       return { root: { service: choice, role: 'router', forwards: [...origins, ...backend] } };
     case 's3-website':
-    case 'function-url':
-      // Single-origin fronts: static only, no backend routing (cross-origin API).
+      // Single-origin front: static only, no backend routing (cross-origin API).
       return {
         root: {
           service: choice,

@@ -86,7 +86,5 @@ export { AlbAdapter, type AlbRenderContext } from './alb_adapter.js';
 export { AlbConstruct, type AlbConstructProps } from './alb_construct.js';
 export { ApiGatewayAdapter, type ApiGatewayRenderContext } from './apigw_adapter.js';
 export { ApiGatewayConstruct, type ApiGatewayConstructProps } from './apigw_construct.js';
-export { FunctionUrlAdapter, type FunctionUrlRenderContext } from './function_url_adapter.js';
-export { FunctionUrlConstruct, type FunctionUrlConstructProps } from './function_url_construct.js';
 export { S3WebsiteAdapter, type S3WebsiteRenderContext } from './s3_website_adapter.js';
 export { S3WebsiteConstruct, type S3WebsiteConstructProps } from './s3_website_construct.js';
