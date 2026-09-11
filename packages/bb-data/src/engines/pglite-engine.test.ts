@@ -3,6 +3,7 @@
 
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { ApiError } from '@aws-blocks/core';
 import { PGlite } from '@electric-sql/pglite';
 import { PGliteEngine } from './pglite-engine.js';
 import { DatabaseErrors } from '../errors.js';
@@ -78,13 +79,16 @@ test('execute returns rowCount for DELETE', async () => {
 
 // --- Core: error translation ---
 
-test('duplicate key throws UniqueConstraintViolation', async () => {
+test('duplicate key throws UniqueConstraintViolation as ApiError status 409', async () => {
   await setup();
   await engine.execute("INSERT INTO t (id, value) VALUES ('a', 'one')");
   await assert.rejects(
     () => engine.execute("INSERT INTO t (id, value) VALUES ('a', 'dupe')"),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409, 'duplicate key must be 409, not 500');
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
+      assert.notStrictEqual(err.retriable, true, 'duplicate key is not retriable');
       return true;
     }
   );
@@ -154,7 +158,9 @@ test('error translation works within transactions', async () => {
   const handle = await engine.beginTransaction();
   await assert.rejects(
     () => engine.executeInTransaction(handle, "INSERT INTO t (id, value) VALUES ('a', 'dupe')"),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409);
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
       return true;
     }

@@ -3,6 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { ApiError } from '@aws-blocks/core';
 import { DataApiEngine, toField, fromField } from './data-api-engine.js';
 import { DatabaseErrors } from '../errors.js';
 
@@ -160,7 +161,7 @@ test('execute returns rowCount', async () => {
 
 // --- error translation ---
 
-test('BadRequestException with unique constraint maps to UniqueConstraintViolation', async () => {
+test('BadRequestException with unique constraint maps to UniqueConstraintViolation (ApiError 409)', async () => {
   const engine = createEngine({
     ExecuteStatementCommand: () => {
       const err = new Error('duplicate key value violates unique constraint');
@@ -170,14 +171,17 @@ test('BadRequestException with unique constraint maps to UniqueConstraintViolati
   });
   await assert.rejects(
     () => engine.execute('INSERT INTO t VALUES (1)'),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409, 'duplicate key must be 409, not 500');
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
+      assert.notStrictEqual(err.retriable, true);
       return true;
     }
   );
 });
 
-test('non-BadRequestException with unique constraint message maps to UniqueConstraintViolation', async () => {
+test('non-BadRequestException with unique constraint message maps to UniqueConstraintViolation (ApiError 409)', async () => {
   const engine = createEngine({
     ExecuteStatementCommand: () => {
       const err = new Error('ERROR: duplicate key value violates unique constraint "t_pkey"; SQLState: 23505');
@@ -187,7 +191,9 @@ test('non-BadRequestException with unique constraint message maps to UniqueConst
   });
   await assert.rejects(
     () => engine.execute('INSERT INTO t VALUES (1)'),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409);
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
       return true;
     }
@@ -330,9 +336,9 @@ test('serialization failure surfaced on CommitTransaction (SQLState 40001) is cl
   );
 });
 
-test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to UniqueConstraintViolation', async () => {
+test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to UniqueConstraintViolation (ApiError 409)', async () => {
   // Confirms the real exception name is DatabaseErrorException (not BadRequestException),
-  // and code-based classification keeps unique-violation mapping working.
+  // and code-based classification maps unique-violation to a 409 ApiError.
   const engine = createEngine({
     ExecuteStatementCommand: () => {
       const err = new Error(
@@ -344,8 +350,11 @@ test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to
   });
   await assert.rejects(
     () => engine.execute('INSERT INTO t VALUES ($1)', ['dup']),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409, 'duplicate key must be 409, not 500');
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
+      assert.notStrictEqual(err.retriable, true);
       return true;
     },
   );

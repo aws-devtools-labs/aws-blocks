@@ -214,7 +214,8 @@ try {
   await db.execute(sql`INSERT INTO users (id, email) VALUES (${id}, ${email})`);
 } catch (e: unknown) {
   if (isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)) {
-    // Duplicate key — email already exists
+    // Duplicate key — email already exists. Serialized as HTTP 409 (Conflict),
+    // not retriable (a blind retry of the same insert fails identically).
   }
   if (isBlocksError(e, DatabaseErrors.QueryFailed)) {
     // General query failure (syntax error, missing table, etc.)

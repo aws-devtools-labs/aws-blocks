@@ -3,6 +3,8 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { isBlocksError, ApiError } from '@aws-blocks/core';
+import { DatabaseErrors } from '@aws-blocks/bb-data';
 import type { api as apiType } from 'aws-blocks';
 
 // Compile-time type assertion helpers. `Equal` is the standard invariant
@@ -102,6 +104,27 @@ export function databaseTests(getApi: () => typeof apiType) {
       const result = await api.dbDuplicateInsert(id);
       assert.strictEqual(result.error, 'UniqueConstraintViolationException');
 
+      await api.dbDelete(id);
+    });
+
+    // Duplicate-key (SQLSTATE 23505) UniqueConstraintViolation must serialize to
+    // JSON-RPC 409 (Conflict) over the wire — reconstructed client-side as an
+    // ApiError with status 409 — not a generic 500. The error name is preserved
+    // so isBlocksError still matches. The PGlite mock enforces the PK constraint,
+    // so this exercises the real translate path locally. (issue #508)
+    test('Database - duplicate insert returns status 409 over the wire', async () => {
+      const api = getApi();
+      const id = `t-409-${Date.now().toString(36)}`;
+      await api.dbInsert(id, 'first', 1);
+      try {
+        await api.dbInsert(id, 'dup', 2);
+        assert.fail('Expected a conflict error');
+      } catch (e) {
+        assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+        assert.strictEqual(e.status, 409, 'duplicate key must be 409, not 500');
+        assert.ok(isBlocksError(e, DatabaseErrors.UniqueConstraintViolation));
+        assert.notStrictEqual(e.retriable, true, 'duplicate key is not retriable');
+      }
       await api.dbDelete(id);
     });
 

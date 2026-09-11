@@ -51,7 +51,20 @@ export function translateDsqlError(e: Error): never {
       retriable: true,
     });
   } else if (code === PG_UNIQUE_VIOLATION) {
-    e.name = DistributedDatabaseErrors.UniqueConstraintViolation;
+    // A duplicate-key / unique-constraint violation (SQLSTATE 23505) is a
+    // Conflict, not an InternalServerError: throw an ApiError with status 409
+    // so the JSON-RPC serializer emits code 409 instead of a generic 500.
+    // Preserve the UniqueConstraintViolation name so isBlocksError() keeps
+    // matching on both server and client, and keep the original error as
+    // `cause` (server-side). Unlike the 40001 branch above, this is NOT
+    // retriable — a duplicate key is deterministic, so a blind retry of the
+    // same insert fails identically (ApiError defaults retriable=false). The
+    // client-visible message is a fixed, stable string; the raw driver text
+    // (which can name columns / constraints) is retained only as `cause`.
+    throw new ApiError('The item violates a unique constraint', 409, {
+      name: DistributedDatabaseErrors.UniqueConstraintViolation,
+      cause: e,
+    });
   } else if (code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)) {
     e.name = DistributedDatabaseErrors.ConnectionFailed;
   } else {

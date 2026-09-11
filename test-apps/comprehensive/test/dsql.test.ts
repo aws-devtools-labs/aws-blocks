@@ -3,6 +3,8 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { isBlocksError, ApiError } from '@aws-blocks/core';
+import { DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 import type { api as apiType } from 'aws-blocks';
 
 // Compile-time type assertion helpers (same pattern as database.test.ts).
@@ -99,6 +101,27 @@ export function dsqlTests(getApi: () => typeof apiType) {
       const result = await api.dsqlDuplicateInsert(id);
       assert.strictEqual(result.error, 'UniqueConstraintViolationException');
 
+      await api.dsqlDelete(id);
+    });
+
+    // Duplicate-key (SQLSTATE 23505) UniqueConstraintViolation must serialize to
+    // JSON-RPC 409 (Conflict) over the wire — reconstructed client-side as an
+    // ApiError with status 409 — not a generic 500. The error name is preserved
+    // so isBlocksError still matches. The DSQL mock enforces the PK constraint,
+    // so this exercises the real translate path locally. (issue #508)
+    test('DSQL - duplicate insert returns status 409 over the wire', async () => {
+      const api = getApi();
+      const id = `d-409-${Date.now().toString(36)}`;
+      await api.dsqlInsert(id, 'first', 1);
+      try {
+        await api.dsqlInsert(id, 'dup', 2);
+        assert.fail('Expected a conflict error');
+      } catch (e) {
+        assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+        assert.strictEqual(e.status, 409, 'duplicate key must be 409, not 500');
+        assert.ok(isBlocksError(e, DistributedDatabaseErrors.UniqueConstraintViolation));
+        assert.notStrictEqual(e.retriable, true, 'duplicate key is not retriable');
+      }
       await api.dsqlDelete(id);
     });
 
