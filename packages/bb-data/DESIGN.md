@@ -46,6 +46,14 @@ bb-data (this package)
 - `pg.Pool` with connection string
 - Used for `fromExisting()` databases (external/managed PostgreSQL providers)
 - Translates pg error codes via shared `translatePgError()`
+- On the AWS runtime, sets the Postgres `application_name` connection parameter
+  to the block's BB user-agent chain (`Scope.formatUserAgentString()`, e.g.
+  `aws-blocks/0.2.6 bb/Database/0.2.6`) so the origin is visible in
+  `pg_stat_activity` and in provider dashboards (Supabase, Neon). The value is
+  capped at the Postgres 63-byte `application_name` limit (middle entries elided
+  rather than truncated mid-token). Attribution only — no query-behavior impact.
+  Not set on the `DataApiEngine` path (RDS Data API is HTTP, not a pg wire
+  connection).
 
 ## Error Translation
 
@@ -120,6 +128,7 @@ The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResou
 | No RDS Proxy behavior | Connection pinning, failover not simulated | Transparent to app code |
 | TLS cert verification default (`fromExisting` connection string) | Mock defaults to `rejectUnauthorized: false` (local/self-signed DBs); AWS runtime defaults to verifying (`PgClientEngine` → `rejectUnauthorized: true`) | Intentional. Pass `ssl` to override either layer; the `db pull`-generated wiring sets `ssl: resolveDbSsl()` for both, so the generated path is consistent. A hand-written `fromExisting({ connectionString })` with no `ssl` passes locally but verifies in AWS (pin a provider CA via `ssl.ca`). The mock warns once when `ssl` is omitted so this dev/prod gap surfaces locally. |
 | External migration *apply* | n/a — build/deploy lifecycle step, not a runtime method | No mock needed (intentional; see Schema Migrations above) |
+| `application_name` on the pg connection | Not set by the mock/local engine; the AWS runtime (`PgClientEngine` path) sets it to the 63-byte-capped BB user-agent chain | Intentional. Attribution-only; visible in `pg_stat_activity` / provider dashboards. Unset on the RDS Data API path. |
 
 ## Relationship to data-common
 
