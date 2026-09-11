@@ -8,12 +8,12 @@ import {
   TreatMissingData,
 } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
-import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
+import type { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { type IKey, Key } from 'aws-cdk-lib/aws-kms';
-import { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
-import { Queue } from 'aws-cdk-lib/aws-sqs';
-import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
+import type { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import type { Queue } from 'aws-cdk-lib/aws-sqs';
+import { type ITopic, Topic } from 'aws-cdk-lib/aws-sns';
 
 /**
  * Default CloudWatch alarm wiring (P3.1 + P3.2).
@@ -71,6 +71,18 @@ export type MonitoringConstructProps = {
    * @default 1 (alarm when >=1% of invocations error)
    */
   ssrErrorRatePercent?: number;
+  /**
+   * When `true` (default) the CloudFront 5xx alarm is created in THIS
+   * (regional) construct. `AWS/CloudFront` metrics only publish in
+   * us-east-1 and a CloudWatch alarm can only evaluate a metric in its
+   * own region, so for an off-region hosting stack the parent sets this
+   * to `false` and instead places the alarm in a dedicated us-east-1
+   * support stack (issue #481). When `false` and a `distribution` is
+   * supplied, the CF alarm is skipped here and `cloudFrontAlarmDeferred`
+   * is set to `true`. The regional alarms (SSR/image/DLQ) are unaffected.
+   * @default true
+   */
+  createCloudFrontAlarmLocally?: boolean;
 };
 
 /**
@@ -94,7 +106,7 @@ export type MonitoringConstructProps = {
  * service-principal calls, and a hard `StringEquals` would
  * reintroduce the exact silent-deny this grant exists to prevent.
  */
-const createAlarmTopicKey = (scope: Construct): Key => {
+export const createAlarmTopicKey = (scope: Construct): Key => {
   const key = new Key(scope, 'AlarmTopicKey', {
     description:
       'Encrypts CloudWatch alarm notifications published to the hosting alarm topic.',
@@ -137,6 +149,13 @@ export class MonitoringConstruct extends Construct {
   readonly encryptionKey?: IKey;
   /** All CloudWatch alarms created by this construct. */
   readonly alarms: Alarm[] = [];
+  /**
+   * True when a `distribution` was supplied but the CloudFront 5xx
+   * alarm was NOT created here because `createCloudFrontAlarmLocally`
+   * was `false` (off-region). The parent must place the alarm in a
+   * us-east-1 support stack. See issue #481.
+   */
+  readonly cloudFrontAlarmDeferred: boolean = false;
 
   /**
    * Wire the default alarm set to the user-supplied or auto-created
@@ -159,7 +178,7 @@ export class MonitoringConstruct extends Construct {
     }
     const action = new SnsAction(this.topic);
 
-    if (props.distribution) {
+    if (props.distribution && (props.createCloudFrontAlarmLocally ?? true)) {
       const cf5xx = new Alarm(this, 'CloudFront5xxRate', {
         metric: new Metric({
           namespace: 'AWS/CloudFront',
@@ -182,6 +201,11 @@ export class MonitoringConstruct extends Construct {
       });
       cf5xx.addAlarmAction(action);
       this.alarms.push(cf5xx);
+    } else if (props.distribution) {
+      // Off-region: the CloudFront metric only exists in us-east-1 and an
+      // alarm can't watch a metric cross-region, so defer the alarm to a
+      // us-east-1 support stack owned by the parent. See issue #481.
+      this.cloudFrontAlarmDeferred = true;
     }
 
     if (props.ssrFunction) {
