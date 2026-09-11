@@ -13,6 +13,9 @@
     },
     {
       "path": "../bb-distributed-table"
+    },
+    {
+      "path": "../bb-lambda-compute"
     }
   ]
 }

@@ -9,4 +9,5 @@ export class CronJob {
 export const CronJobErrors = {
 	InvalidSchedule: 'InvalidScheduleExpression',
 	InvalidTimezone: 'InvalidTimezoneExpression',
+	UnsupportedCompute: 'UnsupportedComputeException',
 } as const;

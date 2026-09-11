@@ -51,6 +51,8 @@ This also follows the API's options-object convention (objects over positional p
 
 `ifNotExists` and `ifFieldEquals` are mutually exclusive at the type level (discriminated union), as are `ifExists` and `ifFieldEquals`. DynamoDB's `ConditionExpression` could combine them, but the semantics are confusing — "create only if it doesn't exist AND the existing item's field equals X" is contradictory. The type system prevents this rather than silently picking one.
 
+A conditional-failure `ApiError` (409) is flagged `retriable` only for a pure `ifFieldEquals` optimistic-lock check (a re-read and retry can succeed); an existence assertion (`ifNotExists`/`ifExists`) is not retriable (a blind retry fails identically). Both runtimes derive this from a single expression keyed on **value presence** (`ifFieldEquals !== undefined`) with the **existence assertion winning** — so even the type-forbidden combined case (only reachable outside the typed API) is not retriable, and mock and AWS produce identical `retriable` for identical inputs.
+
 KVStore uses `ifValueEquals` (compare the entire value). DistributedTable uses `ifFieldEquals` (compare individual fields) because items are structured objects with multiple fields — comparing the entire item would be impractical and fragile.
 
 ### D-DT-5: `scan()` not `list()`
@@ -81,6 +83,10 @@ orders.query({
 
 The `order` field maps to DynamoDB's `ScanIndexForward` parameter (`'desc'` → `ScanIndexForward: false`). It defaults to `'asc'`.
 
+**Ordering ties (GSI):** a GSI sort key need not be unique, so multiple items can share one sort-key value. The mock tie-breaks on the base-table primary key (partition key, then sort key) rather than on Map insertion order — otherwise results would depend on write order / disk-reload order. This **matches DynamoDB's observed ordering** for index rows with equal sort keys; AWS does not document a contractual guarantee for the tie order, so the mock is intentionally **deterministic even where DynamoDB's contract is unspecified** (a plus for reproducible tests — just don't rely on a specific tie order in production logic). Under `order: 'desc'` the whole index order, ties included, reverses.
+
+**String-ordering boundary:** the mock compares sort/base keys with JavaScript `<`/`>` (UTF-16 code-unit order), which can differ from DynamoDB's UTF-8 byte order for non-ASCII string keys. This applies to both the index sort-key comparison and the base-key tie-break, and is a pre-existing property of the mock — surfaced here so the parity discussion is complete.
+
 ### D-DT-7: TTL via options field
 
 **Decision:** TTL is configured via `ttl: 'fieldName'` in the constructor options, not as a separate method or decorator.
@@ -100,7 +106,15 @@ A generic `ValidationException` is exactly the kind of catch-all bucket worth av
 
 **Mock/AWS parity:** the mock checks serialized byte length client-side and throws `ItemTooLarge` directly. On AWS, DynamoDB raises a generic `ValidationException` for an oversized item; the runtime narrows on the size-specific message (`size has exceeded`) and re-maps only that case to `ItemTooLarge`. Other `ValidationException` causes (malformed expressions, type mismatches) propagate unchanged. Both layers therefore surface the same `error.name`, and the shared message lives in `errors.ts` (`DistributedTableMessages.itemTooLarge`) so the two stay byte-for-byte aligned.
 
-### D-DT-9: `readValidation` — `off | coerce | strict`, defaulting to `coerce`
+### D-DT-9: `retriable` on a 409 conflict is scoped to optimistic-lock (`ifFieldEquals`) only
+
+**Decision:** A `ConditionalCheckFailedException` maps to an `ApiError` with status **409**, but `retriable` is **true only for `ifFieldEquals` (optimistic-lock) conflicts** and **false for `ifNotExists`/`ifExists` (existence/uniqueness) assertions**.
+
+**Rationale:** A value/field-equals conflict is genuinely optimistic-concurrency — a re-read and retry can succeed. An `ifNotExists`/`ifExists` failure is an existence assertion: a blind identical retry fails identically, so flagging it retriable is misleading. DynamoDB collapses every conditional failure under one `ConditionalCheckFailedException` with no sub-reason, so the AWS runtime decides retriability per-operation from the condition the caller set on that specific `put`/`delete`, matching the mock branch-for-branch. `error.name` and status (409) are unchanged.
+
+Note `retriable` marks the conflict *kind* (optimistic-lock `ifFieldEquals` vs existence assertion), **not** a guarantee that a retry will succeed: an `ifFieldEquals` conflict against a **missing** row is still flagged retriable, yet a blind retry fails identically — because DynamoDB collapses missing-vs-stale into one indistinguishable exception, and the mock deliberately matches that for parity.
+
+### D-DT-10: `readValidation` — `off | coerce | strict`, defaulting to `coerce`
 
 > The **default choice** (`'coerce'` over `'off'`) is recorded as a cross-cutting architectural decision in [`docs/DECISIONS.md` D-015](../../docs/DECISIONS.md#d-015-distributedtable-reads-default-to-readvalidation-coerce-not-off). This section covers the per-BB mechanics.
 
@@ -123,7 +137,7 @@ A generic `ValidationException` is exactly the kind of catch-all bucket worth av
 
 **Mock/AWS parity:** both layers call the same `applyReadValidation()` helper in `errors.ts`, so all three modes (coerced output, raw-fallback + warn, strict throw) behave identically. `null` (a missing item) passes through untouched in every mode, preserving not-found semantics.
 
-### D-DT-10: Secure-by-default durability & encryption, sourced from stack `BlocksDefaults`
+### D-DT-11: Secure-by-default durability & encryption, sourced from stack `BlocksDefaults`
 
 Durability posture is resolved from the stack-wide `BlocksDefaults` (`BlocksPresets` in `@aws-blocks/core/cdk`), the shared infrastructure-defaults mechanism (introduced in #302): `defaults.removalPolicy`, `defaults.deletionProtection`, and `defaults.pointInTimeRecovery`. Under `BlocksPresets.production` a table defaults to PITR **on**, deletion protection **on**, and `RemovalPolicy.RETAIN`; under `BlocksPresets.sandbox` all three flip off/`DESTROY` so throwaway stacks stay cheap and `sandbox:destroy` is a one-command teardown. SSE defaults to the AWS-managed KMS key. Every default is overridable per table via `protection`, `pointInTimeRecovery`, and `encryption`; a per-block option always wins (`option ?? scope.defaults.field`). Each field is read **independently** from `defaults` — deletion protection and PITR are never derived from `removalPolicy`.
 
@@ -149,7 +163,7 @@ Creates a single DynamoDB table:
 - **TTL:** Enabled via `TimeToLiveSpecification` when `options.ttl` is set
 - **Billing mode:** PAY_PER_REQUEST
 - **Table name:** Derived from `scope.fullId` (includes stack name for uniqueness)
-- **Durability & encryption:** Secure-by-default in production — PITR, deletion protection, SSE-KMS, and `RemovalPolicy.RETAIN` (see D-DT-10)
+- **Durability & encryption:** Secure-by-default in production — PITR, deletion protection, SSE-KMS, and `RemovalPolicy.RETAIN` (see D-DT-11)
 - **Permissions:** `grantReadWriteData` to the parent scope's handler automatically, plus explicit `dynamodb:Query` on `index/*`
 
 Attribute types are inferred from the schema at synth time. The CDK layer probes the schema's `StandardSchemaV1.validate()` method with a test value of `0` for each key field — if the field accepts it without issues, it's numeric (`AttributeType.NUMBER`), otherwise string (`AttributeType.STRING`). This is schema-library-agnostic and uses only the standard validation interface.

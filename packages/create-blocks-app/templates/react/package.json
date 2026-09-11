@@ -7,7 +7,9 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "workspaces": ["aws-blocks"],
+  "workspaces": [
+    "aws-blocks"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "dev:server": "tsx watch aws-blocks/scripts/server.ts",
@@ -16,6 +18,7 @@
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "sandbox:console": "tsx aws-blocks/scripts/console.ts",
     "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+    "prebuild": "blocks-generate-client",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",

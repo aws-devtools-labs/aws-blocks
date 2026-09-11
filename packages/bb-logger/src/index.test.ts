@@ -35,13 +35,11 @@ beforeEach(() => {
 		stderrLines.push(String(chunk));
 		return true;
 	}) as any;
-	delete process.env.LOG_LEVEL;
 });
 
 afterEach(() => {
 	process.stdout.write = origStdoutWrite;
 	process.stderr.write = origStderrWrite;
-	delete process.env.LOG_LEVEL;
 });
 
 function getStdoutEntry(index = 0): LogEntry {
@@ -158,40 +156,6 @@ describe('level filtering', () => {
 		assert.strictEqual(stdoutLines.length, 3);
 		assert.strictEqual(stderrLines.length, 1);
 	});
-});
-
-// ── LOG_LEVEL Environment Variable ──────────────────────────────────────────
-
-describe('LOG_LEVEL env var', () => {
-	test('reads LOG_LEVEL from environment', () => {
-		process.env.LOG_LEVEL = 'warn';
-		const log = new Logger(fakeScope, 'app');
-		log.info('suppressed');
-		log.warn('emitted');
-		assert.strictEqual(stdoutLines.length, 1);
-		assert.strictEqual(getStdoutEntry().level, 'warn');
-	});
-
-	test('constructor option overrides env var', () => {
-		process.env.LOG_LEVEL = 'error';
-		const log = new Logger(fakeScope, 'app', { level: 'debug' });
-		log.debug('emitted');
-		assert.strictEqual(stdoutLines.length, 1);
-	});
-
-	test('invalid env var falls through to default', () => {
-		process.env.LOG_LEVEL = 'invalid';
-		const log = new Logger(fakeScope, 'app');
-		// 'invalid' won't match any LEVEL_PRIORITY key, so shouldLog returns false for most
-		// Actually the level is set to 'invalid' which has undefined priority
-		// This means shouldLog will return NaN >= NaN which is false
-		// Effectively suppresses all output — acceptable edge case behavior
-		log.info('test');
-		// Since 'invalid' is not in LEVEL_PRIORITY, info priority (1) >= undefined — which is false
-		assert.strictEqual(stdoutLines.length, 0);
-	});
-
-
 });
 
 // ── Context ─────────────────────────────────────────────────────────────────

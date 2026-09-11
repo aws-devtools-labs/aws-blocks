@@ -7,15 +7,15 @@
 // factory-injecting wrappers of the same name.
 export * from '@aws-blocks/core/cdk';
 
-import type { Construct } from 'constructs';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
 import {
-	BlocksStack as CoreBlocksStack,
-	BlocksBackend as CoreBlocksBackend,
-	type BlocksStackProps,
 	type BlocksBackendProps,
+	type BlocksStackProps,
+	BlocksBackend as CoreBlocksBackend,
+	BlocksStack as CoreBlocksStack,
 } from '@aws-blocks/core/cdk';
 import type { Compute, DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
+import type { Construct } from 'constructs';
 
 // The umbrella is the one package that depends on both core and a concrete
 // compute, so it supplies the default-compute factory here — a plain import,
@@ -54,62 +54,142 @@ export const BlocksBackend = {
 };
 export type BlocksBackend = CoreBlocksBackend;
 
-// Override core's untyped getSdkIdentifiers with typed overloads
-export { getSdkIdentifiers } from './sdk-identifiers.js';
-
+export type { AuthAction, AuthField, AuthState, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
+export type {
+	AgentConfig,
+	AgentResult,
+	AgentStreamChunk,
+	ModelConfig,
+	StreamOptions,
+	TokenUsage,
+	ToolCallRecord,
+	ToolDefinition,
+} from '@aws-blocks/bb-agent';
+export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
+export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
+export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
+export type {
+	AsyncJobContext,
+	AsyncJobOptions,
+	AsyncJobState,
+	AsyncJobStatus,
+	AsyncJobTransition,
+	BatchSubmitResult,
+	SubmitOptions,
+	WaitUntilCompleteOptions,
+} from '@aws-blocks/bb-async-job';
+export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
 // Building Blocks (CDK versions)
-export { AuthBasic, AuthBasicErrors, type AuthBasicUser, type AuthBasicOptions, type PasswordPolicy } from '@aws-blocks/bb-auth-basic';
-export { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
+export {
+	AuthBasic,
+	AuthBasicErrors,
+	type AuthBasicOptions,
+	type AuthBasicUser,
+	type PasswordPolicy,
+} from '@aws-blocks/bb-auth-basic';
 export type {
 	AuthCognitoOptions,
 	AuthFlowType,
+	CodeDeliveryDetails,
 	CognitoUser,
+	ConfirmSignInOptions,
+	DeviceRecord,
+	ExternalUserPoolRef,
+	MFAPreference,
+	ResetPasswordResult,
+	SignInNextStep,
 	SignInOptions,
 	SignInResult,
-	SignInNextStep,
-	ConfirmSignInOptions,
 	SignUpOptions,
 	SignUpResult,
-	ResetPasswordResult,
-	CodeDeliveryDetails,
 	UpdateAttributeOutcome,
-	MFAPreference,
-	DeviceRecord,
 	UserAttribute,
-	ExternalUserPoolRef,
 } from '@aws-blocks/bb-auth-cognito';
-export { AuthOIDC, AuthOIDCErrors, google, github, customOidc, customOauth2, stubIdp, cognitoFederated, relayOrigin } from '@aws-blocks/bb-auth-oidc';
-export type { AuthOIDCErrorName, OIDCUser, MappedClaims, RelayOrigin } from '@aws-blocks/bb-auth-oidc';
-export type { BlocksAuth, AuthUser, AuthState, AuthAction, AuthField } from '@aws-blocks/auth-common';
-export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions as KVPutOptions, KVStoreOptions, ExternalTableRef } from '@aws-blocks/bb-kv-store';
-export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
-export { Realtime } from '@aws-blocks/bb-realtime';
-export { Database, DatabaseErrors, fromExisting } from '@aws-blocks/bb-data';
-export { sql } from '@aws-blocks/bb-data';
-export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
-export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
-export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
-export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
-export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult, AsyncJobState, AsyncJobStatus, AsyncJobTransition, WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
-export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
-export type { AgentConfig, AgentResult, AgentStreamChunk, ToolDefinition, ToolCallRecord, ModelConfig, StreamOptions, TokenUsage } from '@aws-blocks/bb-agent';
+export { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
+export type { AuthOIDCErrorName, MappedClaims, OIDCUser, RelayOrigin } from '@aws-blocks/bb-auth-oidc';
+export {
+	AuthOIDC,
+	AuthOIDCErrors,
+	cognitoFederated,
+	customOauth2,
+	customOidc,
+	github,
+	google,
+	relayOrigin,
+	stubIdp,
+} from '@aws-blocks/bb-auth-oidc';
+export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
 export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';
-export type { CronJobOptions, CronJobEvent } from '@aws-blocks/bb-cron-job';
-export { FileBucket, FileBucketErrors } from '@aws-blocks/bb-file-bucket';
-export type { FileBucketOptions, PutOptions as FBPutOptions, GetUrlOptions, PutUrlOptions, ScanOptions as FBScanOptions, FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef as FBExternalBucketRef } from '@aws-blocks/bb-file-bucket';
-export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
-export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
-export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
-export type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, SourceConfig, ChunkingConfig, ChunkingStrategy, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
-export { Tracer } from '@aws-blocks/bb-tracer';
-export type { TracerOptions, Segment, AnnotationValue } from '@aws-blocks/bb-tracer';
-export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';
-export type { LogLevel, LoggingOptions, LogEntry, ChildLogger, RetentionDays } from '@aws-blocks/bb-logger';
-export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
-export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from '@aws-blocks/bb-email-client';
-export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
-export type { MetricsOptions, EmitOptions, MetricDatum, MetricUnit, MetricResolution, ExternalMetricsRef, MetricsEmitter } from '@aws-blocks/bb-metrics';
+export type {
+	DashboardOptions,
+	MetricConfig,
+	MetricsBBRef,
+	MetricsSource,
+} from '@aws-blocks/bb-dashboard';
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
-export type { DashboardOptions, MetricConfig, MetricsBBRef, LoggerBBRef, TracerBBRef } from '@aws-blocks/bb-dashboard';
+export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
+export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
+export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
+export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
+export type {
+	DeleteOptions as DTDeleteOptions,
+	DistributedTableOptions,
+	PutOptions as DTPutOptions,
+	QueryOptions as DTQueryOptions,
+	ReadValidationMode,
+	ScanOptions as DTScanOptions,
+	TableKey,
+	TableKeyConfig,
+} from '@aws-blocks/bb-distributed-table';
+export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
+export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
+export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
+export type {
+	CorsRule,
+	ExternalBucketRef as FBExternalBucketRef,
+	FileBucketOptions,
+	FileContent,
+	FileInfo,
+	GetUrlOptions,
+	LifecycleRule,
+	PutOptions as FBPutOptions,
+	PutUrlOptions,
+	ScanOptions as FBScanOptions,
+} from '@aws-blocks/bb-file-bucket';
+export { FileBucket, FileBucketErrors } from '@aws-blocks/bb-file-bucket';
+export type {
+	ChunkingConfig,
+	ChunkingStrategy,
+	KnowledgeBaseOptions,
+	MetadataFilter,
+	RetrieveOptions,
+	RetrieveResult,
+	SourceConfig,
+	WaitUntilSyncedOptions,
+} from '@aws-blocks/bb-knowledge-base';
+export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
+export type {
+	ConditionalDeleteOptions,
+	ConditionalWriteOptions,
+	ExternalTableRef,
+	KVStoreOptions,
+	PutOptions as KVPutOptions,
+} from '@aws-blocks/bb-kv-store';
+export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
+export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-blocks/bb-logger';
+export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';
+export type {
+	EmitOptions,
+	ExternalMetricsRef,
+	MetricDatum,
+	MetricResolution,
+	MetricsEmitter,
+	MetricsOptions,
+	MetricUnit,
+} from '@aws-blocks/bb-metrics';
+export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
+export { Realtime } from '@aws-blocks/bb-realtime';
+export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tracer';
+export { Tracer } from '@aws-blocks/bb-tracer';
+// Override core's untyped getSdkIdentifiers with typed overloads
+export { getSdkIdentifiers } from './sdk-identifiers.js';
