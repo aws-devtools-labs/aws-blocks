@@ -214,3 +214,60 @@ export interface FrontDoorAdapter {
   /** Materialize the service for the given plan. */
   render(scope: Construct, plan: CapabilityPlan, ctx: AdapterContext): FrontDoorResult;
 }
+
+// ── The front-door graph (composition model) ──────────────────────────────────
+//
+// The front door is not a single mutually-exclusive door — it is a COMPOSITION
+// of layers (`edge → router → origins`). This is the neutral, service-agnostic
+// data model for that composition: a tree rooted at the single public entry
+// point. A layer forwards a matched request down to either a NESTED layer
+// (composition — e.g. CloudFront edge in front of an ALB router) or a terminal
+// {@link OriginRef}. See the design docs (hosting-revamp 05 §5.10 / 06 / 07).
+//
+// NOTE (Commit 1 — representation only): these types + `composeGraph` describe
+// the topology; nothing renders from the graph yet, so the deploy path is
+// unchanged. Each current door maps to a degenerate one-node graph.
+
+/** What a layer is FOR in the stack — drives negotiation and rendering order. */
+export type LayerRole = 'edge' | 'router' | 'origin';
+
+/**
+ * A terminal a layer forwards to: a plan origin we own (S3 / server / image), or
+ * an external endpoint we only point at (bring-your-own-compute, a compute's own
+ * ingress). `reachability` distinguishes a public endpoint from a VPC-private one
+ * (an internal ALB/EKS reached via a CloudFront VPC origin / API-GW VPC Link).
+ */
+export type OriginRef =
+  | { kind: 'plan-origin'; originId: string }
+  | { kind: 'external'; url: string; reachability?: 'public' | 'vpc-private' };
+
+/** What a layer forwards a matched request to: a nested layer (composition) or a terminal origin. */
+export type FrontDoorTarget = FrontDoorLayer | OriginRef;
+
+/**
+ * One provisioned layer (a node in the {@link FrontDoorGraph}). It routes matched
+ * selectors DOWN to nested layers or terminal origins. A lone edge/router with
+ * only {@link OriginRef} children is the common single-layer case; a `to` that is
+ * itself a {@link FrontDoorLayer} is the composition case (edge → router → …).
+ */
+export type FrontDoorLayer = {
+  /** The service that realizes this layer (`cloudfront` | `alb` | `api-gateway` | `s3-website` | …). */
+  service: string;
+  /** The role this layer plays. */
+  role: LayerRole;
+  /**
+   * Where this layer forwards. `match` is a neutral selector — a route kind
+   * (`static`/`server`/`image`) or an API-namespace tag (`api:<ns>`); the concrete
+   * URL patterns live in {@link CapabilityPlan.routes} and are applied at render.
+   */
+  forwards: Array<{ match: string; to: FrontDoorTarget }>;
+};
+
+/** The whole composition — the tree rooted at the single public entry layer. */
+export type FrontDoorGraph = {
+  root: FrontDoorLayer;
+};
+
+/** Type guard: is a {@link FrontDoorTarget} a terminal origin (vs a nested layer)? */
+export const isOriginRef = (t: FrontDoorTarget): t is OriginRef =>
+  (t as OriginRef).kind === 'plan-origin' || (t as OriginRef).kind === 'external';
