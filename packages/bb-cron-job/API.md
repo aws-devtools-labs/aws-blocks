@@ -20,6 +20,7 @@ export const CronJobErrors: {
     readonly InvalidSchedule: "InvalidScheduleExpression";
     readonly ScheduleNotSupported: "ScheduleNotSupportedInMock";
     readonly InvalidTimezone: "InvalidTimezoneExpression";
+    readonly UnsupportedCompute: "UnsupportedComputeException";
 };
 
 // @public (undocumented)

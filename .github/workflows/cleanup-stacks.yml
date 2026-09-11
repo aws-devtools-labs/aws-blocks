@@ -87,7 +87,7 @@ jobs:
 
           # Get all e2e stacks in deletable states across all name patterns
           STACKS=""
-          for PREFIX in blocks-test- blocks-hosting- bb-test-; do
+          for PREFIX in blocks-test- blocks-hosting- bb-test- bb-telemetry- bb-vpc-smoke-; do
             BATCH=$(aws cloudformation list-stacks \
               --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE DELETE_FAILED UPDATE_ROLLBACK_COMPLETE REVIEW_IN_PROGRESS \
               --query "StackSummaries[?starts_with(StackName, '${PREFIX}')].StackName" \
@@ -103,15 +103,20 @@ jobs:
               break
             fi
 
-            # Verify this is an e2e-test stack
+            # Verify this is an e2e-test stack. The blocks:purpose tag is either
+            # `e2e-*` (hosting/bb-test: e2e-hosting-ssr, e2e-native-bindings, …) or
+            # `*-e2e` (telemetry-e2e, vpc-smoke-e2e) — accept both shapes.
             PURPOSE=$(aws cloudformation describe-stacks --stack-name "$STACK" \
               --query "Stacks[0].Tags[?Key=='blocks:purpose'].Value | [0]" --output text 2>/dev/null || echo "")
 
-            if [[ "$PURPOSE" != e2e-* ]]; then
-              echo "⏭️  Skipping $STACK (not tagged blocks:purpose=e2e-*)"
-              SKIPPED_NOT_E2E=$((SKIPPED_NOT_E2E + 1))
-              continue
-            fi
+            case "$PURPOSE" in
+              e2e-* | *-e2e) ;;
+              *)
+                echo "⏭️  Skipping $STACK (blocks:purpose='$PURPOSE' is not an e2e marker)"
+                SKIPPED_NOT_E2E=$((SKIPPED_NOT_E2E + 1))
+                continue
+                ;;
+            esac
 
             # Use CloudFormation's CreationTime for precise age check (ISO 8601)
             CREATION_TIME=$(aws cloudformation describe-stacks --stack-name "$STACK" \
@@ -151,7 +156,7 @@ jobs:
           # silent backlog growth that exhausted the quota can't recur unnoticed,
           # without hard-failing this best-effort cleanup job.
           STILL_FAILED=0
-          for PREFIX in blocks-test- blocks-hosting- bb-test-; do
+          for PREFIX in blocks-test- blocks-hosting- bb-test- bb-telemetry- bb-vpc-smoke-; do
             CNT=$(aws cloudformation list-stacks \
               --stack-status-filter DELETE_FAILED \
               --query "length(StackSummaries[?starts_with(StackName, '${PREFIX}')])" \

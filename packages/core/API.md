@@ -58,6 +58,9 @@ export type BlocksContext = {
 };
 
 // @public
+export function blocksError(name: string, message: string): Error;
+
+// @public
 export interface BuildingBlockMeta {
     readonly bbName: string;
     readonly bbVersion: string;

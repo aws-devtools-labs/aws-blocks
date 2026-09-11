@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
@@ -57,6 +58,17 @@ class StubLambdaCompute extends Compute {
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
 	}
+
+	protected applyTracing(): void {}
+	protected healthWidgets(_region: string): IWidget[][] {
+		return [];
+	}
+	protected loggingWidgets(_region: string): IWidget[][] {
+		return [];
+	}
+	protected tracingWidgets(_region: string): IWidget[][] {
+		return [];
+	}
 }
 
 const stubComputeFactory: DefaultComputeFactory = (root) => new StubLambdaCompute(root as never, 'DefaultCompute');
@@ -77,7 +89,12 @@ const importMetaHandlerPath = join(__dirname, '__fixtures__', 'import-meta-handl
 // Wraps BlocksBackend.create, injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it 15 times.
 const makeBackend = (scope: Construct, id: string, backendCDKPath: string) =>
-	BlocksBackend.create(scope, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production, defaultComputeFactory: stubComputeFactory });
+	BlocksBackend.create(scope, id, {
+		backendHandlerPath: handlerPath,
+		backendCDKPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: stubComputeFactory,
+	});
 
 describe('ESM cache-busting (multi-stage)', () => {
 	test('BlocksBackend.create() with same backendCDKPath but different IDs produces constructs in each', async () => {
@@ -170,10 +187,29 @@ describe('shared execution role', () => {
 			'BlocksRole should attach AWSLambdaBasicExecutionRole',
 		);
 
+		// Core is BB-agnostic: with no Building Block that runs AS the shared role, the trust policy
+		// must NOT allow any compute principal beyond Lambda (e.g. bedrock-agentcore is added by the
+		// Agent BB's own construct, not here — see packages/bb-agent).
+		assert.ok(
+			!JSON.stringify(blocksRole.Properties.AssumeRolePolicyDocument).includes('bedrock-agentcore'),
+			'core must not trust bedrock-agentcore by default (no agent → no AgentCore trust)',
+		);
+
 		// The Blocks handler references the shared role, not an auto-generated one.
 		template.hasResourceProperties('AWS::Lambda::Function', {
 			Role: { 'Fn::GetAtt': [blocksRoleId, 'Arn'] },
 		});
+	});
+
+	test('exposes backendModulePath (props.backendCDKPath) for co-bundling BBs', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'BackendPathStack');
+
+		const backend = await makeBackend(parent, 'Blocks', sideEffectBackendPath);
+
+		// Building Blocks that co-bundle the app backend at synth time (e.g. the Agent BB's AgentCore
+		// Runtime) discover it via globalThis.CURRENT_BLOCKS_STACK.backendModulePath.
+		assert.strictEqual(backend.backendModulePath, sideEffectBackendPath);
 	});
 
 	test('a nested block resolves executionRole via the construct-tree walk', async () => {
@@ -211,25 +247,25 @@ describe('shared execution role', () => {
 });
 
 describe('CJS bundle: import.meta.url in the handler is shimmed (no Lambda-load crash)', () => {
-  test('a handler that uses import.meta.url bundles successfully instead of throwing at load', async () => {
-    // The handler is bundled to CJS, where `import.meta` is empty. Left unshimmed,
-    // `fileURLToPath(import.meta.url)` compiles to `fileURLToPath(undefined)` and
-    // throws at Lambda load (esbuild only warns, so the broken bundle would deploy).
-    // blocksNodejsBundling shims import.meta.* to CommonJS equivalents, so bundling
-    // (which runs synchronously during construction) succeeds. The runtime behaviour
-    // of the emitted shim is verified directly in bundling.test.ts.
-    const app = new cdk.App();
-    const stack = new cdk.Stack(app, 'ImportMetaStack');
+	test('a handler that uses import.meta.url bundles successfully instead of throwing at load', async () => {
+		// The handler is bundled to CJS, where `import.meta` is empty. Left unshimmed,
+		// `fileURLToPath(import.meta.url)` compiles to `fileURLToPath(undefined)` and
+		// throws at Lambda load (esbuild only warns, so the broken bundle would deploy).
+		// blocksNodejsBundling shims import.meta.* to CommonJS equivalents, so bundling
+		// (which runs synchronously during construction) succeeds. The runtime behaviour
+		// of the emitted shim is verified directly in bundling.test.ts.
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'ImportMetaStack');
 
-    await assert.doesNotReject(() =>
-      BlocksBackend.create(stack, 'blocks', {
-        backendHandlerPath: importMetaHandlerPath,
-        backendCDKPath: sideEffectBackendPath,
-        defaults: BlocksPresets.production,
-        defaultComputeFactory: stubComputeFactory,
-      }),
-    );
-  });
+		await assert.doesNotReject(() =>
+			BlocksBackend.create(stack, 'blocks', {
+				backendHandlerPath: importMetaHandlerPath,
+				backendCDKPath: sideEffectBackendPath,
+				defaults: BlocksPresets.production,
+				defaultComputeFactory: stubComputeFactory,
+			}),
+		);
+	});
 });
 
 describe('factory function support', () => {
@@ -329,44 +365,44 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
 });
 
 describe('infrastructure defaults (backend-anchored)', () => {
-  test('each backend exposes its own defaults', async () => {
-    const app = new cdk.App();
-    const stack = new cdk.Stack(app, 'TwoBackendsStack');
+	test('each backend exposes its own defaults', async () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'TwoBackendsStack');
 
-    const a = await BlocksBackend.create(stack, 'A', {
-      backendHandlerPath: handlerPath,
-      backendCDKPath: sideEffectBackendPath,
-      defaults: BlocksPresets.production,
-      defaultComputeFactory: stubComputeFactory,
-    });
-    const b = await BlocksBackend.create(stack, 'B', {
-      backendHandlerPath: handlerPath,
-      backendCDKPath: sideEffectBackendPath,
-      defaults: BlocksPresets.sandbox,
-      defaultComputeFactory: stubComputeFactory,
-    });
+		const a = await BlocksBackend.create(stack, 'A', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: stubComputeFactory,
+		});
+		const b = await BlocksBackend.create(stack, 'B', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.sandbox,
+			defaultComputeFactory: stubComputeFactory,
+		});
 
-    // Two backends in one stack must NOT clobber each other — defaults are
-    // anchored on the backend, not the shared stack.
-    assert.strictEqual(a.defaults, BlocksPresets.production);
-    assert.strictEqual(b.defaults, BlocksPresets.sandbox);
-  });
+		// Two backends in one stack must NOT clobber each other — defaults are
+		// anchored on the backend, not the shared stack.
+		assert.strictEqual(a.defaults, BlocksPresets.production);
+		assert.strictEqual(b.defaults, BlocksPresets.sandbox);
+	});
 
-  test('a nested block resolves its owning backend defaults via the tree-walk', async () => {
-    const app = new cdk.App();
-    const stack = new cdk.Stack(app, 'ResolveDefaultsStack');
+	test('a nested block resolves its owning backend defaults via the tree-walk', async () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'ResolveDefaultsStack');
 
-    const backend = await BlocksBackend.create(stack, 'Blocks', {
-      backendHandlerPath: handlerPath,
-      backendCDKPath: sideEffectBackendPath,
-      defaults: BlocksPresets.sandbox,
-      defaultComputeFactory: stubComputeFactory,
-    });
+		const backend = await BlocksBackend.create(stack, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.sandbox,
+			defaultComputeFactory: stubComputeFactory,
+		});
 
-    // A Scope under the backend resolves scope.defaults by walking up to it.
-    const outer = new Scope('outer');
-    const inner = new Scope('inner', { parent: outer });
-    assert.strictEqual(inner.defaults, backend.defaults);
-    assert.strictEqual(inner.defaults, BlocksPresets.sandbox);
-  });
+		// A Scope under the backend resolves scope.defaults by walking up to it.
+		const outer = new Scope('outer');
+		const inner = new Scope('inner', { parent: outer });
+		assert.strictEqual(inner.defaults, backend.defaults);
+		assert.strictEqual(inner.defaults, BlocksPresets.sandbox);
+	});
 });

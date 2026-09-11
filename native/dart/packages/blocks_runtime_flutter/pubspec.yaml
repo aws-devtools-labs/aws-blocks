@@ -1,6 +1,6 @@
 name: blocks_runtime_flutter
 description: Flutter-specific implementations for blocks_runtime (secure storage, OAuth browser flow)
-version: 0.1.2
+version: 0.1.3
 homepage: https://docs.aws.amazon.com/blocks/latest/devguide
 repository: https://github.com/aws-devtools-labs/aws-blocks
 issue_tracker: https://github.com/aws-devtools-labs/aws-blocks/issues
@@ -12,7 +12,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  blocks_runtime: ^0.1.2
+  blocks_runtime: ^0.1.3
   # 11.x needs compileSdk 37, which current stable Flutter/AGP can't target.
   # Upstream: https://github.com/juliansteenbakker/flutter_secure_storage/issues/1224
   flutter_secure_storage: ^10.3.1

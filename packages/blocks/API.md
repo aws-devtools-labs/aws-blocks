@@ -119,7 +119,6 @@ import { LifecycleAdmin } from '@aws-blocks/bb-auth-cognito';
 import { LifecycleRule } from '@aws-blocks/bb-file-bucket';
 import { LogEntry } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
-import { LoggerBBRef } from '@aws-blocks/bb-dashboard';
 import { LoggingErrors } from '@aws-blocks/bb-logger';
 import { LoggingOptions } from '@aws-blocks/bb-logger';
 import { LogLevel } from '@aws-blocks/bb-logger';
@@ -133,6 +132,7 @@ import { MetricsBBRef } from '@aws-blocks/bb-dashboard';
 import { MetricsEmitter } from '@aws-blocks/bb-metrics';
 import { MetricsErrors } from '@aws-blocks/bb-metrics';
 import { MetricsOptions } from '@aws-blocks/bb-metrics';
+import { MetricsSource } from '@aws-blocks/bb-dashboard';
 import { MetricUnit } from '@aws-blocks/bb-metrics';
 import { MFAPreference } from '@aws-blocks/bb-auth-cognito';
 import { ModelConfig } from '@aws-blocks/bb-agent';
@@ -147,7 +147,6 @@ import { RealtimeSubscription } from '@aws-blocks/bb-realtime';
 import { RelayOrigin } from '@aws-blocks/bb-auth-oidc';
 import { relayOrigin } from '@aws-blocks/bb-auth-oidc';
 import { ResetPasswordResult } from '@aws-blocks/bb-auth-cognito';
-import { RetentionDays } from '@aws-blocks/bb-logger';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
 import { Segment } from '@aws-blocks/bb-tracer';
@@ -175,7 +174,6 @@ import { ToolFactory } from '@aws-blocks/bb-agent';
 import { ToolHandlerArgs } from '@aws-blocks/bb-agent';
 import { ToolsConfig } from '@aws-blocks/bb-agent';
 import { Tracer } from '@aws-blocks/bb-tracer';
-import { TracerBBRef } from '@aws-blocks/bb-dashboard';
 import { TracerOptions } from '@aws-blocks/bb-tracer';
 import { Transaction } from '@aws-blocks/bb-data';
 import { TransactionOptions } from '@aws-blocks/bb-distributed-data';
@@ -455,7 +453,6 @@ export function getSdkIdentifiers(bb: Agent): {
     sessionBucketName: string;
     realtimeWsUrl: string;
     realtimeCallbackUrl: string;
-    jobQueueUrl: string;
 };
 
 // @public (undocumented)
@@ -503,8 +500,6 @@ export { LogEntry }
 
 export { Logger }
 
-export { LoggerBBRef }
-
 export { LoggingErrors }
 
 export { LoggingOptions }
@@ -530,6 +525,8 @@ export { MetricsEmitter }
 export { MetricsErrors }
 
 export { MetricsOptions }
+
+export { MetricsSource }
 
 export { MetricUnit }
 
@@ -558,8 +555,6 @@ export { RelayOrigin }
 export { relayOrigin }
 
 export { ResetPasswordResult }
-
-export { RetentionDays }
 
 export { RetrieveOptions }
 
@@ -614,8 +609,6 @@ export { ToolHandlerArgs }
 export { ToolsConfig }
 
 export { Tracer }
-
-export { TracerBBRef }
 
 export { TracerOptions }
 

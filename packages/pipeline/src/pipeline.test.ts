@@ -9,7 +9,7 @@ import { App, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
-import { CodePipelineSource } from 'aws-cdk-lib/pipelines';
+import { CodeBuildStep, CodePipelineSource } from 'aws-cdk-lib/pipelines';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -2285,5 +2285,115 @@ describe('_sourceOverride (internal test hook)', () => {
       // No synth project should carry an NPM_TOKEN (nothing wired).
       assert.deepStrictEqual(synthProjectEnvVars(stack), []);
     });
+  });
+});
+
+describe('postStage hook', () => {
+  // Find the actions of the deploy stage whose Name ends with the given suffix,
+  // returning a name -> RunOrder map so tests can assert relative ordering.
+  function stageActionRunOrders(stack: Stack, stageNameSuffix: string): Record<string, number> {
+    const pipelines = Template.fromStack(stack).findResources('AWS::CodePipeline::Pipeline');
+    for (const { Properties: props } of Object.values(pipelines)) {
+      const stages = (props as { Stages?: Array<{ Name: string; Actions?: Array<{ Name: string; RunOrder: number }> }> })
+        .Stages;
+      const stage = stages?.find((s) => s.Name.endsWith(stageNameSuffix));
+      if (stage?.Actions) {
+        return Object.fromEntries(stage.Actions.map((a) => [a.Name, a.RunOrder]));
+      }
+    }
+    return {};
+  }
+
+  it('invokes the hook once per stage with the stage, config, and a defined source', () => {
+    const seen: Array<{ name: string; hasSource: boolean; hasStage: boolean }> = [];
+    const stack = new Stack(new App(), 'PostStageContextStack');
+
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        branches: [{ branch: 'main', stages: [{ name: 'beta' }, { name: 'prod' }] }],
+        postStage: ({ stage, stageConfig, source }) => {
+          seen.push({ name: stageConfig.name, hasSource: !!source, hasStage: !!stage });
+          return [];
+        },
+      }),
+    );
+
+    assert.deepStrictEqual(
+      seen,
+      [
+        { name: 'beta', hasSource: true, hasStage: true },
+        { name: 'prod', hasSource: true, hasStage: true },
+      ],
+      'hook should be called once per stage with a defined source and stage',
+    );
+  });
+
+  it('attaches returned steps as post-deploy steps of the stage', () => {
+    const stack = new Stack(new App(), 'PostStageStepStack');
+
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        branches: [{ branch: 'main', stages: [{ name: 'beta' }] }],
+        postStage: ({ source }) => [
+          new CodeBuildStep('PostDeployStep', {
+            input: source,
+            commands: ['echo "post-deploy phase"'],
+          }),
+        ],
+      }),
+    );
+
+    const orders = stageActionRunOrders(stack, 'beta');
+    assert.ok(
+      Object.keys(orders).some((name) => name === 'PostDeployStep'),
+      `expected a PostDeployStep action in the beta stage, saw: ${Object.keys(orders).join(', ')}`,
+    );
+  });
+
+  it('runs bakeTime only AFTER the post-stage steps (bake depends on them)', () => {
+    const stack = new Stack(new App(), 'PostStageBakeOrderStack');
+
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        branches: [{ branch: 'main', stages: [{ name: 'beta', bakeTime: Duration.minutes(5) }] }],
+        postStage: ({ source }) => [
+          new CodeBuildStep('PostDeployStep', {
+            input: source,
+            commands: ['echo "post-deploy phase"'],
+          }),
+        ],
+      }),
+    );
+
+    const orders = stageActionRunOrders(stack, 'beta');
+    assert.ok(orders.PostDeployStep !== undefined, 'PostDeployStep action should exist');
+    assert.ok(orders['BakeTime-beta'] !== undefined, 'BakeTime action should exist');
+    // The step dependency serializes bake AFTER the post-stage step: a strictly
+    // higher RunOrder means CodePipeline runs it in a later action slot, not
+    // concurrently.
+    assert.ok(
+      orders['BakeTime-beta'] > orders.PostDeployStep,
+      `bake (RunOrder ${orders['BakeTime-beta']}) must run after post-deploy (RunOrder ${orders.PostDeployStep})`,
+    );
+  });
+
+  it('adds no post steps when the hook returns undefined', () => {
+    const stack = new Stack(new App(), 'PostStageUndefinedStack');
+    assert.doesNotThrow(() =>
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          branches: [{ branch: 'main', stages: [{ name: 'beta' }] }],
+          postStage: () => undefined,
+        }),
+      ),
+    );
   });
 });

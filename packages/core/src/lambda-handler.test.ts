@@ -3,10 +3,11 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost } from './lambda-handler.js';
+import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost, TransientConfigError } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
-import { registerRoute, clearRouteRegistry } from './raw-route.js';
+import { registerRoute, clearRouteRegistry, getRegisteredRoutes } from './raw-route.js';
 import { decodeRpcResponse } from './rpc.js';
+import { _resetConfigCache, _setS3Fetcher } from './common/config.js';
 import type { BlocksContext } from './api.js';
 
 beforeEach(() => {
@@ -28,6 +29,145 @@ async function invoke(backend: any, event: any): Promise<any> {
   const handler = createLambdaHandler(async () => backend);
   return handler(event) as any;
 }
+
+// ── init self-heal (retry on failed initialization) ─────────────────────────
+
+describe('createLambdaHandler — init self-heal', () => {
+  it('retries initialize() on a later request instead of caching a failed init', async () => {
+    let initCalls = 0;
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async echo(msg: string) {
+          return { msg };
+        },
+      }),
+    };
+    // Fail the first initialization (e.g. config not readable yet in the brief post-deploy
+    // window), then succeed. The SAME handler instance must recover — a cached rejected
+    // initPromise would poison the container and fail every subsequent request.
+    const backendFactory = async () => {
+      initCalls++;
+      if (initCalls === 1) throw new Error('transient init failure');
+      return backend;
+    };
+    const handler = createLambdaHandler(backendFactory);
+
+    // 1st request: init fails, so the handler rejects.
+    await assert.rejects(() => handler(makeEvent()) as any, /transient init failure/);
+
+    // 2nd request: init is retried and succeeds → 200 (not a re-thrown cached rejection).
+    const res = (await handler(makeEvent())) as any;
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(initCalls, 2, 'initialize() must be retried on the next request, not cached');
+  });
+
+  it('recovers from a transient-empty (post-deploy 404) config load on the next request', async () => {
+    // Reproduces the poisoned-container bug: the first S3 load hits the transient
+    // post-deploy window (NoSuchKey), so config resolves empty; the handler must
+    // NOT lock in that empty config, and the NEXT request must re-fetch and pick
+    // up the now-present config.
+    _resetConfigCache();
+    process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
+    process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
+    delete process.env.SELFHEAL_KEY;
+
+    let fetchCall = 0;
+    const notFound = new Error('The specified key does not exist.');
+    (notFound as any).name = 'NoSuchKey';
+    _setS3Fetcher(async () => {
+      fetchCall++;
+      if (fetchCall === 1) throw notFound; // config not readable yet
+      return JSON.stringify({ SELFHEAL_KEY: 'ready' });
+    });
+
+    let backendImports = 0;
+    const handler = createLambdaHandler(async () => {
+      backendImports++;
+      return {
+        api: (_ctx: BlocksContext) => ({
+          async echo(msg: string) { return { msg, cfg: process.env.SELFHEAL_KEY }; },
+        }),
+      };
+    });
+
+    try {
+      // 1st request: transient-empty load → initialize() throws TransientConfigError
+      // BEFORE importing the backend (so we never lock in empty config), and the
+      // request rejects.
+      await assert.rejects(() => handler(makeEvent()) as any, TransientConfigError);
+      assert.strictEqual(backendImports, 0, 'backend must NOT be imported while config is unresolved');
+
+      // 2nd request: config now present → initialize() re-runs, re-fetches, and
+      // injects the config into process.env before importing the backend.
+      const res = (await handler(makeEvent())) as any;
+      assert.strictEqual(res.statusCode, 200);
+      const body = JSON.parse(res.body);
+      assert.strictEqual(body.result.cfg, 'ready', 'now-present config was injected on the retry');
+      assert.strictEqual(backendImports, 1, 'backend imported exactly once, on the successful retry');
+      assert.strictEqual(fetchCall, 2, 'S3 was re-fetched on the retry (transient miss is not cached)');
+    } finally {
+      _resetConfigCache();
+      delete process.env.BLOCKS_CONFIG_BUCKET;
+      delete process.env.BLOCKS_CONFIG_KEY;
+      delete process.env.SELFHEAL_KEY;
+    }
+  });
+
+  it('does NOT re-init for a config-less app (no bucket, local dev) — initialize runs once', async () => {
+    _resetConfigCache();
+    delete process.env.BLOCKS_CONFIG_BUCKET;
+    delete process.env.BLOCKS_CONFIG_KEY;
+
+    let backendImports = 0;
+    const handler = createLambdaHandler(async () => {
+      backendImports++;
+      return { api: (_ctx: BlocksContext) => ({ async echo(msg: string) { return { msg }; } }) };
+    });
+
+    try {
+      const r1 = (await handler(makeEvent())) as any;
+      const r2 = (await handler(makeEvent())) as any;
+      assert.strictEqual(r1.statusCode, 200);
+      assert.strictEqual(r2.statusCode, 200);
+      assert.strictEqual(backendImports, 1, 'no re-init for a genuinely config-less (local dev) app');
+    } finally {
+      _resetConfigCache();
+    }
+  });
+
+  it('does NOT re-init or spin for a genuinely-empty ({}) S3 config', async () => {
+    // A real, readable empty config must be treated as resolved — distinct from
+    // the transient 404 miss — so the container does not throw/retry forever nor
+    // re-fetch S3 on every request.
+    _resetConfigCache();
+    process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
+    process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
+
+    let fetchCall = 0;
+    _setS3Fetcher(async () => { fetchCall++; return JSON.stringify({}); });
+
+    let backendImports = 0;
+    const handler = createLambdaHandler(async () => {
+      backendImports++;
+      return { api: (_ctx: BlocksContext) => ({ async echo(msg: string) { return { msg }; } }) };
+    });
+
+    try {
+      const r1 = (await handler(makeEvent())) as any;
+      const r2 = (await handler(makeEvent())) as any;
+      const r3 = (await handler(makeEvent())) as any;
+      assert.strictEqual(r1.statusCode, 200);
+      assert.strictEqual(r2.statusCode, 200);
+      assert.strictEqual(r3.statusCode, 200);
+      assert.strictEqual(backendImports, 1, 'genuinely-empty config resolves; no re-init');
+      assert.strictEqual(fetchCall, 1, 'S3 fetched once and cached — no per-request re-fetch spin');
+    } finally {
+      _resetConfigCache();
+      delete process.env.BLOCKS_CONFIG_BUCKET;
+      delete process.env.BLOCKS_CONFIG_KEY;
+    }
+  });
+});
 
 // ── RPC body tests ──────────────────────────────────────────────────────────
 
@@ -273,6 +413,84 @@ describe('createLambdaHandler — RawRoute body handling', () => {
 });
 
 // ── Cookie extraction tests ─────────────────────────────────────────────────
+
+// ── Unmatched RawRoute diagnostics ──────────────────────────────────────────
+//
+// A request that matches no RawRoute used to return 404 without a trace in
+// CloudWatch, which is what made the duplicate-core-copy bug invisible.
+
+describe('createLambdaHandler — unmatched RawRoute diagnostics', () => {
+  /** Run `fn` with console.error captured; returns the collected lines. */
+  async function captureErrors(fn: () => Promise<void>): Promise<string[]> {
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      lines.push(args.map((a) => String(a)).join(' '));
+    };
+    try {
+      await fn();
+    } finally {
+      console.error = original;
+    }
+    return lines;
+  }
+
+  it('logs method, path and route count when no RawRoute matches', async () => {
+    registerRoute({ method: 'GET', path: '/known', handler: async (ctx) => ctx.response.send({ ok: true }) });
+
+    let result: any;
+    const logged = await captureErrors(async () => {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/unknown', body: null }));
+    });
+
+    assert.strictEqual(result.statusCode, 404);
+    // The count must match the registry the dispatcher actually consulted —
+    // a "0 routes registered" line is the fingerprint of a split registry.
+    const expectedCount = getRegisteredRoutes().length;
+    assert.ok(expectedCount > 0, 'precondition: routes are registered');
+    assert.ok(
+      logged.some(
+        (line) =>
+          line.includes('No RawRoute matched GET /unknown') &&
+          line.includes(`${expectedCount} routes registered`),
+      ),
+      `expected a diagnostic for the unmatched route, got: ${JSON.stringify(logged)}`,
+    );
+  });
+
+  it('does not log when a RawRoute matches', async () => {
+    registerRoute({ method: 'GET', path: '/known', handler: async (ctx) => ctx.response.send({ ok: true }) });
+
+    const logged = await captureErrors(async () => {
+      const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/known', body: null }));
+      assert.strictEqual(result.statusCode, 200);
+    });
+
+    assert.deepStrictEqual(logged, []);
+  });
+
+  it('names duplicate core copies as the likely cause when more than one is loaded', async () => {
+    const REGISTRY_KEY = '__AWS_BLOCKS_RAW_ROUTE_REGISTRY_V1__';
+    const state = (globalThis as typeof globalThis & { [REGISTRY_KEY]?: { copies: number } })[REGISTRY_KEY];
+    assert.ok(state, `route registry state must live on globalThis['${REGISTRY_KEY}']`);
+
+    const originalCopies = state.copies;
+    state.copies = 2;
+    try {
+      const logged = await captureErrors(async () => {
+        const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/unknown', body: null }));
+        assert.strictEqual(result.statusCode, 404);
+      });
+
+      assert.ok(
+        logged.some((line) => line.includes('2 copies of @aws-blocks/core are loaded')),
+        `expected the copy count in the diagnostic, got: ${JSON.stringify(logged)}`,
+      );
+    } finally {
+      state.copies = originalCopies;
+    }
+  });
+});
 
 describe('createLambdaHandler — cookie extraction', () => {
   it('extracts cookies from lowercase "cookie" header (API Gateway v2)', async () => {
