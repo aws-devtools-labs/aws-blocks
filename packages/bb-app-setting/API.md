@@ -41,6 +41,9 @@ export interface AppSettingOptions<T = string> {
     value?: T;
 }
 
+// @public
+export const SECRETS_BULK_CONSTRUCT_ID = "BlocksSecretsBulk";
+
 // (No @packageDocumentation comment for this package)
 
 ```

@@ -1,9 +1,17 @@
 ---
 "@aws-blocks/bb-auth-oidc": minor
+"@aws-blocks/bb-app-setting": minor
 "@aws-blocks/blocks": patch
 ---
 
 fix(auth-oidc): make `cognitoFederated()` deployable by registering the IdP via a deploy-time custom resource
+
+`@aws-blocks/bb-app-setting` now also exports `SECRETS_BULK_CONSTRUCT_ID` — the
+construct id of the shared per-stack secret-init custom resource — so sibling
+blocks can order a resource after the SecureString values are written without
+hard-coding the string. `bb-auth-oidc`'s IdP-registration custom resource uses
+it to take an explicit dependency on that resource (compile-time coupling, so a
+rename can't silently break the ordering guarantee).
 
 `cognitoFederated()` previously produced a CloudFormation template that always
 failed to deploy (#447). It registered the federated identity provider with a

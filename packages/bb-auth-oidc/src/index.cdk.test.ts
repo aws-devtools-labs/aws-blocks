@@ -23,6 +23,7 @@ import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
 import { AuthOIDC, cognitoFederated, google } from './index.cdk.js';
 import type { AppSettingLike } from './providers.js';
 
@@ -107,7 +108,7 @@ test('CDK: the IdP custom resource depends on BlocksSecretsBulk when present (pa
 	// handler reads them.
 	const TOKEN = 'arn:aws:lambda:us-east-1:1:function:x';
 	const { stack, parent } = setup();
-	new cdk.CustomResource(stack, 'BlocksSecretsBulk', { serviceToken: TOKEN });
+	new cdk.CustomResource(stack, SECRETS_BULK_CONSTRUCT_ID, { serviceToken: TOKEN });
 	new AuthOIDC(parent, 'auth', {
 		providers: [
 			cognitoFederated({

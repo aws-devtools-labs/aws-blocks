@@ -30,7 +30,7 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { Scope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { AppSetting, SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import * as cdk from 'aws-cdk-lib';
 import { CustomResource } from 'aws-cdk-lib';
@@ -328,12 +328,15 @@ export class AuthOIDC<
 		});
 
 		// A `secret: true` AppSetting's SecureString value is written by the shared
-		// bb-app-setting bulk-init custom resource (`BlocksSecretsBulk`, a direct
-		// child of the stack). Depend on it so the parameter exists before this
-		// handler reads it — a hard ordering guarantee rather than leaving it to the
-		// handler's read-retry. (Skipped only if the customer somehow configured no
-		// secret AppSetting, in which case the retry remains the fallback.)
-		const bulkSecrets = cdk.Stack.of(this).node.tryFindChild('BlocksSecretsBulk');
+		// bb-app-setting bulk-init custom resource (a direct child of the stack).
+		// Depend on it so the parameter exists before this handler reads it — a hard
+		// ordering guarantee rather than leaving it to the handler's read-retry. The
+		// construct id comes from bb-app-setting's exported `SECRETS_BULK_CONSTRUCT_ID`
+		// (not a hard-coded string), so a rename there can't silently break this
+		// cross-package coupling — it's a compile-time dependency. The lookup can
+		// still legitimately miss (e.g. a non-BlocksStack test harness, or no secret
+		// AppSetting at all), in which case the read-retry remains the fallback.
+		const bulkSecrets = cdk.Stack.of(this).node.tryFindChild(SECRETS_BULK_CONSTRUCT_ID);
 		if (bulkSecrets) cr.node.addDependency(bulkSecrets);
 
 		return cr;
