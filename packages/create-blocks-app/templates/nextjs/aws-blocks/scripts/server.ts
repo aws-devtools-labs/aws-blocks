@@ -6,6 +6,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 startDevServer({
   backendPath: join(__dirname, '..', 'index.ts'),
-  frontendCommand: 'npx next dev --port 3100',
+  frontendCommand: 'npx next dev --webpack --port 3100',
   frontendPort: 3100,
 });
