@@ -16,15 +16,23 @@ export type {
   CapabilityId,
   CapabilityPlan,
   FrontDoorAdapter,
+  FrontDoorGraph,
+  FrontDoorLayer,
   FrontDoorResult,
+  FrontDoorTarget,
   HeaderRule,
+  LayerRole,
   Origin,
+  OriginRef,
   PlanPolicies,
   RedirectRule,
   ReleasePlan,
   RouteTable,
   SupportTier,
 } from './types.js';
+export { isOriginRef } from './types.js';
+export { composeGraph } from './compose.js';
+export type { FrontDoorChoice } from './compose.js';
 export type { RouteEntry, RouteKind } from './route-table.js';
 export {
   buildRouteTable,

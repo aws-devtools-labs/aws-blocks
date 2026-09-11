@@ -66,12 +66,20 @@ export type {
 	CapabilityId,
 	CapabilityPlan,
 	FrontDoorAdapter,
+	FrontDoorGraph,
+	FrontDoorLayer,
 	FrontDoorResult,
+	FrontDoorTarget,
+	LayerRole,
 	Origin,
+	OriginRef,
 	RouteTable,
 	SupportTier,
 } from '../plan/types.js';
+export { isOriginRef } from '../plan/types.js';
 export { buildCapabilityPlan, ORIGIN_IDS } from '../plan/capability-plan.js';
+export { composeGraph } from '../plan/compose.js';
+export type { FrontDoorChoice } from '../plan/compose.js';
 export { negotiate, requiredCapabilities } from '../plan/negotiate.js';
 export { CloudFrontAdapter } from './cloudfront_adapter.js';
 export { AlbAdapter, type AlbRenderContext } from './alb_adapter.js';
