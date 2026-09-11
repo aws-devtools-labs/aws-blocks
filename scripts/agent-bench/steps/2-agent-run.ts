@@ -3,13 +3,14 @@
  *
  * Inputs (env): WORKSPACE (scaffolded bench-app), TASK_PROMPT (PROMPT.md path), OUTPUT (envelope
  * JSON path), BENCH_MODEL (default us.anthropic.claude-opus-4-8), TRACE/METRICS (optional output
- * paths; trace written only on normal completion, none on a wall-clock timeout).
+ * paths). TRACE is written on EVERY exit path — success, invoke-exhausted error, and the wall-clock /
+ * internal-deadline flush — via a per-turn message accumulator (METRICS is written only on success).
  *
  * Tools: the framework's vended `bash` + `fileEditor`, routed through a WorkspaceSandbox rooted at
  * WORKSPACE (containment enforced by the Sandbox); the bash timeout is floored to BASH_MIN_TIMEOUT_SEC.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { Agent, type AgentResult, BedrockModel, ModelStreamUpdateEvent } from '@strands-agents/sdk';
+import { Agent, type AgentResult, BedrockModel, MessageAddedEvent, ModelStreamUpdateEvent } from '@strands-agents/sdk';
 import { makeBash } from '@strands-agents/sdk/vended-tools/bash';
 import { fileEditor } from '@strands-agents/sdk/vended-tools/file-editor';
 import { builderSystem } from '../prompts.ts';
@@ -20,7 +21,8 @@ import {
 	nextBackoffMs,
 	sleep,
 } from './lib/bedrock-retry.ts';
-import { buildCheckpointEnvelope, writeEnvelopeAtomic } from './lib/partial-envelope.mjs';
+import { buildCheckpointEnvelope, buildTraceArtifact, writeEnvelopeAtomic } from './lib/partial-envelope.mjs';
+import { beginWorkspaceDiff, finishWorkspaceDiff } from './lib/workspace-diff.mjs';
 import {
 	BENCH_AGENT_USER,
 	WorkspaceSandbox,
@@ -45,6 +47,25 @@ const MAX_TURNS = 120;
 // Floor for the vended bash timeout (s): the tool defaults to 120s (kills npm install/build) and has
 // no timeout knob, so WorkspaceSandbox raises any provided timeout to at least this. 10 min is ample.
 const BASH_MIN_TIMEOUT_SEC = 600;
+// Self-imposed internal deadline (s): fire a GRACEFUL partial-envelope flush BEFORE GitHub Actions'
+// hard `timeout-minutes: 35` (=2100s) SIGKILLs the step. Without it a budget-exhausted cell that GH
+// kills ungracefully leaves only a checkpoint (→ misclassified harness_error, no trace); the timer
+// guarantees a graceful envelope + trace on our own terms. 2010s = 33.5min, comfortably under 35min.
+const AGENT_DEADLINE_SEC = Number(process.env.BENCH_AGENT_DEADLINE_SEC ?? '2010');
+// Startup sanity guard: the internal deadline MUST stay comfortably below the agent step's hard
+// `timeout-minutes: 35` (see .github/workflows/agent-bench.yml) — keep WORKFLOW_HARD_TIMEOUT_SEC in sync
+// if that changes. If BENCH_AGENT_DEADLINE_SEC is overridden too high (< AGENT_DEADLINE_MARGIN_SEC of
+// head-room), GitHub SIGKILLs the step before our graceful partial-envelope + trace flush runs, silently
+// reintroducing the trace-less cells this timer exists to prevent — so warn loudly rather than invert quietly.
+const WORKFLOW_HARD_TIMEOUT_SEC = 35 * 60;
+const AGENT_DEADLINE_MARGIN_SEC = 60;
+if (AGENT_DEADLINE_SEC > WORKFLOW_HARD_TIMEOUT_SEC - AGENT_DEADLINE_MARGIN_SEC) {
+	process.stderr.write(
+		`[bench] WARNING: BENCH_AGENT_DEADLINE_SEC=${AGENT_DEADLINE_SEC}s leaves <${AGENT_DEADLINE_MARGIN_SEC}s below the agent ` +
+			`step's hard timeout (${WORKFLOW_HARD_TIMEOUT_SEC}s); GitHub may SIGKILL before the graceful flush runs. ` +
+			`Lower BENCH_AGENT_DEADLINE_SEC or raise timeout-minutes in agent-bench.yml.\n`,
+	);
+}
 
 const taskPrompt = readFileSync(TASK_PROMPT_PATH, 'utf-8');
 
@@ -76,7 +97,13 @@ process.stderr.write(
 // envelope from the signal handler. Counters at module scope so they survive invoke retries and the handler.
 let partialTokensIn = 0;
 let partialTokensOut = 0;
+let partialCacheRead = 0;
+let partialCacheWrite = 0;
 let partialCycles = 0;
+// Per-turn message accumulator (assistant toolUse AND user toolResult blocks), captured incrementally
+// via a MessageAddedEvent hook so a NON-returning invoke() (MaxTokensError, wall-clock / internal-
+// deadline kill) still leaves a trace on disk — AgentResult traces exist only once invoke() returns.
+const accumulatedMessages: unknown[] = [];
 
 // Fresh agent per invoke attempt (mirrors the judge): a mid-stream failure can leave a half-built
 // conversation, so each attempt gets a clean agent. The token hook is re-attached every build.
@@ -99,10 +126,25 @@ function makeBuilderAgent(): Agent {
 		if (inner.type === 'modelMetadataEvent' && inner.usage) {
 			partialTokensIn += inner.usage.inputTokens ?? 0;
 			partialTokensOut += inner.usage.outputTokens ?? 0;
+			// Cache-read/write tokens are DISPLAYED only (never fed into cost/SCORE); accumulated with
+			// the same per-cycle += as tokens_in/out so a mid-run kill still leaves the spend on disk.
+			partialCacheRead += inner.usage.cacheReadInputTokens ?? 0;
+			partialCacheWrite += inner.usage.cacheWriteInputTokens ?? 0;
 			partialCycles += 1;
 			// Checkpoint the moment usage advances, so an UNGRACEFUL kill (a pkill storm tearing down
 			// this harness before the SIGTERM flush) still leaves nonzero tokens + partial cycles on OUTPUT.
 			writeCheckpoint();
+		}
+	});
+	// Capture every message (user input, assistant toolUse, AND toolResult blocks) incrementally. The
+	// trace tree from AgentResult omits toolResult blocks and only exists once invoke() returns, so this
+	// hook is the ONLY way a timed-out / max-tokens cell (invoke never returns) preserves tool
+	// outputs + errors for the failure-analysis pass. Best-effort — never let it break the invoke loop.
+	agent.addHook(MessageAddedEvent, (event) => {
+		try {
+			accumulatedMessages.push(event.message.toJSON());
+		} catch {
+			// A malformed message must never abort the run; drop it and continue.
 		}
 	});
 	return agent;
@@ -124,6 +166,8 @@ function writeCheckpoint(): void {
 				startedMs: started,
 				tokensIn: partialTokensIn,
 				tokensOut: partialTokensOut,
+				cacheRead: partialCacheRead,
+				cacheWrite: partialCacheWrite,
 				cycles: partialCycles,
 				isolationActive: ISOLATE,
 			}),
@@ -133,16 +177,42 @@ function writeCheckpoint(): void {
 	}
 }
 
-// Flush a best-effort partial envelope if the runner kills us: SIGTERM on the wall-clock timeout,
-// SIGINT on a cancellation. writeFileSync + exit run synchronously before the SIGKILL grace elapses.
+// Persist the trace artifact to TRACE on ANY exit path (success, invoke-exhausted error, wall-clock /
+// internal-deadline flush). Span traces exist only when invoke() RETURNED; the per-turn accumulated
+// messages (which carry the toolResult blocks) are always included, so an errored/timed-out cell is
+// still analyzable instead of becoming an unanalyzable silent 0. Best-effort — never throws.
+function writeTraceArtifact(result?: AgentResult): void {
+	if (!TRACE_PATH) return;
+	let spanTraces: unknown[] = [];
+	try {
+		spanTraces = result?.traces?.map((t) => t.toJSON()) ?? [];
+	} catch {
+		spanTraces = [];
+	}
+	try {
+		writeFileSync(TRACE_PATH, JSON.stringify(buildTraceArtifact(spanTraces, accumulatedMessages), null, 2));
+	} catch (err) {
+		process.stderr.write(`[bench] failed to write trace to ${TRACE_PATH}: ${describeError(err)}\n`);
+	}
+}
+
+// Flush a best-effort partial envelope when we must stop early: SIGTERM on GitHub's wall-clock
+// timeout, SIGINT on a cancellation, or our own 'internal-deadline' timer firing just before that
+// hard kill. writeFileSync + exit run synchronously before the SIGKILL grace elapses.
 function writePartialEnvelopeAndExit(signal: string): void {
 	if (finished) return;
 	finished = true;
 	// Label by signal so a cancellation isn't mislabeled a timeout. This GRACEFUL terminal stop_reason
-	// (and the absence of the checkpoint flag) is what keeps a genuine timeout as agent_fail (INCLUDED).
+	// (and the absence of the checkpoint flag) is what keeps a genuine timeout / budget exhaustion as
+	// agent_fail (INCLUDED). The internal deadline maps to a wall-clock timeout (the agent ran out of its
+	// time budget), just reached on our own terms with a trace flushed rather than a GH SIGKILL.
 	const isCancel = signal === 'SIGINT';
+	const isInternal = signal === 'internal-deadline';
 	const stopReason = isCancel ? 'cancelled' : 'wall_clock_timeout';
-	const cause = isCancel ? 'cancellation' : 'workflow wall-clock timeout';
+	const cause = isCancel ? 'cancellation' : isInternal ? 'internal deadline' : 'workflow wall-clock timeout';
+	const detail = isInternal
+		? `internal deadline (${AGENT_DEADLINE_SEC}s) reached after ${partialCycles} model call(s)`
+		: `killed by ${signal} (${cause}) after ${partialCycles} model call(s)`;
 	let wrote = false;
 	try {
 		writeFileSync(
@@ -153,11 +223,13 @@ function writePartialEnvelopeAndExit(signal: string): void {
 					duration_sec: Math.round((Date.now() - started) / 1000),
 					tokens_in: partialTokensIn,
 					tokens_out: partialTokensOut,
+					cache_read_tokens: partialCacheRead,
+					cache_write_tokens: partialCacheWrite,
 					stop_reason: stopReason,
 					cycle_count: partialCycles,
 					final_message: '',
 					partial: true,
-					builder_error: `killed by ${signal} (${cause}) after ${partialCycles} model call(s)`,
+					builder_error: detail,
 					isolation_active: ISOLATE,
 				},
 				null,
@@ -166,7 +238,7 @@ function writePartialEnvelopeAndExit(signal: string): void {
 		);
 		wrote = true;
 		process.stderr.write(
-			`[bench] ${signal}: wrote partial envelope tokens=${partialTokensIn}/${partialTokensOut} cycles=${partialCycles}\n`,
+			`[bench] ${signal}: wrote partial envelope (${stopReason}) tokens=${partialTokensIn}/${partialTokensOut} cycles=${partialCycles}\n`,
 		);
 	} catch (err) {
 		process.stderr.write(`[bench] failed to write partial envelope on ${signal}: ${describeError(err)}\n`);
@@ -175,19 +247,33 @@ function writePartialEnvelopeAndExit(signal: string): void {
 			`[bench] partial-spend tokens_in=${partialTokensIn} tokens_out=${partialTokensOut} cycles=${partialCycles}\n`,
 		);
 	}
-	// No trace on the timeout path: the Strands trace/metrics only exist once invoke() RETURNS and the
-	// SDK exposes no mid-run accessor, so a timed-out cell emits only this partial envelope.
-	// Exit 124 = clean timeout with the envelope flushed; 125 = the envelope write itself failed.
+	// Flush the trace too (the accumulated toolUse + toolResult messages) so a timed-out / deadline-hit
+	// cell stays analyzable — previously the timeout path emitted NO trace, an unanalyzable silent
+	// failure. Span traces are absent here (invoke never returned) but the per-turn messages are not.
+	// After the envelope so the envelope write is never delayed by it.
+	writeTraceArtifact();
+	// Exit 124 = clean early-stop with the envelope flushed; 125 = the envelope write itself failed.
 	process.exit(wrote ? 124 : 125);
 }
 process.on('SIGTERM', () => writePartialEnvelopeAndExit('SIGTERM'));
 process.on('SIGINT', () => writePartialEnvelopeAndExit('SIGINT'));
+
+// Arm the self-imposed internal deadline: if invoke() is still running at AGENT_DEADLINE_SEC we flush a
+// graceful partial envelope + trace ourselves, BEFORE GitHub's hard timeout SIGKILLs us ungracefully.
+// Cleared once the retry loop settles (both success and error paths) so it never fires post-finish.
+const deadlineTimer = setTimeout(() => writePartialEnvelopeAndExit('internal-deadline'), AGENT_DEADLINE_SEC * 1000);
 
 // Seed an initial checkpoint NOW — before the first model call — so `isolation_active` is on disk even
 // if the cell dies ungracefully before any model cycle (e.g. an OOM during agent/sandbox setup). Without
 // it such an early death would leave the step-0 baseline with no isolation flag, and scoring.mjs would
 // have to assume isolation was off. A later model cycle (or a terminal exit) overwrites this.
 writeCheckpoint();
+
+// Snapshot the scaffolded workspace NOW (before the agent touches it) so a post-run diff can report
+// LOC/files churn. Best-effort: null on any failure → the cell persists no loc/files (renders ⚪ "(new)").
+// Uses a throwaway external git dir, so it never disturbs the workspace/app or the agent's own git.
+const snapshot = beginWorkspaceDiff(WORKSPACE);
+process.stderr.write(`[bench] workspace churn snapshot: ${snapshot ? 'captured' : 'unavailable (loc/files → null)'}\n`);
 
 // Startup stagger: spread each wave's FIRST Bedrock call so N cells don't all hit invoke at once and
 // trip the account TPM ceiling (the burst that failed 6/10 cells in run 28967475174). Keyed to the
@@ -229,6 +315,9 @@ for (let attempt = 1; attempt <= INVOKE_MAX_ATTEMPTS; attempt++) {
 	}
 }
 
+// The retry loop has settled — cancel the internal deadline so it can't fire during teardown/exit.
+clearTimeout(deadlineTimer);
+
 if (!result) {
 	finished = true;
 	const desc = describeModelError(lastErr);
@@ -242,6 +331,8 @@ if (!result) {
 				duration_sec: Math.round((Date.now() - started) / 1000),
 				tokens_in: partialTokensIn,
 				tokens_out: partialTokensOut,
+				cache_read_tokens: partialCacheRead,
+				cache_write_tokens: partialCacheWrite,
 				stop_reason: 'error',
 				cycle_count: partialCycles,
 				final_message: '',
@@ -252,6 +343,9 @@ if (!result) {
 			2,
 		),
 	);
+	// Persist whatever trace we accumulated (toolUse + toolResult messages) so a non-retryable invoke
+	// failure (e.g. MaxTokensError) leaves an analyzable trace instead of an unanalyzable silent 0.
+	writeTraceArtifact();
 	process.exit(1);
 }
 finished = true;
@@ -266,6 +360,15 @@ const duration_sec = Math.round((Date.now() - started) / 1000);
 const winnerUsage = result.metrics?.accumulatedUsage;
 const tokensIn = Math.max(partialTokensIn, winnerUsage?.inputTokens ?? 0);
 const tokensOut = Math.max(partialTokensOut, winnerUsage?.outputTokens ?? 0);
+// Cache tokens follow the SAME max(hook, winner) rule as tokens_in/out. Displayed only — NOT part of
+// cost/SCORE (see scoring.mjs cellCost); a future net-of-cache cost model could subtract these.
+const cacheRead = Math.max(partialCacheRead, winnerUsage?.cacheReadInputTokens ?? 0);
+const cacheWrite = Math.max(partialCacheWrite, winnerUsage?.cacheWriteInputTokens ?? 0);
+
+// LOC/files churn from the pre-run scaffold snapshot (best-effort; null on any failure — see
+// workspace-diff.mjs). Computed only on the success path: a timed-out/errored cell left the workspace
+// mid-flight, so its diff would be misleading — those paths persist no loc/files (→ ⚪ "(new)").
+const churn = finishWorkspaceDiff(snapshot, WORKSPACE);
 
 writeFileSync(
 	OUTPUT,
@@ -275,8 +378,14 @@ writeFileSync(
 			duration_sec,
 			tokens_in: tokensIn,
 			tokens_out: tokensOut,
+			cache_read_tokens: cacheRead,
+			cache_write_tokens: cacheWrite,
 			stop_reason: result.stopReason,
 			cycle_count: result.metrics?.cycleCount ?? 0,
+			loc_created: churn.loc_created,
+			loc_edited: churn.loc_edited,
+			files_created: churn.files_created,
+			files_edited: churn.files_edited,
 			final_message: messageText(result.lastMessage),
 			isolation_active: ISOLATE,
 		},
@@ -290,13 +399,9 @@ process.stderr.write(
 
 // Persist the trace tree + run metrics as SEPARATE artifacts. NEVER serialize `result` directly:
 // AgentResult.toJSON() strips traces/metrics, so access the properties (traces need per-item toJSON()).
-if (TRACE_PATH) {
-	try {
-		writeFileSync(TRACE_PATH, JSON.stringify(result.traces?.map((t) => t.toJSON()) ?? [], null, 2));
-	} catch (err) {
-		process.stderr.write(`[bench] failed to write trace to ${TRACE_PATH}: ${describeError(err)}\n`);
-	}
-}
+// writeTraceArtifact folds the span traces together with the accumulated messages (toolResult blocks)
+// — the SAME artifact shape every exit path writes, so the analysis step reads one consistent structure.
+writeTraceArtifact(result);
 if (METRICS_PATH) {
 	try {
 		writeFileSync(METRICS_PATH, JSON.stringify(result.metrics ?? {}, null, 2));

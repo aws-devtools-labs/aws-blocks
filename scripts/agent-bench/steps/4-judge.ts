@@ -29,11 +29,13 @@ import { hardCapPlan } from './lib/scoring.mjs';
 
 // Physical spec-blinding: the judge grades a SOURCE-ONLY COPY (JUDGE_SRC) with these excluded, so the
 // objective test can't anchor the score — blinding by ABSENCE.
-//   - STAGE_EXCLUDE_DIRS: node_modules, .git, dist, the staged `bench-tests/` spec dir, and
-//     `.blocks-sandbox` (a build-time artifact). Also the grep exclude-dirs in collectBlocksImports.
+//   - STAGE_EXCLUDE_DIRS: node_modules, .git, dist, the staged `bench-tests/` spec dir,
+//     `.blocks-sandbox` (a build-time artifact), and `.bb-data` (the PGlite/BB mock datadir — runtime
+//     state, not source; copying it across the judge's UID boundary throws EACCES on internal files
+//     like pg_logical/replorigin_checkpoint). Also the grep exclude-dirs in collectBlocksImports.
 //   - EXCLUDED_FILE_RE: the objective *.spec.{js,ts,jsx,tsx,cjs,mjs} test CODE files — deliberately
 //     NOT framework *.spec.json manifests (e.g. blocks.spec.json), which are legit app source.
-const STAGE_EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'bench-tests', '.blocks-sandbox']);
+const STAGE_EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'bench-tests', '.blocks-sandbox', '.bb-data']);
 const EXCLUDED_FILE_RE = /\.spec\.[cm]?[jt]sx?$/;
 
 const WORKSPACE = required('WORKSPACE', '[judge]');
