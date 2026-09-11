@@ -2,6 +2,8 @@
 
 Standard Building Blocks for common AWS services in the AWS Blocks.
 
+> **Note:** This README describes an *aspirational* consolidated API for the foundation blocks. It is **not yet implemented** — this package is currently a stub. For the API that actually ships today, see [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) and [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md), which are the authoritative reference for the shipped blocks.
+
 ## Overview
 
 `foundations` provides production-ready Building Blocks for the most common AWS services. Each block includes CDK infrastructure, runtime SDK integration, and local mocking for development without an AWS account.
@@ -73,8 +75,8 @@ Simple key-value storage for user-scoped data.
 import { KeyValueStore } from '@aws-blocks/blocks';
 
 const store = new KeyValueStore('app', 'settings');
-await store.set(userId, 'theme', 'dark');
-const theme = await store.get(userId, 'theme');
+await store.put(`user:${userId}:theme`, 'dark');
+const theme = await store.get(`user:${userId}:theme`);
 ```
 
 ### SQLTable
@@ -111,7 +113,8 @@ Application configuration values using AWS Systems Manager Parameter Store.
 import { Setting } from '@aws-blocks/blocks';
 
 const config = new Setting('app', 'feature-flags');
-await config.set('newUI', 'enabled');
+await config.put('enabled');
+const newUI = await config.get();
 ```
 
 ### CronJob
