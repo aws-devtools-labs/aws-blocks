@@ -7,8 +7,10 @@
  * unsupported (S3 website endpoints are HTTP-only) — the negotiator fails synth
  * for anything beyond static/SPA, steering those apps to a CDN/ALB/API-GW door.
  */
+import { Fn } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { HostingError } from '../hosting_error.js';
+import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
 import { formatNegotiationErrors, negotiate } from '../plan/negotiate.js';
 import type {
   AdapterContext,
@@ -46,7 +48,7 @@ export type S3WebsiteRenderContext = AdapterContext & {
   degrade?: CapabilityId[];
 };
 
-export class S3WebsiteAdapter implements FrontDoorAdapter {
+export class S3WebsiteAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter {
   readonly service = 's3-website';
 
   supports(capability: CapabilityId): SupportTier {
@@ -54,6 +56,14 @@ export class S3WebsiteAdapter implements FrontDoorAdapter {
   }
 
   render(scope: Construct, plan: CapabilityPlan, ctx: S3WebsiteRenderContext): FrontDoorResult {
+    return { url: this.renderLayer(scope, plan, ctx).url ?? '' };
+  }
+
+  /**
+   * Render the S3 website bucket as a layer. The {@link OriginHandle} is the
+   * website endpoint host (HTTP-only — S3 website endpoints don't support TLS).
+   */
+  renderLayer(scope: Construct, plan: CapabilityPlan, ctx: S3WebsiteRenderContext): LayerHandle {
     const result = negotiate(plan, this, { degrade: ctx.degrade });
     if (result.errors.length > 0) {
       throw new HostingError('CapabilityNotSupportedError', {
@@ -70,6 +80,9 @@ export class S3WebsiteAdapter implements FrontDoorAdapter {
       );
     }
     const site = new S3WebsiteConstruct(scope, 'S3Website', { plan, staticDir: ctx.staticDir });
-    return { url: site.url };
+    return {
+      url: site.url,
+      originHandle: { domainName: Fn.select(1, Fn.split('://', site.url)), protocol: 'http' },
+    };
   }
 }

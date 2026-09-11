@@ -77,6 +77,7 @@ export type {
 	SupportTier,
 } from '../plan/types.js';
 export { isOriginRef } from '../plan/types.js';
+export type { FrontDoorLayerAdapter, LayerHandle, OriginHandle } from './layer.js';
 export { buildCapabilityPlan, ORIGIN_IDS } from '../plan/capability-plan.js';
 export { composeGraph } from '../plan/compose.js';
 export type { FrontDoorChoice } from '../plan/compose.js';

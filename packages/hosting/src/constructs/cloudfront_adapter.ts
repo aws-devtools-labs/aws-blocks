@@ -26,6 +26,7 @@ import type {
   SupportTier,
 } from '../plan/types.js';
 import { CdnConstruct, type CdnConstructProps } from './cdn_construct.js';
+import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
 
 /**
  * CloudFront's per-capability support. CloudFront is the full-feature default:
@@ -70,7 +71,7 @@ export type CloudFrontRenderContext = AdapterContext & {
 /**
  * CloudFront implementation of the {@link FrontDoorAdapter} seam.
  */
-export class CloudFrontAdapter implements FrontDoorAdapter {
+export class CloudFrontAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter {
   readonly service = 'cloudfront';
 
   /** How well CloudFront supports a given capability (always the standard way). */
@@ -85,8 +86,21 @@ export class CloudFrontAdapter implements FrontDoorAdapter {
    * adapter-level entry point that a plan-driven `HostingConstruct` will call
    * once multiple adapters exist.
    */
-  render(scope: Construct, _plan: CapabilityPlan, ctx: CloudFrontRenderContext): FrontDoorResult {
+  render(scope: Construct, plan: CapabilityPlan, ctx: CloudFrontRenderContext): FrontDoorResult {
+    return { url: this.renderLayer(scope, plan, ctx).url ?? '' };
+  }
+
+  /**
+   * Render CloudFront as a layer, returning a {@link LayerHandle}: the public URL
+   * plus the distribution domain a parent could attach to (CloudFront is normally
+   * the root edge, so it rarely has a parent — the handle is provided for
+   * uniformity).
+   */
+  renderLayer(scope: Construct, _plan: CapabilityPlan, ctx: CloudFrontRenderContext): LayerHandle {
     const cdn = new CdnConstruct(scope, 'Cdn', ctx.cdnProps);
-    return { url: cdn.distributionUrl };
+    return {
+      url: cdn.distributionUrl,
+      originHandle: { domainName: cdn.distribution.distributionDomainName, protocol: 'https' },
+    };
   }
 }
