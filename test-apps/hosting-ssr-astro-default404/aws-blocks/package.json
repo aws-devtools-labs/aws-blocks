@@ -14,5 +14,12 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "@astrojs/preact": "^6.0.5",
+    "@playwright/test": "^1.63.0",
+    "astro": "^7.3.1",
+    "concurrently": "^10.0.5",
+    "preact": "^10.29.8"
   }
 }
