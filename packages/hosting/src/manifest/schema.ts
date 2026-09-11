@@ -41,6 +41,13 @@ export const computeResourceSchema = z
         path: ['placement'],
       });
     }
+    if (data.type !== 'edge' && data.placement !== 'regional') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'handler and http-server types require placement to be "regional"',
+        path: ['placement'],
+      });
+    }
   });
 
 /**
