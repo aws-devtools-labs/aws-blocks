@@ -186,12 +186,7 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
       throw buildOutputMissingError(distDir, 'static');
     }
   } else {
-    if (!fs.existsSync(serverEntry)) {
-      throw buildOutputMissingError(serverDir, output);
-    }
-    if (!directoryHasFiles(clientDir)) {
-      throw buildOutputMissingError(clientDir, output);
-    }
+    ensureSsrBuildOutput(clientDir, serverDir, serverEntry, output);
   }
 
   const manifest: DeployManifest =
@@ -695,6 +690,33 @@ const liftAstroRedirects = (config: Record<string, unknown>): Redirect[] => {
 const directoryHasFiles = (dir: string): boolean => {
   if (!fs.existsSync(dir)) return false;
   return fs.readdirSync(dir).length > 0;
+};
+
+/**
+ * Validate a server/hybrid build output.
+ *
+ * `dist/server/entry.mjs` is the required artifact — its absence means the
+ * @astrojs/node standalone build didn't run (throws). An EMPTY `dist/client`,
+ * however, is valid: a pure-SSR app with no static assets (no `public/` files,
+ * no prerendered pages) produces one, and CloudFront simply routes every
+ * request to the SSR Lambda. So do NOT treat an empty client dir as missing —
+ * just ensure it exists (Astro normally creates it) so downstream asset
+ * handling (`staticAssets.directory`, prerender globbing) has a valid path.
+ *
+ * Exported for unit testing.
+ */
+export const ensureSsrBuildOutput = (
+  clientDir: string,
+  serverDir: string,
+  serverEntry: string,
+  output: AstroOutput,
+): void => {
+  if (!fs.existsSync(serverEntry)) {
+    throw buildOutputMissingError(serverDir, output);
+  }
+  if (!fs.existsSync(clientDir)) {
+    fs.mkdirSync(clientDir, { recursive: true });
+  }
 };
 
 const buildOutputMissingError = (
