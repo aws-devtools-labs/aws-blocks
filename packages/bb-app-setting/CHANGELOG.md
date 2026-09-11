@@ -1,5 +1,17 @@
 # @aws-blocks/bb-app-setting
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-logger@0.2.0
+
 ## 0.2.1
 
 ### Patch Changes

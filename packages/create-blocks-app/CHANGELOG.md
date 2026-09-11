@@ -1,5 +1,12 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.23
+
+### Patch Changes
+
+- f24961b: Add a build script to the backend template so freshly scaffolded backend apps support `npm run build`.
+- d9b442e: Make starter template E2E setup wait for the Blocks server without depending on a sample API.
+
 ## 0.1.22
 
 ### Patch Changes
