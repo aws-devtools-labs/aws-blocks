@@ -3,7 +3,7 @@
 
 import { Duration } from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { Scope } from '@aws-blocks/core/cdk';
+import { Scope, registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 
 export interface QueueOptions {
@@ -21,7 +21,7 @@ export class Queue extends Scope {
     });
 
     queue.grantSendMessages(this.handler);
-    this.handler.addEnvironment(`${envSafe(this.fullId)}_URL`, queue.queueUrl);
+    registerConfig(this, `${envSafe(this.fullId)}_URL`, queue.queueUrl);
   }
 }
 

@@ -4,7 +4,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets, registerConfig } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -37,7 +37,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 // Pattern 1 fixture: an SQS queue we'll send to via raw SDK.
 const externalQueue = new sqs.Queue(blocksStack, 'external-queue');
 externalQueue.grantSendMessages(blocksStack.handler);
-blocksStack.handler.addEnvironment('EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
+registerConfig(blocksStack, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 
 // Pattern 2 fixtures: two DynamoDB tables that pretend to predate Blocks.
 // We pre-pinned the physical names above so KVStore.fromExisting and
@@ -66,7 +66,7 @@ new cdk.CfnOutput(blocksStack, 'StackNameOut', { value: stackName });
 
 // Surface the table names to runtime — *.fromExisting on the runtime side
 // reads them from process.env.
-blocksStack.handler.addEnvironment('BLOCKS_LEGACY_SESSIONS_TABLE', legacyTableName);
-blocksStack.handler.addEnvironment('BLOCKS_LEGACY_USERS_TABLE', legacyUsersTableName);
+registerConfig(blocksStack, 'BLOCKS_LEGACY_SESSIONS_TABLE', legacyTableName);
+registerConfig(blocksStack, 'BLOCKS_LEGACY_USERS_TABLE', legacyUsersTableName);
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'extending-guide-validation');
