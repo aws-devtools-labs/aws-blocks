@@ -10,16 +10,15 @@
  */
 import type { ScopeParent } from '@aws-blocks/core';
 import { registerSdkIdentifiers } from '@aws-blocks/core';
+import { BB_DASHBOARD_URL_ENV, mountDashboardRoute } from './routes.js';
 import type { DashboardOptions } from './types.js';
-import { mountDashboardRoute, BB_DASHBOARD_URL_ENV } from './routes.js';
 
 export { DashboardErrors } from './errors.js';
 export type {
 	DashboardOptions,
 	MetricConfig,
 	MetricsBBRef,
-	LoggerBBRef,
-	TracerBBRef,
+	MetricsSource,
 } from './types.js';
 
 /**
@@ -39,7 +38,12 @@ export class Dashboard {
 	readonly fullId: string;
 
 	constructor(scope: ScopeParent, id: string, options?: DashboardOptions) {
-		this.fullId = 'fullId' in scope && scope.fullId ? `${scope.fullId}-${id}` : ('id' in scope && scope.id ? `${scope.id}-${id}` : id);
+		this.fullId =
+			'fullId' in scope && scope.fullId
+				? `${scope.fullId}-${id}`
+				: 'id' in scope && scope.id
+					? `${scope.id}-${id}`
+					: id;
 		this.dashboardName = (options?.dashboardName ?? id).replace(/[^A-Za-z0-9\-_]/g, '-').substring(0, 255);
 		this.url = process.env[BB_DASHBOARD_URL_ENV] ?? null;
 		registerSdkIdentifiers(this.fullId, { dashboardName: this.dashboardName });
