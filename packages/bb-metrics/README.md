@@ -37,7 +37,7 @@ const metrics = new Metrics(scope, id, options?)
 |--------|------|-------------|
 | `unit` | `MetricUnit` | Unit of the metric value. Defaults to `'None'`. |
 | `dimensions` | `Record<string, string>` | Dimensions for this data point (max 30 total including defaults). |
-| `timestamp` | `Date` | Timestamp for the data point. Defaults to now. |
+| `timestamp` | `Date` | Valid timestamp for the data point. Defaults to now. |
 | `resolution` | `MetricResolution` | `'standard'` (60s, default) or `'high'` (1s, higher cost). |
 
 ### MetricUnit
@@ -67,6 +67,8 @@ try {
 | Error | Condition |
 |-------|-----------|
 | `MetricsErrors.InvalidMetricName` | Metric name is empty or exceeds 1024 characters. |
+| `MetricsErrors.InvalidMetricValue` | Metric value is non-finite or outside the range from `-2^360` to `2^360`. |
+| `MetricsErrors.InvalidTimestamp` | Metric timestamp is an invalid `Date`. |
 | `MetricsErrors.InvalidDimensions` | Dimensions exceed 30 entries, or contain empty keys/values, or key/value exceeds 1024 chars. |
 | `MetricsErrors.BatchTooLarge` | Batch contains more than 100 metrics. |
 | `MetricsErrors.InvalidNamespace` | Namespace is empty, too long, contains invalid characters, or uses reserved `AWS/` prefix. |
@@ -166,6 +168,7 @@ This design means you can emit metrics anywhere — in hot loops, synchronous ca
 - Prefer `emitBatch` when recording multiple metrics in a single request
 - Use units to enable automatic conversions in CloudWatch dashboards
 - Use `child()` to avoid repeating dimensions across related metrics
+- Emit finite metric values between `-2^360` and `2^360`, and use valid `Date` timestamps
 
 ## Scaling & Cost (AWS)
 
@@ -180,6 +183,5 @@ This design means you can emit metrics anywhere — in hot loops, synchronous ca
 Metrics are written as EMF JSON to stdout — the same format as AWS. In local dev, you can see metric emissions in the terminal output. No disk persistence — metrics are ephemeral locally (unlike KVStore or DistributedTable which persist to `.bb-data/`).
 
 Delete nothing to reset — there's no local state to clear.
-
 
 
