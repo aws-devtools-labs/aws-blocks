@@ -17,6 +17,7 @@ import { BB_NAME, BB_VERSION } from './version.js';
 // Re-export public types
 export { AppSettingErrors } from './errors.js';
 export type { AppSettingOptions } from './types.js';
+export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
