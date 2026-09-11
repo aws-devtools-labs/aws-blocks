@@ -310,10 +310,31 @@ export class Scope {
       if (byteLen(last) <= maxBytes) return last;
     }
 
-    // Single over-long entry (pathological): slice by bytes, not chars, so the
-    // result never exceeds the server's limit.
-    return Buffer.from(last, 'utf8').subarray(0, maxBytes).toString('utf8');
+    // Single over-long entry (pathological): a lone `key/value` whose UTF-8
+    // encoding alone exceeds maxBytes. BB names and versions are ASCII in
+    // practice, so this branch is effectively unreachable — but trim to the last
+    // whole UTF-8 code-point boundary rather than a raw byte cut, so the result
+    // can never contain a partial multibyte character (a `` char in
+    // pg_stat_activity), staying consistent with the no-mid-token guarantee above.
+    return truncateToBytes(last, maxBytes);
   }
+}
+
+/**
+ * Truncate `s` so its UTF-8 encoding is at most `maxBytes`, cutting only at a
+ * code-point boundary so the result is always valid UTF-8 (never a partial
+ * multibyte sequence). Returns `s` unchanged when it already fits.
+ */
+function truncateToBytes(s: string, maxBytes: number): string {
+  if (Buffer.byteLength(s, 'utf8') <= maxBytes) return s;
+  let out = '';
+  // Iterating a string yields whole code points (surrogate pairs stay intact),
+  // so we only ever append complete characters.
+  for (const ch of s) {
+    if (Buffer.byteLength(out + ch, 'utf8') > maxBytes) break;
+    out += ch;
+  }
+  return out;
 }
 
 /**
