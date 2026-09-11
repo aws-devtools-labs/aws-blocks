@@ -1,5 +1,23 @@
 # @aws-blocks/bb-agent
 
+## 0.4.1
+
+### Patch Changes
+
+- 0385f7e: `useChat`: widen `UseChatOptions.api.sendMessage` and `resume` return types from `Promise<void>` to `Promise<unknown>`.
+  
+  The natural backend methods return objects (`agent.stream()` → `{ channelId }`, `resume` wrappers → `{ ok: true }`), but `Promise<{ channelId }>` is not assignable to `Promise<void>` (TS2322), which forced customers into an await-and-discard wrapper. `useChat` awaits both calls only for completion and discards the resolved value, so `Promise<unknown>` — assignable-from both object results and `void` — lets natural-shape backends wire up directly while existing `void`-returning backends keep compiling. Type-only change; no runtime behavior change.
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-logger@0.2.0
+  - @aws-blocks/bb-distributed-table@0.2.0
+  - @aws-blocks/bb-file-bucket@0.2.1
+  - @aws-blocks/bb-realtime@0.2.1
+
 ## 0.4.0
 
 ### Minor Changes

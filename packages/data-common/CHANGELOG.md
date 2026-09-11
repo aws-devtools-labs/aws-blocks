@@ -1,5 +1,12 @@
 # @aws-blocks/data-common
 
+## 0.1.5
+
+### Patch Changes
+
+- Updated dependencies [d7312f9]
+  - @aws-blocks/bb-logger@0.2.0
+
 ## 0.1.4
 
 ### Patch Changes
