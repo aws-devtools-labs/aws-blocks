@@ -343,10 +343,8 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   // Record the template version that scaffolded this project
   pkg.blocksTemplateVersion = templatePkg.version;
   
-  // When running from the local monorepo, rewrite @aws-blocks/* deps
-  // to file: paths so they resolve to sibling packages. When running from
-  // the published registry (via npx), the sibling packages won't exist on
-  // disk — leave deps as-is so they resolve from the registry instead.
+  // Local monorepo detection — rewrite @aws-blocks/* deps to file: paths so
+  // they resolve to sibling packages during development.
   const parentDir = join(__dirname, '../..');
   const isLocalMonorepo = await access(join(parentDir, 'core', 'package.json')).then(() => true, () => false);
 
@@ -358,6 +356,25 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     for (const dep of allBlocksDeps) {
       const pkgName = dep.replace('@aws-blocks/', '');
       pkg.dependencies[dep] = `file:${parentDir}/${pkgName}`;
+    }
+  } else {
+    // The @aws-blocks/blocks version is maintained as a devDependency by changesets.
+    // Read it directly — if it's missing, that's a build/packaging bug.
+    const cliPkgPath = join(__dirname, '../package.json');
+    const cliPkg = JSON.parse(await readFile(cliPkgPath, 'utf-8'));
+    const blocksVersion = cliPkg.devDependencies?.['@aws-blocks/blocks'];
+    if (!blocksVersion) {
+      throw new Error(
+        'Internal error: @aws-blocks/blocks version not found in create-blocks-app package metadata. ' +
+        'This is a bug — please report it at https://github.com/aws-devtools-labs/aws-blocks/issues'
+      );
+    }
+
+    // Stamp the template's wildcard dep with the real version
+    if (pkg.dependencies?.['@aws-blocks/blocks'] === '*') {
+      pkg.dependencies['@aws-blocks/blocks'] = blocksVersion;
+    } else if (pkg.devDependencies?.['@aws-blocks/blocks'] === '*') {
+      pkg.devDependencies['@aws-blocks/blocks'] = blocksVersion;
     }
   }
   
