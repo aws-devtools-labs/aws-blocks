@@ -6,9 +6,13 @@ import { describe, it } from 'node:test';
 import {
 	AGENT_FAIL_AT,
 	AGENT_FAIL_REASON,
-	AGENT_HARNESS_TEARDOWN_REASON,
+	AGENT_HARNESS_TIMEOUT_REASON,
+	AGENT_MAX_TOKENS_REASON,
 	BUILDER_PRICING,
 	CHECKPOINT_STOP_REASON,
+	DEAD_SERVER_KLASS,
+	DEAD_SERVER_REASON,
+	DEAD_SERVER_STATUS,
 	PRICING,
 	buildCapDecision,
 	cellCost,
@@ -18,6 +22,8 @@ import {
 	compositeBand,
 	HARNESS_FAIL_REASONS,
 	hardCapPlan,
+	isCountedFailKlass,
+	isMaxTokensFailure,
 	isScoredCell,
 	isUngracefulStepTwoDeath,
 	scorePerDollar,
@@ -181,9 +187,21 @@ describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness
 			isolation_active: true,
 		};
 		assert.equal(isUngracefulStepTwoDeath(cell), true);
-		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: AGENT_HARNESS_TEARDOWN_REASON });
+		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: AGENT_HARNESS_TIMEOUT_REASON });
 		assert.equal(isScoredCell(cell), false); // EXCLUDED — a flaky teardown can't move the score
 		assert.equal(verdictOf(cell), 'harness_error');
+	});
+
+	it('the isolation-active teardown reason is the concrete WALL-CLOCK-TIMEOUT label, not the old agent-teardown one', () => {
+		// Under active isolation the death is an infra wall-clock timeout, NOT an agent pkill-storm, so the
+		// reason must read as a timeout. Still harness_error, still EXCLUDED — only the label changed.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', isolation_active: true };
+		const { klass, reason } = classifyCell(cell);
+		assert.equal(klass, 'harness_error');
+		assert.equal(reason, 'wall_clock_timeout');
+		assert.equal(reason, AGENT_HARNESS_TIMEOUT_REASON);
+		assert.notEqual(reason, 'agent_harness_teardown'); // the old, misleading label is gone
+		assert.equal(isScoredCell(cell), false); // still EXCLUDED from the headline mean
 	});
 
 	it('the SAME ungraceful death with isolation OFF → agent_fail, INCLUDED (the #184 pkill-storm is the agent)', () => {
@@ -380,6 +398,74 @@ describe('agent_fail end-to-end invariant: verdict fail, composite 0, INCLUDED',
 		assert.equal(composite(tr, 10), 0); // even a generous judge cannot lift it off 0
 		assert.equal(verdictOf(cell), 'fail');
 		assert.equal(isScoredCell(cell), true);
+	});
+});
+
+describe('dead_server: a crashed/never-served dev-server is a REAL fail (composite 0, INCLUDED — issue #188)', () => {
+	// The over-correction being reversed: an empty APP_BASE_URL / crashed backend makes step 3 skip
+	// Playwright, leaving tests 0/0/0. As a plain 'scored' cell that read verdict 'unknown' and was
+	// EXCLUDED, masking the PGlite backend crash from the mean. dev_server_status='dead' now classifies
+	// it as dead_server — verdict 'fail', composite 0, INCLUDED — so the crash HURTS the score, while a
+	// DISTINCT klass keeps the failure root-cause free to attribute owner=framework (not the agent).
+	const deadCell = { task: 'sql-notes', template: 'nextjs', dev_server_status: 'dead', tests_passed: 0, tests_failed: 0 };
+
+	it("classifyCell → { klass: 'dead_server', reason: 'dev_server_dead' }", () => {
+		assert.deepEqual(classifyCell(deadCell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
+		assert.equal(DEAD_SERVER_STATUS, 'dead');
+		assert.equal(DEAD_SERVER_KLASS, 'dead_server');
+		assert.equal(DEAD_SERVER_REASON, 'dev_server_dead');
+	});
+
+	it("verdicts 'fail' (NOT 'unknown'), is INCLUDED in the mean, and scores composite 0", () => {
+		assert.equal(verdictOf(deadCell), 'fail');
+		assert.equal(isScoredCell(deadCell), true); // INCLUDED — the crash must move the mean
+		assert.equal(composite(testRate(testStats(deadCell)), 10), 0); // even a generous judge can't lift it off 0
+	});
+
+	it('a stamped klass:dead_server is honoured (no tests) — fail + INCLUDED', () => {
+		assert.equal(verdictOf({ klass: DEAD_SERVER_KLASS }), 'fail');
+		assert.equal(isScoredCell({ klass: DEAD_SERVER_KLASS }), true);
+	});
+
+	// PRECEDENCE — a genuine harness_error still WINS over the dead-server signal and stays EXCLUDED.
+	// A cancellation / pre-grade failure / ungraceful agent teardown never produced a runnable app, so a
+	// stray dev_server_status='dead' on such a cell must NOT flip it into the scored set.
+	it('a CANCELLATION with dev_server_status=dead is still harness_error, EXCLUDED (cancel wins)', () => {
+		const cell = { ...deadCell, status: 'cancelled', failed_at: AGENT_FAIL_AT };
+		assert.equal(classifyCell(cell).klass, 'harness_error');
+		assert.equal(isScoredCell(cell), false);
+		assert.equal(verdictOf(cell), 'harness_error');
+	});
+
+	it('a pre-grade (pre-oidc) failure with dev_server_status=dead is still harness_error, EXCLUDED', () => {
+		const cell = { ...deadCell, failed_at: 'pre-oidc' };
+		assert.equal(classifyCell(cell).klass, 'harness_error');
+		assert.equal(isScoredCell(cell), false);
+	});
+
+	it('an ungraceful 2-agent teardown (isolation on) with dev_server_status=dead stays harness_error, EXCLUDED', () => {
+		// The agent step already died as an infra teardown (issue #183) before any dev server existed —
+		// that reclassification must still win over a stray dead signal.
+		const cell = { ...deadCell, failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', isolation_active: true };
+		assert.equal(classifyCell(cell).klass, 'harness_error');
+		assert.equal(isScoredCell(cell), false);
+	});
+});
+
+describe('isCountedFailKlass(klass) — the shared "counted failure" set (agent_fail + dead_server)', () => {
+	it('agent_fail and dead_server are counted failures (verdict fail, composite 0, INCLUDED)', () => {
+		assert.equal(isCountedFailKlass('agent_fail'), true);
+		assert.equal(isCountedFailKlass(DEAD_SERVER_KLASS), true);
+	});
+
+	it('scored and harness_error are NOT counted failures', () => {
+		assert.equal(isCountedFailKlass('scored'), false);
+		assert.equal(isCountedFailKlass('harness_error'), false);
+	});
+
+	it('a missing / undefined / null klass is not a counted failure', () => {
+		assert.equal(isCountedFailKlass(undefined), false);
+		assert.equal(isCountedFailKlass(null), false);
 	});
 });
 
@@ -584,5 +670,46 @@ describe('scorePerDollar(composite, cost) — the headline SCORE (points per $)'
 		assert.equal(scorePerDollar(null, 1.05), null);
 		assert.equal(scorePerDollar(92, null), null);
 		assert.equal(scorePerDollar(92, 0), null);
+	});
+});
+
+describe('classifyCell — MaxTokensError is agent_fail with its OWN reason, not a wall-clock timeout (fix #3)', () => {
+	// A MaxTokensError means a single model response hit the per-call OUTPUT-token cap: the agent spent
+	// its budget on its own merits. That is a GENUINE agent failure (composite 0, INCLUDED) — but it is
+	// NOT a wall-clock timeout, so it must carry the distinct 'max_tokens' reason, never 'agent_timeout'.
+	// Mirrors the cognito-profile cell (composite 0, tokens_in 1,082,766, duration 203s — NOT a timeout).
+	it("a MaxTokensError builder_error → agent_fail, reason 'max_tokens' (INCLUDED, not excluded)", () => {
+		const cell = {
+			failed_at: AGENT_FAIL_AT,
+			status: 'error',
+			stop_reason: 'error',
+			builder_error: 'MaxTokensError: output exceeded the maximum allowed tokens',
+			tokens_in: 1_082_766,
+			tokens_out: 64_000,
+		};
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_MAX_TOKENS_REASON });
+		assert.equal(AGENT_MAX_TOKENS_REASON, 'max_tokens');
+		assert.notEqual(classifyCell(cell).reason, AGENT_FAIL_REASON); // NOT mislabeled 'agent_timeout'
+		assert.equal(isScoredCell({ ...cell, klass: 'agent_fail' }), true); // INCLUDED (composite 0)
+	});
+
+	it("a 'maxTokens' stop_reason (the SDK StopReason string) is also detected", () => {
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'maxTokens' };
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_MAX_TOKENS_REASON });
+	});
+
+	it("a genuine wall-clock timeout keeps reason 'agent_timeout' (only real max-tokens is relabeled)", () => {
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' };
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_FAIL_REASON });
+	});
+
+	it('isMaxTokensFailure detects the signature in stop_reason OR builder_error, and nowhere else', () => {
+		assert.equal(isMaxTokensFailure({ builder_error: 'MaxTokensError: ...' }), true);
+		assert.equal(isMaxTokensFailure({ stop_reason: 'maxTokens' }), true);
+		assert.equal(isMaxTokensFailure({ stop_reason: 'max_tokens' }), true);
+		assert.equal(isMaxTokensFailure({ stop_reason: 'wall_clock_timeout' }), false);
+		assert.equal(isMaxTokensFailure({ builder_error: 'ThrottlingException: rate exceeded' }), false);
+		assert.equal(isMaxTokensFailure({}), false);
+		assert.equal(isMaxTokensFailure(null), false);
 	});
 });
