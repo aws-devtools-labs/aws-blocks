@@ -42,16 +42,16 @@ const ALB_SUPPORT: Record<CapabilityId, SupportTier> = {
   LargePayload: 'degraded', // Lambda-target request/response caps at 1 MB (per-namespace forwarder)
   CustomDomainTls: 'core', // HTTPS listener + a regional ACM cert
   InjectResponseHeaders: 'degraded', // ALB can't inject per-route response headers → move into SSR/origin
-  FilterRequests: 'unsupported', // AlbConstruct wires no WAF today (was overclaimed as 'core'); WAF-on-ALB is follow-on
+  FilterRequests: 'core', // native WAFv2 REGIONAL WebACL associated with the ALB
   CacheResponses: 'degraded', // no global edge cache; a regional cache is the caller's own concern
   AtomicRelease: 'extended', // build-id prefixed keys + target-group swap instead of a KVS cutover
   PinSession: 'degraded', // no edge function to stamp the skew cookie → move into SSR or drop
   OptimizeImage: 'core', // the image-opt Lambda as a target
   RestrictGeo: 'unsupported', // needs WAF geo rules; no WAF wired on the ALB today
-  AccessLogging: 'unsupported', // ALB→S3 access logs not wired in AlbConstruct yet (follow-on)
-  ServeErrorPage: 'unsupported', // no fixed-response error pages wired
+  AccessLogging: 'core', // native ALB access logs → S3
+  ServeErrorPage: 'unsupported', // on ALB the ORIGIN serves app 404/500s; fixed-response is a maintenance page, not an origin-error interceptor — not forced
   Redirect: 'extended', // listener redirect rules from the plan's redirects
-  Alarms: 'unsupported', // MonitoringConstruct is CloudFront-only today
+  Alarms: 'core', // CloudWatch alarms on the ALB's own metrics (5xx, latency)
 };
 
 /** Context the ALB adapter needs beyond the plan: CDK handles + network/TLS options. */
@@ -63,6 +63,12 @@ export type AlbRenderContext = AdapterContext & {
   vpc?: IVpc;
   internal?: boolean;
   certificate?: ICertificate;
+  /** Enable native ALB access logging → S3 (`AccessLogging`). */
+  accessLogging?: boolean;
+  /** Native WAFv2 REGIONAL WebACL for the ALB (`FilterRequests`). */
+  waf?: { enabled?: boolean; rateLimit?: number; webAclArn?: string };
+  /** Emit CloudWatch alarms on the ALB's own metrics (`Alarms`). */
+  monitoring?: boolean;
   /** Capabilities the app explicitly accepts in degraded form (else the negotiator fails). */
   degrade?: CapabilityId[];
 };
@@ -110,6 +116,9 @@ export class AlbAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter {
       vpc: ctx.vpc,
       internal: ctx.internal,
       certificate: ctx.certificate,
+      accessLogging: ctx.accessLogging,
+      waf: ctx.waf,
+      monitoring: ctx.monitoring,
     });
     return {
       url: alb.url,

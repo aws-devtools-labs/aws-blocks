@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { CapabilityPlan } from '../plan/types.js';
 import { AlbConstruct } from './alb_construct.js';
@@ -55,6 +55,50 @@ describe('AlbConstruct — static plan', () => {
     t.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
       Actions: [{ Type: 'redirect', RedirectConfig: { Path: '/new', StatusCode: 'HTTP_301' } }],
     });
+  });
+});
+
+describe('AlbConstruct — native cross-cutting features (not CloudFront imitations)', () => {
+  it('accessLogging → the ALB\'s own access logs are enabled to an S3 bucket', () => {
+    const app = new App();
+    const stack = new Stack(app, 'AL', { env: { account: '111111111111', region: 'us-west-2' } });
+    const bucket = new Bucket(stack, 'Assets');
+    new AlbConstruct(stack, 'Alb', { plan: staticPlan, bucket, accessLogging: true });
+    const t = Template.fromStack(stack);
+    // Native ALB access-logging attribute (not a proxy/format shim).
+    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
+      LoadBalancerAttributes: Match.arrayWith([{ Key: 'access_logs.s3.enabled', Value: 'true' }]),
+    });
+  });
+
+  it('waf → a native WAFv2 REGIONAL WebACL associated with the ALB', () => {
+    const app = new App();
+    const stack = new Stack(app, 'WF', { env: { account: '111111111111', region: 'us-west-2' } });
+    const bucket = new Bucket(stack, 'Assets');
+    new AlbConstruct(stack, 'Alb', { plan: staticPlan, bucket, waf: { enabled: true, rateLimit: 500 } });
+    const t = Template.fromStack(stack);
+    t.hasResourceProperties('AWS::WAFv2::WebACL', { Scope: 'REGIONAL' });
+    // The association binds the WebACL to the ALB (the native AWS mechanism).
+    t.resourceCountIs('AWS::WAFv2::WebACLAssociation', 1);
+  });
+
+  it('monitoring → CloudWatch alarms on the ALB\'s own metrics', () => {
+    const app = new App();
+    const stack = new Stack(app, 'MON', { env: { account: '111111111111', region: 'us-west-2' } });
+    const bucket = new Bucket(stack, 'Assets');
+    new AlbConstruct(stack, 'Alb', { plan: staticPlan, bucket, monitoring: true });
+    const t = Template.fromStack(stack);
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 2); // 5xx + target response time
+  });
+
+  it('none of the above by default → no WebACL, no alarms, no access logging', () => {
+    const app = new App();
+    const stack = new Stack(app, 'NONE', { env: { account: '111111111111', region: 'us-west-2' } });
+    const bucket = new Bucket(stack, 'Assets');
+    new AlbConstruct(stack, 'Alb', { plan: staticPlan, bucket });
+    const t = Template.fromStack(stack);
+    t.resourceCountIs('AWS::WAFv2::WebACLAssociation', 0);
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 0);
   });
 });
 
