@@ -54,6 +54,10 @@ const CLOUDFRONT_SUPPORT: Record<CapabilityId, SupportTier> = {
   PinSession: 'core',
   OptimizeImage: 'core',
   RestrictGeo: 'core',
+  AccessLogging: 'core', // enableLogging + logBucket
+  ServeErrorPage: 'core', // custom error responses / error-page HTML
+  Redirect: 'core', // CloudFront Function (www↔apex) + KVS redirects
+  Alarms: 'core', // MonitoringConstruct (CF 5xx, Lambda errors/throttles, DLQ)
 };
 
 /**

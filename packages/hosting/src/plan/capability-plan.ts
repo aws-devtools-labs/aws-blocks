@@ -49,6 +49,22 @@ export type BuildCapabilityPlanInput = {
   backendNeedsLongRequests?: boolean;
   /** The app needs backend payloads above a router's size cap (large uploads/downloads). */
   backendNeedsLargePayloads?: boolean;
+  /**
+   * Demand signals — app-expressed needs (from HostingProps / manifest) that make
+   * the matching capability REQUIRED. Omitted ⇒ not demanded ⇒ never fails a door
+   * that lacks it. See {@link PlanPolicies} for the meaning of each.
+   */
+  demand?: {
+    customDomain?: boolean;
+    wafEnabled?: boolean;
+    loggingEnabled?: boolean;
+    hasCustomErrorPages?: boolean;
+    hasRedirects?: boolean;
+    needsStreaming?: boolean;
+    geoRestricted?: boolean;
+    monitoringEnabled?: boolean;
+    edgeCacheRequired?: boolean;
+  };
 };
 
 const normalizePattern = (pattern: string, basePath?: string): string => {
@@ -117,6 +133,20 @@ export const buildCapabilityPlan = (input: BuildCapabilityPlanInput): Capability
       hasServer,
       wwwRedirect: input.wwwRedirect,
       skewEnabled: input.skewEnabled === true,
+      // Demand signals (default off ⇒ not required ⇒ never fails a door lacking it).
+      // `hasRedirects` also covers a www↔apex canonical redirect.
+      customDomain: input.demand?.customDomain === true,
+      wafEnabled: input.demand?.wafEnabled === true,
+      loggingEnabled: input.demand?.loggingEnabled === true,
+      hasCustomErrorPages: input.demand?.hasCustomErrorPages === true,
+      hasRedirects:
+        input.demand?.hasRedirects === true ||
+        (manifest.redirects?.length ?? 0) > 0 ||
+        (input.wwwRedirect !== undefined && input.wwwRedirect !== 'none'),
+      needsStreaming: input.demand?.needsStreaming === true,
+      geoRestricted: input.demand?.geoRestricted === true,
+      monitoringEnabled: input.demand?.monitoringEnabled === true,
+      edgeCacheRequired: input.demand?.edgeCacheRequired === true,
     },
     release: { buildId },
     ...(backend ? { backend } : {}),

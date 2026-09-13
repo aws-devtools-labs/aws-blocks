@@ -42,12 +42,16 @@ const ALB_SUPPORT: Record<CapabilityId, SupportTier> = {
   LargePayload: 'degraded', // Lambda-target request/response caps at 1 MB (per-namespace forwarder)
   CustomDomainTls: 'core', // HTTPS listener + a regional ACM cert
   InjectResponseHeaders: 'degraded', // ALB can't inject per-route response headers → move into SSR/origin
-  FilterRequests: 'core', // a REGIONAL WAFv2 WebACL associates with the ALB
+  FilterRequests: 'unsupported', // AlbConstruct wires no WAF today (was overclaimed as 'core'); WAF-on-ALB is follow-on
   CacheResponses: 'degraded', // no global edge cache; a regional cache is the caller's own concern
   AtomicRelease: 'extended', // build-id prefixed keys + target-group swap instead of a KVS cutover
   PinSession: 'degraded', // no edge function to stamp the skew cookie → move into SSR or drop
   OptimizeImage: 'core', // the image-opt Lambda as a target
-  RestrictGeo: 'degraded', // via WAF geo rules, not a native CDN control
+  RestrictGeo: 'unsupported', // needs WAF geo rules; no WAF wired on the ALB today
+  AccessLogging: 'unsupported', // ALB→S3 access logs not wired in AlbConstruct yet (follow-on)
+  ServeErrorPage: 'unsupported', // no fixed-response error pages wired
+  Redirect: 'extended', // listener redirect rules from the plan's redirects
+  Alarms: 'unsupported', // MonitoringConstruct is CloudFront-only today
 };
 
 /** Context the ALB adapter needs beyond the plan: CDK handles + network/TLS options. */

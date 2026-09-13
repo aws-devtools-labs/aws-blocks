@@ -72,6 +72,29 @@ export type PlanPolicies = {
   wwwRedirect?: 'toApex' | 'toWww' | 'none';
   /** Whether cookie-based skew protection is enabled. */
   skewEnabled: boolean;
+
+  // ── Demand signals — each flags an app-expressed NEED, so the negotiator
+  // requires the matching capability ONLY when the app asked for it. Absence of
+  // an un-demanded capability is a clean fit, never a failure. Read from the
+  // app's HostingProps / manifest (the demand surface), not from CloudFront.
+  /** The app configured a custom domain → needs trusted TLS on that host. */
+  customDomain?: boolean;
+  /** The app enabled a WAF → needs request filtering. */
+  wafEnabled?: boolean;
+  /** The app configured access logging → needs the door to emit access logs. */
+  loggingEnabled?: boolean;
+  /** The app ships custom error pages → needs the door to serve them. */
+  hasCustomErrorPages?: boolean;
+  /** The app declared redirects (incl. www↔apex) → needs the door to perform them. */
+  hasRedirects?: boolean;
+  /** The app's SSR streams responses → needs streaming (not buffered). */
+  needsStreaming?: boolean;
+  /** The app restricted content by geography → needs geo enforcement. */
+  geoRestricted?: boolean;
+  /** The app configured monitoring/alarms → needs the door to emit metrics/alarms. */
+  monitoringEnabled?: boolean;
+  /** The app requires edge caching as a hard need (rare; perf is otherwise optional). */
+  edgeCacheRequired?: boolean;
 };
 
 /** Release/atomicity info for the deploy. */
@@ -173,7 +196,11 @@ export type CapabilityId =
   | 'AtomicRelease'
   | 'PinSession'
   | 'OptimizeImage'
-  | 'RestrictGeo';
+  | 'RestrictGeo'
+  | 'AccessLogging'
+  | 'ServeErrorPage'
+  | 'Redirect'
+  | 'Alarms';
 
 /**
  * How well an adapter supports a capability.

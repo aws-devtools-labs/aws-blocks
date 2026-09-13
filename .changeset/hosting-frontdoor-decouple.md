@@ -43,5 +43,19 @@ but browsers lowercase the `Origin` host, which otherwise 403s every cross-origi
 call behind an ALB front door. Origin scheme/host are case-insensitive per spec; no
 effect on the (already-lowercase) CloudFront path.
 
+- **Demand-driven negotiation + completeness guard.** A capability is now
+  `required` only when the app *demands* it (a `HostingProps`/manifest signal),
+  via a single `CAPABILITY_DEMAND` registry — so a door that lacks an
+  *un-demanded* feature negotiates clean (missing ≠ degradation), while a door
+  that lacks a *demanded* one fails/degrades loudly instead of silently dropping
+  it. Adds the previously-unmodeled capabilities `AccessLogging`,
+  `ServeErrorPage`, `Redirect`, `Alarms` (+ demand flags for custom-domain TLS,
+  WAF, streaming, geo). A completeness test enforces that every `CapabilityId` is
+  reachable-as-required by some demand and that perf-only tuning (compression,
+  HTTP/3, price class) is consciously excluded — closing the class of gaps where
+  features (like access logging) slipped past the negotiator unnoticed. Adapter
+  support tiers were corrected to match what each construct actually builds today
+  (e.g. the ALB door no longer overclaims WAF).
+
 Backward compatible — `frontDoor` defaults to `cloudfront` and all new exports are
 additive.
