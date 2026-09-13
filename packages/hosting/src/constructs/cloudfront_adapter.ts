@@ -26,7 +26,7 @@ import type {
   SupportTier,
 } from '../plan/types.js';
 import { CdnConstruct, type CdnConstructProps } from './cdn_construct.js';
-import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
+import type { ChildHandles, FrontDoorLayerAdapter, LayerHandle } from './layer.js';
 
 /**
  * CloudFront's per-capability support. CloudFront is the full-feature default:
@@ -96,8 +96,25 @@ export class CloudFrontAdapter implements FrontDoorAdapter, FrontDoorLayerAdapte
    * the root edge, so it rarely has a parent — the handle is provided for
    * uniformity).
    */
-  renderLayer(scope: Construct, _plan: CapabilityPlan, ctx: CloudFrontRenderContext): LayerHandle {
-    const cdn = new CdnConstruct(scope, 'Cdn', ctx.cdnProps);
+  renderLayer(
+    scope: Construct,
+    _plan: CapabilityPlan,
+    ctx: CloudFrontRenderContext,
+    children?: ChildHandles,
+  ): LayerHandle {
+    // Composition: front each nested child layer (e.g. an ALB router) as a public
+    // HTTP origin at its path. The child's `match` selector is the behavior
+    // pattern; its `originHandle` gives the host + protocol.
+    const childOrigins = [...(children ?? new Map()).entries()].map(([match, handle]) => ({
+      pattern: match,
+      domainName: handle.originHandle.domainName,
+      protocol: handle.originHandle.protocol,
+    }));
+    const cdnProps =
+      childOrigins.length > 0
+        ? { ...ctx.cdnProps, extraHttpOrigins: [...(ctx.cdnProps.extraHttpOrigins ?? []), ...childOrigins] }
+        : ctx.cdnProps;
+    const cdn = new CdnConstruct(scope, 'Cdn', cdnProps);
     return {
       url: cdn.distributionUrl,
       originHandle: { domainName: cdn.distribution.distributionDomainName, protocol: 'https' },

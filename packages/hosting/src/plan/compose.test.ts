@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { composeGraph } from './compose.js';
+import { composeCloudFrontOverRouter, composeGraph } from './compose.js';
 import { isOriginRef } from './types.js';
 import type { CapabilityPlan, FrontDoorLayer, OriginRef } from './types.js';
 
@@ -60,6 +60,17 @@ describe('composeGraph — single-layer topologies (Commit 1: representation onl
       assert.equal(g.root.role, 'router');
       assert.ok(g.root.forwards.some((f) => f.match === 'api:*'));
     }
+  });
+
+  it('composeCloudFrontOverRouter emits a nested CF edge → ALB router (composition)', () => {
+    const g = composeCloudFrontOverRouter(ssrPlan, 'alb');
+    assert.equal(g.root.service, 'cloudfront');
+    assert.equal(g.root.role, 'edge');
+    // The edge forwards the API subtree to a nested ALB router layer.
+    const apiFwd = g.root.forwards.find((f) => f.match === '/aws-blocks/api/*');
+    assert.ok(apiFwd && !isOriginRef(apiFwd.to), 'API subtree routes to a nested layer');
+    assert.equal(!isOriginRef(apiFwd.to) && apiFwd.to.service, 'alb');
+    assert.equal(!isOriginRef(apiFwd.to) && apiFwd.to.role, 'router');
   });
 
   it('the graph type admits nesting (edge → router) even though composeGraph does not emit it yet', () => {

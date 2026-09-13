@@ -170,6 +170,33 @@ void describe('CdnConstruct', () => {
       });
     });
 
+    void it('fronts a nested child layer via extraHttpOrigins (composition: CF → child)', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: spaManifest,
+        securityHeadersPolicy: policy,
+        extraHttpOrigins: [{ pattern: '/aws-blocks/api/*', domainName: 'my-alb-123.us-west-2.elb.amazonaws.com', protocol: 'https' }],
+      });
+
+      const template = Template.fromStack(stack);
+      // The child is bound as a custom (HTTP) origin with the given domain…
+      template.hasResourceProperties('AWS::CloudFront::Distribution', {
+        DistributionConfig: Match.objectLike({
+          Origins: Match.arrayWith([
+            Match.objectLike({ DomainName: 'my-alb-123.us-west-2.elb.amazonaws.com' }),
+          ]),
+          // …and an additional cache behavior routes its path to it.
+          CacheBehaviors: Match.arrayWith([
+            Match.objectLike({ PathPattern: '/aws-blocks/api/*' }),
+          ]),
+        }),
+      });
+    });
+
     void it('creates 403/404 error responses for SPA', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
