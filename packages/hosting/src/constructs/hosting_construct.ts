@@ -49,10 +49,10 @@ import {
 } from '../secret-resolve.js';
 import type { HostingResources } from '../types.js';
 import { CdnConstruct } from './cdn_construct.js';
-import { AlbAdapter } from './alb_adapter.js';
-import { ApiGatewayAdapter } from './apigw_adapter.js';
-import { S3WebsiteAdapter } from './s3_website_adapter.js';
+import type { LayerHandle } from './layer.js';
+import { renderGraph } from './render-graph.js';
 import { buildCapabilityPlan } from '../plan/capability-plan.js';
+import { composeGraph } from '../plan/compose.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
@@ -1355,10 +1355,15 @@ export class HostingConstruct extends Construct {
         serverComputeName: serverName,
         imageComputeName: hasImageOrigin ? 'image-optimization' : undefined,
       };
-      let result: { url: string };
+      // Compose the (single-layer) front-door graph and render it. The graph is
+      // now the dispatch driver for the non-CloudFront doors; each door's ctx
+      // carries the CDK handles the neutral graph can't. Output is byte-identical
+      // to the previous direct `adapter.render(...)` (renderGraph → the same
+      // adapter's renderLayer → the same construct).
+      let handle: LayerHandle;
       switch (fd.kind) {
         case 'alb':
-          result = new AlbAdapter().render(this, plan, {
+          handle = renderGraph(this, composeGraph(plan, 'alb'), plan, {
             ...common,
             vpc: fd.vpc,
             internal: fd.internal,
@@ -1367,13 +1372,13 @@ export class HostingConstruct extends Construct {
           });
           break;
         case 'api-gateway':
-          result = new ApiGatewayAdapter().render(this, plan, {
+          handle = renderGraph(this, composeGraph(plan, 'api-gateway'), plan, {
             ...common,
             degrade: fd.degrade,
           });
           break;
         case 's3-website':
-          result = new S3WebsiteAdapter().render(this, plan, {
+          handle = renderGraph(this, composeGraph(plan, 's3-website'), plan, {
             staticDir: manifest.staticAssets.directory,
             degrade: fd.degrade,
           });
@@ -1381,10 +1386,10 @@ export class HostingConstruct extends Construct {
         default:
           throw new HostingError('UnsupportedFrontDoorError', {
             message: `Unknown front door kind '${(fd as { kind: string }).kind}'.`,
-            resolution: "Use 'cloudfront' (default), or { kind: 'alb' | 'api-gateway' }.",
+            resolution: "Use 'cloudfront' (default), or { kind: 'alb' | 'api-gateway' | 's3-website' }.",
           });
       }
-      this.distributionUrl = result.url;
+      this.distributionUrl = handle.url ?? '';
     }
 
     // ---- 11. Error page deployment (SSR only) ----
