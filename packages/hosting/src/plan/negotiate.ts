@@ -14,39 +14,77 @@
  */
 import type { CapabilityId, CapabilityPlan, FrontDoorAdapter } from './types.js';
 
-/** Which capabilities a plan REQUIRES, inferred from its shape. */
+/**
+ * The DEMAND registry — the single source of truth for "does this app need this
+ * capability?". A capability is REQUIRED iff its predicate is true for the plan;
+ * otherwise its absence is a clean fit, NOT a degradation (that is the whole
+ * point — we never fail a build for a capability the app didn't ask for).
+ *
+ * Demand is read from the plan (which reflects the app's manifest + Hosting
+ * props — the demand surface), never from what a given service happens to
+ * implement. Every {@link CapabilityId} MUST have an entry here; the
+ * completeness test enforces it, so a new capability can't be added without
+ * declaring when it is demanded (this is what stopped features like access
+ * logging from silently slipping past the negotiator).
+ *
+ * Three demand shapes:
+ *  - always-on hard needs (`RouteRequest`, `ServeStaticAsset`);
+ *  - conditional hard needs (SSR, custom-domain TLS, image-opt, same-origin API…)
+ *    — required only when the plan shows the app uses them;
+ *  - opt-in security/compliance (WAF, logging, geo) — required only when the app
+ *    turned them on (then satisfiable by a supporting door or an explicit
+ *    `degrade`).
+ * Pure perf/optional features (compression, HTTP/3, price class) are NOT
+ * capabilities — see the CF-only allowlist — so they can never fail a build.
+ */
+export const CAPABILITY_DEMAND: Record<CapabilityId, (plan: CapabilityPlan) => boolean> = {
+  // Always needed by any site.
+  RouteRequest: () => true,
+  ServeStaticAsset: () => true,
+  // Conditional hard needs — required only when the app actually uses them.
+  RunServerRender: (p) => p.policies.hasServer,
+  // Build-id cutover / invalidation guards a COMPUTE origin serving cacheable
+  // HTML referencing build-prefixed assets (stale-HTML→403). Pure-static has no
+  // such risk, so static doors negotiate clean without an atomicity opt-in.
+  AtomicRelease: (p) => p.policies.hasServer,
+  StreamServerRender: (p) => p.policies.needsStreaming === true,
+  OptimizeImage: (p) => p.origins.some((o) => o.kind === 'image'),
+  PinSession: (p) => p.policies.skewEnabled,
+  InjectResponseHeaders: (p) => p.routes.headers.length > 0,
+  CustomDomainTls: (p) => p.policies.customDomain === true,
+  ServeErrorPage: (p) => p.policies.hasCustomErrorPages === true,
+  Redirect: (p) => p.policies.hasRedirects === true,
+  // Backend/API routing — only when the door proxies the API same-origin.
+  ProxySameOriginApi: (p) => (p.backend?.origins.length ?? 0) > 0,
+  // Path-routing DISTINCT namespaces (multi-compute); a lone `'*'` doesn't need it.
+  RouteApiNamespace: (p) => p.backend?.origins.some((o) => o.namespace !== '*') ?? false,
+  // Router payload/timeout budgets (API GW 29s/10MB, ALB-Lambda 1MB) — required
+  // only when the app declares the need, so a capping door is caught not silent.
+  LongRequest: (p) => p.backend?.needsLongRequests === true,
+  LargePayload: (p) => p.backend?.needsLargePayloads === true,
+  // Opt-in security / compliance — required only when the app turned them on.
+  FilterRequests: (p) => p.policies.wafEnabled === true,
+  RestrictGeo: (p) => p.policies.geoRestricted === true,
+  AccessLogging: (p) => p.policies.loggingEnabled === true,
+  Alarms: (p) => p.policies.monitoringEnabled === true,
+  // Edge caching is a hard need only if the app explicitly requires it; otherwise
+  // it is a perf optimization whose absence is a clean fit.
+  CacheResponses: (p) => p.policies.edgeCacheRequired === true,
+};
+
+/**
+ * CloudFront-only tuning that is deliberately NOT a capability: pure
+ * performance/footprint knobs whose absence on another door is optimal-vs-less,
+ * never a broken use case — so they must never fail a build. Documented here so
+ * the completeness test can assert they are consciously excluded, not forgotten.
+ */
+export const CF_ONLY_FEATURES = ['CompressResponse', 'Http3', 'PriceClass'] as const;
+
+/** Which capabilities a plan REQUIRES — derived from the demand registry. */
 export const requiredCapabilities = (plan: CapabilityPlan): Set<CapabilityId> => {
   const req = new Set<CapabilityId>();
-  // Routing + static serving are always needed.
-  req.add('RouteRequest');
-  req.add('ServeStaticAsset');
-  // Atomic release (build-id cutover / invalidation) guards a COMPUTE origin
-  // serving cacheable HTML that references build-prefixed assets (the stale-HTML
-  // → 403 problem). A pure-static deploy has no such risk, so it is only
-  // required when there is a server — letting simplest static doors (e.g. an
-  // S3 website bucket) negotiate cleanly without an atomicity opt-in.
-  if (plan.policies.hasServer) {
-    req.add('AtomicRelease');
-    req.add('RunServerRender');
-  }
-  if (plan.origins.some((o) => o.kind === 'image')) req.add('OptimizeImage');
-  if (plan.policies.skewEnabled) req.add('PinSession');
-  if (plan.routes.headers.length > 0) req.add('InjectResponseHeaders');
-  // Backend/API routing. Present only when the front door proxies the API
-  // same-origin (undefined = cross-origin, needs no front-door support).
-  if (plan.backend && plan.backend.origins.length > 0) {
-    // Proxying the API subtree same-origin (cookies flow, no CORS).
-    req.add('ProxySameOriginApi');
-    // Path-routing DISTINCT namespaces to distinct computes is the multi-compute
-    // case — a single `'*'` origin (single-compute) does not need it. A door that
-    // serves one origin (function-url) can proxy but cannot path-route.
-    if (plan.backend.origins.some((o) => o.namespace !== '*')) req.add('RouteApiNamespace');
-    // Payload/timeout budgets the router itself imposes (API Gateway 29 s / 10 MB,
-    // ALB-Lambda 1 MB). Required only when the app declares it needs them, so the
-    // negotiator rejects/degrades a capping door instead of the limit surfacing
-    // as a production surprise.
-    if (plan.backend.needsLongRequests) req.add('LongRequest');
-    if (plan.backend.needsLargePayloads) req.add('LargePayload');
+  for (const cap of Object.keys(CAPABILITY_DEMAND) as CapabilityId[]) {
+    if (CAPABILITY_DEMAND[cap](plan)) req.add(cap);
   }
   return req;
 };

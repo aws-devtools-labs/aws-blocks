@@ -43,6 +43,10 @@ const APIGW_SUPPORT: Record<CapabilityId, SupportTier> = {
   PinSession: 'degraded', // no edge function for the skew cookie
   OptimizeImage: 'core', // the image-opt Lambda as an integration
   RestrictGeo: 'unsupported', // no geo control on HTTP API
+  AccessLogging: 'unsupported', // access logging not wired in ApiGatewayConstruct yet (follow-on)
+  ServeErrorPage: 'unsupported', // no gateway-response error pages wired
+  Redirect: 'unsupported', // HTTP API has no redirect primitive
+  Alarms: 'unsupported', // MonitoringConstruct is CloudFront-only today
 };
 
 export type ApiGatewayRenderContext = AdapterContext & {

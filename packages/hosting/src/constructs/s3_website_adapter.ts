@@ -40,6 +40,10 @@ const S3_WEBSITE_SUPPORT: Record<CapabilityId, SupportTier> = {
   PinSession: 'unsupported',
   OptimizeImage: 'unsupported',
   RestrictGeo: 'unsupported',
+  AccessLogging: 'unsupported', // S3 server access logging not wired in the website construct yet
+  ServeErrorPage: 'degraded', // has an S3 error-document slot (used for SPA fallback), not branded multi-status pages
+  Redirect: 'unsupported', // S3 routing rules not wired for the plan's redirects
+  Alarms: 'unsupported',
 };
 
 export type S3WebsiteRenderContext = AdapterContext & {

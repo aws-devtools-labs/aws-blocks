@@ -1341,13 +1341,29 @@ export class HostingConstruct extends Construct {
       const backendOrigins = backendApiUrl
         ? [{ namespace: '*', ingress: { kind: 'url' as const, url: backendApiUrl } }]
         : undefined;
+      // Demand signals from the app's props/manifest (the demand surface) — the
+      // negotiator requires the matching capability ONLY when the app asked for
+      // it, so a door that lacks an UN-demanded feature negotiates clean (missing
+      // ≠ degraded). A door that lacks a DEMANDED feature fails/degrades loudly
+      // instead of silently dropping it.
+      const serverStreams = serverName ? manifest.compute?.[serverName]?.streaming === true : false;
       const plan = buildCapabilityPlan({
         manifest,
         buildId,
         hasServer: Boolean(serverName),
         hasImage: hasImageOrigin,
         skewEnabled: false,
+        wwwRedirect: props.domain?.wwwRedirect,
         backendOrigins,
+        demand: {
+          customDomain: Boolean(props.domain),
+          wafEnabled: props.waf?.enabled === true || Boolean(props.waf?.webAclArn),
+          loggingEnabled: Boolean(props.logging),
+          hasCustomErrorPages: Boolean(props.errorPages),
+          needsStreaming: serverStreams,
+          geoRestricted: Boolean(props.cdn?.geoRestriction),
+          monitoringEnabled: Boolean(props.monitoring),
+        },
       });
       const common = {
         bucket: this.bucket,

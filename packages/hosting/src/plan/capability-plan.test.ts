@@ -81,6 +81,17 @@ describe('buildCapabilityPlan — policies + release', () => {
       hasServer: true,
       wwwRedirect: 'toApex',
       skewEnabled: true,
+      // Demand signals: all off (none passed) except hasRedirects, which the
+      // wwwRedirect:'toApex' canonical redirect implies.
+      customDomain: false,
+      wafEnabled: false,
+      loggingEnabled: false,
+      hasCustomErrorPages: false,
+      hasRedirects: true,
+      needsStreaming: false,
+      geoRestricted: false,
+      monitoringEnabled: false,
+      edgeCacheRequired: false,
     });
     assert.equal(plan.release.buildId, 'build-123');
   });
