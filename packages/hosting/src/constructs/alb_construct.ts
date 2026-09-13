@@ -13,15 +13,16 @@
  * silently dropped): global edge caching, per-route response-header injection,
  * skew-pin cookies, geo restriction. See {@link AlbAdapter}.
  */
-import { CfnOutput, Duration } from 'aws-cdk-lib';
+import { CfnOutput, Duration, Fn, RemovalPolicy } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { Code, Function as LambdaFunction, type IFunction } from 'aws-cdk-lib/aws-lambda';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
+import { CfnWebACL, CfnWebACLAssociation } from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
-import { Fn } from 'aws-cdk-lib';
 import type { CapabilityPlan, RouteKind } from '../plan/types.js';
 import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 import { generateAlbApiProxyCode } from './alb_api_proxy.js';
@@ -44,6 +45,23 @@ export type AlbConstructProps = {
   internal?: boolean;
   /** ACM certificate (regional, same region as the ALB) for an HTTPS listener. */
   certificate?: ICertificate;
+  /**
+   * Enable native ALB access logging (`AccessLogging`) — provisions an S3 log
+   * bucket and turns on the ALB's own access logs (not a CloudFront-format
+   * imitation).
+   */
+  accessLogging?: boolean;
+  /**
+   * WAF for the ALB — a native WAFv2 **REGIONAL** WebACL associated with the
+   * load balancer (`FilterRequests`). Provide `webAclArn` to reuse an existing
+   * WebACL, or set `enabled` to have the construct create one (rate-based rule).
+   */
+  waf?: { enabled?: boolean; rateLimit?: number; webAclArn?: string };
+  /**
+   * Emit CloudWatch alarms on the ALB's OWN metrics (5xx, target response time)
+   * — the native ALB metrics (`Alarms`), not CloudFront's metric set.
+   */
+  monitoring?: boolean;
 };
 
 /** ALB listener rule priority bands (lower number = evaluated first). */
@@ -194,6 +212,57 @@ export class AlbConstruct extends Construct {
         conditions: [elbv2.ListenerCondition.pathPatterns([entry.pattern])],
         targetGroups: [tgForKind(entry.kind)],
       });
+    }
+
+    // ── Native ALB cross-cutting features (NOT CloudFront imitations) ──
+
+    // Access logging: the native ALB access-log feature → a dedicated S3 bucket.
+    if (props.accessLogging) {
+      const logBucket = new s3.Bucket(this, 'AccessLogs', {
+        blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+        encryption: s3.BucketEncryption.S3_MANAGED,
+        enforceSSL: true,
+        removalPolicy: RemovalPolicy.RETAIN,
+      });
+      this.loadBalancer.logAccessLogs(logBucket);
+    }
+
+    // WAF: a native WAFv2 REGIONAL WebACL associated with the ALB (BYO ARN, or
+    // create a rate-limited one). This is the first-class AWS mechanism — not a
+    // proxy Lambda faking request filtering.
+    if (props.waf?.webAclArn || props.waf?.enabled) {
+      let webAclArn = props.waf.webAclArn;
+      if (!webAclArn) {
+        const acl = new CfnWebACL(this, 'WebAcl', {
+          scope: 'REGIONAL',
+          defaultAction: { allow: {} },
+          visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: 'AlbWebAcl', sampledRequestsEnabled: true },
+          rules: [
+            {
+              name: 'RateLimit',
+              priority: 0,
+              action: { block: {} },
+              statement: { rateBasedStatement: { limit: props.waf.rateLimit ?? 1000, aggregateKeyType: 'IP' } },
+              visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: 'AlbRateLimit', sampledRequestsEnabled: true },
+            },
+          ],
+        });
+        webAclArn = acl.attrArn;
+      }
+      new CfnWebACLAssociation(this, 'WebAclAssoc', {
+        resourceArn: this.loadBalancer.loadBalancerArn,
+        webAclArn,
+      });
+    }
+
+    // Alarms: CloudWatch alarms on the ALB's OWN metrics (5xx + latency).
+    if (props.monitoring) {
+      this.loadBalancer.metrics
+        .httpCodeElb(elbv2.HttpCodeElb.ELB_5XX_COUNT)
+        .createAlarm(this, 'Alb5xxAlarm', { threshold: 5, evaluationPeriods: 1 });
+      this.loadBalancer.metrics
+        .targetResponseTime()
+        .createAlarm(this, 'AlbLatencyAlarm', { threshold: 5, evaluationPeriods: 3 });
     }
 
     this.url = `${httpsCert ? 'https' : 'http'}://${this.loadBalancer.loadBalancerDnsName}`;

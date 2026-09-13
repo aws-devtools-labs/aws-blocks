@@ -1384,6 +1384,11 @@ export class HostingConstruct extends Construct {
             vpc: fd.vpc,
             internal: fd.internal,
             certificate: fd.certificate,
+            // Native ALB features, driven by the same props that set the demand
+            // flags — so a demanded capability is actually built, not just claimed.
+            accessLogging: Boolean(props.logging),
+            waf: props.waf,
+            monitoring: Boolean(props.monitoring),
             degrade: fd.degrade,
           });
           break;
