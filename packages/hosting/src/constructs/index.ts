@@ -78,6 +78,7 @@ export type {
 } from '../plan/types.js';
 export { isOriginRef } from '../plan/types.js';
 export type { FrontDoorLayerAdapter, LayerHandle, OriginHandle } from './layer.js';
+export { renderGraph } from './render-graph.js';
 export { buildCapabilityPlan, ORIGIN_IDS } from '../plan/capability-plan.js';
 export { composeGraph } from '../plan/compose.js';
 export type { FrontDoorChoice } from '../plan/compose.js';
