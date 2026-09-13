@@ -49,6 +49,10 @@ import {
 } from '../secret-resolve.js';
 import type { HostingResources } from '../types.js';
 import { CdnConstruct } from './cdn_construct.js';
+import type {
+  AccessLogFormat,
+  AccessLogPartitioning,
+} from './access_logging.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
@@ -269,6 +273,17 @@ export type HostingConstructProps = {
   logging?: {
     enabled: boolean;
     retentionDays?: number;
+    /**
+     * CloudFront logging pipeline: `'v1'` (default, legacy standard logging) or
+     * `'v2'` (standard logging v2 via the CloudWatch Logs delivery pipeline —
+     * ACL-free bucket, partitioned S3 layout, selectable format). See the
+     * public `HostingProps.logging` docs for trade-offs. @default 'v1'
+     */
+    version?: 'v1' | 'v2';
+    /** (v2 only) S3 key layout for delivered logs. @default 'date' */
+    partitioning?: AccessLogPartitioning;
+    /** (v2 only) Delivered log record format. @default 'w3c' */
+    format?: AccessLogFormat;
   };
   /**
    * Custom environment variables for all compute functions. A value may be:
@@ -462,6 +477,7 @@ export class HostingConstruct extends Construct {
     const storage = new StorageConstruct(this, 'Storage', {
       retainOnDelete: props.storage?.retainOnDelete,
       accessLogging: props.logging?.enabled ?? true,
+      accessLogVersion: props.logging?.version,
       encryption: props.storage?.encryption,
       encryptionKey: props.storage?.encryptionKey,
       buildRetentionDays: props.storage?.buildRetentionDays,
@@ -1111,6 +1127,10 @@ export class HostingConstruct extends Construct {
       domainName: resolvedDomainNames.length > 0 ? resolvedDomainNames : undefined,
       wwwRedirect: props.domain?.wwwRedirect,
       accessLogBucket: storage.accessLogBucket,
+      accessLogVersion: props.logging?.version,
+      accessLogPartitioning: props.logging?.partitioning,
+      accessLogFormat: props.logging?.format,
+      skipLoggingRegionValidation: props.skipRegionValidation,
       priceClass: props.cdn?.priceClass,
       geoRestriction: props.cdn?.geoRestriction,
       skewProtection: props.skewProtection ?? { enabled: true },
