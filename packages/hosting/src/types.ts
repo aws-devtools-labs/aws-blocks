@@ -338,6 +338,52 @@ export type HostingProps = {
     enabled: boolean;
     /** Days to retain access logs. Default: 90. */
     retentionDays?: number;
+    /**
+     * CloudFront logging pipeline to use.
+     *
+     * - `'v1'` (**default**) — legacy CloudFront standard logging. The
+     *   distribution writes logs directly to S3 through the `awslogsdelivery`
+     *   canonical user, so the log bucket must keep ACLs enabled
+     *   (`BUCKET_OWNER_PREFERRED`). No CloudFront charge; you pay only S3
+     *   storage.
+     * - `'v2'` — CloudFront **standard logging v2** via the CloudWatch Logs
+     *   vended-logs delivery pipeline. Delivers through the
+     *   `delivery.logs.amazonaws.com` service principal (authorized by a bucket
+     *   policy), so the log bucket uses the modern, ACL-disabled
+     *   `BUCKET_OWNER_ENFORCED`. Adds a **partitioned S3 key layout** (see
+     *   {@link logging.partitioning}) and a **selectable record format** (see
+     *   {@link logging.format}) with no post-processing Lambda.
+     *
+     * @remarks
+     * v2 delivery bills through CloudWatch vended-logs delivery (per-GB), and
+     * the delivery source for the global CloudFront service must be created in
+     * **us-east-1** — synth throws `LoggingV2RegionError` in any other Region.
+     * Default stays `'v1'` to preserve existing (free, ACL-based) behavior;
+     * opt in explicitly.
+     *
+     * @default 'v1'
+     */
+    version?: 'v1' | 'v2';
+    /**
+     * (v2 only) S3 key layout for delivered logs.
+     *
+     * - `'date'` (default) — `{DistributionId}/{yyyy}/{MM}/{dd}/{HH}/…`.
+     * - `'hive'` — Hive-compatible `year=…/month=…/day=…/hour=…` segments so
+     *   Athena/Glue partition projection works without a crawler.
+     *
+     * Ignored when `version` is `'v1'`.
+     *
+     * @default 'date'
+     */
+    partitioning?: 'date' | 'hive';
+    /**
+     * (v2 only) Delivered log record format: `'w3c'` (legacy-compatible
+     * tab-separated), `'plain'`, `'json'`, or `'parquet'` (columnar, queryable
+     * directly by Athena). Ignored when `version` is `'v1'`.
+     *
+     * @default 'w3c'
+     */
+    format?: 'plain' | 'w3c' | 'json' | 'parquet';
   };
 
   /**
