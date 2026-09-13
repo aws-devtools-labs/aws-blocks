@@ -21,6 +21,7 @@ import {
   IResponseHeadersPolicy,
   KeyValueStore,
   LambdaEdgeEventType,
+  OriginProtocolPolicy,
   OriginRequestCookieBehavior,
   OriginRequestHeaderBehavior,
   OriginRequestPolicy,
@@ -124,6 +125,14 @@ export type CdnConstructProps = {
    * built-in default CSP is used.
    */
   contentSecurityPolicy?: string;
+  /**
+   * Extra public HTTP origins to front as nested child layers (composition:
+   * CloudFront edge → a child router/origin, e.g. CF → ALB). Each becomes an
+   * `HttpOrigin(domainName)` bound to an additional behavior at `pattern`, with
+   * cookies/Authorization forwarded and caching disabled. Omit for the default
+   * CloudFront-over-own-origins shape (byte-identical).
+   */
+  extraHttpOrigins?: { pattern: string; domainName: string; protocol: 'http' | 'https' }[];
   /** Map of compute name → Function URL for per-origin routing. */
   computeFunctionUrls?: Map<string, IFunctionUrl>;
   /** Map of compute name → Lambda function for OAC permission patching. */
@@ -865,6 +874,25 @@ export class CdnConstruct extends Construct {
         functionAssociations: [
           { function: getSentinelGuardFn(), eventType: FunctionEventType.VIEWER_REQUEST },
         ],
+      };
+    }
+
+    // ---- Nested-layer origins (composition: CloudFront edge → a child layer) ----
+    // Each entry fronts a child front-door layer (e.g. an ALB router) as a public
+    // HTTP origin at its own path — the same mechanism as the API HttpOrigin
+    // above. Cookies/Authorization are forwarded and caching is disabled so the
+    // child owns the response. Empty/undefined ⇒ no behaviors added ⇒ the default
+    // CloudFront template is byte-identical (guarded by the golden test).
+    for (const child of props.extraHttpOrigins ?? []) {
+      additionalBehaviors[child.pattern] = {
+        origin: new HttpOrigin(child.domainName, {
+          protocolPolicy: child.protocol === 'https' ? OriginProtocolPolicy.HTTPS_ONLY : OriginProtocolPolicy.HTTP_ONLY,
+        }),
+        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        allowedMethods: AllowedMethods.ALLOW_ALL,
+        cachePolicy: CachePolicy.CACHING_DISABLED,
+        originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        responseHeadersPolicy: props.securityHeadersPolicy,
       };
     }
 

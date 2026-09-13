@@ -80,7 +80,7 @@ export { isOriginRef } from '../plan/types.js';
 export type { FrontDoorLayerAdapter, LayerHandle, OriginHandle } from './layer.js';
 export { renderGraph } from './render-graph.js';
 export { buildCapabilityPlan, ORIGIN_IDS } from '../plan/capability-plan.js';
-export { composeGraph } from '../plan/compose.js';
+export { composeGraph, composeCloudFrontOverRouter } from '../plan/compose.js';
 export type { FrontDoorChoice } from '../plan/compose.js';
 export { negotiate, requiredCapabilities } from '../plan/negotiate.js';
 export { CloudFrontAdapter } from './cloudfront_adapter.js';

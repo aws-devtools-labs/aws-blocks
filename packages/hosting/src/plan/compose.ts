@@ -15,6 +15,9 @@
  */
 import type { CapabilityPlan, FrontDoorGraph, FrontDoorLayer, OriginRef } from './types.js';
 
+/** Default path the backend/API subtree is routed under (matches the RPC path nomenclature). */
+const API_SUBTREE_PATTERN = '/aws-blocks/api/*';
+
 /** The front-door services a graph can be composed onto (the current door kinds). */
 export type FrontDoorChoice = 'cloudfront' | 's3-website' | 'alb' | 'api-gateway';
 
@@ -72,4 +75,28 @@ export const composeGraph = (plan: CapabilityPlan, choice: FrontDoorChoice): Fro
         },
       };
   }
+};
+
+/**
+ * Compose a NESTED graph: a CloudFront edge fronting the plan's static origins
+ * directly, plus a child `router` layer (e.g. `alb`) it routes the backend/API
+ * subtree to — the CF → ALB → compute shape (composition, not a single door).
+ *
+ * The edge keeps static/server/image on itself and forwards the API subtree to
+ * the router child; the router carries the backend origins. `renderGraph`
+ * renders the router first, then attaches the edge to its `originHandle`.
+ */
+export const composeCloudFrontOverRouter = (plan: CapabilityPlan, router: 'alb' | 'api-gateway'): FrontDoorGraph => {
+  const routerNode: FrontDoorLayer = {
+    service: router,
+    role: 'router',
+    forwards: [...originForwards(plan), ...backendForwards(plan)],
+  };
+  return {
+    root: {
+      service: 'cloudfront',
+      role: 'edge',
+      forwards: [...originForwards(plan), { match: API_SUBTREE_PATTERN, to: routerNode }],
+    },
+  };
 };

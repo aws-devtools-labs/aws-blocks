@@ -42,6 +42,14 @@ export type LayerHandle = {
 };
 
 /**
+ * Already-rendered child layers, keyed by the parent forward's `match` selector.
+ * The graph renderer builds these bottom-up and hands them to the parent's
+ * {@link FrontDoorLayerAdapter.renderLayer} so it can attach to each child's
+ * {@link OriginHandle} (composition — e.g. CloudFront edge fronting an ALB).
+ */
+export type ChildHandles = ReadonlyMap<string, LayerHandle>;
+
+/**
  * The layer-render seam every front-door service implements. `renderLayer`
  * materializes THIS layer and returns a {@link LayerHandle} a parent can attach
  * to. A one-layer graph (today's doors) renders identically to the current
@@ -52,6 +60,11 @@ export interface FrontDoorLayerAdapter {
   readonly service: string;
   /** Declare how well this service supports a capability (same matrix as `render`). */
   supports(capability: CapabilityId): SupportTier;
-  /** Materialize this layer and return an attach handle. */
-  renderLayer(scope: Construct, plan: CapabilityPlan, ctx: AdapterContext): LayerHandle;
+  /**
+   * Materialize this layer and return an attach handle. `children` carries any
+   * nested layers already rendered below it (empty for a leaf/single layer); an
+   * adapter that can front nested layers (e.g. CloudFront) attaches to each
+   * child's {@link OriginHandle}.
+   */
+  renderLayer(scope: Construct, plan: CapabilityPlan, ctx: AdapterContext, children?: ChildHandles): LayerHandle;
 }
