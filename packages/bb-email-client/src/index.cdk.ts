@@ -31,7 +31,7 @@ export class EmailClient extends Scope {
 
 		// Grant the Lambda handler permission to send emails
 		// Scoped to this account's SES identities rather than '*'
-		this.handler.addToRolePolicy(new PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new PolicyStatement({
 			effect: Effect.ALLOW,
 			actions: [
 				'ses:SendEmail',

@@ -6,9 +6,10 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { DEFAULT_NODE_RUNTIME, blocksNodejsBundling } from '@aws-blocks/core/cdk';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,8 +36,20 @@ export interface AuroraInfraConfig {
   migrationsPath?: string;
   /** CloudFormation removal policy for the Aurora cluster. @default RETAIN */
   removalPolicy?: cdk.RemovalPolicy;
+  /**
+   * Whether to enable RDS deletion protection. Resolved independently of
+   * `removalPolicy` so the stack-wide `defaults.deletionProtection` is honored.
+   * @default derived from removalPolicy (protected unless DESTROY)
+   */
+  deletionProtection?: boolean;
   /** Aurora PostgreSQL engine version, e.g. `'16.13'`. @default '16.13' */
   postgresVersion?: string;
+  /**
+   * CloudWatch retention for the migration Lambda's log group. Populated from
+   * the stack-wide `defaults.logRetention`; when omitted the log group uses the
+   * CDK `LogGroup` default retention.
+   */
+  logRetention?: cdk.aws_logs.RetentionDays;
 }
 
 /**
@@ -146,7 +159,9 @@ export function materialize(
     securityGroups: [securityGroup],
     defaultDatabaseName: databaseName,
     enableDataApi: true,
-    deletionProtection: removalPolicy !== cdk.RemovalPolicy.DESTROY,
+    // Read independently from defaults (falling back to the removalPolicy-derived
+    // value for direct materialize() callers that don't pass it).
+    deletionProtection: options.deletionProtection ?? removalPolicy !== cdk.RemovalPolicy.DESTROY,
     removalPolicy,
   });
 
@@ -196,22 +211,26 @@ export function materialize(
       handler: 'handler',
       runtime: DEFAULT_NODE_RUNTIME,
       timeout: cdk.Duration.minutes(5),
+      logGroup: new LogGroup(scope, `${name}MigrationLogs`, {
+        retention: options.logRetention,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
       environment: {
         CLUSTER_ARN: cluster.clusterArn,
         SECRET_ARN: secret.secretArn,
         DATABASE_NAME: databaseName,
         MIGRATIONS_DIR: '/var/task/migrations',
       },
-      bundling: {
+      bundling: blocksNodejsBundling({
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
-          afterBundling: (inputDir: string, outputDir: string) => [
+          afterBundling: (_inputDir: string, outputDir: string) => [
             `cp -r ${options.migrationsPath} ${outputDir}/migrations`,
           ],
         },
         externalModules: ['@aws-sdk/*'],
-      },
+      }),
     });
     grantDataApi(migrationFn);
 

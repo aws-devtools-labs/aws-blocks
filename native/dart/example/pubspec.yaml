@@ -2,7 +2,7 @@ name: blocks_example
 publish_to: none
 
 environment:
-  sdk: ^3.3.0
+  sdk: ^3.11.0
 
 dependencies:
   http: ^1.2.0
@@ -10,6 +10,6 @@ dependencies:
     path: ../packages/blocks_runtime
 
 dev_dependencies:
-  build_runner: ^2.4.0
+  build_runner: ^2.16.0
   blocks_codegen:
     path: ../packages/blocks_codegen

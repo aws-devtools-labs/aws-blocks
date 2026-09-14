@@ -11,6 +11,7 @@
     { "path": "../bb-auth-basic" },
     { "path": "../bb-auth-cognito" },
     { "path": "../bb-auth-oidc" },
+    { "path": "../bb-auth-jwt" },
     { "path": "../bb-kv-store" },
     { "path": "../bb-distributed-table" },
     { "path": "../bb-realtime" },
@@ -26,6 +27,7 @@
     { "path": "../bb-metrics" },
     { "path": "../bb-logger" },
     { "path": "../bb-tracer" },
-    { "path": "../bb-dashboard" }
+    { "path": "../bb-dashboard" },
+    { "path": "../bb-lambda-compute" }
   ]
 }

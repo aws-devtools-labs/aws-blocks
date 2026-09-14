@@ -8,7 +8,10 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
+import { isBlocksError } from '@aws-blocks/core';
 import { KVStore, KVStoreErrors } from './index.mock.js';
+import { KVStore as AwsKVStore } from './index.aws.js';
+import { TTL_ATTRIBUTE, nowEpochSeconds } from './ttl.js';
 import { z } from 'zod';
 
 beforeEach(() => {
@@ -114,5 +117,209 @@ describe('ifValueEquals: undefined is treated as no-op', () => {
 	test('delete with ifValueEquals: undefined on missing key succeeds silently', async () => {
 		const store = new KVStore({ id: 'root' } as any, 'undef-del-new');
 		await store.delete('nonexistent', { ifValueEquals: undefined } as any);
+	});
+});
+
+// TTL parity. DynamoDB's reaper is asynchronous, so an expired item can still
+// be physically present; both runtimes must therefore hide expired items on
+// read, and neither may write the `ttl` attribute unless asked. Divergence here
+// means code that self-expires sessions locally silently retains them in AWS.
+
+/**
+ * Capture what the AWS runtime would send to DynamoDB and control what it reads
+ * back, without touching the network. Real `KVStore`, real `PutCommand`.
+ */
+function captureAws(id: string, respond: () => any = () => ({})): {
+	store: AwsKVStore<string>;
+	items: () => any[];
+} {
+	const store = new AwsKVStore<string>({ id: 'root' } as any, id);
+	const sent: any[] = [];
+	(store as any).docClient.middlewareStack.add(
+		(_next: any) => async (args: any) => {
+			sent.push(args.input);
+			return { output: respond() };
+		},
+		{ step: 'initialize', name: 'kv-parity-intercept', override: true },
+	);
+	return { store, items: () => sent };
+}
+
+describe('TTL parity between mock and AWS runtimes', () => {
+	test('neither runtime writes a ttl attribute when none is requested', async () => {
+		const mock = new KVStore({ id: 'root' } as any, 'parity-no-ttl');
+		await mock.put('k', 'v');
+		assert.strictEqual(await mock.get('k'), 'v');
+
+		const { store, items } = captureAws('parity-no-ttl-aws');
+		await store.put('k', 'v');
+		assert.ok(!(TTL_ATTRIBUTE in items()[0].Item));
+	});
+
+	test('both runtimes hide an item whose expiry has passed', async () => {
+		const expired = nowEpochSeconds() - 1;
+
+		const mock = new KVStore({ id: 'root' } as any, 'parity-expired');
+		await mock.put('k', 'v', { expiresAt: expired });
+		assert.strictEqual(await mock.get('k'), null);
+
+		const { store } = captureAws('parity-expired-aws', () => ({
+			Item: { pk: 'k', value: JSON.stringify('v'), [TTL_ATTRIBUTE]: expired },
+		}));
+		assert.strictEqual(await store.get('k'), null);
+	});
+
+	test('both runtimes still return an item whose expiry is in the future', async () => {
+		const future = nowEpochSeconds() + 600;
+
+		const mock = new KVStore({ id: 'root' } as any, 'parity-live');
+		await mock.put('k', 'v', { expiresAt: future });
+		assert.strictEqual(await mock.get('k'), 'v');
+
+		const { store } = captureAws('parity-live-aws', () => ({
+			Item: { pk: 'k', value: JSON.stringify('v'), [TTL_ATTRIBUTE]: future },
+		}));
+		assert.strictEqual(await store.get('k'), 'v');
+	});
+
+	test('both runtimes skip expired items during scan', async () => {
+		const expired = nowEpochSeconds() - 1;
+
+		const mock = new KVStore({ id: 'root' } as any, 'parity-scan');
+		await mock.put('live', 'a');
+		await mock.put('dead', 'b', { expiresAt: expired });
+		const mockKeys: string[] = [];
+		for await (const { key } of mock.scan()) mockKeys.push(key);
+		assert.deepStrictEqual(mockKeys, ['live']);
+
+		const { store } = captureAws('parity-scan-aws', () => ({
+			Items: [
+				{ pk: 'live', value: JSON.stringify('a') },
+				{ pk: 'dead', value: JSON.stringify('b'), [TTL_ATTRIBUTE]: expired },
+			],
+		}));
+		const awsKeys: string[] = [];
+		for await (const { key } of store.scan()) awsKeys.push(key);
+		assert.deepStrictEqual(awsKeys, mockKeys);
+	});
+
+	test('both runtimes yield expired items during scan({ includeExpired })', async () => {
+		const expired = nowEpochSeconds() - 1;
+
+		const mock = new KVStore({ id: 'root' } as any, 'parity-scan-include');
+		await mock.put('live', 'a');
+		await mock.put('dead', 'b', { expiresAt: expired });
+		const mockKeys: string[] = [];
+		for await (const { key } of mock.scan({ includeExpired: true })) mockKeys.push(key);
+		assert.deepStrictEqual(mockKeys.sort(), ['dead', 'live']);
+
+		const { store } = captureAws('parity-scan-include-aws', () => ({
+			Items: [
+				{ pk: 'live', value: JSON.stringify('a') },
+				{ pk: 'dead', value: JSON.stringify('b'), [TTL_ATTRIBUTE]: expired },
+			],
+		}));
+		const awsKeys: string[] = [];
+		for await (const { key } of store.scan({ includeExpired: true })) awsKeys.push(key);
+		assert.deepStrictEqual(awsKeys.sort(), mockKeys.sort());
+	});
+
+	test('both runtimes reject the same invalid TTL options with the same error name', async () => {
+		const bad = [
+			{ ttlSeconds: 60, expiresAt: 123456 },
+			{ ttlSeconds: 0 },
+			{ ttlSeconds: -1 },
+			{ expiresAt: Date.now() },
+		] as const;
+
+		const mock = new KVStore({ id: 'root' } as any, 'parity-invalid');
+		const { store } = captureAws('parity-invalid-aws');
+
+		for (const options of bad) {
+			const label = JSON.stringify(options);
+			await assert.rejects(() => mock.put('k', 'v', options as any), (err: any) => {
+				assert.strictEqual(err.name, KVStoreErrors.ValidationFailed, `mock: ${label}`);
+				return true;
+			});
+			await assert.rejects(() => store.put('k', 'v', options as any), (err: any) => {
+				assert.strictEqual(err.name, KVStoreErrors.ValidationFailed, `aws: ${label}`);
+				return true;
+			});
+		}
+	});
+});
+
+// Conditional-write composition parity: the AWS runtime must emit an OR-composed
+// ConditionExpression when both ifNotExists and ifValueEquals are set, matching
+// the mock's behavior. A typo in the join or a missing name/value would slip
+// past the mock-only tests.
+describe('conditional-write composition (AWS PutCommand shape)', () => {
+	test('both conditions → attribute_not_exists(#pk) OR #value = :expected', () => {
+		const { store, items } = captureAws('parity-compose-both');
+		return store.put('k', 'next', { ifNotExists: true, ifValueEquals: 'prev' }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, 'attribute_not_exists(#pk) OR #value = :expected');
+			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#pk': 'pk', '#value': 'value' });
+			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': JSON.stringify('prev') });
+		});
+	});
+
+	test('ifNotExists alone → attribute_not_exists(#pk), no value attrs', () => {
+		const { store, items } = captureAws('parity-compose-absent');
+		return store.put('k', 'v', { ifNotExists: true }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, 'attribute_not_exists(#pk)');
+			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#pk': 'pk' });
+			assert.strictEqual(input.ExpressionAttributeValues, undefined);
+		});
+	});
+
+	test('ifValueEquals alone → #value = :expected, no #pk', () => {
+		const { store, items } = captureAws('parity-compose-value');
+		return store.put('k', 'v', { ifValueEquals: 'prev' }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, '#value = :expected');
+			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#value': 'value' });
+			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': JSON.stringify('prev') });
+		});
+	});
+
+	test('no conditions → no ConditionExpression', () => {
+		const { store, items } = captureAws('parity-compose-none');
+		return store.put('k', 'v').then(() => {
+			assert.strictEqual(items()[0].ConditionExpression, undefined);
+		});
+	});
+
+	test('explicit ifValueEquals: undefined is a no-op (matches the mock)', () => {
+		const { store, items } = captureAws('parity-compose-undef');
+		return store.put('k', 'v', { ifValueEquals: undefined }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, undefined);
+			assert.strictEqual(input.ExpressionAttributeValues, undefined);
+		});
+	});
+
+	test('ifValueEquals: null is a real condition → :expected = "null"', () => {
+		const { store, items } = captureAws('parity-compose-null');
+		return store.put('k', 'v', { ifValueEquals: null as unknown as string }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, '#value = :expected');
+			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': 'null' });
+		});
+	});
+
+	test('a rejected conditional write maps to KVStoreErrors.ConditionalCheckFailed', async () => {
+		// Stub DynamoDB to reject like a real failed condition; the compose path must
+		// surface the mapped, isBlocksError-matchable error (not the mock — the real client).
+		const { store } = captureAws('parity-compose-reject', () => {
+			const err = new Error('The conditional request failed');
+			err.name = 'ConditionalCheckFailedException';
+			throw err;
+		});
+		await assert.rejects(
+			() => store.put('k', 'next', { ifNotExists: true, ifValueEquals: 'prev' }),
+			(err: Error) => isBlocksError(err, KVStoreErrors.ConditionalCheckFailed),
+		);
 	});
 });

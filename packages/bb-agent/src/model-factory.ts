@@ -8,7 +8,7 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 // `./providers/canned` and `./providers/throwing` extend Strands' `Model`, so importing
 // them would evaluate `@strands-agents/sdk` at load time — hence they're also loaded
 // lazily inside createStrandsModel(). See issue #153.
-import type { ModelConfig } from './types.js';
+import type { CannedToolHints, ModelConfig } from './types.js';
 import { AgentErrors, blocksAgentError } from './errors.js';
 
 // TODO: validate model-specific inference config (e.g., some models don't support topP with temperature)
@@ -152,10 +152,10 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _t
  *
  * @see https://strandsagents.com/docs/user-guide/concepts/model-providers/
  */
-export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger): Promise<Model<BaseModelConfig>> {
+export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger, cannedHints?: Map<string, CannedToolHints>): Promise<Model<BaseModelConfig>> {
 	if (!config || config.provider === 'canned') {
 		const { CannedProvider } = await import('./providers/canned.js');
-		return new CannedProvider();
+		return new CannedProvider({ hints: cannedHints });
 	}
 
 	// Test-only provider — throws mid-stream to verify error handling

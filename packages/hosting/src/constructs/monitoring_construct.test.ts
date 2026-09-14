@@ -13,6 +13,9 @@
  *   - Thresholds and metric dimensions are correct (CloudFront metrics
  *     in `us-east-1`, the right namespaces, threshold values).
  *   - BYO SNS topic skips topic creation and reuses the supplied one.
+ *   - The auto-created topic is KMS-encrypted and its key policy
+ *     grants CloudWatch `kms:Decrypt` + `kms:GenerateDataKey*` —
+ *     without that grant alarm notifications are dropped silently.
  *
  * Driven by review feedback on PR #3220 — a 177-line construct with
  * zero tests.
@@ -291,6 +294,140 @@ void describe('MonitoringConstruct', () => {
           'each alarm should reference exactly one SNS action (the alarm topic)',
         );
       }
+    });
+  });
+
+  // ---- Alarm topic encryption (KMS) ----
+
+  // A CloudWatch alarm publishing to a KMS-encrypted SNS topic calls
+  // KMS *directly*; if the key policy has no `cloudwatch.amazonaws.com`
+  // statement the action fails with KMSAccessDenied and the
+  // notification is dropped silently (the alarm still shows ALARM).
+  // These tests are the regression guard for that grant.
+  void describe('alarm topic encryption', () => {
+    void it('encrypts the auto-created topic with a customer-managed key by default', () => {
+      const stack = createStack();
+      new MonitoringConstruct(stack, 'Monitoring', { enabled: true });
+      const template = Template.fromStack(stack);
+
+      template.resourceCountIs('AWS::KMS::Key', 1);
+      template.hasResourceProperties('AWS::SNS::Topic', {
+        KmsMasterKeyId: Match.anyValue(),
+      });
+    });
+
+    void it('grants cloudwatch.amazonaws.com kms:Decrypt and kms:GenerateDataKey* on the key', () => {
+      const stack = createStack();
+      new MonitoringConstruct(stack, 'Monitoring', { enabled: true });
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::KMS::Key', {
+        KeyPolicy: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Effect: 'Allow',
+              Principal: { Service: 'cloudwatch.amazonaws.com' },
+              Action: ['kms:Decrypt', 'kms:GenerateDataKey*'],
+              Resource: '*',
+            }),
+          ]),
+        },
+      });
+    });
+
+    void it('scopes the CloudWatch grant to this account without hard-failing when aws:SourceAccount is absent', () => {
+      const stack = createStack();
+      new MonitoringConstruct(stack, 'Monitoring', { enabled: true });
+      const template = Template.fromStack(stack);
+
+      // `IfExists` matters: aws:SourceAccount is only populated on
+      // direct service-principal calls, and a hard StringEquals would
+      // reintroduce the silent deny this grant exists to prevent.
+      template.hasResourceProperties('AWS::KMS::Key', {
+        KeyPolicy: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Principal: { Service: 'cloudwatch.amazonaws.com' },
+              Condition: {
+                StringEqualsIfExists: { 'aws:SourceAccount': '123456789012' },
+              },
+            }),
+          ]),
+        },
+      });
+    });
+
+    void it('keeps the account-root admin statement on the key', () => {
+      const stack = createStack();
+      new MonitoringConstruct(stack, 'Monitoring', { enabled: true });
+      const template = Template.fromStack(stack);
+
+      // The CloudWatch grant is additive — key administration must
+      // still be delegable to IAM in the owning account.
+      template.hasResourceProperties('AWS::KMS::Key', {
+        KeyPolicy: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Effect: 'Allow',
+              Action: 'kms:*',
+              Principal: { AWS: Match.anyValue() },
+            }),
+          ]),
+        },
+      });
+    });
+
+    void it('wires the alarm actions to the encrypted topic', () => {
+      const stack = createStack();
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        distribution: newDistribution(stack),
+      });
+      const template = Template.fromStack(stack);
+
+      assert.ok(m.encryptionKey, 'construct should expose the topic key');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const json = template.toJSON() as any;
+      const topicIds = Object.keys(json.Resources).filter(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (id) => (json.Resources[id] as any)['Type'] === 'AWS::SNS::Topic',
+      );
+      assert.strictEqual(topicIds.length, 1);
+      const encryptedTopicId = topicIds[0] as string;
+      assert.ok(
+        json.Resources[encryptedTopicId]['Properties']['KmsMasterKeyId'],
+        'the topic alarms publish to must be the encrypted one',
+      );
+
+      const alarm = Object.values(json.Resources).find(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (r: any) => r['Type'] === 'AWS::CloudWatch::Alarm',
+      );
+      assert.deepStrictEqual(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (alarm as any)['Properties']['AlarmActions'],
+        [{ Ref: encryptedTopicId }],
+      );
+    });
+
+    void it('creates no key for a BYO topic — the caller owns its encryption', () => {
+      const stack = createStack();
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        snsTopic: new Topic(stack, 'UserTopic'),
+      });
+      const template = Template.fromStack(stack);
+
+      template.resourceCountIs('AWS::KMS::Key', 0);
+      assert.strictEqual(m.encryptionKey, undefined);
+    });
+
+    void it('creates no key when monitoring is disabled', () => {
+      const stack = createStack();
+      new MonitoringConstruct(stack, 'Monitoring', { enabled: false });
+      const template = Template.fromStack(stack);
+
+      template.resourceCountIs('AWS::KMS::Key', 0);
     });
   });
 

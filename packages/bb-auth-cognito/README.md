@@ -439,6 +439,38 @@ if (hasAuthError(next, AuthCognitoErrors.NotAuthorized)) {
 
 Rule of thumb: **throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Never match on the human-facing `error` string.
 
+For the `setAuthState()` path, auth failures resolve to an error state instead
+of rejecting the promise. A non-retriable failure returns the normal signed-out
+state with the available sign-in actions plus `error` and, when available,
+`errorName`:
+
+```typescript
+{
+  state: 'signedOut',
+  actions: [/* sign-in actions */],
+  error: 'Incorrect username or password',
+  errorName: AuthCognitoErrors.NotAuthorized,
+}
+```
+
+Retriable challenge failures return a thin error state:
+
+```typescript
+{
+  state: 'signedOut',
+  actions: [],
+  error: 'Invalid code',
+  errorName: AuthCognitoErrors.CodeMismatch,
+  retriable: true,
+}
+```
+
+`CodeMismatchException` from `confirmSignIn` (for example, a wrong MFA or OTP
+code) is retriable: Cognito keeps the challenge session valid, so custom UI
+should keep the current challenge form and its hidden `session` fields in place
+and show the returned `error` inline. The built-in `Authenticator` already does
+that when it sees `retriable: true`.
+
 ## UI Components
 
 Use the provider-agnostic Authenticator from `@aws-blocks/auth-common/ui` — same shape as for `AuthBasic`:
@@ -520,6 +552,8 @@ Cognito scales automatically. Default quotas: 40 sign-ups/sec, 120 sign-ins/sec 
 ## Security Model
 
 AWS Blocks auth follows the BFF pattern: the browser sends `{username, password}` to the customer's Lambda over TLS; Lambda forwards to Cognito. The customer's Lambda is inside the user's trust boundary by design — same as `AuthBasic`, `AuthOIDC`, NextAuth, Devise, and every server-mediated auth library. Cognito tokens never reach the browser — instead, the BB issues an opaque HMAC-signed session cookie that maps to a server-side `SessionRecord` in a nested `KVStore`.
+
+The user pool client sets `PreventUserExistenceErrors: ENABLED`, so sign-in and forgot-password responses return a uniform error whether or not the username exists — closing the account-enumeration oracle Cognito exposes by default.
 
 See the auth-cognito technical design (see source repo) for the full architecture and mock-vs-AWS parity notes.
 

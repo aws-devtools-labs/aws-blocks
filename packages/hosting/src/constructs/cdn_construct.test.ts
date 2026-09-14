@@ -3655,6 +3655,42 @@ void describe('CdnConstruct — deploy-time invalidation', () => {
     assert.match(blob, /\\"Items\\":\[\\"\/\*\\"\]/);
   });
 
+  // createInvalidation is bundled in the Lambda runtime's SDK v3, and this
+  // resource fires on EVERY deploy — the CDK default (true) would npm-install
+  // the SDK at invoke time each time. The `resourceCountIs('Custom::AWS', 1)`
+  // below establishes the only Custom::AWS here IS DeployInvalidation.
+  void it('pins the invalidation resource to the bundled SDK (no install at invoke)', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    const { fn, fnUrl } = createSsrFunction(stack);
+
+    new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: ssrManifest,
+      securityHeadersPolicy: policy,
+      computeFunctionUrls: new Map([['default', fnUrl]]),
+      computeFunctions: new Map([['default', fn]]),
+    });
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('Custom::AWS', 1);
+    // Assert on the resource that actually carries createInvalidation, so this
+    // cannot pass off some unrelated future Custom::AWS.
+    const customAws = Object.values(template.findResources('Custom::AWS'))[0] as {
+      Properties: { Create?: unknown; Update?: unknown; InstallLatestAwsSdk?: unknown };
+    };
+    assert.match(
+      JSON.stringify(customAws.Properties.Update ?? customAws.Properties.Create ?? ''),
+      /createInvalidation/,
+    );
+    assert.strictEqual(customAws.Properties.InstallLatestAwsSdk, false);
+    template.hasResourceProperties(
+      'Custom::AWS',
+      Match.objectLike({ InstallLatestAwsSdk: false }),
+    );
+  });
+
   void it('grants only cloudfront:CreateInvalidation to the invalidation resource', () => {
     const stack = createStack();
     const bucket = new Bucket(stack, 'Bucket');

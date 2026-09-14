@@ -1,5 +1,63 @@
 # @aws-blocks/bb-email-client
 
+## 0.1.6
+
+### Patch Changes
+
+- Updated dependencies [df667c5]
+- Updated dependencies [df667c5]
+- Updated dependencies [64ddd74]
+- Updated dependencies [df667c5]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [4a830a6]
+- Updated dependencies [f2f186c]
+- Updated dependencies [46b7c89]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+
+## 0.1.5
+
+### Patch Changes
+
+- 309a236: refactor(bb): attach IAM grants to the shared execution role
+  
+  Data and auth blocks now grant permissions to the shared Blocks execution role
+  (`this.executionRole`) instead of the handler function directly. Grants land on
+  the same role the handler assumes, so the effective runtime permissions are
+  identical — this decouples IAM wiring from the concrete Lambda function ahead of
+  the multi-compute model.
+  
+  For `bb-distributed-data`, the DSQL endpoint and region now flow through the
+  config registry (loaded into `process.env` at cold start, like every other
+  block) rather than being set as direct handler environment variables, and the
+  migration Lambda maps the shared execution role's ARN.
+- Updated dependencies [5798492]
+- Updated dependencies [f00adb0]
+- Updated dependencies [f00adb0]
+- Updated dependencies [08ab129]
+- Updated dependencies [9d4ccea]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [0ac3879]
+- Updated dependencies [e4dac4a]
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/bb-logger@0.1.5
+
+## 0.1.4
+
+### Patch Changes
+
+- Updated dependencies [7b4c62d]
+- Updated dependencies [5262062]
+- Updated dependencies [3614a09]
+- Updated dependencies [5262062]
+- Updated dependencies [5071079]
+- Updated dependencies [8966cfb]
+- Updated dependencies [b11a75b]
+  - @aws-blocks/core@0.2.0
+  - @aws-blocks/bb-logger@0.1.4
+
 ## 0.1.3
 
 ### Patch Changes

@@ -10,6 +10,12 @@
   "references": [
     {
       "path": "../bb-logger"
+    },
+    {
+      "path": "../bb-distributed-table"
+    },
+    {
+      "path": "../bb-lambda-compute"
     }
   ]
 }

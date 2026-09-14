@@ -38,7 +38,9 @@ void main() async {
 
   group('KVStore: special characters in key');
   await blocks.api.kvPut(key: '${prefix}/slashes/and spaces!@#', value: 'ok');
-  final special = await blocks.api.kvGet(key: '${prefix}/slashes/and spaces!@#');
+  final special = await blocks.api.kvGet(
+    key: '${prefix}/slashes/and spaces!@#',
+  );
   check(special == 'ok', 'special chars in key (got: $special)');
 
   group('KVStore: delete');
@@ -48,8 +50,9 @@ void main() async {
   check(deleted == null, 'deleted key returns null');
 
   group('KVStore: parallel writes and reads');
-  final futures = List.generate(10, (i) =>
-    blocks.api.kvPut(key: '${prefix}_par_$i', value: 'val_$i'),
+  final futures = List.generate(
+    10,
+    (i) => blocks.api.kvPut(key: '${prefix}_par_$i', value: 'val_$i'),
   );
   final results = await Future.wait(futures);
   check(results.every((r) => r.success), 'all 10 parallel writes succeeded');

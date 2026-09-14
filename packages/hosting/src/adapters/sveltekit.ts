@@ -36,6 +36,7 @@ import semver from 'semver';
 import { createJiti } from 'jiti';
 import { getPackageInfoSync } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
+import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import type {
   ComputeResource,
   DeployManifest,
@@ -790,7 +791,7 @@ const buildManifest = (input: {
       entrypoint: RUN_SH_FILENAME,
       port: SVELTEKIT_SERVER_PORT,
       placement: 'regional',
-      runtime: 'nodejs20.x',
+      runtime: FRAMEWORK_COMPUTE_RUNTIME,
       /* eslint-disable @typescript-eslint/naming-convention */
       environment: {
         // Behind CloudFront the SSR server must reconstruct the public origin

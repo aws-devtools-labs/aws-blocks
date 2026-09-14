@@ -112,4 +112,58 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     assert.ok(stdout.includes('[rpc-ok] testApi.pingVoid'), `Missing verbose success log. stdout: ${stdout}`);
     assert.ok(!stdout.includes('[rpc-err]'), `Unexpected RPC error log. stdout: ${stdout}`);
   });
+
+  it('returns a JSON usage hint (not an empty body) for a GET on the API path', async () => {
+    const port = await getAvailablePort();
+    tempDir = join(tmpdir(), `dev-404-test-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(join(tempDir, 'backend.ts'), `
+export const testApi = {
+  pingVoid: async () => undefined,
+};
+`);
+    writeFileSync(join(tempDir, 'preload.mjs'), `
+if (!process.loadEnvFile) {
+  process.loadEnvFile = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+}
+`);
+    writeFileSync(join(tempDir, 'run-dev.ts'), `
+import { startDevServer } from '${join(__dirname, 'dev-server.js').replace(/\\/g, '/')}';
+startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')}', port: ${port} });
+`);
+
+    const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
+    devProcess = spawn(tsxBin, ['--import', join(tempDir, 'preload.mjs'), join(tempDir, 'run-dev.ts')], {
+      cwd: tempDir,
+      env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    devProcess.stdout?.on('data', chunk => { stdout += chunk.toString(); });
+    devProcess.stderr?.on('data', chunk => { stderr += chunk.toString(); });
+
+    // A GET on the API path (e.g. opening it in a browser) hits the API handler
+    // but not the POST branch — the exact case that used to return an empty 404.
+    const deadline = Date.now() + 15_000;
+    let response: Response | undefined;
+    let lastError: unknown;
+    while (!response && Date.now() < deadline) {
+      try {
+        response = await fetch(`http://127.0.0.1:${port}/aws-blocks/api`, { method: 'GET' });
+      } catch (error) {
+        lastError = error;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    assert.ok(response, `Dev server did not respond: ${String(lastError)}\nstdout: ${stdout}\nstderr: ${stderr}`);
+    assert.strictEqual(response.status, 404);
+    assert.strictEqual(response.headers.get('content-type'), 'application/json');
+    const payload = await response.json() as { error?: string; expected?: { method?: string; path?: string } };
+    assert.match(payload.error ?? '', /POST/, `404 body should hint at the POST requirement: ${JSON.stringify(payload)}`);
+    assert.strictEqual(payload.expected?.method, 'POST');
+    assert.strictEqual(payload.expected?.path, '/aws-blocks/api');
+  });
 });

@@ -34,6 +34,26 @@ function logCodeLocally(message: string): void {
   if (!isDeployedLambda) console.log(message);
 }
 
+// Shared by the record readers below. A record we cannot parse is worth no more
+// than a missing one: report it as absent so the caller's poller keeps waiting
+// and times out on its own message, rather than failing the test with a JSON
+// syntax error. An empty string is treated the same way.
+//
+// Absent is not silent though: a corrupt record means a bad write, which is a
+// real bug and not the race the pollers exist to absorb, so warn with the key
+// that failed. The value and the parser message are deliberately left out — the
+// message quotes the input it choked on, and these records hold verification
+// codes, which must never reach CloudWatch (see `logCodeLocally` above).
+function parseStoredRecord<T>(key: string, raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    console.warn(`[test-app] ignoring unparseable record at "${key}" (${raw.length} bytes) — treating it as absent`);
+    return null;
+  }
+}
+
 // ============================================================================
 // Building Block Instances
 // ============================================================================
@@ -85,8 +105,8 @@ async function recordDeliveredCode(channel: string, value: DeliveredCode | Deliv
 }
 
 async function readDeliveredCode<T extends DeliveredCode>(channel: string, username: string): Promise<T | null> {
-  const raw = await store.get(codeKey(channel, username));
-  return raw === null ? null : (JSON.parse(raw) as T);
+  const key = codeKey(channel, username);
+  return parseStoredRecord<T>(key, await store.get(key));
 }
 
 async function purgeDeliveredCodes(): Promise<number> {
@@ -160,7 +180,37 @@ const authCMfa = new AuthCognito(scope, 'authCMfa', {
 
 // AuthOIDC - OIDC sign-in gate
 // Uses the stub IdP in mock runtime — no real IdP needed for local tests.
-let lastOidcSignInUser: { userId: string; email: string | null; provider: string } | null = null;
+//
+// ── Sign-in records (e2e read-back) ─────────────────────────────────────────
+//
+// `onSignIn` runs while the OIDC callback is being served; the e2e reads the
+// result back over a later, separate request. A module-level variable cannot
+// carry it: in a deployed environment those two requests may be served by
+// different Lambda instances, so the reader either sees its own `null` or the
+// record of whoever signed in last, on either instance. The second case is
+// worse than a failure because it can pass by accident.
+//
+// Persist to the shared KVStore keyed by `userId` and scoped per AuthOIDC
+// instance, and require `userId` on the read, so a test can only ask for the
+// sign-in it is actually waiting on.
+//
+// These keys are bounded, unlike the verification codes: the stub IdP returns a
+// fixed user per provider, so each sign-in overwrites its own record.
+
+const oidcProfiles = new KVStore(scope, 'oidc-profiles');
+
+type SignInRecord = { userId: string; email: string | null; provider: string };
+
+const signInKey = (instance: string, userId: string) => `signin:${instance}:${userId}`;
+
+async function recordSignIn(instance: string, user: SignInRecord): Promise<void> {
+  await oidcProfiles.put(signInKey(instance, user.userId), JSON.stringify(user));
+}
+
+async function readSignIn(instance: string, userId: string): Promise<SignInRecord | null> {
+  const key = signInKey(instance, userId);
+  return parseStoredRecord<SignInRecord>(key, await oidcProfiles.get(key));
+}
 
 const oidcProviders = [
   stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
@@ -170,16 +220,13 @@ const oidcProviders = [
 const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
   providers: oidcProviders,
   onSignIn: async (user) => {
-    lastOidcSignInUser = { userId: user.userId, email: user.email, provider: user.provider };
+    await recordSignIn('oidc-auth', { userId: user.userId, email: user.email, provider: user.provider });
   },
 });
 
 // AuthOIDC (second instance) — exercises the onSignIn hook with a profile
 // upsert pattern and bearer-token auth for native clients. Uses custom paths
 // to avoid colliding with the first instance.
-const oidcProfiles = new KVStore(scope, 'oidc-profiles');
-let lastExtrasSignInUser: { userId: string; email: string | null; provider: string } | null = null;
-
 const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
   providers: [
     stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] }),
@@ -191,7 +238,7 @@ const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
   // alongside the user, and /aws-blocks/auth/extras/refresh renews tokens.
   allowBearerAuth: true,
   onSignIn: async (user) => {
-    lastExtrasSignInUser = { userId: user.userId, email: user.email, provider: user.provider };
+    await recordSignIn('oidc-auth-extras', { userId: user.userId, email: user.email, provider: user.provider });
     // Upsert profile — the canonical post-sign-in pattern.
     await oidcProfiles.put(`profile:${user.userId}`, JSON.stringify({
       userId: user.userId,
@@ -239,20 +286,24 @@ const itemSchema = z.object({
 
 const table = new DistributedTable(scope, 'items', {
   schema: itemSchema,
-  key: { 
-    partitionKey: 'pk', 
-    sortKey: 'sk' 
+  key: {
+    partitionKey: 'pk',
+    sortKey: 'sk'
   },
   indexes: {
-    byTimestamp: { 
-      partitionKey: 'pk', 
+    byTimestamp: {
+      partitionKey: 'pk',
       sortKey: 'timestamp'
     },
     bySk: {
       partitionKey: 'pk',
       sortKey: 'sk'
     }
-  }
+  },
+  // No per-block `protection`: durability follows the stack-wide `defaults`,
+  // which this E2E app sets to `BlocksPresets.sandbox` (DESTROY + no deletion
+  // protection) so `cdk destroy` tears everything down cleanly. See
+  // aws-blocks/index.cdk.ts.
 });
 
 // DistributedTable with TTL
@@ -267,6 +318,28 @@ const ttlTable = new DistributedTable(scope, 'ttl-items', {
   schema: ttlSchema,
   key: { partitionKey: 'pk', sortKey: 'sk' },
   ttl: 'expiresAt',
+  // Durability follows the stack `defaults` (sandbox preset) — see 'items' above.
+});
+
+// Secure-defaults coverage on a REAL deploy (review comment #6): a table that
+// carries PITR (with a narrowed window) + SSE alongside a GSI, so the GSI
+// custom resource's UpdateTable and the table's durability configuration
+// provision together on AWS — not just in a synth template.
+//
+// Durability (removal policy + deletion protection) follows the stack `defaults`
+// (this E2E app's sandbox preset → DESTROY + unprotected), so the table tears
+// down cleanly — no orphaned `test-app-secure-items` blocking the next run.
+// Only PITR is overridden per-block, since that's the durability prop we're
+// exercising on the deploy path. (The 'locked'/deletion-protection case is
+// covered by the CDK synth tests — a deletion-protected table would by design
+// block `cdk destroy`, so it can't live in an auto-torn-down E2E stack.)
+const secureTable = new DistributedTable(scope, 'secure-items', {
+  schema: itemSchema,
+  key: { partitionKey: 'pk', sortKey: 'sk' },
+  indexes: {
+    byTimestamp: { partitionKey: 'pk', sortKey: 'timestamp' },
+  },
+  pointInTimeRecovery: { retentionDays: 7 },
 });
 
 // Realtime - Typed pub/sub channels (same as template-default cursor demo)
@@ -318,6 +391,27 @@ const validatedJob = new AsyncJob(scope, 'validated-job', {
       subject: payload.subject,
       jobId: ctx.jobId,
     }));
+  },
+});
+
+// AsyncJob with trackStatus - exercises the status table (DynamoDB when deployed).
+// The handler settles immediately on purpose: the transition history is what makes
+// the intermediate `processing` state observable, so there is no delay to widen it.
+const trackedJob = new AsyncJob(scope, 'tracked-job', {
+  trackStatus: true,
+  handler: async (payload: { key: string; value: string }) => {
+    await jobResults.put(`tracked:${payload.key}`, payload.value);
+  },
+});
+
+// Failure path for status tracking. maxRetries: 1 makes the first failure terminal
+// in both runtimes, so `failed` is recorded on the only delivery and the test does
+// not depend on redrive timing.
+const trackedFailingJob = new AsyncJob(scope, 'tracked-failing-job', {
+  trackStatus: true,
+  maxRetries: 1,
+  handler: async (payload: { reason: string }) => {
+    throw new Error(`tracked job failed on purpose: ${payload.reason}`);
   },
 });
 
@@ -891,7 +985,24 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async ttlTableGet(...args: Parameters<typeof ttlTable.get>) {
     return await ttlTable.get(...args);
   },
-  
+
+  // Secure-defaults table (PITR + GSI on a real deploy) — read/write proves
+  // the table is functional; the durability config is asserted AWS-side.
+  async secureTablePut(...args: Parameters<typeof secureTable.put>) {
+    await secureTable.put(...args);
+    return { success: true };
+  },
+
+  async secureTableGet(...args: Parameters<typeof secureTable.get>) {
+    return await secureTable.get(...args);
+  },
+
+  async secureTableQuery(...args: Parameters<typeof secureTable.query>) {
+    const results = [];
+    for await (const item of secureTable.query(...args)) results.push(item);
+    return results;
+  },
+
   // ------------------------------------------------------------------------
   // Auth Tests
   // ------------------------------------------------------------------------
@@ -1282,8 +1393,17 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async oidcGetLastSignInUser() {
-    return lastOidcSignInUser;
+  /**
+   * Read back the sign-in record `onSignIn` wrote for `userId`, or `null` if
+   * that user has not signed in through this instance.
+   *
+   * `userId` is required. The hook fires on a different request than this read,
+   * so "whoever signed in last" is not a safe question to ask: the answer can
+   * be another user, or another AuthOIDC instance's user, and the test would
+   * pass on the wrong record.
+   */
+  async oidcGetLastSignInUser(userId: string) {
+    return await readSignIn('oidc-auth', userId);
   },
 
   async oidcGetProviders() {
@@ -1299,8 +1419,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { userId: user.userId, email: user.email, name: user.name, provider: user.provider, sub: user.sub, iss: user.iss };
   },
 
-  async oidcExtrasGetLastSignInUser() {
-    return lastExtrasSignInUser;
+  /** Read back the sign-in record for `userId`. See `oidcGetLastSignInUser`. */
+  async oidcExtrasGetLastSignInUser(userId: string) {
+    return await readSignIn('oidc-auth-extras', userId);
   },
 
   async oidcExtrasGetProfile(userId: string) {
@@ -1720,10 +1841,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async asyncJobSubmitBatchTooMany() {
-    const items = Array.from({ length: 11 }, (_, i) => ({ key: `k${i}`, value: `v${i}` }));
-    await testJob.submitBatch(items);
-    return { success: true };
+  async asyncJobSubmitLargeBatch() {
+    // More than one SQS SendMessageBatch worth of items: submitBatch must
+    // auto-chunk and return a jobId per item.
+    const items = Array.from({ length: 25 }, (_, i) => ({ key: `k${i}`, value: `v${i}` }));
+    const { jobIds } = await testJob.submitBatch(items);
+    return { jobIds };
   },
 
   async asyncJobSubmitDelayed(key: string, value: string, delaySeconds: number) {
@@ -1749,6 +1872,37 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async asyncJobSubmitBatchDelayed(items: { key: string; value: string }[], delaySeconds: number) {
     const { jobIds } = await testJob.submitBatch(items, { delaySeconds });
     return { jobIds };
+  },
+
+  // ------------------------------------------------------------------------
+  // AsyncJob status tracking (trackStatus) Tests
+  // ------------------------------------------------------------------------
+
+  async asyncJobStatusSubmit(key: string, value: string) {
+    const { jobId } = await trackedJob.submit({ key, value });
+    return { jobId };
+  },
+
+  async asyncJobStatusSubmitBatch(items: Array<{ key: string; value: string }>) {
+    const { jobIds } = await trackedJob.submitBatch(items);
+    return { jobIds };
+  },
+
+  async asyncJobStatusGet(jobId: string) {
+    return trackedJob.getStatus(jobId);
+  },
+
+  async asyncJobStatusWait(jobId: string, timeoutMs: number) {
+    return trackedJob.waitUntilComplete(jobId, { timeoutMs });
+  },
+
+  async asyncJobStatusSubmitFailing(reason: string) {
+    const { jobId } = await trackedFailingJob.submit({ reason });
+    return { jobId };
+  },
+
+  async asyncJobStatusWaitFailing(jobId: string, timeoutMs: number) {
+    return trackedFailingJob.waitUntilComplete(jobId, { timeoutMs });
   },
 
   // ------------------------------------------------------------------------
