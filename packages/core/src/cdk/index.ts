@@ -76,7 +76,14 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
 	_defaultCompute?: Compute;
 
-	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
+	/**
+	 * The default compute's Lambda function.
+	 * @deprecated An app can run on more than one compute, so a single
+	 * stack-level Lambda is no longer a meaningful handle. For IAM grants and
+	 * policies use {@link executionRole} — the shared role every compute assumes
+	 * — e.g. `queue.grantSendMessages(stack.executionRole)`. Removed in a future
+	 * release, once the public compute-configuration surface lands.
+	 */
 	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
 		return this.requireDefaultCompute().fn;
 	}
@@ -220,6 +227,14 @@ export class Scope extends Construct {
 		return (globalThis as any).CURRENT_BLOCKS_STACK as BlocksStack | BlocksBackend;
 	}
 
+	/**
+	 * The default compute's Lambda function, resolved through the owning
+	 * stack/backend.
+	 * @deprecated A Building Block can run on any compute, so the stack's default
+	 * Lambda is not a reliable handle. Grant permissions on
+	 * {@link executionRole} (the shared role every compute assumes) and reach the
+	 * block's own compute via {@link compute}. Removed in a future release.
+	 */
 	get handler() {
 		return this.root.handler;
 	}
