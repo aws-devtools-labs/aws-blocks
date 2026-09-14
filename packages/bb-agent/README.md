@@ -804,7 +804,84 @@ await chat.sendMessage('Hello!');
 await chat.loadConversation('conv-123');
 ```
 
-### 2. Support Agent with Tools
+The example above is framework-agnostic on purpose — `useChat` has no React import and works with any UI layer. The two examples below show how to bridge it into a specific framework's reactivity.
+
+### 2. React: hold the instance once, drive `useState` from the callbacks
+
+`useChat` is a factory, not a React hook, so it must **not** run on every render — recreating it drops the WebSocket subscription and conversation state each time. Hold the single instance in a `useRef` (created lazily so it survives re-renders), and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes:
+
+```tsx
+'use client'; // Next.js only — see the note below. Plain React (Vite/CRA) can omit this.
+
+import { useRef, useState, useEffect } from 'react';
+import { useChat, type ChatMessage } from '@aws-blocks/bb-agent/client';
+import { api } from './api'; // your generated aws-blocks API client
+
+export function Chat() {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [input, setInput] = useState('');
+
+  // Create the instance exactly once. The ref survives every re-render,
+  // so the subscription and conversation state are never torn down.
+  const chatRef = useRef<ReturnType<typeof useChat>>();
+  if (!chatRef.current) {
+    chatRef.current = useChat({
+      api: {
+        sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId),
+        createConversation: () => api.createConversation(),
+        getConversation: (id) => api.getConversation(id),
+      },
+      subscribe: async (channelId, handler) => {
+        const channel = await api.getChannel(channelId);
+        return channel.subscribe(handler);
+      },
+      // Bridge the mutable instance into React state — these fire on every change.
+      onMessagesChange: setMessages,
+      onLoadingChange: setIsLoading,
+    });
+  }
+  const chat = chatRef.current;
+
+  // Tear down the WebSocket subscription when the component unmounts.
+  useEffect(() => () => chat.destroy(), [chat]);
+
+  async function handleSend(e: React.FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || isLoading) return;
+    setInput('');
+    await chat.sendMessage(text);
+  }
+
+  return (
+    <div>
+      <ul>
+        {messages.map((m) => (
+          <li key={m.id} data-role={m.role}>
+            <strong>{m.role}:</strong> {m.content}
+          </li>
+        ))}
+      </ul>
+      <form onSubmit={handleSend}>
+        <input value={input} onChange={(e) => setInput(e.target.value)} disabled={isLoading} />
+        <button type="submit" disabled={isLoading}>Send</button>
+      </form>
+    </div>
+  );
+}
+```
+
+Key points:
+
+- **One instance, held in a ref.** `useRef` + the lazy `if (!chatRef.current)` guard is the React idiom for "construct once." Never call `useChat(...)` directly in the render body — that is the footgun the factory note warns about.
+- **Callbacks are your reactivity bridge.** `useChat` mutates its own message list in place; `onMessagesChange` / `onLoadingChange` hand you the new value so you can `setState` and trigger a render. Passing `setMessages` / `setIsLoading` directly is enough.
+- **Clean up on unmount** with `chat.destroy()` in a `useEffect` cleanup, so the Realtime subscription is closed.
+- **Approvals:** add `onInterrupt: setInterrupts` (with a `const [interrupts, setInterrupts] = useState([])`) to render an approval UI, then call `chat.respondToInterrupt([{ interruptId, approved: true }])`.
+
+**Next.js:** this is the same component — just keep the `'use client'` directive at the top of the file. `useChat` opens a browser WebSocket and holds client state, so it must run in a Client Component, never a Server Component. No other changes are needed.
+
+### 3. Support Agent with Tools
 
 Agent with tools that can look up orders and search documentation. Uses tool context to scope queries to the authenticated user.
 
