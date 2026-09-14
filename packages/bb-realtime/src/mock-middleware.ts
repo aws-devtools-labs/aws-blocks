@@ -147,8 +147,16 @@ function doConnect(wsUrl: string, isReconnect = false) {
 			// therefore suppressed there. aws-middleware.ts now mirrors this via its
 			// intentionalClose flag instead of the old close-code classification.
 			conn.isConnected = false;
+			// Fire onDisconnect for this drop but KEEP the handlers registered, so a
+			// SECOND drop on the same logical subscription notifies again — matching
+			// aws-middleware.ts's every-drop contract (its onclose keeps
+			// disconnectHandlers intact on the reconnecting branch and clears them only
+			// on a terminal close). Genuine teardown still clears these elsewhere:
+			// scheduleReconnect's tornDown/subscriptions.size guard stops the reconnect,
+			// unsubscribe() removes the handler, and __resetConnectionsForTest() clears
+			// the set. (Previously this cleared unconditionally, so onDisconnect fired
+			// only on the FIRST drop locally — a mock↔AWS parity gap.)
 			conn.disconnectHandlers.forEach(h => { try { h('unknown'); } catch {} });
-			conn.disconnectHandlers.clear();
 			scheduleReconnect(wsUrl);
 		};
 		conn.ws.onerror = (e) => {
