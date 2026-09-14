@@ -660,3 +660,38 @@ Most validators discard unrecognized keys when they produce their output (Zod `.
 - Issue #1007; PR #283 (this change), review threads from @soberm and @sarayev.
 - Per-BB mechanics: `packages/bb-distributed-table/DESIGN.md` D-DT-9.
 - Code: `packages/bb-distributed-table/src/{types.ts, errors.ts, index.aws.ts, index.mock.ts}`.
+
+## D-006: Off-region CloudFront alarm is always-on, with warn-and-skip when the account is unresolved
+
+**Date**: 2026-09-14
+**Authors:** sarayev
+
+### Context
+`AWS/CloudFront` metrics publish only in us-east-1, and a CloudWatch alarm can only evaluate a metric in its own region (rejected by aws-cdk-lib at synth). So Hosting's `CloudFront5xxRate` alarm cannot live in an off-region stack — off-region it is placed in a synthesized us-east-1 support stack (`<stackName>-CfMonitoring-<addr>`) that owns its own KMS-encrypted SNS topic. Building that cross-region support stack requires a **concrete account at synth time**: CDK's cross-region export writer/reader machinery bakes real ARNs into the template, and a token account (`Aws.ACCOUNT_ID` / `Ref: AWS::AccountId`, the value an environment-agnostic stack carries) is rejected. See issue #481.
+
+Two edge cases have no valid us-east-1 stack we can synthesize:
+1. **Region resolved, account unresolved** — a legitimate single-synth, multi-account pipeline shape (deploy one template to many accounts).
+2. **Region unresolved** (fully env-agnostic) — we can't decide at synth whether the deploy target is us-east-1, so we can't know whether a local alarm is even wrong.
+
+### Decision
+Off-region CloudFront alarm placement is **always on — there is no opt-out prop** (the removed `monitoring.cloudFrontAlarm: 'skip' | 'usEast1Stack'`). The notification surface is `monitoring.subscriptions` (endpoint subscriptions applied to every alarm topic) plus `hosting.monitoring.alarms` (raw alarms for custom handling).
+
+For the two edge cases above we **warn and skip only the CloudFront alarm** rather than throw:
+- **Unresolved account** (region resolved, off-region): skip the CloudFront alarm, emit a loud synth warning, and keep every other alarm. Do NOT hard-throw.
+- **Unresolved region** (env-agnostic): create the alarm locally (best effort) but emit a synth warning that it will never fire if the app deploys outside us-east-1.
+
+### Rationale
+- **"No opt-out" is the right default** because #481 was a *silent* dead alarm — a knob to turn it off invites exactly the silent gap we are fixing.
+- **But a hard throw is too blunt for the unresolved-account case.** The earlier revision threw `MonitoringEnvRequiredError`, whose only escape was `monitoring.enabled: false` — which also drops the working regional SSR/image/DLQ alarms. That punishes a valid pipeline shape (ambient account) by taking down unrelated, correct monitoring.
+- **A loud synth warning is not the #481 failure mode.** #481 was invisible: the alarm read healthy and never fired. A warning in build output is the opposite — the operator is told plainly what is missing and how to get it (`env: { account, region }`). So warn-and-skip preserves the "no silent gap" principle without the collateral damage.
+- We cannot fill the account ourselves: `Stack.of(this).account` returns the same unresolved token, and forwarding it just moves the CDK cross-region synth error one line down.
+
+### Alternatives Considered
+- **Hard-throw `MonitoringEnvRequiredError` (previous revision):** rejected — takes down all monitoring for a valid pipeline shape; see Rationale.
+- **Keep a `cloudFrontAlarm: 'skip'` opt-out prop (original design):** rejected — a general opt-out re-opens the silent-gap risk #481 is about; the warn-and-skip is narrow (only the genuinely-impossible cases), not a user knob.
+- **Support resource-target (Lambda/SQS) subscriptions in `subscriptions`:** deferred — a Lambda/SQS target in the app-region stack applied to the us-east-1 topic is an unresolvable cross-region reference. `subscriptions` is scoped to endpoint types (`EmailSubscription`/`UrlSubscription`); resource targets use `hosting.monitoring.alarms` / `alarmTopics` instead. Widening later (e.g. via a forwarder) is non-breaking.
+
+### References
+- Issue #481; PR #488
+- AWS CDK `Environment` docs: cross-stack references "require concrete region information and will cause this stack to emit synthesis errors."
+- `packages/hosting/src/constructs/hosting_construct.ts` (monitoring wiring), `us_east_1_monitoring_stack.ts`

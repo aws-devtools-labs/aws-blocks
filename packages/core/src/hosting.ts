@@ -701,12 +701,10 @@ export class Hosting extends Construct {
       logging: props.logging,
       buildCache: props.buildCache,
       errorPages: skipPropsErrorPages ? undefined : props.errorPages,
-      monitoring: props.monitoring
-        ? {
-            ...props.monitoring,
-            // subscriptions and enabled flow through as-is to the L3.
-          }
-        : undefined,
+      // subscriptions and enabled flow straight through to the L3; the
+      // core layer adds nothing here beyond the monitoringTopic → monitoring
+      // surface rename on the output side.
+      monitoring: props.monitoring,
       skewProtection: props.skewProtection,
     };
 

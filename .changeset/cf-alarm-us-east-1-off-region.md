@@ -29,9 +29,21 @@ no opt-out.
 
 Migration: replace `monitoring: { snsTopicArn }` with
 `monitoring: { subscriptions: [new subs.EmailSubscription('oncall@example.com')] }`
-(or a `UrlSubscription`). Resource-target subscriptions (Lambda/SQS) are not
-yet supported off-region; for those, attach a custom alarm action via
-`hosting.monitoring.alarms` instead.
+(or a `UrlSubscription`). Two escape paths cover what `subscriptions` no
+longer does directly:
+
+- **Route alarms to an existing/central SNS topic:**
+  `hosting.monitoring.alarms.forEach(a => a.addAlarmAction(new cw_actions.SnsAction(myTopic)))`.
+- **Resource-target (Lambda/SQS) subscriptions:** still valid on the
+  regional topic via `hosting.monitoring.alarmTopics[].addSubscription(...)`.
+  Only the automatic cross-region fan-out to the us-east-1 CloudFront topic
+  drops them (that would need an unresolvable cross-region reference).
+
+Off-region CloudFront alarm placement is always on and requires
+`env: { account, region }`. When the region resolves but the account is
+unresolved (a single-synth multi-account pipeline), the CloudFront alarm is
+skipped with a loud synth warning rather than throwing — all other alarms
+are unaffected. See `docs/DECISIONS.md` D-006.
 
 `@aws-blocks/core` surfaces `monitoring.subscriptions` and the
 `monitoring` attribute in place of `monitoringTopic`.

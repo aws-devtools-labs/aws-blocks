@@ -56,7 +56,7 @@ export type UsEast1MonitoringStackProps = StackProps & {
 export class UsEast1MonitoringStack extends Stack {
   /** The us-east-1 topic the CloudFront alarm publishes to. */
   readonly topic: ITopic;
-  /** KMS key encrypting the auto-created topic (undefined for a BYO topic). */
+  /** KMS key encrypting the auto-created topic. */
   readonly encryptionKey?: IKey;
   /** The CloudFront 5xx alarm. */
   readonly alarm: Alarm;

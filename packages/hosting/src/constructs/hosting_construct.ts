@@ -38,7 +38,7 @@ import type {
   EmailSubscription,
   UrlSubscription,
 } from 'aws-cdk-lib/aws-sns-subscriptions';
-import { Alarm } from 'aws-cdk-lib/aws-cloudwatch';
+import type { Alarm } from 'aws-cdk-lib/aws-cloudwatch';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { Provider } from 'aws-cdk-lib/custom-resources';
@@ -1175,10 +1175,33 @@ export class HostingConstruct extends Construct {
       // CloudFront metrics only exist in us-east-1 and an alarm can't
       // watch a metric cross-region (issue #481). Off-region, defer the
       // CloudFront alarm to a dedicated us-east-1 support stack.
+      //
+      // NOTE on the three region cases:
+      //   - region === 'us-east-1'      → alarm created locally (correct).
+      //   - region resolved, off-region → alarm deferred to the us-east-1
+      //     support stack below.
+      //   - region UNRESOLVED (token)   → we cannot decide at synth where
+      //     the app deploys, so the alarm is created locally. If that
+      //     deploy target turns out NOT to be us-east-1, the alarm can
+      //     never fire (the #481 bug). We can't fix that at synth, but we
+      //     refuse to do it silently — warn so it's visible in build
+      //     output rather than a green-but-dead alarm.
       const hostingStack = Stack.of(this);
       const region = hostingStack.region;
       const regionResolved = !Token.isUnresolved(region);
       const offRegion = regionResolved && region !== 'us-east-1';
+
+      if (!regionResolved && this.distribution) {
+        Annotations.of(this).addWarningV2(
+          '@aws-blocks/hosting:CloudFrontAlarmRegionUnresolved',
+          `The hosting stack is environment-agnostic (region is an ` +
+            `unresolved token), so the CloudFront 5xx alarm is created ` +
+            `locally. AWS/CloudFront metrics only publish in us-east-1 — ` +
+            `if this app deploys outside us-east-1 the alarm will never ` +
+            `fire. Set env: { account, region } on the stack so the alarm ` +
+            `can be placed in a us-east-1 support stack (issue #481).`,
+        );
+      }
 
       const monitoring = new MonitoringConstruct(this, 'Monitoring', {
         enabled: true,
@@ -1208,36 +1231,47 @@ export class HostingConstruct extends Construct {
       // covered.
       if (this.distribution && monitoring.cloudFrontAlarmDeferred) {
         if (Token.isUnresolved(hostingStack.account)) {
-          // A cross-region stack needs a concrete account. Fail loud
-          // rather than silently drop CloudFront monitoring.
-          throw new HostingError('MonitoringEnvRequiredError', {
-            message:
-              `The off-region CloudFront alarm requires an explicit ` +
-              `env: { account, region } on the stack (region '${region}'), ` +
-              `because the CloudFront alarm must be placed in a separate ` +
-              `us-east-1 stack.`,
-            resolution:
-              `Add env: { account, region } to the Stack.`,
-          });
-        }
-        // Belt-and-suspenders: only reachable for a Hosting construct with no enclosing App/Stage
-        // (CDK's App extends Stage, so Stage.of(this) resolves in normal use). Fail loud rather
-        // than synthesize a mis-scoped us-east-1 support stack.
-        const stage = Stage.of(this);
-        if (!stage) {
-          throw new HostingError('MonitoringStageRequiredError', {
-            message:
-              `Cannot create the us-east-1 CloudFront monitoring stack: no ` +
-              `enclosing App/Stage was found for this construct.`,
-            resolution:
-              `Instantiate hosting within a CDK App (or Stage).`,
-          });
-        }
-        // The us-east-1 CloudFront alarm must reference the regional
-        // distribution's id; CDK bridges that with its standard
-        // cross-region export reader/writer custom resources (added to
-        // both stacks automatically). The support stack applies the same
-        // subscriptions to its own us-east-1 topic. Its id folds in the
+          // Off-region + unresolved account (a legitimate single-synth,
+          // multi-account pipeline shape): we CANNOT build the us-east-1
+          // support stack, because a cross-region stack pairing needs a
+          // concrete account at synth (CDK bakes real ARNs into the
+          // cross-region export machinery; Aws.ACCOUNT_ID / Ref is
+          // rejected — see docs/DECISIONS.md D-006).
+          //
+          // Rather than hard-throw (which forced monitoring.enabled:false
+          // and took down the working regional SSR/image/DLQ alarms too),
+          // skip ONLY the CloudFront alarm and warn loudly. A visible
+          // synth warning is not the silent-alarm failure #481 is about —
+          // the operator is told, in build output, exactly what is missing
+          // and how to get it (set env: { account, region }).
+          Annotations.of(this).addWarningV2(
+            '@aws-blocks/hosting:CloudFrontAlarmSkippedNoAccount',
+            `Skipping the off-region CloudFront 5xx alarm: the stack's ` +
+              `region is '${region}' but its account is unresolved, and a ` +
+              `us-east-1 support stack cannot be synthesized without a ` +
+              `concrete account. All other hosting alarms (SSR, image, ` +
+              `DLQ) are unaffected. Set env: { account, region } on the ` +
+              `stack to enable CloudFront 5xx coverage (issue #481).`,
+          );
+        } else {
+          // Belt-and-suspenders: only reachable for a Hosting construct with no enclosing App/Stage
+          // (CDK's App extends Stage, so Stage.of(this) resolves in normal use). Fail loud rather
+          // than synthesize a mis-scoped us-east-1 support stack.
+          const stage = Stage.of(this);
+          if (!stage) {
+            throw new HostingError('MonitoringStageRequiredError', {
+              message:
+                `Cannot create the us-east-1 CloudFront monitoring stack: no ` +
+                `enclosing App/Stage was found for this construct.`,
+              resolution:
+                `Instantiate hosting within a CDK App (or Stage).`,
+            });
+          }
+          // The us-east-1 CloudFront alarm must reference the regional
+          // distribution's id; CDK bridges that with its standard
+          // cross-region export reader/writer custom resources (added to
+          // both stacks automatically). The support stack applies the same
+          // subscriptions to its own us-east-1 topic. Its id folds in the
         // construct's node addr so two Hosting constructs in one stage
         // don't collide.
         const cfMonitoring = new UsEast1MonitoringStack(
@@ -1249,8 +1283,9 @@ export class HostingConstruct extends Construct {
             subscriptions,
           },
         );
-        alarmTopics.push(cfMonitoring.topic);
-        alarms.push(cfMonitoring.alarm);
+          alarmTopics.push(cfMonitoring.topic);
+          alarms.push(cfMonitoring.alarm);
+        }
       }
 
       this.monitoring = { alarms, alarmTopics };

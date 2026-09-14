@@ -17,7 +17,6 @@ import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { HostingConstruct } from './hosting_construct.js';
 import type { DeployManifest } from '../manifest/types.js';
-import { HostingError } from '../hosting_error.js';
 
 let tmpDir: string;
 
@@ -54,10 +53,14 @@ void describe('HostingConstruct — CloudFront alarm region (#481)', () => {
     const template = Template.fromStack(stack);
     // Alarm lives in this (us-east-1) stack.
     template.resourcePropertiesCountIs('AWS::CloudWatch::Alarm', CF_ALARM, 1);
-    // No second stack was synthesized.
-    assert.strictEqual(
-      app.node.tryFindChild('TestStack-CfMonitoring'),
-      undefined,
+    // No support stack was synthesized. The id carries a node-addr suffix
+    // (`-CfMonitoring-<addr>`), so scan by prefix — an exact-name lookup
+    // would pass even if one were wrongly synthesized.
+    assert.ok(
+      !app.node.children.some(
+        (c) => c instanceof Stack && c.node.id.startsWith('TestStack-CfMonitoring'),
+      ),
+      'no us-east-1 support stack should be synthesized in-region',
     );
   });
 
@@ -159,22 +162,42 @@ void describe('HostingConstruct — CloudFront alarm region (#481)', () => {
     });
   });
 
-  // ---- (ii) Off-region without a concrete account → throws ----
-  void it('throws MonitoringEnvRequiredError off-region when the account is unresolved', () => {
+  // ---- (ii) Off-region + unresolved account → warn-and-skip ----
+  // We can't build the us-east-1 support stack without a concrete account
+  // (cross-region synth needs it), but hard-throwing would take down the
+  // working regional alarms too. So skip ONLY the CloudFront alarm and warn
+  // loudly — a visible warning is not the silent-alarm bug #481 is about.
+  // (See docs/DECISIONS.md D-006.)
+  void it('warns and skips the CloudFront alarm off-region when the account is unresolved (no throw)', () => {
     const staticDir = createStaticDir();
     const app = new App();
     // region resolved (off-region) but account left unresolved.
     const stack = new Stack(app, 'TestStack', {
       env: { region: 'ap-northeast-1' },
     });
-    assert.throws(
-      () =>
-        new HostingConstruct(stack, 'Hosting', {
-          manifest: spaManifest(staticDir),
-        }),
-      (err: unknown) =>
-        err instanceof HostingError &&
-        err.code === 'MonitoringEnvRequiredError',
+
+    // Must NOT throw.
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: spaManifest(staticDir),
+    });
+
+    // No us-east-1 support stack was synthesized.
+    assert.ok(
+      !app.node.children.some(
+        (c) => c instanceof Stack && c.node.id.startsWith('TestStack-CfMonitoring'),
+      ),
+      'no support stack should be synthesized when the account is unresolved',
+    );
+
+    // The regional alarms (e.g. SSR/DLQ) are unaffected — monitoring is
+    // still on, just missing the one CloudFront alarm.
+    const template = Template.fromStack(stack);
+    template.resourcePropertiesCountIs('AWS::CloudWatch::Alarm', CF_ALARM, 0);
+
+    // And the skip is loud.
+    Annotations.fromStack(stack).hasWarning(
+      '*',
+      Match.stringLikeRegexp('Skipping the off-region CloudFront 5xx alarm'),
     );
   });
 });
