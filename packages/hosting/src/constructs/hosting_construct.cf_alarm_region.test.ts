@@ -54,7 +54,7 @@ void describe('HostingConstruct — CloudFront alarm region (#481)', () => {
     // Alarm lives in this (us-east-1) stack.
     template.resourcePropertiesCountIs('AWS::CloudWatch::Alarm', CF_ALARM, 1);
     // No support stack was synthesized. The id carries a node-addr suffix
-    // (`-CfMonitoring-<addr>`), so scan by prefix — an exact-name lookup
+    // (`-CfMonitoring-<addr>`), so scan by prefix; an exact-name lookup
     // would pass even if one were wrongly synthesized.
     assert.ok(
       !app.node.children.some(
@@ -166,7 +166,7 @@ void describe('HostingConstruct — CloudFront alarm region (#481)', () => {
   // We can't build the us-east-1 support stack without a concrete account
   // (cross-region synth needs it), but hard-throwing would take down the
   // working regional alarms too. So skip ONLY the CloudFront alarm and warn
-  // loudly — a visible warning is not the silent-alarm bug #481 is about.
+  // loudly. A visible warning is not the silent-alarm bug #481 is about.
   // (See docs/DECISIONS.md D-006.)
   void it('warns and skips the CloudFront alarm off-region when the account is unresolved (no throw)', () => {
     const staticDir = createStaticDir();
@@ -189,7 +189,7 @@ void describe('HostingConstruct — CloudFront alarm region (#481)', () => {
       'no support stack should be synthesized when the account is unresolved',
     );
 
-    // The regional alarms (e.g. SSR/DLQ) are unaffected — monitoring is
+    // The regional alarms (e.g. SSR/DLQ) are unaffected: monitoring is
     // still on, just missing the one CloudFront alarm.
     const template = Template.fromStack(stack);
     template.resourcePropertiesCountIs('AWS::CloudWatch::Alarm', CF_ALARM, 0);

@@ -103,7 +103,7 @@ export class UsEast1MonitoringStack extends Stack {
     // operators who want the raw ARN. Subscriptions passed via props are
     // already attached above, so the blessed path needs no manual step.
     // (Note: the alarm's distributionId is a cross-region reference CDK
-    // bridges with export writer/reader custom resources — see the
+    // bridges with export writer/reader custom resources; see the
     // `distributionId` prop doc; this output is not what avoids that.)
     new CfnOutput(this, 'MonitoringTopicArnUsEast1', {
       value: this.topic.topicArn,

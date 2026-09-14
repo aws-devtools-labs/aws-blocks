@@ -8,7 +8,7 @@ Fix off-region CloudFront 5xx alarm and rework alarm subscription wiring (#481).
 **Breaking change** (a minor bump pre-1.0):
 
 - The `monitoring.snsTopicArn` prop is **removed**. Attach notifications
-  with the new `monitoring.subscriptions` list instead — `EmailSubscription`
+  with the new `monitoring.subscriptions` list instead: `EmailSubscription`
   and `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions` (endpoint
   subscriptions only, for now). Each subscription is applied to **both**
   hosting alarm topics, so you subscribe in one place and every alarm is
@@ -23,9 +23,12 @@ never fired (it sat at `OK` under `treatMissingData: NOT_BREACHING`).
 Off-region deployments now **always** place the CloudFront alarm in a
 synthesized `<stackName>-CfMonitoring-<addr>` us-east-1 stack with its own
 encrypted SNS topic; `monitoring.subscriptions` are applied to that topic
-too. This requires `env: { account, region }` on off-region stacks —
-env-agnostic off-region synth throws `MonitoringEnvRequiredError`. There is
-no opt-out.
+too. Off-region placement is always on; the only escape is when it is
+genuinely impossible. When the region resolves but the account is
+unresolved (a single-synth multi-account pipeline), the us-east-1 support
+stack cannot be built, so the CloudFront alarm is skipped with a loud synth
+warning and all other alarms are kept, rather than throwing. Set
+`env: { account, region }` to enable CloudFront coverage.
 
 Migration: replace `monitoring: { snsTopicArn }` with
 `monitoring: { subscriptions: [new subs.EmailSubscription('oncall@example.com')] }`
@@ -39,11 +42,7 @@ longer does directly:
   Only the automatic cross-region fan-out to the us-east-1 CloudFront topic
   drops them (that would need an unresolvable cross-region reference).
 
-Off-region CloudFront alarm placement is always on and requires
-`env: { account, region }`. When the region resolves but the account is
-unresolved (a single-synth multi-account pipeline), the CloudFront alarm is
-skipped with a loud synth warning rather than throwing — all other alarms
-are unaffected. See `docs/DECISIONS.md` D-006.
+See `docs/DECISIONS.md` D-006 for the always-on and warn-and-skip rationale.
 
 `@aws-blocks/core` surfaces `monitoring.subscriptions` and the
 `monitoring` attribute in place of `monitoringTopic`.
