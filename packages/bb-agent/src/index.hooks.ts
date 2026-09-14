@@ -316,11 +316,13 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			}
 		} catch (err) {
 			if (destroyed) return;
-			// Re-sync itself failed. Surface it via onError only. We deliberately do NOT also
+			// Re-sync itself failed. Surface it via reportError so the once-per-turn onError
+			// contract holds uniformly: if a send-rejection already reported onError for this
+			// turn, a re-sync throw here won't emit a second one. We deliberately do NOT also
 			// arm the failsafe here (NIT): the channel is resubscribed, so a terminal chunk can
 			// still resolve the turn; arming would fire a second, misleading 'Timed out' error
 			// ~11min later on top of the error we just surfaced.
-			options.onError?.(err instanceof Error ? err.message : String(err));
+			reportError(err instanceof Error ? err.message : String(err));
 		}
 	}
 
@@ -442,8 +444,10 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			try {
 				await options.api.sendMessage(conversationId, text, conversationId);
 			} catch (err) {
-				// Send failed (e.g. 504) — the turn never started server-side. Reset loading,
-				// drop the empty assistant placeholder, and surface the error via onError.
+				// Send rejected (e.g. 504). Reset loading, drop the empty assistant
+				// placeholder, and surface onError. NOTE: a 504 may still have started the
+				// turn server-side (see handleSendFailure) — if so, recovery of that started
+				// turn flows through the reconnect -> getConversation re-sync path, not here.
 				handleSendFailure(err);
 			}
 		},

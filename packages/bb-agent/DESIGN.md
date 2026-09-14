@@ -113,3 +113,33 @@ Custom Strands model provider for local development. No network, no API keys, no
 - Derives tool input from, in order of preference: the tool's `cannedExamples`, the schema `default` (from Zod `.default()`), the first `enum` value (for enum fields), then a generic placeholder by type (`'sample'` / `1` / `true` / `[]`)
 - After Strands executes the tool and sends the result back, returns a fixed acknowledgment (`"I called the tool and got a result."`)
 - Token usage reports zeros (no real model call)
+
+
+## useChat Reconnect Recovery
+
+`useChat` subscribes to the agent's Realtime chunks channel once per conversation and relies on
+the transport's transparent reconnect (bb-realtime). Because WebSocket pub/sub is not durable,
+the hook treats the **persisted conversation as the source of truth** and recovers around the gap:
+
+- **Subscribe adapter must forward verbatim.** `useChat` calls the consumer's `subscribe` with a
+  `ChatSubscribeOptions` *object* (`onMessage`/`onReconnect`/`onDisconnect`/`refresh`), and the
+  adapter must pass that argument straight to `channel.subscribe(...)`. Both middlewares branch on
+  `typeof arg === 'function'` first, so a callable-with-props hybrid would silently drop the extra
+  callbacks and disable reconnect recovery.
+- **On reconnect (`handleReconnect`)** the hook re-reads `getConversation` (recovers a final
+  assistant message if the turn completed during the gap) and `getPendingInterrupts` (recovers a
+  missed interrupt). Two guards protect the eventually-consistent DynamoDB read: `stillSameInFlightTurn`
+  (ignore a read that resolves after a live terminal chunk already resolved the turn) and
+  `extendsStream` (refuse to overwrite the live bubble with a prior-turn row). A re-sync failure is
+  surfaced through `reportError` so the once-per-turn `onError` contract holds.
+- **Bounded failsafe (`RECONNECT_FAILSAFE_MS = 660_000`, ~11 min).** A last-resort timer cleared/re-armed
+  by every received chunk, so it fires only after *complete silence* — never during a long tool-call
+  gap or a slow post-reconnect stream. It must exceed the API Gateway 10-min idle timeout + reconnect
+  budget, otherwise a normal idle→disconnect→reconnect cycle would trip a spurious 'Timed out'. It is
+  the backstop, not the primary recovery (which is the `done` chunk / DB re-sync).
+- **Send-path failsafe.** `sendMessage`/`respondToInterrupt` wrap the RPC in try/catch → `handleSendFailure`,
+  which resets `loading`, drops the empty assistant placeholder, and reports the error once. A 504 may
+  still have started the turn server-side; that started turn is recovered via the reconnect → `getConversation`
+  re-sync path, not the send path.
+- **onInterrupt may re-fire on reconnect** for a still-pending interrupt (both `loadConversation` and
+  `handleReconnect` surface pending interrupts). Handlers should key/dedupe by interrupt id.
