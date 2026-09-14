@@ -9,8 +9,8 @@ closed unexpectedly (e.g. an API Gateway idle timeout or an abnormal `1006` clos
 local mock middleware recovered. It now transparently reconnects with exponential backoff (capped
 retries), rebuilds the socket URL from the retained connection token, and resubscribes every active
 channel by replaying its stored per-channel token so the server can re-authorize. The keep-alive
-ping timer is re-armed on the fresh socket. A normal client-initiated close (`1000`/`1005`, e.g.
-`unsubscribe()`) is still treated as expected and does not trigger a reconnect.
+ping timer is re-armed on the fresh socket. Only a client-initiated teardown — unsubscribing the last
+channel (or the internal reset/give-up paths) — is treated as terminal; an unexpected drop reconnects on ANY close code, including a clean `1000`/`1005`.
 
 `SubscribeOptions` gains an optional `onReconnect` callback, fired once after a successful
 reconnect when every channel on the connection has been re-confirmed by the server (after the
