@@ -163,6 +163,7 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | bb-async-job | Background job processing backed by SQS and Lambda. | queue, job, background, async, worker, submit, batch, retry, status, transitions, SQS |
 | bb-auth-basic | Simple username/password authentication with JWT sessions, password policy, and optional code-confirmed signup and password reset. | — |
 | bb-auth-cognito | Authentication backed by Amazon Cognito User Pools. | — |
+| bb-auth-jwt | Provider-agnostic stateless bearer-JWT authentication Building Block. | — |
 | bb-auth-oidc | OIDC sign-in gate for AWS Blocks applications. | — |
 | bb-cron-job | Scheduled task execution backed by EventBridge Scheduler and Lambda. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
 | bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
