@@ -51,7 +51,7 @@ test('translateDsqlError: unique violation (23505) → ApiError status 409, name
       assert.ok(e instanceof ApiError, 'expected an ApiError');
       assert.equal(e.status, 409);
       assert.equal(e.name, DistributedDatabaseErrors.UniqueConstraintViolation);
-      assert.notEqual(e.retriable, true, 'a duplicate-key retry fails identically → not retriable');
+      assert.strictEqual(e.retriable, false, 'a duplicate-key retry fails identically → not retriable');
       assert.equal(e.message, 'The item violates a unique constraint');
       // Raw driver error retained server-side as `cause`, not leaked into the message.
       assert.equal(e.cause, err);

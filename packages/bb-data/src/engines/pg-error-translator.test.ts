@@ -37,7 +37,7 @@ test('translatePgError: unique violation (23505) → ApiError status 409, name p
       assert.ok(e instanceof ApiError, 'expected an ApiError');
       assert.strictEqual(e.status, 409);
       assert.strictEqual(e.name, DatabaseErrors.UniqueConstraintViolation);
-      assert.notStrictEqual(e.retriable, true, 'a duplicate-key retry fails identically → not retriable');
+      assert.strictEqual(e.retriable, false, 'a duplicate-key retry fails identically → not retriable');
       // Raw driver error is retained server-side as `cause`, not leaked into the message.
       assert.strictEqual(e.cause, err);
       assert.notStrictEqual(e.message, err.message);

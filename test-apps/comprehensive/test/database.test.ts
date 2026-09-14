@@ -123,7 +123,7 @@ export function databaseTests(getApi: () => typeof apiType) {
         assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
         assert.strictEqual(e.status, 409, 'duplicate key must be 409, not 500');
         assert.ok(isBlocksError(e, DatabaseErrors.UniqueConstraintViolation));
-        assert.notStrictEqual(e.retriable, true, 'duplicate key is not retriable');
+        assert.strictEqual(e.retriable, false, 'duplicate key is not retriable');
       }
       await api.dbDelete(id);
     });

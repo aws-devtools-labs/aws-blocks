@@ -175,7 +175,7 @@ test('BadRequestException with unique constraint maps to UniqueConstraintViolati
       assert.ok(err instanceof ApiError, 'expected an ApiError');
       assert.strictEqual(err.status, 409, 'duplicate key must be 409, not 500');
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
-      assert.notStrictEqual(err.retriable, true);
+      assert.strictEqual(err.retriable, false);
       return true;
     }
   );
@@ -354,7 +354,7 @@ test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to
       assert.ok(err instanceof ApiError, 'expected an ApiError');
       assert.strictEqual(err.status, 409, 'duplicate key must be 409, not 500');
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
-      assert.notStrictEqual(err.retriable, true);
+      assert.strictEqual(err.retriable, false);
       return true;
     },
   );

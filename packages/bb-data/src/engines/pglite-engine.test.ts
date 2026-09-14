@@ -88,7 +88,7 @@ test('duplicate key throws UniqueConstraintViolation as ApiError status 409', as
       assert.ok(err instanceof ApiError, 'expected an ApiError');
       assert.strictEqual(err.status, 409, 'duplicate key must be 409, not 500');
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
-      assert.notStrictEqual(err.retriable, true, 'duplicate key is not retriable');
+      assert.strictEqual(err.retriable, false, 'duplicate key is not retriable');
       return true;
     }
   );
