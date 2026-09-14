@@ -380,23 +380,16 @@ export interface HostingProps {
    */
   monitoring?: {
     enabled?: boolean;
-    /** ARN of an existing SNS topic to send alarm actions to. */
-    snsTopicArn?: string;
     /**
-     * How to handle the CloudFront 5xx alarm when the app is deployed
-     * outside us-east-1. AWS/CloudFront metrics only exist in us-east-1
-     * and a CloudWatch alarm can't watch a metric cross-region, so the
-     * alarm cannot live in an off-region stack.
-     *  - `'usEast1Stack'`: place the alarm in a dedicated us-east-1
-     *    support stack (`<stackName>-CfMonitoring`) with its own SNS
-     *    topic, surfaced as the `MonitoringTopicArnUsEast1` output.
-     *    Requires `env: { account, region }` on the stack.
-     *  - `'skip'`: omit the CloudFront alarm off-region (emit a warning).
-     * Ignored when the stack is already in us-east-1.
-     *
-     * When omitted, inherits the underlying default (`'usEast1Stack'`).
+     * Endpoint subscriptions applied to every hosting alarm topic (the
+     * app-region topic and, off-region, the us-east-1 CloudFront topic).
+     * `EmailSubscription` / `UrlSubscription` only — resource-target
+     * subscriptions (Lambda/SQS) are not yet supported.
      */
-    cloudFrontAlarm?: 'usEast1Stack' | 'skip';
+    subscriptions?: Array<
+      | cdk.aws_sns_subscriptions.EmailSubscription
+      | cdk.aws_sns_subscriptions.UrlSubscription
+    >;
   };
 
   /**
@@ -467,8 +460,17 @@ export class Hosting extends Construct {
   public readonly ssrFunction?: cdk.aws_lambda.Function;
   /** S3 bucket for framework build caches (present when `buildCache.enabled` is true). */
   public readonly buildCacheBucket?: cdk.aws_s3.Bucket;
-  /** SNS topic for hosting CloudWatch alarms (present when `monitoring.enabled` is true). */
-  public readonly monitoringTopic?: cdk.aws_sns.ITopic;
+  /**
+   * Hosting monitoring surface (present when `monitoring.enabled` is true):
+   * `alarms` (every CloudWatch alarm, both regions) and `alarmTopics`
+   * (the alarm SNS topics — app-region plus the us-east-1 CloudFront
+   * topic off-region). Subscriptions from `monitoring.subscriptions` are
+   * already attached.
+   */
+  public readonly monitoring?: {
+    alarms: cdk.aws_cloudwatch.Alarm[];
+    alarmTopics: cdk.aws_sns.ITopic[];
+  };
 
   /**
    * Async constructor. Required when a `secret()` / `config()` value resolves at
@@ -702,9 +704,7 @@ export class Hosting extends Construct {
       monitoring: props.monitoring
         ? {
             ...props.monitoring,
-            // cloudFrontAlarm flows through the spread as-is: undefined inherits
-            // the L3 default ('usEast1Stack'). To change the Blocks-app default
-            // to 'skip' later, set it explicitly here.
+            // subscriptions and enabled flow through as-is to the L3.
           }
         : undefined,
       skewProtection: props.skewProtection,
@@ -819,7 +819,7 @@ export class Hosting extends Construct {
     this.url = hosting.distributionUrl;
     this.ssrFunction = primaryFunction;
     this.buildCacheBucket = hosting.buildCacheBucket;
-    this.monitoringTopic = hosting.monitoringTopic;
+    this.monitoring = hosting.monitoring;
 
     // ── 11. CfnOutput ────────────────────────────────────────────
     new cdk.CfnOutput(this, 'HostingUrl', {

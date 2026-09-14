@@ -14,6 +14,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { App, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { HostingConstruct } from './hosting_construct.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
@@ -73,9 +74,15 @@ void describe('HostingConstruct — CloudFront alarm region (#481)', () => {
     const regional = Template.fromStack(stack);
     regional.resourcePropertiesCountIs('AWS::CloudWatch::Alarm', CF_ALARM, 0);
 
-    // A sibling us-east-1 support stack exists and holds the alarm.
-    const support = app.node.tryFindChild('TestStack-CfMonitoring') as Stack;
-    assert.ok(support, 'expected a TestStack-CfMonitoring support stack');
+    // A sibling us-east-1 support stack exists and holds the alarm. Its
+    // id carries a node-addr suffix so two Hosting constructs in one
+    // stage don't collide, so match by prefix.
+    const support = app.node.children.find(
+      (c) =>
+        c instanceof Stack &&
+        c.node.id.startsWith('TestStack-CfMonitoring'),
+    ) as Stack | undefined;
+    assert.ok(support, 'expected a TestStack-CfMonitoring-* support stack');
     assert.strictEqual(support.region, 'us-east-1');
 
     const supportTemplate = Template.fromStack(support);
@@ -85,43 +92,71 @@ void describe('HostingConstruct — CloudFront alarm region (#481)', () => {
         Namespace: 'AWS/CloudFront',
         MetricName: '5xxErrorRate',
         Threshold: 5,
+        ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+        EvaluationPeriods: 1,
+        Period: 300,
+        Statistic: 'Average',
         TreatMissingData: 'notBreaching',
+        Dimensions: Match.arrayWith([
+          Match.objectLike({ Name: 'Region', Value: 'Global' }),
+        ]),
       }),
       1,
     );
-    // Its own SNS topic (two-topic design). No forwarder subscription —
-    // consolidation is via two topics, not runtime message forwarding.
+    // Its own SNS topic. No forwarder subscription — consolidation is via
+    // two topics, not runtime message forwarding.
     supportTemplate.resourceCountIs('AWS::SNS::Topic', 1);
-    supportTemplate.resourceCountIs('AWS::SNS::Subscription', 0);
-    // The us-east-1 topic ARN is surfaced as an output of the support stack.
-    supportTemplate.hasOutput(
-      '*',
-      Match.objectLike({ Description: Match.stringLikeRegexp('us-east-1') }),
-    );
+    // The us-east-1 topic ARN is surfaced by logical id.
+    supportTemplate.hasOutput('MonitoringTopicArnUsEast1', Match.anyValue());
   });
 
-  // ---- (iii) 'skip' mode: warning, no second stack ----
-  void it("emits a warning and creates no support stack when cloudFrontAlarm is 'skip'", () => {
+  // ---- (v) Off-region: endpoint subscriptions reach BOTH topics ----
+  // A single email/URL subscription entry applied to both the regional
+  // and us-east-1 topics must land on each, with no synth collision.
+  void it('applies email + URL subscriptions to both topics off-region', () => {
     const staticDir = createStaticDir();
     const app = new App();
     const stack = new Stack(app, 'TestStack', {
       env: { account: '123456789012', region: 'ap-northeast-1' },
     });
+
     new HostingConstruct(stack, 'Hosting', {
       manifest: spaManifest(staticDir),
-      monitoring: { cloudFrontAlarm: 'skip' },
+      monitoring: {
+        subscriptions: [
+          new subs.EmailSubscription('oncall@example.com'),
+          new subs.UrlSubscription('https://alerts.example.com/hook'),
+        ],
+      },
     });
 
-    const template = Template.fromStack(stack);
-    template.resourcePropertiesCountIs('AWS::CloudWatch::Alarm', CF_ALARM, 0);
-    assert.strictEqual(
-      app.node.tryFindChild('TestStack-CfMonitoring'),
-      undefined,
-    );
-    Annotations.fromStack(stack).hasWarning(
-      '*',
-      Match.stringLikeRegexp('CloudFront 5xx alarm skipped'),
-    );
+    // Regional topic carries both subscriptions.
+    const regional = Template.fromStack(stack);
+    regional.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: 'oncall@example.com',
+    });
+    regional.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'https',
+      Endpoint: 'https://alerts.example.com/hook',
+    });
+
+    // us-east-1 support stack's topic carries them too.
+    const support = app.node.children.find(
+      (c) =>
+        c instanceof Stack &&
+        c.node.id.startsWith('TestStack-CfMonitoring'),
+    ) as Stack | undefined;
+    assert.ok(support, 'expected a TestStack-CfMonitoring-* support stack');
+    const supportTemplate = Template.fromStack(support);
+    supportTemplate.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: 'oncall@example.com',
+    });
+    supportTemplate.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'https',
+      Endpoint: 'https://alerts.example.com/hook',
+    });
   });
 
   // ---- (ii) Off-region without a concrete account → throws ----

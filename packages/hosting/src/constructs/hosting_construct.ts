@@ -33,7 +33,12 @@ import type { IHostedZone } from 'aws-cdk-lib/aws-route53';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deployment';
-import { type ITopic, Topic } from 'aws-cdk-lib/aws-sns';
+import { type ITopic } from 'aws-cdk-lib/aws-sns';
+import type {
+  EmailSubscription,
+  UrlSubscription,
+} from 'aws-cdk-lib/aws-sns-subscriptions';
+import { Alarm } from 'aws-cdk-lib/aws-cloudwatch';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { Provider } from 'aws-cdk-lib/custom-resources';
@@ -322,18 +327,15 @@ export type HostingConstructProps = {
   monitoring?: {
     /** @default true */
     enabled?: boolean;
-    snsTopicArn?: string;
     /**
-     * How to handle the CloudFront 5xx alarm when this stack is not in
-     * us-east-1. CloudFront metrics only exist in us-east-1 and an alarm
-     * can't watch a metric cross-region (issue #481).
-     *  - 'usEast1Stack' (default): place the alarm in a hosting-owned
-     *    us-east-1 support stack (requires env: { account, region }).
-     *  - 'skip': omit the CloudFront alarm off-region (emit a warning).
-     * Ignored when the stack is already in us-east-1.
-     * @default 'usEast1Stack'
+     * Endpoint subscriptions applied to both hosting alarm topics (the
+     * app-region topic and, off-region, the us-east-1 CloudFront topic).
+     * `EmailSubscription` / `UrlSubscription` from
+     * `aws-cdk-lib/aws-sns-subscriptions` only — resource-target
+     * subscriptions (Lambda/SQS) are not yet supported (they'd create an
+     * unresolvable cross-region reference to the us-east-1 topic).
      */
-    cloudFrontAlarm?: 'usEast1Stack' | 'skip';
+    subscriptions?: Array<EmailSubscription | UrlSubscription>;
   };
   /**
    * Cookie-based skew protection.
@@ -386,18 +388,25 @@ export class HostingConstruct extends Construct {
   readonly revalidationDlq?: Queue;
   readonly cacheBucket?: Bucket;
   /**
-   * SNS topic alarm actions are sent to. Set when monitoring is on
-   * (the default). The user subscribes (email, Slack via webhook,
-   * PagerDuty, etc.) via `monitoringTopic.addSubscription(...)` or by
-   * configuring an external listener with the topic ARN.
+   * Monitoring surface, set when monitoring is on (the default).
    *
-   * Not declared `readonly` because the `MonitoringConstruct` that
-   * owns the topic is built mid-constructor (after the SSR / image-opt
-   * Lambdas it alarms on are wired up), so the value is assigned
-   * after the field declaration runs. Treat it as logically immutable
+   * - `alarms`: every CloudWatch alarm created, across both regions
+   *   (includes the us-east-1 CloudFront alarm off-region). Attach
+   *   custom actions via `alarms.forEach(a => a.addAlarmAction(...))`.
+   * - `alarmTopics`: the alarm SNS topics (the app-region topic, plus
+   *   the us-east-1 topic off-region). Subscriptions passed via
+   *   `monitoring.subscriptions` are already attached to all of them;
+   *   this is for advanced callers who want the raw topics.
+   *
+   * Not declared `readonly` because the `MonitoringConstruct` that owns
+   * these is built mid-constructor (after the SSR / image-opt Lambdas it
+   * alarms on are wired up). Treat it as logically immutable
    * post-construction — do not reassign from outside the constructor.
    */
-  monitoringTopic?: ITopic;
+  monitoring?: {
+    alarms: Alarm[];
+    alarmTopics: ITopic[];
+  };
 
   /**
    * Creates the hosting infrastructure from a framework-agnostic deploy manifest.
@@ -1154,9 +1163,7 @@ export class HostingConstruct extends Construct {
     // externally without touching the construct again.
     const monitoringEnabled = props.monitoring?.enabled ?? true;
     if (monitoringEnabled) {
-      const userTopic = props.monitoring?.snsTopicArn
-        ? Topic.fromTopicArn(this, 'AlarmTopicImport', props.monitoring.snsTopicArn)
-        : undefined;
+      const subscriptions = props.monitoring?.subscriptions ?? [];
       const ssrComputeName = this.computeFunctions.has('default')
         ? 'default'
         : this.computeFunctions.has('server')
@@ -1175,7 +1182,7 @@ export class HostingConstruct extends Construct {
 
       const monitoring = new MonitoringConstruct(this, 'Monitoring', {
         enabled: true,
-        snsTopic: userTopic,
+        subscriptions,
         distribution: this.distribution,
         // Lambda@Edge functions don't accept the CW metric helpers we
         // use; only attach when the SSR compute is a regional Lambda.
@@ -1184,70 +1191,69 @@ export class HostingConstruct extends Construct {
         revalidationDlq: this.revalidationDlq,
         createCloudFrontAlarmLocally: !offRegion,
       });
-      this.monitoringTopic = monitoring.topic;
+
+      const alarmTopics: ITopic[] = monitoring.topic ? [monitoring.topic] : [];
+      const alarms: Alarm[] = [...monitoring.alarms];
+
       if (monitoring.topic) {
         new CfnOutput(this, 'MonitoringTopicArn', {
           value: monitoring.topic.topicArn,
-          description: 'SNS topic for hosting alarms. Subscribe an email/Slack/PagerDuty endpoint here.',
+          description: 'SNS topic for hosting alarms. Subscribe via monitoring.subscriptions, or an email/Slack/PagerDuty endpoint here.',
         });
       }
 
-      // Off-region CloudFront alarm handling.
+      // Off-region: place the CloudFront alarm in a us-east-1 support
+      // stack, always (no opt-out). The same subscriptions are applied to
+      // its topic so callers subscribe in one place and both topics are
+      // covered.
       if (this.distribution && monitoring.cloudFrontAlarmDeferred) {
-        const cfAlarmMode = props.monitoring?.cloudFrontAlarm ?? 'usEast1Stack';
-        if (cfAlarmMode === 'skip') {
-          Annotations.of(this).addWarningV2(
-            '@aws-blocks/hosting:CloudFrontAlarmSkipped',
-            `CloudFront 5xx alarm skipped: this stack is in ${region}, but ` +
-              `AWS/CloudFront metrics only exist in us-east-1 and an alarm ` +
-              `cannot watch a metric cross-region. Set ` +
-              `monitoring.cloudFrontAlarm: 'usEast1Stack' (requires ` +
-              `env: { account, region }) for real CloudFront 5xx coverage.`,
-          );
-        } else if (Token.isUnresolved(hostingStack.account)) {
+        if (Token.isUnresolved(hostingStack.account)) {
           // A cross-region stack needs a concrete account. Fail loud
           // rather than silently drop CloudFront monitoring.
           throw new HostingError('MonitoringEnvRequiredError', {
             message:
-              `monitoring.cloudFrontAlarm: 'usEast1Stack' requires an explicit ` +
+              `The off-region CloudFront alarm requires an explicit ` +
               `env: { account, region } on the stack (region '${region}'), ` +
               `because the CloudFront alarm must be placed in a separate ` +
               `us-east-1 stack.`,
             resolution:
-              `Add env: { account, region } to the Stack, or set ` +
-              `monitoring.cloudFrontAlarm: 'skip' to omit the CloudFront alarm.`,
+              `Add env: { account, region } to the Stack.`,
           });
-        } else {
-          // Belt-and-suspenders: only reachable for a Hosting construct with no enclosing App/Stage
-          // (CDK's App extends Stage, so Stage.of(this) resolves in normal use). Fail loud rather
-          // than synthesize a mis-scoped us-east-1 support stack.
-          const stage = Stage.of(this);
-          if (!stage) {
-            throw new HostingError('MonitoringStageRequiredError', {
-              message:
-                `Cannot create the us-east-1 CloudFront monitoring stack: no ` +
-                `enclosing App/Stage was found for this construct.`,
-              resolution:
-                `Instantiate hosting within a CDK App (or Stage), or set ` +
-                `monitoring.cloudFrontAlarm: 'skip'.`,
-            });
-          }
-          // The us-east-1 CloudFront alarm must reference the regional
-          // distribution's id; CDK bridges that with its standard
-          // cross-region export reader/writer custom resources (added to
-          // both stacks automatically). The topic ARN is surfaced as an
-          // output OF the support stack (MonitoringTopicArnUsEast1) — not
-          // re-output here, to keep the wiring one-directional.
-          new UsEast1MonitoringStack(
-            stage,
-            `${hostingStack.stackName}-CfMonitoring`,
-            {
-              env: { account: hostingStack.account, region: 'us-east-1' },
-              distributionId: this.distribution.distributionId,
-            },
-          );
         }
+        // Belt-and-suspenders: only reachable for a Hosting construct with no enclosing App/Stage
+        // (CDK's App extends Stage, so Stage.of(this) resolves in normal use). Fail loud rather
+        // than synthesize a mis-scoped us-east-1 support stack.
+        const stage = Stage.of(this);
+        if (!stage) {
+          throw new HostingError('MonitoringStageRequiredError', {
+            message:
+              `Cannot create the us-east-1 CloudFront monitoring stack: no ` +
+              `enclosing App/Stage was found for this construct.`,
+            resolution:
+              `Instantiate hosting within a CDK App (or Stage).`,
+          });
+        }
+        // The us-east-1 CloudFront alarm must reference the regional
+        // distribution's id; CDK bridges that with its standard
+        // cross-region export reader/writer custom resources (added to
+        // both stacks automatically). The support stack applies the same
+        // subscriptions to its own us-east-1 topic. Its id folds in the
+        // construct's node addr so two Hosting constructs in one stage
+        // don't collide.
+        const cfMonitoring = new UsEast1MonitoringStack(
+          stage,
+          `${hostingStack.stackName}-CfMonitoring-${this.node.addr.slice(0, 8)}`,
+          {
+            env: { account: hostingStack.account, region: 'us-east-1' },
+            distributionId: this.distribution.distributionId,
+            subscriptions,
+          },
+        );
+        alarmTopics.push(cfMonitoring.topic);
+        alarms.push(cfMonitoring.alarm);
       }
+
+      this.monitoring = { alarms, alarmTopics };
     }
 
     // ---- 9a. OPEN_NEXT_ORIGIN env var for URL construction ----

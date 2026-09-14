@@ -33,7 +33,7 @@ import {
   Runtime,
 } from 'aws-cdk-lib/aws-lambda';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
-import { Topic } from 'aws-cdk-lib/aws-sns';
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { MonitoringConstruct } from './monitoring_construct.js';
 
 const createStack = (): Stack => {
@@ -107,17 +107,20 @@ void describe('MonitoringConstruct', () => {
       template.resourceCountIs('AWS::SNS::Topic', 1);
     });
 
-    void it('reuses a BYO SNS topic and creates no new one', () => {
+    void it('applies provided subscriptions to the auto-created topic', () => {
       const stack = createStack();
-      const userTopic = new Topic(stack, 'UserTopic');
       new MonitoringConstruct(stack, 'Monitoring', {
         enabled: true,
-        snsTopic: userTopic,
+        subscriptions: [
+          new subs.EmailSubscription('oncall@example.com'),
+        ],
       });
-      // Synthesize once at the end. If the construct created its own
-      // topic, the count would be 2.
       const template = Template.fromStack(stack);
       template.resourceCountIs('AWS::SNS::Topic', 1);
+      template.hasResourceProperties('AWS::SNS::Subscription', {
+        Protocol: 'email',
+        Endpoint: 'oncall@example.com',
+      });
     });
 
     void it('creates no alarms when no monitorable resources are supplied', () => {
@@ -451,18 +454,6 @@ void describe('MonitoringConstruct', () => {
         (alarm as any)['Properties']['AlarmActions'],
         [{ Ref: encryptedTopicId }],
       );
-    });
-
-    void it('creates no key for a BYO topic — the caller owns its encryption', () => {
-      const stack = createStack();
-      const m = new MonitoringConstruct(stack, 'Monitoring', {
-        enabled: true,
-        snsTopic: new Topic(stack, 'UserTopic'),
-      });
-      const template = Template.fromStack(stack);
-
-      template.resourceCountIs('AWS::KMS::Key', 0);
-      assert.strictEqual(m.encryptionKey, undefined);
     });
 
     void it('creates no key when monitoring is disabled', () => {

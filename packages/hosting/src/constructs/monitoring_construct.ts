@@ -13,7 +13,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { type IKey, Key } from 'aws-cdk-lib/aws-kms';
 import type { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import type { Queue } from 'aws-cdk-lib/aws-sqs';
-import { type ITopic, Topic } from 'aws-cdk-lib/aws-sns';
+import { type ITopic, type ITopicSubscription, Topic } from 'aws-cdk-lib/aws-sns';
 
 /**
  * Default CloudWatch alarm wiring (P3.1 + P3.2).
@@ -44,17 +44,15 @@ import { type ITopic, Topic } from 'aws-cdk-lib/aws-sns';
  * cannot be used: its policy is not editable and does not grant
  * CloudWatch, so every alarm action fails with `KMSAccessDenied` and
  * notifications are dropped silently. See `createAlarmTopicKey`.
- * Callers who need different key management supply their own
- * `snsTopic` (and own its encryption).
  */
 export type MonitoringConstructProps = {
   enabled: boolean;
   /**
-   * BYO SNS topic for alarm actions. When omitted and `enabled: true`,
-   * a topic is created and surfaced via `topic` for the caller to
-   * subscribe to.
+   * Subscriptions to attach to the auto-created alarm topic. The parent
+   * passes the same list to the us-east-1 support stack so a single
+   * entry reaches both topics. Applied via `topic.addSubscription`.
    */
-  snsTopic?: ITopic;
+  subscriptions?: ITopicSubscription[];
   /** CloudFront distribution to alarm on 5xx errors. */
   distribution?: Distribution;
   /** Primary SSR Lambda — error rate + throttle alarms. */
@@ -143,8 +141,8 @@ export class MonitoringConstruct extends Construct {
   readonly topic?: ITopic;
   /**
    * KMS key encrypting the auto-created alarm topic. Undefined when
-   * monitoring is disabled or when a BYO `snsTopic` is supplied.
-   * Exposed so callers can grant additional publishers on the key.
+   * monitoring is disabled. Exposed so callers can grant additional
+   * publishers on the key.
    */
   readonly encryptionKey?: IKey;
   /** All CloudWatch alarms created by this construct. */
@@ -168,13 +166,12 @@ export class MonitoringConstruct extends Construct {
       return;
     }
 
-    if (props.snsTopic) {
-      this.topic = props.snsTopic;
-    } else {
-      this.encryptionKey = createAlarmTopicKey(this);
-      this.topic = new Topic(this, 'AlarmTopic', {
-        masterKey: this.encryptionKey,
-      });
+    this.encryptionKey = createAlarmTopicKey(this);
+    this.topic = new Topic(this, 'AlarmTopic', {
+      masterKey: this.encryptionKey,
+    });
+    for (const sub of props.subscriptions ?? []) {
+      this.topic.addSubscription(sub);
     }
     const action = new SnsAction(this.topic);
 

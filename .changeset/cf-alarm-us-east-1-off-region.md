@@ -1,23 +1,37 @@
 ---
 "@aws-blocks/hosting": minor
-"@aws-blocks/core": patch
+"@aws-blocks/core": minor
 ---
 
-Fix off-region CloudFront alarm placement (#481).
+Fix off-region CloudFront 5xx alarm and rework alarm subscription wiring (#481).
 
-`HostingConstruct` now correctly handles the AWS constraint that
-CloudFront metrics only publish in `us-east-1`: when the hosting stack
-is deployed to a non-`us-east-1` region the CloudFront 5xx alarm is
-placed in a synthesized `<stackName>-CfMonitoring` us-east-1 stack that
-owns its own encrypted SNS topic and exposes a `MonitoringTopicArnUsEast1`
-CloudFormation output for operator subscriptions.
+**Breaking change** (a minor bump pre-1.0):
 
-Off-region deployments now defer the CloudFront 5xx alarm to a synthesized
-`<stackName>-CfMonitoring` us-east-1 stack (own SNS topic +
-MonitoringTopicArnUsEast1 output); this requires env:{account,region} to
-be set off-region. Set monitoring.cloudFrontAlarm:'skip' to opt out (emits
-a warning).
+- The `monitoring.snsTopicArn` prop is **removed**. Attach notifications
+  with the new `monitoring.subscriptions` list instead — `EmailSubscription`
+  and `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions` (endpoint
+  subscriptions only, for now). Each subscription is applied to **both**
+  hosting alarm topics, so you subscribe in one place and every alarm is
+  covered regardless of region.
+- The `hosting.monitoringTopic` attribute is **removed**, replaced by
+  `hosting.monitoring` = `{ alarms, alarmTopics }` (all alarms and all
+  alarm topics across both regions).
 
-`@aws-blocks/core` gains the `cloudFrontAlarm` property on
-`HostingMonitoringOptions` to surface the new `'skip'` | `'usEast1Stack'`
-choice at the L3 config layer.
+`AWS/CloudFront` metrics publish only in us-east-1 and a CloudWatch alarm
+cannot watch a metric cross-region, so off-region the CloudFront 5xx alarm
+never fired (it sat at `OK` under `treatMissingData: NOT_BREACHING`).
+Off-region deployments now **always** place the CloudFront alarm in a
+synthesized `<stackName>-CfMonitoring-<addr>` us-east-1 stack with its own
+encrypted SNS topic; `monitoring.subscriptions` are applied to that topic
+too. This requires `env: { account, region }` on off-region stacks —
+env-agnostic off-region synth throws `MonitoringEnvRequiredError`. There is
+no opt-out.
+
+Migration: replace `monitoring: { snsTopicArn }` with
+`monitoring: { subscriptions: [new subs.EmailSubscription('oncall@example.com')] }`
+(or a `UrlSubscription`). Resource-target subscriptions (Lambda/SQS) are not
+yet supported off-region; for those, attach a custom alarm action via
+`hosting.monitoring.alarms` instead.
+
+`@aws-blocks/core` surfaces `monitoring.subscriptions` and the
+`monitoring` attribute in place of `monitoringTopic`.
