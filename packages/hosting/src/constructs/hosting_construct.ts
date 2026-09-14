@@ -1236,7 +1236,7 @@ export class HostingConstruct extends Construct {
           // support stack, because a cross-region stack pairing needs a
           // concrete account at synth. CDK bakes real ARNs into the
           // cross-region export machinery, and Aws.ACCOUNT_ID / Ref is
-          // rejected. See docs/DECISIONS.md D-006.
+          // rejected. See docs/DECISIONS.md D-016.
           //
           // Rather than hard-throw (which forced monitoring.enabled:false
           // and took down the working regional SSR/image/DLQ alarms too),
@@ -1272,17 +1272,17 @@ export class HostingConstruct extends Construct {
           // cross-region export reader/writer custom resources (added to
           // both stacks automatically). The support stack applies the same
           // subscriptions to its own us-east-1 topic. Its id folds in the
-        // construct's node addr so two Hosting constructs in one stage
-        // don't collide.
-        const cfMonitoring = new UsEast1MonitoringStack(
-          stage,
-          `${hostingStack.stackName}-CfMonitoring-${this.node.addr.slice(0, 8)}`,
-          {
-            env: { account: hostingStack.account, region: 'us-east-1' },
-            distributionId: this.distribution.distributionId,
-            subscriptions,
-          },
-        );
+          // construct's node addr so two Hosting constructs in one stage
+          // don't collide.
+          const cfMonitoring = new UsEast1MonitoringStack(
+            stage,
+            `${hostingStack.stackName}-CfMonitoring-${this.node.addr.slice(0, 8)}`,
+            {
+              env: { account: hostingStack.account, region: 'us-east-1' },
+              distributionId: this.distribution.distributionId,
+              subscriptions,
+            },
+          );
           alarmTopics.push(cfMonitoring.topic);
           alarms.push(cfMonitoring.alarm);
         }

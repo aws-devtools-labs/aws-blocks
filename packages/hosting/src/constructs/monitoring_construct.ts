@@ -32,12 +32,12 @@ import { type ITopic, type ITopicSubscription, Topic } from 'aws-cdk-lib/aws-sns
  *   - SSR Lambda throttles > 0 over 5 min
  *   - SQS DLQ depth >= 1 (any poison message)
  *
- * Alarms are off by default (`enabled: false`) so the construct stays
- * cheap-by-default. When the user opts in we either create an SNS
- * topic and surface its ARN (so the user can subscribe), or attach
- * the user-supplied topic. Cost: pennies/month at idle, scales with
- * alarm-state changes (not requests), plus ~$1/month for the alarm
- * topic's KMS key.
+ * Monitoring defaults to on at the `HostingConstruct` surface
+ * (`monitoring.enabled` is `@default true`). When enabled, the construct
+ * always creates its own SNS topic and surfaces its ARN so the operator
+ * can subscribe; there is no bring-your-own-topic path. Cost: pennies/month
+ * at idle, scales with alarm-state changes (not requests), plus ~$1/month
+ * for the alarm topic's KMS key.
  *
  * The auto-created topic is always encrypted with a dedicated
  * customer-managed KMS key. An AWS-managed key (`alias/aws/sns`)

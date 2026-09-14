@@ -358,11 +358,13 @@ unique when several hosting constructs share a stage) pinned to
 > **Requirement:** because the companion stack is region-pinned you must
 > set `env: { account, region }` on the parent hosting stack when
 > deploying outside `us-east-1`, exactly as you would for a WAF stack
-> (see `waf_construct.ts`). Env-agnostic off-region synth (an unresolved
-> `Token` region with an unresolved account) throws
-> `MonitoringEnvRequiredError` rather than silently dropping the alarm.
+> (see `waf_construct.ts`). If the region is resolved but the account is
+> unresolved, only the CloudFront alarm is skipped (with a loud synth
+> warning); all other alarms are kept. A fully env-agnostic stack
+> (unresolved-token region) creates the alarm locally and warns that it
+> will never fire if the app deploys outside `us-east-1`. See D-016.
 
-Off-region placement is **always on** — there is no opt-out. The
+Off-region placement is **always on**; there is no opt-out. The
 CloudFront 5xx alarm is the whole point of `monitoring`, and a
 silently-missing alarm is exactly the bug this fixes (#481).
 

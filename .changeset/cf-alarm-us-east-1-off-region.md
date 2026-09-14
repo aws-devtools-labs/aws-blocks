@@ -42,7 +42,7 @@ longer does directly:
   Only the automatic cross-region fan-out to the us-east-1 CloudFront topic
   drops them (that would need an unresolvable cross-region reference).
 
-See `docs/DECISIONS.md` D-006 for the always-on and warn-and-skip rationale.
+See `docs/DECISIONS.md` D-016 for the always-on and warn-and-skip rationale.
 
 `@aws-blocks/core` surfaces `monitoring.subscriptions` and the
 `monitoring` attribute in place of `monitoringTopic`.

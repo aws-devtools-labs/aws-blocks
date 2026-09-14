@@ -167,7 +167,7 @@ void describe('HostingConstruct — CloudFront alarm region (#481)', () => {
   // (cross-region synth needs it), but hard-throwing would take down the
   // working regional alarms too. So skip ONLY the CloudFront alarm and warn
   // loudly. A visible warning is not the silent-alarm bug #481 is about.
-  // (See docs/DECISIONS.md D-006.)
+  // (See docs/DECISIONS.md D-016.)
   void it('warns and skips the CloudFront alarm off-region when the account is unresolved (no throw)', () => {
     const staticDir = createStaticDir();
     const app = new App();
