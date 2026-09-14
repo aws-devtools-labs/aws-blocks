@@ -168,6 +168,32 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('deployable templates declare a floating CDK CLI dependency', () => {
+    const templatesDir = join(__dirname, '..', 'templates');
+    const missingOrPinned: string[] = [];
+
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+
+      const pkgPath = join(templatesDir, entry.name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+
+      const packageJson = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+      if (!packageJson.scripts?.sandbox) continue;
+
+      const cdkVersion = packageJson.devDependencies?.['aws-cdk'];
+      if (typeof cdkVersion !== 'string' || !cdkVersion.startsWith('^2.')) {
+        missingOrPinned.push(entry.name);
+      }
+    }
+
+    assert.deepStrictEqual(
+      missingOrPinned,
+      [],
+      `Deployable templates must declare a floating aws-cdk 2.x dependency: ${missingOrPinned.join(', ')}`,
+    );
+  });
+
   it('detects existing project with package.json when "." is given', () => {
     const tmpDir = join(__dirname, '../.test-autodetect-dot');
     mkdirSync(tmpDir, { recursive: true });

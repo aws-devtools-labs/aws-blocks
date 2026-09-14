@@ -1185,8 +1185,32 @@ describe('model-factory', () => {
 // ── useChat ──────────────────────────────────────────────────────────────────
 
 import { useChat } from './index.hooks.js';
+import type { UseChatOptions } from './index.hooks.js';
 
 describe('useChat', () => {
+	// Type-only regression guard for the api return-type contract (PR that widened
+	// sendMessage/resume from Promise<void> to Promise<unknown>). This is compiled by
+	// `tsc --build` before the runtime tests execute, so narrowing either member back
+	// to Promise<void> fails CI here — the durable proof the manual PR check could not
+	// commit. `unknown` must accept BOTH a natural object-returning backend and a
+	// void-returning one; both assignments below must type-check.
+	test('api sendMessage/resume accept object- and void-returning backends (type-only)', () => {
+		const objectBackend: UseChatOptions['api'] = {
+			sendMessage: async () => ({ channelId: 'c' }),
+			createConversation: async () => ({ conversationId: 'c' }),
+			getConversation: async () => ({ messages: [] }),
+			resume: async () => ({ ok: true }),
+		};
+		const voidBackend: UseChatOptions['api'] = {
+			sendMessage: async () => {},
+			createConversation: async () => ({ conversationId: 'c' }),
+			getConversation: async () => ({ messages: [] }),
+			resume: async () => {},
+		};
+		assert.ok(objectBackend.sendMessage);
+		assert.ok(voidBackend.sendMessage);
+	});
+
 	test('onError is called when error chunk arrives', async () => {
 		let chunkHandler: (chunk: any) => void;
 		let errorReceived: string | undefined;

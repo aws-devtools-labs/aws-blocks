@@ -29,10 +29,10 @@ export interface ChatMessage {
 /** Options for creating a chat instance. */
 export interface UseChatOptions {
 	api: {
-		sendMessage(conversationId: string, message: string, channelId: string): Promise<void>;
+		sendMessage(conversationId: string, message: string, channelId: string): Promise<unknown>;
 		createConversation(): Promise<{ conversationId: string }>;
 		getConversation(id: string): Promise<{ messages: { role: string; content: string; metadata?: Record<string, any> }[] }>;
-		resume?(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string): Promise<void>;
+		resume?(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string): Promise<unknown>;
 		getPendingInterrupts?(conversationId: string): Promise<{ interrupts: Array<{ id: string; name: string; reason?: any }> }>;
 	};
 	/**

@@ -28,9 +28,16 @@ export function attach(httpServer: Server) {
 	if (wss) return; // Already attached — multiple BBs may register the same dev attachment
 	wss = new WebSocketServer({ noServer: true });
 
+	// Server-level WS errors must be logged, never left to crash the dev process.
+	wss.on('error', (err) => { console.error('[Realtime WS] Server error:', err); });
+
 	// Only handle /realtime upgrades — ignore all others so HMR (Next.js, Vite)
 	// WebSocket upgrades pass through to the frontend proxy unharmed.
 	httpServer.on('upgrade', (req, socket, head) => {
+		// A client resetting the connection during the upgrade window (ECONNRESET)
+		// emits 'error' on the raw socket. Without this listener Node's default
+		// unhandled-error behaviour tears down the whole dev server process.
+		socket.on('error', () => socket.destroy());
 		const pathname = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`).pathname;
 		if (pathname !== '/realtime') return;
 		wss!.handleUpgrade(req, socket, head, (ws) => wss!.emit('connection', ws, req));
