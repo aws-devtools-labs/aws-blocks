@@ -39,6 +39,31 @@ export function serializationConflict(cause: Error): ApiError {
   });
 }
 
+/**
+ * Build the 409 ApiError for a unique-constraint / duplicate-key violation
+ * (SQLSTATE 23505). Maps to HTTP 409 (Conflict) so the JSON-RPC serializer emits
+ * code 409 instead of a generic 500, preserves the `UniqueConstraintViolation`
+ * name so `isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)` keeps
+ * matching on both server and client, and keeps the original engine error as
+ * `cause` (server-side). Shared by every engine translator (PGlite, pg-client,
+ * Data API) so all paths produce an identically shaped 409.
+ *
+ * Unlike {@link serializationConflict}, this is NOT flagged retriable: a
+ * duplicate key is a deterministic constraint failure, so a blind retry of the
+ * same insert fails identically (ApiError defaults `retriable` to `false`).
+ *
+ * The client-visible message is a fixed, stable string; the raw driver text
+ * (which can name columns / constraint identifiers and varies by engine) is
+ * retained only as `cause` for server-side diagnostics, never interpolated into
+ * the message.
+ */
+export function uniqueConstraintConflict(cause: Error): ApiError {
+  return new ApiError('The item violates a unique constraint', 409, {
+    name: DatabaseErrors.UniqueConstraintViolation,
+    cause,
+  });
+}
+
 const knownErrors = new Set<string>(Object.values(DatabaseErrors));
 
 /**

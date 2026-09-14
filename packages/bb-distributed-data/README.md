@@ -161,7 +161,8 @@ try {
     // (Conflict), retriable — safe to retry.
   }
   if (isBlocksError(e, DistributedDatabaseErrors.UniqueConstraintViolation)) {
-    // Duplicate key
+    // Duplicate key — serialized as HTTP 409 (Conflict), not retriable
+    // (a blind retry of the same insert fails identically).
   }
   if (isBlocksError(e, DistributedDatabaseErrors.QueryFailed)) {
     // General query failure
