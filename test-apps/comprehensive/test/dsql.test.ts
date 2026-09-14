@@ -114,15 +114,19 @@ export function dsqlTests(getApi: () => typeof apiType) {
       const id = `d-409-${Date.now().toString(36)}`;
       await api.dsqlInsert(id, 'first', 1);
       try {
-        await api.dsqlInsert(id, 'dup', 2);
-        assert.fail('Expected a conflict error');
-      } catch (e) {
-        assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
-        assert.strictEqual(e.status, 409, 'duplicate key must be 409, not 500');
-        assert.ok(isBlocksError(e, DistributedDatabaseErrors.UniqueConstraintViolation));
-        assert.strictEqual(e.retriable, false, 'duplicate key is not retriable');
+        await assert.rejects(
+          () => api.dsqlInsert(id, 'dup', 2),
+          (e: unknown) => {
+            assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+            assert.strictEqual(e.status, 409, 'duplicate key must be 409, not 500');
+            assert.ok(isBlocksError(e, DistributedDatabaseErrors.UniqueConstraintViolation));
+            assert.strictEqual(e.retriable, false, 'duplicate key is not retriable');
+            return true;
+          },
+        );
+      } finally {
+        await api.dsqlDelete(id);
       }
-      await api.dsqlDelete(id);
     });
 
     test('DSQL - rejects FOREIGN KEY at query time', async () => {

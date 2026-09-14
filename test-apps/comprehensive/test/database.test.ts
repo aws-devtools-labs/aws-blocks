@@ -117,15 +117,19 @@ export function databaseTests(getApi: () => typeof apiType) {
       const id = `t-409-${Date.now().toString(36)}`;
       await api.dbInsert(id, 'first', 1);
       try {
-        await api.dbInsert(id, 'dup', 2);
-        assert.fail('Expected a conflict error');
-      } catch (e) {
-        assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
-        assert.strictEqual(e.status, 409, 'duplicate key must be 409, not 500');
-        assert.ok(isBlocksError(e, DatabaseErrors.UniqueConstraintViolation));
-        assert.strictEqual(e.retriable, false, 'duplicate key is not retriable');
+        await assert.rejects(
+          () => api.dbInsert(id, 'dup', 2),
+          (e: unknown) => {
+            assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+            assert.strictEqual(e.status, 409, 'duplicate key must be 409, not 500');
+            assert.ok(isBlocksError(e, DatabaseErrors.UniqueConstraintViolation));
+            assert.strictEqual(e.retriable, false, 'duplicate key is not retriable');
+            return true;
+          },
+        );
+      } finally {
+        await api.dbDelete(id);
       }
-      await api.dbDelete(id);
     });
 
     // Kysely transactions must be atomic on the real engine.
