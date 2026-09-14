@@ -1480,7 +1480,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // does NOT hydrate it into a channel client. Tests need the raw token fields.
     const ch = await realtime.getChannel('cursors', subChannel);
     const raw = ch.toJSON() as Record<string, unknown>;
-    const { __blocks, ...descriptor } = raw;
+    const { __blocks, ...rest } = raw;
+    // Preserve the descriptor's real channel key typed as string (see agentGetRawDescriptor)
+    // so a `refresh` callback can spread this cast-free without overriding channel.
+    const descriptor: { channel: string; [key: string]: unknown } = { ...rest, channel: raw.channel as string };
     return descriptor;
   },
 
@@ -1915,7 +1918,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // descriptor targets the SAME channel useChat subscribes to via agentGetChannel.
     const ch = await agent.getChannel(channelId);
     const raw = ch.toJSON() as Record<string, unknown>;
-    const { __blocks, ...descriptor } = raw;
+    const { __blocks, ...rest } = raw;
+    // Preserve the descriptor's real channel key (the full `{fullId}/chunks/{channelId}`
+    // path) typed as a string, so a consumer's `refresh` callback can spread this into a
+    // ChatChannelDescriptor cast-free — the fresh token must resubscribe under the SAME
+    // key the transport stored it under, so this channel must NOT be overridden downstream.
+    const descriptor: { channel: string; [key: string]: unknown } = { ...rest, channel: raw.channel as string };
     return descriptor;
   },
 

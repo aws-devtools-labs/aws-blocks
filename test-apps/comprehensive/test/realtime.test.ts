@@ -383,7 +383,7 @@ export function realtimeTests(getApi: () => typeof apiType) {
 					refresh: async () => {
 						refreshCalls++;
 						const fresh = await api.realtimeGetRawDescriptor(channelName);
-						return { ...fresh, __blocks: 'realtime/channel', channel: channelName };
+						return { ...fresh, __blocks: 'realtime/channel' };
 					},
 				} satisfies import('aws-blocks').SubscribeOptions<Cursor>);
 
