@@ -337,12 +337,14 @@ function createChatForConvo(conversationId: string) {
 		// channel (~1h) / connect (~2h) token TTLs. useChat forwards this to the subscription
 		// as sub.refresh; the transport calls it before each reconnect. agentGetRawDescriptor
 		// mints fresh tokens server-side for the SAME chunks channel and strips __blocks so the
-		// response middleware won't hydrate it — we re-add the discriminant here. `channel` is
-		// set to the concrete conversationId string to satisfy ChatChannelDescriptor's
-		// `channel: string` cast-free, mirroring the realtime e2e's refresh callback.
+		// response middleware won't hydrate it — we re-add the discriminant here. We DO NOT
+		// override `channel`: the raw descriptor already carries the concrete full channel path
+		// (`{fullId}/chunks/{conversationId}`), which is the key both middlewares store the fresh
+		// token under and read on resubscribe. Overriding it with the bare conversationId would
+		// file the fresh token under an orphan key and replay the stale one — defeating the point.
 		refresh: async () => {
 			const fresh = await api.agentGetRawDescriptor(conversationId);
-			return { ...fresh, __blocks: 'realtime/channel', channel: conversationId };
+			return { ...fresh, __blocks: 'realtime/channel' };
 		},
 		onMessagesChange: (msgs) => {
 			chatMessages.innerHTML = msgs.map(m => {
