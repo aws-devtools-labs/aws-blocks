@@ -103,15 +103,16 @@ export function agentTests(getApi: () => typeof apiType) {
         // Mirror realtime.test.ts's refresh callback, sourced from the AGENT's chunks
         // channel: agentGetRawDescriptor mints a FRESH token server-side and strips
         // __blocks so the response middleware won't hydrate it; we re-add the discriminant.
-        // `channel` is set to the concrete conversationId string to satisfy the descriptor's
-        // `channel: string` cast-free (the raw descriptor's channel is typed `unknown`).
+        // We return the raw descriptor as-is (NOT overriding `channel`): it already carries
+        // the concrete full channel path the transport keys the fresh token under, so the
+        // resubscribe after reconnect replays the FRESH token, not a stale one.
         const sub = channel.subscribe({
           onMessage: (chunk: any) => { chunks.push(chunk); },
           onReconnect: () => { reconnects++; },
           refresh: async () => {
             refreshCalls++;
             const fresh = await api.agentGetRawDescriptor(conversationId);
-            return { ...fresh, __blocks: 'realtime/channel', channel: conversationId };
+            return { ...fresh, __blocks: 'realtime/channel' };
           },
         } satisfies import('aws-blocks').SubscribeOptions<any>);
 
