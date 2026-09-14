@@ -26,6 +26,9 @@ import assert from 'node:assert';
 // and `__resetConnectionsForTest`.
 import { hydrate, __resetConnectionsForTest } from './aws-middleware.js';
 import type { RealtimeChannelClient } from './aws-middleware.js';
+// Mock (local-dev) middleware surface — aliased so its refresh-on-reconnect
+// wiring can be asserted alongside the production one in this file.
+import { hydrate as mockHydrate, __resetConnectionsForTest as mockReset } from './mock-middleware.js';
 import type { SubscribeOptions } from './types.js';
 
 // Mirror the mock's caps so the intended production behavior is asserted 1:1.
@@ -600,6 +603,361 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 			FakeWebSocket.instances.length,
 			1,
 			'a deliberate reset must not schedule a reconnect',
+		);
+	});
+
+	// ── PR3: token refresh on reconnect ───────────────────────────────────────
+
+	const FRESH_WS_URL = 'wss://fresh.execute-api.us-west-2.amazonaws.com/prod';
+	const FRESH_CONNECT_TOKEN = 'connect-token-fresh';
+	const FRESH_CHANNEL_TOKEN = 'channel-token-fresh';
+
+	// PR3 core: a reconnect must re-mint via refresh() BEFORE opening the socket,
+	// so the new socket carries the fresh connect token (in the URL) and the
+	// resubscribe carries the fresh channel token — not the stale stored ones.
+	it('reconnect uses refresh() to open with a fresh wsUrl and resubscribe with a fresh token', async () => {
+		const refresh = mock.fn(async () => ({
+			__blocks: 'realtime/channel' as const,
+			channel: CHANNEL,
+			wsUrl: FRESH_WS_URL,
+			connectToken: FRESH_CONNECT_TOKEN,
+			token: FRESH_CHANNEL_TOKEN,
+		}));
+		const options: SubscribeOptions = { onMessage: () => {}, refresh };
+		const client = hydrateClient();
+		client.subscribe(options);
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+		// refresh must NOT run on the initial subscribe — only on a reconnect.
+		assert.strictEqual(refresh.mock.callCount(), 0, 'refresh must not be called on the initial subscribe');
+
+		// Drop → reconnect. openSocket awaits refresh() before constructing the
+		// socket, so its result lands on the microtask queue: flush it.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refresh.mock.callCount(), 1, 'refresh must be called once before the reconnect opens');
+		const second = FakeWebSocket.instances[1];
+		assert.ok(second, 'a reconnect socket should be constructed after refresh resolves');
+		assert.ok(
+			second.url.startsWith(FRESH_WS_URL),
+			`reconnect socket must open with the fresh wsUrl; saw ${second.url}`,
+		);
+		assert.ok(
+			second.url.includes(encodeURIComponent(FRESH_CONNECT_TOKEN)),
+			'reconnect socket URL must carry the fresh connect token',
+		);
+
+		second.emitOpen();
+		const resubs = second.framesFor('subscribe');
+		assert.strictEqual(resubs.length, 1, 'exactly one resubscribe frame expected on the reconnected socket');
+		assert.strictEqual(resubs[0].channel, CHANNEL);
+		assert.strictEqual(
+			resubs[0].token,
+			FRESH_CHANNEL_TOKEN,
+			'resubscribe must carry the fresh channel token, not the stale stored one',
+		);
+	});
+
+	// Back-compat: with no refresh fn, a reconnect replays the stored wsUrl +
+	// token exactly as before, and stays synchronous (no microtask flush needed).
+	it('reconnect without refresh replays the stored token (back-compat)', () => {
+		const client = hydrateClient();
+		client.subscribe(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+
+		const second = FakeWebSocket.instances[1];
+		assert.ok(second, 'reconnect without refresh must open synchronously');
+		assert.ok(second.url.startsWith(WS_URL), 'reconnect must reuse the stored wsUrl');
+		second.emitOpen();
+		const resubs = second.framesFor('subscribe');
+		assert.strictEqual(
+			resubs[0].token,
+			CHANNEL_TOKEN,
+			'the stored channel token is replayed unchanged when no refresh is provided',
+		);
+	});
+
+	// A refresh() rejection must not crash: it surfaces via onDisconnect('error')
+	// and falls back to backoff (no socket is built, and a later tick retries).
+	it('refresh rejection does not crash; falls back to backoff and surfaces onDisconnect', async () => {
+		const refresh = mock.fn(async (): Promise<never> => { throw new Error('mint failed'); });
+		let errorDisconnects = 0;
+		const client = hydrateClient();
+		client.subscribe({
+			onMessage: () => {},
+			onDisconnect: (reason) => { if (reason === 'error') errorDisconnects++; },
+			refresh,
+		});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop (onDisconnect 'error' #1) → reconnect attempts refresh, which rejects.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refresh.mock.callCount(), 1, 'refresh is attempted on reconnect');
+		// refresh rejected BEFORE `new WebSocket(...)`, so no reconnect socket exists.
+		assert.strictEqual(FakeWebSocket.instances.length, 1, 'a refresh failure must not construct a socket');
+		// The failure is surfaced (drop + refresh-failure), not swallowed.
+		assert.strictEqual(errorDisconnects, 2, 'onDisconnect(error) fires for the drop and again for the refresh failure');
+
+		// Backoff was rescheduled rather than crashing — the next tick re-attempts.
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+		assert.strictEqual(refresh.mock.callCount(), 2, 'refresh is retried on the next backoff tick (no crash)');
+	});
+
+	// Finding #5 (LOW): refresh() RESOLVES, but with a malformed descriptor (missing
+	// connect/channel token) that fails the isRealtimeDescriptor guard. The middleware
+	// must NOT fall through and reopen with the STALE stored tokens — it treats this
+	// like a refresh failure: surface onDisconnect('error') and fall back to backoff.
+	it('refresh resolving a malformed descriptor does not open a socket with stale tokens; surfaces error + backoff', async () => {
+		// Well-formed enough to satisfy the RealtimeChannelDescriptor param type
+		// ({ __blocks, channel }), but MISSING wsUrl/connectToken/token — so the
+		// aws-middleware isRealtimeDescriptor guard rejects it. Cast-free.
+		const refresh = mock.fn(async () => ({ __blocks: 'realtime/channel' as const, channel: CHANNEL }));
+		let errorDisconnects = 0;
+		const client = hydrateClient();
+		client.subscribe({
+			onMessage: () => {},
+			onDisconnect: (reason) => { if (reason === 'error') errorDisconnects++; },
+			refresh,
+		});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop (onDisconnect 'error' #1) → reconnect calls refresh, which resolves malformed.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refresh.mock.callCount(), 1, 'refresh is attempted on reconnect');
+		// The malformed descriptor was rejected BEFORE constructing a socket, so no
+		// reconnect socket exists — crucially, none opened carrying the stale tokens.
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'a malformed refresh descriptor must not construct a socket with stale tokens',
+		);
+		// Surfaced (drop + malformed-refresh), not silently swallowed.
+		assert.strictEqual(
+			errorDisconnects,
+			2,
+			'onDisconnect(error) fires for the drop and again for the malformed refresh',
+		);
+
+		// Backoff was rescheduled rather than proceeding — the next tick re-attempts refresh.
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+		assert.strictEqual(refresh.mock.callCount(), 2, 'refresh is retried on the next backoff tick (no crash, no stale-token socket)');
+	});
+
+	// PR3 guard #1 (BLOCKING): a teardown landing while refresh() is in flight
+	// must WIN the race — the awaited continuation must not reopen a zombie
+	// socket or leak a keep-alive interval once unsubscribe has torn the
+	// connection down.
+	it('unsubscribe during a pending refresh does not open a socket', async () => {
+		type FreshDescriptor = {
+			__blocks: 'realtime/channel';
+			channel: string;
+			wsUrl: string;
+			connectToken: string;
+			token: string;
+		};
+		let resolveRefresh: (d: FreshDescriptor) => void = () => {};
+		const refresh = mock.fn(
+			() => new Promise<FreshDescriptor>((res) => { resolveRefresh = res; }),
+		);
+		const client = hydrateClient();
+		const sub = client.subscribe({ onMessage: () => {}, refresh });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop → the reconnect awaits refresh(); we hold the resolver so it stays
+		// pending and no socket can open yet.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		assert.strictEqual(refresh.mock.callCount(), 1, 'reconnect should await refresh()');
+		assert.strictEqual(FakeWebSocket.instances.length, 1, 'no socket may open while refresh is pending');
+
+		// Teardown lands mid-refresh.
+		sub.unsubscribe();
+
+		// The refresh now resolves — the guarded continuation must no-op.
+		resolveRefresh({
+			__blocks: 'realtime/channel',
+			channel: CHANNEL,
+			wsUrl: FRESH_WS_URL,
+			connectToken: FRESH_CONNECT_TOKEN,
+			token: FRESH_CHANNEL_TOKEN,
+		});
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'no zombie socket may be constructed after unsubscribe tore the connection down',
+		);
+
+		// No keep-alive interval may have leaked: advancing past one interval must
+		// not emit a ping on the (now closed) first socket, proving the suite exits.
+		first.sent.length = 0;
+		mock.timers.tick(KEEP_ALIVE_MS + 1000);
+		assert.strictEqual(first.framesFor('ping').length, 0, 'keep-alive interval must not survive teardown');
+	});
+
+	// PR3 guard #2: a persistently REJECTING refresh must fall back to backoff and
+	// give up at MAX_RECONNECT rather than looping forever. Since refresh rejects
+	// before any `new WebSocket(...)`, no reconnect socket is ever constructed, so
+	// the socket count stays bounded and the loop terminates.
+	it('persistently rejecting refresh stops after MAX_RECONNECT', async () => {
+		const refresh = mock.fn(async (): Promise<never> => { throw new Error('mint always fails'); });
+		const client = hydrateClient();
+		const sub = client.subscribe({ onMessage: () => {}, refresh });
+		// The give-up at the cap rejects the still-pending establishment; swallow it.
+		sub.established.catch(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop → each reconnect attempt calls refresh(), which rejects (async), then
+		// schedules the next backoff. Drive well past the cap, flushing the catch
+		// microtask each tick.
+		first.emitServerClose(1006);
+		for (let i = 0; i < MAX_RECONNECT + 5; i++) {
+			mock.timers.tick(60_000);
+			await new Promise((r) => setImmediate(r));
+		}
+
+		assert.strictEqual(
+			refresh.mock.callCount(),
+			MAX_RECONNECT,
+			`refresh must be attempted exactly ${MAX_RECONNECT} times, then give up (not loop forever)`,
+		);
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'a persistently rejecting refresh must not construct any reconnect socket',
+		);
+	});
+});
+
+describe('Mock (local-dev) middleware: token refresh on reconnect', () => {
+	beforeEach(() => {
+		FakeWebSocket.reset();
+		Object.defineProperty(globalThis, 'WebSocket', {
+			value: FakeWebSocket,
+			configurable: true,
+			writable: true,
+		});
+		mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+	});
+
+	afterEach(() => {
+		mock.timers.reset();
+		mockReset();
+	});
+
+	// Mirror of the production PR3 test: the mock reconnect path must also call
+	// refresh() and resubscribe with the fresh token so local dev matches prod.
+	it('mock reconnect calls refresh() and resubscribes with the fresh token', async () => {
+		const FRESH_TOKEN = 'mock-channel-token-fresh';
+		const refresh = mock.fn(async () => ({
+			__blocks: 'realtime/channel' as const,
+			channel: CHANNEL,
+			wsUrl: WS_URL,
+			token: FRESH_TOKEN,
+		}));
+		const client = mockHydrate({
+			__blocks: 'realtime/channel',
+			channel: CHANNEL,
+			wsUrl: WS_URL,
+			token: 'mock-channel-token-stale',
+		});
+		assert.ok(isChannelClient(client), 'mock hydrate should return a channel client');
+		client.subscribe({ onMessage: () => {}, refresh });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+		assert.strictEqual(refresh.mock.callCount(), 0, 'refresh must not be called on the initial subscribe');
+
+		// Force a drop → reconnect. The mock awaits refresh() before reopening.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refresh.mock.callCount(), 1, 'refresh must be called on the mock reconnect');
+		const second = FakeWebSocket.instances[1];
+		assert.ok(second, 'mock should open a reconnect socket after refresh resolves');
+		second.emitOpen();
+		const resubs = second.framesFor('subscribe');
+		assert.strictEqual(resubs.length, 1, 'exactly one resubscribe frame on the mock reconnect');
+		assert.strictEqual(
+			resubs[0].token,
+			FRESH_TOKEN,
+			'mock resubscribe must carry the fresh token from refresh(), not the stale stored one',
+		);
+	});
+
+	// PR3 guard #3 (BLOCKING, mock): a reset landing while refresh() is in flight
+	// must not let the continuation resurrect a fresh pooled entry via
+	// openMockSocket → getOrCreateConnection (tornDown unset), which would re-arm
+	// timers and hang `node --test` — the exact leak PR1's teardown guard fixed.
+	it('reset during a pending refresh does not open a socket (mock)', async () => {
+		type MockFreshDescriptor = { __blocks: 'realtime/channel'; channel: string; wsUrl: string; token: string };
+		let resolveRefresh: (d: MockFreshDescriptor) => void = () => {};
+		const refresh = mock.fn(
+			() => new Promise<MockFreshDescriptor>((res) => { resolveRefresh = res; }),
+		);
+		const client = mockHydrate({
+			__blocks: 'realtime/channel',
+			channel: CHANNEL,
+			wsUrl: WS_URL,
+			token: 'mock-channel-token-stale',
+		});
+		assert.ok(isChannelClient(client), 'mock hydrate should return a channel client');
+		client.subscribe({ onMessage: () => {}, refresh });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop → the mock reconnect awaits refresh(); hold it pending.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		assert.strictEqual(refresh.mock.callCount(), 1, 'mock reconnect should await refresh()');
+		assert.strictEqual(FakeWebSocket.instances.length, 1, 'no socket may open while refresh is pending');
+
+		// Teardown lands mid-refresh: clears + detaches the pooled connection.
+		mockReset();
+
+		// The guarded continuation must no-op instead of resurrecting the pool.
+		resolveRefresh({ __blocks: 'realtime/channel', channel: CHANNEL, wsUrl: WS_URL, token: 'mock-channel-token-fresh' });
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'openMockSocket must not run after reset — no zombie socket or resurrected pool entry',
 		);
 	});
 });

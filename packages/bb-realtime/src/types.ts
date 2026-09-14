@@ -42,10 +42,12 @@ export type DisconnectReason = 'client' | 'timeout' | 'error' | 'unknown';
 export interface SubscribeOptions<T = unknown> {
 	/** Called for each incoming message. */
 	onMessage: (message: T) => void;
-	/** Called when the connection is closed for any reason, including user-initiated `unsubscribe()` (reason: `'client'`). Filter by reason to handle only unexpected drops. */
+	/** Called when the connection is closed for any reason, including user-initiated `unsubscribe()` (reason: `'client'`). Filter by reason to handle only unexpected drops. Note: when a `refresh()` fails during a reconnect, this fires an additional time with reason `'error'` (once for the original drop, once for the refresh failure) before backoff retries. */
 	onDisconnect?: (reason: DisconnectReason) => void;
 	/** Called after the transport transparently reconnects and this channel has been resubscribed (with its stored token replayed). Fires once per successful reconnect, after the corresponding `onDisconnect` for the drop that triggered it. Not called on the initial subscribe. */
 	onReconnect?: () => void;
+	/** Called before each reconnect to obtain a freshly-minted channel descriptor (new connect + channel token) so the subscription can outlive the token TTLs (channel ~1h / connect ~2h). Without it, a reconnect replays the original tokens and will fail once they expire. Not called on the initial subscribe. Note: `refresh` is connection-level (last writer wins across a connection multiplexing several channels), and only re-mints the calling channel's token — sibling channels on the same connection still replay their stored tokens on reconnect. */
+	refresh?: () => Promise<RealtimeChannelDescriptor>;
 }
 
 /**
