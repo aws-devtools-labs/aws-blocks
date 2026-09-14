@@ -207,6 +207,7 @@ Channel path:             my-app-collab/chat/room-123
 | Single-process only | No cross-process pub/sub | Local dev is single-process |
 | No message ordering guarantees | In-process delivery is synchronous (ordered); AWS may deliver out of order | Ordering is inherently non-deterministic |
 | ~~No size/length enforcement locally~~ | ~~Silent failures in AWS~~ | **Fixed** — channel path (1024B) and publish size (32KB) are now enforced in both environments |
+| `onReconnect` fires on frames-sent (mock) vs server-confirmed (AWS) | Mock fires `onReconnect` as soon as the resubscribe frames are sent; AWS fires it only after the server re-confirms each resubscribe. A consumer that assumed the channel is server-confirmed from `onReconnect` timing would behave slightly differently local vs deployed. | Benign for the intended use — `onReconnect` consumers should backfill from the durable store, not assume channel readiness. Sandbox-test flows that depend on server-confirmed timing. |
 
 ## Serialization
 
@@ -254,6 +255,45 @@ channel.subscribe({
 `onDisconnect` fires for all disconnects including user-initiated ones, following the Socket.IO / Ably convention. Consumers filter by reason if they only care about unexpected drops.
 
 **Backfill responsibility:** The Realtime BB does not provide message history. Backfill is the application's responsibility — typically by re-querying the data source. This is intentional: message history requires persistence and ordering guarantees that belong in the application layer, not the pub/sub transport.
+
+### Transparent auto-reconnect
+
+The client transport does not require the application to reconnect manually. On an unexpected
+drop it reconnects with exponential backoff (capped at `MAX_RECONNECT` attempts, `MAX_DELAY_MS`
+ceiling), resubscribes every active channel replaying its stored token, and re-arms the
+~9-minute keep-alive ping. `onReconnect` fires once the resubscribe is confirmed. Terminal vs
+reconnecting is decided by intent (`intentionalClose` / `subscriptions.size === 0`), not the
+close code — a legitimate drop can arrive as a clean `1000`/`1005`. Only when retries are
+exhausted, or a resubscribe is rejected (stale token past its TTL, revoked channel), does the
+transport surface `onDisconnect('error')` as the manual-recovery fallback.
+
+### `refresh` — outliving token TTLs
+
+Auto-reconnect replays the *stored* tokens, which carry TTLs (connect ~2h, channel ~1h). A
+subscription that must outlive those TTLs (e.g. a multi-hour agent turn crossing the 1h/2h
+boundaries) supplies `SubscribeOptions.refresh`: `() => Promise<RealtimeChannelDescriptor>`.
+
+- **Refresh-before-open ordering:** on reconnect the transport `await`s `refresh()` *before*
+  constructing the new socket, so the fresh connect token lands in the socket URL
+  (`?token=…`) and the fresh channel token is applied before the resubscribe frame is sent.
+- **Why the whole descriptor:** `refresh` returns the full descriptor (fresh `wsUrl` + connect
+  token + channel token), not just a channel token — a partial refresh would still fail once
+  the connect token expires past 2h. Minting is server-side (auth-gated), so the transport
+  cannot self-mint; the consumer supplies the callback that re-invokes its own channel method.
+- **Malformed / teardown guards:** a `refresh()` that resolves to a non-descriptor takes the
+  `onDisconnect('error')` + backoff path rather than reopening with stale tokens; the awaited
+  continuation re-checks teardown/pool-ownership both before and after applying the descriptor,
+  so an `unsubscribe()` during a pending refresh cannot resurrect a zombie socket.
+- **Connection-level scoping (limitation):** `refresh` is stored per-connection with
+  last-writer-wins, and applying a fresh descriptor re-mints only *that* descriptor's channel
+  token. On a connection multiplexing several channels, sibling channels replay their original
+  tokens and their resubscribe is rejected once their TTL lapses (surfacing as a connection-wide
+  `onDisconnect('error')` that also reaches cleanly-reconnected siblings). This does not bite the
+  primary `useChat` case (one channel per conversation). An app multiplexing multiple long-lived
+  channels on one endpoint should be aware of this; a future per-channel `refresh` map would
+  close the gap.
+
+Absent `refresh`, reconnect replays the stored tokens (correct for short/transient drops).
 
 ## Channel Name Limits
 
