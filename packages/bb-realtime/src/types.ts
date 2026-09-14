@@ -44,6 +44,8 @@ export interface SubscribeOptions<T = unknown> {
 	onMessage: (message: T) => void;
 	/** Called when the connection is closed for any reason, including user-initiated `unsubscribe()` (reason: `'client'`). Filter by reason to handle only unexpected drops. */
 	onDisconnect?: (reason: DisconnectReason) => void;
+	/** Called after the transport transparently reconnects and this channel has been resubscribed (with its stored token replayed). Fires once per successful reconnect, after the corresponding `onDisconnect` for the drop that triggered it. Not called on the initial subscribe. */
+	onReconnect?: () => void;
 }
 
 /**
@@ -56,7 +58,7 @@ export interface RealtimeSubscription {
 	unsubscribe(): void;
 	/** Resolves when the server confirms the subscription. Rejects on auth failure. */
 	established: Promise<void>;
-	/** The underlying WebSocket connection shared across subscriptions to the same endpoint. Only present on client-side subscriptions. */
+	/** The underlying WebSocket connection shared across subscriptions to the same endpoint. Only present on client-side subscriptions. Implemented as a live getter, so it always reflects the current socket: after a transparent reconnect it returns the fresh socket rather than the closed one captured at subscribe time. */
 	connection?: WebSocket;
 }
 

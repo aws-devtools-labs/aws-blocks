@@ -42,8 +42,19 @@ const connections = new Map<string, {
 	pendingMessages: string[];
 	pendingEstablished: Map<string, PendingSubscribe[]>;
 	disconnectHandlers: Set<(reason: DisconnectReason) => void>;
+	/** Registered onReconnect callbacks (called after a reconnect resubscribes). */
+	reconnectHandlers: Set<() => void>;
 	/** Pending reconnect timer, tracked so it can be cleared on teardown. */
 	reconnectTimer?: ReturnType<typeof setTimeout>;
+	/**
+	 * Set on a deliberate teardown (`__resetConnectionsForTest`). A torn-down
+	 * connection must never reconnect: `scheduleReconnect` short-circuits on it
+	 * so the deliberate `.close()` below cannot re-arm a timer or resurrect a
+	 * pooled entry (which would keep the Node event loop alive and hang
+	 * `node --test`). Only an UNEXPECTED server drop — where this stays false and
+	 * subscriptions remain — reconnects.
+	 */
+	tornDown?: boolean;
 }>();
 
 const MAX_RECONNECT = 5;
@@ -62,13 +73,15 @@ function getOrCreateConnection(wsUrl: string) {
 			pendingMessages: [],
 			pendingEstablished: new Map(),
 			disconnectHandlers: new Set(),
+			reconnectHandlers: new Set(),
+			tornDown: false,
 		};
 		connections.set(wsUrl, conn);
 	}
 	return conn;
 }
 
-function doConnect(wsUrl: string) {
+function doConnect(wsUrl: string, isReconnect = false) {
 	const conn = getOrCreateConnection(wsUrl);
 	try {
 		conn.ws = new WebSocket(wsUrl);
@@ -86,6 +99,14 @@ function doConnect(wsUrl: string) {
 			conn.pendingSubs.length = 0;
 			for (const msg of conn.pendingMessages) { conn.ws!.send(msg); }
 			conn.pendingMessages.length = 0;
+			// After a reconnect (not the initial connect), the stored channels have
+			// just been resubscribed above — notify onReconnect once, mirroring the
+			// AWS middleware's post-resubscribe semantics. The mock does not track
+			// per-channel resubscribe confirmation, so "resubscribe complete" is the
+			// point at which every resubscribe frame has been sent.
+			if (isReconnect) {
+				conn.reconnectHandlers.forEach(h => { try { h(); } catch {} });
+			}
 		};
 		conn.ws.onmessage = (event) => {
 			try {
@@ -116,6 +137,15 @@ function doConnect(wsUrl: string) {
 			} catch (e) { console.error('[Realtime] Parse error:', e); }
 		};
 		conn.ws.onclose = () => {
+			// Reconnect on ANY close, regardless of code. The mock is the reference
+			// intent-based model: it does not inspect the close code (a legitimate
+			// mid-connection drop can arrive as 1000/1005 as well as 1001/1006), and
+			// the reconnect-vs-terminal decision lives entirely in scheduleReconnect's
+			// tornDown/subscriptions.size guard. A client-initiated teardown
+			// (__resetConnectionsForTest sets tornDown and detaches this handler;
+			// unsubscribe of the last channel leaves subscriptions.size === 0) is
+			// therefore suppressed there. aws-middleware.ts now mirrors this via its
+			// intentionalClose flag instead of the old close-code classification.
 			conn.isConnected = false;
 			conn.disconnectHandlers.forEach(h => { try { h('unknown'); } catch {} });
 			conn.disconnectHandlers.clear();
@@ -129,11 +159,23 @@ function doConnect(wsUrl: string) {
 }
 
 function scheduleReconnect(wsUrl: string) {
-	const conn = getOrCreateConnection(wsUrl);
+	// Look up the EXISTING connection rather than creating one: a stale timer or
+	// an onclose firing after teardown must not resurrect a just-deleted pooled
+	// entry from within scheduleReconnect.
+	const conn = connections.get(wsUrl);
+	// Teardown guard (mirrors aws-middleware, which short-circuits when
+	// subscriptions.size === 0): never reconnect a connection that is gone, has
+	// been deliberately torn down, or has no subscribers left. A client-initiated
+	// close (unsubscribe of the last handler) or the `__resetConnectionsForTest`
+	// teardown closes the socket ON PURPOSE; without this guard its onclose would
+	// arm a fresh setTimeout — and recreate a pooled entry — that keeps the event
+	// loop alive and hangs `node --test`. Only an UNEXPECTED drop (connection
+	// still present, not torn down, subscriptions still live) reconnects.
+	if (!conn || conn.tornDown || conn.subscriptions.size === 0) return;
 	if (conn.reconnectAttempts >= MAX_RECONNECT) return;
 	conn.reconnectAttempts++;
 	const delay = Math.min(1000 * 2 ** (conn.reconnectAttempts - 1), MAX_DELAY_MS);
-	conn.reconnectTimer = setTimeout(() => doConnect(wsUrl), delay);
+	conn.reconnectTimer = setTimeout(() => doConnect(wsUrl, true), delay);
 }
 
 /**
@@ -143,11 +185,26 @@ function scheduleReconnect(wsUrl: string) {
  */
 export function __resetConnectionsForTest(): void {
 	for (const conn of connections.values()) {
-		if (conn.reconnectTimer) clearTimeout(conn.reconnectTimer);
+		// Mark torn down and detach the close handler BEFORE closing the socket.
+		// Order matters: the deliberate `.close()` below fires onclose
+		// asynchronously, and if that handler were still attached it would call
+		// scheduleReconnect → arm a fresh timer / recreate a pooled entry AFTER
+		// the map is cleared, leaving a live setTimeout that keeps `node --test`
+		// from ever exiting. Flagging tornDown (the guard's belt) and detaching
+		// onclose (the suspenders) makes the reset fully quiescent — no timers and
+		// no sockets survive it.
+		conn.tornDown = true;
+		if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = undefined; }
 		conn.subscriptions.clear();
 		conn.channelTokens.clear();
 		conn.disconnectHandlers.clear();
-		try { conn.ws?.close(); } catch {}
+		conn.reconnectHandlers.clear();
+		if (conn.ws) {
+			conn.ws.onmessage = null;
+			conn.ws.onerror = null;
+			conn.ws.onclose = null;
+			try { conn.ws.close(); } catch {}
+		}
 	}
 	connections.clear();
 }
@@ -162,10 +219,11 @@ function ensureConnected(wsUrl: string) {
 	doConnect(wsUrl);
 }
 
-function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, token?: string, onDisconnect?: (reason: DisconnectReason) => void): RealtimeSubscription {
+function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, token?: string, onDisconnect?: (reason: DisconnectReason) => void, onReconnect?: () => void): RealtimeSubscription {
 	const conn = getOrCreateConnection(wsUrl);
 	ensureConnected(wsUrl);
 	if (onDisconnect) conn.disconnectHandlers.add(onDisconnect);
+	if (onReconnect) conn.reconnectHandlers.add(onReconnect);
 
 	let establishedResolve: () => void;
 	let establishedReject: (err: Error) => void;
@@ -198,6 +256,7 @@ function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, to
 				try { onDisconnect('client'); } catch {}
 				conn.disconnectHandlers.delete(onDisconnect);
 			}
+			if (onReconnect) conn.reconnectHandlers.delete(onReconnect);
 			const handlers = conn.subscriptions.get(channel);
 			if (handlers) {
 				handlers.delete(handler);
@@ -211,7 +270,11 @@ function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, to
 			}
 		},
 		established,
-		connection: conn.ws!,
+		// Live getter, not a snapshot: doConnect assigns a fresh conn.ws on every
+		// reconnect, so reading conn.ws here means `.connection` always reflects the
+		// current socket rather than the stale one captured at subscribe time.
+		// Coalesce undefined-through to match the optional `connection?: WebSocket` type.
+		get connection() { return conn.ws ?? undefined; },
 	};
 }
 
@@ -233,7 +296,8 @@ export function hydrate(data: unknown): unknown {
 			subscribe(handlerOrOptions: MessageHandler | SubscribeOptions) {
 				const handler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				const onDisconnect = typeof handlerOrOptions === 'function' ? undefined : handlerOrOptions.onDisconnect;
-				return subscribeTo(wsUrl, channel, handler, token as string | undefined, onDisconnect);
+				const onReconnect = typeof handlerOrOptions === 'function' ? undefined : handlerOrOptions.onReconnect;
+				return subscribeTo(wsUrl, channel, handler, token as string | undefined, onDisconnect, onReconnect);
 			},
 		} satisfies RealtimeChannelClient;
 	}
