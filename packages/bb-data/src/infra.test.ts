@@ -123,7 +123,7 @@ function sharedVpcContext(stack: cdk.Stack, opts: { isolated: boolean }) {
       : []),
   ];
   const vpc = new cdk.aws_ec2.Vpc(stack, 'SharedVpc', { maxAzs: 2, natGateways: 1, subnetConfiguration });
-  const lambdaSecurityGroup = new cdk.aws_ec2.SecurityGroup(stack, 'LambdaSg', { vpc });
+  const computeSecurityGroup = new cdk.aws_ec2.SecurityGroup(stack, 'LambdaSg', { vpc });
   const hasRole = (role: string) =>
     role === 'isolated'
       ? vpc.isolatedSubnets.length > 0
@@ -138,8 +138,8 @@ function sharedVpcContext(stack: cdk.Stack, opts: { isolated: boolean }) {
         : cdk.aws_ec2.SubnetType.PRIVATE_WITH_EGRESS;
   return {
     vpc,
-    lambdaSecurityGroup,
-    lambdaSubnets: { subnetType: cdk.aws_ec2.SubnetType.PRIVATE_WITH_EGRESS },
+    computeSecurityGroup,
+    computeSubnets: { subnetType: cdk.aws_ec2.SubnetType.PRIVATE_WITH_EGRESS },
     selectSubnets(scope: { fullId: string }, role: string, o?: { fallback?: string }) {
       if (hasRole(role)) return { subnetType: typeFor(role) };
       if (o?.fallback && hasRole(o.fallback)) return { subnetType: typeFor(o.fallback) };

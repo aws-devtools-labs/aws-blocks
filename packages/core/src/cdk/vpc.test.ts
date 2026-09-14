@@ -279,7 +279,7 @@ describe('VPC utilities', () => {
 	});
 
 	it('getVpcContext walks up the scope tree', () => {
-		const vpcContext = { vpc: 'mock-vpc', lambdaSecurityGroup: 'mock-sg', lambdaSubnets: {} };
+		const vpcContext = { vpc: 'mock-vpc', computeSecurityGroup: 'mock-sg', computeSubnets: {} };
 		const parent: any = { node: { scope: undefined } };
 		setVpcContext(parent, vpcContext as any);
 
@@ -289,7 +289,7 @@ describe('VPC utilities', () => {
 
 	it('setVpcContext stores context on the scope', () => {
 		const fakeScope: any = { node: { scope: undefined } };
-		const vpcContext = { vpc: 'mock-vpc', lambdaSecurityGroup: 'mock-sg', lambdaSubnets: {} };
+		const vpcContext = { vpc: 'mock-vpc', computeSecurityGroup: 'mock-sg', computeSubnets: {} };
 		setVpcContext(fakeScope, vpcContext as any);
 		assert.equal(getVpcContext(fakeScope), vpcContext);
 	});

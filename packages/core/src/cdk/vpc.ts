@@ -124,7 +124,7 @@ export function initializeVpc(scope: Construct, options: BlocksVpcOptions): VpcC
 
 	const resolvedSubnets = subnets ?? { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS };
 
-	const lambdaSecurityGroup = new ec2.SecurityGroup(scope, 'BlocksLambdaSg', {
+	const computeSecurityGroup = new ec2.SecurityGroup(scope, 'BlocksLambdaSg', {
 		vpc,
 		description: 'Security group for Blocks Lambda functions in VPC',
 		allowAllOutbound: true,
@@ -132,8 +132,8 @@ export function initializeVpc(scope: Construct, options: BlocksVpcOptions): VpcC
 
 	const context: VpcContext = {
 		vpc,
-		lambdaSecurityGroup,
-		lambdaSubnets: resolvedSubnets,
+		computeSecurityGroup,
+		computeSubnets: resolvedSubnets,
 		selectSubnets(scope: SubnetScope, role: SubnetRole, opts?: { fallback?: SubnetRole }): ec2.SubnetSelection {
 			if (vpcHasRole(vpc, role)) {
 				return { subnetType: subnetTypeForRole(role) };
@@ -257,7 +257,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	});
 	if (ctx) {
 		endpointSecurityGroup.addIngressRule(
-			ec2.Peer.securityGroupId(ctx.lambdaSecurityGroup.securityGroupId),
+			ec2.Peer.securityGroupId(ctx.computeSecurityGroup.securityGroupId),
 			ec2.Port.tcp(443),
 			'HTTPS from Blocks Lambda',
 		);

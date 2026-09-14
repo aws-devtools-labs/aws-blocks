@@ -118,8 +118,8 @@ export class LambdaCompute extends Compute {
 			...(vpcContext
 				? {
 						vpc: vpcContext.vpc,
-						vpcSubnets: vpcContext.lambdaSubnets,
-						securityGroups: [vpcContext.lambdaSecurityGroup],
+						vpcSubnets: vpcContext.computeSubnets,
+						securityGroups: [vpcContext.computeSecurityGroup],
 					}
 				: {}),
 		});

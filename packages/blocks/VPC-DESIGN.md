@@ -66,28 +66,34 @@ await BlocksStack.create(app, stackName, {
 
 ## BB Endpoint Registration
 
-Each Building Block declares what it needs from the VPC by implementing
-`getVpcRequirements()`, which returns a plain `VpcRequirements` object. The
-framework collects these at finalization, deduplicates, and provisions.
+Each Building Block declares what it needs from the VPC by passing a plain
+`VpcRequirements` object into the `BuildingBlockScope` constructor. The base
+class registers it in a per-stack requirements registry
+(`vpc-requirements-registry.ts`); `finalizeVpc` reads the registry at
+finalization, deduplicates, and provisions.
 
 ### Registration API
 
 ```typescript
-// On BuildingBlockScope (core/cdk)
-abstract getVpcRequirements(): VpcRequirements;
+// A BB passes its requirements to the BuildingBlockScope constructor:
+super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
 
 interface VpcRequirements {
   gatewayEndpoints?: ec2.GatewayVpcEndpointAwsService[];
   interfaceEndpoints?: ec2.InterfaceVpcEndpointAwsService[];
-  /** Subnet role the BB's parent runtime (shared Lambda) must run in;
-   *  validated at synth, fails the build on a mismatch. */
-  runtimeSubnet?: SubnetRole;
+  /** The BB cannot function without a VPC; when set and no VPC was provided,
+   *  the framework lazily derives a default one. */
+  requiresVpc?: boolean;
+  /** The BB's parent runtime (shared Lambda) must have outbound egress;
+   *  validated at synth against the runtime's resolved placement, fails the
+   *  build on a mismatch. */
+  requiresEgress?: boolean;
 }
 ```
 
 ### Per-BB Declarations
 
-| Building Block | `getVpcRequirements()` returns |
+| Building Block | VPC requirements |
 |----------------|--------------------------------|
 | bb-kv-store | `{ gatewayEndpoints: [DYNAMODB] }` |
 | bb-distributed-table | `{ gatewayEndpoints: [DYNAMODB] }` |
@@ -101,18 +107,22 @@ interface VpcRequirements {
 | bb-realtime | `{ interfaceEndpoints: [APIGATEWAY] }` |
 | bb-auth-cognito | `{ interfaceEndpoints: [SSM] }` |
 | bb-auth-oidc | `{ interfaceEndpoints: [SSM] }` |
-| bb-distributed-data | `{ runtimeSubnet: 'private-with-egress' }` (DSQL over public HTTPS needs Lambda egress) |
+| bb-distributed-data | `{ requiresEgress: true }` (DSQL over public HTTPS needs Lambda egress) |
 
-> CloudWatch Logs and SSM interface endpoints are always provisioned by
-> `finalizeVpc` regardless of BB declarations (Lambda log delivery; framework
-> config in SSM).
+> CloudWatch Logs is always provisioned by `finalizeVpc` regardless of BB
+> declarations (Lambda needs it for log delivery from within a VPC). The SSM
+> interface endpoint is no longer always-on — it flows from BB requirements
+> (AppSetting and the auth BBs), so an app that uses neither gets no SSM
+> endpoint.
 
 ### Always-Added Endpoints
 
-The framework always adds these interface endpoints when `provisionEndpoints !== false`:
+The framework always adds these when `provisionEndpoints !== false`, regardless of BB declarations:
 
-- **CloudWatch Logs** — Lambda needs it for log delivery from within VPC
-- **SSM** — Used by auth BBs and AppSetting
+- **CloudWatch Logs** (interface) — Lambda needs it for log delivery from within a VPC
+- **S3** (gateway) — free, route-table only; used to pull config/secrets/migrations at cold start
+
+SSM is *not* in this list — it is provisioned only when a BB in scope declares it (AppSetting, the auth BBs).
 
 ### Collection and Provisioning
 
@@ -125,8 +135,8 @@ After all BBs are constructed, `finalizeVpc` walks the construct tree, collects 
 ```typescript
 interface VpcContext {
   readonly vpc: ec2.IVpc;
-  readonly lambdaSecurityGroup: ec2.ISecurityGroup;
-  readonly lambdaSubnets: ec2.SubnetSelection;
+  readonly computeSecurityGroup: ec2.ISecurityGroup;
+  readonly computeSubnets: ec2.SubnetSelection;
   selectSubnets(role: SubnetRole): ec2.SubnetSelection;
 }
 ```
@@ -176,7 +186,7 @@ test-apps/vpc-smoke/
 ### Phase 1: CDK-level VPC (this PR)
 
 - `vpc` prop on `BlocksStack` / `BlocksBackend`
-- `getVpcRequirements()()` / `getVpcRequirements()()` on `Scope`
+- `VpcRequirements` passed into the `BuildingBlockScope` constructor, collected in a per-stack registry
 - Per-BB endpoint declarations in each BB's CDK constructor
 - Finalization: collect + deduplicate + provision endpoints
 - Lambda placement in private subnets + security group

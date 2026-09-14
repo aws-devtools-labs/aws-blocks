@@ -13,10 +13,17 @@ VPC support adds recurring AWS costs. Understand these before enabling:
 **Example:** A 2-AZ app using KVStore + Database + AsyncJob + AppSetting:
 - 1 NAT Gateway: ~$32/month
 - 5 interface endpoints × 2 AZs × $7.20: ~$72/month
-  (SQS, Secrets Manager, RDS Data, and the always-on CloudWatch Logs + SSM that
-  `finalizeVpc` provisions for every VPC-attached deployment)
+  (SQS from AsyncJob, Secrets Manager + RDS Data from Database, SSM from
+  AppSetting, and the always-on CloudWatch Logs that `finalizeVpc` provisions
+  for every VPC-attached deployment)
 - 2 gateway endpoints (S3, DynamoDB): $0
 - **Total VPC overhead: ~$104/month**
+
+Endpoints other than CloudWatch Logs are provisioned only from the requirements
+the BBs in scope declare — an app without AppSetting or an auth BB gets no SSM
+endpoint, dropping this example to ~$97/month. Only CloudWatch Logs (Lambda log
+delivery) and the free S3 gateway endpoint (config/secrets/migrations at cold
+start) are always added.
 
 > **Most AWS Blocks apps don't need a VPC.** All Blocks communicate with AWS services over HTTPS through public endpoints by default. A VPC adds cost and complexity — only use one when you have a specific requirement for it.
 
@@ -87,6 +94,9 @@ interface BlocksVpcOptions {
 
   /**
    * Subnet selection for Lambda and all Blocks-managed compute placement.
+   * Any subnets you select must belong to `network`; this is not validated at
+   * synth (CDK can't check an imported subnet), so a mismatch surfaces as a
+   * CloudFormation error at deploy.
    * @default { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }
    */
   subnets?: ec2.SubnetSelection;

@@ -43,6 +43,12 @@ export interface BlocksVpcOptions {
 
 	/**
 	 * Subnet selection for Lambda and Blocks-managed compute placement.
+	 *
+	 * Any subnets you select must belong to {@link network}. This is not
+	 * validated at synth — CDK can't check it for an imported subnet (which
+	 * carries no `vpcId`) — so a mismatch surfaces as a CloudFormation error at
+	 * deploy, not a synth-time failure.
+	 *
 	 * @default { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }
 	 */
 	subnets?: ec2.SubnetSelection;
@@ -127,8 +133,8 @@ export interface SubnetScope {
  */
 export interface VpcContext {
 	readonly vpc: ec2.IVpc;
-	readonly lambdaSecurityGroup: ec2.ISecurityGroup;
-	readonly lambdaSubnets: ec2.SubnetSelection;
+	readonly computeSecurityGroup: ec2.ISecurityGroup;
+	readonly computeSubnets: ec2.SubnetSelection;
 	/**
 	 * Resolve a {@link SubnetRole} to a concrete {@link ec2.SubnetSelection} for a
 	 * resource this Building Block provisions itself, verifying the VPC actually
