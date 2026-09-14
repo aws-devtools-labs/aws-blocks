@@ -808,7 +808,7 @@ The example above is framework-agnostic on purpose — `useChat` has no React im
 
 ### 2. React: hold the instance once, drive `useState` from the callbacks
 
-`useChat` is a factory, not a React hook, so it must **not** run on every render — recreating it drops the WebSocket subscription and conversation state each time. Hold the single instance in a `useRef` (created lazily so it survives re-renders), and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes:
+`useChat` is a factory, not a React hook, so it must **not** run on every render — recreating it drops the WebSocket subscription and conversation state each time. Hold the single instance in a `useRef` (created lazily so it survives re-renders), and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. This example keeps the `api` wiring minimal — it omits the `userId` that the End-to-End example (#1) threads through `createConversation` / `sendMessage`; thread it the same way here when your API needs it (or resolve the user server-side).
 
 ```tsx
 'use client'; // Next.js only — see the note below. Plain React (Vite/CRA) can omit this.
@@ -824,8 +824,11 @@ export function Chat() {
 
   // Create the instance exactly once. The ref survives every re-render,
   // so the subscription and conversation state are never torn down.
-  const chatRef = useRef<ReturnType<typeof useChat>>();
+  // Initialize with `undefined` explicitly — @types/react 19 dropped the
+  // zero-argument useRef overload, so useRef<T>() alone fails to type-check.
+  const chatRef = useRef<ReturnType<typeof useChat>>(undefined);
   if (!chatRef.current) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- useChat is a factory, not a hook; the use-prefix trips the linter's hook heuristic.
     chatRef.current = useChat({
       api: {
         sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId),
@@ -874,7 +877,7 @@ export function Chat() {
 
 Key points:
 
-- **One instance, held in a ref.** `useRef` + the lazy `if (!chatRef.current)` guard is the React idiom for "construct once." Never call `useChat(...)` directly in the render body — that is the footgun the factory note warns about.
+- **One instance, held in a ref.** `useRef` + the lazy `if (!chatRef.current)` guard is the React idiom for "construct once." Because the identifier is `use`-prefixed, `eslint-plugin-react-hooks` (bundled in the default Next.js and CRA configs) flags the guarded call as a conditional hook (`react-hooks/rules-of-hooks`). `useChat` is a factory, not a hook, so this is a false positive — the inline `eslint-disable-next-line` above the call silences it. What you must **not** do is call `useChat(...)` unguarded on every render: that recreates the instance each time and is the footgun the factory note warns about.
 - **Callbacks are your reactivity bridge.** `useChat` mutates its own message list in place; `onMessagesChange` / `onLoadingChange` hand you the new value so you can `setState` and trigger a render. Passing `setMessages` / `setIsLoading` directly is enough.
 - **Clean up on unmount** with `chat.destroy()` in a `useEffect` cleanup, so the Realtime subscription is closed.
 - **Approvals:** add `onInterrupt: setInterrupts` (with a `const [interrupts, setInterrupts] = useState([])`) to render an approval UI, then call `chat.respondToInterrupt([{ interruptId, approved: true }])`.
