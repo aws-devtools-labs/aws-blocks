@@ -311,6 +311,14 @@ export type HostingProps = {
     /** Days to retain build artifacts in S3. Default: 30. */
     buildRetentionDays?: number;
     /**
+     * Optional advisory hint: how often you expect to deploy, in days. Used
+     * ONLY at synth to emit a warning when your rollback window
+     * (`buildRetentionDays`) is shorter than your deploy cadence, which would
+     * let superseded builds expire before your next deploy. The live build is
+     * never affected (#480), so this is a rollback-window note, not an error.
+     */
+    deployIntervalDays?: number;
+    /**
      * Opt-in S3 inventory of `builds/` (3.3). When enabled, a daily
      * CSV report of every object under `builds/` lands in a
      * dedicated inventory bucket. Useful for cost audits — find

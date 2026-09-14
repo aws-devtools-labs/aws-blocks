@@ -21,18 +21,19 @@
  * synthesize it.)
  */
 
-import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
+import { after, before, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { isBlocksError } from '@aws-blocks/core';
+import { BlocksPresets, BlocksStack, Scope } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import { Compute } from '@aws-blocks/core/cdk/internal';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import * as cdk from 'aws-cdk-lib';
+import { Template } from 'aws-cdk-lib/assertions';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { AsyncJob, AsyncJobErrors } from './index.cdk.js';
 
 const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
@@ -40,6 +41,17 @@ const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as
 /** A non-Lambda compute, to exercise the "unsupported compute" synth guard. */
 class FakeCompute extends Compute {
 	setEnv(_key: string, _value: string): void {}
+	// Observability hooks are irrelevant here — stub them to satisfy Compute.
+	protected applyTracing(): void {}
+	protected healthWidgets(): IWidget[][] {
+		return [];
+	}
+	protected loggingWidgets(): IWidget[][] {
+		return [];
+	}
+	protected tracingWidgets(): IWidget[][] {
+		return [];
+	}
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -261,7 +273,12 @@ describe('AsyncJob option guards', () => {
 	test('CDK guard: maxBatchingWindowSeconds 301 is rejected', async () => {
 		const stack = await makeStack('AsyncGuardWindow301');
 		assertInvalidOption(
-			() => new AsyncJob(stack, 'jobs', { handler: async () => {}, maxBatchingWindowSeconds: 301, trackStatus: false }),
+			() =>
+				new AsyncJob(stack, 'jobs', {
+					handler: async () => {},
+					maxBatchingWindowSeconds: 301,
+					trackStatus: false,
+				}),
 			/maxBatchingWindowSeconds/,
 			/got: 301/,
 		);
@@ -270,7 +287,12 @@ describe('AsyncJob option guards', () => {
 	test('CDK guard: a negative maxBatchingWindowSeconds is rejected', async () => {
 		const stack = await makeStack('AsyncGuardWindowNeg');
 		assertInvalidOption(
-			() => new AsyncJob(stack, 'jobs', { handler: async () => {}, maxBatchingWindowSeconds: -1, trackStatus: false }),
+			() =>
+				new AsyncJob(stack, 'jobs', {
+					handler: async () => {},
+					maxBatchingWindowSeconds: -1,
+					trackStatus: false,
+				}),
 			/maxBatchingWindowSeconds/,
 			/got: -1/,
 		);
@@ -279,7 +301,12 @@ describe('AsyncJob option guards', () => {
 	test('CDK guard: a fractional maxBatchingWindowSeconds is rejected', async () => {
 		const stack = await makeStack('AsyncGuardWindowFrac');
 		assertInvalidOption(
-			() => new AsyncJob(stack, 'jobs', { handler: async () => {}, maxBatchingWindowSeconds: 2.5, trackStatus: false }),
+			() =>
+				new AsyncJob(stack, 'jobs', {
+					handler: async () => {},
+					maxBatchingWindowSeconds: 2.5,
+					trackStatus: false,
+				}),
 			/maxBatchingWindowSeconds/,
 			/got: 2.5/,
 		);
@@ -288,7 +315,12 @@ describe('AsyncJob option guards', () => {
 	test('CDK guard: NaN maxBatchingWindowSeconds is rejected', async () => {
 		const stack = await makeStack('AsyncGuardWindowNaN');
 		assertInvalidOption(
-			() => new AsyncJob(stack, 'jobs', { handler: async () => {}, maxBatchingWindowSeconds: NaN, trackStatus: false }),
+			() =>
+				new AsyncJob(stack, 'jobs', {
+					handler: async () => {},
+					maxBatchingWindowSeconds: NaN,
+					trackStatus: false,
+				}),
 			/maxBatchingWindowSeconds/,
 			/got: NaN/,
 		);

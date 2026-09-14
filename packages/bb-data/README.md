@@ -223,7 +223,8 @@ try {
     // Transaction could not commit
   }
   if (isBlocksError(e, DatabaseErrors.SerializationFailure)) {
-    // Serializable-isolation conflict with a concurrent transaction — safe to retry
+    // Serializable-isolation conflict with a concurrent transaction — serialized
+    // as HTTP 409 (Conflict), retriable — safe to retry
   }
   if (isBlocksError(e, DatabaseErrors.ConnectionFailed)) {
     // Cannot reach the database — includes a `minCapacity: 0` cluster resuming

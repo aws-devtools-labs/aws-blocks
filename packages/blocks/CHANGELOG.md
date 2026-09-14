@@ -1,5 +1,274 @@
 # @aws-blocks/blocks
 
+## 0.5.0
+
+### Minor Changes
+
+- 9111c0c: feat(bb-agent): cap model and tool calls per turn to bound runaway cost
+  
+  Adds two per-turn safety caps to `AgentConfig`, both defaulting to `20`:
+  
+  - `maxLlmCalls` — the maximum number of model (Bedrock) invocations in a single
+    turn. Model calls are the unit Bedrock bills for, so this is the most direct
+    guard against an agent that loops its reason→act cycle indefinitely; because
+    every tool round needs a model call, it transitively bounds tool loops too.
+  - `maxToolIterations` — the maximum number of tool calls in a single turn
+    (parallel tool batches count each call).
+  
+  When either cap is exceeded the turn is cancelled and the client receives an
+  `error` chunk (so `complete()` rejects) instead of `done`. Both caps are
+  enforced with in-loop Strands hooks, so they work identically on every compute
+  target with no cross-process signaling.
+  
+  Behavior change: turns are now capped at 20 model calls and 20 tool calls by
+  default. This is generous for a single turn, but agents that legitimately reason
+  over many steps or chain many tools must raise `maxLlmCalls` /
+  `maxToolIterations`, or set a cap to `false` to disable it. The caps bound call
+  *count*, not tokens or wall-clock — pair them with a billing or CloudWatch alarm
+  on Bedrock spend for real cost protection.
+  
+  This is a `minor` bump. Every package here is pre-1.0, where `minor` is this
+  repo's signal for a change that can alter existing behavior. The two options are
+  new and optional and there's an opt-out (raise the cap, or set it to `false`),
+  but the new default changes the runtime behavior of every existing agent — a
+  turn that legitimately exceeds 20 model or tool calls is now cut off unless the
+  customer opts out — so it ships as `minor` rather than `patch` to surface that
+  clearly. The counts cover a whole logical turn: they live in the agent's
+  persisted session state, and the per-turn reset is keyed on a turn id applied
+  lazily (the session snapshot is restored inside `stream()`, so an up-front reset
+  would be overwritten and the budget would leak into the next turn), so a turn
+  paused on a human-in-the-loop interrupt keeps its budget across `resume()` while
+  a new message always starts a fresh one. A cap value must be a positive integer
+  or `false`; anything else throws `InvalidModelConfigException`. The umbrella
+  `@aws-blocks/blocks` gets the same bump because it re-exports `AgentConfig`.
+- c45eb92: Extend stack-wide `BlocksDefaults` (introduced in the Infrastructure Options work) with three additive fields, and adopt them across the Blocks-managed infrastructure. Each field is read independently via `option ?? scope.defaults.field` — a per-block option always wins, and no field is derived from another.
+  
+  `@aws-blocks/core/cdk` now adds to `BlocksDefaults` (and both `BlocksPresets`):
+  
+  - `logRetention: RetentionDays` — how long Blocks-managed CloudWatch log groups keep events. Preset sandbox `ONE_WEEK`, production `ONE_YEAR`.
+  - `throttling: { rateLimit, burstLimit }` — request-rate limits applied to every Blocks API Gateway stage. Preset sandbox `200 / 400`, production `1000 / 2000`.
+  - `accessLogging: boolean` — structured JSON access logs on every Blocks API Gateway stage. **Off by default in both presets** (opt-in), because enabling it mutates the account/region-level API Gateway CloudWatch role singleton.
+  
+  Also newly exported from `@aws-blocks/core/cdk`: the `BlocksThrottling` type and `ensureApiGatewayAccount()` (provisions the account-level API Gateway CloudWatch Logs role once per stack). `Scope` gains a `handlerLogGroup` getter for the shared handler log group.
+  
+  **Log retention** — Blocks-managed log groups now follow `defaults.logRetention` instead of AWS's infinite default: the shared handler Lambda (now owned by `BlocksStack`/`BlocksBackend` as `scope.handlerLogGroup`), the `bb-distributed-table` GSI-manager Lambdas, the `bb-distributed-data` DSQL migration Lambda, the `bb-data` Aurora migration Lambda, and the `bb-app-setting` secret-init Lambda. `bb-logger` reconfigures the shared handler group's retention — **only when an explicit per-Logger `retention` is set** (a bare `Logger` no longer writes it back, so it can't clobber another Logger's value) — rather than creating its own `/aws/lambda/<fn>` group. (Note: the framework `custom-resources.Provider` Lambdas these BBs wrap still use AWS's default retention — the L2 `Provider` exposes no log-group/retention override.)
+  
+  **Throttling** — applied to the core REST API stage and the `bb-realtime` WebSocket stage. On a WebSocket stage the throttle unit is messages/second across the connection.
+  
+  **Access logging** — when enabled, each stage writes structured JSON access logs to a dedicated CloudWatch log group (retention = `defaults.logRetention`, removal policy = `defaults.removalPolicy` so production **RETAIN**s the audit trail on teardown). The account-level API Gateway CloudWatch Logs role is provisioned once per stack and shared across stages.
+  
+  **⚠️ Behavior changes on upgrade:**
+  - **Throttling now caps the core REST API and WebSocket stages.** Before this change these stages had no stage-level throttle (they ran at the API Gateway account default, ~10k rps). After upgrade, sandbox is capped at 200 rps / 400 burst and production at 1000 rps / 2000 burst. Apps serving above the production ceiling will see `429`s — raise it with a per-stack `throttling` override (`defaults: { ...BlocksPresets.production, throttling: { rateLimit, burstLimit } }`).
+  - **The shared handler Lambda log group changes.** The handler previously logged to Lambda's auto-created `/aws/lambda/<fn>` group (infinite retention); it now logs to a framework-owned group with the default retention. On upgrade the old auto group is left orphaned in CloudWatch (unmanaged, still infinite) — delete it manually if you want its history/cost gone. Likewise a `bb-logger`-created retention group from a prior version is replaced.
+  - **Access logging** is **opt-in (off in both presets)**. When enabled it requires the account-level API Gateway CloudWatch Logs role — an account/region-level singleton, so enabling it is safe for **one Blocks stack per region** (see `ensureApiGatewayAccount()` for the multi-stack teardown caveat). It defaults off (rather than on for production) so an upgrade never mutates that account-wide singleton without an explicit opt-in.
+  - **`BlocksDefaults` gains three required fields** (`logRetention`, `throttling`, `accessLogging`). Apps that spread a `BlocksPresets` preset (the documented path) are unaffected; code that hand-rolls a literal `BlocksDefaults` object will need to add the new fields to compile.
+  
+  `bb-dashboard` now points its log widgets at the framework-owned handler log
+  group (`scope.handlerLogGroup.logGroupName`) instead of reconstructing
+  `/aws/lambda/<fn>` — the handler now writes to a dedicated group with a
+  CDK-generated name, so the old convention would leave the "Recent Errors" /
+  "Log Volume" widgets querying an empty group.
+  
+  Hosting adoption of these defaults (SSR REST API + compute log groups) ships in a separate change.
+- 4a830a6: feat: route event-block resources to their resolved compute
+  
+  AsyncJob, CronJob, and Realtime now attach their compute-bound resources to a
+  compute resolved at synth rather than the stack's shared handler:
+  
+  - AsyncJob attaches its SQS event source to the resolved compute's function;
+  - CronJob points its EventBridge Scheduler target at the resolved compute's function;
+  - Realtime binds its shared WebSocket API integrations to the stack's **default**
+    compute (its routes are a stack-level singleton) and grants `postToConnection`
+    to the shared execution role, so `publish()` works from any compute.
+  
+  Each block requires a Lambda compute today and fails at synth with a typed
+  `UnsupportedCompute` error (assertable via `isBlocksError`) on any other type.
+  The check uses a duplicate-copy-safe brand (`LambdaCompute.isLambdaCompute`,
+  backed by a `Symbol.for` marker) instead of `instanceof`, so it does not misfire
+  when two copies of `bb-lambda-compute` resolve in one dependency tree.
+  
+  On the default single-Lambda setup the resolved/default compute is the stack's
+  default, whose function is the shared handler — so this is non-breaking with no
+  change to synthesized infrastructure. AsyncJob also grants SQS send to the shared
+  execution role rather than the handler directly.
+  
+  New public surface (hence `minor`):
+  
+  - `@aws-blocks/core` exports `blocksError(name, message)` (the producer half of
+    the `isBlocksError` contract) and `sanitizeConfigKey(id)` from `./bb-utils`
+    (the single env-var-key sanitizer both config writers and runtime readers use).
+  - `@aws-blocks/bb-lambda-compute` adds a `./cdk` subpath exposing the CDK-typed
+    `LambdaCompute` and its `LambdaCompute.isLambdaCompute` guard.
+  - `bb-async-job` / `bb-cron-job` / `bb-realtime` add an `UnsupportedCompute`
+    error member.
+  
+  `@aws-blocks/bb-agent` builds AsyncJob and Realtime internally, so its CDK test
+  moves onto the `BlocksStack.create` harness instead of a handler-only stub.
+  Test-only change — no runtime behavior change to the Agent.
+- f2f186c: fix(hosting): DeleteOldBuilds no longer expires the build that is currently served (#480)
+  
+  The `DeleteOldBuilds` S3 lifecycle rule expired every object under `builds/`
+  after `buildRetentionDays` (default 30), including the build that CloudFront KVS
+  `meta.b` currently points to. An app that did not deploy within the retention
+  window had its live build's objects expired out from under an otherwise-healthy
+  stack — the router kept rewriting to the now-empty prefix, so every static path
+  returned 403 (hosting ≤ 0.1.4) or 404 (≥ 0.1.5) while the API path stayed 200.
+  Recovery required a redeploy.
+  
+  **Fix.** The lifecycle rule now matches only objects tagged
+  `aws-blocks:build-state=superseded`. At the KVS cutover, after the pointer flips
+  to the new build, the cutover handler tags the *outgoing* build's objects
+  superseded (best-effort; list + tag/untag only — the handler is granted **no** S3
+  delete-object permission). The live build is never tagged, so it is never expired,
+  regardless of deploy cadence. Superseded builds are still cleaned up after
+  `buildRetentionDays`. S3 lifecycle `TagFilters` are inclusion-only (there is no
+  "NOT tagged" predicate), which is why the superseded build is tagged rather than
+  the live build excluded.
+  
+  **Rollback-safety hardening.** The same cutover also *clears* the build-state tag
+  on the *incoming* build's objects, symmetric to tagging the outgoing one. Without
+  this, a rollback that re-points `meta.b` back to a retained build that was tagged
+  superseded by an earlier cutover would hand the now-live build to
+  `DeleteOldBuilds` — #480 again. Clearing is best-effort and uses
+  `s3:DeleteObjectTagging` (tags only, never objects).
+  
+  **`buildRetentionDays` is now configurable from `@aws-blocks/core`.** Previously
+  `HostingProps` dropped it (only `retainOnDelete` was forwarded), so the only way
+  to change retention was an L1 bucket override. It now flows through to the
+  hosting bucket lifecycle rule. Must be at least `skewProtection.maxAge`
+  (converted to days) or synth throws `InvalidSkewProtectionMaxAgeError`, as
+  before.
+  
+  **New advisory guard.** An optional `storage.deployIntervalDays` hint emits a
+  synth-time **warning** (never an error) when the deploy cadence is at or beyond
+  `buildRetentionDays`, i.e. when superseded builds could age out before the next
+  deploy and shrink the rollback window. The live build is unaffected, so this is
+  a rollback-window note, not a correctness gate.
+  
+  Pre-1.0 `minor` per this repo's convention: the change alters the synthesized
+  lifecycle rule and the `KvKeys` custom resource (a benign in-place bucket-config
+  + Lambda-role update on the next deploy; no bucket replacement), and adds a new
+  IAM grant (`s3:ListBucket` + `s3:PutObjectTagging` + `s3:DeleteObjectTagging`,
+  scoped to `builds/*`) to the
+  cutover handler. Build artifacts uploaded before the upgrade carry no
+  `build-state` tag and are therefore never expired by the new rule — including
+  the live build — so the upgrade cannot delete a running build; from the next
+  deploy onward each superseded build is tagged and reclaimed normally.
+- 46b7c89: Generate the local `aws-blocks` package's client entry point on fresh checkouts, under the correct export conditions.
+  
+  The templates declare `./client.js` as the package's `browser`/`import` entry and gitignore it as generated, so a scaffold built on any machine other than the one that scaffolded it failed to resolve the package, and `cdk synth` failed with it (the Hosting block builds the frontend during synthesis).
+  
+  `@aws-blocks/blocks` gains a `blocks-generate-client` bin (mirroring `blocks-generate-spec` and `blocks-vendorize`) that spawns the core generator worker with `--conditions=aws-runtime`, so the emitted client imports `aws-middleware` rather than `mock-middleware` regardless of how the hook is invoked. `@aws-blocks/core` exports the existing `generate-client-worker` subpath so the bin can resolve it. The templates wire `"prebuild": "blocks-generate-client"` (including `backend`, where the hook is dormant until a `build` script exists) and gitignore `.hosting/`, the Vite output written during synthesis.
+- 2cb9d74: refactor(bb-agent): remove inert `structuredOutput` field from `AgentConfig`
+  
+  `AgentConfig` declared `structuredOutput?: z.ZodType`, but the field was never
+  implemented, read, or consumed anywhere — no JSDoc, no consumer, no docs, no
+  tests. It advertised a capability that does not exist, so setting it was a silent
+  no-op. The declaration is removed (along with its line in the generated
+  `API.md` report); no runtime behavior changes, because nothing ever read it.
+  
+  Structured output remains a planned future LLM-BB feature, tracked separately.
+  This change only deletes the dead placeholder surface — it does not add or design
+  any real structured-output support.
+  
+  This is a `minor` bump. Removing a property from an exported interface is a
+  breaking change to the public type surface, but every package here is pre-1.0,
+  where this repo's convention is that `minor` — not `major` — is the signal for a
+  breaking or behavior-altering change (see the `maxLlmCalls`/`maxToolIterations`
+  caps, which shipped as `minor` for exactly that reason). Practically the blast
+  radius is a compile error only: code that set `structuredOutput` was already
+  getting no-op behavior, so the error points at configuration that never did
+  anything and the fix is to delete it. The umbrella `@aws-blocks/blocks` gets the
+  same bump because it re-exports `AgentConfig`.
+
+### Patch Changes
+
+- fe0f04a: fix(blocks): drop `jobQueueUrl` from the `Agent` `getSdkIdentifiers` overload
+  
+  The Agent BB no longer runs its loop on an internal AsyncJob (it moved to a Bedrock AgentCore Runtime),
+  so it no longer registers a `jobQueueUrl` identifier. The umbrella `getSdkIdentifiers(agent)` overload
+  still declared it, promising a field that resolves to `undefined` at runtime. Remove it; the overload
+  now returns only `conversationsTableName`, `messagesTableName`, `sessionBucketName`, `realtimeWsUrl`,
+  and `realtimeCallbackUrl`.
+- 585feea: Document AuthCognito setAuthState error-state semantics, including retriable challenge failures and CodeMismatch handling.
+- 64ddd74: refactor(core): retarget the config registry to the shared role and every compute
+  
+  `finalizeConfigRegistry` no longer takes a single handler function. It now takes
+  the owning construct plus the shared execution role and the stack's computes
+  (`finalizeConfigRegistry(root, executionRole, computes)`) and:
+  
+  - grants `s3:GetObject` on the config object **once to the shared execution
+    role** instead of to one function's role, so every compute that assumes the
+    role can read it; and
+  - stamps `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` on **every compute** via
+    `compute.setEnv(...)` rather than on a single hardcoded handler.
+  
+  Adds a per-stack compute registry (`registerCompute` / `getComputes`): computes
+  self-register on their owning stack in the `Compute` base constructor (state
+  keyed on the stack, resolved via `cdk.Stack.of()`, like the config registry), so
+  a multi-stack synth keeps each stack's computes isolated. `create()` reads the
+  registry directly via `getComputes(stack)`.
+  
+  Behavior-preserving for the default single-compute app: the same config object
+  is written to S3, the same two coordinates reach the runtime, and the same
+  `s3:GetObject` permission is available — now via the shared role. Internal
+  refactor; no public API or runtime-config-loading change.
+- 165093b: `CronJob`: validate the schedule (and timezone) at synth so an invalid expression fails fast instead of after minutes of deploy.
+  
+  The CDK layer passed `schedule`/`timezone` straight into the EventBridge `CfnSchedule` with no validation, so an invalid expression — e.g. `rate(10 seconds)` (EventBridge's minimum is 1 minute) or a malformed `cron(...)` — passed `cdk synth` and was only rejected by EventBridge minutes into provisioning. The mock already validated these, so local dev and deploy diverged.
+  
+  The schedule parser and timezone check are now a shared `schedule` module used by both the mock and the CDK construct. `CronJob`'s constructor validates up front and throws `CronJobErrors.InvalidSchedule` / `CronJobErrors.InvalidTimezone` at synth, before any infrastructure is created.
+  
+  The synth gate is deliberately lenient for `cron(...)` — it checks the 6-field shape and defers field-level semantics (`L`/`W`/`#`, year fields, named days) to EventBridge — so it never rejects an advanced-but-valid schedule. The local mock, which must actually simulate the schedule, still can't model those forms; it now throws the new `CronJobErrors.ScheduleNotSupported` (rather than `InvalidSchedule`) for them, so local dev doesn't call a deployable schedule "invalid". No behavior change for valid, mock-supported schedules.
+- 8de4a56: `DistributedTable` mock: order GSI sort-key ties deterministically to match DynamoDB.
+  
+  When a GSI sort key was shared by multiple items, the mock's `query` fell back to Map insertion order for the tied rows — so results depended on write order / disk-reload order and diverged from deployed behavior. The mock now tie-breaks on the base-table primary key (partition key, then sort key), matching DynamoDB's observed ordering for index rows with equal sort keys, and reverses the whole order (ties included) under `order: 'desc'`. AWS doesn't document a contractual guarantee for the tie order, so the mock is intentionally deterministic even where DynamoDB's contract is unspecified. No change for unique sort keys.
+- Updated dependencies [9111c0c]
+- Updated dependencies [fe0f04a]
+- Updated dependencies [1b66571]
+- Updated dependencies [d8a3901]
+- Updated dependencies [585feea]
+- Updated dependencies [64ddd74]
+- Updated dependencies [df667c5]
+- Updated dependencies [df667c5]
+- Updated dependencies [64ddd74]
+- Updated dependencies [df667c5]
+- Updated dependencies [646614b]
+- Updated dependencies [165093b]
+- Updated dependencies [ed158cf]
+- Updated dependencies [c45eb92]
+- Updated dependencies [8de4a56]
+- Updated dependencies [4a830a6]
+- Updated dependencies [f2f186c]
+- Updated dependencies [46b7c89]
+- Updated dependencies [1da58fd]
+- Updated dependencies [4b74c7f]
+- Updated dependencies [2cb9d74]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/bb-agent@0.4.0
+  - @aws-blocks/bb-file-bucket@0.2.0
+  - @aws-blocks/bb-auth-cognito@0.1.9
+  - @aws-blocks/bb-knowledge-base@0.2.3
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-cron-job@0.2.0
+  - @aws-blocks/bb-data@0.2.7
+  - @aws-blocks/bb-logger@0.1.6
+  - @aws-blocks/bb-realtime@0.2.0
+  - @aws-blocks/bb-distributed-table@0.1.7
+  - @aws-blocks/bb-distributed-data@0.1.8
+  - @aws-blocks/bb-app-setting@0.2.1
+  - @aws-blocks/bb-dashboard@0.1.5
+  - @aws-blocks/bb-lambda-compute@0.4.0
+  - @aws-blocks/bb-async-job@0.2.0
+  - @aws-blocks/hosting@0.3.0
+  - @aws-blocks/auth-common@0.1.7
+  - @aws-blocks/bb-auth-basic@0.1.8
+  - @aws-blocks/bb-auth-oidc@0.1.10
+  - @aws-blocks/bb-email-client@0.1.6
+  - @aws-blocks/bb-kv-store@0.1.8
+  - @aws-blocks/bb-metrics@0.1.6
+  - @aws-blocks/bb-tracer@0.1.8
+
 ## 0.4.0
 
 ### Minor Changes

@@ -1,5 +1,27 @@
 # @aws-blocks/bb-knowledge-base
 
+## 0.2.3
+
+### Patch Changes
+
+- 64ddd74: test: adapt CDK tests to the new config-registry finalize signature
+  
+  Test-only change: both packages' CDK tests were updated to call
+  `finalizeConfigRegistry` with its new `(root, executionRole, computes)`
+  signature. No runtime or public API change.
+- Updated dependencies [df667c5]
+- Updated dependencies [df667c5]
+- Updated dependencies [64ddd74]
+- Updated dependencies [df667c5]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [4a830a6]
+- Updated dependencies [f2f186c]
+- Updated dependencies [46b7c89]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+
 ## 0.2.2
 
 ### Patch Changes

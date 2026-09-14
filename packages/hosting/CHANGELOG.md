@@ -1,5 +1,95 @@
 # @aws-blocks/hosting
 
+## 0.3.0
+
+### Minor Changes
+
+- f2f186c: fix(hosting): DeleteOldBuilds no longer expires the build that is currently served (#480)
+  
+  The `DeleteOldBuilds` S3 lifecycle rule expired every object under `builds/`
+  after `buildRetentionDays` (default 30), including the build that CloudFront KVS
+  `meta.b` currently points to. An app that did not deploy within the retention
+  window had its live build's objects expired out from under an otherwise-healthy
+  stack — the router kept rewriting to the now-empty prefix, so every static path
+  returned 403 (hosting ≤ 0.1.4) or 404 (≥ 0.1.5) while the API path stayed 200.
+  Recovery required a redeploy.
+  
+  **Fix.** The lifecycle rule now matches only objects tagged
+  `aws-blocks:build-state=superseded`. At the KVS cutover, after the pointer flips
+  to the new build, the cutover handler tags the *outgoing* build's objects
+  superseded (best-effort; list + tag/untag only — the handler is granted **no** S3
+  delete-object permission). The live build is never tagged, so it is never expired,
+  regardless of deploy cadence. Superseded builds are still cleaned up after
+  `buildRetentionDays`. S3 lifecycle `TagFilters` are inclusion-only (there is no
+  "NOT tagged" predicate), which is why the superseded build is tagged rather than
+  the live build excluded.
+  
+  **Rollback-safety hardening.** The same cutover also *clears* the build-state tag
+  on the *incoming* build's objects, symmetric to tagging the outgoing one. Without
+  this, a rollback that re-points `meta.b` back to a retained build that was tagged
+  superseded by an earlier cutover would hand the now-live build to
+  `DeleteOldBuilds` — #480 again. Clearing is best-effort and uses
+  `s3:DeleteObjectTagging` (tags only, never objects).
+  
+  **`buildRetentionDays` is now configurable from `@aws-blocks/core`.** Previously
+  `HostingProps` dropped it (only `retainOnDelete` was forwarded), so the only way
+  to change retention was an L1 bucket override. It now flows through to the
+  hosting bucket lifecycle rule. Must be at least `skewProtection.maxAge`
+  (converted to days) or synth throws `InvalidSkewProtectionMaxAgeError`, as
+  before.
+  
+  **New advisory guard.** An optional `storage.deployIntervalDays` hint emits a
+  synth-time **warning** (never an error) when the deploy cadence is at or beyond
+  `buildRetentionDays`, i.e. when superseded builds could age out before the next
+  deploy and shrink the rollback window. The live build is unaffected, so this is
+  a rollback-window note, not a correctness gate.
+  
+  Pre-1.0 `minor` per this repo's convention: the change alters the synthesized
+  lifecycle rule and the `KvKeys` custom resource (a benign in-place bucket-config
+  + Lambda-role update on the next deploy; no bucket replacement), and adds a new
+  IAM grant (`s3:ListBucket` + `s3:PutObjectTagging` + `s3:DeleteObjectTagging`,
+  scoped to `builds/*`) to the
+  cutover handler. Build artifacts uploaded before the upgrade carry no
+  `build-state` tag and are therefore never expired by the new rule — including
+  the live build — so the upgrade cannot delete a running build; from the next
+  deploy onward each superseded build is tagged and reclaimed normally.
+
+### Patch Changes
+
+- 1da58fd: `HostingConstruct`: retain the CDKBucketDeployment custom resources so they're skipped on stack teardown. A BucketDeployment custom resource runs a delete-time handler (object cleanup / CloudFront invalidation — aws-cdk#15891, aws-cdk#23708); when it fails it wedges the whole stack in `DELETE_FAILED`, orphaning the CloudFront distribution. Retaining the CRs removes them from the teardown path so the stack — and its distribution — delete cleanly (object cleanup is handled by the bucket's `autoDeleteObjects` / sandbox teardown). Observed leaking distributions on the high-volume Amplify SSR-adapter e2e (`deployment-type=standalone`), which consumes this construct.
+- 4b74c7f: feat(hosting,pipeline): managed-value JSON codec + a public per-stage post-deploy hook
+  
+  **`@aws-blocks/hosting` — managed-value JSON codec.** `secret()`/`config()` markers
+  are branded with a `Symbol` (and may carry a non-serializable `schema`), so they do
+  not survive `JSON.stringify`/`JSON.parse` — the brand is dropped and
+  `isManagedValue()` then returns false. Any consumer that carries a config object
+  containing markers across a JSON boundary (e.g. serializing per-stage config into a
+  build environment variable and reading it back in a later phase) now has a lossless
+  round-trip: `encodeManagedValue`/`decodeManagedValue`, the `managedValueReplacer` /
+  `managedValueReviver` for use with `JSON.stringify`/`JSON.parse`, plus
+  `isManagedValueJSON`, `ManagedValueJSON`, `MANAGED_VALUE_JSON_TAG`,
+  `MANAGED_VALUE_JSON_VERSION`, and the typed `ManagedValueCodecError`. The wire form
+  is a versioned, cross-build compatibility boundary: `decodeManagedValue` accepts
+  `unknown` and validates exhaustively — throwing `ManagedValueCodecError` on an
+  unsupported version, unknown kind, or malformed value — while the reviver leaves
+  anything that is not an exact wire value untouched (a tagged object carrying extra
+  fields is not mistaken for a marker, so no data is silently dropped). A marker's
+  `schema` object is not serializable and is not transported, but its operational bit
+  is, so a schema-bearing marker round-trips **without silently changing runtime
+  behavior** (the far side still JSON-parses the stored value); deep re-validation
+  still requires re-declaring the schema on the far side.
+  
+  **`@aws-blocks/pipeline` — `postStage` hook.** New optional `postStage` prop on
+  `PipelineProps`. It is invoked once per stage with the stage, its config, and the
+  resolved pipeline source (`PostStageContext`), and its returned steps are attached
+  as that stage's post-deploy steps. When the stage also has a `bakeTime`, the bake
+  step is made to depend on the hook's steps, so baking begins only after they
+  complete rather than racing them in parallel. This lets a higher-level construct run
+  a second per-stage deploy phase (one that needs the first phase's outputs) without
+  matching internal construct names to rediscover the stage's source.
+  
+  Both additions are backward compatible — new exports and one new optional prop.
+
 ## 0.2.0
 
 ### Minor Changes

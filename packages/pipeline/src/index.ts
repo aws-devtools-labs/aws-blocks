@@ -24,4 +24,5 @@ export type {
   PipelineSourceConfig,
   PipelineStageConfig,
   PipelineSynthConfig,
+  PostStageContext,
 } from './types.js';

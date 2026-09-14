@@ -132,6 +132,27 @@ describe('create-blocks-app CLI argument parsing', () => {
   });
 });
 
+describe('create-blocks-app template metadata', () => {
+  it('every deployable template has a build script', () => {
+    const templatesDir = join(__dirname, '..', 'templates');
+    const templates = readdirSync(templatesDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    const missing: string[] = [];
+    for (const name of templates) {
+      const pkgPath = join(templatesDir, name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+      const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
+      // Keep this in step with the standard vendorize-script guard below:
+      // a template with a sandbox lifecycle is deployable and must expose build.
+      if (scripts.sandbox && (typeof scripts.build !== 'string' || scripts.build.length === 0)) {
+        missing.push(name);
+      }
+    }
+    assert.deepStrictEqual(missing, [], `Deployable templates missing "build": ${missing.join(', ')}`);
+  });
+});
+
 describe('create-blocks-app auto-detection', () => {
   it('detects existing project with package.json when no target dir given', () => {
     const tmpDir = join(__dirname, '../.test-autodetect-no-arg');

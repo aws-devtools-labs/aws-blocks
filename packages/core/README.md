@@ -76,6 +76,18 @@ The body is JSON-RPC 2.0:
 - `params` is a POSITIONAL array of the method's arguments. A named object also works (its values are used in order).
 - Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status.
 
+Error responses use these JSON-RPC codes:
+
+| Code | Meaning | When Blocks uses it |
+|------|---------|---------------------|
+| `-32700` | Parse error | Request body is not valid JSON. |
+| `-32600` | Invalid Request | Body is not a valid Blocks JSON-RPC request, such as missing `jsonrpc: "2.0"` or a `method` that is not `namespace.method`. |
+| `-32601` | Method not found | The requested namespace or method is not exported by the backend. |
+| `-32602` | Invalid params | Reserved for JSON-RPC parameter validation failures. Application-level validation should throw an `ApiError` with the appropriate HTTP status instead. |
+| `-32603` | Internal error | Reserved for generic JSON-RPC internal errors. Unhandled application errors currently use code `500`. |
+
+Errors thrown with `ApiError` use the positive HTTP status as the JSON-RPC `error.code` (for example, `401`, `404`, or `409`) and include `error.data.name` when an error name is available. The typed client converts JSON-RPC errors back into `ApiError`.
+
 Working example:
 
 ```bash
@@ -312,6 +324,19 @@ new Hosting(stack, 'Web', {
 ```
 
 The `framework` option selects the frontend type: `'spa' | 'static' | 'nextjs'`. When omitted, the framework is auto-detected by reading your app's OWN `package.json` (not `node_modules`): a `next` dependency → `nextjs`; otherwise `spa`; and `static` when there is no `package.json`. Set `framework: 'spa'` explicitly to override auto-detection — e.g. when a stray `next` dependency would otherwise trigger an unwanted Next.js/OpenNext build. Full reference lives in the source JSDoc.
+
+Old builds are retained for rollback and expired by an S3 lifecycle rule after `buildRetentionDays` (default **30**). The build currently being served is never expired regardless of deploy cadence — only superseded builds are cleaned up. Only builds superseded by a normal `Update` cutover are auto-tagged (and thus auto-expired): pre-existing/orphaned builds and aborted or rolled-back deploys are never tagged and need manual cleanup (e.g. an S3 inventory / Batch Operations sweep). Raise the window with `buildRetentionDays` (it must be ≥ `skewProtection.maxAge` in days):
+
+```typescript
+new Hosting(stack, 'Web', {
+  root: join(__dirname, '..'),
+  api: blocksStack,
+  buildRetentionDays: 90,
+});
+```
+
+Core's top-level `buildRetentionDays` maps to the L3 construct's `storage.buildRetentionDays`.
+
 
 ## Building Blocks
 
