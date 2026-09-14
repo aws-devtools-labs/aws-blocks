@@ -105,7 +105,10 @@ export interface UseChatOptions {
 	 * (via `api.agentGetChannel`), which useChat cannot reach — so it cannot self-mint.
 	 * Provide this and useChat forwards it to the subscription (as `refresh`) so long turns
 	 * survive the channel (~1h) / connect (~2h) token TTLs: a reconnect mints fresh tokens
-	 * instead of replaying expired ones. Typically `() => api.agentGetChannel(conversationId)`.
+	 * instead of replaying expired ones. This MUST resolve to the RAW channel descriptor
+	 * (the wire object with `__blocks`/token fields), NOT a hydrated channel client — so
+	 * point it at a raw-descriptor server method, e.g.
+	 * `async () => ({ ...(await api.agentGetRawDescriptor(conversationId)), __blocks: 'realtime/channel' })`.
 	 * When omitted, a reconnect replays the original tokens (fine for short turns).
 	 */
 	refresh?: () => Promise<ChatChannelDescriptor>;
@@ -179,7 +182,8 @@ const RECONNECT_FAILSAFE_MS = 660_000;
  *   },
  *   // Re-mint a fresh channel descriptor on reconnect so long turns outlive the channel
  *   // (~1h) / connect (~2h) token TTLs. useChat forwards this to the subscription as sub.refresh.
- *   refresh: () => api.agentGetChannel(conversationId),
+ *   // Must resolve to the RAW descriptor (wire object with token fields), not a hydrated channel.
+ *   refresh: async () => ({ ...(await api.agentGetRawDescriptor(conversationId)), __blocks: 'realtime/channel' }),
  *   onMessagesChange: (msgs) => renderMessages(msgs),
  *   onLoadingChange: (loading) => updateSpinner(loading),
  * });
