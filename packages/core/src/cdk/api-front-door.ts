@@ -102,9 +102,12 @@ export function resolvedApiFrontDoorUrl(stack: cdk.Stack): string | undefined {
  * One-shot aspect that decides the front door at synth — after the whole tree
  * (including a `Hosting` construct built after `create()` returned) exists.
  *
- * - **Hosting present** → do nothing: Hosting's own distribution already fronts
- *   `/aws-blocks/api/*`, so provisioning a second distribution would be a
- *   throwaway. (Per-namespace fan-out onto Hosting's distribution arrives with
+ * - **Hosting present (same stack)** → do nothing: Hosting's own distribution
+ *   already fronts `/aws-blocks/api/*`, so provisioning a second distribution
+ *   would be a throwaway. Detection is per-stack (the handle is published on the
+ *   stack), so a `Hosting` construct in a *different* stack is invisible here —
+ *   those apps pass `apiFrontDoor: 'none'` so no redundant distribution is
+ *   created. (Per-namespace fan-out onto Hosting's distribution arrives with
  *   multi-compute, D4.)
  * - **No Hosting, provisioning on** → create the Blocks-owned distribution with
  *   a single default behavior → the stack's API origin, publish its URL for the
@@ -112,7 +115,7 @@ export function resolvedApiFrontDoorUrl(stack: cdk.Stack): string | undefined {
  * - **No Hosting, provisioning off** (sandbox / opt-out) → do nothing; the
  *   client keeps hitting the API Gateway directly.
  */
-class ApiFrontDoorAspect implements IAspect {
+class ApiApiFrontDoorAspect implements IAspect {
 	private done = false;
 
 	constructor(
@@ -161,7 +164,7 @@ class ApiFrontDoorAspect implements IAspect {
  * including any `Hosting` construct built afterward — exists) via a CDK aspect.
  * The front door is the stable public origin for the backend HTTP surface, so
  * adding/scaling compute never changes the browser hostname (auth cookies
- * persist). See {@link ApiFrontDoorAspect} for the Hosting-present / provisioning
+ * persist). See {@link ApiApiFrontDoorAspect} for the Hosting-present / provisioning
  * branches.
  *
  * @param stack - The owning stack.
@@ -173,5 +176,5 @@ export function scheduleApiFrontDoor(scope: Construct, apiUrl: string, provision
 	// Add the aspect to `scope` (the BlocksStack/BlocksBackend) so its visit runs
 	// at synth and the front door is scoped under this owner — several backends
 	// in one stack stay independent.
-	Aspects.of(scope).add(new ApiFrontDoorAspect(scope, apiUrl, provision));
+	Aspects.of(scope).add(new ApiApiFrontDoorAspect(scope, apiUrl, provision));
 }

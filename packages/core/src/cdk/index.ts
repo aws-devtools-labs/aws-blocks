@@ -88,7 +88,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	}
 	/**
 	 * The default compute's API Gateway REST API.
-	 * @deprecated The managed CloudFront front door is now the app's public
+	 * @deprecated The managed CloudFront API front door is now the app's public
 	 * origin; use it (or a specific compute's own `apiGateway`) instead of the
 	 * stack-level gateway. Removed in a later multi-compute change (Track D, D5).
 	 */
@@ -97,7 +97,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	}
 	/**
 	 * The default compute's RPC endpoint URL.
-	 * @deprecated The client now resolves the front-door origin (via the `ApiUrl`
+	 * @deprecated The client now resolves the API front-door origin (via the `ApiUrl`
 	 * output → `config.json`); this stack-level accessor is removed in a later
 	 * multi-compute change (Track D, D5).
 	 */
@@ -175,10 +175,18 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 				);
 			}
 		}
-		// Schedule the managed CloudFront API front door (prod default; off in
-		// sandbox). Deferred to synth via an aspect so it can observe a Hosting
-		// construct built after create() returns and reuse its distribution.
-		scheduleApiFrontDoor(stack, stack.apiUrl, stack.defaults.provisionApiFrontDoor);
+		// Schedule the managed CloudFront API front door. The explicit
+		// `apiFrontDoor` prop wins; otherwise fall back to the preset default
+		// (`provisionApiFrontDoor`: on in production, off in sandbox). Deferred to
+		// synth via an aspect so it can observe a Hosting construct built after
+		// create() returns and reuse its distribution.
+		const provisionApiFrontDoor =
+			props.apiFrontDoor === 'cloudfront'
+				? true
+				: props.apiFrontDoor === 'none'
+					? false
+					: stack.defaults.provisionApiFrontDoor;
+		scheduleApiFrontDoor(stack, stack.apiUrl, provisionApiFrontDoor);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
@@ -216,7 +224,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 			);
 		}
 
-		// ApiUrl → the front-door origin when one is provisioned (resolved at synth
+		// ApiUrl → the API front-door origin when one is provisioned (resolved at synth
 		// by the aspect), else the API Gateway directly. Lazy so it reflects the
 		// aspect's decision; the deploy script writes it into the client config.json.
 		new cdk.CfnOutput(stack, 'ApiUrl', {

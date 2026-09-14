@@ -32,8 +32,8 @@ export { Compute } from './compute/compute.js';
 // compute selection resolves through this at finalize.
 export { getComputes } from './compute/compute-registry.js';
 export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
-// Front-door helpers — framework-internal seams. `httpOriginFromApiUrl` builds
+// API front-door helpers — framework-internal seams. `httpOriginFromApiUrl` builds
 // the API origin from an API URL token (shared with Hosting); the others let
 // Hosting publish its distribution and let the `ApiUrl` output read the
-// resolved front-door URL. Not a customer surface.
+// resolved API front-door URL. Not a customer surface.
 export { httpOriginFromApiUrl, registerHostingDistribution, resolvedApiFrontDoorUrl } from './api-front-door.js';

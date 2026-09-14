@@ -126,9 +126,15 @@ export interface BlocksDefaults {
 	 * apps still get the API front door so a later single→multi transition never
 	 * changes the origin.
 	 *
-	 * When a frontend is present, Blocks reuses Hosting's distribution instead of
-	 * creating a second one (see the front-door design); this flag only controls
-	 * whether Blocks provisions/uses an API front door at all.
+	 * When a `Hosting` frontend is present **in the same stack**, Blocks reuses
+	 * Hosting's distribution instead of creating a second one; this flag only
+	 * controls whether Blocks provisions/uses an API front door at all. A `Hosting`
+	 * construct in a *different* stack can't be detected — set
+	 * `apiFrontDoor: 'none'` on `create()` there so no redundant distribution is
+	 * provisioned.
+	 *
+	 * The `apiFrontDoor` prop on `BlocksStack.create` / `BlocksBackend.create`
+	 * (`'cloudfront' | 'none'`) overrides this default per app.
 	 */
 	provisionApiFrontDoor: boolean;
 }

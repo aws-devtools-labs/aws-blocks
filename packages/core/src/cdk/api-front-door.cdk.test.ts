@@ -5,7 +5,7 @@
  * CDK-synth tests for the managed CloudFront API front door (Track D, D2 + D3).
  *
  * The front door is scheduled by core's `scheduleApiFrontDoor` and resolved at
- * synth by a one-shot aspect (`ApiFrontDoorAspect`). Because the aspect runs at
+ * synth by a one-shot aspect (`ApiApiFrontDoorAspect`). Because the aspect runs at
  * synth — after the whole tree, including any `Hosting` construct built after
  * `create()`, exists — these tests must synthesize (`Template.fromStack`) to
  * exercise it. The aspect's branches:
@@ -18,7 +18,7 @@
  * only checks presence in that branch), so no real Hosting distribution is
  * needed here.
  *
- * `scheduleApiFrontDoor` / `ApiFrontDoorAspect` / `httpOriginFromApiUrl` are all core
+ * `scheduleApiFrontDoor` / `ApiApiFrontDoorAspect` / `httpOriginFromApiUrl` are all core
  * code, so these tests live in core. A real app's default compute comes from
  * `@aws-blocks/bb-lambda-compute` (which core can't depend on), so — exactly
  * like `blocks-stack.test.ts` — this uses an inline `StubLambdaCompute` that
@@ -107,12 +107,17 @@ after(() => {
 	rmSync(tmpDir, { recursive: true, force: true });
 });
 
-async function makeStack(id: string, defaults: BlocksDefaults): Promise<BlocksStack> {
+async function makeStack(
+	id: string,
+	defaults: BlocksDefaults,
+	apiFrontDoor?: 'cloudfront' | 'none',
+): Promise<BlocksStack> {
 	const app = new cdk.App();
 	return BlocksStack.create(app, id, {
 		backendHandlerPath: handlerPath,
 		backendCDKPath: backendPath,
 		defaults,
+		apiFrontDoor,
 		defaultComputeFactory: stubComputeFactory,
 	});
 }
@@ -124,7 +129,7 @@ function apiUrlOutput(template: Template): string {
 
 describe('API front door (scheduled aspect, gated on defaults.provisionApiFrontDoor)', () => {
 	test('production, no Hosting: one distribution + ApiUrl points at the front door', async () => {
-		const stack = await makeStack('FrontDoorProd', BlocksPresets.production);
+		const stack = await makeStack('ApiFrontDoorProd', BlocksPresets.production);
 		const template = Template.fromStack(stack);
 
 		template.resourceCountIs('AWS::CloudFront::Distribution', 1);
@@ -138,7 +143,7 @@ describe('API front door (scheduled aspect, gated on defaults.provisionApiFrontD
 	});
 
 	test('sandbox, no Hosting: no front door; ApiUrl stays the API Gateway', async () => {
-		const stack = await makeStack('FrontDoorSandbox', BlocksPresets.sandbox);
+		const stack = await makeStack('ApiFrontDoorSandbox', BlocksPresets.sandbox);
 		const template = Template.fromStack(stack);
 
 		template.resourceCountIs('AWS::CloudFront::Distribution', 0);
@@ -149,15 +154,25 @@ describe('API front door (scheduled aspect, gated on defaults.provisionApiFrontD
 	});
 
 	test('explicit provisionApiFrontDoor:false opts a prod app out', async () => {
-		const stack = await makeStack('FrontDoorProdOptOut', {
+		const stack = await makeStack('ApiFrontDoorProdOptOut', {
 			...BlocksPresets.production,
 			provisionApiFrontDoor: false,
 		});
 		Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 0);
 	});
 
+	test("apiFrontDoor: 'none' opts a prod app out (prop overrides the preset default)", async () => {
+		const stack = await makeStack('ApiFrontDoorPropNone', BlocksPresets.production, 'none');
+		Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 0);
+	});
+
+	test("apiFrontDoor: 'cloudfront' forces a front door on in sandbox (prop overrides the preset default)", async () => {
+		const stack = await makeStack('ApiFrontDoorPropCloudfront', BlocksPresets.sandbox, 'cloudfront');
+		Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 1);
+	});
+
 	test('Hosting present: reuse it — no Blocks-owned distribution is created', async () => {
-		const stack = await makeStack('FrontDoorWithHosting', BlocksPresets.production);
+		const stack = await makeStack('ApiFrontDoorWithHosting', BlocksPresets.production);
 		// Simulate a Hosting construct publishing its distribution after create().
 		// The aspect only checks presence in this branch, so a stub suffices.
 		registerHostingDistribution(stack, {} as unknown as Distribution);

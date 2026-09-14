@@ -334,6 +334,23 @@ export interface BlocksStackProps extends StackProps {
    * option. See `BlocksDefaults` in `@aws-blocks/core/cdk`.
    */
   defaults: BlocksDefaults;
+  /**
+   * How the backend's public HTTP API is fronted.
+   *
+   * - `'cloudfront'` — provision a managed CloudFront distribution as the stable
+   *   public origin, so adding or scaling a compute never changes the browser
+   *   hostname and a `Secure` auth cookie is never dropped. When a `Hosting`
+   *   frontend is present **in the same stack**, Blocks reuses Hosting's
+   *   distribution instead of creating a second one.
+   * - `'none'` — no managed API front door; the client calls the API Gateway
+   *   directly. Use this when a separate frontend already fronts
+   *   `/aws-blocks/api/*` — e.g. a `Hosting` app in a **different** stack, which
+   *   Blocks cannot detect to reuse (see the API front-door docs).
+   *
+   * When omitted, follows the preset's `defaults.provisionApiFrontDoor` (on in
+   * `production`, off in `sandbox`).
+   */
+  apiFrontDoor?: 'cloudfront' | 'none';
 }
 
 export class BlocksStack {
