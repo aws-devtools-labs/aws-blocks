@@ -343,34 +343,48 @@ alarm cannot be placed in a non-`us-east-1` hosting stack.
 
 When `HostingConstruct` detects that the stack's region is **not**
 `us-east-1` it automatically synthesizes a companion stack named
-`<stackName>-CfMonitoring` pinned to `us-east-1`. That stack:
+`<stackName>-CfMonitoring-<addr>` (the `<addr>` suffix keeps the id
+unique when several hosting constructs share a stage) pinned to
+`us-east-1`. That stack:
 
 - creates its own encrypted SNS topic (the alarm action target),
-- wires the CloudFront 5xx rate alarm to that topic, and
+- wires the CloudFront 5xx rate alarm to that topic,
+- applies the same `monitoring.subscriptions` you pass to the hosting
+  construct, so you subscribe in one place and both regions are covered,
+  and
 - emits a `MonitoringTopicArnUsEast1` CloudFormation output so operators
-  can subscribe their on-call pipeline to it.
+  who want the raw ARN can find it.
 
 > **Requirement:** because the companion stack is region-pinned you must
 > set `env: { account, region }` on the parent hosting stack when
 > deploying outside `us-east-1`, exactly as you would for a WAF stack
-> (see `waf_construct.ts`). An unresolved (`Token.isUnresolved`) region
-> is left to the CDK to resolve at deploy time.
+> (see `waf_construct.ts`). Env-agnostic off-region synth (an unresolved
+> `Token` region with an unresolved account) throws
+> `MonitoringEnvRequiredError` rather than silently dropping the alarm.
 
-To opt out — for example in a region where the CloudFront distribution
-is managed separately — set `monitoring.cloudFrontAlarm: 'skip'`. The
-construct emits a CDK warning and omits the alarm entirely.
+Off-region placement is **always on** — there is no opt-out. The
+CloudFront 5xx alarm is the whole point of `monitoring`, and a
+silently-missing alarm is exactly the bug this fixes (#481).
+
+Subscribe with endpoint subscriptions (`EmailSubscription` /
+`UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions`):
 
 ```ts
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
+
 new HostingConstruct(this, 'Hosting', {
   // ...
   monitoring: {
-    cloudFrontAlarm: 'skip', // suppress the us-east-1 companion stack
+    subscriptions: [new subs.EmailSubscription('oncall@example.com')],
   },
 });
 ```
 
-The default value (`'usEast1Stack'`) creates the companion stack. In
-`us-east-1` no companion stack is created — the alarm stays local.
+Resource-target subscriptions (Lambda/SQS) are not yet supported —
+applying them to the us-east-1 topic would create an unresolvable
+cross-region reference. For a custom action, reach the alarms directly
+via `hosting.monitoring.alarms`. In `us-east-1` no companion stack is
+created — the alarm stays local.
 
 
 ## Development
