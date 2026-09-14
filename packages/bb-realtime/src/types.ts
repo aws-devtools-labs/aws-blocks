@@ -44,7 +44,7 @@ export interface SubscribeOptions<T = unknown> {
 	onMessage: (message: T) => void;
 	/** Called when the connection is closed for any reason, including user-initiated `unsubscribe()` (reason: `'client'`). Filter by reason to handle only unexpected drops. */
 	onDisconnect?: (reason: DisconnectReason) => void;
-	/** Called after the transport transparently reconnects and this channel has been resubscribed (with its stored token replayed). Fires once per successful reconnect, after the corresponding `onDisconnect` for the drop that triggered it. Not called on the initial subscribe. */
+	/** Called after the transport transparently reconnects and this channel has been resubscribed (with its stored token replayed). Fires once per successful reconnect, after the corresponding `onDisconnect` for the drop that triggered it. Not called on the initial subscribe. Applies to client-side (hydrated) subscriptions only — a server-side `subscribe()` has no transport reconnect, so an `onReconnect` passed to a server-obtained handle is never fired. */
 	onReconnect?: () => void;
 }
 
