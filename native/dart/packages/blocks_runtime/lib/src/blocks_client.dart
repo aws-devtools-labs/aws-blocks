@@ -69,7 +69,28 @@ class BlocksClient {
       }
     }
 
-    return _httpClient.post(Uri.parse(baseUrl), headers: headers, body: body);
+    return _httpClient.post(_rpcUri(method), headers: headers, body: body);
+  }
+
+  /// The URI a JSON-RPC call is POSTed to: `{baseUrl}/{namespace}`.
+  ///
+  /// The namespace segment lets a front door route each namespace to the compute
+  /// that hosts it; a single-compute backend serves every namespace path from the
+  /// same origin, so it is safe there too. The namespace also stays in the
+  /// JSON-RPC body, which is what the server dispatches on — the path is purely a
+  /// routing hint.
+  ///
+  /// [method] is `'{namespace}.{method}'`; a method with no namespace posts to
+  /// [baseUrl] unchanged. [baseUrl] itself is deliberately left untouched —
+  /// `OidcClient` derives the auth origin from it by stripping the
+  /// `/aws-blocks/api` suffix, which a namespaced base URL would silently defeat.
+  Uri _rpcUri(String method) {
+    final dot = method.indexOf('.');
+    // dot == -1: un-namespaced. dot == 0: empty namespace; nothing to append.
+    if (dot <= 0) return Uri.parse(baseUrl);
+    final namespace = method.substring(0, dot);
+    final base = baseUrl.replaceAll(RegExp(r'/+$'), '');
+    return Uri.parse('$base/$namespace');
   }
 
   dynamic _parseResponse(http.Response response) {

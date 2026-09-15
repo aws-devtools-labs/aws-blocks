@@ -13,6 +13,6 @@ Route each API namespace to the compute that hosts it — the multi-compute requ
 
 **Single-compute apps are unaffected in behavior** — every namespace path resolves to the same compute, and the per-namespace API Gateway routes the previous release mounted already serve them.
 
-Non-breaking, but **redeploy the backend and the frontend together**: a client from this release requests per-namespace paths, which a backend older than the release that mounted per-namespace API Gateway routes will not serve.
+The native Swift, Kotlin, and Dart clients address namespaces the same way, so every client reaches the right compute. They are versioned separately and ship their own changelog entries.
 
-Native (Swift/Kotlin/Dart) clients still post to the base RPC path. They keep working, but their traffic all reaches the default compute; their per-namespace path lands with the native client work.
+Non-breaking, but **redeploy the backend and the frontend together**: a client from this release requests per-namespace paths, which a backend older than the release that mounted per-namespace API Gateway routes will not serve.
