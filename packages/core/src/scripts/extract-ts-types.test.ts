@@ -580,3 +580,139 @@ describe('extractMethodTypes — open-shape intersections', () => {
 		}
 	});
 });
+
+describe('extractMethodTypes — namespace returned by a factory, then destructured (regression: #444)', () => {
+	it('keys a destructured factory namespace qualified, with real schemas', () => {
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+				class Scope { constructor(id: string) {} }
+
+				class NamespaceFactory {
+					constructor(private readonly scope: Scope) {}
+					createNamespaces() {
+						return {
+							indirectNamespace: new ApiNamespace(this.scope, 'indirectNamespace', () => ({
+								async getIndirectGreeting(times: number): Promise<string> { return 'hi'; },
+							})),
+						};
+					}
+				}
+
+				const scope = new Scope('repro');
+				export const directNamespace = new ApiNamespace(scope, 'directNamespace', () => ({
+					async getDirectGreeting(name: string): Promise<number> { return name.length; },
+				}));
+				const { indirectNamespace } = new NamespaceFactory(scope).createNamespaces();
+				export { indirectNamespace };
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			// The factory-returned namespace is now attributed to its binding name,
+			// exactly like the directly-constructed one.
+			const indirect = types.get('indirectNamespace.getIndirectGreeting');
+			assert.ok(indirect, 'indirectNamespace.getIndirectGreeting should be keyed by namespace');
+			assert.strictEqual((indirect.params[0].schema as any).type, 'number');
+			assert.strictEqual((indirect.returnType as any).type, 'string');
+
+			const direct = types.get('directNamespace.getDirectGreeting');
+			assert.ok(direct, 'directNamespace.getDirectGreeting should be present');
+			assert.strictEqual((direct.params[0].schema as any).type, 'string');
+			assert.strictEqual((direct.returnType as any).type, 'number');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('a factory namespace sharing a method name with a direct one does NOT cross-assign', () => {
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+				class Scope { constructor(id: string) {} }
+
+				class Factory {
+					constructor(private readonly scope: Scope) {}
+					build() {
+						return {
+							subscriptions: new ApiNamespace(this.scope, 'subscriptions', () => ({
+								async create(topicCount: number): Promise<{ subId: number }> { return { subId: 1 }; },
+							})),
+						};
+					}
+				}
+
+				const scope = new Scope('app');
+				export const widgets = new ApiNamespace(scope, 'widgets', () => ({
+					async create(label: string): Promise<{ widgetId: string }> { return { widgetId: 'w' }; },
+				}));
+				const { subscriptions } = new Factory(scope).build();
+				export { subscriptions };
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			// Each namespace keeps its OWN param type under a distinct qualified key.
+			assert.strictEqual((types.get('widgets.create')?.params[0].schema as any)?.type, 'string');
+			assert.strictEqual((types.get('subscriptions.create')?.params[0].schema as any)?.type, 'number');
+			// The first-pass AST walk still emits a lingering bare `create` for the
+			// factory namespace, but it never overrides a qualified key: the
+			// direct namespace's qualified `widgets.create` is unaffected above, and
+			// `generate-spec` prefers the qualified key (see the collision test in
+			// generate-spec.test.ts, which asserts this end-to-end in the output).
+			// So the bare entry can't reintroduce the #445 cross-assignment here.
+			assert.strictEqual((types.get('widgets.create')?.params[0].schema as any)?.type, 'string');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('array/nested destructuring falls through to the bare key (documented boundary)', () => {
+		// Only a top-level identifier and a shallow object binding pattern are
+		// attributed to a namespace. An array pattern (`const [ns] = factory()`)
+		// falls through to the bare-key path — the schema is still recovered (the
+		// AST walk found `new ApiNamespace(...)`), just under the bare method name,
+		// which generate-spec's #498 fallback resolves when there's no collision.
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+				class Scope { constructor(id: string) {} }
+
+				class Factory {
+					constructor(private readonly scope: Scope) {}
+					build() {
+						return [
+							new ApiNamespace(this.scope, 'tupleNs', () => ({
+								async ping(count: number): Promise<string> { return 'p'; },
+							})),
+						] as const;
+					}
+				}
+				const scope = new Scope('app');
+				const [tupleNs] = new Factory(scope).build();
+				export { tupleNs };
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			// Not attributed to the binding (array pattern), so no qualified key…
+			assert.ok(!types.has('tupleNs.ping'), 'array pattern is not attributed (documented boundary)');
+			// …but the schema is still present under the bare name (soft fallback).
+			const bare = types.get('ping');
+			assert.ok(bare, 'method schema is still recovered under the bare key');
+			assert.strictEqual((bare.params[0].schema as any)?.type, 'number');
+			assert.strictEqual((bare.returnType as any)?.type, 'string');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

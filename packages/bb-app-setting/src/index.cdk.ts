@@ -14,6 +14,9 @@ import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 
 export { AppSettingErrors } from './errors.js';
 export type { AppSettingOptions } from './types.js';
+export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
+
+import { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 /**
  * CDK construct for AppSetting. Creates a single SSM parameter (String or
@@ -347,7 +350,7 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 		onEventHandler: secretInitFn,
 	});
 
-	new cdk.CustomResource(stack, 'BlocksSecretsBulk', {
+	new cdk.CustomResource(stack, SECRETS_BULK_CONSTRUCT_ID, {
 		serviceToken: provider.serviceToken,
 		properties: {
 			Parameters: cdk.Lazy.any({ produce: () => state!.params }),

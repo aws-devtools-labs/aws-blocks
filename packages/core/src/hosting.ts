@@ -788,6 +788,9 @@ export class Hosting extends Construct {
       for (const dep of assetDeployments) {
         configDeployment.node.addDependency(dep);
       }
+
+      // Delay route cutover until resolved config replaces the static placeholder.
+      hosting.addBuildAssetDependency(configDeployment);
     }
 
     // ── 9. Register public origin + CORS hosting origin into S3 config ──
