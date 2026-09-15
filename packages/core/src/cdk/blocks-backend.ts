@@ -66,6 +66,23 @@ export interface BlocksBackendProps {
 	 * corresponding stack default.
 	 */
 	defaults: BlocksDefaults;
+	/**
+	 * How the backend's public HTTP API is fronted.
+	 *
+	 * - `'cloudfront'` — provision a managed CloudFront distribution as the stable
+	 *   public origin, so adding or scaling a compute never changes the browser
+	 *   hostname and a `Secure` auth cookie is never dropped. When a `Hosting`
+	 *   frontend is present **in the same stack**, Blocks reuses Hosting's
+	 *   distribution instead of creating a second one.
+	 * - `'none'` — no managed API front door; the client calls the API Gateway
+	 *   directly. Use this when a separate frontend already fronts
+	 *   `/aws-blocks/api/*` — e.g. a `Hosting` app in a **different** stack, which
+	 *   Blocks cannot detect to reuse (see the API front-door docs).
+	 *
+	 * When omitted, follows the preset's `defaults.provisionApiFrontDoor` (on in
+	 * `production`, off in `sandbox`).
+	 */
+	apiFrontDoor?: 'cloudfront' | 'none';
 }
 
 /**
@@ -224,11 +241,20 @@ export class BlocksBackend extends Construct {
 	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
 		return this.requireDefaultCompute().fn;
 	}
-	/** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
+	/**
+	 * The default compute's API Gateway REST API.
+	 * @deprecated The managed CloudFront API front door is now the app's public
+	 * origin; use it (or a specific compute's own `apiGateway`) instead of the
+	 * stack-level gateway. Removed in a later multi-compute change.
+	 */
 	get gateway(): apigateway.RestApi {
 		return this.requireDefaultCompute().apiGateway;
 	}
-	/** The default compute's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+	/**
+	 * The default compute's RPC endpoint URL.
+	 * @deprecated The client now resolves the API front-door origin; this
+	 * stack-level accessor is removed in a later multi-compute change.
+	 */
 	get apiUrl(): string {
 		return this.requireDefaultCompute().apiUrl;
 	}
@@ -338,9 +364,17 @@ export class BlocksBackend extends Construct {
 		addBlocksStackMetadata(cdk.Stack.of(backend));
 
 		// Schedule the managed CloudFront API front door (prod default; off in
-		// sandbox). Resolved by a synth-time aspect, so it observes the whole app;
-		// the client is not switched to it here (that is a later change).
-		scheduleApiFrontDoor(backend, backend.apiUrl, backend.defaults.provisionApiFrontDoor);
+		// sandbox). Deferred to synth via an aspect so it can observe a Hosting
+		// construct built after create() returns and reuse its distribution.
+		// The explicit `apiFrontDoor` prop wins; otherwise fall back to the preset
+		// default (`provisionApiFrontDoor`: on in production, off in sandbox).
+		const provisionApiFrontDoor =
+			props.apiFrontDoor === 'cloudfront'
+				? true
+				: props.apiFrontDoor === 'none'
+					? false
+					: backend.defaults.provisionApiFrontDoor;
+		scheduleApiFrontDoor(backend, backend.apiUrl, provisionApiFrontDoor);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));
