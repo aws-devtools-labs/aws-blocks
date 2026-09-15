@@ -70,6 +70,18 @@ public final class BlocksClient {
         cookieStore.removeAll()
     }
 
+    /// The API namespace a JSON-RPC method belongs to — the segment before the
+    /// first `.` in `"{namespace}.{method}"`.
+    ///
+    /// Returns `nil` for a method with no namespace (the generator emits a bare
+    /// method name for un-namespaced operations), in which case the request keeps
+    /// going to the base URL.
+    static func namespace(of method: String) -> String? {
+        guard let dot = method.firstIndex(of: ".") else { return nil }
+        let namespace = String(method[method.startIndex ..< dot])
+        return namespace.isEmpty ? nil : namespace
+    }
+
     /// Creates a URLSession that never touches the system cookie store.
     private static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
@@ -84,9 +96,18 @@ public final class BlocksClient {
     ///
     /// Returns `nil` if the result is JSON `null`.
     public func execute(_ request: BlocksRequest) async throws -> Data? {
-        guard let requestURL = URL(string: url) else {
+        guard let baseURL = URL(string: url) else {
             throw RPCError(message: "Invalid URL: \(url)")
         }
+
+        // Address the namespace as `{base}/{namespace}` so a front door can route
+        // each namespace to the compute that hosts it. The namespace also stays in
+        // the JSON-RPC body, which is what the server dispatches on — the path is
+        // purely a routing hint, and a single-compute backend serves every
+        // namespace path from the same origin. Un-namespaced methods keep posting
+        // to the base URL unchanged.
+        let requestURL = BlocksClient.namespace(of: request.method)
+            .map { baseURL.appendingPathComponent($0) } ?? baseURL
 
         var urlRequest = URLRequest(url: requestURL)
         urlRequest.httpMethod = "POST"

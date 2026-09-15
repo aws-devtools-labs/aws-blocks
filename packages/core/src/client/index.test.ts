@@ -116,3 +116,68 @@ try {
     assert.ok(result.includes('PASS'), `Expected PASS, got: ${result}`);
   });
 });
+
+/**
+ * Tests for the per-namespace request path (multi-compute routing).
+ *
+ * The client POSTs to `{baseUrl}/{namespace}` so a front door can route each
+ * namespace to the compute that hosts it. These use the `{ url }` override so
+ * they never touch config.json discovery (which caches globally), letting them
+ * run in-process against a stubbed `fetch`.
+ */
+describe('Client per-namespace request path', () => {
+  /** Calls one method through the client and returns what `fetch` received. */
+  async function captureRequest(
+    namespace: string,
+    baseUrl: string,
+  ): Promise<{ url: string; body: any }> {
+    const { ApiNamespaceClient } = await import('./index.js');
+    const originalFetch = globalThis.fetch;
+    let captured: { url: string; body: any } | undefined;
+    globalThis.fetch = (async (input: any, init: any) => {
+      captured = { url: String(input), body: JSON.parse(init.body) };
+      return { json: async () => ({ jsonrpc: '2.0', result: 'ok', id: 1 }) };
+    }) as unknown as typeof globalThis.fetch;
+    try {
+      const api = ApiNamespaceClient<{ hello: () => Promise<string> }>(namespace, { url: baseUrl });
+      await api.hello();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    assert.ok(captured, 'fetch should have been called');
+    return captured;
+  }
+
+  it('appends /{namespace} to the base URL', async () => {
+    const { url } = await captureRequest('orders', 'https://api.example.com/aws-blocks/api');
+    assert.strictEqual(url, 'https://api.example.com/aws-blocks/api/orders');
+  });
+
+  it('routes distinct namespaces to distinct paths', async () => {
+    // This is the whole point of the path segment: without it every namespace
+    // would hit one path and a front door could not fan out to per-namespace computes.
+    const orders = await captureRequest('orders', 'https://api.example.com/aws-blocks/api');
+    const authApi = await captureRequest('authApi', 'https://api.example.com/aws-blocks/api');
+    assert.notStrictEqual(orders.url, authApi.url);
+    assert.strictEqual(authApi.url, 'https://api.example.com/aws-blocks/api/authApi');
+  });
+
+  it('tolerates a trailing slash on the base URL without doubling it', async () => {
+    const { url } = await captureRequest('orders', 'https://api.example.com/aws-blocks/api/');
+    assert.strictEqual(url, 'https://api.example.com/aws-blocks/api/orders');
+  });
+
+  it('appends to a relative base URL (same-origin browser calls via Hosting)', async () => {
+    // Hosting publishes a relative apiUrl ('/aws-blocks/api') in config.json.
+    const { url } = await captureRequest('api', '/aws-blocks/api');
+    assert.strictEqual(url, '/aws-blocks/api/api');
+  });
+
+  it('keeps the namespace in the RPC body — the path is only for routing', async () => {
+    // The server dispatches on the body, not the path, so the namespace must
+    // stay in `method`. Dropping it here would break dispatch even though the
+    // URL still looks correct.
+    const { body } = await captureRequest('orders', 'https://api.example.com/aws-blocks/api');
+    assert.strictEqual(body.method, 'orders.hello');
+  });
+});

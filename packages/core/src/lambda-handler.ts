@@ -4,7 +4,7 @@
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ApiError } from './errors.js';
-import { BLOCKS_RPC_PREFIX } from './constants.js';
+import { BLOCKS_RPC_PREFIX, isRpcPath } from './constants.js';
 import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
@@ -395,8 +395,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
         // error envelope) or a plain HTTP path (simple error JSON).
         const origin = event.headers?.origin || event.headers?.Origin || '';
         const requestPath = getRequestPath(event);
-        const isRpcPath = requestPath === BLOCKS_RPC_PREFIX || requestPath.startsWith(BLOCKS_RPC_PREFIX + '/');
-        const body = isRpcPath
+        const body = isRpcPath(requestPath)
           ? errorResponse(504, 'Request timed out', null, { name: 'HandlerTimeoutError' })
           : JSON.stringify({ error: 'Request timed out', code: 'HANDLER_TIMEOUT' });
         return {
