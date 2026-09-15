@@ -68,9 +68,9 @@ Local Mock
 
 ### D-AJ-4: Client-side validation before enqueue
 
-**Decision:** `submit()`/`submitBatch()` validate the schema (when configured) and the 256 KB payload size before calling SQS. `submitBatch` rejects an empty batch first, then validates *every* payload before enqueuing any of them.
+**Decision:** `submit()`/`submitBatch()` validate `delaySeconds` as an integer from 0 to 900, the schema (when configured), and the 256 KB payload size before calling SQS. `submitBatch` rejects an empty or over-cap batch first, then validates the delay and *every* payload before enqueuing any of them.
 
-**Rationale:** Failing fast on the caller's side produces a precise typed error (`PayloadTooLarge`, `ValidationFailed`, `BatchEmpty`) instead of a generic SQS rejection, and avoids a network round-trip for input that cannot succeed. Validating the whole batch up front means one bad payload fails the call without half-submitting the batch. The mock applies identical checks so violations surface the same `error.name` in local dev.
+**Rationale:** Failing fast on the caller's side produces a precise typed error (`PayloadTooLarge`, `ValidationFailed`, `BatchEmpty`) instead of a generic SQS rejection, and avoids a network round-trip for input that cannot succeed. Validating the whole batch up front means one invalid delay or payload fails the call without half-submitting the batch. The mock applies identical checks so violations surface the same `error.name` in local dev.
 
 ### D-AJ-4a: `submitBatch` auto-chunks; a multi-chunk submit is not atomic
 
@@ -149,7 +149,7 @@ No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. Asyn
 
 ## Mock Implementation
 
-- An in-process queue drives processing via `setTimeout(…, 0)`; `delaySeconds` is honored with a deferred timer.
+- An in-process queue drives processing via `setTimeout(…, 0)`; an integer `delaySeconds` from 0 to 900 is honored with a deferred timer.
 - Job IDs are a 13-character slice of `randomUUID()`.
 - Retry semantics mirror AWS: on handler error the entry is retried until `receiveCount >= maxRetries`, then moved to an in-memory `failed` (DLQ) list with `failedAt` and `lastError` recorded.
 - Queue state is exposed on `_queue` (`pending`, `processing`, `delayed`, `failed`, `totalSubmitted`, `totalCompleted`) for dev-server inspection.
