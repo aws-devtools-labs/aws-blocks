@@ -7,6 +7,8 @@ import { join, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
 import { detectFramework, type FrameworkAdapterFn, getAdapter, normalizeBasePath } from '@aws-blocks/hosting/adapters';
 import {
+  AlbConstruct,
+  type CapabilityPlan,
   generateBuildId,
   HostingConstruct,
   type HostingConstructProps,
@@ -15,7 +17,13 @@ import {
   type SkewProtectionConfig,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
-import { AllowedMethods, CachePolicy, OriginRequestPolicy, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
+import {
+  AllowedMethods,
+  CachePolicy,
+  OriginProtocolPolicy,
+  OriginRequestPolicy,
+  ViewerProtocolPolicy,
+} from 'aws-cdk-lib/aws-cloudfront';
 import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
@@ -405,12 +413,38 @@ export interface HostingProps {
    * is CloudFront-only for now; on ALB the frontend reaches the backend via
    * `BLOCKS_API_URL` (cross-origin).
    *
+   * Pass `{ edge: 'cloudfront', router: 'alb' }` to STACK the two — a CloudFront
+   * edge (static/SSR/image served as today) that forwards the same-origin API
+   * subtree (`/aws-blocks/*`, `/aws-blocks-auth/*`) through a regional ALB before
+   * it reaches the backend. This is the composed "CF → ALB → rest of infra" door:
+   * the edge keeps every CloudFront capability, and the ALB becomes the API
+   * router (its own WAFv2/access-logs/alarms available via the ALB layer). Only
+   * meaningful with `api` set (there must be a backend to route to).
+   *
    * @example
    * ```ts
    * new Hosting(stack, 'Web', { root, framework: 'nuxt', frontDoor: { kind: 'alb' } });
+   * new Hosting(stack, 'Web', { root, api, frontDoor: { edge: 'cloudfront', router: 'alb' } });
    * ```
    */
-  frontDoor?: HostingConstructProps['frontDoor'];
+  frontDoor?: HostingConstructProps['frontDoor'] | CloudFrontOverRouterFrontDoor;
+}
+
+/**
+ * A COMPOSED front door: a CloudFront edge stacked over a regional router layer
+ * (today, an ALB). The edge serves static/SSR/image exactly as the default
+ * CloudFront door does; the same-origin API subtree is routed CloudFront → ALB →
+ * backend instead of CloudFront → backend directly. See {@link HostingProps.frontDoor}.
+ */
+export interface CloudFrontOverRouterFrontDoor {
+  /** The edge layer. Only CloudFront today. */
+  edge: 'cloudfront';
+  /** The router layer the edge forwards the API subtree to. Only ALB today. */
+  router: 'alb';
+  /** Bring-your-own VPC for the ALB; a default 2-AZ VPC is created when omitted. */
+  vpc?: import('aws-cdk-lib/aws-ec2').IVpc;
+  /** Internal (private) ALB vs internet-facing. Default: internet-facing. */
+  internal?: boolean;
 }
 
 // ─── Default build output directories per framework ──────────────
@@ -515,6 +549,12 @@ export class Hosting extends Construct {
     super(scope, id);
 
     const root = resolve(props.root);
+
+    // The composed CF → ALB door: a CloudFront edge that forwards the API subtree
+    // through a regional ALB. Detected up front so the L3 stays on the default
+    // CloudFront path and the ALB is stacked in during API-behavior wiring.
+    const cfOverRouter: CloudFrontOverRouterFrontDoor | undefined =
+      typeof props.frontDoor === 'object' && 'edge' in props.frontDoor ? props.frontDoor : undefined;
 
     // ── 1. Detect framework ──────────────────────────────────────
     const framework = props.framework ?? detectFramework(root);
@@ -708,12 +748,15 @@ export class Hosting extends Construct {
       // For the ALB front door, thread the backend API Gateway URL so the L3
       // wires the same-origin `/aws-blocks/*` proxy (a Lambda target) — the ALB
       // analogue of the CloudFront API behaviors below.
-      frontDoor:
-        typeof props.frontDoor === 'object' &&
-        props.api &&
-        (props.frontDoor.kind === 'alb' || props.frontDoor.kind === 'api-gateway')
+      // The composed CF → ALB door builds a NORMAL CloudFront distribution at
+      // the L3 (`frontDoor: undefined`); the ALB is stacked in below, between
+      // the edge and the backend, by re-pointing the API behaviors at it. So the
+      // L3 only ever sees a `kind`-based door or the default.
+      frontDoor: cfOverRouter
+        ? undefined
+        : typeof props.frontDoor === 'object' && props.api && 'kind' in props.frontDoor && props.frontDoor.kind === 'alb'
           ? { ...props.frontDoor, backendApiUrl: props.api.apiUrl }
-          : props.frontDoor,
+          : (props.frontDoor as HostingConstructProps['frontDoor']),
     };
 
     const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
@@ -727,7 +770,17 @@ export class Hosting extends Construct {
     // same-origin `/aws-blocks/*` proxy is wired inside the L3's ALB branch (an
     // api-proxy Lambda target), fed the backend URL via `frontDoor.backendApiUrl`.
     if (props.api && hosting.distribution) {
-      this.addApiBehaviors(hosting, props.api.apiUrl);
+      if (cfOverRouter) {
+        // Composed CF → ALB → backend: stand up a regional ALB whose sole job is
+        // to route the same-origin API subtree to the backend (a forwarder Lambda
+        // target per namespace), then point CloudFront's API behaviors at the ALB
+        // instead of directly at API Gateway. Static/SSR/image keep their normal
+        // CloudFront origins — only `/aws-blocks/*` now flows CF → ALB → backend.
+        const routerOrigin = this.addApiRouterAlb(hosting, props.api.apiUrl, cfOverRouter);
+        this.addApiBehaviors(hosting, props.api.apiUrl, routerOrigin);
+      } else {
+        this.addApiBehaviors(hosting, props.api.apiUrl);
+      }
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -765,10 +818,17 @@ export class Hosting extends Construct {
     // ── 8. Deploy config.json with resolved CDK tokens ───────────
     const buildId = manifest.buildId;
     if (buildId) {
+      // The S3-website door serves from its OWN public bucket at ROOT (no
+      // `builds/<id>/` prefix, and NOT the private assets bucket). Publish
+      // config.json there, at the root `.blocks-sandbox/` path the SPA fetches,
+      // so the cross-origin client can read its absolute API URL. Every other
+      // door serves the private assets bucket under `builds/<id>/`.
+      const configBucket = hosting.websiteBucket ?? hosting.bucket;
+      const configKeyPrefix = hosting.websiteBucket ? '.blocks-sandbox' : `builds/${buildId}/.blocks-sandbox`;
       const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
         sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props))],
-        destinationBucket: hosting.bucket,
-        destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
+        destinationBucket: configBucket,
+        destinationKeyPrefix: configKeyPrefix,
         prune: false,
         // CloudFront-only: attach the distribution + post-rewrite invalidation
         // paths so a redeploy clears the edge entry for config.json. On a
@@ -857,20 +917,68 @@ export class Hosting extends Construct {
   /**
    * Build the config.json payload from props.
    *
-   * When `api` is provided, the config uses a relative `/aws-blocks/api` URL
-   * so the frontend fetches through the same CloudFront domain (no CORS).
+   * When `api` is provided, the config normally uses a relative `/aws-blocks/api`
+   * URL so the frontend fetches through the same front-door origin (no CORS) —
+   * every door that proxies the API subtree same-origin (CloudFront, the composed
+   * CF → ALB, the ALB and API-Gateway doors) works this way.
+   *
+   * The S3-website door is the exception: a static website bucket cannot proxy a
+   * POST to the backend (it answers `/aws-blocks/api` with 405). There is no
+   * same-origin proxy, so the client must call the backend cross-origin at its
+   * ABSOLUTE RPC URL — which is exactly `props.api.apiUrl` (the BlocksStack
+   * already exposes the full `…/aws-blocks/api` endpoint). CORS is already allowed
+   * for this origin — the L3 registers the website URL as `CORS_HOSTING_ORIGINS`.
    */
   private buildConfigJson(props: HostingProps): Record<string, unknown> {
+    if (!props.api) return { ...(props.backendConfig ?? {}) };
+    const crossOrigin =
+      props.frontDoor === 'none';
     return {
       ...(props.backendConfig ?? {}),
-      ...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
+      apiUrl: crossOrigin ? props.api.apiUrl : BLOCKS_RPC_PREFIX,
     };
   }
 
   /**
-   * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
+   * Stand up the regional ALB that routes the same-origin API subtree to the
+   * backend for the composed CF → ALB → infra front door. The ALB carries a
+   * single `'*'` backend origin (a forwarder Lambda → the API Gateway), so
+   * `/aws-blocks/*` and `/aws-blocks-auth/*` reach the backend through it. Returns
+   * an {@link HttpOrigin} for the ALB's DNS name that {@link addApiBehaviors}
+   * fronts from CloudFront (HTTP-only: the internal CF → ALB hop; the viewer hop
+   * is still HTTPS at the edge).
    */
-  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string): void {
+  private addApiRouterAlb(
+    hosting: HostingConstruct,
+    apiUrl: string,
+    fd: CloudFrontOverRouterFrontDoor,
+  ): HttpOrigin {
+    // A minimal plan: no static/route entries (CloudFront serves those directly);
+    // just the backend origin the ALB forwards `/aws-blocks/*` to. The buildId is
+    // carried for the (here unused) asset-proxy key prefix so it stays stable.
+    const routerPlan: CapabilityPlan = {
+      origins: [],
+      routes: { entries: [], redirects: [], headers: [] },
+      policies: { spaFallback: false, hasServer: false, skewEnabled: false },
+      release: { buildId: hosting.buildId },
+      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: apiUrl } }] },
+    };
+    const alb = new AlbConstruct(this, 'ApiRouter', {
+      plan: routerPlan,
+      bucket: hosting.bucket,
+      vpc: fd.vpc,
+      internal: fd.internal,
+    });
+    return new HttpOrigin(alb.loadBalancer.loadBalancerDnsName, {
+      protocolPolicy: OriginProtocolPolicy.HTTP_ONLY,
+    });
+  }
+
+  /**
+   * Add CloudFront behaviors that proxy API traffic to the API Gateway origin
+   * (or, for the composed CF → ALB door, to the ALB router origin passed in).
+   */
+  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string, routerOrigin?: HttpOrigin): void {
     // Only called for the CloudFront front door; the caller guards on
     // `hosting.distribution` existing. Bind it locally for null-safety.
     const distribution = hosting.distribution;
@@ -880,9 +988,13 @@ export class Hosting extends Construct {
     const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
     const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
 
-    const apiGatewayOrigin = new HttpOrigin(hostname, {
-      originPath: `/${stage}`,
-    });
+    // The composed CF → ALB door fronts the ALB (which re-adds the stage path on
+    // the internal hop); the default door fronts API Gateway directly.
+    const apiGatewayOrigin =
+      routerOrigin ??
+      new HttpOrigin(hostname, {
+        originPath: `/${stage}`,
+      });
 
     const behaviorDefaults = {
       allowedMethods: AllowedMethods.ALLOW_ALL,

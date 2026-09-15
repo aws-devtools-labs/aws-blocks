@@ -73,9 +73,9 @@ export class S3WebsiteAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter
       throw new HostingError('CapabilityNotSupportedError', {
         message: formatNegotiationErrors(this.service, result),
         resolution:
-          'The S3 website door serves pure static sites / SPAs over HTTP only. For SSR, an API, ' +
-          'image optimization, HTTPS, or atomic deploys, use { kind: "api-gateway" | "alb" } ' +
-          'or the CloudFront default.',
+          "`frontDoor: 'none'` serves a pure static site / SPA directly from S3 (HTTP only, no " +
+          'front door). For SSR, a same-origin API, image optimization, HTTPS, or atomic deploys, ' +
+          "use the CloudFront default (omit `frontDoor`) or `{ kind: 'alb' }`.",
       });
     }
     for (const w of result.warnings) {
@@ -87,6 +87,10 @@ export class S3WebsiteAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter
     return {
       url: site.url,
       originHandle: { domainName: Fn.select(1, Fn.split('://', site.url)), protocol: 'http' },
+      // The public website bucket the SPA is served from — the wrapper publishes
+      // config.json here (root `.blocks-sandbox/`) so the cross-origin client can
+      // read the absolute API URL from the SAME origin it loads from.
+      publicBucket: site.bucket,
     };
   }
 }

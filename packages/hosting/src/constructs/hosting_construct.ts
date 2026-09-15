@@ -362,6 +362,15 @@ export type HostingConstructProps = {
    */
   frontDoor?:
     | 'cloudfront'
+    /**
+     * No front door — the app is served DIRECTLY from S3 static-website hosting
+     * (public bucket, HTTP-only, no edge, no router). The cheapest option for a
+     * pure static site / SPA. There is no front door to route to a backend, so
+     * SSR / same-origin API / image-opt / TLS are `unsupported`; the negotiator
+     * fails synth for anything beyond static/SPA (use `'cloudfront'` or
+     * `{ kind: 'alb' }`). `s3-website` is the internal mechanism, not a front door.
+     */
+    | 'none'
     | {
         kind: 'alb';
         /** BYO VPC; a default 2-AZ VPC is created when omitted. */
@@ -378,30 +387,15 @@ export type HostingConstructProps = {
         backendApiUrl?: string;
         /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
-      }
-    | {
-        /**
-         * API Gateway HTTP API (v2) — a cheap, regional, HTTPS-by-default,
-         * no-CloudFront door (pay-per-request, scale-to-zero, no VPC). Good for a
-         * SPA/SSR app that doesn't need a CDN. No edge cache, no streaming SSR.
-         */
-        kind: 'api-gateway';
-        /** Backend API Gateway URL to proxy same-origin (`/aws-blocks/*`), set by the Blocks layer. */
-        backendApiUrl?: string;
-        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
-        degrade?: import('../plan/types.js').CapabilityId[];
-      }
-    | {
-        /**
-         * S3 static-website hosting — the simplest/cheapest door for a PURE
-         * static site / SPA: a public website bucket, no CloudFront, no Lambda.
-         * HTTP-only (no TLS), no SSR/API/image/edge. The negotiator fails synth
-         * for anything beyond static/SPA.
-         */
-        kind: 's3-website';
-        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
-        degrade?: import('../plan/types.js').CapabilityId[];
       };
+  // NOTE: neither API Gateway nor S3-website is a public front-door *kind*.
+  // • API Gateway is an API/compute tier, not a frontend front door (anti-pattern:
+  //   no edge cache, per-request cost, 10 MB cap, base64 tax, hard ~29–30s timeout,
+  //   no streaming). Its adapter stays in-tree/dormant as a candidate preview door.
+  // • S3-website is an ORIGIN, not a front door — it fronts nothing. It is surfaced
+  //   as `frontDoor: 'none'` (serve the origin directly); `s3-website` is the
+  //   internal adapter/mechanism name. Both remain reachable via
+  //   `composeGraph`/`renderGraph`, never via this public union.
 };
 
 // ---- Main construct ----
@@ -432,7 +426,20 @@ export class HostingConstruct extends Construct {
    * Mutually exclusive with {@link distribution}.
    */
   readonly loadBalancer?: import('aws-cdk-lib/aws-elasticloadbalancingv2').IApplicationLoadBalancer;
+  /**
+   * The PUBLIC website bucket, present only for `frontDoor: 'none'` (served
+   * directly from S3 website hosting — its own public bucket, from root). The Blocks
+   * wrapper publishes `config.json` here so a cross-origin SPA reads the absolute
+   * API URL from the origin it loads from. Absent for every other door.
+   */
+  readonly websiteBucket?: import('aws-cdk-lib/aws-s3').IBucket;
   readonly distributionUrl: string;
+  /**
+   * The immutable Build ID for this deploy. Static assets live under
+   * `builds/<buildId>/`; a composed router layer (e.g. the CF → ALB → infra
+   * front door) reads it to prefix the same asset keys.
+   */
+  readonly buildId: string;
   readonly computeFunctions: Map<string, LambdaFunction | experimental.EdgeFunction> = new Map();
   readonly computeFunctionUrls: Map<string, FunctionUrl> = new Map();
   /**
@@ -489,6 +496,7 @@ export class HostingConstruct extends Construct {
       );
     }
     const buildId = manifest.buildId ?? generateBuildId();
+    this.buildId = buildId;
 
     // Skew-protection cookie must not outlive the build artifacts it pins
     // to. A `maxAge` longer than `buildRetentionDays` lets a returning
@@ -1072,7 +1080,10 @@ export class HostingConstruct extends Construct {
     // policy, the CDN distribution, OPEN_NEXT_ORIGIN, OAC KMS grant) is guarded
     // by `!useAlb` below. The ALB branch renders the same neutral CapabilityPlan
     // onto an Application Load Balancer.
-    const useCustomDoor = typeof props.frontDoor === 'object';
+    // The CloudFront default handles `undefined` and `'cloudfront'`. Every other
+    // value — `'none'` (serve S3 directly) or `{ kind: 'alb' }` — is a
+    // non-CloudFront door rendered via the front-door graph below.
+    const useCustomDoor = props.frontDoor !== undefined && props.frontDoor !== 'cloudfront';
     let cdn: CdnConstruct | undefined;
 
     if (!useCustomDoor) {
@@ -1322,7 +1333,9 @@ export class HostingConstruct extends Construct {
       // door's asset-proxy. Skew-pin is a CloudFront-edge capability; leave it
       // off the plan so it is not a required capability these doors would reject
       // (apps opt into other degradations via `degrade`).
-      const fd = props.frontDoor as Extract<HostingConstructProps['frontDoor'], { kind: string }>;
+      // `'none'` (bare string) → serve S3 directly; otherwise an object door (alb).
+      const isNone = props.frontDoor === 'none';
+      const fd = isNone ? undefined : (props.frontDoor as Extract<HostingConstructProps['frontDoor'], { kind: string }>);
       const serverName = this.computeFunctions.has('default')
         ? 'default'
         : this.computeFunctions.has('server')
@@ -1337,7 +1350,7 @@ export class HostingConstruct extends Construct {
       // the backend API URL the Blocks layer threads in. A future multi-compute
       // caller passes several named-namespace origins here; the adapters already
       // loop over `plan.backend.origins`. Omitting it = cross-origin API.
-      const backendApiUrl = 'backendApiUrl' in fd ? fd.backendApiUrl : undefined;
+      const backendApiUrl = fd && 'backendApiUrl' in fd ? fd.backendApiUrl : undefined;
       const backendOrigins = backendApiUrl
         ? [{ namespace: '*', ingress: { kind: 'url' as const, url: backendApiUrl } }]
         : undefined;
@@ -1377,40 +1390,37 @@ export class HostingConstruct extends Construct {
       // to the previous direct `adapter.render(...)` (renderGraph → the same
       // adapter's renderLayer → the same construct).
       let handle: LayerHandle;
-      switch (fd.kind) {
-        case 'alb':
-          handle = renderGraph(this, composeGraph(plan, 'alb'), plan, {
-            ...common,
-            vpc: fd.vpc,
-            internal: fd.internal,
-            certificate: fd.certificate,
-            // Native ALB features, driven by the same props that set the demand
-            // flags — so a demanded capability is actually built, not just claimed.
-            accessLogging: Boolean(props.logging),
-            waf: props.waf,
-            monitoring: Boolean(props.monitoring),
-            degrade: fd.degrade,
-          });
-          break;
-        case 'api-gateway':
-          handle = renderGraph(this, composeGraph(plan, 'api-gateway'), plan, {
-            ...common,
-            degrade: fd.degrade,
-          });
-          break;
-        case 's3-website':
-          handle = renderGraph(this, composeGraph(plan, 's3-website'), plan, {
-            staticDir: manifest.staticAssets.directory,
-            degrade: fd.degrade,
-          });
-          break;
-        default:
-          throw new HostingError('UnsupportedFrontDoorError', {
-            message: `Unknown front door kind '${(fd as { kind: string }).kind}'.`,
-            resolution: "Use 'cloudfront' (default), or { kind: 'alb' | 'api-gateway' | 's3-website' }.",
-          });
+      if (isNone) {
+        // No front door — serve the origin directly via S3 website hosting. The
+        // negotiator throws here if the app demands anything beyond static/SPA
+        // (SSR, same-origin API, image-opt, TLS) — never a silently broken deploy.
+        // ('none' maps to the internal `s3-website` renderer.)
+        handle = renderGraph(this, composeGraph(plan, 's3-website'), plan, {
+          staticDir: manifest.staticAssets.directory,
+        });
+      } else if (fd?.kind === 'alb') {
+        handle = renderGraph(this, composeGraph(plan, 'alb'), plan, {
+          ...common,
+          vpc: fd.vpc,
+          internal: fd.internal,
+          certificate: fd.certificate,
+          // Native ALB features, driven by the same props that set the demand
+          // flags — so a demanded capability is actually built, not just claimed.
+          accessLogging: Boolean(props.logging),
+          waf: props.waf,
+          monitoring: Boolean(props.monitoring),
+          degrade: fd.degrade,
+        });
+      } else {
+        throw new HostingError('UnsupportedFrontDoorError', {
+          message: `Unknown front door '${JSON.stringify(props.frontDoor)}'.`,
+          resolution: "Use 'cloudfront' (default), 'none' (S3 website), or { kind: 'alb' }.",
+        });
       }
       this.distributionUrl = handle.url ?? '';
+      // The S3-website door serves from its own public bucket; expose it so the
+      // Blocks wrapper can publish config.json to the same (cross-origin) origin.
+      if (handle.publicBucket) this.websiteBucket = handle.publicBucket;
     }
 
     // ---- 11. Error page deployment (SSR only) ----

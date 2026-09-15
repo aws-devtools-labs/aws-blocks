@@ -40,6 +40,24 @@ describe('resolveCookieSecurity', () => {
 			{ sameSite: 'None', secure: true, partitioned: false },
 		);
 	});
+
+	test('same-origin HTTP front door (plainHttpOrigin) → Lax; no Secure', () => {
+		// A deployed TLS-less door (S3-website / ALB w/o cert) can't carry a
+		// `Secure` cookie; the same-origin `Lax` cookie drops it so the session works.
+		assert.deepStrictEqual(
+			resolveCookieSecurity({ crossDomain: false, isLocalhost: false, plainHttpOrigin: true }),
+			{ sameSite: 'Lax', secure: false, partitioned: false },
+		);
+	});
+
+	test('cross-domain over HTTP front door → still None; Secure (genuinely unusable, not papered over)', () => {
+		// `SameSite=None` mandates `Secure`, so a cross-domain cookie cannot work
+		// behind a TLS-less door — the flag must NOT drop Secure here.
+		assert.deepStrictEqual(
+			resolveCookieSecurity({ crossDomain: true, isLocalhost: false, plainHttpOrigin: true }),
+			{ sameSite: 'None', secure: true, partitioned: false },
+		);
+	});
 });
 
 // ─── buildCookieSecurityAttrs ────────────────────────────────────────────────
