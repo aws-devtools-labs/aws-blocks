@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CDK-synth tests for the managed CloudFront API front door (Track D, D2 + D3).
+ * CDK-synth tests for the managed CloudFront API front door.
  *
  * The front door is scheduled by core's `scheduleApiFrontDoor` and resolved at
- * synth by a one-shot aspect (`ApiApiFrontDoorAspect`). Because the aspect runs at
+ * synth by a one-shot aspect (`ApiFrontDoorAspect`). Because the aspect runs at
  * synth — after the whole tree, including any `Hosting` construct built after
  * `create()`, exists — these tests must synthesize (`Template.fromStack`) to
  * exercise it. The aspect's branches:
@@ -18,7 +18,7 @@
  * only checks presence in that branch), so no real Hosting distribution is
  * needed here.
  *
- * `scheduleApiFrontDoor` / `ApiApiFrontDoorAspect` / `httpOriginFromApiUrl` are all core
+ * `scheduleApiFrontDoor` / `ApiFrontDoorAspect` / `httpOriginFromApiUrl` are all core
  * code, so these tests live in core. A real app's default compute comes from
  * `@aws-blocks/bb-lambda-compute` (which core can't depend on), so — exactly
  * like `blocks-stack.test.ts` — this uses an inline `StubLambdaCompute` that

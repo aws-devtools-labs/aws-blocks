@@ -90,7 +90,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	 * The default compute's API Gateway REST API.
 	 * @deprecated The managed CloudFront API front door is now the app's public
 	 * origin; use it (or a specific compute's own `apiGateway`) instead of the
-	 * stack-level gateway. Removed in a later multi-compute change (Track D, D5).
+	 * stack-level gateway. Removed in a later multi-compute change.
 	 */
 	get gateway(): cdk.aws_apigateway.RestApi {
 		return this.requireDefaultCompute().apiGateway;
@@ -99,7 +99,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	 * The default compute's RPC endpoint URL.
 	 * @deprecated The client now resolves the API front-door origin (via the `ApiUrl`
 	 * output → `config.json`); this stack-level accessor is removed in a later
-	 * multi-compute change (Track D, D5).
+	 * multi-compute change.
 	 */
 	get apiUrl(): string {
 		return this.requireDefaultCompute().apiUrl;

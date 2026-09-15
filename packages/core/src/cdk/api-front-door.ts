@@ -115,7 +115,7 @@ export function resolvedApiFrontDoorUrl(stack: cdk.Stack): string | undefined {
  * - **No Hosting, provisioning off** (sandbox / opt-out) → do nothing; the
  *   client keeps hitting the API Gateway directly.
  */
-class ApiApiFrontDoorAspect implements IAspect {
+class ApiFrontDoorAspect implements IAspect {
 	private done = false;
 
 	constructor(
@@ -164,7 +164,7 @@ class ApiApiFrontDoorAspect implements IAspect {
  * including any `Hosting` construct built afterward — exists) via a CDK aspect.
  * The front door is the stable public origin for the backend HTTP surface, so
  * adding/scaling compute never changes the browser hostname (auth cookies
- * persist). See {@link ApiApiFrontDoorAspect} for the Hosting-present / provisioning
+ * persist). See {@link ApiFrontDoorAspect} for the Hosting-present / provisioning
  * branches.
  *
  * @param stack - The owning stack.
@@ -176,5 +176,5 @@ export function scheduleApiFrontDoor(scope: Construct, apiUrl: string, provision
 	// Add the aspect to `scope` (the BlocksStack/BlocksBackend) so its visit runs
 	// at synth and the front door is scoped under this owner — several backends
 	// in one stack stay independent.
-	Aspects.of(scope).add(new ApiApiFrontDoorAspect(scope, apiUrl, provision));
+	Aspects.of(scope).add(new ApiFrontDoorAspect(scope, apiUrl, provision));
 }
