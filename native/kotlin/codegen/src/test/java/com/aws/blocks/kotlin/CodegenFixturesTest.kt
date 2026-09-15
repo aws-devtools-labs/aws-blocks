@@ -27,6 +27,13 @@ class CodegenFixturesTest : FunSpec({
                     val codegenModel = CodegenModelBuilder().build(rpcModel)
                     val result = KotlinCodeGenerator("com.example.app").generate(codegenModel)
 
+                    val generatedSource = result.files.joinToString("\n") { it.toString() }
+                    Regex("@Serializable\\(with = (\\w+)::class\\)")
+                        .findAll(generatedSource)
+                        .forEach { match ->
+                            generatedSource.contains("object ${match.groupValues[1]}") shouldBe true
+                        }
+
                     if (regenerate) {
                         goldenDir.mkdirs()
                         goldenDir.listFiles()?.forEach { it.delete() }
