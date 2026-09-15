@@ -1,5 +1,30 @@
 # @aws-blocks/bb-auth-basic
 
+## 0.1.9
+
+### Patch Changes
+
+- Updated dependencies [7b86b8e]
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [81609a8]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/bb-app-setting@0.3.0
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-kv-store@0.2.0
+  - @aws-blocks/bb-logger@0.2.0
+  - @aws-blocks/auth-common@0.1.8
+
 ## 0.1.8
 
 ### Patch Changes

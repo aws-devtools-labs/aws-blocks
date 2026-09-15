@@ -1,5 +1,11 @@
 # @aws-blocks/hosting
 
+## 0.3.1
+
+### Patch Changes
+
+- 2806ae2: Ensure the hosting route cutover waits for the resolved client configuration deployment.
+
 ## 0.3.0
 
 ### Minor Changes
