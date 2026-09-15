@@ -1,5 +1,25 @@
 # @aws-blocks/bb-metrics
 
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-logger@0.2.0
+
 ## 0.1.6
 
 ### Patch Changes

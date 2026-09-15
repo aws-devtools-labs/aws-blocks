@@ -1,5 +1,204 @@
 # @aws-blocks/bb-data
 
+## 0.3.0
+
+### Minor Changes
+
+- 21443ba: fix(data): map optimistic-concurrency conflicts to JSON-RPC 409 (Conflict) instead of 500
+  
+  Optimistic-concurrency / conditional-write conflicts now surface to clients as
+  JSON-RPC error **code 409 (Conflict)** instead of a generic **500**. Previously
+  these conflicts were thrown as plain named `Error`s (or re-thrown raw driver
+  errors), and the JSON-RPC serializer maps any non-`ApiError` to 500 — so a
+  routine, expected conflict was indistinguishable from an internal server error.
+  
+  Each affected conflict is now an `ApiError` with `status: 409`, so on the client
+  `error.status === 409`. The structured `error.name` is preserved end-to-end, so
+  `isBlocksError(e, ...)` keeps matching by name on both server and client, and the
+  existing typed error constants are unchanged:
+  
+  - `@aws-blocks/bb-kv-store` — a failed `ifNotExists` / `ifExists` /
+    `ifValueEquals` write or delete (`KVStoreErrors.ConditionalCheckFailed`). The
+    AWS runtime now also normalizes DynamoDB's raw `ConditionalCheckFailedException`
+    on both `put` and `delete`, matching the mock.
+  - `@aws-blocks/bb-distributed-table` — a failed `ifNotExists` / `ifExists` /
+    `ifFieldEquals` condition (`DistributedTableErrors.ConditionalCheckFailed`),
+    in both mock and AWS `put`/`delete`.
+  - `@aws-blocks/bb-distributed-data` — a DSQL serialization failure / OCC
+    conflict, SQLSTATE `40001` (`DistributedDatabaseErrors.SerializationFailure`),
+    in both the mock and real engines.
+  - `@aws-blocks/bb-data` — a serializable-isolation conflict, SQLSTATE `40001`
+    (`DatabaseErrors.SerializationFailure`), across the PGlite, pg-client, and
+    Data API engines.
+  
+  The `retriable` flag is scoped to genuine optimistic-lock conflicts: it is
+  `true` for value/field-equals conflicts (`ifValueEquals` / `ifFieldEquals`) and
+  the 40001 serialization failures, and omitted/`false` for existence/uniqueness
+  assertions (`ifNotExists`, `ifExists`), where a blind identical retry would fail
+  identically. Status (409) and `error.name` are unchanged in every case.
+  
+  This is a `minor` bump. Every package here is pre-1.0, where `minor` is this
+  repo's signal for a change that can alter existing behavior: callers that
+  branched on `error.status === 500` for these conflicts (or on the JSON-RPC error
+  code) will now see `409`. Code that matches conflicts by name via
+  `isBlocksError` — the documented pattern — is unaffected.
+  
+  `@aws-blocks/core` and `@aws-blocks/blocks` get a `patch` bump for a docs-only
+  change: a clarifying sentence was added to the `ApiError.retriable` JSDoc
+  (no behavior or API change).
+- a47d71c: fix(data): map duplicate-key unique-constraint violations to JSON-RPC 409 (Conflict) instead of 500
+  
+  A duplicate-key / unique-constraint violation (SQLSTATE `23505`,
+  `UniqueConstraintViolation`) now surfaces to clients as JSON-RPC error
+  **code 409 (Conflict)** instead of a generic **500**. Previously the engine
+  translators set `error.name` on the raw driver error and re-threw a plain named
+  `Error`; the JSON-RPC serializer maps any non-`ApiError` to 500, so a routine,
+  expected duplicate-key conflict was indistinguishable from an internal server
+  error. This mirrors the `40001`/OCC → 409 mapping already established for these
+  Blocks.
+  
+  Each affected conflict is now an `ApiError` with `status: 409`, so on the client
+  `error.status === 409`. The structured `error.name` is preserved end-to-end, so
+  `isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)` (and the
+  `DistributedDatabaseErrors` equivalent) keeps matching by name on both server and
+  client; the typed error constants are unchanged.
+  
+  - `@aws-blocks/bb-data` — a duplicate-key violation (SQLSTATE `23505`,
+    `DatabaseErrors.UniqueConstraintViolation`) across the PGlite, pg-client, and
+    Data API engines (both the SQLState-parsed and message-matched Data API paths),
+    routed through a shared `uniqueConstraintConflict()` helper.
+  - `@aws-blocks/bb-distributed-data` — a DSQL duplicate-key violation (SQLSTATE
+    `23505`, `DistributedDatabaseErrors.UniqueConstraintViolation`) in
+    `translateDsqlError`, in both the mock and real engines.
+  
+  The conflict is **not** flagged `retriable`: a duplicate key is deterministic, so
+  a blind retry of the same insert fails identically (unlike the `40001`
+  serialization failures, which stay retriable). The client-visible message is a
+  fixed, stable string; the raw driver text (which can name columns / constraints)
+  is retained only as `cause` for server-side diagnostics. Genuine infrastructure
+  errors (`ConnectionFailed`, `QueryFailed`) are unchanged and correctly stay 500,
+  and the `SerializationFailure`/OCC paths are untouched.
+  
+  This is a `minor` bump. Both data packages are pre-1.0, where `minor` is this
+  repo's signal for a change that can alter existing behavior: callers that
+  branched on `error.status === 500` for these conflicts (or on the JSON-RPC error
+  code) will now see `409`. Code that matches conflicts by name via
+  `isBlocksError` — the documented pattern — is unaffected.
+  
+  `@aws-blocks/blocks` gets a `patch` bump because it re-exports `bb-data` and
+  `bb-distributed-data` (satisfies the umbrella publish guard); no umbrella source
+  changed.
+  
+  Fixes #508.
+
+### Patch Changes
+
+- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
+- 6496713: fix(bb-data): place shared-VPC Aurora in the subnets the VPC actually has
+  
+  When `Database` runs inside a bring-your-own VPC, its Aurora cluster was pinned
+  to `PRIVATE_ISOLATED` subnets. The VPC in every docs example
+  (`new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 })`) has no isolated
+  tier, so following the documented setup and adding a `Database` failed synth
+  with "no isolated subnet groups in this VPC."
+  
+  Aurora is reached over the RDS Data API (HTTPS via the interface endpoint), not
+  a raw Postgres socket, so the placement tier does not affect reachability — it
+  only has to be a tier the VPC actually has. The shared-VPC path now prefers the
+  isolated tier when the VPC has one (keeping the DB off any NAT path) and falls
+  back to `PRIVATE_WITH_EGRESS` otherwise, via the VPC context's `selectSubnets`.
+  The standalone path is unchanged — it still builds its own VPC with a dedicated
+  isolated tier.
+  
+  This is a `patch` bump: pre-1.0, where this repo reserves `minor` for breaking
+  changes. The behavior change only affects the shared-VPC path that previously
+  failed synth, so it is strictly a fix. The umbrella `@aws-blocks/blocks` gets
+  the same bump because it re-exports `Database`.
+  
+  Also adds `Template.fromStack` unit coverage for `finalizeVpc` in
+  `@aws-blocks/core` — asserting the provisioned `AWS::EC2::VPCEndpoint` set, the
+  gateway/interface dedup, and the always-on CloudWatch Logs + SSM endpoints —
+  which previously had no test exercising the provisioning path.
+- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
+  
+  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
+  
+  **Building Blocks declare VPC requirements via the constructor, not a method.**
+  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
+  requirements (a value, or a callback for values that depend on `fullId`) and
+  registers them in a central per-stack registry. This keeps the compile-time
+  forcing the previous `abstract getVpcRequirements()` provided — a block can't
+  silently omit its requirements — without a standing method on every subclass, and
+  gives the framework one place to read, deduplicate, and answer "does anything here
+  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
+  
+  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
+  function without a VPC declares `requiresVpc: true`; when one is needed and the
+  customer didn't bring their own, Blocks lazily creates a single shared VPC
+  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
+  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
+  bring-your-own override.
+  
+  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
+  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
+  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
+  compliance requirement to use specific subnets. Omit it to keep the default
+  (prefer isolated, fall back to `private-with-egress`).
+- 6496713: fix(core): harden VPC integration — scoped endpoint SG, runtime-subnet validation, instructive subnet errors
+  
+  Second-pass hardening of VPC support based on review feedback.
+  
+  **Interface endpoints are no longer reachable from the whole VPC.** They now get
+  a dedicated security group that allows 443 only from the Blocks Lambda SG, and
+  the endpoints are created with `open: false` to suppress CDK's default
+  "allow 443 from the entire VPC CIDR" rule. On a bring-your-own VPC this stops
+  unrelated workloads from reaching every Blocks interface endpoint.
+  
+  **`VpcRequirements.subnetRole` is replaced by `requiresEgress`.** The old field
+  was declared but never consumed. `requiresEgress` expresses a real, validated
+  capability: whether the BB's parent runtime (the shared handler Lambda) must be
+  able to reach the internet. `finalizeVpc` validates it against the runtime's
+  actual placement and fails synth with an actionable message on a mismatch — it
+  never relocates the runtime (that's the customer's explicit choice).
+  `bb-distributed-data` (DSQL) declares `requiresEgress: true`, turning a
+  previously silent runtime failure (DSQL in isolated subnets deploys clean, then
+  every call times out) into a build-time error.
+  
+  **`VpcContext.selectSubnets` is now instructive.** It takes the requesting BB and
+  verifies the VPC actually has the requested subnet tier, throwing a BB-named,
+  actionable error instead of the opaque CDK "no subnet groups" error. It accepts
+  an explicit `{ fallback }` so a BB can opt into graceful degradation (e.g. Aurora
+  over the Data API works from `private-with-egress` when there is no isolated
+  tier); the downgrade is never silent. `bb-data` uses this.
+  
+  **Other fixes:** Lambda placement now fails fast with an actionable error when a
+  VPC has no private-with-egress tier and none was specified; `bb-data` drops its
+  unused 5432 ingress rule (Aurora is reached over the RDS Data API, not a socket);
+  removed `any` casts from the Lambda props and endpoint/CIDR handling; de-duplicated
+  the VPC/non-VPC branches in `BlocksStack`.
+  
+  All pre-1.0 `patch` bumps — no breaking changes to shipped, consumed API
+  (`subnetRole` had no consumers). The umbrella `@aws-blocks/blocks` re-exports the
+  affected types.
+- Updated dependencies [7b86b8e]
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/bb-app-setting@0.3.0
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-logger@0.2.0
+  - @aws-blocks/data-common@0.1.5
+
 ## 0.2.7
 
 ### Patch Changes
