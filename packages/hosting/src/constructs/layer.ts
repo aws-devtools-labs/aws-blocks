@@ -39,6 +39,15 @@ export type LayerHandle = {
   url?: string;
   /** How a parent layer attaches to this layer (see {@link OriginHandle}). */
   originHandle: OriginHandle;
+  /**
+   * The PUBLIC bucket this layer serves from, when the layer owns one that is
+   * also the origin the browser fetches (only the S3-website door: it creates
+   * its own public website bucket and serves from ROOT, unlike every other door
+   * which serves the private assets bucket under `builds/<id>/`). The wrapper
+   * uses it to publish `config.json` to the same origin the SPA reads. Absent
+   * for doors that serve the shared private assets bucket.
+   */
+  publicBucket?: import('aws-cdk-lib/aws-s3').IBucket;
 };
 
 /**
