@@ -18,6 +18,7 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 // Re-export public types from types module (canonical source)
 export { AppSettingErrors } from './errors.js';
 export type { AppSettingOptions } from './types.js';
+export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
