@@ -43,3 +43,52 @@ export function registerCompute(compute: Compute): void {
 export function getComputes(scope: Construct): readonly Compute[] {
 	return getRegistry(cdk.Stack.of(scope));
 }
+
+/**
+ * Map each API namespace in the app to the endpoint of the compute that hosts
+ * it — the routing table a front door needs to path-route
+ * `/aws-blocks/api/{namespace}` to the right compute.
+ *
+ * Derived (not stored) from the two facts the framework already tracks: each
+ * `ApiNamespace` records itself on its compute (`compute.namespaces`), and each
+ * compute exposes its ingress (`compute.endpoint`). Deriving keeps a single
+ * source of truth — there is no second representation to drift.
+ *
+ * Computes without an `endpoint` are skipped: a worker-only compute (queues,
+ * cron) has no HTTP ingress, and container computes front through a stack-level
+ * shared load balancer rather than per-compute. Their namespaces simply do not
+ * appear, and the caller falls back to the default route for them.
+ *
+ * Call after `create()` has resolved — namespaces are recorded during the
+ * backend import, so the map is empty before that.
+ *
+ * @param scope - Any construct in the stack (used to locate the stack).
+ * @throws If one namespace name is claimed by two different computes, which
+ *   would make routing ambiguous (and already breaks the runtime's flat
+ *   `backend[namespace]` dispatch).
+ */
+export function getApiEndpoints(scope: Construct): Readonly<Record<string, string>> {
+	const endpoints: Record<string, string> = {};
+	const owner: Record<string, string> = {};
+
+	for (const compute of getComputes(scope)) {
+		const endpoint = compute.endpoint;
+		if (!endpoint) continue;
+		for (const namespace of compute.namespaces) {
+			const previous = owner[namespace];
+			// The same compute recording a namespace twice is harmless (same
+			// endpoint); two different computes claiming it is a real conflict.
+			if (previous !== undefined && previous !== compute.fullId) {
+				throw new Error(
+					`API namespace "${namespace}" is claimed by two computes ("${previous}" and ` +
+						`"${compute.fullId}"). A namespace must be hosted by exactly one compute so ` +
+						`requests can be routed to it unambiguously.`,
+				);
+			}
+			owner[namespace] = compute.fullId;
+			endpoints[namespace] = endpoint;
+		}
+	}
+
+	return endpoints;
+}

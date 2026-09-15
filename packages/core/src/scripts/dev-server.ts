@@ -11,7 +11,7 @@ import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
 import { ApiError } from '../errors.js';
-import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX } from '../constants.js';
+import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, isRpcPath } from '../constants.js';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
 import { CORS_MAX_AGE } from '../cors.js';
@@ -896,7 +896,7 @@ export async function startDevServer(options: DevServerOptions) {
 
   // ── Request handler ────────────────────────────────────────────────────
   function isApiRequest(method: string, pathname: string): boolean {
-    if (pathname === BLOCKS_RPC_PREFIX || pathname.startsWith(BLOCKS_RPC_PREFIX + '/')) return true;
+    if (isRpcPath(pathname)) return true;
     if (matchRoute(method, pathname)) return true;
     return false;
   }
@@ -1143,7 +1143,10 @@ function handleApiRequest(
   method: string,
   apis: Map<string, any>,
 ): void {
-  if (method === 'POST' && url.pathname === BLOCKS_RPC_PREFIX) {
+  // Accept the whole RPC subtree, not just the bare prefix: the client addresses
+  // a namespace as `/aws-blocks/api/{namespace}`. Mirrors the Lambda handler via
+  // the shared predicate so local dev and deployed dispatch identically.
+  if (method === 'POST' && isRpcPath(url.pathname)) {
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', async () => {
@@ -1316,7 +1319,7 @@ function handleApiRequest(
   // a browser, which sends a GET, or trying a REST-style URL) with no feedback.
   // Reply with a small JSON hint pointing at the one supported shape. When the
   // path was right but the method wasn't, say so explicitly.
-  const wrongMethodOnApi = url.pathname === BLOCKS_RPC_PREFIX;
+  const wrongMethodOnApi = isRpcPath(url.pathname);
   const message = wrongMethodOnApi
     ? `The AWS Blocks JSON-RPC API expects POST, not ${method}.`
     : 'Not found. The AWS Blocks JSON-RPC API is served at POST /aws-blocks/api.';

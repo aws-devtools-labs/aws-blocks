@@ -515,3 +515,35 @@ describe('LambdaCompute per-namespace ingress path', () => {
 		assert.strictEqual(Object.keys(nsResources).length, 1, 'namespace resource is not duplicated');
 	});
 });
+
+// `endpoint` is the routing-facing origin base: the same URL as `apiUrl` minus
+// the reserved `/aws-blocks/api` suffix. Routing infrastructure (CloudFront
+// behaviors, ALB rules) targets it; the client-facing URL stays `apiUrl`.
+//
+// Both are CDK tokens, so the suffix is stripped with a CloudFormation intrinsic
+// that resolves at deploy — the *template* therefore still mentions the suffix
+// (as the `Fn::Split` delimiter, and inside the nested `apiUrl`), while the
+// deployed value is `https://{host}/{stage}`. Assert the intrinsic's shape
+// rather than string-matching the template. The behavioural proof that this
+// yields the right origin lives in the front-door synth tests, which assert the
+// resulting `DomainName`/`OriginPath`.
+describe('LambdaCompute endpoint (origin base)', () => {
+	test('endpoint is apiUrl with the reserved RPC suffix stripped', () => {
+		const { stack, parent } = setup('LambdaComputeEndpoint');
+		const compute = new LambdaCompute(parent, 'extra');
+
+		assert.deepStrictEqual(stack.resolve(compute.endpoint), {
+			'Fn::Select': [0, { 'Fn::Split': ['/aws-blocks/api', stack.resolve(compute.apiUrl)] }],
+		});
+	});
+
+	test('apiUrl still carries the RPC suffix (the client-facing URL is unchanged)', () => {
+		const { stack, parent } = setup('LambdaComputeEndpointApiUrl');
+		const compute = new LambdaCompute(parent, 'extra');
+
+		assert.ok(
+			JSON.stringify(stack.resolve(compute.apiUrl)).includes('/aws-blocks/api'),
+			'apiUrl keeps the reserved RPC suffix',
+		);
+	});
+});

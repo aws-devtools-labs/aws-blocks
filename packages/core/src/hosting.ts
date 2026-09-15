@@ -19,7 +19,7 @@ import { AllowedMethods, CachePolicy, OriginRequestPolicy, ViewerProtocolPolicy 
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { registerConfig } from './cdk/config-registry.js';
-import { httpOriginFromApiUrl, registerHostingDistribution } from './cdk/api-front-door.js';
+import { addNamespaceBehaviors, httpOriginFromApiUrl, registerHostingDistribution } from './cdk/api-front-door.js';
 import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
@@ -120,6 +120,21 @@ export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
 export interface BlocksStackApi {
 	/** Fully-qualified API Gateway URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks`). */
 	readonly apiUrl: string;
+	/**
+	 * Each API namespace mapped to the endpoint of the compute that hosts it, so
+	 * Hosting can add one CloudFront behavior per namespace pointing at the right
+	 * compute. `BlocksStack` / `BlocksBackend` expose this as `apiEndpoints`.
+	 *
+	 * Optional so a hand-rolled `{ apiUrl }` object still satisfies this
+	 * interface (it is deliberately structural). When omitted or empty, Hosting
+	 * proxies the whole `/aws-blocks/api` subtree to the single `apiUrl` — the
+	 * single-compute behavior.
+	 *
+	 * Plain data rather than a construct reference: only values cross a stack
+	 * boundary, so Hosting attaches behaviors to its *own* distribution whether
+	 * or not it shares a stack with the backend.
+	 */
+	readonly apiEndpoints?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -712,7 +727,7 @@ export class Hosting extends Construct {
 
 		// ── 7. Add CloudFront behaviors for API proxy ────────────────
 		if (props.api) {
-			this.addApiBehaviors(hosting, props.api.apiUrl);
+			this.addApiBehaviors(hosting, props.api.apiUrl, props.api.apiEndpoints);
 			// Publish this distribution so the backend's managed API front door
 			// reuses it instead of provisioning a second one (see
 			// scheduleApiFrontDoor / ApiFrontDoorAspect in cdk/api-front-door.ts).
@@ -856,7 +871,11 @@ export class Hosting extends Construct {
 	/**
 	 * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
 	 */
-	private addApiBehaviors(hosting: HostingConstruct, apiUrl: string): void {
+	private addApiBehaviors(
+		hosting: HostingConstruct,
+		apiUrl: string,
+		apiEndpoints?: Readonly<Record<string, string>>,
+	): void {
 		// Shared with the backend's managed API front door so both build the API
 		// origin identically from the API URL token.
 		const apiGatewayOrigin = httpOriginFromApiUrl(apiUrl);
@@ -867,6 +886,18 @@ export class Hosting extends Construct {
 			originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
 			viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
 		};
+
+		// Multi-compute fan-out FIRST: one behavior per namespace → its owning
+		// compute. CloudFront evaluates behaviors in the order they were added
+		// (first match wins), so these must precede the `${BLOCKS_RPC_PREFIX}/*`
+		// wildcard below — otherwise the wildcard swallows every namespace request
+		// and the fan-out silently routes everything to the default compute.
+		//
+		// Hosting adds these to its OWN distribution rather than the backend's
+		// front-door aspect reaching in: only the endpoint values cross a stack
+		// boundary, so this works whether or not Hosting shares the backend's
+		// stack. Single-compute apps pass an empty/omitted map and are unaffected.
+		addNamespaceBehaviors(hosting.distribution, apiEndpoints ?? {});
 
 		hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
 		hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);

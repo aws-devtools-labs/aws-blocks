@@ -31,11 +31,36 @@ import { registerCompute } from './compute-registry.js';
  */
 export abstract class Compute extends Scope {
 	/**
-	 * API namespaces assigned to run on this compute — recorded so request
-	 * routing can map a namespace to the compute that hosts it. Currently
-	 * unpopulated (no compute assignment surface yet).
+	 * API namespaces assigned to run on this compute — recorded by the
+	 * `ApiNamespace` constructor so request routing can map a namespace to the
+	 * compute that hosts it. Read at synth finalize to mount per-namespace
+	 * ingress ({@link mountNamespaceRoutes}) and to build the routing map
+	 * ({@link endpoint}).
 	 */
 	readonly namespaces: string[] = [];
+
+	/**
+	 * This compute's HTTP ingress, as an origin **base URL** — scheme + host
+	 * (+ stage where the platform has one), with **no** `/aws-blocks/api` suffix
+	 * and no trailing slash. For example
+	 * `https://{id}.execute-api.{region}.amazonaws.com/prod`.
+	 *
+	 * The base (rather than the full RPC URL) is what routing infrastructure
+	 * wants: a CloudFront origin is a host + origin path, and every consumer of
+	 * the old `apiUrl` immediately stripped the RPC suffix back off. The
+	 * client-facing URL is derived as `endpoint + BLOCKS_RPC_PREFIX`.
+	 *
+	 * A plain string rather than a CDK `IOrigin` so it also serves non-CloudFront
+	 * front doors (ALB listener rules, an API Gateway custom domain, or a
+	 * customer-built one); `httpOriginFromApiUrl` derives an `IOrigin` where one
+	 * is needed. May be a CDK token.
+	 *
+	 * **Optional**: a compute need not have HTTP ingress. A worker-only compute
+	 * (queue consumers, cron) has none, and container computes front through a
+	 * stack-level shared load balancer rather than per-compute. Consumers must
+	 * treat `undefined` as "not routable" and skip it.
+	 */
+	readonly endpoint?: string;
 
 	/**
 	 * Whether tracing has been enabled on this compute — flipped by

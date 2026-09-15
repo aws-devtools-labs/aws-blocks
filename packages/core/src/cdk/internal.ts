@@ -36,4 +36,13 @@ export type { DefaultComputeFactory } from './compute/default-compute-factory.js
 // the API origin from an API URL token (shared with Hosting); the others let
 // Hosting publish its distribution and let the `ApiUrl` output read the
 // resolved API front-door URL. Not a customer surface.
-export { httpOriginFromApiUrl, registerHostingDistribution, resolvedApiFrontDoorUrl } from './api-front-door.js';
+export {
+	addNamespaceBehaviors,
+	httpOriginFromApiUrl,
+	httpOriginFromEndpoint,
+	registerHostingDistribution,
+	resolvedApiFrontDoorUrl,
+} from './api-front-door.js';
+// Derive the namespace → compute-endpoint routing table. Framework/test surface;
+// the customer-facing form is `BlocksStack.apiEndpoints`.
+export { getApiEndpoints } from './compute/compute-registry.js';

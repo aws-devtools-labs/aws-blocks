@@ -231,8 +231,34 @@ function processResponse(data: unknown): unknown {
  * Options for `ApiNamespaceClient`.
  */
 export interface ApiNamespaceClientOptions {
-  /** Explicit API URL. When provided, skips automatic config.json discovery. */
+  /**
+   * Explicit API **base** URL. When provided, skips automatic config.json discovery.
+   *
+   * This replaces only the *discovery* of the base URL, not the request path: the
+   * client still appends `/{namespace}` to it, exactly as it does for a base URL
+   * resolved from config.json. Pass the same value config.json would carry
+   * (for example `https://d123.cloudfront.net/aws-blocks/api`), not a
+   * namespace-qualified URL. A trailing slash is tolerated.
+   */
   url?: string;
+}
+
+/**
+ * Builds the request URL for a namespace by appending `/{namespace}` to the API
+ * base URL.
+ *
+ * The namespace segment is what lets a front door (CloudFront, or a bring-your-own
+ * one) route each namespace to the compute that hosts it — a single-compute backend
+ * serves every namespace path from the same origin, so this is safe there too. The
+ * namespace also stays in the JSON-RPC body, which is what the server dispatches on;
+ * the path is purely for routing.
+ *
+ * `baseUrl` may be relative (Hosting publishes `/aws-blocks/api` for same-origin
+ * browser calls), so this does deliberate string concatenation rather than going
+ * through `new URL()`.
+ */
+function namespaceRequestUrl(baseUrl: string, namespace: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/${namespace}`;
 }
 
 /**
@@ -263,7 +289,8 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
     get(target, method: string | symbol) {
       if (typeof method === 'symbol') return undefined;
       return async (...args: any[]) => {
-        const apiUrl = urlOverride ?? await getApiUrl();
+        const baseUrl = urlOverride ?? await getApiUrl();
+        const requestUrl = namespaceRequestUrl(baseUrl, name);
         
         let request: BlocksRequest = {
           apiNamespace: name,
@@ -301,7 +328,7 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
           }
         }
         
-        const response = await fetch(apiUrl, {
+        const response = await fetch(requestUrl, {
           method: 'POST',
           headers: request.headers,
           credentials: 'include',
