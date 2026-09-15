@@ -11,6 +11,7 @@ export const OFFICIAL_BB_NAMES: ReadonlySet<string> = new Set([
   'AppSetting',
   'AsyncJob',
   'AuthBasic',
+  'AuthBearerJwt',
   'AuthCognito',
   'AuthOidc',
   'CronJob',

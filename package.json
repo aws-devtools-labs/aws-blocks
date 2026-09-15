@@ -17,6 +17,7 @@
     "packages/bb-auth-basic",
     "packages/bb-auth-cognito",
     "packages/bb-auth-oidc",
+    "packages/bb-auth-jwt",
     "packages/bb-realtime",
     "packages/bb-async-job",
     "packages/bb-dashboard",
