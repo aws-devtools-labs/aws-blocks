@@ -7,8 +7,27 @@ import type {
 import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import type { IKey } from 'aws-cdk-lib/aws-kms';
 import type { RetentionDays } from 'aws-cdk-lib/aws-logs';
+import type {
+  EmailSubscription,
+  UrlSubscription,
+} from 'aws-cdk-lib/aws-sns-subscriptions';
 import type { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
 import type { FrameworkAdapterFn } from './adapters/index.js';
+
+/**
+ * Alarm subscription types supported by Hosting monitoring.
+ *
+ * Restricted to endpoint subscriptions (`EmailSubscription`,
+ * `UrlSubscription`) because each subscription is applied to BOTH the
+ * app-region alarm topic and the us-east-1 CloudFront alarm topic, and
+ * a resource-target subscription (Lambda/SQS) would create a
+ * cross-region reference from the app-region resource to the us-east-1
+ * topic that CDK cannot resolve without explicit physical names. Endpoint
+ * subscriptions carry no resource reference, so they attach cleanly to
+ * both topics. Resource-target support can be added later (e.g. via a
+ * forwarder) by widening this type — a non-breaking change.
+ */
+export type HostingAlarmSubscription = EmailSubscription | UrlSubscription;
 
 /**
  * Open union type for framework names.
@@ -347,18 +366,25 @@ export type HostingProps = {
    * Idle cost is a few cents per month per alarm — set
    * `monitoring: { enabled: false }` to opt out.
    *
-   * If `snsTopicArn` is omitted, an SNS topic is created and surfaced
-   * via the construct's `monitoringTopic` field for the caller to
-   * subscribe to.
+   * If `subscriptions` is omitted, the alarm topics are still created
+   * and surfaced via the construct's `monitoring.alarmTopics` field so
+   * the caller can subscribe later.
    */
   monitoring?: {
     /** @default true */
     enabled?: boolean;
     /**
-     * BYO SNS topic ARN for alarm actions. When omitted, an SNS topic
-     * is created.
+     * Subscriptions to attach to the hosting alarm topics. Each entry is
+     * applied to BOTH the app-region topic and the us-east-1 CloudFront
+     * topic, so a single entry covers every hosting alarm regardless of
+     * which region its metric lives in.
+     *
+     * Restricted to endpoint subscriptions — `EmailSubscription` and
+     * `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions`. See
+     * {@link HostingAlarmSubscription} for why resource-target
+     * subscriptions (Lambda/SQS) are not yet supported.
      */
-    snsTopicArn?: string;
+    subscriptions?: HostingAlarmSubscription[];
   };
 
   /**

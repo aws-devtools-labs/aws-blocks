@@ -241,7 +241,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
 - Configure `CORS_ALLOWED_ORIGINS` explicitly for production — avoid wildcards
 - For cross-domain deployments, pass `crossDomain: true` to auth constructors (enables `SameSite=None; Secure; Partitioned`)
-- Enable `monitoring: { enabled: true, snsTopicArn: '...' }` on Hosting for production alerts
+- Enable `monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only)
 - Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default
 - Logger provides serialization safety (circular refs, type coercion) but does NOT redact sensitive content — never pass raw credentials, tokens, or secrets to Logger methods; sanitize context objects before logging
 
