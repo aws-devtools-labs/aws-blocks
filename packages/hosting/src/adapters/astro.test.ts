@@ -15,6 +15,7 @@ import {
   installSharpForAstroSsr,
   patchAstroRemoteImageRedirects,
   ASTRO_REDIRECT_PATCH_MARKER,
+  ensureSsrBuildOutput,
 } from './astro.js';
 
 void describe('astroUsesSharpService — decide whether to ship sharp (issue #3)', () => {
@@ -206,5 +207,58 @@ export { loadRemoteImage };
     const { okStatus, badStatus } = (await fn()) as { okStatus: number; badStatus: number };
     assert.equal(okStatus, 200, 'allowed redirect (picsum→fastly) is followed to the 200');
     assert.equal(badStatus, 302, 'disallowed redirect (picsum→evil) is NOT followed; returns the 3xx for Astro to reject');
+  });
+});
+
+void describe('ensureSsrBuildOutput — empty dist/client is valid for pure SSR', () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'astro-ssr-out-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const scaffold = (opts: { entry: boolean; client: 'absent' | 'empty' | 'files' }) => {
+    const distDir = path.join(tmp, 'dist');
+    const serverDir = path.join(distDir, 'server');
+    const clientDir = path.join(distDir, 'client');
+    const serverEntry = path.join(serverDir, 'entry.mjs');
+    if (opts.entry) {
+      fs.mkdirSync(serverDir, { recursive: true });
+      fs.writeFileSync(serverEntry, 'export const handler = () => {};');
+    }
+    if (opts.client === 'empty') fs.mkdirSync(clientDir, { recursive: true });
+    if (opts.client === 'files') {
+      fs.mkdirSync(clientDir, { recursive: true });
+      fs.writeFileSync(path.join(clientDir, 'favicon.svg'), '<svg/>');
+    }
+    return { clientDir, serverDir, serverEntry };
+  };
+
+  it('does NOT throw when dist/client is empty (no static assets)', () => {
+    const { clientDir, serverDir, serverEntry } = scaffold({ entry: true, client: 'empty' });
+    assert.doesNotThrow(() => ensureSsrBuildOutput(clientDir, serverDir, serverEntry, 'server'));
+    assert.equal(fs.existsSync(clientDir), true);
+  });
+
+  it('creates dist/client when it is absent, without throwing', () => {
+    const { clientDir, serverDir, serverEntry } = scaffold({ entry: true, client: 'absent' });
+    assert.equal(fs.existsSync(clientDir), false);
+    assert.doesNotThrow(() => ensureSsrBuildOutput(clientDir, serverDir, serverEntry, 'server'));
+    assert.equal(fs.existsSync(clientDir), true);
+  });
+
+  it('does NOT throw when dist/client has static assets', () => {
+    const { clientDir, serverDir, serverEntry } = scaffold({ entry: true, client: 'files' });
+    assert.doesNotThrow(() => ensureSsrBuildOutput(clientDir, serverDir, serverEntry, 'server'));
+  });
+
+  it('throws AstroBuildOutputMissingError when the server entry is missing', () => {
+    const { clientDir, serverDir, serverEntry } = scaffold({ entry: false, client: 'empty' });
+    assert.throws(
+      () => ensureSsrBuildOutput(clientDir, serverDir, serverEntry, 'server'),
+      /AstroBuildOutputMissingError|build output is missing or empty/,
+    );
   });
 });
