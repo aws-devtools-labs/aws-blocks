@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { Scope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { FileBucketOptions, CorsRule, LifecycleRule, ExternalBucketRef } from './types.js';
 import { validateBucketName } from './bucket-name.js';
@@ -26,7 +27,7 @@ const DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS = 90;
 /** HTTP methods that mutate bucket state; unsafe to expose to wildcard origins. */
 const MUTATING_CORS_METHODS: ReadonlyArray<CorsRule['allowedMethods'][number]> = ['PUT', 'POST', 'DELETE'];
 
-export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends Scope {
+export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends BuildingBlockScope {
 	private bucket: s3.IBucket;
 
 	/**
@@ -39,7 +40,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.S3] } });
 
 		if (options?.bucket) {
 			// `fromExisting`: don't provision; bind to the pre-existing bucket and

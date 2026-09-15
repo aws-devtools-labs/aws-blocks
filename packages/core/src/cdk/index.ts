@@ -19,8 +19,11 @@ import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
-import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
+import { finalizeTracing } from './tracer-registry.js';
+import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
+import { registerVpcRequirements } from './vpc-requirements-registry.js';
+import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
 export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from '../errors.js';
 export type { ScopeOptions } from '../index.js';
@@ -39,10 +42,12 @@ export {
 export { blocksNodejsBundling } from './bundling.js';
 export { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
 export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
-export { finalizeTracing, registerTracer } from './tracer-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { synthGuard } from './synth-guard.js';
+export { finalizeTracing, registerTracer } from './tracer-registry.js';
+export { getVpcContext } from './vpc.js';
+export type { BlocksVpcOptions, SubnetRole, VpcContext, VpcRequirements } from './vpc-types.js';
 
 /**
  * Core's `create()` props: the public {@link BlocksStackProps} plus the required
@@ -104,15 +109,26 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		return this._defaultCompute as LambdaShapedCompute;
 	}
 
+	private _vpcOptions?: BlocksVpcOptions;
+
 	private constructor(scope: Construct, id: string, props: BlocksStackProps) {
 		super(scope, id, props);
 		this.id = id;
 		this.backendHandlerPath = props.backendHandlerPath;
-		this.defaults = props.defaults;
 		this.backendModulePath = props.backendCDKPath;
+		this.defaults = props.defaults;
+		this._vpcOptions = props.defaults.vpc;
 
 		// Set globalThis so Building Blocks attach directly to this stack
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
+
+		// Initialize VPC context before the default compute is created and before
+		// BBs are constructed, so both can discover it: the default compute
+		// (LambdaCompute) reads it via getVpcContext(this) to place its function in
+		// the VPC, and BBs (e.g. bb-data) read it to co-locate their resources.
+		if (this._vpcOptions) {
+			initializeVpc(this, this._vpcOptions);
+		}
 
 		const infra = setupBlocksInfra(this, props, id);
 		this.executionRole = infra.executionRole;
@@ -159,6 +175,25 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		// Build any deferred Dashboards now that every compute's observability
 		// state is settled — so the dashboard is order-independent.
 		finalizeDashboards(stack);
+
+		// Finalize VPC. A VPC is a derived resource: use the customer's if they
+		// brought one, else lazily create one only if a Building Block genuinely
+		// requires it (requiresVpc). Most apps need neither — Lambda reaches AWS
+		// services from the managed network without a VPC.
+		if (stack._vpcOptions) {
+			finalizeVpc(stack, stack._vpcOptions);
+		} else if (anyRequirementNeedsVpc(stack)) {
+			const derived = getOrCreateVpc(stack);
+			const options = { network: derived };
+			initializeVpc(stack, options);
+			finalizeVpc(stack, options);
+			cdk.Annotations.of(stack).addInfoV2(
+				'blocks:vpc:derived',
+				'A Building Block required a VPC and none was provided, so Blocks created one ' +
+					'(with a NAT gateway, which has an ongoing cost). Pass `defaults.vpc: { network }` to ' +
+					'BlocksStack.create to bring your own. See packages/blocks/VPC.md.',
+			);
+		}
 
 		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
 
@@ -368,5 +403,65 @@ export class Scope extends Construct {
 	}
 	get devAttachments(): readonly string[] {
 		return [];
+	}
+}
+
+/**
+ * A VPC-requirements provider: either the requirements directly, or a callback
+ * that returns them. Use the callback form when the value depends on `fullId`
+ * or other post-construction state — it is evaluated by the base constructor
+ * *after* `super()` runs, so `this` is fully available.
+ */
+export type VpcRequirementsProvider = VpcRequirements | (() => VpcRequirements);
+
+/**
+ * Constructor options for a {@link BuildingBlockScope} — the {@link ScopeOptions}
+ * every Scope takes, plus the block's VPC requirements. `vpc` is **required** so
+ * a BB author can't silently omit it; pass `{}` when the block needs nothing
+ * VPC-specific.
+ */
+export interface BuildingBlockScopeOptions extends ScopeOptions {
+	/**
+	 * What this block needs from the VPC — endpoints, runtime egress, whether it
+	 * requires a VPC at all. A value, or a callback (evaluated after `super()`,
+	 * so it may read `this.fullId`). See {@link VpcRequirements}.
+	 */
+	vpc: VpcRequirementsProvider;
+}
+
+/**
+ * Base class for Building Block CDK constructs.
+ *
+ * BBs extend this instead of `Scope` directly and **must** declare their VPC
+ * requirements as a constructor argument — the base registers them centrally
+ * (see `vpc-requirements-registry.ts`) so `finalizeVpc` can pull, deduplicate,
+ * and provision endpoints, and so the lazy VPC can answer "does anything here
+ * need a VPC?". Passing the requirements is required by the constructor
+ * signature, so a BB author cannot silently forget to declare them — the same
+ * forcing the previous `abstract getVpcRequirements()` gave, but without a
+ * standing method on every subclass.
+ *
+ * Declare `{}` when the BB needs nothing VPC-specific.
+ *
+ * @example
+ * ```ts
+ * export class KVStore extends BuildingBlockScope {
+ *   constructor(scope: ScopeParent, id: string) {
+ *     super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
+ *     // …
+ *   }
+ * }
+ * ```
+ */
+export class BuildingBlockScope extends Scope {
+	constructor(id: string, options: BuildingBlockScopeOptions) {
+		const { vpc, ...scopeOptions } = options;
+		super(id, scopeOptions);
+		// Resolve the provider (callback form is evaluated here, after super(), so
+		// values that depend on this.fullId are available) and self-register on the
+		// owning stack. Register even when empty so the registry is a faithful
+		// census of every BB — the lazy VPC and finalizeVpc both rely on that.
+		const requirements = typeof vpc === 'function' ? vpc() : vpc;
+		registerVpcRequirements(this, requirements);
 	}
 }

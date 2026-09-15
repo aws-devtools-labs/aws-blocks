@@ -16,6 +16,8 @@ import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
+import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
+import type { BlocksVpcOptions } from './vpc-types.js';
 
 /**
  * Validate that the Node.js process was started with `--conditions=cdk`.
@@ -113,7 +115,13 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 		// (e.g. the Agent BB adds bedrock-agentcore in its CDK construct) — core stays
 		// agnostic and only Lambda is trusted by default.
 		assumedBy: new iam.CompositePrincipal(new iam.ServicePrincipal('lambda.amazonaws.com')),
-		managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')],
+		managedPolicies: [
+			iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+			// When Lambda is placed in a VPC it needs ENI management permissions
+			...(props.defaults.vpc
+				? [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')]
+				: []),
+		],
 	});
 
 	// ── Resource Groups ───────────────────────────────────────────────────
@@ -270,11 +278,14 @@ export class BlocksBackend extends Construct {
 		return `${stackName}-${this.node.id}`;
 	}
 
+	private _vpcOptions?: BlocksVpcOptions;
+
 	private constructor(scope: Construct, id: string, props: BlocksBackendProps) {
 		super(scope, id);
 
 		this.backendHandlerPath = props.backendHandlerPath;
 		this.backendModulePath = props.backendCDKPath;
+		this._vpcOptions = props.defaults.vpc;
 
 		// Expose self to Building Blocks at CDK time
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
@@ -283,6 +294,14 @@ export class BlocksBackend extends Construct {
 		// in one stack each keep their own posture; Building Blocks resolve them by
 		// walking up to their owning backend (see Scope.defaults).
 		this.defaults = props.defaults;
+
+		// Initialize VPC context before the default compute is created and before
+		// BBs are constructed, so both can discover it: the default compute
+		// (LambdaCompute) reads it via getVpcContext(this) to place its function in
+		// the VPC, and BBs (e.g. bb-data) read it to co-locate their resources.
+		if (this._vpcOptions) {
+			initializeVpc(this, this._vpcOptions);
+		}
 
 		const infra = setupBlocksInfra(this, props, id);
 		this.executionRole = infra.executionRole;
@@ -327,6 +346,23 @@ export class BlocksBackend extends Construct {
 		// Build any deferred Dashboards now that every compute's observability
 		// state is settled — so the dashboard is order-independent.
 		finalizeDashboards(backend);
+
+		// Finalize VPC. Derived resource: use the customer's if provided, else
+		// lazily create one only if a Building Block requires it.
+		if (backend._vpcOptions) {
+			finalizeVpc(backend, backend._vpcOptions);
+		} else if (anyRequirementNeedsVpc(backend)) {
+			const derived = getOrCreateVpc(backend);
+			const options = { network: derived };
+			initializeVpc(backend, options);
+			finalizeVpc(backend, options);
+			cdk.Annotations.of(backend).addInfoV2(
+				'blocks:vpc:derived',
+				'A Building Block required a VPC and none was provided, so Blocks created one ' +
+					'(with a NAT gateway, which has an ongoing cost). Pass `defaults.vpc: { network }` to ' +
+					'bring your own. See packages/blocks/VPC.md.',
+			);
+		}
 
 		return backend;
 	}
