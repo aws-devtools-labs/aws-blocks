@@ -28,6 +28,8 @@
     "packages/bb-tracer",
     "packages/bb-metrics",
     "packages/bb-lambda-compute",
+    "packages/bb-container-compute",
+    "packages/bb-compute",
     "packages/blocks",
     "packages/create-blocks-app",
     "packages/create-block",

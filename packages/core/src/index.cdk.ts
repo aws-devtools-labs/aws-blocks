@@ -18,6 +18,14 @@ export {
 	type ValueKind,
 } from '@aws-blocks/hosting';
 export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
+export {
+	type ComputeCapabilities,
+	type ComputeHandle,
+	type ComputeKind,
+	LAMBDA_MAX_MEMORY_MB,
+	LAMBDA_MAX_TIMEOUT_SECONDS,
+	selectComputeKind,
+} from './common/compute-capabilities.js';
 export type { BlocksVpcOptions, ScopeOptions, SubnetRole, VpcContext, VpcRequirements } from './cdk/index.js';
 export {
 	BlocksBackend,

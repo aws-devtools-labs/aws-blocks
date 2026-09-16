@@ -57,6 +57,21 @@ export function getVpcContext(scope: Construct): VpcContext | undefined {
 	return undefined;
 }
 
+/**
+ * Whether VPC context has already been initialized anywhere at or above `scope`.
+ *
+ * A container compute must place its Fargate tasks in the shared VPC *during the
+ * backend import* — well before `create()`'s `finalizeVpc` step runs — so it
+ * initializes the VPC itself on first need (`getOrCreateVpc` + `initializeVpc`).
+ * This guard lets both that early path and the later finalize path check "already
+ * done?" so the security group and context are created exactly once, whichever
+ * runs first. Thin wrapper over {@link getVpcContext} for intent at call sites.
+ * @internal
+ */
+export function isVpcInitialized(scope: Construct): boolean {
+	return getVpcContext(scope) !== undefined;
+}
+
 const LAZY_VPC_KEY = Symbol.for('BLOCKS_LAZY_VPC');
 
 /**

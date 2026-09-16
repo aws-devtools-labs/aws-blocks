@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import type { ComputeCapabilities, ComputeKind } from '../../common/compute-capabilities.js';
 import type { ScopeOptions } from '../../common/index.js';
 import { Scope } from '../index.js';
 import { registerCompute } from './compute-registry.js';
@@ -36,6 +37,25 @@ export abstract class Compute extends Scope {
 	 * unpopulated (no compute assignment surface yet).
 	 */
 	readonly namespaces: string[] = [];
+
+	/**
+	 * Which backing service this compute is — `'lambda'` (per-invocation function)
+	 * or `'container'` (long-lived Fargate task). Set by the concrete subclass and
+	 * read by delivery logic that must branch on the runtime model (e.g. AsyncJob
+	 * wires a native SQS event source on Lambda but leaves a container to
+	 * self-poll). Defaults to `'lambda'` so pre-existing subclasses that don't set
+	 * it keep today's behavior.
+	 */
+	readonly kind: ComputeKind = 'lambda';
+
+	/**
+	 * The capability attributes this compute was resolved from ({@link
+	 * ComputeCapabilities}). Read by delivery logic that needs the *values* rather
+	 * than just the kind — notably the container SQS poller, which enforces
+	 * `timeoutSeconds` as a per-handler wall-clock limit. Empty for a compute
+	 * built without explicit capabilities (e.g. the default Lambda).
+	 */
+	readonly capabilities: ComputeCapabilities = {};
 
 	/**
 	 * Whether tracing has been enabled on this compute — flipped by

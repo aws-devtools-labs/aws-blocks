@@ -21,7 +21,7 @@ import { finalizeConfigRegistry } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
-import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
+import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import { registerVpcRequirements } from './vpc-requirements-registry.js';
 import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
@@ -180,8 +180,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		// brought one, else lazily create one only if a Building Block genuinely
 		// requires it (requiresVpc). Most apps need neither — Lambda reaches AWS
 		// services from the managed network without a VPC.
+		//
+		// A container compute needs the shared VPC *at construction* (during the
+		// backend import above), so it may have already derived and initialized it
+		// via getOrCreateVpc + initializeVpc. In that case we skip re-initializing
+		// (isVpcInitialized) but still run finalizeVpc to provision endpoints.
 		if (stack._vpcOptions) {
 			finalizeVpc(stack, stack._vpcOptions);
+		} else if (isVpcInitialized(stack)) {
+			finalizeVpc(stack, { network: getOrCreateVpc(stack) });
 		} else if (anyRequirementNeedsVpc(stack)) {
 			const derived = getOrCreateVpc(stack);
 			const options = { network: derived };

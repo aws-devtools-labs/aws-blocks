@@ -9,6 +9,7 @@ import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import { registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
 import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import type {
@@ -80,24 +81,35 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
 		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
 
+		// Assign the requested compute (if any) before anything reads `this.compute`
+		// below. `_compute` is the framework's internal per-scope assignment slot;
+		// the public option is typed as the opaque ComputeHandle, so the cast to the
+		// concrete Compute is framework plumbing (the value is always a real Compute
+		// under --conditions=cdk).
+		if (options.compute) {
+			this._compute = options.compute as unknown as NonNullable<typeof this._compute>;
+		}
+
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 10;
 		const maxBatchingWindowSeconds = options.maxBatchingWindowSeconds ?? 5;
 		validateEventSourceOptions(this.fullId, batchSize, maxBatchingWindowSeconds);
 
-		// The queue is consumed by an SQS event source on the compute's own
-		// Lambda, so a AsyncJob currently requires a Lambda compute. Other
-		// compute types need a different consumption path (e.g. runtime polling)
-		// that does not exist yet — fail loud at synth rather than provision a
-		// queue nothing consumes (submitted jobs would silently pile up). The
-		// CronJob and Realtime blocks add the same guard in this change. The brand
-		// check (not `instanceof`) survives duplicate bb-lambda-compute copies in
-		// one dependency tree.
+		// A AsyncJob's queue must be consumed by exactly one runtime. On a Lambda
+		// compute that's a native SQS event source (below); on a container compute
+		// the container's runtime self-starts an owner-matched poller (see
+		// index.aws.ts) — no event source is wired here. Any other compute type has
+		// no consumption path yet, so fail loud at synth rather than provision a
+		// queue nothing drains (submitted jobs would silently pile up). The brand
+		// checks (not `instanceof`) survive duplicate compute-package copies in one
+		// dependency tree.
 		const compute = this.compute;
-		if (!LambdaCompute.isLambdaCompute(compute)) {
+		const onLambda = LambdaCompute.isLambdaCompute(compute);
+		const onContainer = ContainerCompute.isContainerCompute(compute);
+		if (!onLambda && !onContainer) {
 			throw blocksError(
 				AsyncJobErrors.UnsupportedCompute,
-				`AsyncJob "${this.fullId}" currently supports only a Lambda compute.`,
+				`AsyncJob "${this.fullId}" supports only a Lambda or container compute.`,
 			);
 		}
 
@@ -150,13 +162,29 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 		// single failing record makes SQS treat the whole batch as handled and delete
 		// every message in it (silent loss). The runtime handler already returns
 		// `{ batchItemFailures }`, so this is never configurable.
-		compute.fn.addEventSource(
-			new SqsEventSource(this.queue, {
-				batchSize,
-				reportBatchItemFailures: true,
-				maxBatchingWindow: Duration.seconds(maxBatchingWindowSeconds),
-			})
-		);
+		if (onLambda) {
+			compute.fn.addEventSource(
+				new SqsEventSource(this.queue, {
+					batchSize,
+					reportBatchItemFailures: true,
+					maxBatchingWindow: Duration.seconds(maxBatchingWindowSeconds),
+				})
+			);
+		} else {
+			// Container path: the runtime self-starts an owner-matched poller (no
+			// native event source). Grant the shared task role permission to
+			// receive and delete from this queue — the poller does both. The DLQ
+			// redrive is enforced by SQS via the queue's redrive policy, exactly as
+			// on the Lambda path.
+			this.queue.grantConsumeMessages(this.executionRole);
+			// The per-handler wall-clock limit the container poller enforces comes
+			// from the compute's capabilities.timeoutSeconds; stamp it into config
+			// so the runtime reads it without re-deriving the compute.
+			const timeoutSeconds = compute.capabilities.timeoutSeconds;
+			if (timeoutSeconds !== undefined) {
+				registerConfig(this, `BLOCKS_HANDLER_TIMEOUT_${idKey}`, String(timeoutSeconds));
+			}
+		}
 
 		// Same child id and options as the runtime entry points, so the provisioned
 		// table is the one JobStatusTracker resolves at request time.

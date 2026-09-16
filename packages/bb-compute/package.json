@@ -1,12 +1,12 @@
 {
-  "name": "@aws-blocks/bb-async-job",
-  "version": "0.2.0",
+  "name": "@aws-blocks/bb-compute",
+  "version": "0.1.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
-    "directory": "packages/bb-async-job"
+    "directory": "packages/bb-compute"
   },
-  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/bb-async-job#readme",
+  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/bb-compute#readme",
   "bugs": {
     "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
   },
@@ -30,28 +30,28 @@
       "aws-runtime": "./dist/index.aws.js",
       "types": "./dist/index.mock.d.ts",
       "default": "./dist/index.mock.js"
+    },
+    "./cdk": {
+      "types": "./dist/index.cdk.d.ts",
+      "default": "./dist/index.cdk.js"
     }
   },
   "scripts": {
-    "prebuild": "node ../../scripts/generate-version.mjs AsyncJob",
+    "prebuild": "node ../../scripts/generate-version.mjs Compute",
     "build": "tsc --build",
-    "test": "node --test --test-force-exit dist/**/*.test.js"
+    "test": "node --conditions=cdk --test dist/index.cdk.test.js"
   },
   "dependencies": {
-    "@aws-blocks/bb-logger": "^0.1.6",
-    "@aws-blocks/bb-distributed-table": "^0.1.7",
-    "@aws-blocks/bb-lambda-compute": "^0.4.0",
-    "@aws-blocks/bb-container-compute": "^0.1.0",
     "@aws-blocks/core": "^0.4.0",
-    "@aws-sdk/client-sqs": "^3.0.0"
+    "@aws-blocks/bb-lambda-compute": "^0.4.0",
+    "@aws-blocks/bb-container-compute": "^0.1.0"
   },
   "devDependencies": {
-    "@standard-schema/spec": "^1.0.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.3.0"
   },
   "peerDependencies": {
     "aws-cdk-lib": "^2.257.0",
-    "constructs": "^10.0.0"
+    "constructs": "^10.6.0"
   }
 }

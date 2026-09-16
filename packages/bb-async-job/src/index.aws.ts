@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { SQSClient, SendMessageCommand, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
+import { ReceiveMessageCommand, DeleteMessageCommand } from '@aws-sdk/client-sqs';
 import type { SendMessageBatchCommandOutput } from '@aws-sdk/client-sqs';
 import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { getConfigSync, getContainerComputeId, isContainerRuntime, registerContainerPoller } from '@aws-blocks/core';
 import { EventSourceMapping, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -79,8 +81,21 @@ export class AsyncJob<T = unknown> extends Scope {
 
 		// Only register handler if queue URL is available (i.e., running in Lambda, not codegen)
 		if (queueUrl) {
-			const queueName = queueUrl.split('/').pop()!;
-			this.registerLambdaEventHandler(EventSourceMapping.SQS, queueName, (record) => this._processRecord(record));
+			if (isContainerRuntime()) {
+				// Container worker: self-start a poller, but only for the queues THIS
+				// compute owns (the owner-match). The owner id was stamped at synth as
+				// BLOCKS_HANDLER_OWNER_<id>; if it matches this process's
+				// BLOCKS_COMPUTE_ID, drain the queue. This is how exactly one compute
+				// consumes each queue even when several containers run the same image.
+				const owner = getConfigSync(`BLOCKS_HANDLER_OWNER_${sanitizeConfigKey(this.fullId)}`);
+				const self = getContainerComputeId();
+				if (owner && self && owner === self) {
+					this.registerContainerPoller(queueUrl);
+				}
+			} else {
+				const queueName = queueUrl.split('/').pop()!;
+				this.registerLambdaEventHandler(EventSourceMapping.SQS, queueName, (record) => this._processRecord(record));
+			}
 		}
 	}
 
@@ -171,6 +186,103 @@ export class AsyncJob<T = unknown> extends Scope {
 		}
 
 		await this._status?.tryRecordTransition(ctx.jobId, 'complete', ctx.receiveCount);
+	}
+
+	/**
+	 * Start a long-poll loop that drains this job's queue on a container worker,
+	 * calling {@link _processRecord} per message. Enforces a per-handler wall-clock
+	 * limit (the compute's `timeoutSeconds`, stamped as BLOCKS_HANDLER_TIMEOUT_<id>
+	 * at synth): a handler that runs past it is aborted so its message becomes
+	 * visible again and, after `maxRetries` redeliveries, lands in the DLQ — the
+	 * same terminal path as a thrown handler.
+	 *
+	 * Delete-on-success only: a message is deleted from the queue after its handler
+	 * resolves, so a crash mid-processing leaves it for redelivery (at-least-once,
+	 * matching the Lambda path). Registered with core's container runtime, which
+	 * starts it after the backend import and stops it on SIGTERM.
+	 */
+	private registerContainerPoller(queueUrl: string): void {
+		const timeoutRaw = getConfigSync(`BLOCKS_HANDLER_TIMEOUT_${sanitizeConfigKey(this.fullId)}`);
+		const timeoutMs = timeoutRaw ? Number(timeoutRaw) * 1000 : undefined;
+
+		registerContainerPoller(() => {
+			let running = true;
+			const loop = async (): Promise<void> => {
+				while (running) {
+					let messages: Array<{ MessageId?: string; Body?: string; ReceiptHandle?: string; Attributes?: Record<string, string> }>;
+					try {
+						const res = await this._sqsClient.send(
+							new ReceiveMessageCommand({
+								QueueUrl: queueUrl,
+								MaxNumberOfMessages: 10,
+								WaitTimeSeconds: 20,
+								MessageSystemAttributeNames: ['ApproximateReceiveCount', 'SentTimestamp'],
+							}),
+						);
+						messages = res.Messages ?? [];
+					} catch (err) {
+						this.log.error?.(`AsyncJob container poller receive failed: ${err instanceof Error ? err.message : String(err)}`);
+						await new Promise((r) => setTimeout(r, 1000));
+						continue;
+					}
+
+					// Process the batch concurrently; each message is independent.
+					await Promise.allSettled(
+						messages.map(async (m) => {
+							const record = {
+								messageId: m.MessageId ?? '',
+								body: m.Body ?? '',
+								attributes: {
+									ApproximateReceiveCount: m.Attributes?.ApproximateReceiveCount ?? '1',
+									SentTimestamp: m.Attributes?.SentTimestamp ?? String(Date.now()),
+								},
+							};
+							try {
+								await this.withTimeout(this._processRecord(record), timeoutMs);
+								// Success: delete so SQS doesn't redeliver.
+								await this._sqsClient.send(
+									new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: m.ReceiptHandle! }),
+								);
+							} catch (err) {
+								// Failure or timeout: do NOT delete — the message becomes
+								// visible again after its visibility timeout and SQS redrives it,
+								// moving it to the DLQ once ApproximateReceiveCount exceeds
+								// maxReceiveCount. Same terminal semantics as the Lambda path.
+								this.log.error?.(
+									`AsyncJob "${this._id}" handler failed for ${record.messageId}: ${err instanceof Error ? err.message : String(err)}`,
+								);
+							}
+						}),
+					);
+				}
+			};
+			void loop();
+			return {
+				stop() {
+					running = false;
+				},
+			};
+		});
+	}
+
+	/**
+	 * Race a handler promise against a wall-clock deadline. Resolves with the
+	 * handler's result if it finishes first; rejects with a timeout error if the
+	 * deadline wins, so the caller leaves the message for redelivery. When no
+	 * timeout is configured the handler runs unbounded (a container's whole point
+	 * is work beyond Lambda's ceiling).
+	 */
+	private async withTimeout<R>(work: Promise<R>, timeoutMs?: number): Promise<R> {
+		if (timeoutMs === undefined) return work;
+		let timer: ReturnType<typeof setTimeout>;
+		const timeout = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => reject(new Error(`AsyncJob handler exceeded ${timeoutMs}ms wall-clock limit`)), timeoutMs);
+		});
+		try {
+			return await Promise.race([work, timeout]);
+		} finally {
+			clearTimeout(timer!);
+		}
 	}
 
 	/** Validates payload and returns the serialized JSON string for reuse */

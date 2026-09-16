@@ -4,15 +4,10 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "include": [
-    "src/**/*"
-  ],
+  "include": ["src/**/*"],
   "references": [
     {
-      "path": "../bb-logger"
-    },
-    {
-      "path": "../bb-distributed-table"
+      "path": "../core"
     },
     {
       "path": "../bb-lambda-compute"

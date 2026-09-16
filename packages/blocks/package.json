@@ -89,7 +89,9 @@
     "@aws-blocks/bb-email-client": "^0.1.6",
     "@aws-blocks/bb-metrics": "^0.1.6",
     "@aws-blocks/bb-dashboard": "^0.1.5",
-    "@aws-blocks/bb-lambda-compute": "^0.4.0"
+    "@aws-blocks/bb-lambda-compute": "^0.4.0",
+    "@aws-blocks/bb-container-compute": "^0.1.0",
+    "@aws-blocks/bb-compute": "^0.1.0"
   },
   "aws-blocks": {
     "vendorize": {
@@ -110,6 +112,9 @@
       ],
       "@aws-blocks/bb-async-job": [
         "AsyncJob"
+      ],
+      "@aws-blocks/bb-compute": [
+        "Compute"
       ],
       "@aws-blocks/bb-cron-job": [
         "CronJob"

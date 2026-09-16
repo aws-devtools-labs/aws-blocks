@@ -27,6 +27,8 @@
     { "path": "../bb-logger" },
     { "path": "../bb-tracer" },
     { "path": "../bb-dashboard" },
-    { "path": "../bb-lambda-compute" }
+    { "path": "../bb-lambda-compute" },
+    { "path": "../bb-container-compute" },
+    { "path": "../bb-compute" }
   ]
 }

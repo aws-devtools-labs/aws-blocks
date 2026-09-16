@@ -16,6 +16,14 @@ export {
 	type ValueKind,
 } from '@aws-blocks/hosting';
 export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
+export {
+	type ComputeCapabilities,
+	type ComputeHandle,
+	type ComputeKind,
+	LAMBDA_MAX_MEMORY_MB,
+	LAMBDA_MAX_TIMEOUT_SECONDS,
+	selectComputeKind,
+} from './common/compute-capabilities.js';
 export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
 export { type BuildingBlockMeta, Scope, type ScopeOptions, type ScopeParent } from './common/index.js';
 export {
@@ -25,6 +33,15 @@ export {
 	registerSdkIdentifiers,
 } from './common/sdk-registry.js';
 export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+export {
+	type ContainerPollerHandle,
+	type ContainerPollerStarter,
+	_resetContainerPollers,
+	getContainerComputeId,
+	isContainerRuntime,
+	registerContainerPoller,
+	runContainer,
+} from './container-runtime.js';
 export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
 export {
 	clearRouteRegistry,
