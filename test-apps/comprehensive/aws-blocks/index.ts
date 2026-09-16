@@ -606,11 +606,19 @@ const timeoutCompute = new Compute(scope, 'slow-worker', {
 const containerTimeoutJob = new AsyncJob(scope, 'container-timeout-job', {
   compute: timeoutCompute,
   maxRetries: 1,
-  handler: async (payload: { key: string }) => {
-    // Sleep well past the 2s limit; on the container the poller aborts this and
-    // does NOT write the result. If it ever completes, the marker below lets the
-    // test detect a missed timeout.
-    await new Promise((r) => setTimeout(r, 10_000));
+  handler: async (payload: { key: string }, ctx) => {
+    // Sleep well past the 2s limit, but honor the wall-clock abort signal the
+    // container poller passes in (ctx.signal fires at the limit). On abort we
+    // throw before writing, so the "completed" marker is never persisted and the
+    // delivery redrives to the DLQ. A handler that ignored the signal would keep
+    // running — cancellation is cooperative — but its delivery still fails.
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, 10_000);
+      ctx.signal?.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(new Error('aborted: wall-clock limit exceeded'));
+      });
+    });
     await jobResults.put(`container-timeout:${payload.key}`, 'completed-should-not-happen');
   },
 });

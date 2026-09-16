@@ -162,12 +162,13 @@ export class AsyncJob<T = unknown> extends Scope {
 		messageId: string;
 		body: string;
 		attributes: { ApproximateReceiveCount: string; SentTimestamp: string };
-	}): Promise<void> {
+	}, signal?: AbortSignal): Promise<void> {
 		const payload = JSON.parse(record.body) as T;
 		const ctx: AsyncJobContext = {
 			jobId: record.messageId,
 			receiveCount: parseInt(record.attributes.ApproximateReceiveCount, 10),
 			sentAt: new Date(parseInt(record.attributes.SentTimestamp, 10)).toISOString(),
+			signal,
 		};
 
 		await this._status?.tryRecordTransition(ctx.jobId, 'processing', ctx.receiveCount);
@@ -238,7 +239,7 @@ export class AsyncJob<T = unknown> extends Scope {
 								},
 							};
 							try {
-								await this.withTimeout(this._processRecord(record), timeoutMs);
+								await this.withTimeout(record, m.ReceiptHandle, timeoutMs);
 								// Success: delete so SQS doesn't redeliver.
 								await this._sqsClient.send(
 									new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: m.ReceiptHandle! }),
@@ -266,20 +267,33 @@ export class AsyncJob<T = unknown> extends Scope {
 	}
 
 	/**
-	 * Race a handler promise against a wall-clock deadline. Resolves with the
-	 * handler's result if it finishes first; rejects with a timeout error if the
-	 * deadline wins, so the caller leaves the message for redelivery. When no
-	 * timeout is configured the handler runs unbounded (a container's whole point
-	 * is work beyond Lambda's ceiling).
+	 * Run a record's handler with a wall-clock deadline. Passes an
+	 * {@link AbortSignal} into the handler (via the job context) that fires at the
+	 * deadline, so a cooperative handler can cancel in-flight work; the race
+	 * rejects at the deadline regardless, so the poller stops waiting and the
+	 * message redrives to the DLQ. When no timeout is configured the handler runs
+	 * unbounded (a container's whole point is work beyond Lambda's ceiling).
 	 */
-	private async withTimeout<R>(work: Promise<R>, timeoutMs?: number): Promise<R> {
-		if (timeoutMs === undefined) return work;
+	private async withTimeout(
+		record: { messageId: string; body: string; attributes: { ApproximateReceiveCount: string; SentTimestamp: string } },
+		_receiptHandle: string | undefined,
+		timeoutMs?: number,
+	): Promise<void> {
+		if (timeoutMs === undefined) {
+			return this._processRecord(record);
+		}
+		const controller = new AbortController();
 		let timer: ReturnType<typeof setTimeout>;
-		const timeout = new Promise<never>((_, reject) => {
-			timer = setTimeout(() => reject(new Error(`AsyncJob handler exceeded ${timeoutMs}ms wall-clock limit`)), timeoutMs);
+		const deadline = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => {
+				// Signal the handler to stop in-flight work, then reject so the poller
+				// leaves the message for redelivery.
+				controller.abort();
+				reject(new Error(`AsyncJob handler exceeded ${timeoutMs}ms wall-clock limit`));
+			}, timeoutMs);
 		});
 		try {
-			return await Promise.race([work, timeout]);
+			await Promise.race([this._processRecord(record, controller.signal), deadline]);
 		} finally {
 			clearTimeout(timer!);
 		}
