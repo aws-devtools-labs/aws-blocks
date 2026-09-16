@@ -29,6 +29,8 @@
   "files": [
     "dist",
     "templates",
+    "README.md",
+    "DESIGN.md",
     "LICENSE"
   ]
 }
