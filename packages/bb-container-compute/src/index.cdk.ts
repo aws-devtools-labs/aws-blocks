@@ -41,6 +41,7 @@ import * as cdk from 'aws-cdk-lib';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { buildContainerHealthWidgets, buildContainerLoggingWidgets, buildContainerTracingWidgets } from './observability.js';
@@ -140,6 +141,15 @@ export class ContainerCompute extends Compute {
 		this.taskDefinition = new ecs.FargateTaskDefinition(this, 'TaskDef', {
 			cpu,
 			memoryLimitMiB,
+			// Run on ARM64 (Graviton) — cheaper at equal performance and, critically,
+			// matches the architecture of the image Blocks builds from the local
+			// Docker daemon (arm64 on Apple Silicon). A mismatch surfaces as
+			// "exec format error" when the task starts. Blocks defaults Lambda to
+			// arm64 too, so the whole app is Graviton by default.
+			runtimePlatform: {
+				cpuArchitecture: ecs.CpuArchitecture.ARM64,
+				operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+			},
 			// The task role is the shared Blocks role (application permissions). The
 			// separate executionRole (image pull + log write) is created by CDK.
 			taskRole: taskRole as Role,
@@ -150,7 +160,14 @@ export class ContainerCompute extends Compute {
 		this.container = this.taskDefinition.addContainer('Backend', {
 			image: this.capabilities.image
 				? ecs.ContainerImage.fromRegistry(this.capabilities.image)
-				: ecs.ContainerImage.fromAsset(assetPath),
+				: ecs.ContainerImage.fromAsset(assetPath, {
+						// Build for arm64 regardless of the build host's architecture, so
+						// the image always matches the ARM64 task platform above (an amd64
+						// image on an arm64 task — or vice versa — fails at task start with
+						// "exec format error"). Requires buildx/QEMU on an x86 host, which
+						// the Docker CLI provides by default.
+						platform: Platform.LINUX_ARM64,
+					}),
 			logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'blocks', logGroup: this.logGroup }),
 			environment: {
 				NODE_ENV: 'production',
