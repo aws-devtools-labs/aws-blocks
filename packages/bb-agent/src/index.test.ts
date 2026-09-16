@@ -1695,4 +1695,39 @@ describe('createChat', () => {
 		assert.ok(msgs.some(m => m.role === 'assistant' && m.content === 'done!'), 'resume streams the completion');
 		assert.strictEqual(chat.isLoading(), false);
 	});
+
+	test('a failing attach/run clears loading, fires onError, and drops the empty placeholder', async () => {
+		for (const mode of ['run', 'established'] as const) {
+			const errors: string[] = [];
+			const chat = createChat({
+				transport: {
+					subscribe(): ChunkStream {
+						return {
+							// `established` rejects in that mode; otherwise resolves and `run` rejects.
+							established: mode === 'established' ? Promise.reject(new Error('attach failed')) : Promise.resolve(),
+							unsubscribe() {},
+							async *[Symbol.asyncIterator]() {},
+						};
+					},
+					async run() {
+						if (mode === 'run') throw new Error('run rejected');
+						return { channelId: 'c' };
+					},
+				},
+				api: {
+					createConversation: async () => ({ conversationId: 'conv-e' }),
+					getConversation: async () => ({ messages: [] }),
+				},
+				onError: e => errors.push(e),
+			});
+
+			await chat.sendMessage('hi');
+			await new Promise(r => setTimeout(r, 10));
+
+			assert.strictEqual(chat.isLoading(), false, `${mode} failure must clear loading (no wedge)`);
+			assert.strictEqual(errors.length, 1, `${mode} failure must fire onError once`);
+			// A second send must NOT be silently dropped by the `if (loading) return` guard.
+			assert.ok(!chat.getMessages().some(m => m.role === 'assistant' && !m.content), `${mode} failure must not leave an empty assistant bubble`);
+		}
+	});
 });

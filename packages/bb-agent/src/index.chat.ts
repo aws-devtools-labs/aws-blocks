@@ -146,9 +146,12 @@ export function createChat(options: CreateChatOptions): ChatController {
 	}
 
 	/**
-	 * Resolve the channel for a turn: the persisted conversationId when there is one;
-	 * otherwise (inference-only) reuse `lastChannelId` when resuming a paused turn, and
-	 * mint a fresh UUID for a brand-new message.
+	 * Resolve the channel for a **sendMessage** turn: the persisted conversationId when
+	 * there is one; otherwise (inference-only) reuse `lastChannelId` when resuming a
+	 * paused turn, and mint a fresh UUID for a brand-new message. This is the ONLY
+	 * writer of `lastChannelId` — the `run()` primitive resolves its channel without
+	 * mutating it, so interleaving `run()` with `sendMessage` can't corrupt an
+	 * inference-only resume target.
 	 */
 	function resolveChannelId(id: string | null, input: SendInput): string {
 		if (id) return id;
@@ -284,12 +287,36 @@ export function createChat(options: CreateChatOptions): ChatController {
 			}
 			options.onMessagesChange?.(messages);
 			setLoading(true);
-			await startTurn(input);
+			// startTurn's attach (stream.established) and submit (transport.run) run
+			// BEFORE the background consumer's try/catch, so a rejection here would
+			// otherwise escape with loading stuck true — wedging every future
+			// sendMessage on the `if (loading) return` guard. Clear state and surface
+			// the error instead.
+			try {
+				await startTurn(input);
+			} catch (err) {
+				if (assistantId) {
+					const assistant = messages.find((m) => m.id === assistantId);
+					if (assistant && !assistant.content) {
+						messages = messages.filter((m) => m.id !== assistantId);
+						options.onMessagesChange?.(messages);
+					}
+					assistantId = null;
+				}
+				setLoading(false);
+				options.onError?.(err instanceof Error ? err.message : String(err));
+			}
 		},
 
 		async run(input: SendInput): Promise<{ channelId: string }> {
 			const id = await ensureConversation();
-			const channelId = resolveChannelId(id, input);
+			// The `run` primitive does NOT touch `lastChannelId` (the sendMessage easy
+			// path owns it). For a persisted chat the channel is the conversationId; for
+			// inference-only it mints a fresh channel per call. If you resume an
+			// inference-only turn, do it through the same entry point that started it
+			// (either sendMessage or an explicit channelId you carry yourself) — the two
+			// paths don't share channel state.
+			const channelId = id ?? crypto.randomUUID();
 			if (typeof input === 'string') {
 				return transport.run({ channelId, conversationId: id, message: input });
 			}
