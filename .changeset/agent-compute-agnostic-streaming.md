@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/bb-agent": minor
+"@aws-blocks/blocks": patch
 ---
 
 feat(bb-agent): compute-agnostic client streaming API — `createChat` + `realtimeTransport`
