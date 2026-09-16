@@ -83,19 +83,31 @@ function main() {
 			regressed: delta !== null && delta < REGRESSION_DELTA,
 			analysis: c.analysis || null,
 			issues: Array.isArray(c.analysis_issues) ? c.analysis_issues.filter((s) => typeof s === 'string' && s.trim()) : [],
+			failure_analysis: c.failure_analysis && typeof c.failure_analysis === 'object' ? c.failure_analysis : null,
 		};
 	});
 
 	// ── Executive summary: ONE best-effort Bedrock synthesis over the analyses ─
 	const execSummary = synthesize(aggregate, verdictCounts, rows);
 
+	// ── Failure root-cause: deterministic roll-up line + per-cell structured diagnosis ─
+	const failureRows = rows.filter((r) => r.failure_analysis);
+	const failureRollup = summarizeFailures(failureRows);
+
 	// ── Potential issues: deterministic flags + each cell's emitted issues ─────
 	const potential = collectPotentialIssues(rows);
 
-	// ── Render: Executive summary → Potential issues → collapsible per-cell ────
+	// ── Render: Executive summary → Failure root-cause → Potential issues → collapsible per-cell ────
 	const out = [];
 	out.push('## Executive summary', '');
+	if (failureRollup) out.push(failureRollup, '');
 	out.push(execSummary.text, '');
+
+	if (failureRows.length > 0) {
+		out.push('## 🔴 Failure root-cause', '');
+		out.push(`_Deep per-cell diagnosis of ${failureRows.length} failing cell(s) from quoted test/log evidence · model \`${MODEL_ID}\`._`, '');
+		for (const line of renderFailureAnalyses(failureRows)) out.push(line);
+	}
 
 	out.push('## ⚠️ Potential issues', '');
 	if (potential.length === 0) {
@@ -139,7 +151,69 @@ function main() {
 		executive_summary_error: execSummary.error ?? null,
 		potential_issues: potential,
 		cells: rows,
+		failure_analyses: failureRows.map((r) => ({ task: r.task, template: r.template, ...r.failure_analysis })),
 	});
+}
+
+// Badge per failure category (falls back to a generic marker for unknown categories).
+const FAILURE_CATEGORY_BADGE = {
+	build: '🏗️',
+	'dev-server': '🖥️',
+	'api-shape': '🔌',
+	auth: '🔑',
+	persistence: '💾',
+	timeout: '⏱️',
+	flake: '🎲',
+	'agent-logic': '🧠',
+};
+const MAX_EVIDENCE_CHARS = 500;
+
+function fdisp(v, fallback = '—') {
+	return typeof v === 'string' && v.trim() ? v.trim() : fallback;
+}
+
+// One deterministic sentence folding the structured failures by category + owner into the exec summary
+// (rendered even if the Bedrock roll-up call failed). Returns null when there are no structured failures.
+function summarizeFailures(failureRows) {
+	if (failureRows.length === 0) return null;
+	const byCat = new Map();
+	const byOwner = new Map();
+	for (const r of failureRows) {
+		const cat = fdisp(r.failure_analysis?.category, 'uncategorized');
+		const owner = fdisp(r.failure_analysis?.owner, 'unknown');
+		byCat.set(cat, (byCat.get(cat) ?? 0) + 1);
+		byOwner.set(owner, (byOwner.get(owner) ?? 0) + 1);
+	}
+	const catParts = [...byCat.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${n} ${c}`);
+	const ownerParts = [...byOwner.entries()].sort((a, b) => b[1] - a[1]).map(([o, n]) => `${n} ${o}`);
+	const n = failureRows.length;
+	return `**${n} failing cell(s) diagnosed:** ${catParts.join(', ')} · owners: ${ownerParts.join(', ')}.`;
+}
+
+// Per-cell structured root-cause blocks. Each: category badge + owner header, root cause, quoted
+// evidence (as a blockquote, clipped), and likely fix. Defensive against missing fields.
+function renderFailureAnalyses(failureRows) {
+	const out = [];
+	for (const r of failureRows) {
+		const fa = r.failure_analysis ?? {};
+		const cat = fdisp(fa.category, 'uncategorized');
+		const badge = FAILURE_CATEGORY_BADGE[cat] ?? '🔴';
+		const owner = fdisp(fa.owner, 'unknown');
+		out.push(`### ${badge} \`${r.task}/${r.template}\` — ${cat} · owner: ${owner}`, '');
+		out.push(`- **Root cause:** ${fdisp(fa.root_cause)}`);
+		const evidence = fdisp(fa.evidence, '');
+		if (evidence) {
+			const clipped = (evidence.length > MAX_EVIDENCE_CHARS ? `${evidence.slice(0, MAX_EVIDENCE_CHARS)}…` : evidence)
+				.split('\n')
+				.map((l) => `  > ${l}`)
+				.join('\n');
+			out.push('- **Evidence:**');
+			out.push(clipped);
+		}
+		out.push(`- **Likely fix:** ${fdisp(fa.likely_fix)}`);
+		out.push('');
+	}
+	return out;
 }
 
 // Deterministic "Potential issues": harness/agent failures + low/regressed composites first, then
