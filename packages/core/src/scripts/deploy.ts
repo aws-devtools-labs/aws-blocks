@@ -17,6 +17,20 @@ export interface DeployOptions {
   projectRoot: string;
 }
 
+/**
+ * The single machine-readable completion line a caller (a coding agent, a CI
+ * step, a script) greps for "deploy done + where it lives", instead of parsing
+ * CloudFormation output or polling the stack. Pure + exported so it is unit
+ * tested; `deploy()` prints exactly this string as the last line on success.
+ * `api=` is always present; `url=` (the public frontend) only when the app
+ * deployed hosting.
+ */
+export function formatDeploySignal(apiUrl: string, hostingUrl?: string): string {
+  return hostingUrl
+    ? `BLOCKS_DEPLOYED url=${hostingUrl} api=${apiUrl}`
+    : `BLOCKS_DEPLOYED api=${apiUrl}`;
+}
+
 export async function deploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
     console.log('🏗️  Preparing deployment...');
@@ -117,5 +131,11 @@ export async function deploy(options: DeployOptions) {
     if (hostingUrl) {
       console.log(`🌐 Frontend URL: ${hostingUrl}`);
     }
+
+    // Machine-readable completion signal — a single stable line a caller (a
+    // coding agent, a CI step, a script) can grep for "deploy done + where it
+    // lives" without parsing CloudFormation output or polling the stack. Always
+    // the LAST line on the success path.
+    console.log(`\n${formatDeploySignal(apiUrl, hostingUrl)}`);
   });
 }
