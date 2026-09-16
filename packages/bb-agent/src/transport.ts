@@ -145,18 +145,13 @@ export function realtimeTransport(io: {
 	resume: (channelId: string, responses: InterruptResponse[], conversationId: string | null) => Promise<void>;
 }): ChatTransport {
 	return {
-		// `opts` (e.g. `observer`) is part of the ChatTransport seam but is currently
-		// ADVISORY for the Realtime runtime: a Realtime channel handle is inherently
-		// subscribe-only, so there is no delivery difference to apply here. Accepted so
-		// the signature matches the seam; a future transport (e.g. AgentCore /ws) may honor it.
+		// `opts.observer` is part of the seam but advisory here: a Realtime channel
+		// handle is subscribe-only, so there's no delivery difference to apply.
 		subscribe(channelId: string, _opts?: { observer?: boolean }): ChunkStream {
 			const q = new ChunkQueue();
 			let unsub: (() => void) | null = null;
-			// If unsubscribe() is called before io.subscribe resolves, `unsub` isn't
-			// assigned yet — record the intent and tear down the moment it resolves,
-			// otherwise the underlying subscription leaks (the source keeps firing into
-			// a closed queue). Reachable via createChat destroy()/newConversation()
-			// racing an in-flight subscribe.
+			// If unsubscribe() is called before io.subscribe resolves, `unsub` isn't set
+			// yet — record the intent and detach on resolve so the subscription can't leak.
 			let unsubscribed = false;
 
 			// Attach immediately so chunks published after this point are captured;

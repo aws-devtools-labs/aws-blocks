@@ -133,11 +133,8 @@ export function createChat(options: CreateChatOptions): ChatController {
 	let activeStream: ChunkStream | null = null;
 	let assistantId: string | null = null;
 	let assistantText = '';
-	// For inference-only chats (no persisted conversationId) the channel is a random
-	// UUID. Remember it so a resume — sendMessage({ interruptResponses }) — reuses the
-	// interrupted turn's channel instead of minting a fresh one the backend isn't
-	// publishing to. Reset by newConversation(). Persisted chats key on conversationId
-	// (stable), so this only matters for the inference-only + interrupt combination.
+	// Inference-only chats have no persisted id, so the channel is a random UUID.
+	// Remember it so a resume reuses the interrupted turn's channel. Reset on new chat.
 	let lastChannelId: string | null = null;
 
 	function setLoading(next: boolean) {
@@ -146,12 +143,9 @@ export function createChat(options: CreateChatOptions): ChatController {
 	}
 
 	/**
-	 * Resolve the channel for a **sendMessage** turn: the persisted conversationId when
-	 * there is one; otherwise (inference-only) reuse `lastChannelId` when resuming a
-	 * paused turn, and mint a fresh UUID for a brand-new message. This is the ONLY
-	 * writer of `lastChannelId` — the `run()` primitive resolves its channel without
-	 * mutating it, so interleaving `run()` with `sendMessage` can't corrupt an
-	 * inference-only resume target.
+	 * Resolve the channel for a **sendMessage** turn. The ONLY writer of `lastChannelId`
+	 * (run() resolves without mutating it), so interleaving run() with sendMessage can't
+	 * corrupt an inference-only resume target.
 	 */
 	function resolveChannelId(id: string | null, input: SendInput): string {
 		if (id) return id;
@@ -180,9 +174,8 @@ export function createChat(options: CreateChatOptions): ChatController {
 		}
 
 		if (chunk.type === 'error') {
-			// Mirror the interrupt branch: if the error arrives before any text was
-			// generated, drop the empty assistant placeholder so a failed turn doesn't
-			// leave a blank assistant bubble in the UI.
+			// Drop the empty assistant placeholder if the error arrived before any text
+			// (mirror the interrupt branch), so a failed turn leaves no blank bubble.
 			if (assistantId) {
 				const assistant = messages.find((m) => m.id === assistantId);
 				if (assistant && !assistant.content) {
@@ -287,11 +280,8 @@ export function createChat(options: CreateChatOptions): ChatController {
 			}
 			options.onMessagesChange?.(messages);
 			setLoading(true);
-			// startTurn's attach (stream.established) and submit (transport.run) run
-			// BEFORE the background consumer's try/catch, so a rejection here would
-			// otherwise escape with loading stuck true — wedging every future
-			// sendMessage on the `if (loading) return` guard. Clear state and surface
-			// the error instead.
+			// startTurn's attach + submit run before the background consumer's try/catch,
+			// so a rejection here must clear loading (else the guard wedges future sends).
 			try {
 				await startTurn(input);
 			} catch (err) {
@@ -310,12 +300,9 @@ export function createChat(options: CreateChatOptions): ChatController {
 
 		async run(input: SendInput): Promise<{ channelId: string }> {
 			const id = await ensureConversation();
-			// The `run` primitive does NOT touch `lastChannelId` (the sendMessage easy
-			// path owns it). For a persisted chat the channel is the conversationId; for
-			// inference-only it mints a fresh channel per call. If you resume an
-			// inference-only turn, do it through the same entry point that started it
-			// (either sendMessage or an explicit channelId you carry yourself) — the two
-			// paths don't share channel state.
+			// run() does NOT touch `lastChannelId` (sendMessage owns it). Persisted chat →
+			// conversationId; inference-only → a fresh channel per call. Resume an
+			// inference-only turn through the same entry point that started it.
 			const channelId = id ?? crypto.randomUUID();
 			if (typeof input === 'string') {
 				return transport.run({ channelId, conversationId: id, message: input });
