@@ -100,9 +100,14 @@ export class ContainerCompute extends Compute {
 			requiresVpc: true,
 			requiresEgress: true,
 		});
-		const vpc = getOrCreateVpc(this);
-		if (!isVpcInitialized(this)) {
-			initializeVpc(this, { network: vpc });
+		// Derive/reuse the one shared VPC and initialize context on the owning STACK
+		// (not `this`), so create()'s finalize sees it via isVpcInitialized(stack)
+		// and doesn't create a second one. getVpcContext walks up the tree, so this
+		// container (and every sibling) still resolves it.
+		const stack = cdk.Stack.of(this);
+		const vpc = getOrCreateVpc(stack);
+		if (!isVpcInitialized(stack)) {
+			initializeVpc(stack, { network: vpc });
 		}
 		const vpcContext = getVpcContext(this);
 
@@ -177,6 +182,9 @@ export class ContainerCompute extends Compute {
 			// avoids a gap where nothing polls.
 			minHealthyPercent: 100,
 			maxHealthyPercent: 200,
+			// Fail (and roll back) a deploy quickly when tasks can't start, instead
+			// of CloudFormation waiting up to ~3 hours for the service to stabilize.
+			circuitBreaker: { rollback: true },
 		});
 	}
 
