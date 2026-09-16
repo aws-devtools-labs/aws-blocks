@@ -133,10 +133,29 @@ export function createChat(options: CreateChatOptions): ChatController {
 	let activeStream: ChunkStream | null = null;
 	let assistantId: string | null = null;
 	let assistantText = '';
+	// For inference-only chats (no persisted conversationId) the channel is a random
+	// UUID. Remember it so a resume — sendMessage({ interruptResponses }) — reuses the
+	// interrupted turn's channel instead of minting a fresh one the backend isn't
+	// publishing to. Reset by newConversation(). Persisted chats key on conversationId
+	// (stable), so this only matters for the inference-only + interrupt combination.
+	let lastChannelId: string | null = null;
 
 	function setLoading(next: boolean) {
 		loading = next;
 		options.onLoadingChange?.(loading);
+	}
+
+	/**
+	 * Resolve the channel for a turn: the persisted conversationId when there is one;
+	 * otherwise (inference-only) reuse `lastChannelId` when resuming a paused turn, and
+	 * mint a fresh UUID for a brand-new message.
+	 */
+	function resolveChannelId(id: string | null, input: SendInput): string {
+		if (id) return id;
+		const isResume = typeof input !== 'string';
+		if (isResume && lastChannelId) return lastChannelId;
+		lastChannelId = crypto.randomUUID();
+		return lastChannelId;
 	}
 
 	/** Drive UI state from a single chunk. Mirrors the useChat state machine. */
@@ -158,6 +177,17 @@ export function createChat(options: CreateChatOptions): ChatController {
 		}
 
 		if (chunk.type === 'error') {
+			// Mirror the interrupt branch: if the error arrives before any text was
+			// generated, drop the empty assistant placeholder so a failed turn doesn't
+			// leave a blank assistant bubble in the UI.
+			if (assistantId) {
+				const assistant = messages.find((m) => m.id === assistantId);
+				if (assistant && !assistant.content) {
+					messages = messages.filter((m) => m.id !== assistantId);
+					options.onMessagesChange?.(messages);
+				}
+				assistantId = null;
+			}
 			setLoading(false);
 			options.onError?.(chunk.error ?? 'Unknown error');
 		}
@@ -188,7 +218,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 	/** Subscribe fresh, await confirmation, then run — the fused ordering that removes the race. */
 	async function startTurn(input: SendInput) {
 		const id = await ensureConversation();
-		const channelId = id ?? crypto.randomUUID();
+		const channelId = resolveChannelId(id, input);
 
 		// Attach the consumer BEFORE running — no early chunk can be dropped.
 		if (activeStream) activeStream.unsubscribe();
@@ -259,7 +289,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 
 		async run(input: SendInput): Promise<{ channelId: string }> {
 			const id = await ensureConversation();
-			const channelId = id ?? crypto.randomUUID();
+			const channelId = resolveChannelId(id, input);
 			if (typeof input === 'string') {
 				return transport.run({ channelId, conversationId: id, message: input });
 			}
@@ -279,6 +309,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 				activeStream = null;
 			}
 			conversationId = null;
+			lastChannelId = null;
 			messages = [];
 			assistantId = null;
 			assistantText = '';

@@ -145,9 +145,19 @@ export function realtimeTransport(io: {
 	resume: (channelId: string, responses: InterruptResponse[], conversationId: string | null) => Promise<void>;
 }): ChatTransport {
 	return {
-		subscribe(channelId: string): ChunkStream {
+		// `opts` (e.g. `observer`) is part of the ChatTransport seam but is currently
+		// ADVISORY for the Realtime runtime: a Realtime channel handle is inherently
+		// subscribe-only, so there is no delivery difference to apply here. Accepted so
+		// the signature matches the seam; a future transport (e.g. AgentCore /ws) may honor it.
+		subscribe(channelId: string, _opts?: { observer?: boolean }): ChunkStream {
 			const q = new ChunkQueue();
 			let unsub: (() => void) | null = null;
+			// If unsubscribe() is called before io.subscribe resolves, `unsub` isn't
+			// assigned yet — record the intent and tear down the moment it resolves,
+			// otherwise the underlying subscription leaks (the source keeps firing into
+			// a closed queue). Reachable via createChat destroy()/newConversation()
+			// racing an in-flight subscribe.
+			let unsubscribed = false;
 
 			// Attach immediately so chunks published after this point are captured;
 			// `established` surfaces the subscription-confirmed signal to the caller.
@@ -157,13 +167,24 @@ export function realtimeTransport(io: {
 					if (TERMINAL_TYPES.has(chunk.type)) q.close();
 				})
 				.then((sub) => {
+					if (unsubscribed) {
+						// unsubscribe() was called during the attach window — detach now.
+						sub.unsubscribe();
+						return;
+					}
 					unsub = sub.unsubscribe;
 					return sub.established;
+				})
+				.catch((err) => {
+					// Attach failed — close the queue so the iterator ends instead of hanging.
+					q.close();
+					throw err;
 				});
 
 			return {
 				established,
 				unsubscribe() {
+					unsubscribed = true;
 					unsub?.();
 					q.close();
 				},
