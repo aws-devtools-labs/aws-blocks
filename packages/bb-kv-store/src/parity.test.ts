@@ -323,3 +323,63 @@ describe('conditional-write composition (AWS PutCommand shape)', () => {
 		);
 	});
 });
+
+// The AWS `delete` path detected `ifValueEquals` with `'ifValueEquals' in
+// conditions` (presence) while the mock and `put` use `!== undefined`, and its
+// `if/else if` dropped the value check when `ifExists` was also set. These
+// assert the DeleteCommand shape matches the mock's conjunctive semantics.
+describe('conditional-delete composition (AWS DeleteCommand shape)', () => {
+	test('ifValueEquals alone → #value = :expected, no #pk', () => {
+		const { store, items } = captureAws('parity-del-value');
+		return store.delete('k', { ifValueEquals: 'prev' }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, '#value = :expected');
+			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': '"prev"' });
+			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#value': 'value' });
+		});
+	});
+
+	test('ifExists alone → attribute_exists(#pk), no values', () => {
+		const { store, items } = captureAws('parity-del-exists');
+		return store.delete('k', { ifExists: true }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, 'attribute_exists(#pk)');
+			assert.strictEqual(input.ExpressionAttributeValues, undefined);
+		});
+	});
+
+	test('ifExists + ifValueEquals compose with AND (value check is NOT dropped)', () => {
+		const { store, items } = captureAws('parity-del-both');
+		return store.delete('k', { ifExists: true, ifValueEquals: 'prev' }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, 'attribute_exists(#pk) AND #value = :expected');
+			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': '"prev"' });
+			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#pk': 'pk', '#value': 'value' });
+		});
+	});
+
+	test('no conditions → no ConditionExpression', () => {
+		const { store, items } = captureAws('parity-del-none');
+		return store.delete('k').then(() => {
+			assert.strictEqual(items()[0].ConditionExpression, undefined);
+		});
+	});
+
+	test('explicit ifValueEquals: undefined is a no-op (matches the mock)', () => {
+		const { store, items } = captureAws('parity-del-undef');
+		return store.delete('k', { ifValueEquals: undefined }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, undefined);
+			assert.strictEqual(input.ExpressionAttributeValues, undefined);
+		});
+	});
+
+	test('ifValueEquals: null is a real condition → :expected = "null"', () => {
+		const { store, items } = captureAws('parity-del-null');
+		return store.delete('k', { ifValueEquals: null as unknown as string }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, '#value = :expected');
+			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': 'null' });
+		});
+	});
+});
