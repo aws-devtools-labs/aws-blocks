@@ -26,6 +26,7 @@ import type {
 	ProviderOpts,
 	SecretLike,
 	StubProvider,
+	StubUser,
 } from './types.js';
 
 /**
@@ -119,6 +120,25 @@ export interface StubIdpOpts<N extends string = string> {
 	scopes?: string[];
 	/** Decide the `/authorize` response. See {@link OnStubAuthorize}. */
 	onAuthorize?: OnStubAuthorize;
+	/**
+	 * Inline test users, declared in code — the local identity directory for the
+	 * stub login screen and the `users` passed to {@link OnStubAuthorize}. When
+	 * provided (and non-empty), these take precedence over a `users.json` seed
+	 * file and the built-in default user, so E2E fixtures can pin deterministic
+	 * users without a gitignored data file.
+	 *
+	 * @example
+	 * ```typescript
+	 * stubIdp({
+	 *   name: 'corporate',
+	 *   users: [
+	 *     { sub: 'u-1', email: 'alice@example.com', name: 'Alice' },
+	 *     { sub: 'u-2', email: 'bob@example.com', name: 'Bob' },
+	 *   ],
+	 * });
+	 * ```
+	 */
+	users?: readonly StubUser[];
 }
 
 /**
@@ -156,6 +176,7 @@ export function stubIdp<N extends string>(opts: StubIdpOpts<N>): StubProvider<N>
 		clientSecret: 'stub-client-secret',
 		scopes: opts.scopes ?? [...OIDC_DEFAULT_SCOPES],
 		onAuthorize: opts.onAuthorize,
+		users: opts.users,
 	};
 }
 
