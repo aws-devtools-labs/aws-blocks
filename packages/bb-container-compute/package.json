@@ -42,7 +42,8 @@
     "test": "node --conditions=cdk --test dist/index.cdk.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.4.0"
+    "@aws-blocks/core": "^0.4.0",
+    "esbuild": "^0.27.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

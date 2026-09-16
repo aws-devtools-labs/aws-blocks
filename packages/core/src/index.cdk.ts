@@ -62,6 +62,15 @@ export {
 	registerSdkIdentifiers,
 } from './common/sdk-registry.js';
 export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+export {
+	type ContainerPollerHandle,
+	type ContainerPollerStarter,
+	_resetContainerPollers,
+	getContainerComputeId,
+	isContainerRuntime,
+	registerContainerPoller,
+	runContainer,
+} from './container-runtime.js';
 export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
 export {
 	type BlocksStackApi,
