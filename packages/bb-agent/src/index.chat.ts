@@ -78,11 +78,20 @@ export type SendInput = string | { interruptResponses: InterruptResponse[] };
 
 /** Returned by {@link createChat}. */
 export interface ChatController {
-	/** Drive the current turn — start a new message OR resume a paused one. Fuses subscribe + run (no race). */
+	/**
+	 * Drive the current turn — start a new message OR resume a paused one. Fuses
+	 * subscribe + run (no race). If a turn is already in flight the call is a no-op
+	 * (silently dropped) — check {@link isLoading} before calling if you need to know.
+	 */
 	sendMessage(input: SendInput): Promise<void>;
 	/** Primitive: run a turn (produce only; chunks go to subscribers). Lazily creates the conversation if new. */
 	run(input: SendInput): Promise<{ channelId: string }>;
-	/** Primitive: attach a consumer to a channel (the current one, or a shared/observed id). */
+	/**
+	 * Primitive: attach a consumer to a channel (the current one, or a shared/observed id).
+	 * On an inference-only chat the live channel is internal (a random UUID, not the null
+	 * `conversationId`), so pass an explicit `channelId` — the id returned by `run()` — rather
+	 * than relying on the current-channel fallback.
+	 */
 	subscribe(opts?: { channelId?: string; observer?: boolean }): ChunkStream;
 	/** Start a fresh conversation — the next turn lazily creates one. */
 	newConversation(): void;
@@ -241,6 +250,11 @@ export function createChat(options: CreateChatOptions): ChatController {
 				// over a still-open subscription and never see a fresh confirmation.
 				stream.unsubscribe();
 				if (activeStream === stream) activeStream = null;
+				// Clear loading unconditionally: a terminal chunk already cleared it, but a
+				// stream ended by unsubscribe() (newConversation()/destroy() mid-turn) sees
+				// no terminal chunk, so without this `loading` would stay true and the
+				// `if (loading) return` guard in sendMessage would drop every future send.
+				setLoading(false);
 			}
 		})();
 	}

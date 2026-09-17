@@ -1730,4 +1730,42 @@ describe('createChat', () => {
 			assert.ok(!chat.getMessages().some(m => m.role === 'assistant' && !m.content), `${mode} failure must not leave an empty assistant bubble`);
 		}
 	});
+
+	test('newConversation() mid-turn clears loading so the next sendMessage is not dropped', async () => {
+		let runCalls = 0;
+		// A stream that stays open (never emits a terminal chunk) until unsubscribed,
+		// so the first turn is genuinely in flight when newConversation() closes it.
+		const chat = createChat({
+			transport: {
+				subscribe(): ChunkStream {
+					let done = false;
+					let wake: (() => void) | null = null;
+					return {
+						established: Promise.resolve(),
+						unsubscribe() { done = true; wake?.(); },
+						async *[Symbol.asyncIterator]() {
+							while (!done) await new Promise<void>(r => { wake = r; });
+						},
+					};
+				},
+				async run(turn) { runCalls++; return { channelId: turn.channelId }; },
+			},
+			api: {
+				createConversation: async () => ({ conversationId: `conv-${runCalls}` }),
+				getConversation: async () => ({ messages: [] }),
+			},
+		});
+
+		await chat.sendMessage('first');           // turn is now in flight (no terminal chunk)
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(chat.isLoading(), true, 'turn is in flight');
+
+		chat.newConversation();                     // closes the stream WITHOUT a terminal chunk
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(chat.isLoading(), false, 'newConversation must clear loading');
+
+		await chat.sendMessage('second');           // must NOT be dropped by the loading guard
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(runCalls, 2, 'the second send after newConversation must reach the transport');
+	});
 });

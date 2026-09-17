@@ -44,7 +44,12 @@ export interface TurnRequest {
  * which is what lets `createChat` guarantee no early chunk is dropped.
  */
 export interface ChunkStream extends AsyncIterable<AgentStreamChunk> {
-	/** Resolves when the consumer is attached (subscribe confirmed); rejects if attach fails. */
+	/**
+	 * Resolves when the consumer is attached (subscribe confirmed); rejects if attach fails.
+	 * Await it (or attach a `.catch`) before iterating — `createChat` does this internally, but
+	 * a caller using the `subscribe()` primitive directly must, or an attach failure surfaces as
+	 * an unhandled promise rejection.
+	 */
 	established: Promise<void>;
 	/** Detach the consumer and end the iterator. */
 	unsubscribe(): void;
