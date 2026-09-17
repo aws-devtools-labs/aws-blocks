@@ -216,12 +216,27 @@ derived from the published tokens via `lib/scoring.mjs`. A reader can re-derive 
 or re-weight — every composite, cost and score from the published data without
 re-running anything.
 
-**Gating.** Observational by default: with the repo/org variable
-`BENCH_MIN_SCORE` unset the summary only reports the mean composite. Set it to a
-number to gate — the summary job exits non-zero when the mean composite across
-scored cells falls below it; this is the **one** intentional exception to
-green-regardless (below). There is no baseline-*delta* gate — the PR-vs-baseline
-overview (below) is observational only.
+**Gating.** Observational by default: with all three gate variables unset the
+summary only reports the mean composite and never turns the check red. Each gate
+is opt-in via its own repo/org variable, and any one tripping exits the summary
+job non-zero (the intentional exception to green-regardless, below):
+
+- `BENCH_MIN_SCORE` — absolute floor. Fails when the mean composite across scored
+  cells falls below it. Skipped (never fails) when no cell scored.
+- `BENCH_MAX_REGRESSION` — regression vs `main`. Fails when the mean composite
+  drops more than this many points below the `main` baseline. Skipped on the
+  first run / when no baseline exists (nothing to diff).
+- `BENCH_MAX_HARNESS_ERRORS` — infra-failure ceiling. Fails when more than this
+  many cells are `harness_error` — an unreadable/corrupt `result.json` artifact
+  counts too, since it is also a broken measurement. Distinct from a low agent
+  score: this catches a broken *measurement*. Must be a whole number — a negative
+  or fractional value is treated as unset (a negative count would invert the gate;
+  a fractional count is nonsensical). One case fires with **no variable set
+  at all**: if the bench matrix did not succeed AND produced zero result artifacts
+  (e.g. `build-blocks` failed so every cell was skipped), the summary reds the
+  check — a total upstream failure must not report green.
+
+A negative or non-numeric value for any gate variable is treated as unset.
 
 **Check status — green regardless.** A bench cell never turns the PR check red.
 Every fallible cell step (`npm ci`, OIDC, `1-init`, `2-agent`, `3-build-and-test`,
@@ -229,8 +244,8 @@ Every fallible cell step (`npm ci`, OIDC, `1-init`, `2-agent`, `3-build-and-test
 `if: steps.<prev>.outcome == 'success'` chain that reproduces the old implicit
 skip-chain — so an agent timeout still skips its tests/judge and scores composite
 0, rather than scoring a partial app. A cell's outcome lives in `result.json` +
-the run summary, not the check status, and the summary job is green too (unless
-`BENCH_MIN_SCORE` is set and trips). A new commit cancels the prior in-flight run
+the run summary, not the check status, and the summary job is green too (unless a
+gate above is set and trips). A new commit cancels the prior in-flight run
 via the workflow `concurrency` group.
 
 **The report — Overview + Detailed vs the `main` baseline.** Each run writes a
@@ -283,8 +298,10 @@ Reading/writing the baseline uses the same OIDC role (`s3:GetObject` /
 | `steps/lib/analysis.mjs` | Shared, mostly-pure helpers for the trace/metrics analysis feature: trace trimming, prompt builders, and `parseCellAnalysis` (splits the per-cell model output into an analysis string + a bounded potential-issues list). Imported by `analyze-cell.mjs` (per-cell) and `analyze.mjs` (roll-up) |
 | `steps/analyze-cell.mjs` | Step 4b: per-cell trace/metrics analysis via the judge model; writes a concise `analysis` string **and** an `analysis_issues[]` (potential issues) back into the cell's `result.json` |
 | `steps/analyze.mjs` | Summary-job roll-up: synthesizes the per-cell analyses into a short **Executive summary** (paragraph + bullets) via one best-effort Bedrock call, aggregates a **Potential issues** section, and renders a collapsed **Per-cell analysis** (each cell also collapsed) |
+| `steps/lib/gates.mjs` | **Single source of truth** for the merge gate: `parseThreshold` + `evaluateGates` decide pass/fail from the floor (`BENCH_MIN_SCORE`), regression-vs-`main` (`BENCH_MAX_REGRESSION`) and harness/infra (`BENCH_MAX_HARNESS_ERRORS`, incl. the whole-run upstream-failure case). Pure; imported by summary |
+| `steps/lib/pr-comment.sh` | Upsert the report as one sticky PR comment keyed by a hidden marker (update oldest, delete duplicates); same-repo PR only, best-effort |
 | `steps/finalize-result.mjs` | Run with `if: always()`; stamps `status` + `failed_at` from per-step outcomes, then `klass`, `test_rate`, `verdict`, `composite` via `lib/scoring.mjs` |
-| `steps/summary.mjs` | Render the report to `$GITHUB_STEP_SUMMARY`: a collapsible **Glossary**, the colors-only **Overview** + numbers **Detailed results** tables (vs the `main` baseline), and a deterministic caveats block; reads one `result.json` per cell (N=1); writes the run's schema-2 aggregate (+ Athena NDJSON) for the S3 baseline; optional `BENCH_MIN_SCORE` gate |
+| `steps/summary.mjs` | Render the report to `$GITHUB_STEP_SUMMARY` **and** to a file for the sticky PR comment: a collapsible **Glossary**, the colors-only **Overview** + numbers **Detailed results** tables (vs the `main` baseline), a **Merge verdict** section (each enabled gate's decision), and a deterministic caveats block; reads one `result.json` per cell (N=1); writes the run's schema-2 aggregate (+ Athena NDJSON) for the S3 baseline; runs the three gates via `lib/gates.mjs` and exits non-zero when any trips |
 | `package.json` | Workspace metadata; `private: true` |
 
 Failure handling: every cell starts with `0-init-result.mjs` writing a
@@ -298,10 +315,16 @@ summary table — never silently missing.
 The report is written to the **GitHub Actions run summary**
 (`$GITHUB_STEP_SUMMARY`) and renders in the run UI — the Glossary, the Overview +
 Detailed tables, then the executive summary / potential issues / per-cell
-analysis. The bench posts **no PR comment** — the github-script commenting step in
-`agent-bench.yml` is intentionally left in place but commented out, so it can be
-restored if commenting is ever wanted again. When the bench matrix produces no
-results, `summary.mjs` renders a benign "no results" note and still exits 0.
+analysis. The bench also posts the report as **one sticky PR comment** — the
+`Comment bench report on PR` step upserts a single comment keyed by a hidden
+`<!-- agent-bench-report -->` marker (`steps/lib/pr-comment.sh`): it updates the
+oldest marker comment in place and deletes any duplicates, so re-runs never spam
+the thread. It runs same-repo PRs only (a fork PR has no token) and is
+`continue-on-error`, so a comment failure never reds the bench — the report is
+also in the Actions run summary. Requires `pull-requests: write`, granted on the
+caller `bench` job in `pr-agent-bench.yml` (a reusable workflow's token is capped
+down to the caller's). When the bench matrix produces no results, `summary.mjs`
+renders a benign "no results" note and still exits 0.
 
 ## Local development
 
