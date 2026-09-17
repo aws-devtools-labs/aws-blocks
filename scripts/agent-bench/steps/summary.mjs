@@ -7,6 +7,7 @@ import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:f
 import { join } from 'node:path';
 import { cellCost, compositeBand, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
 import { buildAggregate, cellComposite, deltaBall, diffAgainstBaseline, renderDetailed, renderOverview } from './lib/overview.mjs';
+import { evaluateGates } from './lib/gates.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
 
@@ -16,6 +17,35 @@ try {
 	dirs = readdirSync(RESULTS_DIR).filter((d) => d.startsWith('bench-result-'));
 } catch (err) {
 	if (err?.code !== 'ENOENT') throw err;
+}
+
+// Write a minimal fallback comment NOW, before the risky rendering below, so the always() comment
+// step has something to post if summary.mjs throws mid-render: a "failed to render" stub instead of
+// silently leaving a red check with no explanation on the PR. The full report overwrites this on the
+// normal path. Skip it entirely when the matrix produced ZERO result artifacts AND no gate could
+// block (a path-filtered run the bench never ran for) — such a run should leave no PR comment at all;
+// the final write below applies the same "something to report" guard.
+const anyGateEnv = ['BENCH_MIN_SCORE', 'BENCH_MAX_REGRESSION', 'BENCH_MAX_HARNESS_ERRORS'].some(
+	(k) => (process.env[k] ?? '').trim() !== '',
+);
+const benchJobFailedEnv = ['BENCH_JOB_RESULT', 'BENCH_BUILD_RESULT'].some((k) => {
+	const v = (process.env[k] ?? '').trim();
+	return v !== '' && v !== 'success' && v !== 'skipped' && v !== 'cancelled';
+});
+const shouldComment = dirs.length > 0 || anyGateEnv || benchJobFailedEnv;
+if (process.env.COMMENT_MD_PATH && shouldComment) {
+	try {
+		const runId = process.env.GITHUB_RUN_ID;
+		const repo = process.env.GITHUB_REPOSITORY;
+		const server = process.env.GITHUB_SERVER_URL;
+		const link = server && repo && runId ? `${server}/${repo}/actions/runs/${runId}` : 'the Actions run';
+		writeFileSync(
+			process.env.COMMENT_MD_PATH,
+			`## Agent Bench\n\n⚠️ The bench summary failed to render — see [the Actions run](${link}) for logs. This comment is a fallback; the check is red because \`summary.mjs\` did not complete.\n`,
+		);
+	} catch {
+		// Best-effort: if even this write fails, the comment step's own empty-file guard handles it.
+	}
 }
 
 // One row per cell, read from the single result.json the cell artifact holds.
@@ -82,11 +112,46 @@ if (baselinePath) {
 }
 const diff = diffAgainstBaseline(aggregate, baseline);
 
-// ── Headline + optional gate over the composite mean (scored cells only) ──────
-const minScoreRaw = (process.env.BENCH_MIN_SCORE ?? '').trim();
-const min = Number(minScoreRaw);
-const gateEnabled = minScoreRaw !== '' && Number.isFinite(min);
-let gateFailed = false;
+// ── Headline + gates (floor / regression-vs-main / harness) over the composite mean ──
+// The three gates live in lib/gates.mjs (pure, unit-tested); each is opt-in via its own env var, so
+// an unconfigured repo stays observational — exactly today's behaviour.
+const gateResult = evaluateGates(
+	{
+		meanComposite: aggregate.mean_composite,
+		scoredCells: compositeCells.length,
+		meanDelta: diff.hasBaseline ? diff.meanDelta : null,
+		hasBaseline: diff.hasBaseline,
+		// harness_error cells (infra) PLUS unreadable-artifact cells: a corrupt/unreadable result.json
+		// is also a broken measurement, so it counts toward the harness ceiling rather than slipping
+		// between both harness checks.
+		harnessErrors: harnessErrors.length + errorCells.length,
+		totalCells: cells.length,
+		// The upstream job results, passed by the workflow (success | failure | cancelled | skipped |
+		// ''). benchJobFailed is true when EITHER the bench matrix OR its build-blocks dependency
+		// genuinely FAILED. This is load-bearing: `bench` has `needs: build-blocks` with no `if:`, so
+		// once the workflow is triggered `bench` is only ever 'skipped' because build-blocks
+		// failed/skipped — never a per-cell path filter (the path allowlist gates the whole workflow at
+		// the caller, before any job runs). So when build-blocks FAILS, GitHub SKIPS bench and
+		// BENCH_JOB_RESULT is 'skipped', not 'failure' — the BUILD result is the only signal that the
+		// skip was a failure, which is why a failed build-blocks alone trips the whole-run gate (with
+		// zero cells). 'cancelled' is NOT a failure: a user-initiated or superseding-commit cancellation
+		// left nothing measured on purpose, and reddening it with "nothing was measured" is misleading
+		// (the superseding run re-gates). Computed once as benchJobFailedEnv near the top (also gates
+		// the comment write).
+		benchJobFailed: benchJobFailedEnv,
+	},
+	{
+		minScore: process.env.BENCH_MIN_SCORE,
+		maxRegression: process.env.BENCH_MAX_REGRESSION,
+		maxHarnessErrors: process.env.BENCH_MAX_HARNESS_ERRORS,
+	},
+);
+const floorGate = gateResult.gates.find((g) => g.name === 'floor');
+const gateFailed = gateResult.failed;
+// Read the floor's enabled/threshold from the gate result — the parse lives only in gates.mjs, so
+// the headline can't drift from the gate decision (e.g. the negative-is-disabled rule).
+const floorEnabled = floorGate.enabled;
+const min = floorGate.value;
 
 const judgeMean = judgeScoredCells.length
 	? judgeScoredCells.reduce((acc, r) => acc + r.judge_score, 0) / judgeScoredCells.length
@@ -98,7 +163,7 @@ function headlineLine() {
 		if (cells.length > 0 && harnessErrors.length === cells.length) {
 			return `⚠️ All ${cells.length} cell(s) were harness_error — nothing was scored, no composite headline.`;
 		}
-		const g = gateEnabled ? ` (\`BENCH_MIN_SCORE=${min}\` set, but with no scored cells the gate is skipped — conservative.)` : '';
+		const g = floorEnabled ? ` (\`BENCH_MIN_SCORE=${min}\` set, but with no scored cells the floor is skipped — conservative.)` : '';
 		return `_No cells produced test results — no composite headline to report._${g}`;
 	}
 	const mean = aggregate.mean_composite;
@@ -109,9 +174,12 @@ function headlineLine() {
 			? ` · ${deltaBall(diff.meanDelta)} ${diff.meanDelta > 0 ? '+' : ''}${diff.meanDelta.toFixed(1)} vs \`main\``
 			: '';
 	const head = `Mean composite **${mean.toFixed(1)}**/100 ${compositeBand(mean)} across ${compositeCells.length} scored cell(s)${judgeNote}${deltaNote}.`;
-	if (!gateEnabled) return `${head} _Observational — \`BENCH_MIN_SCORE\` unset, so it does not gate the merge._`;
-	const pass = mean >= min;
-	gateFailed = !pass;
+	if (!floorEnabled) return `${head} _Observational — \`BENCH_MIN_SCORE\` unset, so the floor does not gate the merge._`;
+	// Defensive/unreachable: the early return above already handled compositeCells.length === 0, and
+	// the floor gate only skips on scoredCells === 0 — so with scored cells present it never skips.
+	// Kept so this doesn't silently render a wrong headline if that early return is ever changed.
+	if (floorGate.skipped) return `${head} _\`BENCH_MIN_SCORE=${min}\` set, but no scored cells — floor skipped._`;
+	const pass = !floorGate.failed;
 	return `${pass ? '✅' : '❌'} ${head} Threshold **${min}** — ${pass ? 'pass' : 'FAIL'}.`;
 }
 
@@ -184,6 +252,25 @@ if (cells.length > 0) {
 // 3) Detailed results — numbers.
 if (cells.length > 0) {
 	md.push(...renderDetailed(diff, { heading: '## Detailed results', note: 'Same rows, colored `baseline -> pr`.' }));
+}
+
+// 3b) Merge verdict — the gate decisions (only shown when at least one gate is enabled).
+const enabledGates = gateResult.gates.filter((g) => g.enabled);
+if (enabledGates.length > 0) {
+	md.push('## Merge verdict', '');
+	md.push(gateFailed ? '❌ **This bench run BLOCKS the PR.**' : '✅ **This bench run does not block the PR.**', '');
+	for (const g of enabledGates) {
+		const icon = g.failed ? '❌' : g.skipped ? '⚪' : '✅';
+		const label = g.name === 'floor' ? 'Absolute floor' : g.name === 'regression' ? 'Regression vs `main`' : 'Harness (infra) failures';
+		md.push(`- ${icon} **${label}** — ${g.reason}`);
+	}
+	// The Δ-vs-base ball in the tables is a FIXED ±5-pt cosmetic band; the regression GATE uses the
+	// configurable BENCH_MAX_REGRESSION. They can disagree (a 🟡 "flat" ball with a failing gate at a
+	// tighter limit) — the ball is display, the gate threshold is what blocks.
+	if (enabledGates.some((g) => g.name === 'regression')) {
+		md.push('', '_The `Δ vs base` ball above is a fixed ±5-pt display band; the regression gate uses `BENCH_MAX_REGRESSION`. The ball is cosmetic — the gate threshold is what blocks._');
+	}
+	md.push('');
 }
 
 // 4) Compact caveats (deterministic) — excluded / harness / judge-error cells.
@@ -283,7 +370,20 @@ if (process.env.GITHUB_STEP_SUMMARY) {
 	process.stdout.write(out);
 }
 
+// Write the SAME rendered report to a file the workflow posts as a sticky PR comment. Best-effort:
+// a write failure never reds the job — the step summary above already has the report, and the gate
+// exit below is what actually blocks. Skipped on a path-filtered no-results run (shouldComment=false)
+// so the bench leaves no comment on a PR it never ran for.
+if (process.env.COMMENT_MD_PATH && shouldComment) {
+	try {
+		writeFileSync(process.env.COMMENT_MD_PATH, out);
+	} catch (err) {
+		process.stderr.write(`[summary] failed to write comment markdown to ${process.env.COMMENT_MD_PATH}: ${err?.message ?? err}\n`);
+	}
+}
+
 if (gateFailed) {
-	process.stderr.write(`[summary] mean composite below BENCH_MIN_SCORE=${minScoreRaw}; failing the gate\n`);
+	const failed = gateResult.gates.filter((g) => g.failed).map((g) => `${g.name}: ${g.reason}`).join(' | ');
+	process.stderr.write(`[summary] merge gate FAILED — ${failed}\n`);
 	process.exit(1);
 }
