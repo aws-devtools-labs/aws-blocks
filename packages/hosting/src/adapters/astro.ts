@@ -36,7 +36,7 @@ import { createJiti } from 'jiti';
 import { getPackageInfoSync, isPackageExists } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
-import { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
+import type { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
 
 export type AstroAdapterOptions = {
   /** Project root directory (absolute). */
@@ -714,8 +714,18 @@ export const ensureSsrBuildOutput = (
   if (!fs.existsSync(serverEntry)) {
     throw buildOutputMissingError(serverDir, output);
   }
-  if (!fs.existsSync(clientDir)) {
-    fs.mkdirSync(clientDir, { recursive: true });
+  // `dist/client` only holds static assets (public/, prerendered pages, hashed
+  // client JS/CSS); a pure-SSR build legitimately emits none. `mkdirSync` with
+  // `recursive` is idempotent, so create unconditionally — but emit a breadcrumb
+  // only when we actually materialize an ABSENT dir, so a silently-empty client
+  // (a broken build that dropped its assets) still surfaces in build logs rather
+  // than being masked by the create.
+  const clientAbsent = !fs.existsSync(clientDir);
+  fs.mkdirSync(clientDir, { recursive: true });
+  if (clientAbsent) {
+    process.stderr.write(
+      'ℹ️  No dist/client emitted; treating as a pure-SSR build (CloudFront routes all requests to the SSR Lambda).\n',
+    );
   }
 };
 
