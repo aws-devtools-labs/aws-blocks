@@ -28,6 +28,11 @@ env:
   NPM_CONFIG_FETCH_RETRIES: '5'
   NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '20000'
   NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '120000'
+  # SINGLE SOURCE OF TRUTH for the Bedrock model id. Builder, judge, and the summary-job analysis all
+  # derive from this — bump it in ONE place instead of three. NOTE: the inline session policy below
+  # uses inference-profile/* wildcards (model-agnostic), so it does NOT need editing on a model bump;
+  # the IAM role's own Resource ARN, provisioned by CDK outside this repo, still does — see PR body.
+  BENCH_MODEL_ID: us.anthropic.claude-opus-4-8
 
 jobs:
   # Build + pack the whole monorepo to a local npm registry ONCE per run, handed to every cell
@@ -96,10 +101,11 @@ jobs:
     env:
       WORKSPACE: ${{ github.workspace }}/bench-app
       TASK: ${{ matrix.task }}
-      # Bedrock geo inference-profile IDs (both resolve in us-east-1). Overridable via BENCH_MODEL;
-      # builder and judge share Opus 4.8 (same-model self-eval bias accepted for now).
-      BENCH_MODEL: us.anthropic.claude-opus-4-8
-      BENCH_JUDGE_MODEL: us.anthropic.claude-opus-4-8
+      # Bedrock geo inference-profile IDs (both resolve in us-east-1). Override the model at the
+      # workflow-level BENCH_MODEL_ID (below); builder and judge share it (same-model self-eval bias
+      # accepted for now) and both derive from it, so a bump is one edit.
+      BENCH_MODEL: ${{ env.BENCH_MODEL_ID }}
+      BENCH_JUDGE_MODEL: ${{ env.BENCH_MODEL_ID }}
       AWS_REGION: us-east-1
       TEMPLATE: ${{ matrix.template }}
       PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
@@ -167,17 +173,21 @@ jobs:
           role-duration-seconds: 7200
           # LEAST PRIVILEGE (canonical explanation): the effective session permissions are the
           # INTERSECTION of the role's policy and this inline policy, so this narrows the initial
-          # session to Bedrock Converse ONLY — steps 1→4b (agent, judge, per-cell analysis) run with
-          # no s3:PutObject. It cannot widen the role, so the shared AWS_ROLE_ARN and every other
+          # session to Bedrock model-invocation ONLY — steps 1→4b (agent, judge, per-cell analysis) run
+          # with no s3:PutObject. It cannot widen the role, so the shared AWS_ROLE_ARN and every other
           # workflow that uses it are untouched — no new IAM roles or environment secrets. The
-          # allow-list is exactly the two model-invocation paths the harness uses: ConverseStream for
-          # the Strands BedrockModel (builder/judge stream — see the ModelStreamUpdateEvent hook in
-          # 2-agent-run.ts) and Converse for the CLI `bedrock-runtime converse` analysis. InvokeModel
-          # / InvokeModelWithResponseStream are intentionally omitted — no path uses them. Resources
-          # stay on model-invocation ARNs (inference-profile + foundation-model), robust to the us.*
-          # geo profile's cross-region routing and a BENCH_MODEL override — the role itself already
-          # pins the exact model. "Persist to S3" re-assumes the same role below WITHOUT this policy
-          # to regain the s3 write for that step.
+          # allow-list is exactly the model-invocation actions with a verified call site: the Strands
+          # `BedrockModel` (builder/judge stream — see the ModelStreamUpdateEvent hook in 2-agent-run.ts
+          # and 4-judge.ts) calls `bedrock:InvokeModelWithResponseStream`, and the CLI
+          # `bedrock-runtime converse` analysis (analysis.mjs bedrockConverse) calls `bedrock:Converse`.
+          # Non-streaming `InvokeModel` and `ConverseStream` are intentionally omitted — no path uses
+          # them. (Earlier this list omitted the Invoke* actions on the false assumption that the SDK
+          # used ConverseStream — that is what 403'd every cell. NOTE: this is the SESSION half only;
+          # the role's own identity policy must ALSO grant these actions or the intersection is still
+          # empty.) Resources stay on model-invocation ARNs (inference-profile + foundation-model),
+          # robust to the us.* geo profile's cross-region routing and a BENCH_MODEL override. "Persist
+          # to S3" re-assumes the same role below WITHOUT this policy to regain the s3 write for that
+          # step.
           inline-session-policy: >-
             {
               "Version": "2012-10-17",
@@ -186,8 +196,8 @@ jobs:
                   "Sid": "BedrockInvokeOnly",
                   "Effect": "Allow",
                   "Action": [
-                    "bedrock:Converse",
-                    "bedrock:ConverseStream"
+                    "bedrock:InvokeModelWithResponseStream",
+                    "bedrock:Converse"
                   ],
                   "Resource": [
                     "arn:aws:bedrock:*:*:inference-profile/*",
@@ -505,8 +515,8 @@ jobs:
           RESULTS_DIR: results
           BASELINE_PATH: ${{ github.workspace }}/baseline.json
           ANALYSIS_PATH: ${{ github.workspace }}/bench-analysis.json
-          # Same judge model as 4-judge.ts / the per-cell analysis.
-          BENCH_JUDGE_MODEL: us.anthropic.claude-opus-4-8
+          # Same judge model as 4-judge.ts / the per-cell analysis (workflow-level BENCH_MODEL_ID).
+          BENCH_JUDGE_MODEL: ${{ env.BENCH_MODEL_ID }}
           AWS_REGION: us-east-1
 
       - name: Upload analysis (best-effort)
