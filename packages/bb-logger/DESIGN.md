@@ -8,23 +8,27 @@ Design document for Logger. For usage, see [README.md](./README.md).
 
 ## Infrastructure (CDK)
 
-The framework owns a single CloudWatch Logs LogGroup for the shared handler
-Lambda (created by the `BlocksStack`/`BlocksBackend` with retention from the
-stack-wide `defaults.logRetention`). The Logger construct **reconfigures that
-group's retention** rather than creating its own:
+**Logging is always on and Logger owns no deploy-time infrastructure.** Every
+compute captures stdout to a single CloudWatch Logs LogGroup for its handler,
+created by the compute itself. There is no "enable logging" seam — logs always
+exist for every compute.
 
-- **Retention:** Resolved as `options.retention ?? scope.defaults.logRetention`
-  and applied to the shared handler log group via the L1 escape hatch
-  (`CfnLogGroup.retentionInDays`). An explicit per-Logger `retention` wins over
-  the stack-wide default; both target the one group.
-- **When `retention` is omitted:** The group keeps the stack-wide
-  `defaults.logRetention` already applied by the BlocksStack/BlocksBackend.
-- **No second LogGroup:** Logger deliberately does not create a
-  `/aws/lambda/${handler.functionName}` group of its own — that would collide
-  with the framework-owned group on the log-group name.
-- **Log level env var:** Sets `LOG_LEVEL` on the shared Lambda handler when
-  `options.level` is configured. Multiple Logger BBs can coexist with different
-  levels via constructor options.
+Because logging is unconditional, the CDK `Logger` is a **no-op placeholder**:
+its constructor just lets `new Logger(scope, id)` resolve in a CDK app. Any
+number of Loggers can coexist freely (they own nothing to collide over). The
+two things a Logger *used* to carry now live elsewhere:
+
+- **Retention** is a **compute-level setting**, not a Logger option. A compute's
+  handler log group takes its retention from that compute's `logRetention` prop
+  (e.g. `LambdaCompute`'s `logRetention`), falling back to the stack-wide
+  `defaults.logRetention`. Set retention where the compute is constructed, not
+  on a Logger. (The `retention` option was removed from `LoggingOptions`.)
+- **Log level** is purely per-instance *runtime* behavior. A `Logger`'s `level`
+  is applied by the logger instance itself; a logger without an explicit `level`
+  defaults to `'info'` (see *Log Level Resolution* below). Blocks does **not**
+  stamp an app-wide default — there is no `defaults.logLevel`, no `LOG_LEVEL`
+  env var, and the CDK layer provisions nothing for level. This is why multiple
+  Loggers with different levels coexist without fighting over shared config.
 
 ## Serialization Format
 
@@ -75,15 +79,15 @@ All logging methods are **synchronous**. This is an intentional deviation from t
 
 Priority order (highest wins):
 1. Constructor `options.level`
-2. Global env var: `LOG_LEVEL`
-3. Default: `'info'`
+2. Default: `'info'`
 
 ## Mock Implementation
 
 The mock entry point (`index.mock.ts`) re-exports the AWS runtime (`index.aws.ts`) directly. Both environments use the same code: write structured JSON to `process.stdout` / `process.stderr`. There is no mock-specific behavior because the logging mechanism (stdout/stderr → CloudWatch) is provided by the Lambda runtime, not by the BB.
 
 - No files created in `.bb-data/` — logs are ephemeral.
-- `retention` option is accepted but ignored (no local CloudWatch equivalent).
+- Retention is a cloud-only concept (no local CloudWatch equivalent); it is a
+  compute-level setting and has no effect locally.
 - Log level filtering works identically to production.
 
 ### Mock vs AWS Behavior Differences

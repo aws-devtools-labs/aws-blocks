@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
@@ -18,6 +19,7 @@ import { BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 import { Scope } from './index.js';
+import { getVpcContext } from './vpc.js';
 
 // A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
 // @aws-blocks/blocks), which core's own tests can't depend on. Use an
@@ -37,6 +39,11 @@ class StubLambdaCompute extends Compute {
 		this.logGroup = new cdk.aws_logs.LogGroup(this, 'HandlerLogGroup', {
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
+		// Discover the shared VPC context from the owning stack/backend, mirroring
+		// LambdaCompute — so the core-side VPC placement plumbing (initializeVpc →
+		// getVpcContext) is exercised by these tests without depending on
+		// @aws-blocks/bb-lambda-compute.
+		const vpcContext = getVpcContext(this);
 		this.fn = new lambda.NodejsFunction(this, 'Handler', {
 			entry: this.backendHandlerPath,
 			runtime: cdk.aws_lambda.Runtime.NODEJS_22_X,
@@ -45,6 +52,13 @@ class StubLambdaCompute extends Compute {
 			logGroup: this.logGroup,
 			environment: { BLOCKS_STACK_NAME: this.backendStackName },
 			bundling: { minify: true, esbuildArgs: { '--conditions': 'aws-runtime' } },
+			...(vpcContext
+				? {
+						vpc: vpcContext.vpc,
+						vpcSubnets: vpcContext.computeSubnets,
+						securityGroups: [vpcContext.computeSecurityGroup],
+					}
+				: {}),
 		});
 		this.apiGateway = new apigateway.RestApi(this, 'API', { restApiName: 'Blocks API' });
 		this.apiGateway.root.addProxy({
@@ -56,6 +70,17 @@ class StubLambdaCompute extends Compute {
 
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
+	}
+
+	protected applyTracing(): void {}
+	protected healthWidgets(_region: string): IWidget[][] {
+		return [];
+	}
+	protected loggingWidgets(_region: string): IWidget[][] {
+		return [];
+	}
+	protected tracingWidgets(_region: string): IWidget[][] {
+		return [];
 	}
 }
 
@@ -77,7 +102,12 @@ const importMetaHandlerPath = join(__dirname, '__fixtures__', 'import-meta-handl
 // Wraps BlocksBackend.create, injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it 15 times.
 const makeBackend = (scope: Construct, id: string, backendCDKPath: string) =>
-	BlocksBackend.create(scope, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production, defaultComputeFactory: stubComputeFactory });
+	BlocksBackend.create(scope, id, {
+		backendHandlerPath: handlerPath,
+		backendCDKPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: stubComputeFactory,
+	});
 
 describe('ESM cache-busting (multi-stage)', () => {
 	test('BlocksBackend.create() with same backendCDKPath but different IDs produces constructs in each', async () => {
@@ -170,10 +200,29 @@ describe('shared execution role', () => {
 			'BlocksRole should attach AWSLambdaBasicExecutionRole',
 		);
 
+		// Core is BB-agnostic: with no Building Block that runs AS the shared role, the trust policy
+		// must NOT allow any compute principal beyond Lambda (e.g. bedrock-agentcore is added by the
+		// Agent BB's own construct, not here — see packages/bb-agent).
+		assert.ok(
+			!JSON.stringify(blocksRole.Properties.AssumeRolePolicyDocument).includes('bedrock-agentcore'),
+			'core must not trust bedrock-agentcore by default (no agent → no AgentCore trust)',
+		);
+
 		// The Blocks handler references the shared role, not an auto-generated one.
 		template.hasResourceProperties('AWS::Lambda::Function', {
 			Role: { 'Fn::GetAtt': [blocksRoleId, 'Arn'] },
 		});
+	});
+
+	test('exposes backendModulePath (props.backendCDKPath) for co-bundling BBs', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'BackendPathStack');
+
+		const backend = await makeBackend(parent, 'Blocks', sideEffectBackendPath);
+
+		// Building Blocks that co-bundle the app backend at synth time (e.g. the Agent BB's AgentCore
+		// Runtime) discover it via globalThis.CURRENT_BLOCKS_STACK.backendModulePath.
+		assert.strictEqual(backend.backendModulePath, sideEffectBackendPath);
 	});
 
 	test('a nested block resolves executionRole via the construct-tree walk', async () => {
@@ -211,25 +260,25 @@ describe('shared execution role', () => {
 });
 
 describe('CJS bundle: import.meta.url in the handler is shimmed (no Lambda-load crash)', () => {
-  test('a handler that uses import.meta.url bundles successfully instead of throwing at load', async () => {
-    // The handler is bundled to CJS, where `import.meta` is empty. Left unshimmed,
-    // `fileURLToPath(import.meta.url)` compiles to `fileURLToPath(undefined)` and
-    // throws at Lambda load (esbuild only warns, so the broken bundle would deploy).
-    // blocksNodejsBundling shims import.meta.* to CommonJS equivalents, so bundling
-    // (which runs synchronously during construction) succeeds. The runtime behaviour
-    // of the emitted shim is verified directly in bundling.test.ts.
-    const app = new cdk.App();
-    const stack = new cdk.Stack(app, 'ImportMetaStack');
+	test('a handler that uses import.meta.url bundles successfully instead of throwing at load', async () => {
+		// The handler is bundled to CJS, where `import.meta` is empty. Left unshimmed,
+		// `fileURLToPath(import.meta.url)` compiles to `fileURLToPath(undefined)` and
+		// throws at Lambda load (esbuild only warns, so the broken bundle would deploy).
+		// blocksNodejsBundling shims import.meta.* to CommonJS equivalents, so bundling
+		// (which runs synchronously during construction) succeeds. The runtime behaviour
+		// of the emitted shim is verified directly in bundling.test.ts.
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'ImportMetaStack');
 
-    await assert.doesNotReject(() =>
-      BlocksBackend.create(stack, 'blocks', {
-        backendHandlerPath: importMetaHandlerPath,
-        backendCDKPath: sideEffectBackendPath,
-        defaults: BlocksPresets.production,
-        defaultComputeFactory: stubComputeFactory,
-      }),
-    );
-  });
+		await assert.doesNotReject(() =>
+			BlocksBackend.create(stack, 'blocks', {
+				backendHandlerPath: importMetaHandlerPath,
+				backendCDKPath: sideEffectBackendPath,
+				defaults: BlocksPresets.production,
+				defaultComputeFactory: stubComputeFactory,
+			}),
+		);
+	});
 });
 
 describe('factory function support', () => {
@@ -329,44 +378,98 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
 });
 
 describe('infrastructure defaults (backend-anchored)', () => {
-  test('each backend exposes its own defaults', async () => {
-    const app = new cdk.App();
-    const stack = new cdk.Stack(app, 'TwoBackendsStack');
+	test('each backend exposes its own defaults', async () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'TwoBackendsStack');
 
-    const a = await BlocksBackend.create(stack, 'A', {
-      backendHandlerPath: handlerPath,
-      backendCDKPath: sideEffectBackendPath,
-      defaults: BlocksPresets.production,
-      defaultComputeFactory: stubComputeFactory,
-    });
-    const b = await BlocksBackend.create(stack, 'B', {
-      backendHandlerPath: handlerPath,
-      backendCDKPath: sideEffectBackendPath,
-      defaults: BlocksPresets.sandbox,
-      defaultComputeFactory: stubComputeFactory,
-    });
+		const a = await BlocksBackend.create(stack, 'A', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: stubComputeFactory,
+		});
+		const b = await BlocksBackend.create(stack, 'B', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.sandbox,
+			defaultComputeFactory: stubComputeFactory,
+		});
 
-    // Two backends in one stack must NOT clobber each other — defaults are
-    // anchored on the backend, not the shared stack.
-    assert.strictEqual(a.defaults, BlocksPresets.production);
-    assert.strictEqual(b.defaults, BlocksPresets.sandbox);
-  });
+		// Two backends in one stack must NOT clobber each other — defaults are
+		// anchored on the backend, not the shared stack.
+		assert.strictEqual(a.defaults, BlocksPresets.production);
+		assert.strictEqual(b.defaults, BlocksPresets.sandbox);
+	});
 
-  test('a nested block resolves its owning backend defaults via the tree-walk', async () => {
-    const app = new cdk.App();
-    const stack = new cdk.Stack(app, 'ResolveDefaultsStack');
+	test('a nested block resolves its owning backend defaults via the tree-walk', async () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'ResolveDefaultsStack');
 
-    const backend = await BlocksBackend.create(stack, 'Blocks', {
-      backendHandlerPath: handlerPath,
-      backendCDKPath: sideEffectBackendPath,
-      defaults: BlocksPresets.sandbox,
-      defaultComputeFactory: stubComputeFactory,
-    });
+		const backend = await BlocksBackend.create(stack, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.sandbox,
+			defaultComputeFactory: stubComputeFactory,
+		});
 
-    // A Scope under the backend resolves scope.defaults by walking up to it.
-    const outer = new Scope('outer');
-    const inner = new Scope('inner', { parent: outer });
-    assert.strictEqual(inner.defaults, backend.defaults);
-    assert.strictEqual(inner.defaults, BlocksPresets.sandbox);
-  });
+		// A Scope under the backend resolves scope.defaults by walking up to it.
+		const outer = new Scope('outer');
+		const inner = new Scope('inner', { parent: outer });
+		assert.strictEqual(inner.defaults, backend.defaults);
+		assert.strictEqual(inner.defaults, BlocksPresets.sandbox);
+	});
+});
+
+describe('VPC placement', () => {
+	test('places the handler Lambda in the VPC with a security group when vpc is provided', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'VpcParent', {
+			env: { account: '123456789012', region: 'us-east-1' },
+		});
+		const vpc = new cdk.aws_ec2.Vpc(parent, 'AppVpc', { maxAzs: 2, natGateways: 1 });
+
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: { ...BlocksPresets.production, vpc: { network: vpc } },
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		const template = Template.fromStack(parent);
+		// The handler Lambda is VPC-attached: it has a VpcConfig with subnets + SGs.
+		template.hasResourceProperties('AWS::Lambda::Function', {
+			VpcConfig: Match.objectLike({
+				SubnetIds: Match.anyValue(),
+				SecurityGroupIds: Match.anyValue(),
+			}),
+		});
+		// The VPC-access managed policy is attached to the execution role.
+		const policies = template.findResources('AWS::IAM::Role');
+		const hasVpcManagedPolicy = Object.values(policies).some((role: any) =>
+			JSON.stringify(role.Properties?.ManagedPolicyArns ?? []).includes('AWSLambdaVPCAccessExecutionRole'),
+		);
+		assert.ok(hasVpcManagedPolicy, 'execution role should have the VPC access managed policy');
+	});
+
+	test('no VpcConfig on the handler when vpc is omitted', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'NoVpcParent');
+
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		const template = Template.fromStack(parent);
+		const fns = template.findResources('AWS::Lambda::Function');
+		for (const fn of Object.values(fns)) {
+			assert.strictEqual(
+				(fn as any).Properties?.VpcConfig,
+				undefined,
+				'handler must not have VpcConfig when no VPC is configured',
+			);
+		}
+	});
 });

@@ -6,7 +6,7 @@ import type { ConfigValue, SecretValue } from '@aws-blocks/hosting';
 import type * as cdk from 'aws-cdk-lib';
 import type * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
-import type { IFileSetProducer } from 'aws-cdk-lib/pipelines';
+import type { CodeBuildStep, IFileSetProducer, ShellStep } from 'aws-cdk-lib/pipelines';
 
 /**
  * Configuration for the pipeline source (GitHub/CodeConnections).
@@ -295,6 +295,31 @@ export interface BranchConfig<TConfig = Record<string, unknown>> {
 }
 
 /**
+ * Context passed to a {@link PipelineProps.postStage} hook for one deploy stage.
+ */
+export interface PostStageContext<TConfig = Record<string, unknown>> {
+  /** The CDK Stage the hook may attach post-deploy steps for. */
+  readonly stage: cdk.Stage;
+
+  /**
+   * The full configuration for this stage — including `name`, the user-defined
+   * `config`, and `env` (the stage's target account/region). Read `env` here to
+   * make a post-deploy step target the same account/region as the stage.
+   */
+  readonly stageConfig: PipelineStageConfig<TConfig>;
+
+  /**
+   * The resolved pipeline source file set for this stage's branch. Use it as the
+   * `input` of a returned `CodeBuildStep`/`ShellStep` so the step runs against
+   * the same checked-out source, rather than adding a second source action.
+   *
+   * Exposed so callers never have to reach into the construct tree to rediscover
+   * the source (which would couple them to internal construct naming).
+   */
+  readonly source: IFileSetProducer;
+}
+
+/**
  * Props for the {@link Pipeline} L3 construct.
  *
  * @example Multi-branch configuration
@@ -493,4 +518,26 @@ export interface PipelineProps<TConfig = Record<string, unknown>> {
    * and behavior may change without a major version bump.
    */
   readonly _sourceOverride?: IFileSetProducer;
+
+  /**
+   * Hook to attach extra post-deploy steps to each stage.
+   *
+   * Called once per stage (after the stage's stacks are populated) with the
+   * stage, its config, and the resolved pipeline {@link PostStageContext.source}.
+   * The returned steps are added as the stage's post-deploy steps, and run
+   * **after the stage deploys**. When the stage also has a `bakeTime`, the bake
+   * step is made to depend on these steps, so baking begins only **after** they
+   * complete (rather than racing them in parallel).
+   *
+   * This is the supported way for a higher-level construct to run a second
+   * deploy phase per stage (e.g. a follow-on `cdk deploy` that needs the first
+   * phase's outputs) without matching the pipeline's internal construct names to
+   * rediscover the stage's source.
+   *
+   * @param context - The stage, its config, and the resolved source file set.
+   * @returns Post-deploy steps to attach to the stage (empty/undefined to add none).
+   */
+  readonly postStage?: (
+    context: PostStageContext<TConfig>,
+  ) => Array<ShellStep | CodeBuildStep> | undefined;
 }

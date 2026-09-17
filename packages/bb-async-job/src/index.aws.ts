@@ -4,7 +4,7 @@
 import { SQSClient, SendMessageCommand, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import type { SendMessageBatchCommandOutput } from '@aws-sdk/client-sqs';
 import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
-import { EventSourceMapping } from '@aws-blocks/core/bb-utils';
+import { EventSourceMapping, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type {
@@ -67,7 +67,7 @@ export class AsyncJob<T = unknown> extends Scope {
 			customUserAgent: this.buildUserAgentChain(),
 		});
 
-		const envKey = `BLOCKS_QUEUE_URL_${this.fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+		const envKey = `BLOCKS_QUEUE_URL_${sanitizeConfigKey(this.fullId)}`;
 		const queueUrl = process.env[envKey] ?? '';
 		this._envKey = envKey;
 

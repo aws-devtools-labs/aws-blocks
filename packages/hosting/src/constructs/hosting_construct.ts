@@ -42,7 +42,7 @@ import type { Alarm } from 'aws-cdk-lib/aws-cloudwatch';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { Provider } from 'aws-cdk-lib/custom-resources';
-import { Construct } from 'constructs';
+import { Construct, type IDependable } from 'constructs';
 import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -63,7 +63,7 @@ import { UsEast1MonitoringStack } from './us_east_1_monitoring_stack.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
-import { StorageConstruct } from './storage_construct.js';
+import { StorageConstruct, DEFAULT_BUILD_RETENTION_DAYS } from './storage_construct.js';
 import { WafConstruct } from './waf_construct.js';
 
 // Re-export build ID helpers for public API + tests
@@ -254,6 +254,8 @@ export type HostingConstructProps = {
     encryptionKey?: IKey;
     retainOnDelete?: boolean;
     buildRetentionDays?: number;
+    /** Advisory hint used at synth to warn when deploy cadence ≥ retention (#480). */
+    deployIntervalDays?: number;
     /** 3.3 — opt-in daily S3 inventory of `builds/`. */
     inventory?: { enabled: boolean };
     /**
@@ -372,6 +374,7 @@ export class HostingConstruct extends Construct {
   readonly distribution: Distribution;
   readonly distributionUrl: string;
   readonly computeFunctions: Map<string, LambdaFunction | experimental.EdgeFunction> = new Map();
+  private readonly cdn: CdnConstruct;
   readonly computeFunctionUrls: Map<string, FunctionUrl> = new Map();
   /**
    * `live` aliases for compute resources with provisioned concurrency.
@@ -409,6 +412,14 @@ export class HostingConstruct extends Construct {
   };
 
   /**
+   * Registers a dependency that must finish before the new build becomes
+   * reachable through the KVS route table.
+   */
+  addBuildAssetDependency(dependency: IDependable): void {
+    this.cdn.addBuildAssetDependency(dependency);
+  }
+
+  /**
    * Creates the hosting infrastructure from a framework-agnostic deploy manifest.
    */
   constructor(scope: Construct, id: string, props: HostingConstructProps) {
@@ -440,7 +451,7 @@ export class HostingConstruct extends Construct {
     // viewer present a cookie for a build whose `builds/<id>/` prefix the
     // S3 lifecycle rule has already deleted → hard 403 on every asset.
     if (props.skewProtection?.enabled && props.skewProtection.maxAge) {
-      const retentionDays = props.storage?.buildRetentionDays ?? 30;
+      const retentionDays = props.storage?.buildRetentionDays ?? DEFAULT_BUILD_RETENTION_DAYS;
       const retentionSeconds = retentionDays * 24 * 60 * 60;
       if (props.skewProtection.maxAge > retentionSeconds) {
         throw new HostingError('InvalidSkewProtectionMaxAgeError', {
@@ -448,6 +459,26 @@ export class HostingConstruct extends Construct {
           resolution:
             'Lower skewProtection.maxAge to at most storage.buildRetentionDays (in seconds), or raise storage.buildRetentionDays. A cookie that outlives the build prefix pins returning viewers to a deleted build → 403.',
         });
+      }
+    }
+
+    // #480: advisory (NOT fatal) — a deploy cadence at or beyond the retention
+    // window means a superseded build can age out before the next deploy,
+    // shrinking the rollback window. The IN-SERVICE build is never expired
+    // (only superseded builds carry the lifecycle tag), so this is a
+    // rollback-window note, not a 403 risk — hence warn, not throw (mirrors the
+    // rewrite-proxy warning above: never block a deployable, working app).
+    const deployIntervalDays = props.storage?.deployIntervalDays;
+    if (deployIntervalDays != null) {
+      const retentionDays = props.storage?.buildRetentionDays ?? DEFAULT_BUILD_RETENTION_DAYS;
+      if (deployIntervalDays >= retentionDays) {
+        process.stderr.write(
+          `⚠️  Hosting: storage.deployIntervalDays (${deployIntervalDays}d) is >= ` +
+            `storage.buildRetentionDays (${retentionDays}d). Superseded builds may be ` +
+            `expired before your next deploy, shrinking the rollback window. The build ` +
+            `currently being served is unaffected. Raise storage.buildRetentionDays to ` +
+            `keep more rollback targets available.\n`,
+        );
       }
     }
 
@@ -1126,6 +1157,7 @@ export class HostingConstruct extends Construct {
         : undefined,
     });
 
+    this.cdn = cdn;
     this.distribution = cdn.distribution;
     this.distributionUrl = cdn.distributionUrl;
 

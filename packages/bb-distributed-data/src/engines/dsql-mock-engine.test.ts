@@ -8,6 +8,7 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DsqlMockEngine } from './dsql-mock-engine.js';
 import { DistributedDatabaseErrors } from '../errors.js';
+import { ApiError } from '@aws-blocks/core';
 
 const TEST_DIR = '.bb-data-dsql-mock-test-' + process.pid;
 let engine: DsqlMockEngine;
@@ -131,4 +132,26 @@ test('recovers on a later call after the init-retry budget is exhausted', async 
   const rows = await engine.query<{ id: string }>('SELECT id FROM t');
   assert.deepStrictEqual(rows, [{ id: 'ok' }]);
   assert.ok(creates >= 4, 'engine should build a fresh instance after exhaustion');
+});
+
+// --- OCC conflict surfaces as HTTP 409 (Conflict) ---
+// A simulated serialization-failure (SQLSTATE 40001) on commit must reach the
+// caller as an ApiError with status 409 — not a plain 500 — while preserving
+// the SerializationFailure name and flagging the conflict retriable, so mock
+// and real DSQL engines behave identically over the JSON-RPC wire.
+test('commit OCC conflict surfaces as an ApiError with status 409', async () => {
+  const dir = join(TEST_DIR, 'occ-conflict-409');
+  engine = new DsqlMockEngine(dir);
+  const handle = await engine.beginTransaction();
+  engine.simulateConflict();
+  await assert.rejects(
+    () => engine.commitTransaction(handle),
+    (e: unknown) => {
+      assert.ok(e instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(e.status, 409);
+      assert.strictEqual(e.name, DistributedDatabaseErrors.SerializationFailure);
+      assert.strictEqual(e.retriable, true);
+      return true;
+    },
+  );
 });

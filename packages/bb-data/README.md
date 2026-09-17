@@ -214,7 +214,8 @@ try {
   await db.execute(sql`INSERT INTO users (id, email) VALUES (${id}, ${email})`);
 } catch (e: unknown) {
   if (isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)) {
-    // Duplicate key — email already exists
+    // Duplicate key — email already exists. Serialized as HTTP 409 (Conflict),
+    // not retriable (a blind retry of the same insert fails identically).
   }
   if (isBlocksError(e, DatabaseErrors.QueryFailed)) {
     // General query failure (syntax error, missing table, etc.)
@@ -223,10 +224,12 @@ try {
     // Transaction could not commit
   }
   if (isBlocksError(e, DatabaseErrors.SerializationFailure)) {
-    // Serializable-isolation conflict with a concurrent transaction — safe to retry
+    // Serializable-isolation conflict with a concurrent transaction — serialized
+    // as HTTP 409 (Conflict), retriable — safe to retry
   }
   if (isBlocksError(e, DatabaseErrors.ConnectionFailed)) {
-    // Cannot reach the database
+    // Cannot reach the database — includes a `minCapacity: 0` cluster resuming
+    // from auto-pause, which succeeds on retry a few seconds later
   }
 }
 ```
