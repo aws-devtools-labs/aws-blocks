@@ -11,10 +11,9 @@ import { join } from 'node:path';
 
 // Judge model, reused for analysis (Opus 4.8 for both per-cell + synthesis). Same id as 4-judge.ts.
 // FALLBACK ONLY: in the workflow, BENCH_JUDGE_MODEL is always injected (job-level env in
-// agent-bench.yml, itself derived from the single workflow-level BENCH_MODEL_ID), so this literal is
-// used solely when a script runs under bare `node` with the env var unset. It can drift from
-// BENCH_MODEL_ID without affecting a real bench run; keep it in step on a model bump if you rely on
-// the bare-node path.
+// agent-bench.yml), so this literal is used solely when a script runs under bare `node` with the env
+// var unset. It can drift from the workflow's model id without affecting a real bench run; keep it in
+// step on a model bump if you rely on the bare-node path.
 export const DEFAULT_MODEL_ID = 'us.anthropic.claude-opus-4-8';
 
 // Keep the model INPUT small (cost + latency). Caps on each slice of the trace.

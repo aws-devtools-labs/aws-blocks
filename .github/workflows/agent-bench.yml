@@ -28,11 +28,6 @@ env:
   NPM_CONFIG_FETCH_RETRIES: '5'
   NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '20000'
   NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '120000'
-  # SINGLE SOURCE OF TRUTH for the Bedrock model id. Builder, judge, and the summary-job analysis all
-  # derive from this — bump it in ONE place instead of three. NOTE: the inline session policy below
-  # uses inference-profile/* wildcards (model-agnostic), so it does NOT need editing on a model bump;
-  # the IAM role's own Resource ARN, provisioned by CDK outside this repo, still does — see PR body.
-  BENCH_MODEL_ID: us.anthropic.claude-opus-4-8
 
 jobs:
   # Build + pack the whole monorepo to a local npm registry ONCE per run, handed to every cell
@@ -101,11 +96,10 @@ jobs:
     env:
       WORKSPACE: ${{ github.workspace }}/bench-app
       TASK: ${{ matrix.task }}
-      # Bedrock geo inference-profile IDs (both resolve in us-east-1). Override the model at the
-      # workflow-level BENCH_MODEL_ID (below); builder and judge share it (same-model self-eval bias
-      # accepted for now) and both derive from it, so a bump is one edit.
-      BENCH_MODEL: ${{ env.BENCH_MODEL_ID }}
-      BENCH_JUDGE_MODEL: ${{ env.BENCH_MODEL_ID }}
+      # Bedrock geo inference-profile IDs (both resolve in us-east-1). Overridable via BENCH_MODEL;
+      # builder and judge share Opus 4.8 (same-model self-eval bias accepted for now).
+      BENCH_MODEL: us.anthropic.claude-opus-4-8
+      BENCH_JUDGE_MODEL: us.anthropic.claude-opus-4-8
       AWS_REGION: us-east-1
       TEMPLATE: ${{ matrix.template }}
       PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
@@ -552,8 +546,8 @@ jobs:
           RESULTS_DIR: results
           BASELINE_PATH: ${{ github.workspace }}/baseline.json
           ANALYSIS_PATH: ${{ github.workspace }}/bench-analysis.json
-          # Same judge model as 4-judge.ts / the per-cell analysis (workflow-level BENCH_MODEL_ID).
-          BENCH_JUDGE_MODEL: ${{ env.BENCH_MODEL_ID }}
+          # Same judge model as 4-judge.ts / the per-cell analysis.
+          BENCH_JUDGE_MODEL: us.anthropic.claude-opus-4-8
           AWS_REGION: us-east-1
 
       - name: Upload analysis (best-effort)
