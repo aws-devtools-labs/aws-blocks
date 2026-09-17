@@ -106,6 +106,8 @@ export type {
 	UserAttribute,
 } from '@aws-blocks/bb-auth-cognito';
 export { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
+export type { AuthBearerJwtOptions, AuthBearerUser, SecretLike } from '@aws-blocks/bb-auth-jwt';
+export { AuthBearerJwt, AuthBearerJwtErrors } from '@aws-blocks/bb-auth-jwt';
 export type { AuthOIDCErrorName, MappedClaims, OIDCUser, RelayOrigin } from '@aws-blocks/bb-auth-oidc';
 export {
 	AuthOIDC,
