@@ -143,11 +143,15 @@ function defaultUser(providerName: string): StubUser {
 /**
  * The local identity directory for `onAuthorize` and the login screen.
  *
- * Reads `users.json` from `dataDir` (mock runtime only) when present; falls
- * back to the single deterministic default when absent or malformed, so the
- * AWS runtime and un-configured apps are unchanged.
+ * Precedence: inline `users` declared on the provider (in code) → `users.json`
+ * from `dataDir` (mock runtime only) → the single deterministic default. Falls
+ * back on absent/malformed input, so the AWS runtime and un-configured apps are
+ * unchanged.
  */
-function stubUserDirectory(providerName: string, dataDir?: string): StubUser[] {
+function stubUserDirectory(providerName: string, dataDir?: string, inlineUsers?: readonly StubUser[]): StubUser[] {
+	if (inlineUsers && inlineUsers.length > 0) {
+		return [...inlineUsers];
+	}
 	if (dataDir) {
 		try {
 			const parsed = JSON.parse(readFileSync(join(dataDir, 'users.json'), 'utf8'));
@@ -218,7 +222,7 @@ export async function handleAuthorize(provider: StubProvider, ctx: BlocksContext
 				state: req.state,
 				nonce: req.nonce,
 				loginHint: req.loginHint,
-				users: stubUserDirectory(provider.name, dataDir),
+				users: stubUserDirectory(provider.name, dataDir, provider.users),
 			});
 		} catch {
 			redirectWithError(ctx, req.redirectUri, req.state, 'access_denied', 'sign-in denied by onAuthorize');
@@ -237,7 +241,7 @@ export async function handleAuthorize(provider: StubProvider, ctx: BlocksContext
 	const authorizeAction = `${stubIssuerUrl(provider.name, ctx)}/authorize`;
 	ctx.response.status = 200;
 	ctx.response.headers.set('Content-Type', 'text/html');
-	ctx.response.send(renderLoginPage(provider.name, stubUserDirectory(provider.name, dataDir), req, authorizeAction));
+	ctx.response.send(renderLoginPage(provider.name, stubUserDirectory(provider.name, dataDir, provider.users), req, authorizeAction));
 }
 
 /** Login-screen form submission: resolve the picked user and issue the code. */
@@ -245,7 +249,7 @@ export async function handleAuthorizeSubmit(provider: StubProvider, ctx: BlocksC
 	const form = new URLSearchParams(await ctx.request.text());
 	const req = parseAuthorizeRequest(form, ctx);
 	if (!req) return;
-	const user = stubUserDirectory(provider.name, dataDir).find((u) => u.sub === form.get('sub'))
+	const user = stubUserDirectory(provider.name, dataDir, provider.users).find((u) => u.sub === form.get('sub'))
 		?? defaultUser(provider.name);
 	issueCodeRedirect(ctx, req, user);
 }

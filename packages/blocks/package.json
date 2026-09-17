@@ -22,6 +22,8 @@
     "docs",
     "src",
     "README.md",
+    "VPC.md",
+    "VPC-DESIGN.md",
     "LICENSE"
   ],
   "exports": {

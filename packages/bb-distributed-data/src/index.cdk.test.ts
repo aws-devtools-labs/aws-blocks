@@ -269,6 +269,39 @@ test('CDK: migration resources created when migrationsPath is provided', () => {
   }
 });
 
+test('CDK: migration CustomResource tracks the app role ARN', () => {
+  rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
+  mkdirSync(MIGRATIONS_DIR, { recursive: true });
+  writeFileSync(join(MIGRATIONS_DIR, '001_create.sql'), 'CREATE TABLE t (id TEXT PRIMARY KEY)');
+
+  try {
+    const template = synth((stack) => {
+      new DistributedDatabase(scope(stack), 'mydsql', { migrationsPath: MIGRATIONS_DIR });
+    });
+    const customResources = template.findResources('AWS::CloudFormation::CustomResource');
+    const cr = Object.values(customResources)[0] as any;
+
+    // CloudFormation only re-invokes a CustomResource when its PROPERTIES change. The app
+    // role ARN must therefore be a property, not just a Lambda env var — otherwise replacing
+    // the app's IAM role leaves the DSQL `AWS IAM GRANT` pointing at the old, deleted ARN and
+    // every query fails with 28000 (invalid_authorization_specification).
+    assert.ok(cr.Properties?.appRoleArn, 'CustomResource should have appRoleArn property');
+
+    // It must be the same reference the migration Lambda receives, so the two can never drift.
+    const fns = template.findResources('AWS::Lambda::Function');
+    const migrationFnEntry = Object.entries(fns).find(([id]) => id.includes('MigrationFn'));
+    assert.ok(migrationFnEntry, 'Migration Lambda should exist');
+    const env = (migrationFnEntry[1] as any).Properties?.Environment?.Variables ?? {};
+    assert.deepStrictEqual(
+      cr.Properties.appRoleArn,
+      env.APP_ROLE_ARN,
+      'CustomResource appRoleArn should match the migration Lambda APP_ROLE_ARN env var'
+    );
+  } finally {
+    rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
+  }
+});
+
 test('CDK: migration CustomResource has migrationsHash property', () => {
   rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
   mkdirSync(MIGRATIONS_DIR, { recursive: true });
