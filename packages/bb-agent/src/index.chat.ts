@@ -147,6 +147,10 @@ export function createChat(options: CreateChatOptions): ChatController {
 	let lastChannelId: string | null = null;
 
 	function setLoading(next: boolean) {
+		// Idempotent: only notify on an actual change. A turn ends by BOTH the done/
+		// error/interrupt handler and the background consumer's finally, so without this
+		// guard a normal turn would fire onLoadingChange(false) twice.
+		if (loading === next) return;
 		loading = next;
 		options.onLoadingChange?.(loading);
 	}
