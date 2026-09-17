@@ -10,6 +10,8 @@ on:
   pull_request:
     paths:
       - 'native/dart/packages/**'
+      - 'scripts/generate-native-versions.mjs'
+      - 'scripts/generate-native-versions.test.mjs'
       - '.github/workflows/native-dart-analysis.yml'
   workflow_dispatch:
 
@@ -27,6 +29,26 @@ env:
   MIN_FLUTTER: '3.41.0'
 
 jobs:
+  version-constant:
+    name: Version constant is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Check Dart version constant matches pubspec.yaml
+        run: node scripts/generate-native-versions.mjs --dart --check
+
+      - name: Test the version generator
+        run: node --test scripts/generate-native-versions.test.mjs
+
   analyze:
     name: ${{ matrix.package-name }} (${{ matrix.sdk }})
     runs-on: ubuntu-latest
