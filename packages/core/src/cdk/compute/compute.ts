@@ -38,6 +38,24 @@ export abstract class Compute extends Scope {
 	readonly namespaces: string[] = [];
 
 	/**
+	 * This compute's origin base — scheme + host + stage, with no
+	 * `/aws-blocks/api` suffix and no trailing slash. The API front door routes
+	 * to this value; a client-facing RPC URL is `endpoint + BLOCKS_RPC_PREFIX`,
+	 * composed at the point of use rather than stored, so there is exactly one
+	 * representation of an origin here.
+	 *
+	 * Optional because a worker-only compute — a queue consumer or a cron target
+	 * with no HTTP ingress — has no endpoint to route to. Also absent at runtime:
+	 * only the CDK compute classes resolve one.
+	 *
+	 * Implementations must use the `https://` scheme: the API front door parses
+	 * that prefix (`httpOriginFromEndpoint`) to split the CloudFront origin host
+	 * from the stage path. A non-`https://` value would not split and would
+	 * silently produce a broken origin.
+	 */
+	readonly endpoint?: string;
+
+	/**
 	 * Whether tracing has been enabled on this compute — flipped by
 	 * {@link enableTracing}. Private so it can't be set independently of the
 	 * infra; read internally by {@link dashboardSection} to decide whether to
