@@ -1767,5 +1767,10 @@ describe('createChat', () => {
 		await chat.sendMessage('second');           // must NOT be dropped by the loading guard
 		await new Promise(r => setTimeout(r, 10));
 		assert.strictEqual(runCalls, 2, 'the second send after newConversation must reach the transport');
+
+		// Tear down the still-open second turn so no async iterator is left parked
+		// when the test ends (node --test fails a test that leaves pending async work).
+		chat.destroy();
+		await new Promise(r => setTimeout(r, 10));
 	});
 });
