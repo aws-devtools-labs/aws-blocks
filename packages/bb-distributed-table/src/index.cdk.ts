@@ -11,7 +11,7 @@ import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Key, type IKey } from 'aws-cdk-lib/aws-kms';
-import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME, getOrCreateOnRoot } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 import { fileURLToPath } from 'node:url';
@@ -241,7 +241,7 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 
 		// Add GSI manager if indexes are defined
 		if (config.indexes && Object.keys(config.indexes).length > 0) {
-			const gsiProvider = getOrCreateGsiProvider(cdk.Stack.of(this), this.defaults.logRetention);
+			const gsiProvider = getOrCreateGsiProvider(this, this.defaults.logRetention);
 			gsiProvider.addTableArn(this.table.tableArn, isSandbox);
 
 			const indexesWithTypes: Record<string, any> = {};
@@ -286,7 +286,7 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 	deleteBatch(..._args: unknown[]): never { return synthGuard('DistributedTable', 'deleteBatch'); }
 }
 
-// ── Shared GSI Manager Provider (one per stack) ─────────────────────────────
+// ── Shared GSI Manager Provider (one per backend root) ───────────────────────
 
 const GSI_PROVIDER_KEY = Symbol.for('BLOCKS_GSI_MANAGER_PROVIDER');
 
@@ -295,83 +295,83 @@ interface SharedGsiProvider {
 	addTableArn: (tableArn: string, isSandbox: boolean) => void;
 }
 
-function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): SharedGsiProvider {
-	const existing = (stack as any)[GSI_PROVIDER_KEY] as SharedGsiProvider | undefined;
-	if (existing) return existing;
+// Keyed on (and parented under) the owning backend root, so two BlocksBackends in
+// one cdk.Stack each get their own GSI provider — the provider's IAM policy is
+// scoped (lazily) to the tables that registered with it, so sharing A's provider
+// would let B's tables accumulate onto A's policy.
+function getOrCreateGsiProvider(scope: Construct, logRetention: RetentionDays): SharedGsiProvider {
+	return getOrCreateOnRoot(scope, GSI_PROVIDER_KEY, (root): SharedGsiProvider => {
+		const __dirname = dirname(fileURLToPath(import.meta.url));
 
-	const __dirname = dirname(fileURLToPath(import.meta.url));
+		const tableArns: string[] = [];
+		const sandboxTableArns: string[] = [];
 
-	const tableArns: string[] = [];
-	const sandboxTableArns: string[] = [];
+		// Own the GSI-manager Lambdas' log groups so their retention follows the
+		// stack-wide default instead of AWS's infinite retention. Torn down with the
+		// stack (logs are not durable state).
+		const gsiManagerLambda = new LambdaFunction(root, 'BlocksGsiManager', {
+			runtime: DEFAULT_NODE_RUNTIME,
+			handler: 'index.handler',
+			code: Code.fromAsset(join(__dirname, 'gsi-manager-lambda')),
+			timeout: Duration.minutes(15),
+			logGroup: new LogGroup(root, 'BlocksGsiManagerLogs', {
+				retention: logRetention,
+				removalPolicy: cdk.RemovalPolicy.DESTROY,
+			}),
+		});
 
-	// Own the GSI-manager Lambdas' log groups so their retention follows the
-	// stack-wide default instead of AWS's infinite retention. Torn down with the
-	// stack (logs are not durable state).
-	const gsiManagerLambda = new LambdaFunction(stack, 'BlocksGsiManager', {
-		runtime: DEFAULT_NODE_RUNTIME,
-		handler: 'index.handler',
-		code: Code.fromAsset(join(__dirname, 'gsi-manager-lambda')),
-		timeout: Duration.minutes(15),
-		logGroup: new LogGroup(stack, 'BlocksGsiManagerLogs', {
-			retention: logRetention,
-			removalPolicy: cdk.RemovalPolicy.DESTROY,
-		}),
-	});
+		const gsiIsCompleteLambda = new LambdaFunction(root, 'BlocksGsiIsComplete', {
+			runtime: DEFAULT_NODE_RUNTIME,
+			handler: 'index.isCompleteHandler',
+			code: Code.fromAsset(join(__dirname, 'gsi-manager-lambda')),
+			timeout: Duration.minutes(1),
+			logGroup: new LogGroup(root, 'BlocksGsiIsCompleteLogs', {
+				retention: logRetention,
+				removalPolicy: cdk.RemovalPolicy.DESTROY,
+			}),
+		});
 
-	const gsiIsCompleteLambda = new LambdaFunction(stack, 'BlocksGsiIsComplete', {
-		runtime: DEFAULT_NODE_RUNTIME,
-		handler: 'index.isCompleteHandler',
-		code: Code.fromAsset(join(__dirname, 'gsi-manager-lambda')),
-		timeout: Duration.minutes(1),
-		logGroup: new LogGroup(stack, 'BlocksGsiIsCompleteLogs', {
-			retention: logRetention,
-			removalPolicy: cdk.RemovalPolicy.DESTROY,
-		}),
-	});
+		// Production permissions — lazily resolved so ARNs accumulate as tables register
+		gsiManagerLambda.addToRolePolicy(new PolicyStatement({
+			actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
+			resources: cdk.Lazy.list({ produce: () => tableArns }),
+		}));
 
-	// Production permissions — lazily resolved so ARNs accumulate as tables register
-	gsiManagerLambda.addToRolePolicy(new PolicyStatement({
-		actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
-		resources: cdk.Lazy.list({ produce: () => tableArns }),
-	}));
+		gsiIsCompleteLambda.addToRolePolicy(new PolicyStatement({
+			actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
+			resources: cdk.Lazy.list({ produce: () => tableArns }),
+		}));
 
-	gsiIsCompleteLambda.addToRolePolicy(new PolicyStatement({
-		actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
-		resources: cdk.Lazy.list({ produce: () => tableArns }),
-	}));
+		// Sandbox permissions — only added if any table requests sandbox mode
+		let sandboxPolicyAdded = false;
 
-	// Sandbox permissions — only added if any table requests sandbox mode
-	let sandboxPolicyAdded = false;
+		const provider = new Provider(root, 'BlocksGsiProvider', {
+			onEventHandler: gsiManagerLambda,
+			isCompleteHandler: gsiIsCompleteLambda,
+			queryInterval: Duration.seconds(10),
+			totalTimeout: Duration.hours(2),
+		});
 
-	const provider = new Provider(stack, 'BlocksGsiProvider', {
-		onEventHandler: gsiManagerLambda,
-		isCompleteHandler: gsiIsCompleteLambda,
-		queryInterval: Duration.seconds(10),
-		totalTimeout: Duration.hours(2),
-	});
-
-	const shared: SharedGsiProvider = {
-		serviceToken: provider.serviceToken,
-		addTableArn: (tableArn: string, isSandbox: boolean) => {
-			tableArns.push(tableArn);
-			if (isSandbox) {
-				sandboxTableArns.push(tableArn);
-				if (!sandboxPolicyAdded) {
-					sandboxPolicyAdded = true;
-					gsiManagerLambda.addToRolePolicy(new PolicyStatement({
-						actions: [
-							'dynamodb:DeleteTable',
-							'dynamodb:CreateTable',
-							'dynamodb:Scan',
-							'dynamodb:BatchWriteItem',
-						],
-						resources: cdk.Lazy.list({ produce: () => sandboxTableArns }),
-					}));
+		return {
+			serviceToken: provider.serviceToken,
+			addTableArn: (tableArn: string, isSandbox: boolean) => {
+				tableArns.push(tableArn);
+				if (isSandbox) {
+					sandboxTableArns.push(tableArn);
+					if (!sandboxPolicyAdded) {
+						sandboxPolicyAdded = true;
+						gsiManagerLambda.addToRolePolicy(new PolicyStatement({
+							actions: [
+								'dynamodb:DeleteTable',
+								'dynamodb:CreateTable',
+								'dynamodb:Scan',
+								'dynamodb:BatchWriteItem',
+							],
+							resources: cdk.Lazy.list({ produce: () => sandboxTableArns }),
+						}));
+					}
 				}
-			}
-		},
-	};
-
-	(stack as any)[GSI_PROVIDER_KEY] = shared;
-	return shared;
+			},
+		};
+	});
 }

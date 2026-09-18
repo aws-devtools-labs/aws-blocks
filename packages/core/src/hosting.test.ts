@@ -736,6 +736,41 @@ describe('Hosting', () => {
       assert.ok(patterns.includes('/users/*'), 'Should have /users/* behavior for parameterized RawRoute');
     });
 
+    it('only adds RawRoute behaviors owned by the backend this distribution fronts', () => {
+      createSpaBuildOutput(tmpDir);
+
+      // The route registry is a process-global shared by every backend in a
+      // multi-stack synth. Three routes: one owned by THIS distribution's
+      // backend root, one owned by a DIFFERENT backend, and one owner-less
+      // (a framework built-in / the runtime path). Only the first and the
+      // owner-less one may reach this distribution — before ownership tagging,
+      // every stack's CloudFront picked up every other stack's routes.
+      const thisBackendId = 'OwnerFilterStack'; // a top-level stack's node.path == its id
+      registerRoute({ method: 'GET', path: '/mine', handler: async () => {}, ownerRootId: thisBackendId });
+      registerRoute({ method: 'GET', path: '/theirs', handler: async () => {}, ownerRootId: 'OtherBackend' });
+      registerRoute({ method: 'GET', path: '/builtin', handler: async () => {} }); // owner-less → matches all
+
+      const app = new App();
+      const stack = new Stack(app, thisBackendId);
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+      });
+
+      const template = Template.fromStack(stack);
+      const distributions = template.findResources('AWS::CloudFront::Distribution');
+      const distConfig = (distributions[Object.keys(distributions)[0]] as any).Properties.DistributionConfig;
+      const patterns = (distConfig.CacheBehaviors ?? []).map((b: any) => b.PathPattern);
+
+      assert.ok(patterns.includes('/mine'), 'own backend route must get a behavior');
+      assert.ok(patterns.includes('/builtin'), 'owner-less (built-in) route must get a behavior');
+      assert.ok(
+        !patterns.includes('/theirs'),
+        `a foreign backend's route must NOT leak into this distribution, got: ${JSON.stringify(patterns)}`,
+      );
+    });
+
     it('adds a CloudFront behavior for a route another core copy registered', () => {
       createSpaBuildOutput(tmpDir);
 

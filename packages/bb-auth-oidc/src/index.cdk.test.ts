@@ -20,9 +20,9 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
-import type { Construct } from 'constructs';
+import { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets } from '@aws-blocks/core/cdk';
 import { SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
 import { AuthOIDC, cognitoFederated, google } from './index.cdk.js';
 import type { AppSettingLike } from './providers.js';
@@ -125,6 +125,48 @@ test('CDK: the IdP custom resource depends on BlocksSecretsBulk when present (pa
 	assert.ok(idpEntry, 'IdP custom resource should exist');
 	const dependsOn: string[] = (idpEntry![1] as any).DependsOn ?? [];
 	assert.ok(dependsOn.includes(bulkLogicalId as string), 'IdP CR must depend on the bulk secret-init resource');
+});
+
+test('CDK: the IdP CR depends on BlocksSecretsBulk under an embedded backend root (root !== stack)', () => {
+	// Regression: bb-app-setting parents the shared secret bulk-init resource under
+	// the backend ROOT, not the enclosing cdk.Stack. For an embedded BlocksBackend
+	// (root !== stack) that resource is a *grandchild* of the stack, so the old
+	// `cdk.Stack.of(this).node.tryFindChild(...)` lookup missed it (tryFindChild is
+	// non-recursive) and the ordering dependency was silently dropped. AuthOIDC must
+	// resolve the parent via getBlocksRoot(this), like bb-app-setting does.
+	const TOKEN = 'arn:aws:lambda:us-east-1:1:function:embedded';
+	const app = new cdk.App();
+	const stack = new cdk.Stack(app, 'CustomerStack');
+	// Brand a construct as a backend root exactly as BlocksStack/BlocksBackend do
+	// (the interned Symbol.for is the whole identity check getBlocksRoot performs).
+	const backend = new Construct(stack, 'Backend');
+	(backend as unknown as Record<symbol, unknown>)[Symbol.for('blocks:BackendRoot')] = true;
+	// A backend root exposes its infrastructure `defaults` posture; BBs read it
+	// (e.g. logRetention) once findBackendRoot resolves to this construct.
+	(backend as unknown as { defaults: unknown }).defaults = BlocksPresets.production;
+	(globalThis as any).CURRENT_BLOCKS_STACK = backend; // parent-less Scopes attach here
+	// The bulk-init resource lives under the backend root — where bb-app-setting now parents it.
+	new cdk.CustomResource(backend, SECRETS_BULK_CONSTRUCT_ID, { serviceToken: TOKEN });
+	const parent = new Scope('app');
+	new AuthOIDC(parent, 'auth', {
+		providers: [
+			cognitoFederated({
+				name: 'google', identityProvider: 'Google', cognitoDomain: 'myapp-abc123', region: 'us-east-1',
+				clientId: appSettingStub('app-google-client-id'), clientSecret: appSettingStub('app-google-client-secret'),
+			}),
+		],
+	});
+	const template = Template.fromStack(stack);
+	const crs = template.findResources('AWS::CloudFormation::CustomResource');
+	const bulkLogicalId = Object.keys(crs).find((k) => crs[k].Properties?.ServiceToken === TOKEN);
+	assert.ok(bulkLogicalId, 'stand-in BlocksSecretsBulk should be in the template');
+	const idpEntry = Object.entries(crs).find(([, r]: [string, any]) => r.Properties?.ProviderName === 'Google');
+	assert.ok(idpEntry, 'IdP custom resource should exist');
+	const dependsOn: string[] = (idpEntry![1] as any).DependsOn ?? [];
+	assert.ok(
+		dependsOn.includes(bulkLogicalId as string),
+		'IdP CR must depend on the bulk secret-init resource even when the backend root is not the stack',
+	);
 });
 
 test('CDK: the IdP-registration Lambda is granted cognito-idp, ssm:GetParameter and scoped kms:Decrypt', () => {
