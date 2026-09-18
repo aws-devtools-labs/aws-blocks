@@ -20,6 +20,7 @@ import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { registerConfig } from './cdk/config-registry.js';
+import { getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
 import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
@@ -732,7 +733,15 @@ export class Hosting extends Construct {
 
     // ── 7. Add CloudFront behaviors for API proxy ────────────────
     if (props.api) {
-      this.addApiBehaviors(hosting, props.api.apiUrl);
+      // Resolve the backend root this distribution fronts, so we only add its own
+      // RawRoute behaviors. `props.api` is the backend in the canonical usage
+      // (`new Hosting(stack, 'Hosting', { api: stack })`); when it's a branded
+      // BlocksStack/BlocksBackend use its node.path directly, else walk up from
+      // this Hosting construct to the owning root.
+      const ownerRootId = isBlocksBackendRoot(props.api)
+        ? props.api.node.path
+        : getBlocksRoot(this).node.path;
+      this.addApiBehaviors(hosting, props.api.apiUrl, ownerRootId);
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -872,7 +881,7 @@ export class Hosting extends Construct {
   /**
    * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
    */
-  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string): void {
+  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string, ownerRootId: string): void {
     const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
     const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
     const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
@@ -903,6 +912,11 @@ export class Hosting extends Construct {
 
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
     for (const route of getRegisteredRoutes()) {
+      // The route registry is a process-global shared by every backend in the
+      // synth. Only add behaviors for routes owned by the backend this
+      // distribution fronts. Owner-less routes (framework built-ins) carry no
+      // ownerRootId and match every distribution, preserving prior behavior.
+      if (route.ownerRootId !== undefined && route.ownerRootId !== ownerRootId) continue;
       if (route.path.startsWith(`${BLOCKS_RPC_PREFIX}/`)) continue;
       if (route.path === BLOCKS_AUTH_PREFIX || route.path.startsWith(`${BLOCKS_AUTH_PREFIX}/`)) continue;
 
