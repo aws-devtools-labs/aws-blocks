@@ -8,8 +8,9 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME, getOrCreateOnRoot } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
+import type { Construct } from 'constructs';
 import { AppSettingErrors } from './errors.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 
@@ -156,7 +157,7 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 			// then fail tagging it (AddTagsToResource needs ssm:GetParameters).
 			// We only need runtime read access, granted below.
 			if (!external) {
-				registerSecret(cdk.Stack.of(this), parameterName, this.defaults.logRetention, options.kmsKeyArn);
+				registerSecret(this, parameterName, this.defaults.logRetention, options.kmsKeyArn);
 			}
 
 			// Grant the handler KMS access. External secrets are read-only (Decrypt
@@ -208,7 +209,7 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 	}
 }
 
-// ── Bulk Secret Initialization (one CustomResource per stack) ───────────────
+// ── Bulk Secret Initialization (one CustomResource per backend root) ─────────
 
 const SECRET_BULK_KEY = Symbol.for('BLOCKS_SECRET_BULK_INIT');
 
@@ -227,24 +228,32 @@ interface SecretBulkState {
  * first call, creates the shared Lambda, Provider, and a single CustomResource.
  * All subsequent calls just append to the parameter list (resolved lazily at
  * synth time).
+ *
+ * Keyed on (and parented under) the owning backend root, so two BlocksBackends in
+ * one cdk.Stack each get their own bulk-init CustomResource — its Lambda's IAM
+ * policy is scoped (lazily) to the parameters that registered with it, so sharing
+ * A's resource would let B's secrets accumulate onto A's policy. `stack`-scoped
+ * values (ARNs, region, stack name) are derived from the resolved backend's stack.
  */
-function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: RetentionDays, keyId?: string): void {
-	let state = (stack as any)[SECRET_BULK_KEY] as SecretBulkState | undefined;
-	if (state) {
-		state.params.push({ name: parameterName, keyId });
-		return;
-	}
+function registerSecret(scope: Construct, parameterName: string, logRetention: RetentionDays, keyId?: string): void {
+	const state = getOrCreateOnRoot(scope, SECRET_BULK_KEY, (root) => buildSecretBulk(root, logRetention));
+	state.params.push({ name: parameterName, keyId });
+}
 
-	// First secret in this stack — create all shared infrastructure
-	state = { params: [{ name: parameterName, keyId }] };
-	(stack as any)[SECRET_BULK_KEY] = state;
+// The per-backend shared bulk-init infrastructure (Lambda + Provider + a single
+// CustomResource), built once per backend root via getOrCreateOnRoot. The returned
+// state's `params` list is appended to by registerSecret and read lazily at synth
+// by the resources created here.
+function buildSecretBulk(root: Construct, logRetention: RetentionDays): SecretBulkState {
+	const stack = cdk.Stack.of(root);
+	const state: SecretBulkState = { params: [] };
 
-	const secretInitFn = new lambda.Function(stack, 'BlocksSecretInitFn', {
+	const secretInitFn = new lambda.Function(root, 'BlocksSecretInitFn', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.handler',
 		// Own the log group so its retention follows the stack-wide default
 		// instead of AWS's infinite retention.
-		logGroup: new LogGroup(stack, 'BlocksSecretInitLogs', {
+		logGroup: new LogGroup(root, 'BlocksSecretInitLogs', {
 			retention: logRetention,
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		}),
@@ -322,7 +331,7 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 		// GetParameter is needed to read a secret's current value when re-keying it.
 		actions: ['ssm:GetParameter', 'ssm:PutParameter', 'ssm:DeleteParameter', 'ssm:AddTagsToResource'],
 		resources: cdk.Lazy.list({
-			produce: () => state!.params.map(p =>
+			produce: () => state.params.map(p =>
 				stack.formatArn({
 					service: 'ssm',
 					resource: 'parameter',
@@ -347,15 +356,17 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 		},
 	}));
 
-	const provider = new cr.Provider(stack, 'BlocksSecretProvider', {
+	const provider = new cr.Provider(root, 'BlocksSecretProvider', {
 		onEventHandler: secretInitFn,
 	});
 
-	new cdk.CustomResource(stack, SECRETS_BULK_CONSTRUCT_ID, {
+	new cdk.CustomResource(root, SECRETS_BULK_CONSTRUCT_ID, {
 		serviceToken: provider.serviceToken,
 		properties: {
-			Parameters: cdk.Lazy.any({ produce: () => state!.params }),
+			Parameters: cdk.Lazy.any({ produce: () => state.params }),
 			StackName: (() => { let s = stack; while (s.nestedStackParent) s = s.nestedStackParent; return s.stackName; })(),
 		},
 	});
+
+	return state;
 }

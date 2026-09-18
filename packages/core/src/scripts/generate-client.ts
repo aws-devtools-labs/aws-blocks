@@ -24,9 +24,13 @@ export async function generateClientCode(foundationPath: string): Promise<string
 
 	const backend = await import(pathToFileURL(foundationPath).href);
 
-	// Read collected middleware and clean up
+	// Read collected middleware, then clean up only the collector we created.
+	// Deleting one we didn't own would clobber a collector the dev server (or a
+	// concurrent generate-spec) is still using — mirrors generate-spec.ts.
 	const middleware: string[] = (globalThis as any).__BLOCKS_CLIENT_MIDDLEWARE__;
-	delete (globalThis as any).__BLOCKS_CLIENT_MIDDLEWARE__;
+	if (!collectorAlreadyActive) {
+		delete (globalThis as any).__BLOCKS_CLIENT_MIDDLEWARE__;
+	}
 
 	const imports = new Set<string>();
 	const lines: string[] = [];
