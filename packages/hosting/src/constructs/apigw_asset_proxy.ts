@@ -62,8 +62,11 @@ function keyFor(uri) {
 }
 
 exports.handler = async (event) => {
-  // Payload 2.0: rawPath is the request path (both API Gateway HTTP API and Function URLs).
-  let uri = event.rawPath || (event.requestContext && event.requestContext.http && event.requestContext.http.path) || '/';
+  // Payload 2.0 (HTTP API / Function URL): rawPath. Payload 1.0 (REST API): path.
+  // The REST API front door invokes this Lambda with the v1 envelope, so read
+  // both — the response shape below ({statusCode, headers, isBase64Encoded, body})
+  // is valid for a v1 and a v2 proxy integration alike.
+  let uri = event.rawPath || (event.requestContext && event.requestContext.http && event.requestContext.http.path) || event.path || '/';
   uri = resolveIndex(stripBasePath(uri));
   const key = keyFor(uri);
   try {
