@@ -15,18 +15,23 @@ the right fit for the "SPA/SSR + API, no CDN, many low-traffic apps" shape (e.g.
 a platform that stands up an app per user).
 
 ```ts
-// Default flavor — a regional REST API front door (no CloudFront)
+// Default flavor — a regional HTTP API v2 (rootless; no CloudFront)
 new Hosting(stack, 'Web', { root, api, frontDoor: { kind: 'apiGateway' } });
 
-// The cheaper HTTP API v2 flavor
-new Hosting(stack, 'Web', { root, api, frontDoor: { kind: 'apiGateway', api: 'http' } });
+// REST flavor — only behind a custom domain / CloudFront (its /prod stage path
+// would break a bare SPA's root-absolute asset URLs)
+new Hosting(stack, 'Web', { root, api, frontDoor: { kind: 'apiGateway', api: 'rest' } });
 ```
 
-**Flavor (`api`): `'rest'` (default) or `'http'`.** REST is the default because it
-invokes the SSR/image Lambdas with `lambda:InvokeFunction` (no Lambda
-Function-URL SigV4 body-hash mismatch on non-empty `POST`/`PUT`) and is the same
-flavor already used to front SSR behind CloudFront; `'http'` selects the cheaper
-HTTP API v2. Both render the same neutral `CapabilityPlan` through the existing
+**Flavor (`api`): `'http'` (default) or `'rest'`.** HTTP API v2 is the default
+because its auto `$default` stage is **rootless** — a SPA/SSR app's root-absolute
+asset URLs (`/assets/*`, `/favicon.ico`) resolve directly — and it's cheaper. A
+bare REST API `execute-api` URL always carries a **stage path** (`/prod/`), which
+breaks those root-absolute URLs, so `'rest'` is only suitable **behind a custom
+domain** (base-path mapping to the stage) or a CloudFront edge — not as a bare
+standalone door for a root SPA. (The Function-URL SigV4 body-hash issue that
+motivates REST behind CloudFront is moot for a standalone door — there's no OAC.)
+Both flavors render the same neutral `CapabilityPlan` through the existing
 `api-gateway` adapter/graph seam; only the construct differs.
 
 The asset-proxy Lambda is now payload-format-agnostic — it reads the request

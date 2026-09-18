@@ -168,28 +168,28 @@ describe('ApiGatewayConstruct (HTTP) — custom domain', () => {
 });
 
 describe('ApiGatewayAdapter — flavor selection', () => {
-	it("renders a REST API by default (apiType omitted) and for apiType: 'rest'", () => {
-		for (const apiType of [undefined, 'rest' as const]) {
+	it("renders an HTTP API v2 by default (apiType omitted) and for apiType: 'http' — its $default stage is rootless", () => {
+		for (const apiType of [undefined, 'http' as const]) {
 			const app = new App();
-			const stack = new Stack(app, `FR-${apiType ?? 'default'}`, {
+			const stack = new Stack(app, `FH-${apiType ?? 'default'}`, {
 				env: { account: '111111111111', region: 'us-west-2' },
 			});
 			const bucket = new Bucket(stack, 'Assets');
 			new ApiGatewayAdapter().render(stack, staticPlan, { bucket, apiType });
 			const t = Template.fromStack(stack);
-			t.resourceCountIs('AWS::ApiGateway::RestApi', 1);
-			t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
+			t.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+			t.resourceCountIs('AWS::ApiGateway::RestApi', 0);
 		}
 	});
 
-	it("renders an HTTP API v2 for apiType: 'http'", () => {
+	it("renders a REST API for apiType: 'rest' (for use behind a custom domain / CloudFront)", () => {
 		const app = new App();
-		const stack = new Stack(app, 'FH', { env: { account: '111111111111', region: 'us-west-2' } });
+		const stack = new Stack(app, 'FR', { env: { account: '111111111111', region: 'us-west-2' } });
 		const bucket = new Bucket(stack, 'Assets');
-		new ApiGatewayAdapter().render(stack, staticPlan, { bucket, apiType: 'http' });
+		new ApiGatewayAdapter().render(stack, staticPlan, { bucket, apiType: 'rest' });
 		const t = Template.fromStack(stack);
-		t.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
-		t.resourceCountIs('AWS::ApiGateway::RestApi', 0);
+		t.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+		t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
 	});
 });
 
