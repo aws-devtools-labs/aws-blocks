@@ -1,11 +1,13 @@
 package com.aws.blocks.plugin
 
 import com.android.build.api.variant.AndroidComponentsExtension
+import com.aws.blocks.kotlin.generator.RelayToRequirement
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.plugins.JavaPluginExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
+import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
 
 /**
  * Gradle plugin that registers an [AwsBlocksCodegenTask] to generate
@@ -93,11 +95,27 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
             it.serverOverrides.set(extension.serverOverrides)
             it.visibility.set(extension.visibility)
             it.relayTo.set(extension.relayTo)
+            it.relayToRequirement.set(RelayToRequirement.NotNeeded)
             it.outputDirectory.set(outputDir)
         }
 
         val kmpExtension = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
         kmpExtension.sourceSets.getByName("commonMain").kotlin.srcDir(task.map { it.outputDirectory })
+
+        // Targets are registered by the consumer's own `kotlin { }` block, so the decision
+        // has to wait until the project is evaluated. A plain value keeps the task input
+        // configuration-cache friendly.
+        project.afterEvaluate {
+            val registersScheme = kmpExtension.targets.any { target ->
+                target.platformType == KotlinPlatformType.androidJvm ||
+                    target.platformType == KotlinPlatformType.native
+            }
+            task.configure {
+                it.relayToRequirement.set(
+                    if (registersScheme) RelayToRequirement.Recommended else RelayToRequirement.NotNeeded,
+                )
+            }
+        }
 
         project.pluginManager.withPlugin("com.android.application") {
             injectOidcManifestPlaceholder(project, extension)
@@ -127,6 +145,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
                 it.serverOverrides.set(extension.serverOverrides)
                 it.visibility.set(extension.visibility)
                 it.relayTo.set(extension.relayTo)
+                it.relayToRequirement.set(RelayToRequirement.Required)
                 it.outputDirectory.set(outputDir)
             }
 
@@ -144,6 +163,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
             it.serverOverrides.set(extension.serverOverrides)
             it.visibility.set(extension.visibility)
             it.relayTo.set(extension.relayTo)
+            it.relayToRequirement.set(RelayToRequirement.NotNeeded)
             it.outputDirectory.set(outputDir)
         }
 

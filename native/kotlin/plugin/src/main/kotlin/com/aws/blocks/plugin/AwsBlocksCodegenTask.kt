@@ -2,6 +2,7 @@ package com.aws.blocks.plugin
 
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
+import com.aws.blocks.kotlin.generator.RelayToRequirement
 import com.aws.blocks.kotlin.parser.OpenRpcParser
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
@@ -51,6 +52,10 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
     @get:org.gradle.api.tasks.Optional
     abstract val relayTo: Property<String>
 
+    /** How strongly this project's targets need a relay target. */
+    @get:Input
+    abstract val relayToRequirement: Property<RelayToRequirement>
+
     /** Directory where generated `.kt` files are written. */
     @get:OutputDirectory
     abstract val outputDirectory: DirectoryProperty
@@ -94,6 +99,7 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
             packageName = packageName.get(),
             internalVisibility = visibility.get() == GeneratedVisibility.Internal,
             relayTo = relayTo.orNull,
+            relayToRequirement = relayToRequirement.get(),
         )
         val codegenModel = CodegenModelBuilder().build(mergedModel)
         val result = generator.generate(codegenModel)

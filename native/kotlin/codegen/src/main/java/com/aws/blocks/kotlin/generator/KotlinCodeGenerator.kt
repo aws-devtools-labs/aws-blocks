@@ -49,11 +49,16 @@ class KotlinCodeGenerator(
     private val packageName: String,
     private val internalVisibility: Boolean = false,
     private val relayTo: String? = null,
+    private val relayToRequirement: RelayToRequirement = RelayToRequirement.Required,
 ) {
 
     /** Visibility modifier applied to all top-level generated types. */
     private val apiModifiers: List<KModifier> =
         if (internalVisibility) listOf(KModifier.INTERNAL) else emptyList()
+
+    /** Whether OIDC methods must be replaced with a stub that names the missing configuration. */
+    private val stubOidc: Boolean
+        get() = relayTo == null && relayToRequirement == RelayToRequirement.Required
 
     private fun TypeSpec.withApiVisibility(): TypeSpec =
         if (apiModifiers.isEmpty()) this
@@ -72,7 +77,10 @@ class KotlinCodeGenerator(
         val files = mutableListOf<FileSpec>()
         val warnings = mutableListOf<String>()
 
-        if (relayTo == null && model.hasOidcTransferable()) {
+        if (relayTo == null &&
+            relayToRequirement != RelayToRequirement.NotNeeded &&
+            model.hasOidcTransferable()
+        ) {
             warnings.add(
                 "Your Blocks spec includes OIDC auth, but no relay target is configured. " +
                     "OIDC operations will not be available. To enable OIDC, add to your build.gradle.kts:\n\n" +
@@ -832,7 +840,7 @@ class KotlinCodeGenerator(
             )
 
         for (operation in namespace.operations) {
-            if (relayTo == null && containsOidcTransferable(operation.result.type)) {
+            if (stubOidc && containsOidcTransferable(operation.result.type)) {
                 classBuilder.addFunction(generateOidcStubMethod(operation))
             } else {
                 val opContext = buildOperationTypeContext(operation)
@@ -1253,7 +1261,7 @@ class KotlinCodeGenerator(
         fun visit(type: ResolvedType) {
             when (type) {
                 is ResolvedType.Transferable -> {
-                    if (relayTo == null && type.transferableName == "oidc/client") return
+                    if (stubOidc && type.transferableName == "oidc/client") return
                     val serializerName = getTransferableSerializerName(type)
                     if (seen.add(serializerName)) {
                         val returnType = resolveTransferable(type, index)
@@ -1457,9 +1465,7 @@ class KotlinCodeGenerator(
             }
 
             "oidc/client" -> {
-                val url = relayTo
-                    ?: error("OIDC operation reached codegen without relayTo configured")
-                CodeBlock.of("%T.fromJson(%L, client, %S)", ClassNames.oidcClient, expr, url)
+                CodeBlock.of("%T.fromJson(%L, client, %S)", ClassNames.oidcClient, expr, relayTo ?: "")
             }
 
             else -> {
