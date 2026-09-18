@@ -19,6 +19,25 @@ export const BLOCKS_NAMESPACE = '/aws-blocks';
 export const BLOCKS_RPC_PREFIX = '/aws-blocks/api';
 
 /**
+ * Whether a request path targets the RPC endpoint.
+ *
+ * True for {@link BLOCKS_RPC_PREFIX} itself and for anything below it. The
+ * client addresses a namespace as `/aws-blocks/api/{namespace}` so a front door
+ * can route each namespace to the compute that hosts it, and `RawRoute`
+ * registration under this prefix is rejected — so the whole subtree is RPC.
+ * Dispatch still reads the namespace from the request body, not the path.
+ *
+ * Shared by the Lambda handler and the local dev server so both agree on what
+ * counts as RPC. When they disagree, a request works in one and 404s in the
+ * other, which is a confusing class of bug to chase down.
+ *
+ * @param pathname - The request path, without query string.
+ */
+export function isRpcPath(pathname: string): boolean {
+	return pathname === BLOCKS_RPC_PREFIX || pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`);
+}
+
+/**
  * Reserved subtree for the auth Building Block's HTTP routes.
  *
  * Like {@link BLOCKS_RPC_PREFIX}, this lives under the reserved `/aws-blocks`

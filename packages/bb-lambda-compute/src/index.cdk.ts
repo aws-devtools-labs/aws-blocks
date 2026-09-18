@@ -57,6 +57,13 @@ export class LambdaCompute extends Compute {
 	/** The RPC endpoint URL (`{gateway}/aws-blocks/api`). */
 	readonly apiUrl: string;
 	/**
+	 * This compute's origin base — `{gateway}` with no `/aws-blocks/api` suffix
+	 * and no trailing slash. Routing infrastructure (CloudFront behaviors, ALB
+	 * rules) targets this; the client-facing URL is `endpoint + BLOCKS_RPC_PREFIX`
+	 * (which is what {@link apiUrl} already is).
+	 */
+	override readonly endpoint: string;
+	/**
 	 * The `/aws-blocks/api` gateway resource. Per-namespace ingress resources
 	 * ({@link mountNamespaceRoutes}) are mounted under it.
 	 */
@@ -199,6 +206,11 @@ export class LambdaCompute extends Compute {
 		this.apiGateway.root.addProxy({ defaultIntegration: integration, anyMethod: true });
 
 		this.apiUrl = `${this.apiGateway.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
+		// Origin base = the API URL minus the reserved RPC suffix. `apiGateway.url`
+		// carries a trailing slash and is a CDK token, so strip the suffix with a
+		// CloudFormation intrinsic rather than JS string ops (which would operate
+		// on the token placeholder, not the resolved value).
+		this.endpoint = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, this.apiUrl));
 	}
 
 	setEnv(key: string, value: string): void {

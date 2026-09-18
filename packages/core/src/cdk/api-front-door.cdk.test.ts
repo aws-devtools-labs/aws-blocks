@@ -50,6 +50,8 @@ class StubLambdaCompute extends Compute {
 	readonly fn: lambda.NodejsFunction;
 	readonly apiGateway: apigateway.RestApi;
 	readonly apiUrl: string;
+	/** Origin base — mirrors LambdaCompute: apiUrl minus the reserved RPC suffix. */
+	override readonly endpoint: string;
 	readonly logGroup: cdk.aws_logs.LogGroup;
 	constructor(scope: ScopeParent, id: string) {
 		super(id, { parent: scope });
@@ -71,6 +73,7 @@ class StubLambdaCompute extends Compute {
 			anyMethod: true,
 		});
 		this.apiUrl = `${this.apiGateway.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
+		this.endpoint = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, this.apiUrl));
 	}
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
@@ -218,5 +221,96 @@ describe('httpOriginFromApiUrl', () => {
 		const origin = httpOriginFromApiUrl('https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api');
 		assert.ok(origin, 'returns an origin');
 		assert.strictEqual(typeof origin.bind, 'function', 'is a CloudFront IOrigin');
+	});
+});
+
+describe('API front door: multi-compute namespace fan-out', () => {
+	/**
+	 * A prod stack with a second compute, each hosting one namespace.
+	 *
+	 * `ApiNamespace` records itself on its compute during the backend import;
+	 * these push directly so the test needs no real backend module. The aspect
+	 * reads the map at synth (inside `Template.fromStack`), so mutating here is
+	 * seen by the fan-out.
+	 */
+	async function twoComputeStack(id: string): Promise<BlocksStack> {
+		const stack = await makeStack(id, BlocksPresets.production);
+		const worker = new StubLambdaCompute(stack as never, 'WorkerCompute');
+		stack._defaultCompute?.namespaces.push('api');
+		worker.namespaces.push('authApi');
+		return stack;
+	}
+
+	/** The front door's `DistributionConfig`. */
+	function frontDoorConfig(stack: BlocksStack): any {
+		const distributions = Template.fromStack(stack).findResources('AWS::CloudFront::Distribution');
+		const keys = Object.keys(distributions);
+		assert.strictEqual(keys.length, 1, 'expected exactly one front-door distribution');
+		return (distributions[keys[0]] as any).Properties.DistributionConfig;
+	}
+
+	function behaviorFor(config: any, pattern: string): any {
+		const found = (config.CacheBehaviors ?? []).find((b: any) => b.PathPattern === pattern);
+		assert.ok(found, `expected a cache behavior for ${pattern}`);
+		return found;
+	}
+
+	test('each namespace behavior targets the compute that hosts it', async () => {
+		const config = frontDoorConfig(await twoComputeStack('FanOutTargets'));
+		/** Origin id → its DomainName as JSON (an intrinsic referencing the gateway). */
+		const domainById = new Map<string, string>(
+			(config.Origins ?? []).map((o: any) => [o.Id, JSON.stringify(o.DomainName)]),
+		);
+
+		// The second compute's namespace routes to the second compute's gateway.
+		const authBehavior = behaviorFor(config, `${BLOCKS_RPC_PREFIX}/authApi`);
+		assert.match(
+			domainById.get(authBehavior.TargetOriginId) ?? '',
+			/WorkerComputeAPI/,
+			'authApi should route to the WorkerCompute gateway',
+		);
+
+		// The default compute's namespace routes to the default compute — the same
+		// origin the fallback (default) behavior uses.
+		const apiBehavior = behaviorFor(config, `${BLOCKS_RPC_PREFIX}/api`);
+		assert.match(
+			domainById.get(apiBehavior.TargetOriginId) ?? '',
+			/DefaultComputeAPI/,
+			'api should route to the DefaultCompute gateway',
+		);
+		assert.strictEqual(
+			apiBehavior.TargetOriginId,
+			config.DefaultCacheBehavior.TargetOriginId,
+			'a namespace on the default compute should reuse the fallback origin',
+		);
+
+		// Subtrees follow their namespace (RawRoutes may hang below it).
+		assert.strictEqual(
+			behaviorFor(config, `${BLOCKS_RPC_PREFIX}/authApi/*`).TargetOriginId,
+			authBehavior.TargetOriginId,
+		);
+	});
+
+	test('builds one origin per distinct compute, not per namespace', async () => {
+		// Two computes → two origins. Without the shared-origin cache the default
+		// compute would get a second, duplicate origin (fallback + its namespace).
+		const config = frontDoorConfig(await twoComputeStack('FanOutOriginDedupe'));
+		assert.strictEqual((config.Origins ?? []).length, 2, 'expected one origin per compute');
+	});
+
+	test('the default behavior stays the fallback for unrouted namespaces', async () => {
+		// A namespace on a compute with no `endpoint` (worker-only) is absent from
+		// the map; it must still reach the default compute via the default behavior.
+		const stack = await makeStack('FanOutFallback', BlocksPresets.production);
+		stack._defaultCompute?.namespaces.push('api');
+		const config = frontDoorConfig(stack);
+
+		assert.ok(config.DefaultCacheBehavior.TargetOriginId, 'default behavior must have an origin');
+		// Single compute → a single origin shared by the fallback and the namespace.
+		assert.strictEqual((config.Origins ?? []).length, 1);
+		assert.strictEqual(
+			behaviorFor(config, `${BLOCKS_RPC_PREFIX}/api`).TargetOriginId,
+			config.DefaultCacheBehavior.TargetOriginId,
+		);
 	});
 });

@@ -612,6 +612,114 @@ describe('Hosting', () => {
 			);
     });
 
+    // ── Multi-compute fan-out ──────────────────────────────────
+    //
+    // When the backend runs several computes, Hosting path-routes
+    // `/aws-blocks/api/{namespace}` to the compute that hosts each namespace.
+    // It receives the namespace→endpoint map as plain data on the `api` prop,
+    // so these need no real computes.
+
+    /** The first distribution's config in a synthesized stack. */
+    function distConfigOf(stack: Stack): any {
+      const distributions = Template.fromStack(stack).findResources('AWS::CloudFront::Distribution');
+      return (distributions[Object.keys(distributions)[0]] as any).Properties.DistributionConfig;
+    }
+
+    const MULTI_COMPUTE_API: BlocksStackApi = {
+      ...MOCK_API,
+      apiEndpoints: {
+        orders: 'https://orders.example.com/prod',
+        authApi: 'https://auth-worker.example.com/prod',
+      },
+    };
+
+    it('routes each namespace to its own compute origin when apiEndpoints is provided', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'MultiComputeFanOutStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MULTI_COMPUTE_API,
+      });
+
+      const distConfig = distConfigOf(stack);
+      const cacheBehaviors = distConfig.CacheBehaviors ?? [];
+      /** Origin id → domain name, to check a behavior points at the right compute. */
+      const domainById = new Map<string, string>(
+        (distConfig.Origins ?? []).map((o: any) => [o.Id, o.DomainName]),
+      );
+
+      for (const [namespace, host] of [
+        ['orders', 'orders.example.com'],
+        ['authApi', 'auth-worker.example.com'],
+      ] as const) {
+        const exact = cacheBehaviors.find((b: any) => b.PathPattern === `${BLOCKS_RPC_PREFIX}/${namespace}`);
+        assert.ok(exact, `Should have a ${BLOCKS_RPC_PREFIX}/${namespace} behavior`);
+        assert.strictEqual(
+          domainById.get(exact.TargetOriginId),
+          host,
+          `${namespace} should be routed to the compute that hosts it`,
+        );
+        // RawRoutes can hang below a namespace, so the subtree routes with it.
+        const subtree = cacheBehaviors.find((b: any) => b.PathPattern === `${BLOCKS_RPC_PREFIX}/${namespace}/*`);
+        assert.ok(subtree, `Should have a ${BLOCKS_RPC_PREFIX}/${namespace}/* behavior`);
+        assert.strictEqual(subtree.TargetOriginId, exact.TargetOriginId);
+      }
+    });
+
+    it('orders per-namespace behaviors before the broader API wildcard', () => {
+      // Load-bearing: CloudFront matches behaviors in order, so a
+      // `/aws-blocks/api/*` added first would swallow every namespace request.
+      // The fan-out would then silently do nothing — requests would still
+      // succeed, served by the wrong compute, since every compute runs the
+      // same bundle. That failure is invisible without this assertion.
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'FanOutPrecedenceStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MULTI_COMPUTE_API,
+      });
+
+      const cacheBehaviors = distConfigOf(stack).CacheBehaviors ?? [];
+      const patterns = cacheBehaviors.map((b: any) => b.PathPattern);
+      const wildcardIndex = patterns.indexOf(`${BLOCKS_RPC_PREFIX}/*`);
+      assert.ok(wildcardIndex >= 0, `Expected the ${BLOCKS_RPC_PREFIX}/* fallback to still exist`);
+
+      for (const namespace of Object.keys(MULTI_COMPUTE_API.apiEndpoints ?? {})) {
+        const index = patterns.indexOf(`${BLOCKS_RPC_PREFIX}/${namespace}`);
+        assert.ok(
+          index >= 0 && index < wildcardIndex,
+          `${BLOCKS_RPC_PREFIX}/${namespace} must be added before ${BLOCKS_RPC_PREFIX}/* ` +
+            `(got index ${index} vs wildcard ${wildcardIndex})`,
+        );
+      }
+    });
+
+    it('adds no per-namespace behaviors when apiEndpoints is omitted (single compute)', () => {
+      // Single-compute apps keep exactly the previous behavior set: the whole
+      // API subtree proxies to one origin.
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'SingleComputeNoFanOutStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+      });
+
+      const cacheBehaviors = distConfigOf(stack).CacheBehaviors ?? [];
+      const namespaceBehaviors = cacheBehaviors.filter(
+        (b: any) =>
+          typeof b.PathPattern === 'string' &&
+          b.PathPattern.startsWith(`${BLOCKS_RPC_PREFIX}/`) &&
+          b.PathPattern !== `${BLOCKS_RPC_PREFIX}/*`,
+      );
+      assert.deepStrictEqual(namespaceBehaviors, [], 'No namespace fan-out without apiEndpoints');
+    });
+
     it('works without api prop (static-only site)', () => {
       createSpaBuildOutput(tmpDir);
 

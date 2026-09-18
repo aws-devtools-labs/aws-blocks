@@ -10,7 +10,7 @@ import { Construct } from 'constructs';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
-import { getComputes } from './compute/compute-registry.js';
+import { getApiEndpoints, getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
@@ -265,6 +265,25 @@ export class BlocksBackend extends Construct {
 		return this.requireDefaultCompute().logGroup;
 	}
 
+	/**
+	 * Each API namespace in the app mapped to the endpoint of the compute that
+	 * hosts it — the routing table for path-routing `/aws-blocks/api/{namespace}`
+	 * to the right compute.
+	 *
+	 * Blocks uses this for its own API front door, and `Hosting` uses it to add
+	 * API behaviors to its distribution. It is also the surface to read when
+	 * building your **own** front door (CloudFront, an ALB, an API Gateway custom
+	 * domain) — typically alongside `apiFrontDoor: 'none'` so Blocks doesn't
+	 * provision a distribution you are replacing.
+	 *
+	 * Read it after `create()` has resolved; namespaces are recorded during the
+	 * backend import. Values may be CDK tokens. Namespaces hosted on a compute
+	 * with no HTTP ingress (a worker-only compute) do not appear.
+	 */
+	get apiEndpoints(): Readonly<Record<string, string>> {
+		return getApiEndpoints(this);
+	}
+
 	private requireDefaultCompute(): LambdaShapedCompute {
 		if (!this._defaultCompute) {
 			throw new Error(
@@ -374,7 +393,7 @@ export class BlocksBackend extends Construct {
 				: props.apiFrontDoor === 'none'
 					? false
 					: backend.defaults.provisionApiFrontDoor;
-		scheduleApiFrontDoor(backend, backend.apiUrl, provisionApiFrontDoor);
+		scheduleApiFrontDoor(backend, backend.apiUrl, provisionApiFrontDoor, backend._defaultCompute?.endpoint);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));

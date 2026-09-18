@@ -199,6 +199,90 @@ final class BlocksClientTests: XCTestCase {
         // (We can't easily verify the cookie header without another request,
         // but at least verify it doesn't crash)
     }
+
+    // MARK: - Namespace Routing
+
+    /// Runs one request and asserts the URL it was POSTed to.
+    private func assertRequestURL(
+        base: String,
+        method: String,
+        equals expected: String,
+        line: UInt = #line
+    ) async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.absoluteString, expected, line: line)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"jsonrpc":"2.0","result":true,"id":1}"#.utf8))
+        }
+
+        let client = BlocksClient(url: base, session: session)
+        _ = try await client.execute(BlocksRequest(method: method, params: [], id: 1))
+    }
+
+    func testExecutePostsToThePerNamespacePath() async throws {
+        // A namespace is addressed as `{base}/{namespace}` so a front door can
+        // route it to the compute that hosts it.
+        try await assertRequestURL(
+            base: "http://localhost:3001/aws-blocks/api",
+            method: "orders.list",
+            equals: "http://localhost:3001/aws-blocks/api/orders"
+        )
+    }
+
+    func testExecuteRoutesDistinctNamespacesToDistinctPaths() async throws {
+        try await assertRequestURL(
+            base: "http://localhost:3001/aws-blocks/api",
+            method: "authApi.signIn",
+            equals: "http://localhost:3001/aws-blocks/api/authApi"
+        )
+    }
+
+    func testExecuteKeepsTheStagePrefix() async throws {
+        try await assertRequestURL(
+            base: "https://abc.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api",
+            method: "orders.list",
+            equals: "https://abc.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api/orders"
+        )
+    }
+
+    func testExecuteToleratesATrailingSlashOnTheBaseURL() async throws {
+        try await assertRequestURL(
+            base: "http://localhost:3001/aws-blocks/api/",
+            method: "orders.list",
+            equals: "http://localhost:3001/aws-blocks/api/orders"
+        )
+    }
+
+    func testExecuteLeavesAnUnNamespacedMethodAtTheBaseURL() async throws {
+        // The generator emits a bare method name for un-namespaced operations;
+        // there is no segment to add.
+        try await assertRequestURL(
+            base: "http://localhost:3001/aws-blocks/api",
+            method: "ping",
+            equals: "http://localhost:3001/aws-blocks/api"
+        )
+    }
+
+    func testNamespaceOfMethod() {
+        XCTAssertEqual(BlocksClient.namespace(of: "orders.list"), "orders")
+        // Only the first segment — a dotted method name below a namespace still
+        // routes to that namespace.
+        XCTAssertEqual(BlocksClient.namespace(of: "orders.items.list"), "orders")
+        XCTAssertNil(BlocksClient.namespace(of: "ping"))
+        XCTAssertNil(BlocksClient.namespace(of: ".leadingDot"))
+    }
+
+    func testRawRouteBaseIsUnaffectedByNamespaceRouting() {
+        // Raw routes and the auth flow strip the RPC path off the configured URL.
+        // Namespace routing must not mutate the stored base URL.
+        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api")
+        XCTAssertEqual(client.rawRouteBase, "http://localhost:3001")
+        XCTAssertEqual(client.baseUrl, "http://localhost:3001/aws-blocks/api")
+    }
 }
 
 // MARK: - Mock URLProtocol
