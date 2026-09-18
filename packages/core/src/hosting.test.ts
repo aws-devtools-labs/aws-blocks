@@ -1895,7 +1895,7 @@ describe('Hosting', () => {
   });
 
   describe('composed CF → ALB front door', () => {
-    it('stacks a CloudFront edge OVER an ALB router (both exist), not one instead of the other', () => {
+    it('stacks a CloudFront edge OVER a FULL ALB router (both exist), not one instead of the other', () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, 'CfOverAlbStack', { env: { account: '111111111111', region: 'us-east-1' } });
@@ -1907,16 +1907,16 @@ describe('Hosting', () => {
       });
 
       const t = Template.fromStack(stack);
-      // The edge is still a real CloudFront distribution (full edge feature set).
+      // The edge is a real (thin) CloudFront distribution (TLS, cache, WAF).
       t.resourceCountIs('AWS::CloudFront::Distribution', 1);
-      // The router layer is a real regional ALB — the composition, not a swap.
+      // The router is a real regional ALB — the composition, not a swap.
       t.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
-      // The ALB routes the same-origin API subtree to the backend (a forwarder
-      // Lambda target for the `'*'` namespace → `/aws-blocks/*` + auth subtree).
+      // Design B: the ALB routes to EVERYTHING via Lambda targets — the asset-proxy
+      // (→ S3) and the API-forwarder (→ backend) for a SPA (no SSR/image compute).
       t.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', { TargetType: 'lambda' });
     });
 
-    it('points CloudFront\'s API behaviors at the ALB origin (CF → ALB → backend), not at API Gateway directly', () => {
+    it("CloudFront's single default origin IS the ALB (http-only), with no per-path API behaviors (ALB routes everything)", () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, 'CfOverAlbOriginStack', { env: { account: '111111111111', region: 'us-east-1' } });
@@ -1928,15 +1928,15 @@ describe('Hosting', () => {
       });
 
       const t = Template.fromStack(stack);
-      // A CloudFront origin whose domain is the ALB DNS name, reached HTTP-only on
-      // the internal edge→router hop.
+      // Design B: ONE origin — the ALB, reached HTTP-only on the internal edge→ALB
+      // hop — and a single default behavior forwarding everything to it. There are
+      // NO additional per-path (API) cache behaviors: the ALB does all the routing.
       t.hasResourceProperties('AWS::CloudFront::Distribution', {
         DistributionConfig: Match.objectLike({
+          DefaultCacheBehavior: Match.objectLike({ ViewerProtocolPolicy: 'redirect-to-https' }),
+          CacheBehaviors: Match.absent(),
           Origins: Match.arrayWith([
-            Match.objectLike({
-              DomainName: Match.objectLike({ 'Fn::GetAtt': Match.arrayWith([Match.stringLikeRegexp('ApiRouter')]) }),
-              CustomOriginConfig: Match.objectLike({ OriginProtocolPolicy: 'http-only' }),
-            }),
+            Match.objectLike({ CustomOriginConfig: Match.objectLike({ OriginProtocolPolicy: 'http-only' }) }),
           ]),
         }),
       });
