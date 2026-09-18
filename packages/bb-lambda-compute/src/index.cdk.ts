@@ -105,8 +105,15 @@ export class LambdaCompute extends Compute {
 			handler: 'handler',
 			role: this.executionRole,
 			logGroup: this.logGroup,
-			memorySize: 2048,
-			timeout: cdk.Duration.seconds(60 * 15),
+			// Defaults preserve the previous hardcoded values (2048 MiB memory — which
+			// also scales CPU on Lambda — and the 15-minute ceiling). `timeout` accepts
+			// a plain number of seconds as well as a Duration, so a caller that must
+			// stay CDK-free (the requirements-to-Lambda mapping) can set it too.
+			memorySize: options?.memorySize ?? 2048,
+			timeout:
+				typeof options?.timeout === 'number'
+					? cdk.Duration.seconds(options.timeout)
+					: (options?.timeout ?? cdk.Duration.seconds(60 * 15)),
 			environment: {
 				NODE_ENV: 'production',
 				BLOCKS_STACK_NAME: this.backendStackName,

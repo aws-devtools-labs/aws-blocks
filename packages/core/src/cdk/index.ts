@@ -30,6 +30,15 @@ import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from '../errors.js';
 export type { ScopeOptions } from '../index.js';
 export { ensureApiGatewayAccount } from './apigateway-account.js';
+// The compute abstraction: the handle `ComputeProvider.provide()` returns and
+// that a workload is assigned to. Abstract on purpose — concrete computes
+// (`LambdaCompute`) live in their own packages, so this public surface never
+// names an AWS service. Exported type-only: customers only ever *receive* a
+// `Compute` (never `new Compute()` or `instanceof`), and a runtime re-export
+// here would form a module-init cycle — `compute.ts` extends the `Scope` class
+// defined in this file, so pulling its value in at this file's top would read
+// `Scope` before it initializes. The runtime value stays on `/cdk/internal`.
+export type { Compute, ComputeDashboardSection } from './compute/compute.js';
 export {
 	BlocksBackend,
 	type BlocksBackendProps,
