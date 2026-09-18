@@ -63,6 +63,37 @@ export interface ComputeCapabilities {
 	 * @default undefined — Blocks builds and runs its standard image.
 	 */
 	image?: string;
+
+	/**
+	 * On a container, the maximum number of jobs this compute processes at once
+	 * per task. This is the primary **per-task cost lever**: each in-flight job
+	 * runs in its own worker thread, so this bounds concurrent CPU/memory use, and
+	 * you size the task's `cpu`/`memory` to match. Ignored on Lambda (which scales
+	 * by concurrent invocations, not an in-process cap).
+	 *
+	 * @default a conservative framework default (container jobs are typically
+	 * heavy); raise it alongside `cpu`/`memory` for higher throughput per task.
+	 */
+	maxConcurrency?: number;
+
+	/**
+	 * Task-count autoscaling for a container compute — the layer above
+	 * {@link maxConcurrency} (which caps jobs *per task*). Scales the number of
+	 * tasks between `minTasks` and `maxTasks`, targeting roughly
+	 * `backlogPerTask` visible queue messages per task. Reserved for a future
+	 * release; declaring it today has no effect yet. It is an options field so
+	 * adding the behavior later is non-breaking.
+	 *
+	 * @default undefined — a single task (no autoscaling).
+	 */
+	scaling?: {
+		/** Minimum running tasks. */
+		minTasks?: number;
+		/** Maximum running tasks. */
+		maxTasks?: number;
+		/** Target visible-queue-messages per task for target tracking. */
+		backlogPerTask?: number;
+	};
 }
 
 /**

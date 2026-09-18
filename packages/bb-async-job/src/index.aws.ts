@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { SQSClient, SendMessageCommand, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
-import { ReceiveMessageCommand, DeleteMessageCommand } from '@aws-sdk/client-sqs';
+import { ReceiveMessageCommand, DeleteMessageCommand, ChangeMessageVisibilityCommand } from '@aws-sdk/client-sqs';
 import type { SendMessageBatchCommandOutput } from '@aws-sdk/client-sqs';
 import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
 import { getConfigSync, getContainerComputeId, isContainerRuntime, registerContainerPoller } from '@aws-blocks/core';
+import { dispatchJobToWorker, isJobWorker } from '@aws-blocks/core';
 import { EventSourceMapping, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
+import { registerAsyncJob } from './job-registry.js';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type {
@@ -46,6 +48,30 @@ const MAX_BATCH_PAYLOADS = 10_000;
 /** Maximum number of `SendMessageBatch` requests in flight at once. */
 const MAX_BATCH_CONCURRENCY = 5;
 
+/**
+ * How long, in seconds, the container poller keeps an in-flight message hidden
+ * on each heartbeat. Re-applied on an interval while the handler runs so a
+ * long-running job (the reason a container is used) is never redelivered
+ * mid-flight — the container equivalent of Lambda's event-source mapping
+ * auto-extending visibility up to the function timeout.
+ */
+const VISIBILITY_HEARTBEAT_SECONDS = 60;
+/**
+ * Interval between heartbeats. Comfortably shorter than
+ * {@link VISIBILITY_HEARTBEAT_SECONDS} so the next extension always lands before
+ * the current visibility window lapses, even under some scheduling delay.
+ */
+const VISIBILITY_HEARTBEAT_INTERVAL_MS = 30_000;
+
+/**
+ * Default number of jobs a container processes at once when the compute doesn't
+ * set `maxConcurrency`. Conservative because a container job can be heavy (it's
+ * on a container precisely because it's long-running or memory-hungry); the
+ * customer raises it — and sizes the task's cpu/memory to match — as the primary
+ * per-task cost lever.
+ */
+const DEFAULT_CONTAINER_CONCURRENCY = 5;
+
 export class AsyncJob<T = unknown> extends Scope {
 	private _handler: (payload: T, context: AsyncJobContext) => Promise<void>;
 	private _schema?: StandardSchemaV1<T>;
@@ -81,12 +107,22 @@ export class AsyncJob<T = unknown> extends Scope {
 
 		// Only register handler if queue URL is available (i.e., running in Lambda, not codegen)
 		if (queueUrl) {
-			if (isContainerRuntime()) {
-				// Container worker: self-start a poller, but only for the queues THIS
-				// compute owns (the owner-match). The owner id was stamped at synth as
-				// BLOCKS_HANDLER_OWNER_<id>; if it matches this process's
-				// BLOCKS_COMPUTE_ID, drain the queue. This is how exactly one compute
-				// consumes each queue even when several containers run the same image.
+			// Always register this job for lookup-by-fullId. A container job worker
+			// re-imports the backend and resolves the handler here to run one job.
+			// Registered via a thin adapter so `_processRecord` stays private.
+			registerAsyncJob(this.fullId, { _processRecord: (record) => this._processRecord(record) });
+
+			if (isJobWorker()) {
+				// Inside a spawned worker thread: the parent handed us one job and
+				// resolves it via the registry above. Do NOT start a poller — the
+				// parent owns pulling; a worker that polled would double-consume.
+			} else if (isContainerRuntime()) {
+				// Container PARENT process: self-start a poller for the queues THIS
+				// compute owns (owner-match). The poller dispatches each message to a
+				// fresh worker thread (enforced timeout + isolation). The owner id was
+				// stamped at synth as BLOCKS_HANDLER_OWNER_<id>; run only if it matches
+				// this process's BLOCKS_COMPUTE_ID, so exactly one compute drains each
+				// queue even when several containers run the same image.
 				const owner = getConfigSync(`BLOCKS_HANDLER_OWNER_${sanitizeConfigKey(this.fullId)}`);
 				const self = getContainerComputeId();
 				if (owner && self && owner === self) {
@@ -190,112 +226,177 @@ export class AsyncJob<T = unknown> extends Scope {
 	}
 
 	/**
-	 * Start a long-poll loop that drains this job's queue on a container worker,
-	 * calling {@link _processRecord} per message. Enforces a per-handler wall-clock
-	 * limit (the compute's `timeoutSeconds`, stamped as BLOCKS_HANDLER_TIMEOUT_<id>
-	 * at synth): a handler that runs past it is aborted so its message becomes
-	 * visible again and, after `maxRetries` redeliveries, lands in the DLQ — the
-	 * same terminal path as a thrown handler.
+	 * Start a long-poll loop that drains this job's queue on the container **parent**
+	 * process, dispatching each message to a **fresh worker thread** (see core's
+	 * `dispatchJobToWorker`). Running each job in its own worker is what makes the
+	 * per-handler wall-clock limit *enforced* rather than cooperative: on timeout
+	 * the parent hard-terminates the worker, so even a pure CPU busy-loop is
+	 * stopped. The limit is the compute's `timeoutSeconds`, stamped as
+	 * `BLOCKS_HANDLER_TIMEOUT_<id>` at synth.
 	 *
-	 * Delete-on-success only: a message is deleted from the queue after its handler
-	 * resolves, so a crash mid-processing leaves it for redelivery (at-least-once,
-	 * matching the Lambda path). Registered with core's container runtime, which
-	 * starts it after the backend import and stops it on SIGTERM.
+	 * Concurrency is bounded by `BLOCKS_HANDLER_CONCURRENCY_<id>` (the poller's
+	 * per-task cost lever): at most that many workers run at once. Delete-on-success
+	 * only — a message is deleted after its worker reports success; a timeout,
+	 * crash, or handler error leaves it for SQS redrive → DLQ after `maxRetries`
+	 * (at-least-once, matching the Lambda path). Visibility is extended on a
+	 * heartbeat so a long job isn't redelivered mid-flight.
+	 *
+	 * Registered with core's container runtime, which starts it after the backend
+	 * import and drains it on SIGTERM (stop receiving, let in-flight workers finish
+	 * within the grace window).
 	 */
 	private registerContainerPoller(queueUrl: string): void {
 		const timeoutRaw = getConfigSync(`BLOCKS_HANDLER_TIMEOUT_${sanitizeConfigKey(this.fullId)}`);
 		const timeoutMs = timeoutRaw ? Number(timeoutRaw) * 1000 : undefined;
+		const concurrencyRaw = getConfigSync(`BLOCKS_HANDLER_CONCURRENCY_${sanitizeConfigKey(this.fullId)}`);
+		const maxConcurrency = concurrencyRaw ? Math.max(1, Number(concurrencyRaw)) : DEFAULT_CONTAINER_CONCURRENCY;
 
 		registerContainerPoller(() => {
 			let running = true;
+			let inFlight = 0;
+			const idle: Array<() => void> = [];
+
+			// Resolve when all in-flight workers have finished (for graceful drain).
+			const whenDrained = (): Promise<void> =>
+				inFlight === 0 ? Promise.resolve() : new Promise<void>((r) => idle.push(r));
+
+			const releaseSlot = () => {
+				inFlight--;
+				if (inFlight === 0) {
+					while (idle.length) idle.shift()!();
+				}
+			};
+
+			// Handle one message end to end: dispatch to a worker (enforced timeout),
+			// heartbeat visibility while it runs, delete on success, leave for redrive
+			// otherwise. Never throws — a failure just means "don't delete".
+			const handleMessage = async (m: {
+				MessageId?: string;
+				Body?: string;
+				ReceiptHandle?: string;
+				Attributes?: Record<string, string>;
+			}): Promise<void> => {
+				const record = {
+					messageId: m.MessageId ?? '',
+					body: m.Body ?? '',
+					attributes: {
+						ApproximateReceiveCount: m.Attributes?.ApproximateReceiveCount ?? '1',
+						SentTimestamp: m.Attributes?.SentTimestamp ?? String(Date.now()),
+					},
+				};
+				try {
+					const result = await this.withVisibilityHeartbeat(queueUrl, m.ReceiptHandle, () =>
+						dispatchJobToWorker({ jobFullId: this.fullId, record }, timeoutMs),
+					);
+					if (result.ok) {
+						await this._sqsClient.send(
+							new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: m.ReceiptHandle! }),
+						);
+					} else {
+						// Timeout / crash / handler error: do NOT delete. SQS re-shows the
+						// message after its visibility timeout and redrives it, moving it to
+						// the DLQ once ApproximateReceiveCount exceeds maxReceiveCount.
+						this.log.error?.(
+							`AsyncJob "${this._id}" delivery failed for ${record.messageId}` +
+								`${result.timedOut ? ' (wall-clock timeout — worker terminated)' : ''}: ${result.error}`,
+						);
+					}
+				} finally {
+					releaseSlot();
+				}
+			};
+
 			const loop = async (): Promise<void> => {
 				while (running) {
-					let messages: Array<{ MessageId?: string; Body?: string; ReceiptHandle?: string; Attributes?: Record<string, string> }>;
+					// Only pull as many as we have free worker slots for, so a burst can't
+					// spawn unbounded workers (the cost cap).
+					const free = maxConcurrency - inFlight;
+					if (free <= 0) {
+						await new Promise((r) => setTimeout(r, 50));
+						continue;
+					}
+					let messages: Array<{
+						MessageId?: string;
+						Body?: string;
+						ReceiptHandle?: string;
+						Attributes?: Record<string, string>;
+					}>;
 					try {
 						const res = await this._sqsClient.send(
 							new ReceiveMessageCommand({
 								QueueUrl: queueUrl,
-								MaxNumberOfMessages: 10,
+								MaxNumberOfMessages: Math.min(10, free),
 								WaitTimeSeconds: 20,
 								MessageSystemAttributeNames: ['ApproximateReceiveCount', 'SentTimestamp'],
 							}),
 						);
 						messages = res.Messages ?? [];
 					} catch (err) {
-						this.log.error?.(`AsyncJob container poller receive failed: ${err instanceof Error ? err.message : String(err)}`);
+						this.log.error?.(
+							`AsyncJob container poller receive failed: ${err instanceof Error ? err.message : String(err)}`,
+						);
 						await new Promise((r) => setTimeout(r, 1000));
 						continue;
 					}
 
-					// Process the batch concurrently; each message is independent.
-					await Promise.allSettled(
-						messages.map(async (m) => {
-							const record = {
-								messageId: m.MessageId ?? '',
-								body: m.Body ?? '',
-								attributes: {
-									ApproximateReceiveCount: m.Attributes?.ApproximateReceiveCount ?? '1',
-									SentTimestamp: m.Attributes?.SentTimestamp ?? String(Date.now()),
-								},
-							};
-							try {
-								await this.withTimeout(record, m.ReceiptHandle, timeoutMs);
-								// Success: delete so SQS doesn't redeliver.
-								await this._sqsClient.send(
-									new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: m.ReceiptHandle! }),
-								);
-							} catch (err) {
-								// Failure or timeout: do NOT delete — the message becomes
-								// visible again after its visibility timeout and SQS redrives it,
-								// moving it to the DLQ once ApproximateReceiveCount exceeds
-								// maxReceiveCount. Same terminal semantics as the Lambda path.
-								this.log.error?.(
-									`AsyncJob "${this._id}" handler failed for ${record.messageId}: ${err instanceof Error ? err.message : String(err)}`,
-								);
-							}
-						}),
-					);
+					// Dispatch each message to its own worker without awaiting here, so up
+					// to maxConcurrency run in parallel; the slot count gates the next pull.
+					for (const m of messages) {
+						inFlight++;
+						void handleMessage(m);
+					}
 				}
 			};
 			void loop();
+
 			return {
 				stop() {
 					running = false;
 				},
+				drain: whenDrained,
 			};
 		});
 	}
 
 	/**
-	 * Run a record's handler with a wall-clock deadline. Passes an
-	 * {@link AbortSignal} into the handler (via the job context) that fires at the
-	 * deadline, so a cooperative handler can cancel in-flight work; the race
-	 * rejects at the deadline regardless, so the poller stops waiting and the
-	 * message redrives to the DLQ. When no timeout is configured the handler runs
-	 * unbounded (a container's whole point is work beyond Lambda's ceiling).
+	 * Run `work` while keeping the in-flight message hidden from other receives.
+	 *
+	 * SQS hides a received message only for the queue's visibility timeout; a job
+	 * that runs longer would otherwise reappear and be processed a second time
+	 * (a duplicate run, and a wasted retry). This periodically re-applies a
+	 * visibility extension on the message's receipt handle until `work` settles —
+	 * the container equivalent of what Lambda's event-source mapping does
+	 * automatically. Best-effort: a failed extension is logged, not fatal (SQS's
+	 * at-least-once contract still holds), and the interval is always cleared in
+	 * `finally` so it can't outlive the job.
 	 */
-	private async withTimeout(
-		record: { messageId: string; body: string; attributes: { ApproximateReceiveCount: string; SentTimestamp: string } },
-		_receiptHandle: string | undefined,
-		timeoutMs?: number,
-	): Promise<void> {
-		if (timeoutMs === undefined) {
-			return this._processRecord(record);
-		}
-		const controller = new AbortController();
-		let timer: ReturnType<typeof setTimeout>;
-		const deadline = new Promise<never>((_, reject) => {
-			timer = setTimeout(() => {
-				// Signal the handler to stop in-flight work, then reject so the poller
-				// leaves the message for redelivery.
-				controller.abort();
-				reject(new Error(`AsyncJob handler exceeded ${timeoutMs}ms wall-clock limit`));
-			}, timeoutMs);
-		});
+	private async withVisibilityHeartbeat<R>(
+		queueUrl: string,
+		receiptHandle: string | undefined,
+		work: () => Promise<R>,
+	): Promise<R> {
+		if (!receiptHandle) return work();
+		const heartbeat = setInterval(() => {
+			this._sqsClient
+				.send(
+					new ChangeMessageVisibilityCommand({
+						QueueUrl: queueUrl,
+						ReceiptHandle: receiptHandle,
+						VisibilityTimeout: VISIBILITY_HEARTBEAT_SECONDS,
+					}),
+				)
+				.catch((err: unknown) => {
+					this.log.error?.(
+						`AsyncJob "${this._id}" failed to extend visibility: ${err instanceof Error ? err.message : String(err)}`,
+					);
+				});
+		}, VISIBILITY_HEARTBEAT_INTERVAL_MS);
+		// Don't let the heartbeat timer keep the process alive on its own.
+		if (typeof heartbeat === 'object' && 'unref' in heartbeat) heartbeat.unref();
 		try {
-			await Promise.race([this._processRecord(record, controller.signal), deadline]);
+			return await work();
 		} finally {
-			clearTimeout(timer!);
+			clearInterval(heartbeat);
 		}
 	}
 

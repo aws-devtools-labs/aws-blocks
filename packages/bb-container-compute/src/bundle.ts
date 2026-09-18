@@ -59,29 +59,9 @@ const CJS_BANNER = 'const importMetaUrl = require("url").pathToFileURL(__filenam
  * @returns `outDir`, ready to hand to `ecs.ContainerImage.fromAsset`.
  */
 export function bundleContainerAsset(backendModulePath: string, outDir: string): string {
-	// Generated entry: load config into process.env, import the backend (which
-	// constructs + registers every BB and its handlers), then start the container
-	// runtime (self-starts owned pollers). Wrapped in an async IIFE because the
-	// bundle is emitted as CJS, which has no top-level await.
-	const entrySource = [
-		"import { loadConfigToProcessEnv, runContainer } from '@aws-blocks/core';",
-		'(async () => {',
-		'  await loadConfigToProcessEnv();',
-		`  await import(${JSON.stringify(backendModulePath)});`,
-		'  await runContainer();',
-		'})();',
-	].join('\n');
-
 	mkdirSync(outDir, { recursive: true });
 
-	buildSync({
-		stdin: {
-			contents: entrySource,
-			resolveDir: PKG_ROOT,
-			sourcefile: '__container_entry.mjs',
-			loader: 'js',
-		},
-		outfile: join(outDir, 'main.js'),
+	const shared = {
 		bundle: true,
 		platform: 'node',
 		target: 'node22',
@@ -92,19 +72,61 @@ export function bundleContainerAsset(backendModulePath: string, outDir: string):
 		conditions: ['aws-runtime', 'node'],
 		banner: { js: CJS_BANNER },
 		define: { 'import.meta.url': 'importMetaUrl' },
+	} satisfies Partial<Parameters<typeof buildSync>[0]>;
+
+	// ── Parent entry (main.js) ──────────────────────────────────────────────
+	// Loads config, points the runtime at the worker bundle it will spawn per
+	// job, imports the backend (constructs + registers every BB and its pollers),
+	// then runs the parent loop. Wrapped in an async IIFE (CJS has no TLA).
+	const mainEntry = [
+		"import { loadConfigToProcessEnv, runContainer } from '@aws-blocks/core';",
+		'(async () => {',
+		'  await loadConfigToProcessEnv();',
+		// Absolute in-image path to the co-bundled worker; dispatchJobToWorker reads this.
+		"  process.env.BLOCKS_JOB_WORKER_ENTRY = '/app/worker.js';",
+		`  await import(${JSON.stringify(backendModulePath)});`,
+		'  await runContainer();',
+		'})();',
+	].join('\n');
+
+	buildSync({
+		stdin: { contents: mainEntry, resolveDir: PKG_ROOT, sourcefile: '__container_main.mjs', loader: 'js' },
+		outfile: join(outDir, 'main.js'),
+		...shared,
 	});
 
-	// `{"type":"commonjs"}` so Node treats the .js bundle as CJS regardless of any
+	// ── Job worker entry (worker.js) ────────────────────────────────────────
+	// Spawned per job by the parent. Loads config, re-imports the backend (so the
+	// AsyncJob registers itself and its handler closure is reconstructed in this
+	// thread), then runs the single job the parent handed it via workerData,
+	// resolving the handler by fullId from the AsyncJob registry.
+	const workerEntry = [
+		"import { loadConfigToProcessEnv, runJobWorker } from '@aws-blocks/core';",
+		"import { getAsyncJob } from '@aws-blocks/bb-async-job/job-registry';",
+		'(async () => {',
+		'  await loadConfigToProcessEnv();',
+		`  await import(${JSON.stringify(backendModulePath)});`,
+		'  await runJobWorker(getAsyncJob);',
+		'})();',
+	].join('\n');
+
+	buildSync({
+		stdin: { contents: workerEntry, resolveDir: PKG_ROOT, sourcefile: '__container_worker.mjs', loader: 'js' },
+		outfile: join(outDir, 'worker.js'),
+		...shared,
+	});
+
+	// `{"type":"commonjs"}` so Node treats the .js bundles as CJS regardless of any
 	// ambient "type":"module" in a parent package.json.
 	writeFileSync(join(outDir, 'package.json'), '{"type":"commonjs"}');
 
-	// Minimal Docker build context: copy the bundle + package.json onto a slim
-	// Node base and run it. No `npm install` — every dependency is inlined into
-	// main.js by esbuild above, so the image build is a single COPY.
+	// Minimal Docker build context: copy both bundles + package.json onto a slim
+	// Node base and run the parent. No `npm install` — every dependency is inlined
+	// into the bundles by esbuild above, so the image build is a single COPY.
 	const dockerfile = [
 		`FROM ${NODE_BASE_IMAGE}`,
 		'WORKDIR /app',
-		'COPY main.js package.json ./',
+		'COPY main.js worker.js package.json ./',
 		// Run as the built-in non-root `node` user (present in the official image).
 		'USER node',
 		'CMD ["node", "main.js"]',

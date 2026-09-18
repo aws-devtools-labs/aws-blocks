@@ -1,0 +1,2910 @@
+diff --git a/.changeset/generic-compute-container-async-jobs.md b/.changeset/generic-compute-container-async-jobs.md
+new file mode 100644
+index 00000000..a868de9b
+--- /dev/null
++++ b/.changeset/generic-compute-container-async-jobs.md
+@@ -0,0 +1,39 @@
++---
++"@aws-blocks/bb-compute": minor
++"@aws-blocks/bb-container-compute": minor
++"@aws-blocks/bb-async-job": minor
++"@aws-blocks/core": minor
++"@aws-blocks/blocks": minor
++---
++
++feat(compute): generic `Compute` block with container-backed long-running jobs
++
++Adds a capability-driven compute surface and lets an `AsyncJob` run on a
++container (AWS Fargate) instead of Lambda — for work beyond Lambda's envelope
++(a wall-clock budget over 15 minutes, a long-lived process, or more memory than
++Lambda offers). All net-new surface; nothing existing changes shape.
++
++**`Compute` (new, `@aws-blocks/bb-compute`).** The one compute block customers
++use. Describe a workload's capabilities — `timeoutSeconds`, `memory`, `cpu`,
++`longLived`, `image` — and Blocks selects the backing AWS service: a modest
++request/response workload stays on Lambda; anything that exceeds Lambda's
++envelope runs on a container. The service name never appears in the API — Blocks
++knows which service satisfies the stated needs. The concrete backing computes
++(`LambdaCompute`, and the new internal `ContainerCompute`) stay internal.
++
++**`AsyncJob({ compute })`.** A job's handler can be placed on a `Compute`. On a
++Lambda compute delivery is unchanged (a native SQS event source). On a container
++compute the container runtime self-starts an **owner-matched** SQS poller
++(exactly one compute drains each queue) and enforces a **per-handler wall-clock
++limit** from the compute's `timeoutSeconds`, aborting a handler that overruns so
++its message redrives to the DLQ. In local dev, compute assignment is transparent
++— handlers run in-process exactly as before.
++
++**Central lazy VPC.** A container is VPC-resident, so it hooks into the
++framework's existing lazy VPC: the one shared app VPC is derived on first need
++(NAT egress) and a Lambda-only sibling joins the same VPC. No `vpc` prop
++required.
++
++**core.** `ComputeCapabilities` + `selectComputeKind`, the `ComputeHandle`
++marker, and a container-runtime seam (`runContainer`, `registerContainerPoller`,
++worker-mode helpers) that the co-bundled container image entry drives.
+diff --git a/package-lock.json b/package-lock.json
+index dfc61c97..65730d05 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -33,6 +33,8 @@
+         "packages/bb-tracer",
+         "packages/bb-metrics",
+         "packages/bb-lambda-compute",
++        "packages/bb-container-compute",
++        "packages/bb-compute",
+         "packages/blocks",
+         "packages/create-blocks-app",
+         "packages/create-block",
+@@ -20672,6 +20674,14 @@
+       "resolved": "packages/bb-auth-oidc",
+       "link": true
+     },
++    "node_modules/@aws-blocks/bb-compute": {
++      "resolved": "packages/bb-compute",
++      "link": true
++    },
++    "node_modules/@aws-blocks/bb-container-compute": {
++      "resolved": "packages/bb-container-compute",
++      "link": true
++    },
+     "node_modules/@aws-blocks/bb-cron-job": {
+       "resolved": "packages/bb-cron-job",
+       "link": true
+@@ -55378,6 +55388,7 @@
+       "version": "0.2.0",
+       "license": "Apache-2.0",
+       "dependencies": {
++        "@aws-blocks/bb-container-compute": "^0.1.0",
+         "@aws-blocks/bb-distributed-table": "^0.1.7",
+         "@aws-blocks/bb-lambda-compute": "^0.4.0",
+         "@aws-blocks/bb-logger": "^0.1.6",
+@@ -56444,6 +56455,41 @@
+         "@esbuild/win32-x64": "0.25.12"
+       }
+     },
++    "packages/bb-compute": {
++      "name": "@aws-blocks/bb-compute",
++      "version": "0.1.0",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "@aws-blocks/bb-container-compute": "^0.1.0",
++        "@aws-blocks/bb-lambda-compute": "^0.4.0",
++        "@aws-blocks/core": "^0.4.0"
++      },
++      "devDependencies": {
++        "@types/node": "^20.0.0",
++        "typescript": "^5.3.0"
++      },
++      "peerDependencies": {
++        "aws-cdk-lib": "^2.257.0",
++        "constructs": "^10.6.0"
++      }
++    },
++    "packages/bb-container-compute": {
++      "name": "@aws-blocks/bb-container-compute",
++      "version": "0.1.0",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "@aws-blocks/core": "^0.4.0",
++        "esbuild": "^0.27.0"
++      },
++      "devDependencies": {
++        "@types/node": "^20.0.0",
++        "typescript": "^5.3.0"
++      },
++      "peerDependencies": {
++        "aws-cdk-lib": "^2.257.0",
++        "constructs": "^10.6.0"
++      }
++    },
+     "packages/bb-cron-job": {
+       "name": "@aws-blocks/bb-cron-job",
+       "version": "0.2.0",
+@@ -56483,7 +56529,7 @@
+       "version": "0.3.0",
+       "resolved": "https://registry.npmjs.org/@aws-blocks/core/-/core-0.3.0.tgz",
+       "integrity": "sha512-u4h9aDEZObvQf4Plyl5BlmcrfaVjfRVDizQsCDzpN7XYTTyamUZJmPSmZwlHWsjjneYGwJvI+wNk9DA40+Ohvg==",
+-      "dev": true,
++      "extraneous": true,
+       "license": "Apache-2.0",
+       "dependencies": {
+         "@aws-blocks/hosting": "*",
+@@ -57263,6 +57309,8 @@
+         "@aws-blocks/bb-auth-basic": "^0.1.8",
+         "@aws-blocks/bb-auth-cognito": "^0.1.9",
+         "@aws-blocks/bb-auth-oidc": "^0.1.10",
++        "@aws-blocks/bb-compute": "^0.1.0",
++        "@aws-blocks/bb-container-compute": "^0.1.0",
+         "@aws-blocks/bb-cron-job": "^0.2.0",
+         "@aws-blocks/bb-dashboard": "^0.1.5",
+         "@aws-blocks/bb-data": "^0.2.7",
+diff --git a/package.json b/package.json
+index 69f88f54..1418e28e 100644
+--- a/package.json
++++ b/package.json
+@@ -28,6 +28,8 @@
+     "packages/bb-tracer",
+     "packages/bb-metrics",
+     "packages/bb-lambda-compute",
++    "packages/bb-container-compute",
++    "packages/bb-compute",
+     "packages/blocks",
+     "packages/create-blocks-app",
+     "packages/create-block",
+diff --git a/packages/bb-async-job/package.json b/packages/bb-async-job/package.json
+index 5a2f862b..27b301b9 100644
+--- a/packages/bb-async-job/package.json
++++ b/packages/bb-async-job/package.json
+@@ -30,6 +30,10 @@
+       "aws-runtime": "./dist/index.aws.js",
+       "types": "./dist/index.mock.d.ts",
+       "default": "./dist/index.mock.js"
++    },
++    "./job-registry": {
++      "types": "./dist/job-registry.d.ts",
++      "default": "./dist/job-registry.js"
+     }
+   },
+   "scripts": {
+@@ -41,6 +45,7 @@
+     "@aws-blocks/bb-logger": "^0.1.6",
+     "@aws-blocks/bb-distributed-table": "^0.1.7",
+     "@aws-blocks/bb-lambda-compute": "^0.4.0",
++    "@aws-blocks/bb-container-compute": "^0.1.0",
+     "@aws-blocks/core": "^0.4.0",
+     "@aws-sdk/client-sqs": "^3.0.0"
+   },
+diff --git a/packages/bb-async-job/src/index.aws.ts b/packages/bb-async-job/src/index.aws.ts
+index 3716f9ba..40634fcb 100644
+--- a/packages/bb-async-job/src/index.aws.ts
++++ b/packages/bb-async-job/src/index.aws.ts
+@@ -2,9 +2,13 @@
+ // SPDX-License-Identifier: Apache-2.0
+ 
+ import { SQSClient, SendMessageCommand, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
++import { ReceiveMessageCommand, DeleteMessageCommand, ChangeMessageVisibilityCommand } from '@aws-sdk/client-sqs';
+ import type { SendMessageBatchCommandOutput } from '@aws-sdk/client-sqs';
+ import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
++import { getConfigSync, getContainerComputeId, isContainerRuntime, registerContainerPoller } from '@aws-blocks/core';
++import { dispatchJobToWorker, isJobWorker } from '@aws-blocks/core';
+ import { EventSourceMapping, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
++import { registerAsyncJob } from './job-registry.js';
+ import type { ScopeParent } from '@aws-blocks/core';
+ import type { StandardSchemaV1 } from '@standard-schema/spec';
+ import type {
+@@ -44,6 +48,30 @@ const MAX_BATCH_PAYLOADS = 10_000;
+ /** Maximum number of `SendMessageBatch` requests in flight at once. */
+ const MAX_BATCH_CONCURRENCY = 5;
+ 
++/**
++ * How long, in seconds, the container poller keeps an in-flight message hidden
++ * on each heartbeat. Re-applied on an interval while the handler runs so a
++ * long-running job (the reason a container is used) is never redelivered
++ * mid-flight — the container equivalent of Lambda's event-source mapping
++ * auto-extending visibility up to the function timeout.
++ */
++const VISIBILITY_HEARTBEAT_SECONDS = 60;
++/**
++ * Interval between heartbeats. Comfortably shorter than
++ * {@link VISIBILITY_HEARTBEAT_SECONDS} so the next extension always lands before
++ * the current visibility window lapses, even under some scheduling delay.
++ */
++const VISIBILITY_HEARTBEAT_INTERVAL_MS = 30_000;
++
++/**
++ * Default number of jobs a container processes at once when the compute doesn't
++ * set `maxConcurrency`. Conservative because a container job can be heavy (it's
++ * on a container precisely because it's long-running or memory-hungry); the
++ * customer raises it — and sizes the task's cpu/memory to match — as the primary
++ * per-task cost lever.
++ */
++const DEFAULT_CONTAINER_CONCURRENCY = 5;
++
+ export class AsyncJob<T = unknown> extends Scope {
+ 	private _handler: (payload: T, context: AsyncJobContext) => Promise<void>;
+ 	private _schema?: StandardSchemaV1<T>;
+@@ -79,8 +107,31 @@ export class AsyncJob<T = unknown> extends Scope {
+ 
+ 		// Only register handler if queue URL is available (i.e., running in Lambda, not codegen)
+ 		if (queueUrl) {
+-			const queueName = queueUrl.split('/').pop()!;
+-			this.registerLambdaEventHandler(EventSourceMapping.SQS, queueName, (record) => this._processRecord(record));
++			// Always register this job for lookup-by-fullId. A container job worker
++			// re-imports the backend and resolves the handler here to run one job.
++			// Registered via a thin adapter so `_processRecord` stays private.
++			registerAsyncJob(this.fullId, { _processRecord: (record) => this._processRecord(record) });
++
++			if (isJobWorker()) {
++				// Inside a spawned worker thread: the parent handed us one job and
++				// resolves it via the registry above. Do NOT start a poller — the
++				// parent owns pulling; a worker that polled would double-consume.
++			} else if (isContainerRuntime()) {
++				// Container PARENT process: self-start a poller for the queues THIS
++				// compute owns (owner-match). The poller dispatches each message to a
++				// fresh worker thread (enforced timeout + isolation). The owner id was
++				// stamped at synth as BLOCKS_HANDLER_OWNER_<id>; run only if it matches
++				// this process's BLOCKS_COMPUTE_ID, so exactly one compute drains each
++				// queue even when several containers run the same image.
++				const owner = getConfigSync(`BLOCKS_HANDLER_OWNER_${sanitizeConfigKey(this.fullId)}`);
++				const self = getContainerComputeId();
++				if (owner && self && owner === self) {
++					this.registerContainerPoller(queueUrl);
++				}
++			} else {
++				const queueName = queueUrl.split('/').pop()!;
++				this.registerLambdaEventHandler(EventSourceMapping.SQS, queueName, (record) => this._processRecord(record));
++			}
+ 		}
+ 	}
+ 
+@@ -147,12 +198,13 @@ export class AsyncJob<T = unknown> extends Scope {
+ 		messageId: string;
+ 		body: string;
+ 		attributes: { ApproximateReceiveCount: string; SentTimestamp: string };
+-	}): Promise<void> {
++	}, signal?: AbortSignal): Promise<void> {
+ 		const payload = JSON.parse(record.body) as T;
+ 		const ctx: AsyncJobContext = {
+ 			jobId: record.messageId,
+ 			receiveCount: parseInt(record.attributes.ApproximateReceiveCount, 10),
+ 			sentAt: new Date(parseInt(record.attributes.SentTimestamp, 10)).toISOString(),
++			signal,
+ 		};
+ 
+ 		await this._status?.tryRecordTransition(ctx.jobId, 'processing', ctx.receiveCount);
+@@ -173,6 +225,181 @@ export class AsyncJob<T = unknown> extends Scope {
+ 		await this._status?.tryRecordTransition(ctx.jobId, 'complete', ctx.receiveCount);
+ 	}
+ 
++	/**
++	 * Start a long-poll loop that drains this job's queue on the container **parent**
++	 * process, dispatching each message to a **fresh worker thread** (see core's
++	 * `dispatchJobToWorker`). Running each job in its own worker is what makes the
++	 * per-handler wall-clock limit *enforced* rather than cooperative: on timeout
++	 * the parent hard-terminates the worker, so even a pure CPU busy-loop is
++	 * stopped. The limit is the compute's `timeoutSeconds`, stamped as
++	 * `BLOCKS_HANDLER_TIMEOUT_<id>` at synth.
++	 *
++	 * Concurrency is bounded by `BLOCKS_HANDLER_CONCURRENCY_<id>` (the poller's
++	 * per-task cost lever): at most that many workers run at once. Delete-on-success
++	 * only — a message is deleted after its worker reports success; a timeout,
++	 * crash, or handler error leaves it for SQS redrive → DLQ after `maxRetries`
++	 * (at-least-once, matching the Lambda path). Visibility is extended on a
++	 * heartbeat so a long job isn't redelivered mid-flight.
++	 *
++	 * Registered with core's container runtime, which starts it after the backend
++	 * import and drains it on SIGTERM (stop receiving, let in-flight workers finish
++	 * within the grace window).
++	 */
++	private registerContainerPoller(queueUrl: string): void {
++		const timeoutRaw = getConfigSync(`BLOCKS_HANDLER_TIMEOUT_${sanitizeConfigKey(this.fullId)}`);
++		const timeoutMs = timeoutRaw ? Number(timeoutRaw) * 1000 : undefined;
++		const concurrencyRaw = getConfigSync(`BLOCKS_HANDLER_CONCURRENCY_${sanitizeConfigKey(this.fullId)}`);
++		const maxConcurrency = concurrencyRaw ? Math.max(1, Number(concurrencyRaw)) : DEFAULT_CONTAINER_CONCURRENCY;
++
++		registerContainerPoller(() => {
++			let running = true;
++			let inFlight = 0;
++			const idle: Array<() => void> = [];
++
++			// Resolve when all in-flight workers have finished (for graceful drain).
++			const whenDrained = (): Promise<void> =>
++				inFlight === 0 ? Promise.resolve() : new Promise<void>((r) => idle.push(r));
++
++			const releaseSlot = () => {
++				inFlight--;
++				if (inFlight === 0) {
++					while (idle.length) idle.shift()!();
++				}
++			};
++
++			// Handle one message end to end: dispatch to a worker (enforced timeout),
++			// heartbeat visibility while it runs, delete on success, leave for redrive
++			// otherwise. Never throws — a failure just means "don't delete".
++			const handleMessage = async (m: {
++				MessageId?: string;
++				Body?: string;
++				ReceiptHandle?: string;
++				Attributes?: Record<string, string>;
++			}): Promise<void> => {
++				const record = {
++					messageId: m.MessageId ?? '',
++					body: m.Body ?? '',
++					attributes: {
++						ApproximateReceiveCount: m.Attributes?.ApproximateReceiveCount ?? '1',
++						SentTimestamp: m.Attributes?.SentTimestamp ?? String(Date.now()),
++					},
++				};
++				try {
++					const result = await this.withVisibilityHeartbeat(queueUrl, m.ReceiptHandle, () =>
++						dispatchJobToWorker({ jobFullId: this.fullId, record }, timeoutMs),
++					);
++					if (result.ok) {
++						await this._sqsClient.send(
++							new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: m.ReceiptHandle! }),
++						);
++					} else {
++						// Timeout / crash / handler error: do NOT delete. SQS re-shows the
++						// message after its visibility timeout and redrives it, moving it to
++						// the DLQ once ApproximateReceiveCount exceeds maxReceiveCount.
++						this.log.error?.(
++							`AsyncJob "${this._id}" delivery failed for ${record.messageId}` +
++								`${result.timedOut ? ' (wall-clock timeout — worker terminated)' : ''}: ${result.error}`,
++						);
++					}
++				} finally {
++					releaseSlot();
++				}
++			};
++
++			const loop = async (): Promise<void> => {
++				while (running) {
++					// Only pull as many as we have free worker slots for, so a burst can't
++					// spawn unbounded workers (the cost cap).
++					const free = maxConcurrency - inFlight;
++					if (free <= 0) {
++						await new Promise((r) => setTimeout(r, 50));
++						continue;
++					}
++					let messages: Array<{
++						MessageId?: string;
++						Body?: string;
++						ReceiptHandle?: string;
++						Attributes?: Record<string, string>;
++					}>;
++					try {
++						const res = await this._sqsClient.send(
++							new ReceiveMessageCommand({
++								QueueUrl: queueUrl,
++								MaxNumberOfMessages: Math.min(10, free),
++								WaitTimeSeconds: 20,
++								MessageSystemAttributeNames: ['ApproximateReceiveCount', 'SentTimestamp'],
++							}),
++						);
++						messages = res.Messages ?? [];
++					} catch (err) {
++						this.log.error?.(
++							`AsyncJob container poller receive failed: ${err instanceof Error ? err.message : String(err)}`,
++						);
++						await new Promise((r) => setTimeout(r, 1000));
++						continue;
++					}
++
++					// Dispatch each message to its own worker without awaiting here, so up
++					// to maxConcurrency run in parallel; the slot count gates the next pull.
++					for (const m of messages) {
++						inFlight++;
++						void handleMessage(m);
++					}
++				}
++			};
++			void loop();
++
++			return {
++				stop() {
++					running = false;
++				},
++				drain: whenDrained,
++			};
++		});
++	}
++
++	/**
++	 * Run `work` while keeping the in-flight message hidden from other receives.
++	 *
++	 * SQS hides a received message only for the queue's visibility timeout; a job
++	 * that runs longer would otherwise reappear and be processed a second time
++	 * (a duplicate run, and a wasted retry). This periodically re-applies a
++	 * visibility extension on the message's receipt handle until `work` settles —
++	 * the container equivalent of what Lambda's event-source mapping does
++	 * automatically. Best-effort: a failed extension is logged, not fatal (SQS's
++	 * at-least-once contract still holds), and the interval is always cleared in
++	 * `finally` so it can't outlive the job.
++	 */
++	private async withVisibilityHeartbeat<R>(
++		queueUrl: string,
++		receiptHandle: string | undefined,
++		work: () => Promise<R>,
++	): Promise<R> {
++		if (!receiptHandle) return work();
++		const heartbeat = setInterval(() => {
++			this._sqsClient
++				.send(
++					new ChangeMessageVisibilityCommand({
++						QueueUrl: queueUrl,
++						ReceiptHandle: receiptHandle,
++						VisibilityTimeout: VISIBILITY_HEARTBEAT_SECONDS,
++					}),
++				)
++				.catch((err: unknown) => {
++					this.log.error?.(
++						`AsyncJob "${this._id}" failed to extend visibility: ${err instanceof Error ? err.message : String(err)}`,
++					);
++				});
++		}, VISIBILITY_HEARTBEAT_INTERVAL_MS);
++		// Don't let the heartbeat timer keep the process alive on its own.
++		if (typeof heartbeat === 'object' && 'unref' in heartbeat) heartbeat.unref();
++		try {
++			return await work();
++		} finally {
++			clearInterval(heartbeat);
++		}
++	}
++
+ 	/** Validates payload and returns the serialized JSON string for reuse */
+ 	private async validatePayload(payload: T): Promise<string> {
+ 		if (this._schema) {
+diff --git a/packages/bb-async-job/src/index.cdk.ts b/packages/bb-async-job/src/index.cdk.ts
+index 64130fb0..96ea3210 100644
+--- a/packages/bb-async-job/src/index.cdk.ts
++++ b/packages/bb-async-job/src/index.cdk.ts
+@@ -9,6 +9,7 @@ import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+ import { registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
+ import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+ import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
++import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
+ import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
+ import type { ScopeParent } from '@aws-blocks/core';
+ import type {
+@@ -80,24 +81,35 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
+ 	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
+ 		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
+ 
++		// Assign the requested compute (if any) before anything reads `this.compute`
++		// below. `_compute` is the framework's internal per-scope assignment slot;
++		// the public option is typed as the opaque ComputeHandle, so the cast to the
++		// concrete Compute is framework plumbing (the value is always a real Compute
++		// under --conditions=cdk).
++		if (options.compute) {
++			this._compute = options.compute as unknown as NonNullable<typeof this._compute>;
++		}
++
+ 		const maxRetries = options.maxRetries ?? 3;
+ 		const batchSize = options.batchSize ?? 10;
+ 		const maxBatchingWindowSeconds = options.maxBatchingWindowSeconds ?? 5;
+ 		validateEventSourceOptions(this.fullId, batchSize, maxBatchingWindowSeconds);
+ 
+-		// The queue is consumed by an SQS event source on the compute's own
+-		// Lambda, so a AsyncJob currently requires a Lambda compute. Other
+-		// compute types need a different consumption path (e.g. runtime polling)
+-		// that does not exist yet — fail loud at synth rather than provision a
+-		// queue nothing consumes (submitted jobs would silently pile up). The
+-		// CronJob and Realtime blocks add the same guard in this change. The brand
+-		// check (not `instanceof`) survives duplicate bb-lambda-compute copies in
+-		// one dependency tree.
++		// A AsyncJob's queue must be consumed by exactly one runtime. On a Lambda
++		// compute that's a native SQS event source (below); on a container compute
++		// the container's runtime self-starts an owner-matched poller (see
++		// index.aws.ts) — no event source is wired here. Any other compute type has
++		// no consumption path yet, so fail loud at synth rather than provision a
++		// queue nothing drains (submitted jobs would silently pile up). The brand
++		// checks (not `instanceof`) survive duplicate compute-package copies in one
++		// dependency tree.
+ 		const compute = this.compute;
+-		if (!LambdaCompute.isLambdaCompute(compute)) {
++		const onLambda = LambdaCompute.isLambdaCompute(compute);
++		const onContainer = ContainerCompute.isContainerCompute(compute);
++		if (!onLambda && !onContainer) {
+ 			throw blocksError(
+ 				AsyncJobErrors.UnsupportedCompute,
+-				`AsyncJob "${this.fullId}" currently supports only a Lambda compute.`,
++				`AsyncJob "${this.fullId}" supports only a Lambda or container compute.`,
+ 			);
+ 		}
+ 
+@@ -150,13 +162,38 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
+ 		// single failing record makes SQS treat the whole batch as handled and delete
+ 		// every message in it (silent loss). The runtime handler already returns
+ 		// `{ batchItemFailures }`, so this is never configurable.
+-		compute.fn.addEventSource(
+-			new SqsEventSource(this.queue, {
+-				batchSize,
+-				reportBatchItemFailures: true,
+-				maxBatchingWindow: Duration.seconds(maxBatchingWindowSeconds),
+-			})
+-		);
++		if (onLambda) {
++			compute.fn.addEventSource(
++				new SqsEventSource(this.queue, {
++					batchSize,
++					reportBatchItemFailures: true,
++					maxBatchingWindow: Duration.seconds(maxBatchingWindowSeconds),
++				})
++			);
++		} else {
++			// Container path: the runtime self-starts an owner-matched poller (no
++			// native event source). Grant the shared task role permission to
++			// receive, delete, and change-visibility on this queue — the poller does
++			// all three (delete-on-success + visibility heartbeat for long jobs). The
++			// DLQ redrive is enforced by SQS via the queue's redrive policy, exactly
++			// as on the Lambda path.
++			this.queue.grantConsumeMessages(this.executionRole);
++			// The per-handler wall-clock limit the container poller ENFORCES (by
++			// terminating the job's worker thread) comes from the compute's
++			// capabilities.timeoutSeconds; stamp it so the runtime reads it without
++			// re-deriving the compute.
++			const timeoutSeconds = compute.capabilities.timeoutSeconds;
++			if (timeoutSeconds !== undefined) {
++				registerConfig(this, `BLOCKS_HANDLER_TIMEOUT_${idKey}`, String(timeoutSeconds));
++			}
++			// Per-task concurrency cap (the cost lever): how many jobs — each in its
++			// own worker thread — run at once. Stamped when set; the runtime uses a
++			// conservative default otherwise.
++			const maxConcurrency = compute.capabilities.maxConcurrency;
++			if (maxConcurrency !== undefined) {
++				registerConfig(this, `BLOCKS_HANDLER_CONCURRENCY_${idKey}`, String(maxConcurrency));
++			}
++		}
+ 
+ 		// Same child id and options as the runtime entry points, so the provisioned
+ 		// table is the one JobStatusTracker resolves at request time.
+diff --git a/packages/bb-async-job/src/types.ts b/packages/bb-async-job/src/types.ts
+index 039715cb..4b903d2c 100644
+--- a/packages/bb-async-job/src/types.ts
++++ b/packages/bb-async-job/src/types.ts
+@@ -2,6 +2,7 @@
+ // SPDX-License-Identifier: Apache-2.0
+ 
+ import type { StandardSchemaV1 } from '@standard-schema/spec';
++import type { ComputeHandle } from '@aws-blocks/core';
+ import type { ChildLogger } from '@aws-blocks/bb-logger';
+ 
+ /**
+@@ -14,6 +15,16 @@ export interface AsyncJobContext {
+ 	receiveCount: number;
+ 	/** ISO 8601 timestamp of when the message was sent. */
+ 	sentAt: string;
++	/**
++	 * Aborts when the job exceeds its compute's wall-clock limit
++	 * (`Compute.timeoutSeconds`). On a container the limit is **enforced** by
++	 * terminating the worker thread the job runs in, so a handler that ignores this
++	 * signal is still stopped at the deadline; the signal is offered so cooperative
++	 * handlers can also unwind in-flight work (close connections, flush) a moment
++	 * before termination. Present only when a timeout is configured; `undefined` on
++	 * Lambda (the platform enforces the function timeout) and when no limit is set.
++	 */
++	signal?: AbortSignal;
+ }
+ 
+ /**
+@@ -50,6 +61,19 @@ export interface AsyncJobOptions<T> {
+ 	trackStatus?: boolean;
+ 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
+ 	logger?: ChildLogger;
++	/**
++	 * The compute this job's handler runs on. Pass a `Compute` block to place the
++	 * handler on a different runtime than the app default — e.g. a long-running or
++	 * high-memory job that a container (Fargate) can serve but Lambda cannot.
++	 *
++	 * When omitted, the job runs on the app's default compute (Lambda), exactly as
++	 * today. Assigning a container-backed `Compute` moves delivery from a native
++	 * SQS→Lambda event source to an owner-matched poller the container self-starts;
++	 * the per-handler wall-clock limit comes from the compute's `timeoutSeconds`.
++	 * In local dev, compute assignment is transparent — the handler runs in-process
++	 * regardless.
++	 */
++	compute?: ComputeHandle;
+ }
+ 
+ /**
+diff --git a/packages/bb-async-job/tsconfig.json b/packages/bb-async-job/tsconfig.json
+index 4a052095..7312cf7d 100644
+--- a/packages/bb-async-job/tsconfig.json
++++ b/packages/bb-async-job/tsconfig.json
+@@ -16,6 +16,9 @@
+     },
+     {
+       "path": "../bb-lambda-compute"
++    },
++    {
++      "path": "../bb-container-compute"
+     }
+   ]
+ }
+diff --git a/packages/bb-compute/package.json b/packages/bb-compute/package.json
+new file mode 100644
+index 00000000..f3a3b26b
+--- /dev/null
++++ b/packages/bb-compute/package.json
+@@ -0,0 +1,57 @@
++{
++  "name": "@aws-blocks/bb-compute",
++  "version": "0.1.0",
++  "repository": {
++    "type": "git",
++    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
++    "directory": "packages/bb-compute"
++  },
++  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/bb-compute#readme",
++  "bugs": {
++    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
++  },
++  "author": "Amazon Web Services",
++  "license": "Apache-2.0",
++  "type": "module",
++  "files": [
++    "dist",
++    "README.md",
++    "DESIGN.md",
++    "src",
++    "LICENSE"
++  ],
++  "exports": {
++    ".": {
++      "browser": "./dist/index.browser.js",
++      "cdk": {
++        "types": "./dist/index.cdk.d.ts",
++        "default": "./dist/index.cdk.js"
++      },
++      "aws-runtime": "./dist/index.aws.js",
++      "types": "./dist/index.mock.d.ts",
++      "default": "./dist/index.mock.js"
++    },
++    "./cdk": {
++      "types": "./dist/index.cdk.d.ts",
++      "default": "./dist/index.cdk.js"
++    }
++  },
++  "scripts": {
++    "prebuild": "node ../../scripts/generate-version.mjs Compute",
++    "build": "tsc --build",
++    "test": "node --conditions=cdk --test dist/index.cdk.test.js"
++  },
++  "dependencies": {
++    "@aws-blocks/core": "^0.4.0",
++    "@aws-blocks/bb-lambda-compute": "^0.4.0",
++    "@aws-blocks/bb-container-compute": "^0.1.0"
++  },
++  "devDependencies": {
++    "@types/node": "^20.0.0",
++    "typescript": "^5.3.0"
++  },
++  "peerDependencies": {
++    "aws-cdk-lib": "^2.257.0",
++    "constructs": "^10.6.0"
++  }
++}
+diff --git a/packages/bb-compute/src/index.aws.ts b/packages/bb-compute/src/index.aws.ts
+new file mode 100644
+index 00000000..16bc15b7
+--- /dev/null
++++ b/packages/bb-compute/src/index.aws.ts
+@@ -0,0 +1,28 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * AWS-runtime entry for the generic `Compute` block. At runtime a compute is
++ * inert (its infrastructure was created at synth), so this selects and returns
++ * the inert concrete handle — matching the CDK selector's return-an-instance
++ * shape so a `{ compute }` reference resolves identically in both phases.
++ */
++import type { ScopeParent } from '@aws-blocks/core';
++import { selectComputeKind } from '@aws-blocks/core';
++import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
++import { ContainerCompute } from '@aws-blocks/bb-container-compute';
++import type { ComputeProps } from './types.js';
++
++export type { ComputeProps } from './types.js';
++
++export class Compute {
++	constructor(scope: ScopeParent, id: string, props: ComputeProps = {}) {
++		const { logRetention, ...capabilities } = props;
++		if (selectComputeKind(capabilities) === 'container') {
++			// biome-ignore lint/correctness/noConstructorReturn: intentional selector.
++			return new ContainerCompute(scope, id, { capabilities, logRetention }) as unknown as Compute;
++		}
++		// biome-ignore lint/correctness/noConstructorReturn: intentional selector.
++		return new LambdaCompute(scope, id, { logRetention }) as unknown as Compute;
++	}
++}
+diff --git a/packages/bb-compute/src/index.browser.ts b/packages/bb-compute/src/index.browser.ts
+new file mode 100644
+index 00000000..fb6096f5
+--- /dev/null
++++ b/packages/bb-compute/src/index.browser.ts
+@@ -0,0 +1,10 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++// Browser stub — compute is server-side infrastructure and never runs in the
++// browser. The backend module that constructs it is type-imported by frontends,
++// so this stub keeps CDK out of the browser bundle while the reference resolves.
++export class Compute {
++	setEnv(_key: string, _value: string): void {}
++}
++export type { ComputeProps } from './types.js';
+diff --git a/packages/bb-compute/src/index.cdk.test.ts b/packages/bb-compute/src/index.cdk.test.ts
+new file mode 100644
+index 00000000..f0829905
+--- /dev/null
++++ b/packages/bb-compute/src/index.cdk.test.ts
+@@ -0,0 +1,65 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * Verifies the generic `Compute` block selects the correct backing compute from
++ * capability attributes and returns the concrete, branded instance (not a
++ * wrapper) — so the framework's delivery logic recognizes it.
++ *
++ * Runs under `--conditions=cdk` so the compute packages resolve their CDK
++ * entries (real constructs) rather than the mock stubs.
++ */
++import { test, describe } from 'node:test';
++import assert from 'node:assert';
++import * as cdk from 'aws-cdk-lib';
++import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
++import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
++import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
++import { Compute } from './index.cdk.js';
++
++/** A minimal stub compute so BlocksStack.create wires a default without pulling the real one. */
++function stubFactory(root: unknown): unknown {
++	// The default compute is irrelevant to these selection tests; a tiny stub with
++	// the members the stack's accessors touch keeps create() happy.
++	return new LambdaCompute(root as never, 'DefaultCompute');
++}
++
++async function makeStack(): Promise<cdk.Stack> {
++	const app = new cdk.App();
++	// A real BlocksStack so `new Compute(stack, ...)` has a proper root, VPC
++	// registry, and compute registry.
++	const stack = await BlocksStack.create(app, 'ComputeSelStack', {
++		backendHandlerPath: `${process.cwd()}/dist/index.cdk.js`,
++		backendCDKPath: `${process.cwd()}/dist/index.cdk.js`,
++		defaults: BlocksPresets.production,
++		defaultComputeFactory: stubFactory as never,
++	} as never);
++	return stack as unknown as cdk.Stack;
++}
++
++describe('Compute — capability-driven selection', () => {
++	test('a modest workload selects a LambdaCompute', async () => {
++		const stack = await makeStack();
++		const c = new Compute(stack as never, 'lambda-ish', { memory: 512 });
++		assert.ok(LambdaCompute.isLambdaCompute(c), 'should be a LambdaCompute');
++		assert.ok(!ContainerCompute.isContainerCompute(c), 'should not be a ContainerCompute');
++	});
++
++	test('a long timeout selects a ContainerCompute', async () => {
++		const stack = await makeStack();
++		const c = new Compute(stack as never, 'long', { timeoutSeconds: 1800 });
++		assert.ok(ContainerCompute.isContainerCompute(c), 'over-15-min budget → container');
++	});
++
++	test('longLived selects a ContainerCompute', async () => {
++		const stack = await makeStack();
++		const c = new Compute(stack as never, 'lived', { longLived: true });
++		assert.ok(ContainerCompute.isContainerCompute(c), 'long-lived → container');
++	});
++
++	test('an explicit cpu request selects a ContainerCompute', async () => {
++		const stack = await makeStack();
++		const c = new Compute(stack as never, 'cpu', { cpu: 1024 });
++		assert.ok(ContainerCompute.isContainerCompute(c), 'explicit cpu → container');
++	});
++});
+diff --git a/packages/bb-compute/src/index.cdk.ts b/packages/bb-compute/src/index.cdk.ts
+new file mode 100644
+index 00000000..5d60b456
+--- /dev/null
++++ b/packages/bb-compute/src/index.cdk.ts
+@@ -0,0 +1,68 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * The generic **`Compute`** Building Block — the one compute surface customers
++ * use. Rather than naming an AWS service, a customer describes the workload's
++ * capabilities (timeout, memory, cpu, whether it's long-lived, an optional
++ * image) and Blocks picks the backing service: a short, request/response
++ * workload runs on Lambda; anything that exceeds Lambda's envelope runs on a
++ * container (Fargate). This keeps the public API a statement of *needs*, not of
++ * infrastructure — Blocks knows which AWS service satisfies them.
++ *
++ * @example
++ * ```ts
++ * // Stays on Lambda — nothing exceeds its envelope.
++ * const api = new Compute(scope, 'api', { memory: 512 });
++ *
++ * // Runs on a container — a 30-minute budget is beyond Lambda's 15-minute cap.
++ * const worker = new Compute(scope, 'worker', { timeoutSeconds: 1800, memory: 2048 });
++ *
++ * // Assign a block's handler to it.
++ * const jobs = new AsyncJob(scope, 'jobs', { compute: worker, handler });
++ * ```
++ */
++import type { ComputeHandle, ScopeParent } from '@aws-blocks/core';
++import { selectComputeKind } from '@aws-blocks/core';
++import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
++import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
++import type { ComputeProps } from './types.js';
++
++export type { ComputeProps } from './types.js';
++
++/**
++ * A compute defined by capability, not by service. Constructing one resolves —
++ * from its {@link ComputeProps} — to the concrete backing compute
++ * (`LambdaCompute` or `ContainerCompute`) and **returns that instance**: the
++ * value a customer holds and hands to `{ compute }` is the real, branded compute
++ * the framework's delivery logic recognizes. `Compute` is therefore a selector,
++ * not a wrapper — there is no extra construct layer or forwarding to maintain.
++ *
++ * The static return type is {@link ComputeHandle} (the opaque public handle) so
++ * customer code treats it as "a compute" without depending on which service
++ * backs it; internally the returned object is the concrete compute.
++ */
++export class Compute {
++	constructor(scope: ScopeParent, id: string, props: ComputeProps = {}) {
++		const { logRetention, ...capabilities } = props;
++		const kind = selectComputeKind(capabilities);
++		// A JS constructor may return an object, which becomes the result of `new`.
++		// We return the concrete compute so the customer holds the real, branded
++		// instance (LambdaCompute / ContainerCompute) — the one AsyncJob and the
++		// finalize steps recognize — with no wrapper indirection.
++		if (kind === 'container') {
++			// biome-ignore lint/correctness/noConstructorReturn: intentional selector — see class docs.
++			return new ContainerCompute(scope, id, { capabilities, logRetention }) as unknown as Compute;
++		}
++		// biome-ignore lint/correctness/noConstructorReturn: intentional selector — see class docs.
++		return new LambdaCompute(scope, id, { logRetention }) as unknown as Compute;
++	}
++}
++
++/**
++ * The type of a constructed {@link Compute} as customers should hold it — an
++ * opaque {@link ComputeHandle}. Declared as a companion type so
++ * `const c: ComputeInstance = new Compute(...)` reads cleanly; the runtime value
++ * is the concrete backing compute.
++ */
++export type ComputeInstance = ComputeHandle;
+diff --git a/packages/bb-compute/src/index.mock.ts b/packages/bb-compute/src/index.mock.ts
+new file mode 100644
+index 00000000..9a4d6f01
+--- /dev/null
++++ b/packages/bb-compute/src/index.mock.ts
+@@ -0,0 +1,11 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * Local-dev (mock) and types entry for the generic `Compute` block. Local dev
++ * runs the backend in-process with no provisioned compute, so this selects and
++ * returns the inert concrete handle; compute assignment is transparent in dev.
++ * This entry also backs the package's public `types`.
++ */
++export { Compute } from './index.aws.js';
++export type { ComputeProps } from './types.js';
+diff --git a/packages/bb-compute/src/types.ts b/packages/bb-compute/src/types.ts
+new file mode 100644
+index 00000000..574365c2
+--- /dev/null
++++ b/packages/bb-compute/src/types.ts
+@@ -0,0 +1,21 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++import type { ComputeCapabilities } from '@aws-blocks/core';
++import type { RetentionDays } from 'aws-cdk-lib/aws-logs';
++
++/**
++ * Options for the generic {@link Compute} block. These are service-agnostic
++ * capability attributes ({@link ComputeCapabilities}) that describe *what* the
++ * workload needs; Blocks selects the backing AWS service (Lambda or Fargate)
++ * from them. A modest request/response workload stays on Lambda; a long-lived,
++ * long-running, or high-memory workload is placed on a container.
++ */
++export interface ComputeProps extends ComputeCapabilities {
++	/**
++	 * CloudWatch Logs retention for this compute's log group. Logs are always
++	 * captured; this only bounds how long they're kept. Per-compute override of
++	 * the stack-wide `defaults.logRetention`.
++	 */
++	logRetention?: RetentionDays;
++}
+diff --git a/packages/bb-compute/tsconfig.json b/packages/bb-compute/tsconfig.json
+new file mode 100644
+index 00000000..3505d9a0
+--- /dev/null
++++ b/packages/bb-compute/tsconfig.json
+@@ -0,0 +1,19 @@
++{
++  "extends": "../../tsconfig.base.json",
++  "compilerOptions": {
++    "outDir": "./dist",
++    "rootDir": "./src"
++  },
++  "include": ["src/**/*"],
++  "references": [
++    {
++      "path": "../core"
++    },
++    {
++      "path": "../bb-lambda-compute"
++    },
++    {
++      "path": "../bb-container-compute"
++    }
++  ]
++}
+diff --git a/packages/bb-container-compute/package.json b/packages/bb-container-compute/package.json
+new file mode 100644
+index 00000000..db1f4a1a
+--- /dev/null
++++ b/packages/bb-container-compute/package.json
+@@ -0,0 +1,56 @@
++{
++  "name": "@aws-blocks/bb-container-compute",
++  "version": "0.1.0",
++  "repository": {
++    "type": "git",
++    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
++    "directory": "packages/bb-container-compute"
++  },
++  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/bb-container-compute#readme",
++  "bugs": {
++    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
++  },
++  "author": "Amazon Web Services",
++  "license": "Apache-2.0",
++  "type": "module",
++  "files": [
++    "dist",
++    "README.md",
++    "DESIGN.md",
++    "src",
++    "LICENSE"
++  ],
++  "exports": {
++    ".": {
++      "browser": "./dist/index.browser.js",
++      "cdk": {
++        "types": "./dist/index.cdk.d.ts",
++        "default": "./dist/index.cdk.js"
++      },
++      "aws-runtime": "./dist/index.aws.js",
++      "types": "./dist/index.mock.d.ts",
++      "default": "./dist/index.mock.js"
++    },
++    "./cdk": {
++      "types": "./dist/index.cdk.d.ts",
++      "default": "./dist/index.cdk.js"
++    }
++  },
++  "scripts": {
++    "prebuild": "node ../../scripts/generate-version.mjs ContainerCompute",
++    "build": "tsc --build",
++    "test": "node --conditions=cdk --test dist/index.cdk.test.js"
++  },
++  "dependencies": {
++    "@aws-blocks/core": "^0.4.0",
++    "esbuild": "^0.27.0"
++  },
++  "devDependencies": {
++    "@types/node": "^20.0.0",
++    "typescript": "^5.3.0"
++  },
++  "peerDependencies": {
++    "aws-cdk-lib": "^2.257.0",
++    "constructs": "^10.6.0"
++  }
++}
+diff --git a/packages/bb-container-compute/src/bundle.ts b/packages/bb-container-compute/src/bundle.ts
+new file mode 100644
+index 00000000..4ad95bdf
+--- /dev/null
++++ b/packages/bb-container-compute/src/bundle.ts
+@@ -0,0 +1,138 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * Synth-time co-bundle for the container compute's image asset.
++ *
++ * The container process must run BOTH the developer's backend (which constructs
++ * the real Building Blocks and their handler closures) AND core's
++ * `runContainer()` entry — from a SINGLE module graph, so every BB's module
++ * singletons (the event-handler map, the SDK-identifier registry) are shared.
++ * Bundled separately they'd each get their own `@aws-blocks/core` copy, a job's
++ * handler would register in one map and the poller would read the other, and no
++ * job would ever run.
++ *
++ * We esbuild-bundle a tiny generated entry that imports both from the same
++ * graph, resolving `@aws-blocks/*` to their `aws-runtime` variants exactly as
++ * core bundles the Lambda handler. `esbuild.buildSync()` is called directly
++ * (not via CDK's `NodejsFunction`) to avoid the `PathNotUnderRoot` failure it
++ * hits for npm-installed packages; `buildSync` because CDK synth is synchronous.
++ *
++ * The output dir is a Docker build context: `main.js` (the CJS bundle),
++ * `package.json` (`{"type":"commonjs"}`), and a `Dockerfile` on a slim Node base
++ * image that just runs `node main.js`. All JS (including the AWS SDK) is bundled
++ * into `main.js`, so the image needs no `npm install` — a single-COPY, single-CMD
++ * Dockerfile keeps the build fast and hermetic.
++ */
++import { buildSync } from 'esbuild';
++import { mkdirSync, writeFileSync } from 'node:fs';
++import { dirname, join } from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++const __dirname = dirname(fileURLToPath(import.meta.url));
++/** bb-container-compute package root (dist/.. == package dir), esbuild's resolution base. */
++const PKG_ROOT = join(__dirname, '..');
++
++/**
++ * Node base image for the container. Slim Debian variant of the same Node major
++ * the Lambda runtime targets (22), so runtime behavior matches the function path.
++ */
++const NODE_BASE_IMAGE = 'public.ecr.aws/docker/library/node:22-slim';
++
++/**
++ * `import.meta.url` shim for the CJS bundle: any transitively-bundled code that
++ * reads `import.meta.url` (e.g. a `fileURLToPath(import.meta.url)`) resolves to a
++ * real path instead of throwing under CommonJS output.
++ */
++const CJS_BANNER = 'const importMetaUrl = require("url").pathToFileURL(__filename).href;';
++
++/**
++ * Co-bundle the app backend + `runContainer()` into a self-contained Docker build
++ * context directory.
++ *
++ * @param backendModulePath - absolute path to the app's backend module (the
++ *   BlocksStack/BlocksBackend `backendCDKPath`). Imported by absolute PATH (not a
++ *   `file://` URL — esbuild resolves paths) so it lands in the SAME module graph
++ *   and its `@aws-blocks/*` deps dedupe to one instance.
++ * @param outDir - directory to write the build context into (a stable,
++ *   synth-scoped path under `cdk.out`).
++ * @returns `outDir`, ready to hand to `ecs.ContainerImage.fromAsset`.
++ */
++export function bundleContainerAsset(backendModulePath: string, outDir: string): string {
++	mkdirSync(outDir, { recursive: true });
++
++	const shared = {
++		bundle: true,
++		platform: 'node',
++		target: 'node22',
++		format: 'cjs',
++		minify: true,
++		// Resolve @aws-blocks/* (and the backend's BB constructions) to their
++		// AWS-runtime variants, exactly as core bundles the Lambda handler.
++		conditions: ['aws-runtime', 'node'],
++		banner: { js: CJS_BANNER },
++		define: { 'import.meta.url': 'importMetaUrl' },
++	} satisfies Partial<Parameters<typeof buildSync>[0]>;
++
++	// ── Parent entry (main.js) ──────────────────────────────────────────────
++	// Loads config, points the runtime at the worker bundle it will spawn per
++	// job, imports the backend (constructs + registers every BB and its pollers),
++	// then runs the parent loop. Wrapped in an async IIFE (CJS has no TLA).
++	const mainEntry = [
++		"import { loadConfigToProcessEnv, runContainer } from '@aws-blocks/core';",
++		'(async () => {',
++		'  await loadConfigToProcessEnv();',
++		// Absolute in-image path to the co-bundled worker; dispatchJobToWorker reads this.
++		"  process.env.BLOCKS_JOB_WORKER_ENTRY = '/app/worker.js';",
++		`  await import(${JSON.stringify(backendModulePath)});`,
++		'  await runContainer();',
++		'})();',
++	].join('\n');
++
++	buildSync({
++		stdin: { contents: mainEntry, resolveDir: PKG_ROOT, sourcefile: '__container_main.mjs', loader: 'js' },
++		outfile: join(outDir, 'main.js'),
++		...shared,
++	});
++
++	// ── Job worker entry (worker.js) ────────────────────────────────────────
++	// Spawned per job by the parent. Loads config, re-imports the backend (so the
++	// AsyncJob registers itself and its handler closure is reconstructed in this
++	// thread), then runs the single job the parent handed it via workerData,
++	// resolving the handler by fullId from the AsyncJob registry.
++	const workerEntry = [
++		"import { loadConfigToProcessEnv, runJobWorker } from '@aws-blocks/core';",
++		"import { getAsyncJob } from '@aws-blocks/bb-async-job/job-registry';",
++		'(async () => {',
++		'  await loadConfigToProcessEnv();',
++		`  await import(${JSON.stringify(backendModulePath)});`,
++		'  await runJobWorker(getAsyncJob);',
++		'})();',
++	].join('\n');
++
++	buildSync({
++		stdin: { contents: workerEntry, resolveDir: PKG_ROOT, sourcefile: '__container_worker.mjs', loader: 'js' },
++		outfile: join(outDir, 'worker.js'),
++		...shared,
++	});
++
++	// `{"type":"commonjs"}` so Node treats the .js bundles as CJS regardless of any
++	// ambient "type":"module" in a parent package.json.
++	writeFileSync(join(outDir, 'package.json'), '{"type":"commonjs"}');
++
++	// Minimal Docker build context: copy both bundles + package.json onto a slim
++	// Node base and run the parent. No `npm install` — every dependency is inlined
++	// into the bundles by esbuild above, so the image build is a single COPY.
++	const dockerfile = [
++		`FROM ${NODE_BASE_IMAGE}`,
++		'WORKDIR /app',
++		'COPY main.js worker.js package.json ./',
++		// Run as the built-in non-root `node` user (present in the official image).
++		'USER node',
++		'CMD ["node", "main.js"]',
++		'',
++	].join('\n');
++	writeFileSync(join(outDir, 'Dockerfile'), dockerfile);
++
++	return outDir;
++}
+diff --git a/packages/bb-container-compute/src/index.aws.ts b/packages/bb-container-compute/src/index.aws.ts
+new file mode 100644
+index 00000000..e097545a
+--- /dev/null
++++ b/packages/bb-container-compute/src/index.aws.ts
+@@ -0,0 +1,25 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * AWS-runtime entry point for `ContainerCompute`.
++ *
++ * At runtime a compute is inert — it *is* the environment the handler already
++ * runs in, and its infrastructure was created at synth. So the runtime
++ * `ContainerCompute` constructs (so the import succeeds and any `{ compute }`
++ * reference resolves) but provisions nothing and pulls in no CDK. `setEnv` is a
++ * no-op — configuration is injected at synth.
++ */
++import { Scope } from '@aws-blocks/core';
++import type { ScopeParent } from '@aws-blocks/core';
++import type { ContainerComputeProps } from './types.js';
++
++export type { ContainerComputeProps } from './types.js';
++
++export class ContainerCompute extends Scope {
++	constructor(scope: ScopeParent, id: string, _options?: ContainerComputeProps) {
++		super(id, { parent: scope });
++	}
++
++	setEnv(_key: string, _value: string): void {}
++}
+diff --git a/packages/bb-container-compute/src/index.browser.ts b/packages/bb-container-compute/src/index.browser.ts
+new file mode 100644
+index 00000000..edc3ea6e
+--- /dev/null
++++ b/packages/bb-container-compute/src/index.browser.ts
+@@ -0,0 +1,10 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++// Browser stub — a compute is server-side infrastructure and never runs in the
++// browser. The backend module that constructs it is type-imported by frontends,
++// so this stub keeps CDK out of the browser bundle while the reference resolves.
++export class ContainerCompute {
++	setEnv(_key: string, _value: string): void {}
++}
++export type { ContainerComputeProps } from './types.js';
+diff --git a/packages/bb-container-compute/src/index.cdk.test.ts b/packages/bb-container-compute/src/index.cdk.test.ts
+new file mode 100644
+index 00000000..92c14928
+--- /dev/null
++++ b/packages/bb-container-compute/src/index.cdk.test.ts
+@@ -0,0 +1,80 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * Verifies `ContainerCompute` provisions a Fargate service in the framework's
++ * central lazy VPC, runs AS the shared execution role, and appends the
++ * `ecs-tasks` trust principal. Runs under `--conditions=cdk` for real constructs.
++ *
++ * A tiny co-bundled backend is written to a temp dir so the image asset builds
++ * (the container skips provisioning when no backend module is discoverable).
++ */
++import { test, describe, before, after } from 'node:test';
++import assert from 'node:assert';
++import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
++import { fileURLToPath } from 'node:url';
++import { dirname, join } from 'node:path';
++import * as cdk from 'aws-cdk-lib';
++import { Template } from 'aws-cdk-lib/assertions';
++import { Match } from 'aws-cdk-lib/assertions';
++import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
++import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
++import { ContainerCompute } from './index.cdk.js';
++
++const __dirname = dirname(fileURLToPath(import.meta.url));
++let tmpDir: string;
++let handlerPath: string;
++let backendPath: string;
++
++before(() => {
++	tmpDir = mkdtempSync(join(__dirname, 'tmp-container-'));
++	handlerPath = join(tmpDir, 'handler.mjs');
++	writeFileSync(handlerPath, "export const handler = async () => ({ statusCode: 200, body: '{}' });\n");
++	// A no-op backend so the co-bundle has something to import.
++	backendPath = join(tmpDir, 'backend.mjs');
++	writeFileSync(backendPath, 'export default () => {};\n');
++});
++
++after(() => {
++	rmSync(tmpDir, { recursive: true, force: true });
++});
++
++describe('ContainerCompute — Fargate in the shared VPC', () => {
++	test('provisions a Fargate service, cluster, and a shared VPC', async () => {
++		const app = new cdk.App();
++		const stack = await BlocksStack.create(app, 'ContainerStack', {
++			backendHandlerPath: handlerPath,
++			backendCDKPath: backendPath,
++			defaults: BlocksPresets.production,
++			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
++		} as never);
++
++		const compute = new ContainerCompute(stack as never, 'worker', {
++			capabilities: { timeoutSeconds: 1800, longLived: true, cpu: 512, memory: 1024 },
++		});
++		assert.ok(ContainerCompute.isContainerCompute(compute));
++		assert.strictEqual(compute.kind, 'container');
++
++		const template = Template.fromStack(stack as unknown as cdk.Stack);
++		// A VPC was lazily derived (the container requires one).
++		template.resourceCountIs('AWS::EC2::VPC', 1);
++		// A Fargate service + task definition + cluster.
++		template.resourceCountIs('AWS::ECS::Cluster', 1);
++		template.resourceCountIs('AWS::ECS::Service', 1);
++		template.hasResourceProperties('AWS::ECS::TaskDefinition', {
++			RequiresCompatibilities: ['FARGATE'],
++			Cpu: '512',
++			Memory: '1024',
++		});
++		// The shared role trusts ecs-tasks (appended by the container compute).
++		template.hasResourceProperties('AWS::IAM::Role', {
++			AssumeRolePolicyDocument: {
++				Statement: Match.arrayWith([
++					Match.objectLike({
++						Principal: { Service: 'ecs-tasks.amazonaws.com' },
++					}),
++				]),
++			},
++		});
++	});
++});
+diff --git a/packages/bb-container-compute/src/index.cdk.ts b/packages/bb-container-compute/src/index.cdk.ts
+new file mode 100644
+index 00000000..44cfcb27
+--- /dev/null
++++ b/packages/bb-container-compute/src/index.cdk.ts
+@@ -0,0 +1,314 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * A container-backed {@link Compute}: a long-lived AWS Fargate service that runs
++ * the Blocks backend as a persistent process and self-starts its owned event
++ * pollers (see core's `runContainer`). Selected by the public `Compute` block
++ * when a workload's capabilities exceed Lambda's envelope (a wall-clock budget
++ * over 15 minutes, an explicit CPU request, a long-lived process, or a custom
++ * image).
++ *
++ * The tasks run AS the shared Blocks execution role (`this.executionRole`), so
++ * every Building Block's grants reach the container exactly as they reach the
++ * Lambda handler — no per-compute least-privilege analysis, matching the shared
++ * handler's trust boundary.
++ *
++ * **VPC.** Fargate tasks are intrinsically VPC-resident, so this compute hooks
++ * into the framework's central lazy VPC: it derives (or reuses) the one shared
++ * app VPC in its constructor via `getOrCreateVpc` + `initializeVpc`, and places
++ * its tasks in the `private-with-egress` tier (NAT egress for image pulls, logs,
++ * and AWS APIs). A Lambda-only sibling in the same app joins the same VPC.
++ *
++ * @internal Not customer-instantiable — customers use the generic `Compute`
++ * block, which builds this when the capabilities call for a container.
++ */
++
++import { mkdirSync } from 'node:fs';
++import { join } from 'node:path';
++import type { ComputeCapabilities } from '@aws-blocks/core';
++import type { ScopeParent } from '@aws-blocks/core';
++import { getConfigLocation } from '@aws-blocks/core/cdk';
++import {
++	Compute,
++	getOrCreateVpc,
++	getVpcContext,
++	initializeVpc,
++	isVpcInitialized,
++	registerVpcRequirements,
++} from '@aws-blocks/core/cdk/internal';
++import * as cdk from 'aws-cdk-lib';
++import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
++import * as ec2 from 'aws-cdk-lib/aws-ec2';
++import * as ecs from 'aws-cdk-lib/aws-ecs';
++import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
++import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
++import { LogGroup } from 'aws-cdk-lib/aws-logs';
++import { buildContainerHealthWidgets, buildContainerLoggingWidgets, buildContainerTracingWidgets } from './observability.js';
++import { bundleContainerAsset } from './bundle.js';
++import type { ContainerComputeProps } from './types.js';
++
++export type { ContainerComputeProps } from './types.js';
++
++/**
++ * Process-global brand marking a {@link ContainerCompute} instance. Registered
++ * via `Symbol.for` (like `LambdaCompute`'s brand) so identification survives
++ * duplicate `bb-container-compute` copies in one dependency tree, where
++ * `instanceof` fails because each copy has a distinct class object.
++ */
++const CONTAINER_COMPUTE_BRAND: unique symbol = Symbol.for('blocks:ContainerCompute');
++
++/** Default Fargate task sizing when the workload didn't request cpu/memory. */
++const DEFAULT_CPU = 512;
++const DEFAULT_MEMORY_MB = 1024;
++
++/** Container port the runtime's health server listens on (worker mode still exposes it). */
++const CONTAINER_PORT = 8080;
++
++export class ContainerCompute extends Compute {
++	/**
++	 * Brand enabling cross-copy identification via {@link ContainerCompute.isContainerCompute}.
++	 * @internal
++	 */
++	readonly [CONTAINER_COMPUTE_BRAND] = true;
++
++	/** Container compute is always container-kind (drives AsyncJob delivery branching). */
++	override readonly kind = 'container' as const;
++	/** The capabilities this container was resolved from (poller reads timeoutSeconds). */
++	override readonly capabilities: ComputeCapabilities;
++
++	/** The Fargate service running the backend process. */
++	readonly service?: ecs.FargateService;
++	/** The task definition (its default container carries the injected env). */
++	readonly taskDefinition?: ecs.FargateTaskDefinition;
++	/** This container's CloudWatch log group (awslogs driver ships stdout/stderr here). */
++	readonly logGroup: LogGroup;
++
++	/** Its own container so setEnv can add env vars after construction. */
++	private readonly container?: ecs.ContainerDefinition;
++
++	constructor(scope: ScopeParent, id: string, options?: ContainerComputeProps) {
++		super(id, { parent: scope });
++		this.capabilities = options?.capabilities ?? {};
++
++		// A Fargate service needs a VPC. Declare the requirement centrally (so a
++		// census of the app still shows a VPC is needed) and then materialize the
++		// shared VPC now — the service is constructed here, during the backend
++		// import, well before create()'s finalizeVpc runs. initializeVpc is guarded
++		// so whichever of {this constructor, finalizeVpc} runs first wins and the
++		// security group + context are created exactly once (isVpcInitialized).
++		registerVpcRequirements(this as unknown as { readonly fullId: string } & typeof this, {
++			requiresVpc: true,
++			requiresEgress: true,
++		});
++		// Derive/reuse the one shared VPC and initialize context on the owning STACK
++		// (not `this`), so create()'s finalize sees it via isVpcInitialized(stack)
++		// and doesn't create a second one. getVpcContext walks up the tree, so this
++		// container (and every sibling) still resolves it.
++		const stack = cdk.Stack.of(this);
++		const vpc = getOrCreateVpc(stack);
++		if (!isVpcInitialized(stack)) {
++			initializeVpc(stack, { network: vpc });
++		}
++		const vpcContext = getVpcContext(this);
++
++		this.logGroup = new LogGroup(this, 'TaskLogGroup', {
++			retention: options?.logRetention ?? this.defaults.logRetention,
++			removalPolicy: cdk.RemovalPolicy.DESTROY,
++		});
++
++		const assetPath = this.buildImageAsset();
++		if (!assetPath || !vpcContext) {
++			// No backend module discoverable (isolated unit test without a
++			// BlocksStack) — skip provisioning rather than fail synth, mirroring how
++			// the AgentCore runtime degrades. A test that wants the infra provides a
++			// real stack.
++			return;
++		}
++
++		// Run AS the shared Blocks execution role (task role) so every BB grant
++		// reaches the container. Append the ecs-tasks trust principal to the shared
++		// role's assume policy — added here (not in core) so the role only trusts
++		// ECS when a container compute exists. Done once per stack: several
++		// container computes would otherwise pile up identical trust statements and
++		// overflow the inline-policy limit.
++		const taskRole = this.executionRole;
++		this.appendEcsTrustOnce(taskRole);
++
++		const cpu = this.capabilities.cpu ?? DEFAULT_CPU;
++		const memoryLimitMiB = this.capabilities.memory ?? DEFAULT_MEMORY_MB;
++
++		this.taskDefinition = new ecs.FargateTaskDefinition(this, 'TaskDef', {
++			cpu,
++			memoryLimitMiB,
++			// Run on ARM64 (Graviton) — cheaper at equal performance and, critically,
++			// matches the architecture of the image Blocks builds from the local
++			// Docker daemon (arm64 on Apple Silicon). A mismatch surfaces as
++			// "exec format error" when the task starts. Blocks defaults Lambda to
++			// arm64 too, so the whole app is Graviton by default.
++			runtimePlatform: {
++				cpuArchitecture: ecs.CpuArchitecture.ARM64,
++				operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
++			},
++			// The task role is the shared Blocks role (application permissions). The
++			// separate executionRole (image pull + log write) is created by CDK.
++			taskRole: taskRole as Role,
++		});
++
++		const { bucketName: configBucketName, key: configKey } = getConfigLocation(this);
++
++		this.container = this.taskDefinition.addContainer('Backend', {
++			image: this.capabilities.image
++				? ecs.ContainerImage.fromRegistry(this.capabilities.image)
++				: ecs.ContainerImage.fromAsset(assetPath, {
++						// Build for arm64 regardless of the build host's architecture, so
++						// the image always matches the ARM64 task platform above (an amd64
++						// image on an arm64 task — or vice versa — fails at task start with
++						// "exec format error"). Requires buildx/QEMU on an x86 host, which
++						// the Docker CLI provides by default.
++						platform: Platform.LINUX_ARM64,
++					}),
++			logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'blocks', logGroup: this.logGroup }),
++			environment: {
++				NODE_ENV: 'production',
++				// The namespace the container rebuilds fullId (and every derived
++				// resource name) from — the owning stack/backend's canonical root id,
++				// the SAME value the Lambda handler/compute use.
++				BLOCKS_STACK_NAME: this.backendStackName,
++				// Config location so runContainer's loadConfigToProcessEnv() loads the
++				// full app config (IAM to read it is inherited via the shared role).
++				BLOCKS_CONFIG_BUCKET: configBucketName,
++				BLOCKS_CONFIG_KEY: configKey,
++				// Identifies this compute so an event block's poller only drains the
++				// queues whose BLOCKS_HANDLER_OWNER matches (the owner-match seam).
++				BLOCKS_COMPUTE_ID: this.fullId,
++				// Worker mode: start owned pollers, no inbound RPC serving (routing to
++				// containers is a separate front-door concern).
++				BLOCKS_SERVICE_MODE: 'worker',
++			},
++			portMappings: [{ containerPort: CONTAINER_PORT }],
++		});
++
++		this.service = new ecs.FargateService(this, 'Service', {
++			cluster: this.getOrCreateCluster(vpc),
++			taskDefinition: this.taskDefinition,
++			desiredCount: 1,
++			vpcSubnets: vpcContext.computeSubnets,
++			securityGroups: [vpcContext.computeSecurityGroup],
++			// A worker drains a queue; brief overlap on redeploy is harmless and
++			// avoids a gap where nothing polls.
++			minHealthyPercent: 100,
++			maxHealthyPercent: 200,
++			// Fail (and roll back) a deploy quickly when tasks can't start, instead
++			// of CloudFormation waiting up to ~3 hours for the service to stabilize.
++			circuitBreaker: { rollback: true },
++		});
++	}
++
++	/**
++	 * Inject a runtime configuration value as a container env var. Called by the
++	 * framework (e.g. finalizeConfigRegistry) after construction; the container
++	 * definition exists by then for any provisioned compute.
++	 */
++	setEnv(key: string, value: string): void {
++		this.container?.addEnvironment(key, value);
++	}
++
++	/**
++	 * Type guard for a {@link ContainerCompute} that survives duplicate
++	 * `bb-container-compute` copies in one dependency tree — checks the
++	 * process-global brand rather than class identity.
++	 */
++	static isContainerCompute(x: unknown): x is ContainerCompute {
++		return (
++			typeof x === 'object' &&
++			x !== null &&
++			(x as { [CONTAINER_COMPUTE_BRAND]?: unknown })[CONTAINER_COMPUTE_BRAND] === true
++		);
++	}
++
++	protected applyTracing(): void {
++		// ADOT sidecar / X-Ray for containers is a later observability task; the
++		// container still ships stdout traces via the log driver. No-op for now so
++		// enabling a Tracer doesn't fail on a container compute.
++	}
++
++	protected healthWidgets(region: string): IWidget[][] {
++		return buildContainerHealthWidgets(this.service?.serviceName ?? this.fullId, this.getClusterName(), region);
++	}
++
++	protected loggingWidgets(region: string): IWidget[][] {
++		return buildContainerLoggingWidgets(this.logGroup.logGroupName, region);
++	}
++
++	protected tracingWidgets(region: string): IWidget[][] {
++		return buildContainerTracingWidgets(this.service?.serviceName ?? this.fullId, region);
++	}
++
++	/**
++	 * Append the `ecs-tasks` service principal to the shared role's assume-role
++	 * policy, once per stack. `assumeRolePolicy` exists only on a concrete
++	 * `iam.Role`; core always creates BlocksRole concretely, so narrow and fail
++	 * loud if that ever changes.
++	 */
++	private appendEcsTrustOnce(role: cdk.aws_iam.IRole): void {
++		const stack = cdk.Stack.of(this);
++		const KEY = Symbol.for('BLOCKS_CONTAINER_ECS_TRUST');
++		const stackAny = stack as unknown as Record<symbol, boolean | undefined>;
++		if (stackAny[KEY]) return;
++		if (!(role instanceof Role)) {
++			throw new Error(
++				'ContainerCompute requires the shared Blocks execution role to be a concrete iam.Role to add its ecs-tasks trust',
++			);
++		}
++		role.assumeRolePolicy?.addStatements(
++			new cdk.aws_iam.PolicyStatement({
++				effect: cdk.aws_iam.Effect.ALLOW,
++				principals: [new ServicePrincipal('ecs-tasks.amazonaws.com')],
++				actions: ['sts:AssumeRole'],
++			}),
++		);
++		stackAny[KEY] = true;
++	}
++
++	/**
++	 * One shared ECS cluster per stack (keyed on the stack) so multiple container
++	 * computes share it rather than each standing up their own.
++	 */
++	private getOrCreateCluster(vpc: ec2.IVpc): ecs.Cluster {
++		const stack = cdk.Stack.of(this);
++		const KEY = Symbol.for('BLOCKS_CONTAINER_CLUSTER');
++		const stackAny = stack as unknown as Record<symbol, ecs.Cluster | undefined>;
++		if (stackAny[KEY]) return stackAny[KEY]!;
++		const cluster = new ecs.Cluster(stack, 'BlocksContainerCluster', { vpc });
++		stackAny[KEY] = cluster;
++		return cluster;
++	}
++
++	private getClusterName(): string {
++		const stackAny = cdk.Stack.of(this) as unknown as Record<symbol, ecs.Cluster | undefined>;
++		return stackAny[Symbol.for('BLOCKS_CONTAINER_CLUSTER')]?.clusterName ?? '';
++	}
++
++	/**
++	 * Co-bundle the app backend + `runContainer()` into a Docker build context dir.
++	 * Returns undefined when the backend module path can't be discovered (isolated
++	 * unit tests) — the caller then skips provisioning.
++	 */
++	private buildImageAsset(): string | undefined {
++		if (this.capabilities.image) {
++			// A custom image is used verbatim (fromRegistry); no asset build needed.
++			// Return a sentinel non-undefined so provisioning proceeds.
++			return this.capabilities.image;
++		}
++		const stack = (globalThis as any).CURRENT_BLOCKS_STACK as { backendModulePath?: string } | undefined;
++		const backendModulePath = stack?.backendModulePath;
++		if (!backendModulePath) return undefined;
++		const outDir = join(
++			cdk.App.of(this)?.outdir ?? cdk.Stack.of(this).node.tryGetContext('cdk.out') ?? '.cdk-container',
++			`container-${this.fullId}`,
++		);
++		mkdirSync(outDir, { recursive: true });
++		return bundleContainerAsset(backendModulePath, outDir);
++	}
++}
+diff --git a/packages/bb-container-compute/src/index.mock.ts b/packages/bb-container-compute/src/index.mock.ts
+new file mode 100644
+index 00000000..b17e2223
+--- /dev/null
++++ b/packages/bb-container-compute/src/index.mock.ts
+@@ -0,0 +1,14 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * Local-dev (mock) and types entry point for `ContainerCompute`.
++ *
++ * Local dev runs the backend in-process with no container, so — as at runtime —
++ * there is nothing for a compute to provision or execute. The mock reuses the
++ * inert runtime handle: it constructs and its `setEnv` is a no-op. Event blocks
++ * assigned to a container run their handlers in-process locally, exactly as they
++ * do on the default compute, so a container assignment is transparent in dev.
++ */
++export { ContainerCompute } from './index.aws.js';
++export type { ContainerComputeProps } from './types.js';
+diff --git a/packages/bb-container-compute/src/observability.ts b/packages/bb-container-compute/src/observability.ts
+new file mode 100644
+index 00000000..a95b8a62
+--- /dev/null
++++ b/packages/bb-container-compute/src/observability.ts
+@@ -0,0 +1,135 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * CloudWatch Dashboard widget builders for a container-backed compute — the
++ * ECS/Fargate analogues of the Lambda widgets in `bb-lambda-compute`. Kept in a
++ * separate module so `ContainerCompute` stays a thin class body that delegates
++ * (`healthWidgets` → CPU/Memory/TaskCount, `loggingWidgets` → the log group).
++ */
++import { Duration } from 'aws-cdk-lib';
++import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
++import { GraphWidget, LogQueryWidget, Metric } from 'aws-cdk-lib/aws-cloudwatch';
++
++/**
++ * Build Fargate health widgets: CPU utilization, memory utilization, and running
++ * task count. Returns two rows.
++ *
++ * @param serviceName - The ECS service name the widgets query metrics for.
++ * @param clusterName - The ECS cluster name (a required dimension for ECS metrics).
++ * @param region - AWS region the widgets query in.
++ */
++export function buildContainerHealthWidgets(serviceName: string, clusterName: string, region: string): IWidget[][] {
++	const dims = { ServiceName: serviceName, ClusterName: clusterName };
++
++	const cpu = new GraphWidget({
++		title: 'Container CPU Utilization',
++		width: 12,
++		height: 6,
++		region,
++		left: [
++			new Metric({
++				namespace: 'AWS/ECS',
++				metricName: 'CPUUtilization',
++				dimensionsMap: dims,
++				statistic: 'Average',
++				period: Duration.seconds(60),
++			}),
++		],
++	});
++
++	const memory = new GraphWidget({
++		title: 'Container Memory Utilization',
++		width: 12,
++		height: 6,
++		region,
++		left: [
++			new Metric({
++				namespace: 'AWS/ECS',
++				metricName: 'MemoryUtilization',
++				dimensionsMap: dims,
++				statistic: 'Average',
++				period: Duration.seconds(60),
++			}),
++		],
++	});
++
++	const tasks = new GraphWidget({
++		title: 'Running Tasks',
++		width: 24,
++		height: 6,
++		region,
++		left: [
++			new Metric({
++				namespace: 'ECS/ContainerInsights',
++				metricName: 'RunningTaskCount',
++				dimensionsMap: dims,
++				statistic: 'Average',
++				period: Duration.seconds(60),
++			}),
++		],
++	});
++
++	return [[cpu, memory], [tasks]];
++}
++
++/**
++ * Build log widgets for a container's log group: a recent-errors Log Insights
++ * query plus a log-volume graph. Returns one widget per row.
++ *
++ * @param logGroupName - The CloudWatch log group name the awslogs driver writes to.
++ * @param region - AWS region the widgets query in.
++ */
++export function buildContainerLoggingWidgets(logGroupName: string, region: string): IWidget[][] {
++	const logQuery = new LogQueryWidget({
++		title: 'Recent Errors',
++		width: 24,
++		height: 6,
++		region,
++		logGroupNames: [logGroupName],
++		queryLines: [
++			'fields @timestamp, @message',
++			'filter @message like /ERROR/ or level = "error"',
++			'sort @timestamp desc',
++			'limit 20',
++		],
++	});
++
++	const logVolume = new GraphWidget({
++		title: 'Log Volume',
++		width: 24,
++		height: 6,
++		region,
++		left: [
++			new Metric({
++				namespace: 'AWS/Logs',
++				metricName: 'IncomingLogEvents',
++				dimensionsMap: { LogGroupName: logGroupName },
++				statistic: 'Sum',
++				period: Duration.seconds(300),
++			}),
++		],
++	});
++
++	return [[logQuery], [logVolume]];
++}
++
++/**
++ * Build the trace widget row for a container compute. Container tracing (ADOT)
++ * is a later task; this renders the service-scoped trace list so the section is
++ * present once tracing is wired.
++ *
++ * @param serviceName - The ECS service name the trace filter scopes to.
++ * @param region - AWS region the widget queries in.
++ */
++export function buildContainerTracingWidgets(serviceName: string, region: string): IWidget[][] {
++	const traces = new LogQueryWidget({
++		title: `Traces — ${serviceName}`,
++		width: 24,
++		height: 6,
++		region,
++		logGroupNames: [],
++		queryLines: ['fields @timestamp, @message', 'limit 20'],
++	});
++	return [[traces]];
++}
+diff --git a/packages/bb-container-compute/src/types.ts b/packages/bb-container-compute/src/types.ts
+new file mode 100644
+index 00000000..b1064385
+--- /dev/null
++++ b/packages/bb-container-compute/src/types.ts
+@@ -0,0 +1,33 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++import type { ComputeCapabilities } from '@aws-blocks/core';
++import type { RetentionDays } from 'aws-cdk-lib/aws-logs';
++
++/**
++ * Options for constructing an internal `ContainerCompute`.
++ *
++ * A `ContainerCompute` is never instantiated directly by a customer — the public
++ * `Compute` block builds one when a workload's {@link ComputeCapabilities}
++ * exceed Lambda's envelope. These options are the capability values `Compute`
++ * resolved, plus the same per-compute log-retention knob `LambdaCompute` takes.
++ *
++ * @internal
++ */
++export interface ContainerComputeProps {
++	/**
++	 * The capability attributes this container was selected for. `cpu`/`memory`
++	 * size the Fargate task; `timeoutSeconds` is stamped into config so the
++	 * runtime poller can enforce a per-handler wall-clock limit; `image`, when
++	 * set, replaces the Blocks-built default image.
++	 */
++	capabilities?: ComputeCapabilities;
++
++	/**
++	 * CloudWatch Logs retention for this container's log group. Logs are always
++	 * captured (the task's `awslogs` driver ships stdout/stderr here); this only
++	 * bounds how long they're kept. Per-compute override of the stack-wide
++	 * `defaults.logRetention` (used when omitted).
++	 */
++	logRetention?: RetentionDays;
++}
+diff --git a/packages/bb-container-compute/tsconfig.json b/packages/bb-container-compute/tsconfig.json
+new file mode 100644
+index 00000000..f9aae6a6
+--- /dev/null
++++ b/packages/bb-container-compute/tsconfig.json
+@@ -0,0 +1,13 @@
++{
++  "extends": "../../tsconfig.base.json",
++  "compilerOptions": {
++    "outDir": "./dist",
++    "rootDir": "./src"
++  },
++  "include": ["src/**/*"],
++  "references": [
++    {
++      "path": "../core"
++    }
++  ]
++}
+diff --git a/packages/blocks/package.json b/packages/blocks/package.json
+index 131deb5b..cca31949 100644
+--- a/packages/blocks/package.json
++++ b/packages/blocks/package.json
+@@ -89,7 +89,9 @@
+     "@aws-blocks/bb-email-client": "^0.1.6",
+     "@aws-blocks/bb-metrics": "^0.1.6",
+     "@aws-blocks/bb-dashboard": "^0.1.5",
+-    "@aws-blocks/bb-lambda-compute": "^0.4.0"
++    "@aws-blocks/bb-lambda-compute": "^0.4.0",
++    "@aws-blocks/bb-container-compute": "^0.1.0",
++    "@aws-blocks/bb-compute": "^0.1.0"
+   },
+   "aws-blocks": {
+     "vendorize": {
+@@ -111,6 +113,9 @@
+       "@aws-blocks/bb-async-job": [
+         "AsyncJob"
+       ],
++      "@aws-blocks/bb-compute": [
++        "Compute"
++      ],
+       "@aws-blocks/bb-cron-job": [
+         "CronJob"
+       ],
+diff --git a/packages/blocks/src/index.cdk.ts b/packages/blocks/src/index.cdk.ts
+index bb416b44..c5871d76 100644
+--- a/packages/blocks/src/index.cdk.ts
++++ b/packages/blocks/src/index.cdk.ts
+@@ -79,6 +79,8 @@ export type {
+ 	WaitUntilCompleteOptions,
+ } from '@aws-blocks/bb-async-job';
+ export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
++export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
++export type { ComputeCapabilities, ComputeHandle } from '@aws-blocks/core';
+ // Building Blocks (CDK versions)
+ export {
+ 	AuthBasic,
+diff --git a/packages/blocks/src/index.ts b/packages/blocks/src/index.ts
+index b34c8653..89d7b7e0 100644
+--- a/packages/blocks/src/index.ts
++++ b/packages/blocks/src/index.ts
+@@ -95,6 +95,20 @@ export type {
+  * Full docs: `README.md` in the package directory above.
+  */
+ export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
++/**
++ * **Capability-defined compute: Lambda or container, selected for you.**
++ *
++ * Describe what a workload needs — timeout, memory, cpu, whether it's
++ * long-lived, or a custom image — and Blocks picks the backing service: a
++ * short request/response workload runs on Lambda; a long-running, long-lived,
++ * or high-memory one runs on a container (Fargate). Hand the result to a
++ * handler-bearing block via its `compute` option (e.g. `AsyncJob`).
++ *
++ * Package: `@aws-blocks/bb-compute`
++ * Full docs: `README.md` in the package directory above.
++ */
++export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
++export type { ComputeCapabilities, ComputeHandle } from '@aws-blocks/core';
+ /**
+  * **Username/password authentication with JWT sessions.**
+  *
+diff --git a/packages/blocks/src/vendorize-map.test.ts b/packages/blocks/src/vendorize-map.test.ts
+index 54558457..ad830289 100644
+--- a/packages/blocks/src/vendorize-map.test.ts
++++ b/packages/blocks/src/vendorize-map.test.ts
+@@ -47,13 +47,16 @@ describe('aws-blocks.vendorize map', () => {
+ 
+     for (const dep of deps) {
+       // Skip infrastructure packages (not user-facing BBs). bb-lambda-compute
+-      // is the internal default compute — CDK-only and not customer-instantiable
+-      // — so it has no public symbol to vendorize. `hosting` is the CDK hosting
+-      // library whose value API is re-exported through core/blocks — infra, not a BB.
++      // and bb-container-compute are the internal backing computes — CDK-only and
++      // not customer-instantiable (customers use the generic `Compute` from
++      // bb-compute, which IS in the map) — so they have no public symbol to
++      // vendorize. `hosting` is the CDK hosting library whose value API is
++      // re-exported through core/blocks — infra, not a BB.
+       if (
+         dep.endsWith('/core') ||
+         dep.endsWith('/auth-common') ||
+         dep.endsWith('/bb-lambda-compute') ||
++        dep.endsWith('/bb-container-compute') ||
+         dep.endsWith('/hosting')
+       )
+         continue;
+diff --git a/packages/blocks/tsconfig.json b/packages/blocks/tsconfig.json
+index da5d63e2..725ff26e 100644
+--- a/packages/blocks/tsconfig.json
++++ b/packages/blocks/tsconfig.json
+@@ -27,6 +27,8 @@
+     { "path": "../bb-logger" },
+     { "path": "../bb-tracer" },
+     { "path": "../bb-dashboard" },
+-    { "path": "../bb-lambda-compute" }
++    { "path": "../bb-lambda-compute" },
++    { "path": "../bb-container-compute" },
++    { "path": "../bb-compute" }
+   ]
+ }
+diff --git a/packages/core/src/cdk/blocks-backend.ts b/packages/core/src/cdk/blocks-backend.ts
+index 365ef306..8e52df44 100644
+--- a/packages/core/src/cdk/blocks-backend.ts
++++ b/packages/core/src/cdk/blocks-backend.ts
+@@ -16,7 +16,7 @@ import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
+ import { finalizeDashboards } from './dashboard-registry.js';
+ import { finalizeTracing } from './tracer-registry.js';
+ import { addBlocksStackMetadata } from './stack-metadata.js';
+-import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
++import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
+ import type { BlocksVpcOptions } from './vpc-types.js';
+ 
+ /**
+@@ -349,8 +349,14 @@ export class BlocksBackend extends Construct {
+ 
+ 		// Finalize VPC. Derived resource: use the customer's if provided, else
+ 		// lazily create one only if a Building Block requires it.
++		//
++		// A container compute may have already derived + initialized the shared VPC
++		// during the backend import (it needs the VPC at construction), so skip
++		// re-initializing when that happened but still run finalizeVpc for endpoints.
+ 		if (backend._vpcOptions) {
+ 			finalizeVpc(backend, backend._vpcOptions);
++		} else if (isVpcInitialized(backend)) {
++			finalizeVpc(backend, { network: getOrCreateVpc(backend) });
+ 		} else if (anyRequirementNeedsVpc(backend)) {
+ 			const derived = getOrCreateVpc(backend);
+ 			const options = { network: derived };
+diff --git a/packages/core/src/cdk/compute/compute.ts b/packages/core/src/cdk/compute/compute.ts
+index 2c51a497..b0321609 100644
+--- a/packages/core/src/cdk/compute/compute.ts
++++ b/packages/core/src/cdk/compute/compute.ts
+@@ -2,6 +2,7 @@
+ // SPDX-License-Identifier: Apache-2.0
+ 
+ import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
++import type { ComputeCapabilities, ComputeKind } from '../../common/compute-capabilities.js';
+ import type { ScopeOptions } from '../../common/index.js';
+ import { Scope } from '../index.js';
+ import { registerCompute } from './compute-registry.js';
+@@ -37,6 +38,25 @@ export abstract class Compute extends Scope {
+ 	 */
+ 	readonly namespaces: string[] = [];
+ 
++	/**
++	 * Which backing service this compute is — `'lambda'` (per-invocation function)
++	 * or `'container'` (long-lived Fargate task). Set by the concrete subclass and
++	 * read by delivery logic that must branch on the runtime model (e.g. AsyncJob
++	 * wires a native SQS event source on Lambda but leaves a container to
++	 * self-poll). Defaults to `'lambda'` so pre-existing subclasses that don't set
++	 * it keep today's behavior.
++	 */
++	readonly kind: ComputeKind = 'lambda';
++
++	/**
++	 * The capability attributes this compute was resolved from ({@link
++	 * ComputeCapabilities}). Read by delivery logic that needs the *values* rather
++	 * than just the kind — notably the container SQS poller, which enforces
++	 * `timeoutSeconds` as a per-handler wall-clock limit. Empty for a compute
++	 * built without explicit capabilities (e.g. the default Lambda).
++	 */
++	readonly capabilities: ComputeCapabilities = {};
++
+ 	/**
+ 	 * Whether tracing has been enabled on this compute — flipped by
+ 	 * {@link enableTracing}. Private so it can't be set independently of the
+diff --git a/packages/core/src/cdk/index.ts b/packages/core/src/cdk/index.ts
+index 866a508c..687a0e86 100644
+--- a/packages/core/src/cdk/index.ts
++++ b/packages/core/src/cdk/index.ts
+@@ -21,7 +21,7 @@ import { finalizeConfigRegistry } from './config-registry.js';
+ import { finalizeDashboards } from './dashboard-registry.js';
+ import { addBlocksStackMetadata } from './stack-metadata.js';
+ import { finalizeTracing } from './tracer-registry.js';
+-import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
++import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
+ import { registerVpcRequirements } from './vpc-requirements-registry.js';
+ import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
+ 
+@@ -180,8 +180,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
+ 		// brought one, else lazily create one only if a Building Block genuinely
+ 		// requires it (requiresVpc). Most apps need neither — Lambda reaches AWS
+ 		// services from the managed network without a VPC.
++		//
++		// A container compute needs the shared VPC *at construction* (during the
++		// backend import above), so it may have already derived and initialized it
++		// via getOrCreateVpc + initializeVpc. In that case we skip re-initializing
++		// (isVpcInitialized) but still run finalizeVpc to provision endpoints.
+ 		if (stack._vpcOptions) {
+ 			finalizeVpc(stack, stack._vpcOptions);
++		} else if (isVpcInitialized(stack)) {
++			finalizeVpc(stack, { network: getOrCreateVpc(stack) });
+ 		} else if (anyRequirementNeedsVpc(stack)) {
+ 			const derived = getOrCreateVpc(stack);
+ 			const options = { network: derived };
+diff --git a/packages/core/src/cdk/internal.ts b/packages/core/src/cdk/internal.ts
+index bd87085a..119e2ac8 100644
+--- a/packages/core/src/cdk/internal.ts
++++ b/packages/core/src/cdk/internal.ts
+@@ -26,9 +26,16 @@
+ // Reserved `/aws-blocks` path segment, needed by concrete computes (e.g.
+ // LambdaCompute in @aws-blocks/bb-lambda-compute) to build their API route tree.
+ export { BLOCKS_NAMESPACE } from '../constants.js';
++export type { ComputeCapabilities, ComputeHandle, ComputeKind } from '../common/compute-capabilities.js';
++export { LAMBDA_MAX_MEMORY_MB, LAMBDA_MAX_TIMEOUT_SECONDS, selectComputeKind } from '../common/compute-capabilities.js';
+ export type { ComputeDashboardSection } from './compute/compute.js';
+ export { Compute } from './compute/compute.js';
+ // Enumerate the computes registered on a stack — the Dashboard BB's default
+ // compute selection resolves through this at finalize.
+ export { getComputes } from './compute/compute-registry.js';
+ export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
++// VPC integration helpers a concrete container compute needs to hook into the
++// central lazy VPC: derive-or-reuse the shared VPC, initialize context, resolve
++// subnets, and declare its own requirement so the lazy VPC materializes.
++export { registerVpcRequirements } from './vpc-requirements-registry.js';
++export { anyRequirementNeedsVpc, getOrCreateVpc, getVpcContext, initializeVpc, isVpcInitialized } from './vpc.js';
+diff --git a/packages/core/src/cdk/vpc.test.ts b/packages/core/src/cdk/vpc.test.ts
+index 21848f71..bbec2620 100644
+--- a/packages/core/src/cdk/vpc.test.ts
++++ b/packages/core/src/cdk/vpc.test.ts
+@@ -160,7 +160,7 @@ describe('finalizeVpc — endpoint provisioning', () => {
+ 		// VPC CIDR. We assert the rule is present (arrayWith) rather than the exact
+ 		// array, since CDK may add its own paired rule for the endpoint association.
+ 		const sgs = template.findResources('AWS::EC2::SecurityGroup', {
+-			Properties: { GroupDescription: 'Blocks interface VPC endpoints — 443 from the Blocks Lambda only' },
++			Properties: { GroupDescription: 'Blocks interface VPC endpoints - 443 from the Blocks Lambda only' },
+ 		});
+ 		assert.equal(Object.keys(sgs).length, 1, 'exactly one dedicated endpoint SG');
+ 		const sg = Object.values(sgs)[0] as {
+diff --git a/packages/core/src/cdk/vpc.ts b/packages/core/src/cdk/vpc.ts
+index 5d9c0558..4322ecd9 100644
+--- a/packages/core/src/cdk/vpc.ts
++++ b/packages/core/src/cdk/vpc.ts
+@@ -1,7 +1,7 @@
+ // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ // SPDX-License-Identifier: Apache-2.0
+ 
+-import { Annotations } from 'aws-cdk-lib';
++import { Annotations, Stack } from 'aws-cdk-lib';
+ import * as ec2 from 'aws-cdk-lib/aws-ec2';
+ import type { Construct } from 'constructs';
+ import { getVpcRequirements as getRegisteredVpcRequirements } from './vpc-requirements-registry.js';
+@@ -57,6 +57,21 @@ export function getVpcContext(scope: Construct): VpcContext | undefined {
+ 	return undefined;
+ }
+ 
++/**
++ * Whether VPC context has already been initialized anywhere at or above `scope`.
++ *
++ * A container compute must place its Fargate tasks in the shared VPC *during the
++ * backend import* — well before `create()`'s `finalizeVpc` step runs — so it
++ * initializes the VPC itself on first need (`getOrCreateVpc` + `initializeVpc`).
++ * This guard lets both that early path and the later finalize path check "already
++ * done?" so the security group and context are created exactly once, whichever
++ * runs first. Thin wrapper over {@link getVpcContext} for intent at call sites.
++ * @internal
++ */
++export function isVpcInitialized(scope: Construct): boolean {
++	return getVpcContext(scope) !== undefined;
++}
++
+ const LAZY_VPC_KEY = Symbol.for('BLOCKS_LAZY_VPC');
+ 
+ /**
+@@ -89,10 +104,16 @@ export function anyRequirementNeedsVpc(scope: Construct): boolean {
+  * @internal
+  */
+ export function getOrCreateVpc(scope: Construct): ec2.IVpc {
+-	const holder = scope as any;
+-	const existing = holder[LAZY_VPC_KEY] as ec2.IVpc | undefined;
++	// Key and construct on the owning STACK, not the passed scope, so every caller
++	// shares the one VPC. The finalize path passes the stack; a container compute
++	// passes itself (`this`) during the backend import — keying on `scope` would
++	// give each its own VPC (and a duplicate `BlocksVpc` construct id under a
++	// different tree path). cdk.Stack.of collapses both to the same holder.
++	const stack = Stack.of(scope);
++	const holder = stack as unknown as Record<symbol, ec2.IVpc | undefined>;
++	const existing = holder[LAZY_VPC_KEY];
+ 	if (existing) return existing;
+-	const vpc = new ec2.Vpc(scope, 'BlocksVpc', { maxAzs: 2, natGateways: 1 });
++	const vpc = new ec2.Vpc(stack, 'BlocksVpc', { maxAzs: 2, natGateways: 1 });
+ 	holder[LAZY_VPC_KEY] = vpc;
+ 	return vpc;
+ }
+@@ -252,7 +273,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
+ 	const ctx = getVpcContext(scope);
+ 	const endpointSecurityGroup = new ec2.SecurityGroup(scope, 'BlocksVpcEndpointSg', {
+ 		vpc,
+-		description: 'Blocks interface VPC endpoints — 443 from the Blocks Lambda only',
++		description: 'Blocks interface VPC endpoints - 443 from the Blocks Lambda only',
+ 		allowAllOutbound: true,
+ 	});
+ 	if (ctx) {
+diff --git a/packages/core/src/common/compute-capabilities.ts b/packages/core/src/common/compute-capabilities.ts
+new file mode 100644
+index 00000000..d4b85635
+--- /dev/null
++++ b/packages/core/src/common/compute-capabilities.ts
+@@ -0,0 +1,148 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * Capability attributes that describe *what* a workload needs from its compute,
++ * expressed as service-agnostic traits rather than an AWS service name. Blocks
++ * reads these to select the backing service (see {@link selectComputeKind}): a
++ * short, memory-modest, request/response workload fits Lambda; anything that
++ * exceeds Lambda's envelope — a longer wall-clock budget, more memory, an
++ * explicit long-lived process, or a custom container image — is placed on a
++ * container (Fargate) instead.
++ *
++ * This is the single source of truth for both the customer-facing `Compute`
++ * block (which takes these as its options) and the internal selection logic, so
++ * the block's public surface never mentions Lambda or Fargate.
++ */
++export interface ComputeCapabilities {
++	/**
++	 * Wall-clock budget for a single unit of work, in seconds. On a Lambda-backed
++	 * compute this maps to the function timeout (hard-capped at 900s by the
++	 * platform); on a container it is enforced in-process by the poller, which
++	 * aborts a handler that runs past it. A value above
++	 * {@link LAMBDA_MAX_TIMEOUT_SECONDS} therefore forces a container.
++	 *
++	 * @default undefined — the compute uses its platform default.
++	 */
++	timeoutSeconds?: number;
++
++	/**
++	 * Memory available to the workload, in MB. Above {@link LAMBDA_MAX_MEMORY_MB}
++	 * (Lambda's ceiling) this forces a container. On a container it sets the task
++	 * memory.
++	 *
++	 * @default undefined — the compute uses its platform default.
++	 */
++	memory?: number;
++
++	/**
++	 * vCPU units for the workload (1024 = 1 vCPU), Fargate's unit. Lambda derives
++	 * CPU from memory and has no independent CPU knob, so setting this forces a
++	 * container (there is no way to honor an explicit CPU request on Lambda).
++	 *
++	 * @default undefined
++	 */
++	cpu?: number;
++
++	/**
++	 * Whether the workload is a **long-lived process** rather than a
++	 * per-invocation function — e.g. it drains a queue continuously, holds
++	 * persistent connections, or keeps warm state between units of work. A
++	 * long-lived workload cannot run on Lambda's per-invocation model, so this
++	 * forces a container.
++	 *
++	 * @default false
++	 */
++	longLived?: boolean;
++
++	/**
++	 * A custom container image reference (an ECR image URI or a local build
++	 * context path) to run instead of the Blocks-built default image. Supplying
++	 * one is intrinsically a container request, so it forces a container.
++	 *
++	 * @default undefined — Blocks builds and runs its standard image.
++	 */
++	image?: string;
++
++	/**
++	 * On a container, the maximum number of jobs this compute processes at once
++	 * per task. This is the primary **per-task cost lever**: each in-flight job
++	 * runs in its own worker thread, so this bounds concurrent CPU/memory use, and
++	 * you size the task's `cpu`/`memory` to match. Ignored on Lambda (which scales
++	 * by concurrent invocations, not an in-process cap).
++	 *
++	 * @default a conservative framework default (container jobs are typically
++	 * heavy); raise it alongside `cpu`/`memory` for higher throughput per task.
++	 */
++	maxConcurrency?: number;
++
++	/**
++	 * Task-count autoscaling for a container compute — the layer above
++	 * {@link maxConcurrency} (which caps jobs *per task*). Scales the number of
++	 * tasks between `minTasks` and `maxTasks`, targeting roughly
++	 * `backlogPerTask` visible queue messages per task. Reserved for a future
++	 * release; declaring it today has no effect yet. It is an options field so
++	 * adding the behavior later is non-breaking.
++	 *
++	 * @default undefined — a single task (no autoscaling).
++	 */
++	scaling?: {
++		/** Minimum running tasks. */
++		minTasks?: number;
++		/** Maximum running tasks. */
++		maxTasks?: number;
++		/** Target visible-queue-messages per task for target tracking. */
++		backlogPerTask?: number;
++	};
++}
++
++/**
++ * Which backing service a {@link Compute} resolves to. `'lambda'` for a
++ * per-invocation function; `'container'` for a long-lived Fargate task. Internal
++ * — customers only ever see the generic `Compute` block.
++ * @internal
++ */
++export type ComputeKind = 'lambda' | 'container';
++
++/**
++ * The public-facing handle for a compute a customer can hand to a handler-bearing
++ * block (e.g. `new AsyncJob(scope, id, { compute })`). It is intentionally opaque:
++ * a Building Block only needs to *pass it back* to the framework, which resolves
++ * the concrete compute internally. Both the CDK `Compute` construct and the inert
++ * mock/browser compute stubs satisfy this empty marker structurally, so a BB's
++ * options type can reference it without importing CDK — the same cross-entry-safe
++ * pattern the SDK-identifier and value markers use.
++ *
++ * The brand keeps it from collapsing to `unknown`/`{}` (which would accept any
++ * value); it is never read at runtime.
++ */
++export interface ComputeHandle {
++	/** @internal Nominal brand — never populated; present only so the type is distinct. */
++	readonly __blocksCompute?: never;
++}
++
++/** AWS Lambda's maximum function timeout (15 minutes), in seconds. */
++export const LAMBDA_MAX_TIMEOUT_SECONDS = 900;
++
++/** AWS Lambda's maximum function memory, in MB. */
++export const LAMBDA_MAX_MEMORY_MB = 10_240;
++
++/**
++ * Select the backing compute kind from capability attributes. A workload runs on
++ * Lambda unless it declares something Lambda cannot provide — a wall-clock
++ * budget beyond 15 minutes, more than 10 GB of memory, an explicit CPU request
++ * (Lambda has no CPU knob), a long-lived process, or a custom image — any of
++ * which places it on a container instead.
++ *
++ * The rule is deliberately conservative: absent any capability that Lambda
++ * can't satisfy, the cheaper request/response Lambda wins, so a plain
++ * `new Compute(scope, 'x')` stays Lambda and matches today's default.
++ */
++export function selectComputeKind(caps: ComputeCapabilities): ComputeKind {
++	if (caps.longLived === true) return 'container';
++	if (caps.image !== undefined) return 'container';
++	if (caps.cpu !== undefined) return 'container';
++	if (caps.timeoutSeconds !== undefined && caps.timeoutSeconds > LAMBDA_MAX_TIMEOUT_SECONDS) return 'container';
++	if (caps.memory !== undefined && caps.memory > LAMBDA_MAX_MEMORY_MB) return 'container';
++	return 'lambda';
++}
+diff --git a/packages/core/src/common/official-bb-names.generated.ts b/packages/core/src/common/official-bb-names.generated.ts
+index d16fd1c3..c7efd94a 100644
+--- a/packages/core/src/common/official-bb-names.generated.ts
++++ b/packages/core/src/common/official-bb-names.generated.ts
+@@ -13,6 +13,7 @@ export const OFFICIAL_BB_NAMES: ReadonlySet<string> = new Set([
+   'AuthBasic',
+   'AuthCognito',
+   'AuthOidc',
++  'Compute',
+   'CronJob',
+   'Dashboard',
+   'Database',
+diff --git a/packages/core/src/container-runtime.ts b/packages/core/src/container-runtime.ts
+new file mode 100644
+index 00000000..c0c97215
+--- /dev/null
++++ b/packages/core/src/container-runtime.ts
+@@ -0,0 +1,278 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++/**
++ * Container runtime — the long-lived process (and its per-job worker threads) a
++ * container-backed compute runs. It is the container analogue of
++ * `createLambdaHandler`: where Lambda is invoked per-event by AWS, a container
++ * runs a persistent parent process that pulls events and dispatches each to a
++ * **fresh worker thread**.
++ *
++ * **Why worker threads.** A job's handler is arbitrary customer code; a
++ * wall-clock timeout can only be *enforced* (not merely requested) by running
++ * the job in something the runtime can forcibly stop. Node cannot interrupt
++ * in-flight JavaScript on the main thread — `AbortSignal` is cooperative — but a
++ * `worker_thread` can be hard-terminated with `worker.terminate()`. So each job
++ * runs in its own worker: on timeout the parent terminates it, guaranteeing a
++ * runaway (even a pure CPU busy-loop) is stopped and its message redrives to the
++ * DLQ. A fresh worker per job also isolates jobs from each other — a leak or
++ * corrupted global in one job never touches the next.
++ *
++ * **The bridge.** The handler is an inline closure that cannot cross the thread
++ * boundary, so the worker rebuilds it by *re-importing the backend* (which
++ * constructs every Building Block and registers each AsyncJob), then looks the
++ * job up by `fullId` and runs it. The parent → worker message carries only
++ * serializable data (`{ jobFullId, record }`); the worker → parent reply is
++ * `{ ok }` or `{ error }`. The handler's *own* Blocks calls (e.g. `bucket.put`)
++ * run against real AWS from inside the worker using the task role — no bridge
++ * needed for those, because the worker is a full runtime.
++ *
++ * **Cost levers.** Two knobs bound spend: the poller's concurrency cap (how many
++ * workers run at once → task sizing) and the per-handler timeout (kills runaway
++ * CPU). Task-count autoscaling is a future, additive layer on the Fargate
++ * service and needs no change here.
++ */
++
++import { createServer } from 'node:http';
++import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
++
++/** Container port the health server listens on. Matches the CDK port mapping. */
++const HEALTH_PORT = 8080;
++
++/** How long graceful shutdown waits for in-flight workers before exiting. */
++const DRAIN_GRACE_MS = 25_000;
++
++/**
++ * A poller starter registered by an event Building Block. Called once by
++ * {@link runContainer}; returns a handle used for graceful shutdown.
++ */
++export type ContainerPollerStarter = () => ContainerPollerHandle;
++
++/** Handle to a running poller — drained on SIGTERM. */
++export interface ContainerPollerHandle {
++	/** Stop receiving new work. */
++	stop(): Promise<void> | void;
++	/** Resolve once all in-flight work has finished (for graceful drain). */
++	drain?(): Promise<void>;
++}
++
++/**
++ * Whether this process is a container worker (parent OR job worker) rather than a
++ * Lambda invocation. Event Building Blocks read this to decide whether to pull
++ * (self-poll) instead of relying on a native Lambda event source. Set from
++ * `BLOCKS_SERVICE_MODE=worker`, which the container compute stamps on the task
++ * (inherited by worker threads).
++ */
++export function isContainerRuntime(): boolean {
++	return process.env.BLOCKS_SERVICE_MODE === 'worker';
++}
++
++/**
++ * Whether this is a spawned **job worker thread** (as opposed to the parent
++ * poller process). In a worker, an AsyncJob must register itself for lookup but
++ * must NOT start a poller — the parent owns pulling; the worker only runs the one
++ * job it was handed. Detected via `worker_threads` + the marker in `workerData`.
++ */
++export function isJobWorker(): boolean {
++	return !isMainThread && (workerData as { __blocksJobWorker?: boolean } | null)?.__blocksJobWorker === true;
++}
++
++/** This process's compute id (the container compute's fullId), for owner-match. */
++export function getContainerComputeId(): string | undefined {
++	return process.env.BLOCKS_COMPUTE_ID || undefined;
++}
++
++const POLLER_STARTERS: ContainerPollerStarter[] = [];
++
++/**
++ * Register a poller starter to be launched by {@link runContainer}. An event
++ * Building Block calls this from its AWS-runtime constructor when it runs on this
++ * container and owns its queue. No-op safe to call before `runContainer()`.
++ */
++export function registerContainerPoller(starter: ContainerPollerStarter): void {
++	POLLER_STARTERS.push(starter);
++}
++
++/** Clear registered pollers. **For test cleanup only.** */
++export function _resetContainerPollers(): void {
++	POLLER_STARTERS.length = 0;
++}
++
++// ── Per-job worker dispatch (parent side) ────────────────────────────────────
++
++/** The message the parent sends a worker to run one job. */
++export interface JobWorkerRequest {
++	/** The AsyncJob `fullId` to resolve in the re-imported backend. */
++	jobFullId: string;
++	/** The SQS record to process (serializable subset). */
++	record: {
++		messageId: string;
++		body: string;
++		attributes: { ApproximateReceiveCount: string; SentTimestamp: string };
++	};
++}
++
++/** The worker's reply after attempting one job. */
++export type JobWorkerReply = { ok: true } | { ok: false; error: string };
++
++/** Outcome of a dispatched job. `timedOut` means the worker was hard-terminated. */
++export type JobDispatchResult = { ok: true } | { ok: false; error: string; timedOut: boolean };
++
++/**
++ * Absolute path to the co-bundled worker entry file. The container image build
++ * emits the worker bundle next to the main bundle; the parent spawns it here. Set
++ * via `BLOCKS_JOB_WORKER_ENTRY` by the image entry so this module stays free of
++ * assumptions about the on-disk layout.
++ */
++function jobWorkerEntry(): string {
++	const entry = process.env.BLOCKS_JOB_WORKER_ENTRY;
++	if (!entry) {
++		throw new Error(
++			'[Blocks container] BLOCKS_JOB_WORKER_ENTRY is not set — the job worker bundle path must be provided by the image entry.',
++		);
++	}
++	return entry;
++}
++
++/**
++ * Run one job in a fresh worker thread, enforcing `timeoutMs` by terminating the
++ * worker if it overruns. Resolves with the outcome; never rejects. On timeout the
++ * worker is hard-terminated (a runaway CPU loop is genuinely stopped), and the
++ * result is `{ ok: false, timedOut: true }` so the caller leaves the message for
++ * redrive.
++ *
++ * @param req - The job to run.
++ * @param timeoutMs - Wall-clock limit, or `undefined` for no limit.
++ */
++export function dispatchJobToWorker(req: JobWorkerRequest, timeoutMs?: number): Promise<JobDispatchResult> {
++	return new Promise<JobDispatchResult>((resolve) => {
++		let settled = false;
++		const worker = new Worker(jobWorkerEntry(), {
++			workerData: { __blocksJobWorker: true, request: req },
++			// Inherit env (BLOCKS_STACK_NAME, config coordinates, AWS creds vars) so
++			// the worker's re-imported backend resolves the same resources.
++			env: process.env,
++		});
++
++		const finish = (result: JobDispatchResult) => {
++			if (settled) return;
++			settled = true;
++			clearTimeout(timer);
++			// Ensure the worker is gone regardless of how we settled.
++			void worker.terminate();
++			resolve(result);
++		};
++
++		const timer =
++			timeoutMs === undefined
++				? (undefined as unknown as ReturnType<typeof setTimeout>)
++				: setTimeout(() => {
++						// Hard enforcement: stop the worker even mid-CPU-loop.
++						finish({ ok: false, error: `job exceeded ${timeoutMs}ms wall-clock limit`, timedOut: true });
++					}, timeoutMs);
++		if (timer && typeof timer === 'object' && 'unref' in timer) timer.unref();
++
++		worker.on('message', (msg: JobWorkerReply) => {
++			finish(msg.ok ? { ok: true } : { ok: false, error: msg.error, timedOut: false });
++		});
++		worker.on('error', (err: Error) => {
++			finish({ ok: false, error: err.message, timedOut: false });
++		});
++		worker.on('exit', (code) => {
++			// A non-zero exit that wasn't already accounted for (message/error/timeout)
++			// is a crash — treat as failure so the message redrives.
++			if (code !== 0) finish({ ok: false, error: `worker exited with code ${code}`, timedOut: false });
++			else finish({ ok: false, error: 'worker exited before reporting a result', timedOut: false });
++		});
++	});
++}
++
++// ── Job worker (worker-thread side) ──────────────────────────────────────────
++
++/**
++ * Entry point for a spawned job worker. Called by the co-bundled worker bundle
++ * *after* it has `loadConfigToProcessEnv()`-ed and imported the backend (so every
++ * AsyncJob has registered itself). Resolves the job by `fullId`, runs one record,
++ * and posts the reply back to the parent. Never throws — errors become a
++ * `{ ok: false }` reply so the parent can decide redrive.
++ *
++ * @param resolveJob - Looks up a registered runnable job by `fullId`
++ *   (bb-async-job supplies `getAsyncJob`). Passed in so core doesn't depend on
++ *   the AsyncJob package.
++ */
++export async function runJobWorker(
++	resolveJob: (fullId: string) => { _processRecord(record: JobWorkerRequest['record']): Promise<void> } | undefined,
++): Promise<void> {
++	const data = workerData as { request?: JobWorkerRequest } | null;
++	const port = parentPort;
++	if (!port || !data?.request) {
++		// Not a proper worker invocation; nothing to do.
++		return;
++	}
++	const { jobFullId, record } = data.request;
++	try {
++		const job = resolveJob(jobFullId);
++		if (!job) {
++			port.postMessage({ ok: false, error: `no AsyncJob registered for "${jobFullId}"` } satisfies JobWorkerReply);
++			return;
++		}
++		await job._processRecord(record);
++		port.postMessage({ ok: true } satisfies JobWorkerReply);
++	} catch (err) {
++		port.postMessage({
++			ok: false,
++			error: err instanceof Error ? err.message : String(err),
++		} satisfies JobWorkerReply);
++	}
++}
++
++// ── Parent process boot ──────────────────────────────────────────────────────
++
++/**
++ * Boot the container parent: start a health server and every registered poller,
++ * then keep the process alive until SIGTERM/SIGINT, on which it drains gracefully
++ * — stop receiving, let in-flight workers finish within {@link DRAIN_GRACE_MS},
++ * then exit. Invoked by the co-bundled image entry after config load + backend
++ * import (so all pollers are registered).
++ */
++export async function runContainer(): Promise<void> {
++	const server = createServer((req, res) => {
++		res.writeHead(200, { 'Content-Type': 'application/json' });
++		res.end(JSON.stringify({ status: 'ok', path: req.url }));
++	});
++	server.listen(HEALTH_PORT);
++
++	const handles: ContainerPollerHandle[] = [];
++	for (const starter of POLLER_STARTERS) {
++		try {
++			handles.push(starter());
++		} catch (err) {
++			console.error('[Blocks container] poller failed to start:', err);
++		}
++	}
++
++	console.log(
++		`[Blocks container] parent up (compute=${getContainerComputeId() ?? 'unknown'}, pollers=${handles.length})`,
++	);
++
++	await new Promise<void>((resolve) => {
++		let shuttingDown = false;
++		const shutdown = async (signal: string) => {
++			if (shuttingDown) return;
++			shuttingDown = true;
++			console.log(`[Blocks container] ${signal} received — draining (grace ${DRAIN_GRACE_MS}ms)`);
++			// Stop pulling new work immediately.
++			await Promise.allSettled(handles.map((h) => h.stop()));
++			// Let in-flight workers finish within the grace window.
++			const drains = handles.filter((h) => h.drain).map((h) => h.drain!());
++			await Promise.race([
++				Promise.allSettled(drains),
++				new Promise((r) => setTimeout(r, DRAIN_GRACE_MS)),
++			]);
++			server.close();
++			resolve();
++		};
++		process.once('SIGTERM', () => void shutdown('SIGTERM'));
++		process.once('SIGINT', () => void shutdown('SIGINT'));
++	});
++}
+diff --git a/packages/core/src/index.cdk.ts b/packages/core/src/index.cdk.ts
+index c5f0311f..61ab45cd 100644
+--- a/packages/core/src/index.cdk.ts
++++ b/packages/core/src/index.cdk.ts
+@@ -18,6 +18,14 @@ export {
+ 	type ValueKind,
+ } from '@aws-blocks/hosting';
+ export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
++export {
++	type ComputeCapabilities,
++	type ComputeHandle,
++	type ComputeKind,
++	LAMBDA_MAX_MEMORY_MB,
++	LAMBDA_MAX_TIMEOUT_SECONDS,
++	selectComputeKind,
++} from './common/compute-capabilities.js';
+ export type { BlocksVpcOptions, ScopeOptions, SubnetRole, VpcContext, VpcRequirements } from './cdk/index.js';
+ export {
+ 	BlocksBackend,
+@@ -54,6 +62,21 @@ export {
+ 	registerSdkIdentifiers,
+ } from './common/sdk-registry.js';
+ export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
++export {
++	type ContainerPollerHandle,
++	type ContainerPollerStarter,
++	type JobDispatchResult,
++	type JobWorkerReply,
++	type JobWorkerRequest,
++	_resetContainerPollers,
++	dispatchJobToWorker,
++	getContainerComputeId,
++	isContainerRuntime,
++	isJobWorker,
++	registerContainerPoller,
++	runContainer,
++	runJobWorker,
++} from './container-runtime.js';
+ export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
+ export {
+ 	type BlocksStackApi,
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index 0eb6554e..709c3ae0 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -16,6 +16,14 @@ export {
+ 	type ValueKind,
+ } from '@aws-blocks/hosting';
+ export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
++export {
++	type ComputeCapabilities,
++	type ComputeHandle,
++	type ComputeKind,
++	LAMBDA_MAX_MEMORY_MB,
++	LAMBDA_MAX_TIMEOUT_SECONDS,
++	selectComputeKind,
++} from './common/compute-capabilities.js';
+ export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
+ export { type BuildingBlockMeta, Scope, type ScopeOptions, type ScopeParent } from './common/index.js';
+ export {
+@@ -25,6 +33,21 @@ export {
+ 	registerSdkIdentifiers,
+ } from './common/sdk-registry.js';
+ export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
++export {
++	type ContainerPollerHandle,
++	type ContainerPollerStarter,
++	type JobDispatchResult,
++	type JobWorkerReply,
++	type JobWorkerRequest,
++	_resetContainerPollers,
++	dispatchJobToWorker,
++	getContainerComputeId,
++	isContainerRuntime,
++	isJobWorker,
++	registerContainerPoller,
++	runContainer,
++	runJobWorker,
++} from './container-runtime.js';
+ export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
+ export {
+ 	clearRouteRegistry,
+diff --git a/test-apps/comprehensive/aws-blocks/index.ts b/test-apps/comprehensive/aws-blocks/index.ts
+index 7d79f2d4..6c885fdf 100644
+--- a/test-apps/comprehensive/aws-blocks/index.ts
++++ b/test-apps/comprehensive/aws-blocks/index.ts
+@@ -12,6 +12,7 @@ import type { PutOptions, DeleteOptions } from '@aws-blocks/bb-distributed-table
+ import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
+ import { isBlocksError } from '@aws-blocks/core';
+ import { AsyncJob } from '@aws-blocks/bb-async-job';
++import { Compute } from '@aws-blocks/blocks';
+ import { AppSetting } from '@aws-blocks/bb-app-setting';
+ import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
+ import { Tracer } from '@aws-blocks/bb-tracer';
+@@ -556,6 +557,72 @@ const bucket = new FileBucket(scope, 'files', { removalPolicy: 'destroy' });
+ // FileBucket with versioning enabled
+ const versionedBucket = new FileBucket(scope, 'versioned-files', { versioned: true, removalPolicy: 'destroy' });
+ 
++// ------------------------------------------------------------------------
++// Container compute — long-running AsyncJobs on a container (Fargate)
++// ------------------------------------------------------------------------
++// A capability-defined Compute: the long wall-clock budget (beyond Lambda's
++// 15-minute cap) + long-lived flag select a container-backed runtime. The same
++// backend runs on the container, which self-starts an owner-matched SQS poller
++// for the jobs assigned to it. Locally this is transparent (in-process).
++const containerCompute = new Compute(scope, 'worker', {
++  timeoutSeconds: 1800,
++  longLived: true,
++  memory: 1024,
++  cpu: 512,
++});
++
++// A job dispatched to the container. Its handler reads from the payload and
++// writes to BOTH a KVStore and a FileBucket — proving the container can reach
++// Blocks resources exactly as the Lambda handler does (shared execution role,
++// same config, same SDK-identifier resolution).
++const containerJob = new AsyncJob(scope, 'container-job', {
++  compute: containerCompute,
++  handler: async (payload: { key: string; value: string }, ctx) => {
++    // KVStore write — the canonical "did the handler run" signal.
++    await jobResults.put(`container:${payload.key}`, JSON.stringify({
++      value: payload.value,
++      jobId: ctx.jobId,
++      receiveCount: ctx.receiveCount,
++      sentAt: ctx.sentAt,
++      // Distinguish the container runtime from Lambda so the test can assert
++      // where the handler actually ran when deployed.
++      runtime: process.env.BLOCKS_SERVICE_MODE === 'worker' ? 'container' : 'local-or-lambda',
++    }));
++    // FileBucket write — a second, different Blocks resource reached from the container.
++    await bucket.put(`container-artifacts/${payload.key}.txt`, payload.value);
++  },
++});
++
++// A container job whose handler deliberately runs longer than the compute's
++// per-handler wall-clock limit, so the poller aborts it. maxRetries: 1 makes the
++// first (timed-out) delivery terminal, so it lands in the DLQ without a long
++// redrive wait. The timeout here (2s) is far below the compute's default; the
++// AsyncJob-level compute limit is what the container poller enforces.
++const timeoutCompute = new Compute(scope, 'slow-worker', {
++  timeoutSeconds: 3,
++  longLived: true,
++});
++
++const containerTimeoutJob = new AsyncJob(scope, 'container-timeout-job', {
++  compute: timeoutCompute,
++  maxRetries: 1,
++  handler: async (payload: { key: string }) => {
++    // Deliberately NON-cooperative: a tight CPU busy-loop that never yields and
++    // never checks an abort signal. The only way to stop this is to terminate the
++    // worker thread it runs in — which is exactly what the container poller does
++    // at the 3s wall-clock limit. If the worker weren't terminated this would burn
++    // ~60s and then write the marker below; because it IS terminated, the marker
++    // is never written and the delivery redrives to the DLQ. This proves the
++    // timeout is ENFORCED, not merely cooperative.
++    const end = Date.now() + 60_000;
++    while (Date.now() < end) {
++      // burn CPU — no await, no signal check
++    }
++    await jobResults.put(`container-timeout:${payload.key}`, 'completed-should-not-happen');
++  },
++});
++
++
+ // AppSetting - Single configuration values backed by SSM Parameter Store
+ // Scope SSM names by stack identity so parallel deploys don't collide.
+ const ssmPrefix = `/${scope.fullId}`;
+@@ -1850,6 +1917,37 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
+     return { jobIds };
+   },
+ 
++  // ------------------------------------------------------------------------
++  // Container-dispatched AsyncJob Tests
++  // ------------------------------------------------------------------------
++
++  async containerJobSubmit(key: string, value: string) {
++    const { jobId } = await containerJob.submit({ key, value });
++    return { jobId };
++  },
++
++  async containerJobGetResult(key: string) {
++    const raw = await jobResults.get(`container:${key}`);
++    return raw ? JSON.parse(raw) : null;
++  },
++
++  async containerJobGetArtifact(key: string) {
++    // Reads the FileBucket object the container handler wrote — proves the
++    // container reached a second Blocks resource.
++    const content = await bucket.get(`container-artifacts/${key}.txt`);
++    return content ? { value: content.body.toString('utf8') } : null;
++  },
++
++  async containerTimeoutJobSubmit(key: string) {
++    const { jobId } = await containerTimeoutJob.submit({ key });
++    return { jobId };
++  },
++
++  async containerTimeoutJobGetResult(key: string) {
++    const raw = await jobResults.get(`container-timeout:${key}`);
++    return raw ? { value: raw } : null;
++  },
++
+   // ------------------------------------------------------------------------
+   // AsyncJob status tracking (trackStatus) Tests
+   // ------------------------------------------------------------------------
+diff --git a/test-apps/comprehensive/test/container-job.test.ts b/test-apps/comprehensive/test/container-job.test.ts
+new file mode 100644
+index 00000000..54b7aae1
+--- /dev/null
++++ b/test-apps/comprehensive/test/container-job.test.ts
+@@ -0,0 +1,104 @@
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++import { test, describe } from 'node:test';
++import assert from 'node:assert';
++import { setTimeout } from 'node:timers/promises';
++import type { api as apiType } from 'aws-blocks';
++
++const ENV = process.env.BLOCKS_TEST_ENV || 'local';
++const isDeployed = ENV === 'sandbox' || ENV === 'production';
++
++const RESULT_POLL_INTERVAL_MS = 250;
++
++/**
++ * Wall-clock budget for a container-dispatched job to complete. Deployed runs
++ * pay for the SQS receive long-poll, the container's own poll cadence, and — on
++ * a cold service — Fargate task startup + image pull, so the budget is generous
++ * when deployed. Local simulates the container in-process, so it settles fast.
++ */
++const RESULT_POLL_BUDGET_MS = isDeployed ? 120_000 : 15_000;
++
++async function pollForResult<T>(
++  fetch: () => Promise<T | null>,
++  budgetMs: number = RESULT_POLL_BUDGET_MS,
++): Promise<T | null> {
++  const deadline = Date.now() + budgetMs;
++  let result: T | null = null;
++  do {
++    result = await fetch();
++    if (result) break;
++    await setTimeout(RESULT_POLL_INTERVAL_MS);
++  } while (Date.now() < deadline);
++  return result;
++}
++
++/**
++ * Container-dispatched AsyncJob e2e. Exercises the multi-compute path end to end:
++ * a `Compute` block whose capabilities select a container (Fargate) backs an
++ * AsyncJob; submitting drains through an owner-matched SQS poller the container
++ * self-starts, and the handler reaches Blocks resources (KVStore + FileBucket)
++ * from the container. Also demonstrates the per-handler wall-clock limit.
++ *
++ * In local mode the container is simulated in-process (the handler runs exactly
++ * as any other AsyncJob), so the same assertions hold across local, sandbox, and
++ * production — full parity, no environment-specific branching in the assertions.
++ */
++export function containerJobTests(getApi: () => typeof apiType) {
++  describe('AsyncJob on container compute', () => {
++    test('container job — successful dispatch, invocation, and Blocks-resource access', async () => {
++      const api = getApi();
++      const testId = Date.now().toString(36);
++      const key = `ctr-${testId}`;
++
++      const { jobId } = await api.containerJobSubmit(key, 'hello-from-container');
++      assert.ok(typeof jobId === 'string' && jobId.length > 0, 'submit returns a job id');
++
++      // KVStore result proves the handler ran.
++      const result = await pollForResult(() => api.containerJobGetResult(key));
++      assert.ok(result, 'container handler should have written the KVStore result');
++      assert.strictEqual(result.value, 'hello-from-container');
++      assert.strictEqual(result.jobId, jobId);
++
++      // When deployed, the handler must have run ON the container (not Lambda).
++      // Locally it's simulated in-process, so only assert the runtime marker when deployed.
++      if (isDeployed) {
++        assert.strictEqual(result.runtime, 'container', 'handler ran on the container runtime');
++      }
++
++      // FileBucket artifact proves the container reached a SECOND Blocks resource.
++      const artifact = await pollForResult(() => api.containerJobGetArtifact(key));
++      assert.ok(artifact, 'container handler should have written the FileBucket artifact');
++      assert.strictEqual(artifact.value, 'hello-from-container');
++    });
++
++    test('container job — non-cooperative handler is force-terminated at the wall-clock limit', async () => {
++      const api = getApi();
++
++      // Enforcement can only be shown against a real container: the local mock runs
++      // handlers in-process, so a CPU busy-loop can't be worker-terminated there and
++      // would just freeze the dev server. Skip submitting it locally; the deployed
++      // run is the meaningful proof.
++      if (!isDeployed) return;
++
++      const testId = Date.now().toString(36);
++      const key = `ctr-timeout-${testId}`;
++
++      const { jobId } = await api.containerTimeoutJobSubmit(key);
++      assert.ok(typeof jobId === 'string' && jobId.length > 0);
++
++      // The handler busy-loops ~60s but the compute's limit is 3s. If the timeout
++      // were merely cooperative, this non-cooperative loop would run to completion
++      // and write the "completed" marker. Because the worker thread is hard-
++      // terminated at 3s, the marker is never written. Wait comfortably past the
++      // limit (and past a couple redrive cycles) and assert it never completed.
++      await setTimeout(30_000);
++      const result = await api.containerTimeoutJobGetResult(key);
++      assert.strictEqual(
++        result,
++        null,
++        'a non-cooperative handler exceeding the wall-clock limit must be terminated, not allowed to complete',
++      );
++    });
++  });
++}
+diff --git a/test-apps/comprehensive/test/e2e.test.ts b/test-apps/comprehensive/test/e2e.test.ts
+index 4784d2f8..b5ca8f20 100644
+--- a/test-apps/comprehensive/test/e2e.test.ts
++++ b/test-apps/comprehensive/test/e2e.test.ts
+@@ -23,6 +23,7 @@ import { databaseTests } from './database.test.js';
+ import { dsqlTests } from './dsql.test.js';
+ import { asyncJobTests } from './async-job.test.js';
+ import { asyncJobStatusTests } from './async-job-status.test.js';
++import { containerJobTests } from './container-job.test.js';
+ import { agentTests } from './agent.test.js';
+ import { cronJobTests } from './cron-job.test.js';
+ import { fileBucketTests } from './file-bucket.test.js';
+@@ -234,6 +235,9 @@ asyncJobTests(() => api);
+ // AsyncJob status tracking tests (separate file)
+ asyncJobStatusTests(() => api);
+ 
++// Container-dispatched AsyncJob tests (separate file)
++containerJobTests(() => api);
++
+ // CronJob tests (separate file)
+ cronJobTests(() => api);
+ 

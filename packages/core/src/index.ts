@@ -36,11 +36,17 @@ export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 export {
 	type ContainerPollerHandle,
 	type ContainerPollerStarter,
+	type JobDispatchResult,
+	type JobWorkerReply,
+	type JobWorkerRequest,
 	_resetContainerPollers,
+	dispatchJobToWorker,
 	getContainerComputeId,
 	isContainerRuntime,
+	isJobWorker,
 	registerContainerPoller,
 	runContainer,
+	runJobWorker,
 } from './container-runtime.js';
 export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
 export {

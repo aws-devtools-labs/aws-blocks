@@ -17,13 +17,12 @@ export interface AsyncJobContext {
 	sentAt: string;
 	/**
 	 * Aborts when the job exceeds its compute's wall-clock limit
-	 * (`Compute.timeoutSeconds`), letting a long-running handler cancel in-flight
-	 * work cooperatively — pass it to `fetch`, the AWS SDK, or check
-	 * `signal.aborted` in a loop. Present only on a container compute that has a
-	 * timeout configured; `undefined` on Lambda (where the platform enforces the
-	 * function timeout) and when no limit is set. Cancellation is cooperative:
-	 * a handler that ignores the signal keeps running, but its delivery is already
-	 * treated as failed and redrives to the DLQ.
+	 * (`Compute.timeoutSeconds`). On a container the limit is **enforced** by
+	 * terminating the worker thread the job runs in, so a handler that ignores this
+	 * signal is still stopped at the deadline; the signal is offered so cooperative
+	 * handlers can also unwind in-flight work (close connections, flush) a moment
+	 * before termination. Present only when a timeout is configured; `undefined` on
+	 * Lambda (the platform enforces the function timeout) and when no limit is set.
 	 */
 	signal?: AbortSignal;
 }

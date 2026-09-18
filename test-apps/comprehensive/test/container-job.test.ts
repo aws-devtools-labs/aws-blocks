@@ -72,26 +72,33 @@ export function containerJobTests(getApi: () => typeof apiType) {
       assert.strictEqual(artifact.value, 'hello-from-container');
     });
 
-    test('container job — per-handler wall-clock timeout is enforced', async () => {
+    test('container job — non-cooperative handler is force-terminated at the wall-clock limit', async () => {
       const api = getApi();
+
+      // Enforcement can only be shown against a real container: the local mock runs
+      // handlers in-process, so a CPU busy-loop can't be worker-terminated there and
+      // would just freeze the dev server. Skip submitting it locally; the deployed
+      // run is the meaningful proof.
+      if (!isDeployed) return;
+
       const testId = Date.now().toString(36);
       const key = `ctr-timeout-${testId}`;
 
       const { jobId } = await api.containerTimeoutJobSubmit(key);
       assert.ok(typeof jobId === 'string' && jobId.length > 0);
 
-      // The handler sleeps 10s but the compute's limit is 2s, so the poller aborts
-      // it and the "completed" marker is never written. Wait past the handler's own
-      // sleep to be sure it didn't sneak through, then assert no result.
-      //
-      // Local note: the in-process simulation runs the handler to completion (no
-      // wall-clock abort locally), so this timeout-enforcement assertion is a
-      // deployed-only guarantee. Locally we only assert the job was accepted.
-      if (!isDeployed) return;
-
-      await setTimeout(15_000);
+      // The handler busy-loops ~60s but the compute's limit is 3s. If the timeout
+      // were merely cooperative, this non-cooperative loop would run to completion
+      // and write the "completed" marker. Because the worker thread is hard-
+      // terminated at 3s, the marker is never written. Wait comfortably past the
+      // limit (and past a couple redrive cycles) and assert it never completed.
+      await setTimeout(30_000);
       const result = await api.containerTimeoutJobGetResult(key);
-      assert.strictEqual(result, null, 'a handler exceeding the wall-clock limit must not complete');
+      assert.strictEqual(
+        result,
+        null,
+        'a non-cooperative handler exceeding the wall-clock limit must be terminated, not allowed to complete',
+      );
     });
   });
 }

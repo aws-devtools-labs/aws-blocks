@@ -173,16 +173,25 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 		} else {
 			// Container path: the runtime self-starts an owner-matched poller (no
 			// native event source). Grant the shared task role permission to
-			// receive and delete from this queue — the poller does both. The DLQ
-			// redrive is enforced by SQS via the queue's redrive policy, exactly as
-			// on the Lambda path.
+			// receive, delete, and change-visibility on this queue — the poller does
+			// all three (delete-on-success + visibility heartbeat for long jobs). The
+			// DLQ redrive is enforced by SQS via the queue's redrive policy, exactly
+			// as on the Lambda path.
 			this.queue.grantConsumeMessages(this.executionRole);
-			// The per-handler wall-clock limit the container poller enforces comes
-			// from the compute's capabilities.timeoutSeconds; stamp it into config
-			// so the runtime reads it without re-deriving the compute.
+			// The per-handler wall-clock limit the container poller ENFORCES (by
+			// terminating the job's worker thread) comes from the compute's
+			// capabilities.timeoutSeconds; stamp it so the runtime reads it without
+			// re-deriving the compute.
 			const timeoutSeconds = compute.capabilities.timeoutSeconds;
 			if (timeoutSeconds !== undefined) {
 				registerConfig(this, `BLOCKS_HANDLER_TIMEOUT_${idKey}`, String(timeoutSeconds));
+			}
+			// Per-task concurrency cap (the cost lever): how many jobs — each in its
+			// own worker thread — run at once. Stamped when set; the runtime uses a
+			// conservative default otherwise.
+			const maxConcurrency = compute.capabilities.maxConcurrency;
+			if (maxConcurrency !== undefined) {
+				registerConfig(this, `BLOCKS_HANDLER_CONCURRENCY_${idKey}`, String(maxConcurrency));
 			}
 		}
 

@@ -599,26 +599,25 @@ const containerJob = new AsyncJob(scope, 'container-job', {
 // redrive wait. The timeout here (2s) is far below the compute's default; the
 // AsyncJob-level compute limit is what the container poller enforces.
 const timeoutCompute = new Compute(scope, 'slow-worker', {
-  timeoutSeconds: 2,
+  timeoutSeconds: 3,
   longLived: true,
 });
 
 const containerTimeoutJob = new AsyncJob(scope, 'container-timeout-job', {
   compute: timeoutCompute,
   maxRetries: 1,
-  handler: async (payload: { key: string }, ctx) => {
-    // Sleep well past the 2s limit, but honor the wall-clock abort signal the
-    // container poller passes in (ctx.signal fires at the limit). On abort we
-    // throw before writing, so the "completed" marker is never persisted and the
-    // delivery redrives to the DLQ. A handler that ignored the signal would keep
-    // running — cancellation is cooperative — but its delivery still fails.
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(resolve, 10_000);
-      ctx.signal?.addEventListener('abort', () => {
-        clearTimeout(timer);
-        reject(new Error('aborted: wall-clock limit exceeded'));
-      });
-    });
+  handler: async (payload: { key: string }) => {
+    // Deliberately NON-cooperative: a tight CPU busy-loop that never yields and
+    // never checks an abort signal. The only way to stop this is to terminate the
+    // worker thread it runs in — which is exactly what the container poller does
+    // at the 3s wall-clock limit. If the worker weren't terminated this would burn
+    // ~60s and then write the marker below; because it IS terminated, the marker
+    // is never written and the delivery redrives to the DLQ. This proves the
+    // timeout is ENFORCED, not merely cooperative.
+    const end = Date.now() + 60_000;
+    while (Date.now() < end) {
+      // burn CPU — no await, no signal check
+    }
     await jobResults.put(`container-timeout:${payload.key}`, 'completed-should-not-happen');
   },
 });
