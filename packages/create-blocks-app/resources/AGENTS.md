@@ -25,3 +25,5 @@
 - `npm run sandbox` — deploy backend to AWS, serve frontend locally
 - `npm run deploy` — full production deploy to AWS
 - `npm run sandbox:destroy` — tear down sandbox resources
+
+On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). Grep that one line for "deploy finished + where it lives"; don't poll CloudFormation or hunt the URL out of the streamed output.
