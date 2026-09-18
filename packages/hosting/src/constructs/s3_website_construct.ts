@@ -43,8 +43,12 @@ export class S3WebsiteConstruct extends Construct {
       websiteIndexDocument: 'index.html',
       websiteErrorDocument: errorDoc,
       publicReadAccess: true,
-      // Website hosting needs public bucket-policy reads; keep ACLs blocked.
-      blockPublicAccess: BlockPublicAccess.BLOCK_ACLS,
+      // Website hosting needs the public bucket-policy read to take effect. Use
+      // BLOCK_ACLS_ONLY (blocks ACLs, but sets blockPublicPolicy AND
+      // restrictPublicBuckets to FALSE) — the deprecated BLOCK_ACLS leaves those
+      // two unset, so S3 defaults them to true and SILENTLY neutralizes the
+      // public-read policy (anonymous website reads then 403).
+      blockPublicAccess: BlockPublicAccess.BLOCK_ACLS_ONLY,
       removalPolicy: RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     });
