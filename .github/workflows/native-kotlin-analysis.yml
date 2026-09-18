@@ -1,0 +1,65 @@
+name: Native Kotlin Analysis
+
+# Version-sync drift check + runtime unit tests for the native Kotlin SDK.
+# Path-filtered so it only runs for PRs that touch native/kotlin.
+
+on:
+  pull_request:
+    paths:
+      - 'native/kotlin/**'
+      - '.github/workflows/native-kotlin-analysis.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: native-kotlin-analysis-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  version-sync:
+    name: Kotlin version is in sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+
+      # The runtime version constant is generated at build time from
+      # gradle.properties VERSION_NAME; this asserts that stays in sync with
+      # package.json (the changesets source of truth). Token-semver validation
+      # lives in the generateVersion Gradle task, exercised by the runtime
+      # unit tests below.
+      - name: Check gradle.properties version matches package.json
+        working-directory: native/kotlin
+        run: scripts/sync-version.sh --check
+
+  build-and-test:
+    name: Build & Test (runtime)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: native/kotlin
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      - name: Run runtime unit tests (JVM)
+        run: ./gradlew :runtime:jvmTest
