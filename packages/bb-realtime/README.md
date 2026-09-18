@@ -198,6 +198,7 @@ import { RealtimeErrors } from '@aws-blocks/bb-realtime';
 RealtimeErrors.ValidationFailed  // data failed schema validation on publish
 RealtimeErrors.PublishFailed     // Publish fan-out failed (AWS only)
 RealtimeErrors.ConnectionFailed  // WebSocket connection or subscribe rejected
+RealtimeErrors.UnsupportedCompute // default compute is not Lambda (thrown at synth time)
 ```
 
 ## Best Practices
