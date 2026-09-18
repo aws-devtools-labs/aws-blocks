@@ -5,6 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { ApiNamespace, API_NAMESPACE_MARKER } from './api.js';
 import { Scope } from './common/index.js';
+import { BLOCKS_RPC_PREFIX } from './constants.js';
+import { clearRouteRegistry, getRegisteredRoutes } from './raw-route.js';
 
 const scope = new Scope('test');
 
@@ -24,27 +26,39 @@ test('Different ApiNamespace names should not collide', () => {
   assert.strictEqual((api2 as any)[API_NAMESPACE_MARKER], 'api2');
 });
 
-// ApiNamespace records its name on the scope's resolved compute (CDK
-// synth), while staying a silent no-op where no compute is resolvable.
-test('ApiNamespace records its name on a resolvable compute', () => {
-  const compute = { namespaces: [] as string[] };
+// ApiNamespace registers a routing-only entry (endpoint-carrying, handler-less)
+// so the front door can fan `/aws-blocks/api/{name}` out to the compute that
+// serves it — but only where the scope resolves a compute (CDK synth). It stays
+// a silent no-op where no compute is resolvable (mock/runtime).
+test('ApiNamespace registers a routing entry carrying the compute endpoint', () => {
+  clearRouteRegistry();
+  const compute = { endpoint: 'https://api.example.com/prod' };
   new ApiNamespace({ id: 'app', compute } as never, 'myapi', () => ({ ping: () => 'ok' }));
-  assert.deepStrictEqual(compute.namespaces, ['myapi']);
+  const entry = getRegisteredRoutes().find((r) => r.path === `${BLOCKS_RPC_PREFIX}/myapi`);
+  assert.ok(entry, 'a routing entry is registered for the namespace');
+  // Routing-only: no handler (matchRoute skips it, so it never dispatches).
+  assert.strictEqual(entry.handler, undefined);
+  assert.strictEqual(entry.endpoint, 'https://api.example.com/prod');
+  assert.strictEqual(entry.subtree, true);
 });
 
-test('ApiNamespace is a no-op recorder when the scope has no compute', () => {
-  // The common Scope (mock/runtime) has no `compute`; recording must not throw
+test('ApiNamespace registers no routing entry when the scope has no compute', () => {
+  clearRouteRegistry();
+  // The common Scope (mock/runtime) has no `compute`; registration must not throw
   // and the handler is still tagged and returned unchanged.
   const handler = new ApiNamespace(new Scope('no-compute'), 'plainapi', () => ({ x: () => 1 }));
   assert.strictEqual((handler as any)[API_NAMESPACE_MARKER], 'plainapi');
+  assert.strictEqual(getRegisteredRoutes().length, 0);
 });
 
-test('ApiNamespace records a namespace at most once per compute', () => {
-  // `namespaces` is a set of names: recording the same name twice (e.g. a
-  // re-imported module during synth) must not append a duplicate.
-  const compute = { namespaces: [] as string[] };
+test('ApiNamespace registers a namespace routing entry at most once', () => {
+  clearRouteRegistry();
+  // Recording the same namespace twice (e.g. a re-imported module during synth)
+  // must not append a duplicate routing entry.
+  const compute = { endpoint: 'https://api.example.com/prod' };
   const scopeLike = { id: 'app', compute } as never;
   new ApiNamespace(scopeLike, 'dup', () => ({ ping: () => 'ok' }));
   new ApiNamespace(scopeLike, 'dup', () => ({ ping: () => 'ok' }));
-  assert.deepStrictEqual(compute.namespaces, ['dup']);
+  const dupEntries = getRegisteredRoutes().filter((r) => r.path === `${BLOCKS_RPC_PREFIX}/dup`);
+  assert.strictEqual(dupEntries.length, 1);
 });

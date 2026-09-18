@@ -4,7 +4,7 @@
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ApiError } from './errors.js';
-import { BLOCKS_RPC_PREFIX } from './constants.js';
+import { BLOCKS_RPC_PREFIX, isRpcPath } from './constants.js';
 import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
@@ -395,8 +395,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
         // error envelope) or a plain HTTP path (simple error JSON).
         const origin = event.headers?.origin || event.headers?.Origin || '';
         const requestPath = getRequestPath(event);
-        const isRpcPath = requestPath === BLOCKS_RPC_PREFIX || requestPath.startsWith(BLOCKS_RPC_PREFIX + '/');
-        const body = isRpcPath
+        const body = isRpcPath(requestPath)
           ? errorResponse(504, 'Request timed out', null, { name: 'HandlerTimeoutError' })
           : JSON.stringify({ error: 'Request timed out', code: 'HANDLER_TIMEOUT' });
         return {
@@ -522,9 +521,12 @@ function createHandler(backend: any) {
     const inboundCookies = event.headers?.cookie || event.headers?.Cookie || '';
 
     return requestCookies.run(inboundCookies, async () => {
-    // RawRoute dispatch — check path-based routes before falling through to RPC
+    // RawRoute dispatch — check path-based routes before falling through to RPC.
+    // The whole `/aws-blocks/api` subtree (bare path and `/aws-blocks/api/{ns}`)
+    // is RPC: dispatch reads the namespace from the JSON-RPC body, so skip RawRoute
+    // matching for it and fall through to RPC handling.
     const requestPath = getRequestPath(event);
-    if (requestPath !== BLOCKS_RPC_PREFIX) {
+    if (!isRpcPath(requestPath)) {
       const matched = matchRoute(httpMethod, requestPath);
       if (matched) {
         return handleRawRoute(event, matched.route, matched.params, corsHeaders, signal);
@@ -629,7 +631,7 @@ function createHandler(backend: any) {
 
 async function handleRawRoute(
   event: any,
-  route: import('./raw-route.js').RegisteredRoute,
+  route: import('./raw-route.js').DispatchRoute,
   params: Record<string, string>,
   corsHeaders: Record<string, string>,
   signal?: AbortSignal,

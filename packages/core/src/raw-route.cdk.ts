@@ -51,6 +51,9 @@ export class RawRoute extends Scope {
   constructor(scope: ScopeParent, id: string, options: RawRouteOptions) {
     super(id, { parent: scope });
     this.path = resolveRoutePath(scope, id, options);
-    registerRoute({ ...options, path: this.path });
+    // Carry the serving compute's origin so the front door routes this path to it.
+    // Resolves to the default compute unless an ancestor scope assigns one; absent
+    // (worker-only compute) means the front door falls back to its default origin.
+    registerRoute({ ...options, path: this.path, endpoint: this.compute.endpoint });
   }
 }

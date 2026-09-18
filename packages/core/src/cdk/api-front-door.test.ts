@@ -13,11 +13,13 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { Distribution, type IOrigin } from 'aws-cdk-lib/aws-cloudfront';
 import {
+	addRouteBehaviors,
 	API_BEHAVIOR_OPTIONS,
 	httpOriginFromEndpoint,
 	resolveApiFrontDoor,
 	scheduleApiFrontDoor,
 } from './api-front-door.js';
+import { clearRouteRegistry, getRegisteredRoutes, registerRoute, registerRoutingEntry } from '../raw-route.js';
 
 function distributionWith(stack: cdk.Stack, origin: IOrigin): Distribution {
 	return new Distribution(stack, 'D', { defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS } });
@@ -129,6 +131,66 @@ describe('scheduleApiFrontDoor', () => {
 		new cdk.aws_sns.Topic(stack, 'T2');
 		scheduleApiFrontDoor(stack, true, ENDPOINT);
 		Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 1);
+	});
+});
+
+describe('addRouteBehaviors', () => {
+	const DEFAULT = 'https://default.execute-api.us-east-1.amazonaws.com/prod';
+	const OTHER = 'https://other.execute-api.us-east-1.amazonaws.com/prod';
+
+	/** A distribution whose default behavior points at `origin` (the caller-owned one). */
+	function seedDistribution(stack: cdk.Stack): { dist: Distribution; origin: IOrigin } {
+		const origin = httpOriginFromEndpoint(DEFAULT);
+		return { dist: distributionWith(stack, origin), origin };
+	}
+
+	test('api-front-door mode: a default-endpoint namespace adds no behavior', () => {
+		// The default behavior already forwards to the default compute, so a namespace
+		// that resolves there needs nothing extra — a true no-op until a compute is assigned.
+		clearRouteRegistry();
+		registerRoutingEntry({ path: '/aws-blocks/api/notes', endpoint: DEFAULT, subtree: true });
+		const stack = new cdk.Stack(new cdk.App(), 'S');
+		const { dist, origin } = seedDistribution(stack);
+		addRouteBehaviors(dist, getRegisteredRoutes(), DEFAULT, 'api-front-door', new Map([[DEFAULT, origin]]));
+
+		const config = soleDistributionConfig(stack);
+		assert.strictEqual(config.CacheBehaviors, undefined, 'no per-path behaviors for a default-endpoint namespace');
+		assert.strictEqual(config.Origins.length, 1, 'only the default origin');
+	});
+
+	test('api-front-door mode: a non-default namespace fans out to its compute origin', () => {
+		// The assignment surface (a later PR) flips this namespace's endpoint; the same
+		// registration then carries a non-default endpoint and this code fans it out —
+		// the exact/subtree pair — to a second origin.
+		clearRouteRegistry();
+		registerRoutingEntry({ path: '/aws-blocks/api/heavy', endpoint: OTHER, subtree: true });
+		const stack = new cdk.Stack(new cdk.App(), 'S');
+		const { dist, origin } = seedDistribution(stack);
+		addRouteBehaviors(dist, getRegisteredRoutes(), DEFAULT, 'api-front-door', new Map([[DEFAULT, origin]]));
+
+		const config = soleDistributionConfig(stack);
+		const patterns = (config.CacheBehaviors ?? []).map((b) => b.PathPattern);
+		assert.deepStrictEqual(patterns, ['/aws-blocks/api/heavy', '/aws-blocks/api/heavy/*']);
+		assert.strictEqual(config.Origins.length, 2, 'default origin plus the assigned compute origin');
+	});
+
+	test('shared-frontend mode: diverts the RPC + auth subtrees and RawRoutes off the frontend', () => {
+		// The default behavior serves the frontend here, so every API path must be
+		// diverted: the reserved RPC/auth subtrees plus each app RawRoute.
+		clearRouteRegistry();
+		registerRoute({ method: 'GET', path: '/health', handler: async () => {}, endpoint: DEFAULT });
+		const stack = new cdk.Stack(new cdk.App(), 'S');
+		const { dist, origin } = seedDistribution(stack);
+		addRouteBehaviors(dist, getRegisteredRoutes(), DEFAULT, 'shared-frontend', new Map([[DEFAULT, origin]]));
+
+		const patterns = (soleDistributionConfig(stack).CacheBehaviors ?? []).map((b) => b.PathPattern);
+		assert.ok(patterns.includes('/health'), 'RawRoute diverted off the frontend');
+		assert.ok(patterns.includes('/aws-blocks/api'), 'bare RPC path diverted');
+		assert.ok(patterns.includes('/aws-blocks/api/*'), 'RPC subtree diverted');
+		assert.ok(patterns.includes('/aws-blocks/auth/*'), 'auth subtree diverted');
+		// The reserved fallbacks come last so a per-namespace behavior would win first-match.
+		assert.strictEqual(patterns[patterns.length - 1], '/aws-blocks/auth/*');
+		clearRouteRegistry();
 	});
 });
 
