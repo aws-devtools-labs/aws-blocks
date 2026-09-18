@@ -1,5 +1,6 @@
 ---
 '@aws-blocks/hosting': patch
+'@aws-blocks/blocks': patch
 ---
 
 fix(astro): allow an empty `dist/client` for pure-SSR builds
@@ -10,4 +11,4 @@ a missing build output and threw `AstroBuildOutputMissingError`, blocking synth
 and deploy. `dist/server/entry.mjs` is the real required artifact; an empty (or
 absent) `dist/client` is valid, since CloudFront routes every request to the SSR
 Lambda. The adapter now requires only the server entry and ensures `dist/client`
-exists (creating it when absent) instead of failing.
+exists (creating it when absent, with a build-log breadcrumb) instead of failing.
