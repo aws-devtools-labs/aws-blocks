@@ -48,7 +48,7 @@ export interface ChatConversationApi {
 	/** Load a conversation's message history for rendering. */
 	getConversation(
 		id: string,
-	): Promise<{ messages: { role: string; content: string; metadata?: Record<string, JSONValue> }[] }>;
+	): Promise<{ messages: { role: string; content: string; metadata?: unknown }[] }>;
 	/** Check whether a conversation has unanswered interrupts (e.g. the user left mid-approval). */
 	getPendingInterrupts?(
 		conversationId: string,
@@ -383,7 +383,9 @@ export function createChat(options: CreateChatOptions): ChatController {
 					id: nextId(),
 					role: m.role as 'user' | 'assistant' | 'approval',
 					content: m.content,
-					metadata: m.metadata,
+					// Incoming metadata is Record<string, unknown> (any backend shape); coerce
+					// to the JSONValue ChatMessage renders. Undefined stays undefined.
+					metadata: m.metadata === undefined ? undefined : (toJSONValue(m.metadata) as Record<string, JSONValue>),
 				}));
 			options.onMessagesChange?.(messages);
 
