@@ -1,124 +1,119 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 
-const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3000';
+const BASE = process.env.BLOCKS_URL || 'http://localhost:3000';
 const SYNC = 8_000;
 
 const RUN = process.env.RUN_ID || String(Date.now());
-let seq = 0;
-const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
+let rpcSeq = 0;
+let uniqSeq = 0;
+const uniq = (base: string) => `${base}-${RUN}-${++uniqSeq}-${Date.now()}`;
 
-// Per-test no-error gate: ONLY uncaught page errors.
 function watchErrors(page: Page, sink: string[] = []): string[] {
 	page.on('pageerror', (err) => sink.push(String(err)));
 	return sink;
 }
 
-const presence = (page: Page, name: string) => page.getByTestId('presence-item').filter({ hasText: name });
-
-async function join(page: Page, name: string): Promise<void> {
-	await expect(page.getByTestId('presence-name-input')).toBeVisible({ timeout: SYNC });
-	await page.getByTestId('presence-name-input').fill(name);
-	await page.getByTestId('join-btn').click();
+async function rpc(
+	ctx: APIRequestContext,
+	method: string,
+	params: unknown[] = [],
+): Promise<{ status: number; body: any }> {
+	const res = await ctx.post(`${BASE}/aws-blocks/api`, {
+		headers: { 'Content-Type': 'application/json' },
+		data: { jsonrpc: '2.0', method, params, id: ++rpcSeq },
+	});
+	return { status: res.status(), body: await res.json().catch(() => null) };
 }
 
+const join = (ctx: APIRequestContext, name: string) => rpc(ctx, 'api.join', [name]);
+
+async function roster(ctx: APIRequestContext): Promise<string[]> {
+	const { body } = await rpc(ctx, 'api.listPresent', []);
+	const rows = Array.isArray(body?.result) ? body.result : [];
+	return rows.map((r: any) => String(r?.name ?? r));
+}
+// The shared board holds every name every test joins, so scope roster reads to
+// this call's own unique names rather than asserting on absolute counts. The
+// `count(...) === 1` assertions below are race-free only because the harness
+// runs specs serially (fullyParallel:false / workers:1 in
+// scripts/agent-bench/steps/3-build-and-test.sh); moving to >1 worker would
+// require reworking them to tolerate concurrent joins of the same unique name.
+const count = (names: string[], name: string) => names.filter((n) => n === name).length;
+
+const presence = (page: Page, name: string) => page.getByTestId('presence-item').filter({ hasText: name });
+
+// HARNESS CONTRACT: requires workers:1 (serial; shared-store assertions assume no concurrent runners)
 test.describe('collab-presence-board', () => {
-	test('shows the name input and the join button', async ({ page }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
+	// --- Framework surface: the shared board runs through the api ---
 
-		await expect(page.getByTestId('presence-name-input')).toBeVisible();
-		await expect(page.getByTestId('join-btn')).toBeVisible();
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('joining adds a presence row rendering the visitor name', async ({ page }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
+	test('api.join registers a visitor and api.listPresent reads them back from the store', async ({ request }) => {
 		const name = uniq('user');
-		await join(page, name);
-		await expect(presence(page, name)).toHaveCount(1, { timeout: SYNC });
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+		const j = await join(request, name);
+		expect(j.body?.error, `join error: ${JSON.stringify(j.body?.error)}`).toBeFalsy();
+		expect(count(await roster(request), name)).toBe(1);
 	});
 
-	test('a new join appears in another already-open tab in real time', async ({ browser }) => {
-		const errors: string[] = [];
-		const ctxA = await browser.newContext();
-		const ctxB = await browser.newContext();
-		const tabA = await ctxA.newPage();
-		const tabB = await ctxB.newPage();
-		watchErrors(tabA, errors);
-		watchErrors(tabB, errors);
-
-		await tabA.goto(BASE);
-		await tabB.goto(BASE);
-
-		const name = uniq('user');
-		await join(tabA, name);
-
-		// Tab B had the board open before A joined; it must reflect A's presence
-		// within a couple seconds — realtime, no reload.
-		await expect.poll(() => presence(tabB, name).count(), { timeout: SYNC }).toBe(1);
-
-		await ctxA.close();
-		await ctxB.close();
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	test('presence is keyed by name — a repeat join never duplicates the roster row', async ({ request }) => {
+		const name = uniq('dup');
+		await join(request, name);
+		await join(request, name);
+		await join(request, name);
+		expect(count(await roster(request), name), 'name-keyed board must hold at most one row per name').toBe(1);
 	});
 
-	test('the roster persists across a full reload', async ({ page }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		const name = uniq('user');
-		await join(page, name);
-		await expect(presence(page, name)).toHaveCount(1, { timeout: SYNC });
-
-		await page.reload();
-		await expect(presence(page, name)).toHaveCount(1, { timeout: SYNC });
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	test('names round-trip verbatim through the store', async ({ request }) => {
+		const name = `${uniq('xss')} <b>BOOM</b>`;
+		await join(request, name);
+		const names = await roster(request);
+		// The exact string round-trips — no escaping, stripping, or mutation server-side.
+		expect(names).toContain(name);
 	});
 
-	test('two visitors with different names both appear on the board', async ({ browser }) => {
-		const errors: string[] = [];
-		const ctxA = await browser.newContext();
-		const ctxB = await browser.newContext();
-		const tabA = await ctxA.newPage();
-		const tabB = await ctxB.newPage();
-		watchErrors(tabA, errors);
-		watchErrors(tabB, errors);
-
-		await tabA.goto(BASE);
-		await tabB.goto(BASE);
-
-		const nameA = uniq('ann');
-		const nameB = uniq('bob');
-		await join(tabA, nameA);
-		await join(tabB, nameB);
-
-		// Each tab eventually sees both rosters via realtime sync.
-		await expect.poll(() => presence(tabA, nameA).count(), { timeout: SYNC }).toBe(1);
-		await expect.poll(() => presence(tabA, nameB).count(), { timeout: SYNC }).toBe(1);
-		await expect.poll(() => presence(tabB, nameA).count(), { timeout: SYNC }).toBe(1);
-		await expect.poll(() => presence(tabB, nameB).count(), { timeout: SYNC }).toBe(1);
-
-		await ctxA.close();
-		await ctxB.close();
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	test('a unicode / emoji name round-trips byte-for-byte', async ({ request }) => {
+		const name = `${uniq('uni')} 日本語 🙂`;
+		await join(request, name);
+		expect(await roster(request)).toContain(name);
 	});
 
-	test('the join button is disabled until a non-empty name is entered', async ({ page }) => {
+	test('a blank or whitespace-only name is rejected and does not change the roster', async ({ request }) => {
+		// A real name of our own, so we can assert on OUR entry rather than the
+		// shared roster's absolute length (which other workers/tests mutate).
+		const mine = uniq('valid');
+		await join(request, mine);
+		expect(count(await roster(request), mine)).toBe(1);
+
+		const bads = ['', '   ', '\t\n'];
+		for (const bad of bads) {
+			const j = await join(request, bad);
+			expect(j.status, `unexpected HTTP ${j.status}`).toBeLessThan(500);
+			expect(j.body?.error, `blank name must be rejected, got result ${JSON.stringify(j.body?.result)}`).toBeTruthy();
+		}
+
+		// No phantom entry was added by the rejected joins, and our own valid entry
+		// is untouched — neither depends on the global roster length.
+		const after = await roster(request);
+		for (const bad of bads) expect(after, `rejected input ${JSON.stringify(bad)} leaked into the roster`).not.toContain(bad);
+		expect(count(after, mine), 'the rejected joins must not disturb this visitor\u2019s entry').toBe(1);
+	});
+
+	test('multiple distinct visitors all persist in the shared roster', async ({ request }) => {
+		const names = [uniq('m1'), uniq('m2'), uniq('m3')];
+		for (const n of names) await join(request, n);
+		const present = await roster(request);
+		for (const n of names) expect(count(present, n), `${n} missing from roster`).toBe(1);
+	});
+
+	// --- Page smoke: thin client renders + primary control ---
+
+	test('renders the composer; join is disabled until a real name is typed', async ({ page }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
 		const input = page.getByTestId('presence-name-input');
 		const joinBtn = page.getByTestId('join-btn');
-		await expect(input).toBeVisible();
+		await expect(input).toBeVisible({ timeout: SYNC });
+		await expect(joinBtn).toBeVisible();
 
-		// Empty and whitespace-only names cannot be joined (trim before checking);
-		// a real name re-enables the control so it isn't simply always-disabled.
 		await input.fill('');
 		await expect(joinBtn).toBeDisabled();
 		await input.fill('   ');
@@ -129,150 +124,83 @@ test.describe('collab-presence-board', () => {
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	test('a visitor name with markup is rendered as text, not injected as HTML', async ({ page }) => {
+	test('joining from the UI adds a row; a markup name renders as text, not injected HTML', async ({ page }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
-		// Names are untrusted. A correct impl renders the name as text (escaped);
-		// one that uses innerHTML would parse this into a real <b> element.
 		const token = uniq('xss');
 		const name = `${token} <b>BOOM</b>`;
-		await join(page, name);
+		await page.getByTestId('presence-name-input').fill(name);
+		await page.getByTestId('join-btn').click();
 
-		// Scope by the clean unique token (a substring of the name).
 		const row = presence(page, token);
 		await expect(row).toHaveCount(1, { timeout: SYNC });
-		// The markup is shown verbatim as text...
 		await expect(row).toContainText('<b>BOOM</b>', { timeout: SYNC });
-		// ...and was NOT parsed into a live element.
 		await expect(row.locator('b')).toHaveCount(0);
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	test('the shared board persists multiple visitors across a reload', async ({ browser }) => {
-		const errors: string[] = [];
-		const ctxA = await browser.newContext();
-		const ctxB = await browser.newContext();
-		const tabA = await ctxA.newPage();
-		const tabB = await ctxB.newPage();
-		watchErrors(tabA, errors);
-		watchErrors(tabB, errors);
-
-		await tabA.goto(BASE);
-		await tabB.goto(BASE);
-
-		const nameA = uniq('persistA');
-		const nameB = uniq('persistB');
-		await join(tabA, nameA);
-		await join(tabB, nameB);
-
-		// Both rosters first reach tab A via realtime...
-		await expect.poll(() => presence(tabA, nameA).count(), { timeout: SYNC }).toBe(1);
-		await expect.poll(() => presence(tabA, nameB).count(), { timeout: SYNC }).toBe(1);
-
-		// ...then a reload of tab A must restore BOTH from the persisted board —
-		// not just the visitor who joined in this tab.
-		await tabA.reload();
-		await expect.poll(() => presence(tabA, nameA).count(), { timeout: SYNC }).toBe(1);
-		await expect.poll(() => presence(tabA, nameB).count(), { timeout: SYNC }).toBe(1);
-
-		await ctxA.close();
-		await ctxB.close();
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('joining with a name already present does not create a duplicate row', async ({ page }) => {
+	test('a reload restores the shared roster (page fetches api.listPresent on load)', async ({ page }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
-		const name = uniq('dup');
-		await join(page, name);
+		const name = uniq('persist');
+		await page.getByTestId('presence-name-input').fill(name);
+		await page.getByTestId('join-btn').click();
 		await expect(presence(page, name)).toHaveCount(1, { timeout: SYNC });
-
-		// Join the SAME name again. Presence is keyed by name, so this must NOT add
-		// a second row (an append-by-random-key impl would).
-		await join(page, name);
-
-		// Deterministic flush: a sentinel join issued AFTER the duplicate must
-		// round-trip through the same persist/broadcast path. Once its row is
-		// visible, the duplicate join above has fully settled — so the count for
-		// `name` is final (not racing an in-flight second row).
-		const sentinel = uniq('flush');
-		await join(page, sentinel);
-		await expect(presence(page, sentinel)).toHaveCount(1, { timeout: SYNC });
-
-		await expect(presence(page, name)).toHaveCount(1, { timeout: SYNC });
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('a tab opened AFTER others have joined loads the existing roster on first paint', async ({ browser }) => {
-		const errors: string[] = [];
-		const ctxA = await browser.newContext();
-		const ctxB = await browser.newContext();
-		const tabA = await ctxA.newPage();
-		const tabB = await ctxB.newPage();
-		watchErrors(tabA, errors);
-		watchErrors(tabB, errors);
-
-		await tabA.goto(BASE);
-		await tabB.goto(BASE);
-		const nameA = uniq('early-a');
-		const nameB = uniq('early-b');
-		await join(tabA, nameA);
-		await join(tabB, nameB);
-		// Make sure both are committed/broadcast before the late tab opens.
-		await expect.poll(() => presence(tabA, nameA).count(), { timeout: SYNC }).toBe(1);
-		await expect.poll(() => presence(tabA, nameB).count(), { timeout: SYNC }).toBe(1);
-
-		// A brand-new tab opens with no prior realtime events: it must fetch the
-		// stored roster on load and show BOTH immediately — a realtime-only impl
-		// (no initial fetch) would show a blank board here.
-		const ctxC = await browser.newContext();
-		const tabC = await ctxC.newPage();
-		watchErrors(tabC, errors);
-		await tabC.goto(BASE);
-		await expect.poll(() => presence(tabC, nameA).count(), { timeout: SYNC }).toBe(1);
-		await expect.poll(() => presence(tabC, nameB).count(), { timeout: SYNC }).toBe(1);
-
-		await ctxA.close();
-		await ctxB.close();
-		await ctxC.close();
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('a unicode/emoji name renders correctly on the board', async ({ page }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		const token = uniq('uni');
-		const name = `${token} 日本語 🙂`;
-		await join(page, name);
-
-		const row = presence(page, token);
-		await expect(row).toHaveCount(1, { timeout: SYNC });
-		await expect(row).toContainText('日本語', { timeout: SYNC });
-		await expect(row).toContainText('🙂', { timeout: SYNC });
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('multiple names joined from one tab all persist across a reload', async ({ page }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		const names = [uniq('m1'), uniq('m2'), uniq('m3')];
-		for (const n of names) {
-			await join(page, n);
-			await expect(presence(page, n)).toHaveCount(1, { timeout: SYNC });
-		}
 
 		await page.reload();
-		for (const n of names) {
-			await expect(presence(page, n)).toHaveCount(1, { timeout: SYNC });
-		}
+		// A blank first-paint that only fills on the next realtime event would fail:
+		// the stored roster must be fetched and rendered on load.
+		await expect(presence(page, name)).toHaveCount(1, { timeout: SYNC });
 
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	});
+
+	test('a freshly-opened tab paints the pre-existing roster on mount (first-paint from listPresent)', async ({ page, request }) => {
+		const errors = watchErrors(page);
+		// Seed the shared board over the api BEFORE this tab ever opens — these
+		// joins are "already present" from the new tab's point of view.
+		const a = uniq('early');
+		const b = uniq('early');
+		await join(request, a);
+		await join(request, b);
+
+		// Opening the page now must render the already-present roster on load
+		// (a mount-time api.listPresent), not sit blank waiting for a future
+		// realtime event. Deterministic: the joins completed before goto.
+		await page.goto(BASE);
+		await expect(presence(page, a)).toHaveCount(1, { timeout: SYNC });
+		await expect(presence(page, b)).toHaveCount(1, { timeout: SYNC });
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	});
+
+	// --- Realtime fan-out: intrinsically two browser contexts (PARTIALLY-DOM) ---
+
+	test('a join in one tab appears in another already-open tab in real time', async ({ browser }) => {
+		const errors: string[] = [];
+		const ctxA = await browser.newContext();
+		const ctxB = await browser.newContext();
+		const tabA = await ctxA.newPage();
+		const tabB = await ctxB.newPage();
+		watchErrors(tabA, errors);
+		watchErrors(tabB, errors);
+
+		await tabA.goto(BASE);
+		await tabB.goto(BASE);
+
+		const name = uniq('rt');
+		await tabA.getByTestId('presence-name-input').fill(name);
+		await tabA.getByTestId('join-btn').click();
+
+		// Tab B had the board open before A joined; it must reflect A's presence
+		// within a couple seconds — realtime broadcast, no reload.
+		await expect.poll(() => presence(tabB, name).count(), { timeout: SYNC }).toBe(1);
+
+		await ctxA.close();
+		await ctxB.close();
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 });
