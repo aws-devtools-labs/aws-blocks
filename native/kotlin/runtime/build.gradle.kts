@@ -56,3 +56,37 @@ kotlin {
         }
     }
 }
+
+// Kotlin ships a compiled artifact, so the version is generated at build time
+// from VERSION_NAME (unlike Swift/Dart, which commit the constant).
+val versionOutputDir = layout.buildDirectory.dir("generated/version/commonMain/kotlin")
+
+val generateVersion by tasks.registering {
+    val versionValue = (project.findProperty("VERSION_NAME") as String?)
+        ?: error("VERSION_NAME is not set in gradle.properties")
+    inputs.property("version", versionValue)
+    outputs.dir(versionOutputDir)
+    doLast {
+        // Reject a non-semver VERSION_NAME rather than baking a malformed token.
+        require(Regex("""^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,20})?$""").matches(versionValue)) {
+            "VERSION_NAME \"$versionValue\" is not a valid token semver (N.N.N, optional -prerelease, no build metadata)."
+        }
+        val pkgDir = versionOutputDir.get().dir("com/aws/blocks/kotlin").asFile
+        pkgDir.mkdirs()
+        pkgDir.resolve("Version.kt").writeText(
+            """
+            |package com.aws.blocks.kotlin
+            |
+            |/** Semver of this AWS Blocks Kotlin runtime library. */
+            |internal const val blocksRuntimeVersion = "$versionValue"
+            |
+            |/** User agent token for this runtime, e.g. `aws-blocks-kotlin/$versionValue`. */
+            |internal const val blocksUserAgentToken = "aws-blocks-kotlin/${'$'}blocksRuntimeVersion"
+            |""".trimMargin(),
+        )
+    }
+}
+
+kotlin.sourceSets.named("commonMain") {
+    kotlin.srcDir(generateVersion.map { versionOutputDir })
+}
