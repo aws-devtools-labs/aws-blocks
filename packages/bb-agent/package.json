@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-agent",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "keywords": [
     "aws-blocks",
     "ai",
@@ -55,11 +55,11 @@
     "test": "node --test dist/index.test.js && node --conditions=cdk --test dist/index.cdk.test.js && node --test dist/agentcore-bundle.test.js"
   },
   "dependencies": {
-    "@aws-blocks/bb-distributed-table": "^0.2.0",
-    "@aws-blocks/bb-file-bucket": "^0.2.1",
-    "@aws-blocks/bb-logger": "^0.2.0",
-    "@aws-blocks/bb-realtime": "^0.2.1",
-    "@aws-blocks/core": "^0.5.0",
+    "@aws-blocks/bb-distributed-table": "^0.2.1",
+    "@aws-blocks/bb-file-bucket": "^0.2.2",
+    "@aws-blocks/bb-logger": "^0.2.1",
+    "@aws-blocks/bb-realtime": "^0.2.2",
+    "@aws-blocks/core": "^0.6.0",
     "@aws-sdk/client-bedrock": "^3.700.0",
     "@aws-sdk/client-bedrock-agentcore": "^3.700.0",
     "@opentelemetry/api": "^1.9.0",
@@ -71,7 +71,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "@aws-blocks/bb-lambda-compute": "^0.5.0",
+    "@aws-blocks/bb-lambda-compute": "^0.5.1",
     "@aws-sdk/client-bedrock-runtime": "^3.700.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@types/node": "^20.0.0",
