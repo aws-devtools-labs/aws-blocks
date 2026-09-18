@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/data-common",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "keywords": [
     "aws-blocks",
     "database",
@@ -39,7 +39,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "@aws-blocks/bb-logger": "^0.1.4",
+    "@aws-blocks/bb-logger": "^0.2.0",
     "kysely": "^0.28.12"
   }
 }
