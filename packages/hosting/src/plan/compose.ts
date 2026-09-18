@@ -78,13 +78,15 @@ export const composeGraph = (plan: CapabilityPlan, choice: FrontDoorChoice): Fro
 };
 
 /**
- * Compose a NESTED graph: a CloudFront edge fronting the plan's static origins
- * directly, plus a child `router` layer (e.g. `alb`) it routes the backend/API
- * subtree to — the CF → ALB → compute shape (composition, not a single door).
+ * Compose a NESTED graph representation: a CloudFront edge plus a child `router`
+ * layer (e.g. `alb`) it forwards the backend/API subtree to.
  *
- * The edge keeps static/server/image on itself and forwards the API subtree to
- * the router child; the router carries the backend origins. `renderGraph`
- * renders the router first, then attaches the edge to its `originHandle`.
+ * NOTE: this is the graph-layer *representation* used by `renderGraph`'s
+ * nested-composition path; it is **not** the shipping composed door. The
+ * user-facing `frontDoor: { edge: 'cloudfront', router: 'alb' }` door is realized
+ * as the doc's **Design B** (CloudFront's single origin IS a full ALB router that
+ * routes to everything) directly in `core.Hosting` (`addCloudFrontOverAlb`). A
+ * thin-edge graph renderer that produces Design B from this graph is a follow-on.
  */
 export const composeCloudFrontOverRouter = (plan: CapabilityPlan, router: 'alb' | 'api-gateway'): FrontDoorGraph => {
   const routerNode: FrontDoorLayer = {
