@@ -4,7 +4,7 @@ Build a scheduled email-digest feature in this AWS Blocks app. A recurring job i
 
 ## Setup (do this first)
 
-The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
+The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace. Remove any starter/scaffold demo code and UI you don't need for this task, so the workspace stays scoped to the digest feature.
 
 ## Requirements
 
