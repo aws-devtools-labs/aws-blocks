@@ -102,7 +102,54 @@ See the [`example/android`](example/android) directory for a complete Android ap
 | General/RPC | ✅ | ✅ | ✅ |
 | Realtime    | ✅ | ✅ | ✅ |
 | File Bucket | ✅ | ✅ | ✅ |
-| OIDC        | ✅ | ❌ | ❌ |
+| OIDC        | ✅ | ✅ | ✅ |
+
+## OIDC Setup
+
+Configure the URI the backend relays back to once sign-in completes. It must match an
+entry in your backend's `allowedRelayOrigins`:
+
+```kotlin
+awsBlocks {
+    apiSpec = file("path/to/blocks.spec.json")
+    packageName = "com.myapp.generated"
+    oidc {
+        relayTo = "com.yourcompany.yourapp://auth/callback"
+    }
+}
+```
+
+This property was previously named `redirectUrl`. That name still works but reports a
+deprecation warning; setting both to different values fails the build.
+
+Note this is not the OAuth `redirect_uri` — that one is the backend's own HTTPS callback,
+which the client derives from the spec.
+
+**Android** needs nothing beyond the value above. The Gradle plugin injects the scheme
+into the merged manifest, so the redirect activity is registered for you.
+
+**iOS** needs the same scheme declared in your app's `Info.plist`, because the Gradle
+plugin cannot reach an Xcode project:
+
+```xml
+<key>CFBundleURLTypes</key>
+<array>
+    <dict>
+        <key>CFBundleURLSchemes</key>
+        <array>
+            <string>com.yourcompany.yourapp</string>
+        </array>
+    </dict>
+</array>
+```
+
+Sign-in uses `ASWebAuthenticationSession`. Dismissing the sheet throws
+`OidcCancelledException`.
+
+**JVM** needs no relay configuration at all. It binds a loopback listener on an
+OS-assigned port per sign-in and uses that as the relay target, which the backend allows
+on any port without an allowlist entry. Any value you configure is ignored on this target.
+Sign-in there times out after 5 minutes, surfacing as `OidcCancelledException`.
 
 ## Requirements
 
