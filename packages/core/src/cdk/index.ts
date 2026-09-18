@@ -18,6 +18,8 @@ import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry } from './config-registry.js';
+import { resolveApiFrontDoor, resolvedApiFrontDoorUrl, scheduleApiFrontDoor } from './api-front-door.js';
+import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
@@ -93,6 +95,22 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	get apiUrl(): string {
 		return this.requireDefaultCompute().apiUrl;
 	}
+	/**
+	 * The default compute's origin base — see `Compute.endpoint`. No
+	 * `/aws-blocks/api` suffix and no trailing slash.
+	 *
+	 * This is the origin the API front door forwards to, and the base a
+	 * client-facing RPC URL is composed from (`defaultEndpoint + BLOCKS_RPC_PREFIX`).
+	 */
+	get defaultEndpoint(): string {
+		const endpoint = this.requireDefaultCompute().endpoint;
+		if (!endpoint) {
+			throw new Error(
+				'Default compute has no HTTP endpoint — a worker-only compute cannot serve as the default.',
+			);
+		}
+		return endpoint;
+	}
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
 	 * `bb-logger` CDK construct is a no-op and no longer touches it. */
@@ -164,6 +182,13 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 				);
 			}
 		}
+		// Deferred to synth: `Hosting` may be built after this resolves and claim the
+		// front-door role, in which case no managed distribution is provisioned.
+		scheduleApiFrontDoor(
+			stack,
+			resolveApiFrontDoor(props.apiFrontDoor, props.defaults),
+			stack._defaultCompute?.endpoint,
+		);
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
 
@@ -195,7 +220,20 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 			);
 		}
 
-		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
+		// Where a client should send RPC calls. Lazy because the answer is only
+		// settled at synth: a front door — the managed one, or a `Hosting`
+		// distribution that claimed the role — is decided by an aspect that runs
+		// after this. Resolving eagerly here would bake in the gateway URL and
+		// bypass the front door entirely.
+		//
+		// The RPC prefix is appended either way: this output is the API's address,
+		// and `deploy.ts`/`sandbox.ts` hand it straight to a client as
+		// `BLOCKS_API_URL`.
+		new cdk.CfnOutput(stack, 'ApiUrl', {
+			value: cdk.Lazy.string({
+				produce: () => `${resolvedApiFrontDoorUrl(stack) ?? stack.defaultEndpoint}${BLOCKS_RPC_PREFIX}`,
+			}),
+		});
 
 		addBlocksStackMetadata(stack);
 

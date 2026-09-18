@@ -13,6 +13,7 @@ import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
+import { resolveApiFrontDoor, scheduleApiFrontDoor } from './api-front-door.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
@@ -65,6 +66,14 @@ export interface BlocksBackendProps {
 	 * corresponding stack default.
 	 */
 	defaults: BlocksDefaults;
+	/**
+	 * Override the preset's managed-API-front-door decision for this backend.
+	 *
+	 * `'cloudfront'` provisions one even in a sandbox; `'none'` suppresses it even
+	 * in production, for an app that fronts its API itself (an ALB, a custom
+	 * domain, an existing CDN). Omit to follow `defaults.provisionApiFrontDoor`.
+	 */
+	apiFrontDoor?: 'cloudfront' | 'none';
 }
 
 /**
@@ -182,6 +191,8 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	registerConfig(scope, 'BB_RESOURCES_GROUP_URL', resourcesUrl);
 	registerConfig(scope, 'BB_SETTINGS_GROUP_URL', settingsUrl);
 
+	// Ambient stack identity: the BlocksStack/BlocksBackend constructor sets this
+	// before calling us, so it is the stack these routes belong to.
 	registerBuiltinRoutes();
 
 	return { executionRole };
@@ -230,6 +241,22 @@ export class BlocksBackend extends Construct {
 	/** The default compute's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
 	get apiUrl(): string {
 		return this.requireDefaultCompute().apiUrl;
+	}
+	/**
+	 * The default compute's origin base — see `Compute.endpoint`. No
+	 * `/aws-blocks/api` suffix and no trailing slash.
+	 *
+	 * This is the origin the API front door forwards to, and the base a
+	 * client-facing RPC URL is composed from (`defaultEndpoint + BLOCKS_RPC_PREFIX`).
+	 */
+	get defaultEndpoint(): string {
+		const endpoint = this.requireDefaultCompute().endpoint;
+		if (!endpoint) {
+			throw new Error(
+				'Default compute has no HTTP endpoint — a worker-only compute cannot serve as the default.',
+			);
+		}
+		return endpoint;
 	}
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
@@ -335,6 +362,14 @@ export class BlocksBackend extends Construct {
 			}
 		}
 		addBlocksStackMetadata(cdk.Stack.of(backend));
+
+		// Deferred to synth: `Hosting` may be built after this resolves and claim the
+		// front-door role, in which case no managed distribution is provisioned.
+		scheduleApiFrontDoor(
+			backend,
+			resolveApiFrontDoor(props.apiFrontDoor, props.defaults),
+			backend._defaultCompute?.endpoint,
+		);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));

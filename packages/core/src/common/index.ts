@@ -334,6 +334,19 @@ export interface BlocksStackProps extends StackProps {
    * option. See `BlocksDefaults` in `@aws-blocks/core/cdk`.
    */
   defaults: BlocksDefaults;
+  /**
+   * Override the preset's managed-API-front-door decision for this app.
+   *
+   * `'cloudfront'` provisions one even in a sandbox; `'none'` suppresses it even
+   * in production, for an app that fronts its API itself (an ALB, a custom
+   * domain, an existing CDN). Omit to follow `defaults.provisionApiFrontDoor`.
+   *
+   * The managed front door forwards a single catch-all behavior to the default
+   * compute. If you front the API yourself instead (`'none'`), the app's routing
+   * table is still available through `getRegisteredRoutes()` to build behaviors
+   * from.
+   */
+  apiFrontDoor?: 'cloudfront' | 'none';
 }
 
 export class BlocksStack {
