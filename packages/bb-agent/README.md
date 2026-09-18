@@ -728,7 +728,10 @@ const transport = realtimeTransport({
   // Start a new turn (submits the backend job that publishes chunks).
   sendMessage: (channelId, message, conversationId) =>
     api.agentStream(message, conversationId ?? undefined, channelId),
-  // Resume a paused turn with the user's interrupt responses.
+  // Resume a paused turn with the user's interrupt responses. `responses` is
+  // `InterruptResponse[]` (its `approved` is optional); type your `agentResume`
+  // param as `InterruptResponse[]` so this passes straight through — if your RPC
+  // narrows it to `approved: boolean`, map here: `responses.map(r => ({ ...r, approved: r.approved ?? false }))`.
   resume: (channelId, responses, conversationId) =>
     api.agentResume(channelId, responses, conversationId ?? undefined),
 });

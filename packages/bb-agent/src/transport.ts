@@ -133,6 +133,8 @@ const TERMINAL_TYPES: ReadonlySet<AgentStreamChunk['type']> = new Set(['done', '
  *   },
  *   sendMessage: (channelId, message, conversationId) =>
  *     api.agentStream(message, conversationId ?? undefined, channelId),
+ *   // `responses` is InterruptResponse[] (optional `approved`); type your agentResume
+ *   // param as InterruptResponse[] to pass through, or map `approved: r.approved ?? false`.
  *   resume: (channelId, responses, conversationId) =>
  *     api.agentResume(channelId, responses, conversationId ?? undefined),
  * });

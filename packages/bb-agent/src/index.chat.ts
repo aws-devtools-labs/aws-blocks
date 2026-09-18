@@ -27,7 +27,7 @@
  */
 
 import type { ChatTransport, ChunkStream } from './transport.js';
-import type { AgentStreamChunk, InterruptResponse } from './types.js';
+import type { AgentStreamChunk, InterruptResponse, JSONValue } from './types.js';
 
 export type { ChatTransport, ChunkStream, TurnRequest } from './transport.js';
 export { realtimeTransport } from './transport.js';
@@ -38,7 +38,7 @@ export interface ChatMessage {
 	id: string;
 	role: 'user' | 'assistant' | 'approval';
 	content: string;
-	metadata?: Record<string, any>;
+	metadata?: Record<string, JSONValue>;
 }
 
 /** Conversation CRUD — plain request/response RPC to the backend, the same across every runtime. */
@@ -48,11 +48,11 @@ export interface ChatConversationApi {
 	/** Load a conversation's message history for rendering. */
 	getConversation(
 		id: string,
-	): Promise<{ messages: { role: string; content: string; metadata?: Record<string, any> }[] }>;
+	): Promise<{ messages: { role: string; content: string; metadata?: Record<string, JSONValue> }[] }>;
 	/** Check whether a conversation has unanswered interrupts (e.g. the user left mid-approval). */
 	getPendingInterrupts?(
 		conversationId: string,
-	): Promise<{ interrupts: Array<{ id: string; name: string; reason?: any }> }>;
+	): Promise<{ interrupts: Array<{ id: string; name: string; reason?: unknown }> }>;
 }
 
 /** Options for {@link createChat}. */
@@ -67,10 +67,15 @@ export interface CreateChatOptions {
 	onLoadingChange?: (isLoading: boolean) => void;
 	/** Called on each streaming chunk. */
 	onChunk?: (chunk: AgentStreamChunk) => void;
-	/** Called when the agent encounters an error. */
-	onError?: (error: string) => void;
+	/**
+	 * Called when the agent encounters an error. `error` is the message; `cause` is the
+	 * original error object when the failure was a rejected attach/run (undefined for a
+	 * stream `error` chunk, which carries only a message), so a call site can
+	 * `isBlocksError(cause, ...)` to branch on error type.
+	 */
+	onError?: (error: string, cause?: unknown) => void;
 	/** Called when the agent pauses for human approval. Continue with `sendMessage({ interruptResponses })`. */
-	onInterrupt?: (interrupts: Array<{ id: string; name: string; reason?: any }>) => void;
+	onInterrupt?: (interrupts: Array<{ id: string; name: string; reason?: unknown }>) => void;
 }
 
 /** A message to start a turn, or the interrupt responses that resume a paused one. */
@@ -110,6 +115,19 @@ export interface ChatController {
 let messageCounter = 0;
 function nextId(): string {
 	return `msg-${++messageCounter}-${Date.now()}`;
+}
+
+/**
+ * Coerce an arbitrary value into a {@link JSONValue} for audit metadata. A value that
+ * is already JSON-round-trippable is kept as-is; anything else (a function, a symbol,
+ * a cyclic object) becomes its string form, so metadata stays a clean JSONValue.
+ */
+function toJSONValue(value: unknown): JSONValue {
+	try {
+		return JSON.parse(JSON.stringify(value)) as JSONValue;
+	} catch {
+		return String(value);
+	}
 }
 
 /**
@@ -247,7 +265,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 				for await (const chunk of stream) handleChunk(chunk);
 			} catch (err) {
 				setLoading(false);
-				options.onError?.(err instanceof Error ? err.message : String(err));
+				options.onError?.(err instanceof Error ? err.message : String(err), err);
 			} finally {
 				// Tear down the underlying subscription (e.g. the WebSocket) when the
 				// turn ends — otherwise resuming on the same channel would re-subscribe
@@ -276,13 +294,21 @@ export function createChat(options: CreateChatOptions): ChatController {
 			} else {
 				// Resuming a paused turn — record the decisions, reuse/insert an assistant placeholder.
 				for (const r of input.interruptResponses) {
+					// Build audit metadata as JSONValue (no `undefined`, no `any`): include only
+					// the fields that are set. `input` is InterruptResponse.input (audit-only) — coerce
+					// to a JSON string when it isn't already a JSON scalar/structure.
+					const metadata: Record<string, JSONValue> = {};
+					if (r.approved !== undefined) metadata.approved = r.approved;
+					if (r.trust !== undefined) metadata.trust = r.trust;
+					if (r.toolName !== undefined) metadata.toolName = r.toolName;
+					if (r.input !== undefined) metadata.input = toJSONValue(r.input);
 					messages = [
 						...messages,
 						{
 							id: nextId(),
 							role: 'approval' as const,
 							content: r.approved ? 'Approved' : 'Denied',
-							metadata: { approved: r.approved, trust: r.trust, toolName: r.toolName, input: r.input },
+							metadata,
 						},
 					];
 				}
@@ -312,7 +338,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 					assistantId = null;
 				}
 				setLoading(false);
-				options.onError?.(err instanceof Error ? err.message : String(err));
+				options.onError?.(err instanceof Error ? err.message : String(err), err);
 			}
 		},
 
