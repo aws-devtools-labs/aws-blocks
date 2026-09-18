@@ -6,7 +6,7 @@
 '@aws-blocks/bb-cron-job': minor
 '@aws-blocks/bb-distributed-table': minor
 '@aws-blocks/bb-realtime': minor
-'@aws-blocks/blocks': patch
+"@aws-blocks/blocks": patch
 ---
 
 Scope all shared Blocks synth state to the owning backend root (`BlocksStack`/`BlocksBackend`) instead of the enclosing `cdk.Stack`, so two `BlocksBackend`s in one stack — and multiple stacks in one synth — stay fully independent.
