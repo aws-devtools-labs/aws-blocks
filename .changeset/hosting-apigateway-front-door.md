@@ -34,6 +34,15 @@ path from a v1 (`event.path`, REST) or v2 (`event.rawPath`, HTTP API / Function
 URL) event, so one generator serves both flavors. The SSR/image Lambdas already
 branch on v1/v2, so a REST door works with the existing compute.
 
+**Custom domains** are wired for both flavors (`CustomDomainTls` is `core`, and
+actually built — not an overclaim): pass `domain` and the door provisions a
+**regional** API Gateway custom `DomainName` + mapping (REST base-path mapping /
+HTTP API mapping) and Route 53 A/AAAA alias records to the gateway's regional
+domain, for one or more names. The certificate is your BYO regional cert
+(`frontDoor.certificate` or `domain.certificate`, same region as the stack — not
+the CloudFront us-east-1 requirement) or is DNS-validated against the hosted zone
+when omitted. `wwwRedirect` remains `unsupported` on this door (no edge function).
+
 Edge capabilities (global cache, per-route response headers, skew-pin, geo) and
 response streaming are `degraded`/`unsupported` on this door and — as with the
 ALB door — must be accepted via `degrade`, else the negotiator fails at synth

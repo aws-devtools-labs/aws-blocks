@@ -19,13 +19,16 @@
  * response cap.
  */
 import { CfnOutput, Duration, Fn } from 'aws-cdk-lib';
-import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
+import { ApiMapping, DomainName, HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration, HttpUrlIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { Code, Function as LambdaFunction, type IFunction } from 'aws-cdk-lib/aws-lambda';
+import { AaaaRecord, ARecord, RecordTarget } from 'aws-cdk-lib/aws-route53';
+import { ApiGatewayv2DomainProperties } from 'aws-cdk-lib/aws-route53-targets';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import type { CapabilityPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
+import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 export type ApiGatewayConstructProps = {
@@ -34,6 +37,8 @@ export type ApiGatewayConstructProps = {
   computeFunctions?: Map<string, IFunction>;
   serverComputeName?: string;
   imageComputeName?: string;
+  /** Custom domain(s) — a regional cert + DomainName + API mapping + Route 53 alias. */
+  domain?: ApiGwCustomDomain;
 };
 
 /** Convert a route-table glob pattern to an API Gateway HTTP API route path (or null for the catch-all). */
@@ -125,6 +130,26 @@ export class ApiGatewayConstruct extends Construct {
     }
 
     this.url = this.api.apiEndpoint; // https://<id>.execute-api.<region>.amazonaws.com
+
+    // Custom domain(s): a regional DomainName + API mapping per name, with a
+    // Route 53 A/AAAA alias to the gateway's regional domain. The primary name
+    // becomes the door's URL.
+    if (props.domain) {
+      const { certificate, hostedZone, names } = resolveApiGwDomain(this, 'Domain', props.domain);
+      names.forEach((name, i) => {
+        const dn = new DomainName(this, `Domain${i}`, { domainName: name, certificate });
+        new ApiMapping(this, `DomainMap${i}`, { api: this.api, domainName: dn });
+        if (hostedZone) {
+          const target = RecordTarget.fromAlias(
+            new ApiGatewayv2DomainProperties(dn.regionalDomainName, dn.regionalHostedZoneId),
+          );
+          new ARecord(this, `DomainA${i}`, { zone: hostedZone, recordName: name, target });
+          new AaaaRecord(this, `DomainAAAA${i}`, { zone: hostedZone, recordName: name, target });
+        }
+      });
+      this.url = `https://${names[0]}`;
+    }
+
     new CfnOutput(this, 'ApiGatewayUrl', { value: this.url, description: 'API Gateway HTTP API front-door URL' });
   }
 }

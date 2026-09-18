@@ -121,6 +121,52 @@ describe('ApiGatewayRestConstruct — with backend proxy', () => {
 	});
 });
 
+describe('ApiGatewayRestConstruct — custom domain', () => {
+	const app = new App();
+	const stack = new Stack(app, 'SRDom', { env: { account: '111111111111', region: 'us-west-2' } });
+	const bucket = new Bucket(stack, 'Assets');
+	// hostedZoneId (not name) avoids HostedZone.fromLookup() which needs context.
+	new ApiGatewayRestConstruct(stack, 'ApiGwRest', {
+		plan: staticPlan,
+		bucket,
+		domain: { names: ['app.example.com'], hostedZone: 'example.com', hostedZoneId: 'Z1234567890ABC' },
+	});
+	const t = Template.fromStack(stack);
+
+	it('provisions a REGIONAL custom DomainName + base-path mapping', () => {
+		t.hasResourceProperties('AWS::ApiGateway::DomainName', {
+			DomainName: 'app.example.com',
+			EndpointConfiguration: { Types: ['REGIONAL'] },
+		});
+		t.resourceCountIs('AWS::ApiGateway::BasePathMapping', 1);
+	});
+
+	it('creates a regional ACM cert (stack region, not us-east-1) and A+AAAA alias records', () => {
+		t.resourceCountIs('AWS::CertificateManager::Certificate', 1);
+		// One A + one AAAA alias.
+		t.resourceCountIs('AWS::Route53::RecordSet', 2);
+	});
+});
+
+describe('ApiGatewayConstruct (HTTP) — custom domain', () => {
+	const app = new App();
+	const stack = new Stack(app, 'SHDom', { env: { account: '111111111111', region: 'us-west-2' } });
+	const bucket = new Bucket(stack, 'Assets');
+	new ApiGatewayConstruct(stack, 'ApiGw', {
+		plan: staticPlan,
+		bucket,
+		domain: { names: ['app.example.com'], hostedZone: 'example.com', hostedZoneId: 'Z1234567890ABC' },
+	});
+	const t = Template.fromStack(stack);
+
+	it('provisions an HTTP API v2 DomainName + API mapping + A/AAAA alias records', () => {
+		t.hasResourceProperties('AWS::ApiGatewayV2::DomainName', { DomainName: 'app.example.com' });
+		t.resourceCountIs('AWS::ApiGatewayV2::ApiMapping', 1);
+		t.resourceCountIs('AWS::CertificateManager::Certificate', 1);
+		t.resourceCountIs('AWS::Route53::RecordSet', 2);
+	});
+});
+
 describe('ApiGatewayAdapter — flavor selection', () => {
 	it("renders a REST API by default (apiType omitted) and for apiType: 'rest'", () => {
 		for (const apiType of [undefined, 'rest' as const]) {
