@@ -357,6 +357,16 @@ export type HostingConstructProps = {
    *   at the edge (edge cache, per-route response headers, skew-pin, geo)
    *   are degraded on ALB and must be accepted via `degrade` (the negotiator
    *   fails synth otherwise — conscious, never silent).
+   * - `{ kind: 'apiGateway', … }` — an Amazon API Gateway as the front door
+   *   (regional, no CDN, no VPC/NAT, scale-to-zero, pay-per-request). The
+   *   *serverless* sibling of the ALB door: API Gateway owns routing (a route
+   *   per origin/namespace), serves private S3 assets via an asset-proxy
+   *   Lambda, and proxies `/aws-blocks/*` same-origin to the backend natively
+   *   (no forwarder Lambda). Best for a SPA/SSR app that wants no CDN and no
+   *   always-on ALB baseline. Edge capabilities (edge cache, per-route headers,
+   *   skew-pin, geo) and response streaming are degraded/unsupported and must
+   *   be accepted via `degrade`. Choose the flavor with `api`: `'rest'`
+   *   (default) or `'http'` (cheaper HTTP API v2).
    *
    * Omit for the CloudFront default (backward-compatible).
    */
@@ -387,15 +397,33 @@ export type HostingConstructProps = {
         backendApiUrl?: string;
         /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
+      }
+    | {
+        kind: 'apiGateway';
+        /**
+         * The API Gateway flavor. `'rest'` (default) is a REST API — it invokes
+         * the SSR/image Lambdas with `lambda:InvokeFunction` (no Function-URL
+         * body-hash mismatch on POST/PUT) and mirrors the flavor already used
+         * for SSR behind CloudFront. `'http'` is the cheaper HTTP API v2.
+         * @default 'rest'
+         */
+        api?: 'rest' | 'http';
+        /** Regional ACM certificate for a custom-domain HTTPS listener (same region). */
+        certificate?: ICertificate;
+        /**
+         * Backend API URL to proxy same-origin (`/aws-blocks/*`) through the
+         * gateway. Set by the Blocks integration layer from the `api` prop;
+         * enables cookie auth with no CORS. API Gateway proxies an external
+         * HTTPS URL natively — no forwarder Lambda (unlike the ALB door).
+         */
+        backendApiUrl?: string;
+        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
+        degrade?: import('../plan/types.js').CapabilityId[];
       };
-  // NOTE: neither API Gateway nor S3-website is a public front-door *kind*.
-  // • API Gateway is an API/compute tier, not a frontend front door (anti-pattern:
-  //   no edge cache, per-request cost, 10 MB cap, base64 tax, hard ~29–30s timeout,
-  //   no streaming). Its adapter stays in-tree/dormant as a candidate preview door.
-  // • S3-website is an ORIGIN, not a front door — it fronts nothing. It is surfaced
-  //   as `frontDoor: 'none'` (serve the origin directly); `s3-website` is the
-  //   internal adapter/mechanism name. Both remain reachable via
-  //   `composeGraph`/`renderGraph`, never via this public union.
+  // NOTE: S3-website is not a public front-door *kind* — it is an ORIGIN, not a
+  // front door (it fronts nothing). It is surfaced as `frontDoor: 'none'` (serve
+  // the origin directly); `s3-website` is the internal adapter/mechanism name,
+  // reachable via `composeGraph`/`renderGraph`, never via this public union.
 };
 
 // ---- Main construct ----
@@ -1411,10 +1439,22 @@ export class HostingConstruct extends Construct {
           monitoring: Boolean(props.monitoring),
           degrade: fd.degrade,
         });
+      } else if (fd?.kind === 'apiGateway') {
+        // API Gateway owns routing: a route per origin (asset-proxy → private S3,
+        // SSR/image Lambdas) plus native same-origin backend proxy. `api` picks
+        // REST (default; lambda:InvokeFunction — no Function-URL body-hash issue)
+        // vs the cheaper HTTP API v2. Edge capabilities (cache/headers/skew/geo)
+        // and streaming are degraded/unsupported and accepted via `degrade`.
+        handle = renderGraph(this, composeGraph(plan, 'api-gateway'), plan, {
+          ...common,
+          apiType: fd.api ?? 'rest',
+          certificate: fd.certificate,
+          degrade: fd.degrade,
+        });
       } else {
         throw new HostingError('UnsupportedFrontDoorError', {
           message: `Unknown front door '${JSON.stringify(props.frontDoor)}'.`,
-          resolution: "Use 'cloudfront' (default), 'none' (S3 website), or { kind: 'alb' }.",
+          resolution: "Use 'cloudfront' (default), 'none' (S3 website), { kind: 'alb' }, or { kind: 'apiGateway' }.",
         });
       }
       this.distributionUrl = handle.url ?? '';

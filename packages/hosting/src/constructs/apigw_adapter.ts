@@ -1,7 +1,9 @@
 /**
- * API Gateway (HTTP API v2) front-door adapter — a cheap, regional,
- * HTTPS-by-default, no-CloudFront door. Renders the same {@link CapabilityPlan}
- * as CloudFront/ALB onto an {@link ApiGatewayConstruct}.
+ * API Gateway front-door adapter — a cheap, regional, HTTPS-by-default,
+ * no-CloudFront door. Renders the same {@link CapabilityPlan} as CloudFront/ALB
+ * onto either a REST API ({@link ApiGatewayRestConstruct}, the default — no
+ * Function-URL body-hash issue) or an HTTP API v2 ({@link ApiGatewayConstruct},
+ * cheaper), selected by `ctx.apiType`.
  *
  * Best fit: a SPA/SSR app that doesn't want a CDN — pay-per-request,
  * scale-to-zero, no ALB/NAT idle cost, same-origin `/aws-blocks/*` (so cookie
@@ -24,6 +26,7 @@ import type {
   SupportTier,
 } from '../plan/types.js';
 import { ApiGatewayConstruct } from './apigw_construct.js';
+import { ApiGatewayRestConstruct } from './apigw_rest_construct.js';
 
 /** API Gateway HTTP API's per-capability support. */
 const APIGW_SUPPORT: Record<CapabilityId, SupportTier> = {
@@ -54,6 +57,12 @@ export type ApiGatewayRenderContext = AdapterContext & {
   computeFunctions?: Map<string, IFunction>;
   serverComputeName?: string;
   imageComputeName?: string;
+  /**
+   * Which API Gateway flavor to render. `'rest'` uses a REST API
+   * (`lambda:InvokeFunction`, no Function-URL body-hash issue; native
+   * `HTTP_PROXY` backend); `'http'` uses HTTP API v2 (cheaper). Default `'rest'`.
+   */
+  apiType?: 'rest' | 'http';
   degrade?: CapabilityId[];
 };
 
@@ -88,13 +97,25 @@ export class ApiGatewayAdapter implements FrontDoorAdapter, FrontDoorLayerAdapte
       );
     }
 
-    const apigw = new ApiGatewayConstruct(scope, 'ApiGateway', {
+    const constructProps = {
       plan,
       bucket: ctx.bucket,
       computeFunctions: ctx.computeFunctions,
       serverComputeName: ctx.serverComputeName,
       imageComputeName: ctx.imageComputeName,
-    });
+    };
+    // REST (default) or HTTP API v2. Both expose `.url`; the REST URL carries a
+    // `/prod` stage, so derive the origin host from the URL's host segment
+    // (index 2 of `https://host/…`), not the scheme split used for HTTP API.
+    const isRest = (ctx.apiType ?? 'rest') === 'rest';
+    if (isRest) {
+      const apigw = new ApiGatewayRestConstruct(scope, 'ApiGateway', constructProps);
+      return {
+        url: apigw.url,
+        originHandle: { domainName: Fn.select(2, Fn.split('/', apigw.url)), protocol: 'https' },
+      };
+    }
+    const apigw = new ApiGatewayConstruct(scope, 'ApiGateway', constructProps);
     return {
       url: apigw.url,
       originHandle: { domainName: Fn.select(1, Fn.split('://', apigw.url)), protocol: 'https' },

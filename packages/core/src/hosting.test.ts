@@ -1834,6 +1834,42 @@ describe('Hosting', () => {
     });
   });
 
+  describe("frontDoor: { kind: 'apiGateway' } (API Gateway owns routing — no CloudFront)", () => {
+    it('static SPA → a REGIONAL REST API (default flavor), NO CloudFront, NO ALB', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ApiGwStaticStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'apiGateway' } });
+
+      const t = Template.fromStack(stack);
+      t.resourceCountIs('AWS::CloudFront::Distribution', 0);
+      t.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 0);
+      // Default flavor is REST (no HTTP API v2).
+      t.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+      t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
+      // Same-origin backend proxy (`/aws-blocks/*`) via a native HTTP_PROXY integration.
+      t.hasResourceProperties('AWS::ApiGateway::Method', { Integration: { Type: 'HTTP_PROXY' } });
+      // Private asset bucket read by the asset-proxy Lambda (no public website bucket).
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: { Variables: { ASSET_KEY_PREFIX: Match.stringLikeRegexp('^builds/') } },
+      });
+    });
+
+    it("api: 'http' selects the cheaper HTTP API v2 instead of REST", () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ApiGwHttpStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'apiGateway', api: 'http' } });
+
+      const t = Template.fromStack(stack);
+      t.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+      t.resourceCountIs('AWS::ApiGateway::RestApi', 0);
+      t.resourceCountIs('AWS::CloudFront::Distribution', 0);
+    });
+  });
+
   describe('composed CF → ALB front door', () => {
     it('stacks a CloudFront edge OVER an ALB router (both exist), not one instead of the other', () => {
       createSpaBuildOutput(tmpDir);

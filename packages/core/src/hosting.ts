@@ -413,6 +413,13 @@ export interface HostingProps {
    * is CloudFront-only for now; on ALB the frontend reaches the backend via
    * `BLOCKS_API_URL` (cross-origin).
    *
+   * Pass `{ kind: 'apiGateway', … }` to serve behind an Amazon API Gateway
+   * instead — the serverless, no-VPC, scale-to-zero sibling of the ALB door.
+   * It owns routing and proxies `/aws-blocks/*` same-origin natively (no
+   * forwarder Lambda). Choose the flavor with `api`: `'rest'` (default) or
+   * `'http'` (HTTP API v2). Edge capabilities and response streaming are
+   * degraded/unsupported and must be accepted via `degrade`.
+   *
    * Pass `{ edge: 'cloudfront', router: 'alb' }` to STACK the two — a CloudFront
    * edge (static/SSR/image served as today) that forwards the same-origin API
    * subtree (`/aws-blocks/*`, `/aws-blocks-auth/*`) through a regional ALB before
@@ -754,7 +761,10 @@ export class Hosting extends Construct {
       // L3 only ever sees a `kind`-based door or the default.
       frontDoor: cfOverRouter
         ? undefined
-        : typeof props.frontDoor === 'object' && props.api && 'kind' in props.frontDoor && props.frontDoor.kind === 'alb'
+        : typeof props.frontDoor === 'object' &&
+            props.api &&
+            'kind' in props.frontDoor &&
+            (props.frontDoor.kind === 'alb' || props.frontDoor.kind === 'apiGateway')
           ? { ...props.frontDoor, backendApiUrl: props.api.apiUrl }
           : (props.frontDoor as HostingConstructProps['frontDoor']),
     };

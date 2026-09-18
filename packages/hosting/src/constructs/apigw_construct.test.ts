@@ -5,6 +5,7 @@ import { Template } from 'aws-cdk-lib/assertions';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { CapabilityPlan } from '../plan/types.js';
 import { ApiGatewayConstruct } from './apigw_construct.js';
+import { ApiGatewayRestConstruct } from './apigw_rest_construct.js';
 import { ApiGatewayAdapter } from './apigw_adapter.js';
 
 const staticPlan: CapabilityPlan = {
@@ -77,6 +78,73 @@ describe('ApiGatewayConstruct — with backend proxy', () => {
     t.resourceCountIs('AWS::ApiGatewayV2::Route', 5);
     t.hasResourceProperties('AWS::ApiGatewayV2::Integration', { IntegrationType: 'HTTP_PROXY' });
   });
+});
+
+const synthRest = (plan: CapabilityPlan) => {
+	const app = new App();
+	const stack = new Stack(app, 'SR', { env: { account: '111111111111', region: 'us-west-2' } });
+	const bucket = new Bucket(stack, 'Assets');
+	new ApiGatewayRestConstruct(stack, 'ApiGwRest', { plan, bucket });
+	return Template.fromStack(stack);
+};
+
+describe('ApiGatewayRestConstruct — static plan', () => {
+	const t = synthRest(staticPlan);
+
+	it('creates a REGIONAL REST API with all-binary media types', () => {
+		t.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+		t.hasResourceProperties('AWS::ApiGateway::RestApi', {
+			EndpointConfiguration: { Types: ['REGIONAL'] },
+			BinaryMediaTypes: ['*/*'],
+		});
+	});
+
+	it('provisions the asset-proxy Lambda with the build-id key prefix', () => {
+		t.hasResourceProperties('AWS::Lambda::Function', {
+			Environment: { Variables: { ASSET_KEY_PREFIX: 'builds/testbuild' } },
+		});
+	});
+
+	it('deploys a prod stage', () => {
+		t.hasResourceProperties('AWS::ApiGateway::Stage', { StageName: 'prod' });
+	});
+});
+
+describe('ApiGatewayRestConstruct — with backend proxy', () => {
+	it('adds a same-origin HTTP_PROXY backend integration for /aws-blocks/*', () => {
+		const t = synthRest(
+			withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api'),
+		);
+		t.hasResourceProperties('AWS::ApiGateway::Method', {
+			Integration: { Type: 'HTTP_PROXY' },
+		});
+	});
+});
+
+describe('ApiGatewayAdapter — flavor selection', () => {
+	it("renders a REST API by default (apiType omitted) and for apiType: 'rest'", () => {
+		for (const apiType of [undefined, 'rest' as const]) {
+			const app = new App();
+			const stack = new Stack(app, `FR-${apiType ?? 'default'}`, {
+				env: { account: '111111111111', region: 'us-west-2' },
+			});
+			const bucket = new Bucket(stack, 'Assets');
+			new ApiGatewayAdapter().render(stack, staticPlan, { bucket, apiType });
+			const t = Template.fromStack(stack);
+			t.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+			t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
+		}
+	});
+
+	it("renders an HTTP API v2 for apiType: 'http'", () => {
+		const app = new App();
+		const stack = new Stack(app, 'FH', { env: { account: '111111111111', region: 'us-west-2' } });
+		const bucket = new Bucket(stack, 'Assets');
+		new ApiGatewayAdapter().render(stack, staticPlan, { bucket, apiType: 'http' });
+		const t = Template.fromStack(stack);
+		t.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+		t.resourceCountIs('AWS::ApiGateway::RestApi', 0);
+	});
 });
 
 describe('ApiGatewayAdapter — capability matrix', () => {
