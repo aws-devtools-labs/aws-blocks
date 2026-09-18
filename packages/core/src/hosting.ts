@@ -908,7 +908,12 @@ export class Hosting extends Construct {
     // Seed the origin cache with the default endpoint → its origin so a path back
     // on the default compute reuses one origin rather than minting a duplicate.
     const apiOrigin = httpOriginFromEndpoint(api.defaultEndpoint);
-    addRouteBehaviors(hosting.distribution, getRegisteredRoutes(), api.defaultEndpoint, new Map([[api.defaultEndpoint, apiOrigin]]));
+    addRouteBehaviors(
+      hosting.distribution,
+      getRegisteredRoutes(),
+      api.defaultEndpoint,
+      new Map([[api.defaultEndpoint, apiOrigin]]),
+    );
 
     // A RawRoute with a path parameter becomes a prefix-wildcard behavior that
     // matches more than the route does, and on this distribution can shadow

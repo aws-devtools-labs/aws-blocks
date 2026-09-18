@@ -166,6 +166,19 @@ export function addRouteBehaviors(
 		// so it is inert — and emitting unconditionally is what lets both front-door
 		// paths share this code with no mode flag.
 		if (route.subtree) {
+			// Routability guard: a namespace resolves its endpoint from the compute
+			// serving it, and the default compute always has one — so a missing endpoint
+			// on a namespace entry means it was assigned a compute with no HTTP ingress
+			// (a worker-only compute). Fail synth with the offending path rather than
+			// silently falling back to the default origin, which would answer the
+			// namespace from the wrong compute and mask the misconfiguration.
+			if (route.endpoint === undefined) {
+				throw new Error(
+					`API namespace "${route.path}" is assigned to a compute that has no HTTP endpoint, so the ` +
+						'front door cannot route to it. Assign the namespace to a compute that serves HTTP (the ' +
+						'default, or one from `ComputeProvider.provide()`), or remove the assignment.',
+				);
+			}
 			addBehavior(route.path, endpoint);
 			addBehavior(`${route.path}/*`, endpoint);
 			continue;
@@ -285,7 +298,12 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		// default compute reuses it. With no assignments (today) the emitted
 		// behaviors all point at the default origin — redundant with the default
 		// behavior above, and inert; a non-default assignment fans that path out.
-		addRouteBehaviors(distribution, getRegisteredRoutes(), this.defaultEndpoint, new Map([[this.defaultEndpoint, origin]]));
+		addRouteBehaviors(
+			distribution,
+			getRegisteredRoutes(),
+			this.defaultEndpoint,
+			new Map([[this.defaultEndpoint, origin]]),
+		);
 
 		state.resolvedUrl = `https://${distribution.distributionDomainName}`;
 		new cdk.CfnOutput(this.owner, FRONT_DOOR_OUTPUT_ID, {
@@ -323,6 +341,10 @@ export function resolveApiFrontDoor(
  * @param provision whether the stack's posture wants a managed distribution
  * @param defaultEndpoint the default compute's origin base — the fallback origin
  */
-export function scheduleApiFrontDoor(owner: Construct, provision: boolean, defaultEndpoint?: string): void {
+export function scheduleApiFrontDoor(
+	owner: Construct,
+	provision: boolean,
+	defaultEndpoint?: string,
+): void {
 	cdk.Aspects.of(owner).add(new ApiFrontDoorAspect(owner, provision, defaultEndpoint));
 }

@@ -343,7 +343,10 @@ export function registerRoutingEntry(options: RoutingEntryOptions): void {
 
   const normalizedPath = options.path.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
 
-  const existing = state.routes.find((r) => r.handler === undefined && r.path === normalizedPath);
+  // Idempotent per path: a module re-imported during synth records once.
+  const existing = state.routes.find(
+    (r) => r.handler === undefined && r.path === normalizedPath,
+  );
   if (existing) return;
 
   const { pattern, paramNames } = compilePath(normalizedPath);

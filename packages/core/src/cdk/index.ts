@@ -281,6 +281,12 @@ export class Scope extends Construct {
 		this.id = id;
 		this.parent = parent;
 		this.root = this.resolveRoot();
+		// A scope-level compute default, inherited by everything built inside this
+		// scope (see the `compute` getter, which walks up to the nearest assignment).
+		// `ScopeOptions` is shared with the runtime and browser entries, so it types
+		// this structurally as `AssignedCompute`; under CDK the value is a real
+		// `Compute` (the object `ComputeProvider.provide()` returns here).
+		this._compute = options?.compute as Compute | undefined;
 	}
 
 	/**

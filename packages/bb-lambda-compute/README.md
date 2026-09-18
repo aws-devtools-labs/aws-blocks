@@ -14,17 +14,24 @@ on.
 ## What it provides
 
 `LambdaCompute` — a `Compute` (the abstract base from `@aws-blocks/core`) that
-provisions and owns a `NodejsFunction` (2048 MB, 15-minute timeout) fronted by
-its own API Gateway REST API. The function assumes the shared Blocks execution
-role, so Building Block grants reach it; its handler entry and `BLOCKS_STACK_NAME`
-are derived from the owning `BlocksStack` / `BlocksBackend`, never
-caller-supplied.
+provisions and owns a `NodejsFunction` (2048 MiB memory and a 15-minute timeout by
+default, both configurable via `LambdaComputeProps`) fronted by its own API Gateway
+REST API. The function assumes the shared Blocks execution role, so Building Block
+grants reach it; its handler entry and `BLOCKS_STACK_NAME` are derived from the owning
+`BlocksStack` / `BlocksBackend`, never caller-supplied.
 
 | Member | Type | Description |
 |--------|------|-------------|
 | `fn` | `NodejsFunction` | The Lambda function backing this compute (CDK layer). |
 | `apiGateway` | `RestApi` | The API Gateway REST API fronting `fn` (CDK layer). |
 | `setEnv(key, value)` | `void` | Inject a runtime environment variable into the function. |
+
+`LambdaComputeProps` (all optional):
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `memorySize` | `number` | `2048` | Function memory in MiB (also scales CPU on Lambda). |
+| `timeout` | `Duration \| number` | 15 minutes | Function timeout; a plain `number` is read as seconds. |
 
 ## Local Development
 

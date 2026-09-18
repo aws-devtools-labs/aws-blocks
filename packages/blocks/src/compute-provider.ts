@@ -82,6 +82,9 @@ export interface ComputeRequirements {
  */
 export const SERVERLESS_COMPUTE_LIMITS = {
 	minTimeoutSeconds: 1,
+	// Keep `maxTimeoutSeconds` in sync with `LAMBDA_MAX_TIMEOUT_SECONDS` in
+	// `@aws-blocks/bb-lambda-compute` — the same platform ceiling, which is also that
+	// compute's default timeout when a workload declares none.
 	maxTimeoutSeconds: 900,
 	minMemoryMb: 128,
 	maxMemoryMb: 10240,
