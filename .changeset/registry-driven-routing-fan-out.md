@@ -14,15 +14,20 @@ registered route carries the `endpoint` of the compute that serves it, so a sing
 dedupes origins by endpoint. Both front-door paths (the managed distribution and
 Hosting's own) now route identically from that table.
 
-Today every route resolves to the default compute, so `addRouteBehaviors()`
-collapses to exactly the behaviors #564 emitted by hand: the managed distribution
-stays a single catch-all to the default origin (no per-path behaviors), and
-Hosting still diverts the reserved `/aws-blocks/api` RPC subtree, the
-`/aws-blocks/auth` subtree, and each app `RawRoute` off the frontend to the
-default origin. This is deliberately a no-op on the wire until an assignment
-surface (a later change) gives a namespace a non-default compute — at which point
-the *same* registration carries a non-default endpoint and the *same* front-door
-code fans that path out to the assigned origin, with no change here.
+Today every route resolves to the default compute, so `addRouteBehaviors()` emits
+an explicit behavior per known API path (each namespace subtree, each app
+`RawRoute`, and the reserved `/aws-blocks/api` RPC and `/aws-blocks/auth`
+subtrees) all pointing at the one default origin. There is deliberately **no mode
+flag**: `addRouteBehaviors()` never sets a distribution's default behavior — each
+caller (the managed distribution → the default compute; Hosting → the frontend)
+owns that — so emitting a behavior for every API path lets whatever is left fall
+through to the caller's own default, correctly in both cases. On the managed
+distribution these per-path behaviors are redundant with the default behavior and
+inert; the cost is a few extra CloudFront behaviors (well within the per-distribution
+quota for typical apps). This is a no-op on the wire until an assignment surface (a
+later change) gives a namespace a non-default compute — at which point the *same*
+registration carries a non-default endpoint and the *same* front-door code fans
+that path out to the assigned origin, with no change here.
 
 Two things are deliberately deferred to that later change, since neither has an
 observable effect while every route resolves to the default endpoint: per-stack

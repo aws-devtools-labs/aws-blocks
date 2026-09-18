@@ -24,18 +24,22 @@ export {
 	getSdkIdentifiers,
 	registerSdkIdentifiers,
 } from './common/sdk-registry.js';
-export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX, isRpcPath } from './constants.js';
 export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
 export {
 	clearRouteRegistry,
+	type DispatchRoute,
 	getRegisteredRoutes,
 	type HttpMethod,
+	isDispatchRoute,
 	lockRouteRegistry,
 	matchRoute,
 	RawRouteErrors,
 	type RawRouteOptions,
 	type RegisteredRoute,
 	registerRoute,
+	registerRoutingEntry,
+	type RoutingEntryOptions,
 	unlockRouteRegistry,
 } from './raw-route.js';
 export { RawRoute } from './raw-route.mock.js';

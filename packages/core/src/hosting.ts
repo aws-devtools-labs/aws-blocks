@@ -870,12 +870,14 @@ export class Hosting extends Construct {
    * Route API traffic through this distribution.
    *
    * The distribution's default behavior serves the frontend, so every API path
-   * must be diverted off it. {@link addRouteBehaviors} (mode `'shared-frontend'`)
-   * builds those behaviors from the shared route registry: the reserved RPC and
-   * auth subtrees, plus each app RawRoute outside them. A namespace or route
-   * assigned to a non-default compute is fanned out to that compute's origin;
-   * everything else routes to the default compute. Both front-door paths (this one
-   * and the Blocks-owned distribution) route identically from the one table.
+   * must be diverted off it. {@link addRouteBehaviors} builds those behaviors from
+   * the shared route registry: the reserved RPC and auth subtrees, plus each app
+   * RawRoute outside them. A namespace or route assigned to a non-default compute
+   * is fanned out to that compute's origin; everything else routes to the default
+   * compute. Both front-door paths (this one and the Blocks-owned distribution)
+   * route identically from the one table — the frontend fallback that makes this
+   * distribution's default behavior differ is the distribution's own concern, not
+   * `addRouteBehaviors`'s, so it needs no mode flag.
    *
    * Claiming the front-door role is part of the same step: with the API on this
    * distribution, the backend must not provision a managed one of its own.
@@ -906,13 +908,15 @@ export class Hosting extends Construct {
     // Seed the origin cache with the default endpoint → its origin so a path back
     // on the default compute reuses one origin rather than minting a duplicate.
     const apiOrigin = httpOriginFromEndpoint(api.defaultEndpoint);
-    addRouteBehaviors(
-      hosting.distribution,
-      getRegisteredRoutes(),
-      api.defaultEndpoint,
-      'shared-frontend',
-      new Map([[api.defaultEndpoint, apiOrigin]]),
-    );
+    addRouteBehaviors(hosting.distribution, getRegisteredRoutes(), api.defaultEndpoint, new Map([[api.defaultEndpoint, apiOrigin]]));
+
+    // A RawRoute with a path parameter becomes a prefix-wildcard behavior that
+    // matches more than the route does, and on this distribution can shadow
+    // SSR/frontend paths under the same prefix. There is no synth-time check for
+    // it: a frontend has no enumerable route table (it is served through the
+    // distribution's default behavior), so a collision cannot be proven and a
+    // wildcard RawRoute is often intentional. The consideration is documented on
+    // `RawRoute` instead — pick a prefix the frontend does not serve.
   }
 }
 
