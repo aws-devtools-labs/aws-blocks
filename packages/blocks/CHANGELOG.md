@@ -1,5 +1,38 @@
 # @aws-blocks/blocks
 
+## 0.6.1
+
+### Patch Changes
+
+- d4b32f2: Add `README.md` and `DESIGN.md` to `@aws-blocks/create-block` and ship them in the published package (`files`), matching the first-party package convention.
+  
+  Tidy two `extract-ts-types` test nits (test/comment only, no runtime change): replace a redundant re-assert with a direct check of the documented lingering-bare-key behavior, and link the array/tuple & nested-destructuring boundary to its tracking issue (#552).
+- Updated dependencies [5501cb6]
+- Updated dependencies [d4b32f2]
+  - @aws-blocks/hosting@0.4.0
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/auth-common@0.1.9
+  - @aws-blocks/bb-agent@0.4.2
+  - @aws-blocks/bb-app-setting@0.3.1
+  - @aws-blocks/bb-async-job@0.2.2
+  - @aws-blocks/bb-auth-basic@0.1.10
+  - @aws-blocks/bb-auth-cognito@0.1.11
+  - @aws-blocks/bb-auth-oidc@0.2.1
+  - @aws-blocks/bb-cron-job@0.2.2
+  - @aws-blocks/bb-dashboard@0.2.1
+  - @aws-blocks/bb-data@0.3.1
+  - @aws-blocks/bb-distributed-data@0.2.1
+  - @aws-blocks/bb-distributed-table@0.2.1
+  - @aws-blocks/bb-email-client@0.1.8
+  - @aws-blocks/bb-file-bucket@0.2.2
+  - @aws-blocks/bb-knowledge-base@0.2.5
+  - @aws-blocks/bb-kv-store@0.2.1
+  - @aws-blocks/bb-lambda-compute@0.5.1
+  - @aws-blocks/bb-logger@0.2.1
+  - @aws-blocks/bb-metrics@0.1.8
+  - @aws-blocks/bb-realtime@0.2.2
+  - @aws-blocks/bb-tracer@0.2.1
+
 ## 0.6.0
 
 ### Minor Changes
