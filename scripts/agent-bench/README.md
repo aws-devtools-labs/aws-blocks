@@ -42,9 +42,10 @@ Nine steps per cell, all on the GitHub runner (4b and 6b are best-effort auxilia
 
 No microVM, no S3 transport between runner and sandbox. The runner is the
 sandbox; Bedrock provides the model. Builder and judge currently both run on
-Opus 4.8 (the builder model is the `BENCH_MODEL` knob, default Opus 4.8); set
-`BENCH_MODEL` back to a Sonnet id to de-correlate and limit same-model
-self-evaluation bias.
+Opus 4.8 (builder via `BENCH_MODEL`, judge via `BENCH_JUDGE_MODEL`, both
+defaulting to Opus 4.8). To de-correlate and limit same-model self-evaluation
+bias, give the builder and judge different ids — set `BENCH_MODEL` (builder) and
+`BENCH_JUDGE_MODEL` (judge) to distinct values.
 
 ## Security
 
