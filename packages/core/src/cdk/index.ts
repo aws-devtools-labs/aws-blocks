@@ -12,6 +12,7 @@ import {
 	type ScopeOptions,
 	type ScopeParent,
 } from '../common/index.js';
+import { scheduleApiFrontDoor } from './api-front-door.js';
 import { assertCdkConditionActive, BlocksBackend, setupBlocksInfra } from './blocks-backend.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
@@ -164,6 +165,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 				);
 			}
 		}
+		// Schedule the managed CloudFront API front door (prod default; off in
+		// sandbox). Resolved by a synth-time aspect, so it observes the whole app;
+		// the client is not switched to it here (that is a later change).
+		scheduleApiFrontDoor(stack, stack.apiUrl, stack.defaults.provisionApiFrontDoor);
+
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
 
