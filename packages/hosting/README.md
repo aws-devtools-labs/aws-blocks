@@ -345,6 +345,41 @@ new HostingConstruct(stack, 'Hosting', {
 });
 ```
 
+## Access logging
+
+CloudFront access logs are delivered to a dedicated, private S3 bucket. Two
+pipelines are supported via `logging.version`:
+
+| | `'v1'` (default) | `'v2'` |
+| --- | --- | --- |
+| Mechanism | Legacy standard logging (inline on the distribution) | Standard logging v2 (CloudWatch Logs vended-logs delivery) |
+| Log bucket ACLs | Required (`BUCKET_OWNER_PREFERRED`) | **None** (`BUCKET_OWNER_ENFORCED`) |
+| S3 key layout | Flat prefix | **Partitioned** — `date` or Hive-compatible (`logging.partitioning`) |
+| Record format | W3C tab-separated | `w3c` \| `plain` \| `json` \| `parquet` (`logging.format`) |
+| CloudFront charge | None (S3 storage only) | Per-GB vended-logs delivery charge |
+| Region constraint | Any | Delivery source must be **us-east-1** |
+
+`v1` stays the default (no billing change). Opt into `v2` for an ACL-free log
+bucket and a partitioned, query-ready layout with no post-processing Lambda:
+
+```ts
+new HostingConstruct(stack, 'Hosting', {
+  manifest,
+  logging: {
+    enabled: true,
+    version: 'v2',
+    partitioning: 'hive',   // or 'date' (default). Athena/Glue-friendly.
+    format: 'parquet',      // or 'w3c' (default), 'json', 'plain'
+    retentionDays: 90,
+  },
+});
+```
+
+> **Region:** because CloudFront is a global service, standard logging v2's
+> delivery source must be created in **us-east-1** (same constraint as ACM
+> certificates). Synth throws `LoggingV2RegionError` in any other Region — deploy
+> the hosting stack to us-east-1 or use `version: 'v1'`.
+
 ## Custom domains
 
 Configure a custom domain through the `domain` prop on `HostingConstruct`
