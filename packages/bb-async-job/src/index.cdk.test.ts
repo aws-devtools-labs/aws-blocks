@@ -122,6 +122,22 @@ describe('AsyncJob compute targeting', () => {
 		);
 	});
 
+	test('targeted via the public { compute } option: event source follows it (no wrapping scope)', async () => {
+		const stack = await makeStack('AsyncDirectOption');
+		const lambdaB = new LambdaCompute(stack, 'LambdaB');
+		// PR5's customer surface: the compute is handed to the constructor directly,
+		// not inherited from a wrapping scope's internal `_compute` seam.
+		new AsyncJob(stack, 'jobs', { handler: async () => {}, trackStatus: false, compute: lambdaB });
+
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::Lambda::EventSourceMapping', 1);
+		assert.ok(eventSourceTargets(template, fnLogicalId(stack, lambdaB)), 'event source targets lambdaB');
+		assert.ok(
+			!eventSourceTargets(template, fnLogicalId(stack, stack._defaultCompute as LambdaCompute)),
+			'event source does NOT target the default compute',
+		);
+	});
+
 	test('rejects a non-Lambda compute at synth', async () => {
 		const stack = await makeStack('AsyncUnsupportedCompute');
 		const scoped = new Scope('scoped', { parent: stack });

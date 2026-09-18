@@ -117,9 +117,37 @@ import { ComputeProvider } from '@aws-blocks/blocks';
 const reports = ComputeProvider.provide('reports', { timeoutSeconds: 60 * 4, memoryMb: 1024 });
 ```
 
-`provide()` returns a compute handle you hold and (with the assignment surface that ships next) hand to an API namespace or worker. You never name the service that fulfils the request — today it resolves to a serverless (Lambda) compute, and when another fulfillment exists the same declaration resolves differently with no call-site change. A request that no compute can host fails immediately (naming the field, value, and ceiling) rather than deploying and then timing out. Constructing a compute directly (`new LambdaCompute(scope, id)`) remains fully supported for an app that wants to name its platform.
+`provide()` returns a compute handle you hold and hand to an API namespace or worker. You never name the service that fulfils the request — today it resolves to a serverless (Lambda) compute, and when another fulfillment exists the same declaration resolves differently with no call-site change. A request that no compute can host fails immediately (naming the field, value, and ceiling) rather than deploying and then timing out. Constructing a compute directly (`new LambdaCompute(scope, id)`) remains fully supported for an app that wants to name its platform.
 
-> The surface that assigns a declared compute to a specific namespace or worker ships next; this release adds the declaration itself.
+### Assigning a compute to a workload
+
+Pass the handle to the workload that needs it. Everything else keeps running on the default compute:
+
+```typescript
+import { ApiNamespace, Scope } from '@aws-blocks/core';
+import { ComputeProvider } from '@aws-blocks/blocks';
+import { AsyncJob } from '@aws-blocks/bb-async-job';
+
+const scope = new Scope('app');
+const reports = ComputeProvider.provide('reports', { timeoutSeconds: 60 * 4, memoryMb: 1024 });
+
+// An API namespace: its /aws-blocks/api/reports subtree is routed to the reports compute.
+export const reportsApi = new ApiNamespace(scope, 'reports', (ctx) => ({
+  async generate(range: string) {
+    /* a slow, memory-hungry report — safe on the bigger compute */
+  },
+}), { compute: reports });
+
+// A background worker: its queue is consumed by the reports compute's Lambda.
+const ingest = new AsyncJob(scope, 'ingest', {
+  handler: async (batch: string[]) => {
+    /* a slow ingest — runs on the bigger compute, off the request path */
+  },
+  compute: reports,
+});
+```
+
+`CronJob` takes the same `compute` option, and `Dashboard` takes a `computes: [...]` list to focus on a subset. The whole app is built from one bundle, so any compute can serve any request — assigning one just directs that workload's traffic to a compute sized for it. Assignment shapes deployed routing (CloudFront in production, the localhost proxy in a sandbox); local `npm run dev` runs the whole app in one process, so the assignment is inert there. Assigning a worker-only compute (one with no HTTP endpoint) to an HTTP path fails synth with an actionable message.
 
 ## Building Blocks
 

@@ -112,6 +112,42 @@ describe('CronJob compute targeting', () => {
 			'schedule does NOT target the default compute',
 		);
 	});
+
+	test('targeted via the public { compute } option: schedule follows it (no wrapping scope)', async () => {
+		const stack = await makeStack('CronDirectOption');
+		const lambdaB = new LambdaCompute(stack, 'LambdaB');
+		// PR5's customer surface: the compute is handed to the constructor directly,
+		// not inherited from a wrapping scope's internal `_compute` seam.
+		new CronJob(stack, 'nightly', { schedule: 'rate(1 day)', handler: async () => {}, compute: lambdaB });
+
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::Scheduler::Schedule', 1);
+		assert.ok(scheduleTargets(template, fnLogicalId(stack, lambdaB)), 'schedule targets lambdaB');
+		assert.ok(
+			!scheduleTargets(template, fnLogicalId(stack, stack._defaultCompute as LambdaCompute)),
+			'schedule does NOT target the default compute',
+		);
+	});
+
+	test('two jobs on different computes: the shared scheduler role can invoke BOTH functions', async () => {
+		const stack = await makeStack('CronTwoComputes');
+		const lambdaB = new LambdaCompute(stack, 'LambdaB');
+		const scoped = new Scope('scoped', { parent: stack });
+		scoped._compute = lambdaB;
+		// One job on the default compute, one on lambdaB. The scheduler role is shared
+		// per stack; before the per-compute grant it only reached the first job's
+		// function, so the second job's schedule would fail at runtime with AccessDenied.
+		new CronJob(stack, 'onDefault', { schedule: 'rate(1 day)', handler: async () => {} });
+		new CronJob(scoped, 'onB', { schedule: 'rate(1 day)', handler: async () => {} });
+
+		const template = Template.fromStack(stack);
+		const policies = JSON.stringify(template.findResources('AWS::IAM::Policy'));
+		assert.ok(
+			policies.includes(fnLogicalId(stack, stack._defaultCompute as LambdaCompute)),
+			'scheduler role policy grants invoke on the default compute function',
+		);
+		assert.ok(policies.includes(fnLogicalId(stack, lambdaB)), 'scheduler role policy grants invoke on lambdaB');
+	});
 });
 
 describe('CronJob synth-time schedule validation', () => {

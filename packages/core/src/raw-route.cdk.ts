@@ -66,8 +66,21 @@ export class RawRoute extends Scope {
     super(id, { parent: scope });
     this.path = resolveRoutePath(scope, id, options);
     // Carry the serving compute's origin so the front door routes this path to it.
-    // Resolves to the default compute unless an ancestor scope assigns one; absent
-    // (worker-only compute) means the front door falls back to its default origin.
-    registerRoute({ ...options, path: this.path, endpoint: this.compute.endpoint });
+    // Resolves to the default compute unless an ancestor scope assigns one.
+    const compute = this.compute;
+    // Routability guard (mirrors the namespace guard in api-front-door.ts, but at
+    // the construction site where the assignment is unambiguous): the default compute
+    // always has an endpoint, so a missing one means an ancestor scope assigned this
+    // route a compute with no HTTP ingress (a worker-only compute). Fail synth naming
+    // the path rather than silently falling back to the default origin, which would
+    // answer the route from the wrong compute and mask the misconfiguration.
+    if (compute.endpoint === undefined) {
+      throw new Error(
+        `RawRoute "${this.path}" is assigned to a compute that has no HTTP endpoint, so the front door ` +
+          'cannot route to it. Move the route to a scope served by a compute that serves HTTP (the default, ' +
+          'or one from `ComputeProvider.provide()`), or remove the assignment.',
+      );
+    }
+    registerRoute({ ...options, path: this.path, endpoint: compute.endpoint });
   }
 }

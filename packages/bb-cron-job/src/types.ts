@@ -1,10 +1,12 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { AssignedCompute } from '@aws-blocks/core';
+
 /**
  * Event passed to the CronJob handler on each scheduled invocation.
  */
-import type { ChildLogger } from '@aws-blocks/bb-logger';
 export interface CronJobEvent<T = void> {
 	/** ISO 8601 timestamp of the scheduled invocation time. */
 	scheduledTime: string;
@@ -47,5 +49,23 @@ export interface CronJobOptions<T = void> {
 	input?: T;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
+	/**
+	 * Run this job's handler on a specific compute, sized for its workload, instead
+	 * of the app's default compute. Pass the handle returned by
+	 * `ComputeProvider.provide()`:
+	 *
+	 * ```typescript
+	 * const nightly = ComputeProvider.provide('nightly', { timeoutSeconds: 900, memoryMb: 2048 });
+	 * new CronJob(scope, 'rollup', { schedule: 'rate(1 day)', handler: rollup, compute: nightly });
+	 * ```
+	 *
+	 * The EventBridge schedule invokes this compute's Lambda directly, so assigning
+	 * one here moves the work — and its timeout/memory budget — off the default
+	 * compute. Must resolve to a Lambda compute (the only kind the scheduler can
+	 * invoke today); assigning a worker-only compute fails synth. Omitted, the job
+	 * runs on the default compute.
+	 *
+	 * Only takes effect at synth; the local mock runs every job in-process.
+	 */
+	compute?: AssignedCompute;
 }
-

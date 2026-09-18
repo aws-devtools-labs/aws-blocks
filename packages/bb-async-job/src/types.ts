@@ -1,8 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { AssignedCompute } from '@aws-blocks/core';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 /**
  * Context passed to the AsyncJob handler with metadata about the current job.
@@ -50,6 +51,25 @@ export interface AsyncJobOptions<T> {
 	trackStatus?: boolean;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
+	/**
+	 * Run this job's handler on a specific compute, sized for its workload, instead
+	 * of the app's default compute. Pass the handle returned by
+	 * `ComputeProvider.provide()`:
+	 *
+	 * ```typescript
+	 * const heavy = ComputeProvider.provide('ingest', { timeoutSeconds: 600, memoryMb: 2048 });
+	 * const ingest = new AsyncJob(scope, 'ingest', { handler: async (batch) => {}, compute: heavy });
+	 * ```
+	 *
+	 * The job's SQS queue is consumed by an event source on this compute's Lambda,
+	 * so assigning one here moves the work — and its timeout/memory budget — off the
+	 * default compute. Must resolve to a Lambda compute (the only kind that can
+	 * consume a queue today); assigning a worker-only compute fails synth. Omitted,
+	 * the job runs on the default compute.
+	 *
+	 * Only takes effect at synth; the local mock runs every job in-process.
+	 */
+	compute?: AssignedCompute;
 }
 
 /**
@@ -122,4 +142,3 @@ export interface BatchSubmitResult {
 	/** Details of any entries that failed to enqueue. */
 	failed: Array<{ index: number; code: string; message: string }>;
 }
-
