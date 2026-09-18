@@ -1448,7 +1448,17 @@ export class HostingConstruct extends Construct {
         handle = renderGraph(this, composeGraph(plan, 'api-gateway'), plan, {
           ...common,
           apiType: fd.api ?? 'rest',
-          certificate: fd.certificate,
+          // Custom domain: names come from `domain`; the regional cert is the
+          // door's `certificate` (BYO, stack-region) or `domain.certificate`,
+          // else DNS-validated against the hosted zone by the construct.
+          domain: props.domain
+            ? {
+                names: Array.isArray(props.domain.domainName) ? props.domain.domainName : [props.domain.domainName],
+                hostedZone: props.domain.hostedZone,
+                hostedZoneId: props.domain.hostedZoneId,
+                certificate: fd.certificate ?? props.domain.certificate,
+              }
+            : undefined,
           degrade: fd.degrade,
         });
       } else {

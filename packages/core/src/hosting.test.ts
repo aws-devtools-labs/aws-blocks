@@ -1868,6 +1868,30 @@ describe('Hosting', () => {
       t.resourceCountIs('AWS::ApiGateway::RestApi', 0);
       t.resourceCountIs('AWS::CloudFront::Distribution', 0);
     });
+
+    it('wires a custom domain (regional cert + DomainName + Route 53) when `domain` is set', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ApiGwDomainStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      // hostedZoneId avoids HostedZone.fromLookup() (which needs context).
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        frontDoor: { kind: 'apiGateway' },
+        domain: { domainName: 'app.example.com', hostedZoneId: 'Z1234567890ABC' },
+      });
+
+      const t = Template.fromStack(stack);
+      t.hasResourceProperties('AWS::ApiGateway::DomainName', {
+        DomainName: 'app.example.com',
+        EndpointConfiguration: { Types: ['REGIONAL'] },
+      });
+      t.resourceCountIs('AWS::ApiGateway::BasePathMapping', 1);
+      t.resourceCountIs('AWS::CertificateManager::Certificate', 1);
+      t.resourceCountIs('AWS::Route53::RecordSet', 2);
+      t.resourceCountIs('AWS::CloudFront::Distribution', 0);
+    });
   });
 
   describe('composed CF → ALB front door', () => {

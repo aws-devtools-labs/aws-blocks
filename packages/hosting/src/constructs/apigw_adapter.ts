@@ -26,6 +26,7 @@ import type {
   SupportTier,
 } from '../plan/types.js';
 import { ApiGatewayConstruct } from './apigw_construct.js';
+import type { ApiGwCustomDomain } from './apigw_domain.js';
 import { ApiGatewayRestConstruct } from './apigw_rest_construct.js';
 
 /** API Gateway HTTP API's per-capability support. */
@@ -63,6 +64,8 @@ export type ApiGatewayRenderContext = AdapterContext & {
    * `HTTP_PROXY` backend); `'http'` uses HTTP API v2 (cheaper). Default `'rest'`.
    */
   apiType?: 'rest' | 'http';
+  /** Custom domain(s) for the door — a regional cert + DomainName + mapping + Route 53 alias. */
+  domain?: ApiGwCustomDomain;
   degrade?: CapabilityId[];
 };
 
@@ -103,6 +106,7 @@ export class ApiGatewayAdapter implements FrontDoorAdapter, FrontDoorLayerAdapte
       computeFunctions: ctx.computeFunctions,
       serverComputeName: ctx.serverComputeName,
       imageComputeName: ctx.imageComputeName,
+      domain: ctx.domain,
     };
     // REST (default) or HTTP API v2. Both expose `.url`; the REST URL carries a
     // `/prod` stage, so derive the origin host from the URL's host segment
