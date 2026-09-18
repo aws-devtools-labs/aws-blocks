@@ -7,9 +7,7 @@ import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.TypeSpec
 
-class TransferableSerializerGenerator(
-    private val packageName: String,
-) {
+class TransferableSerializerGenerator {
     data class TransferableEntry(
         val transferableName: String,
         val serializerName: String,

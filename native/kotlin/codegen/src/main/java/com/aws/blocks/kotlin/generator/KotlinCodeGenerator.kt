@@ -24,6 +24,7 @@ import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.MemberName
 import com.squareup.kotlinpoet.ParameterSpec
+import com.squareup.kotlinpoet.ParameterizedTypeName
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeName
@@ -71,6 +72,7 @@ class KotlinCodeGenerator(
         val index = buildTypeIndex(model)
         val files = mutableListOf<FileSpec>()
         val warnings = mutableListOf<String>()
+        val serializerRegistry = TransferableSerializerRegistry()
 
         if (redirectUrl == null && model.hasOidcTransferable()) {
             warnings.add(
@@ -85,15 +87,19 @@ class KotlinCodeGenerator(
         }
 
         // Emit shared Types.kt
-        val typesFile = generateTypesFile(index)
+        val typesFile = generateTypesFile(index, serializerRegistry)
         if (typesFile != null) files.add(typesFile)
 
-        // Emit Serializers.kt for transferable types
-        val transferableEntries = collectTransferableEntries(model, index)
-        if (transferableEntries.isNotEmpty()) {
-            val serializerGenerator = TransferableSerializerGenerator(packageName)
+        // Generate API files before serializers so annotations register every serializer they use.
+        val apiFiles = model.apiNamespaces.map { group ->
+            generateApiGroupFile(group, index, model.servers, model.endpoint, serializerRegistry)
+        }
+
+        // Emit Serializers.kt for the transferables referenced by generated annotations.
+        if (serializerRegistry.entries.isNotEmpty()) {
+            val serializerGenerator = TransferableSerializerGenerator()
             val serializersFile = FileSpec.builder(packageName, "Serializers")
-            for (entry in transferableEntries) {
+            for (entry in serializerRegistry.entries) {
                 serializersFile.addType(serializerGenerator.generateSerializerObject(entry))
             }
             files.add(serializersFile.build())
@@ -105,9 +111,7 @@ class KotlinCodeGenerator(
         }
 
         // Emit per-API-group files (interface + impl)
-        for (group in model.apiNamespaces) {
-            files.add(generateApiGroupFile(group, index, model.servers, model.endpoint))
-        }
+        files.addAll(apiFiles)
 
         return GeneratorResult(files, warnings)
     }
@@ -177,7 +181,7 @@ class KotlinCodeGenerator(
 
     // ── Types.kt generation ──────────────────────────────────────────
 
-    private fun generateTypesFile(index: TypeIndex): FileSpec? {
+    private fun generateTypesFile(index: TypeIndex, serializerRegistry: TransferableSerializerRegistry): FileSpec? {
         if (index.dataClasses.isEmpty() && index.enumClasses.isEmpty() && index.sealedClasses.isEmpty()) {
             return null
         }
@@ -212,14 +216,14 @@ class KotlinCodeGenerator(
         }
         for ((_, entry) in index.sealedClasses) {
             val unionType = entry.typeDef.type as ResolvedType.Union
-            val spec = generateSealedClass(entry.shortName, unionType, index)
+            val spec = generateSealedClass(entry.shortName, unionType, index, serializerRegistry = serializerRegistry)
             routeType(entry.typeDef, spec)
         }
 
         // Emit data classes, injecting schema-child types as nested types
         for ((_, entry) in index.dataClasses) {
             val recordType = entry.typeDef.type as ResolvedType.Record
-            var spec = generateDataClass(entry.shortName, recordType, index)
+            var spec = generateDataClass(entry.shortName, recordType, index, serializerRegistry = serializerRegistry)
 
             val nestedTypes = schemaNestedTypes[entry.typeDef.name]
             if (nestedTypes != null) {
@@ -247,6 +251,8 @@ class KotlinCodeGenerator(
         record: ResolvedType.Record,
         index: TypeIndex,
         opContext: OperationTypeContext? = null,
+        serializerRegistry: TransferableSerializerRegistry,
+        serializerContext: OperationTypeContext? = opContext,
     ): TypeSpec {
         val constructor = FunSpec.constructorBuilder()
         val classBuilder = TypeSpec
@@ -290,11 +296,12 @@ class KotlinCodeGenerator(
             if (isTransferableType(field.type)) {
                 val transferableType = unwrapNullableTransferable(field.type)
                 if (transferableType != null) {
-                    val serializerName = getTransferableSerializerName(transferableType, index, opContext)
-                    propBuilder.addAnnotation(
-                        AnnotationSpec.builder(ClassNames.serializable)
-                            .addMember("with = %T::class", ClassName(packageName, serializerName))
-                            .build()
+                    addTransferableSerializerAnnotation(
+                        propBuilder,
+                        transferableType,
+                        index,
+                        serializerRegistry,
+                        serializerContext,
                     )
                 }
             }
@@ -529,6 +536,8 @@ class KotlinCodeGenerator(
         union: ResolvedType.Union,
         index: TypeIndex,
         opContext: OperationTypeContext? = null,
+        serializerRegistry: TransferableSerializerRegistry,
+        serializerContext: OperationTypeContext? = opContext,
     ): TypeSpec {
         val sealedBuilder = TypeSpec.classBuilder(name)
             .addModifiers(KModifier.SEALED)
@@ -556,13 +565,25 @@ class KotlinCodeGenerator(
         for (variant in union.variants) {
             val variantContext = if (variant.nestedTypes.isNotEmpty()) {
                 val ctx = OperationTypeContext(opContext?.operationObjectName ?: name)
-                if (opContext != null) ctx.typeMap.putAll(opContext.typeMap)
+                if (opContext != null) ctx.copyTypesFrom(opContext)
                 for (nested in variant.nestedTypes) {
-                    ctx.typeMap[nested.name] = ClassName("", variant.name, nested.name)
+                    ctx.register(
+                        nested.type,
+                        ClassName("", variant.name, nested.name),
+                        ClassName(packageName, variant.name, nested.name),
+                    )
                 }
                 ctx
             } else opContext
-            val variantSpec = generateSealedVariant(name, variant, union.discriminator, index, variantContext)
+            val variantSpec = generateSealedVariant(
+                name,
+                variant,
+                union.discriminator,
+                index,
+                variantContext,
+                serializerRegistry,
+                serializerContext,
+            )
             sealedBuilder.addType(variantSpec)
         }
 
@@ -614,6 +635,8 @@ class KotlinCodeGenerator(
         discriminator: DiscriminatorInfo?,
         index: TypeIndex,
         opContext: OperationTypeContext? = null,
+        serializerRegistry: TransferableSerializerRegistry,
+        serializerContext: OperationTypeContext? = opContext,
     ): TypeSpec {
         val sealedClassName = ClassName("", sealedName)
 
@@ -664,6 +687,15 @@ class KotlinCodeGenerator(
                         .build()
                 )
             }
+            unwrapNullableTransferable(field.type)?.let { transferableType ->
+                addTransferableSerializerAnnotation(
+                    propBuilder,
+                    transferableType,
+                    index,
+                    serializerRegistry,
+                    serializerContext,
+                )
+            }
             variantBuilder.addProperty(propBuilder.build())
         }
 
@@ -697,7 +729,14 @@ class KotlinCodeGenerator(
             )
 
             // Generate the embedded sealed class and nest it inside the variant
-            val embeddedSpec = generateSealedClass(embeddedName, variant.embeddedUnion, index, opContext)
+            val embeddedSpec = generateSealedClass(
+                embeddedName,
+                variant.embeddedUnion,
+                index,
+                opContext,
+                serializerRegistry,
+                serializerContext,
+            )
             variantBuilder.addType(embeddedSpec)
         }
 
@@ -710,7 +749,15 @@ class KotlinCodeGenerator(
 
         // Add variant-scoped nested types (e.g. enums for array item fields)
         for (nested in variant.nestedTypes) {
-            variantBuilder.addType(generateNestedTypeSpec(nested, index))
+            variantBuilder.addType(
+                generateNestedTypeSpec(
+                    nested,
+                    index,
+                    listOf(sealedName, variant.name),
+                    serializerRegistry,
+                    serializerContext,
+                ),
+            )
         }
 
         return variantBuilder.build()
@@ -748,6 +795,7 @@ class KotlinCodeGenerator(
         index: TypeIndex,
         servers: List<ServerDefinition>,
         endpoint: String?,
+        serializerRegistry: TransferableSerializerRegistry,
     ): FileSpec {
         val className = toPascalCase(group.name)
         val builder = FileSpec.builder(packageName, className)
@@ -764,7 +812,9 @@ class KotlinCodeGenerator(
             )
         }
 
-        builder.addType(generateApiClass(group, className, index, servers, endpoint).withApiVisibility())
+        builder.addType(
+            generateApiClass(group, className, index, servers, endpoint, serializerRegistry).withApiVisibility(),
+        )
 
         return builder.build()
     }
@@ -783,13 +833,36 @@ class KotlinCodeGenerator(
      * Maps short type names to their relative ClassName path within an operation object.
      * Used to resolve inline types referenced in method signatures and bodies.
      */
-    private class OperationTypeContext(
+    private inner class OperationTypeContext(
         val operationObjectName: String,
     ) {
-        /** Maps short type name → relative ClassName (e.g. "Result" → ClassName("", "Echo", "Result")) */
-        val typeMap = LinkedHashMap<String, ClassName>()
-        /** Maps short type name → fully qualified ClassName for serializer declarations. */
-        val serializerTypeMap = LinkedHashMap<String, ClassName>()
+        private val relativeTypes = LinkedHashMap<ResolvedType, ClassName>()
+        private val qualifiedTypes = LinkedHashMap<ResolvedType, ClassName>()
+        private val relativeNames = LinkedHashMap<String, ClassName>()
+        private val qualifiedNames = LinkedHashMap<String, ClassName>()
+
+        fun register(type: ResolvedType, relative: ClassName, qualified: ClassName) {
+            relativeTypes[type] = relative
+            qualifiedTypes[type] = qualified
+            namedType(type)?.let { name ->
+                relativeNames[name] = relative
+                qualifiedNames[name] = qualified
+            }
+        }
+
+        fun resolve(type: ResolvedType, qualified: Boolean): ClassName? =
+            if (qualified) qualifiedTypes[type] else relativeTypes[type]
+
+        fun resolveByName(name: String, qualified: Boolean): ClassName? =
+            if (qualified) qualifiedNames[name] else relativeNames[name]
+
+        fun copyTypesFrom(other: OperationTypeContext) {
+            relativeTypes.putAll(other.relativeTypes)
+            qualifiedTypes.putAll(other.qualifiedTypes)
+            relativeNames.putAll(other.relativeNames)
+            qualifiedNames.putAll(other.qualifiedNames)
+        }
+
     }
 
     private fun generateApiClass(
@@ -798,6 +871,7 @@ class KotlinCodeGenerator(
         index: TypeIndex,
         servers: List<ServerDefinition>,
         endpoint: String?,
+        serializerRegistry: TransferableSerializerRegistry,
     ): TypeSpec {
         val clientInitializer = if (endpoint != null) {
             com.squareup.kotlinpoet.CodeBlock.of("%T(%T(server.name, server.url.toString() + %S))", ClassNames.blocksClient, blocksServerClass, endpoint)
@@ -833,11 +907,16 @@ class KotlinCodeGenerator(
                     .build(),
             )
 
+        val operationContexts = java.util.IdentityHashMap<Operation, OperationTypeContext?>()
+        for (operation in namespace.operations) {
+            operationContexts[operation] = buildOperationTypeContext(operation, className)
+        }
+
         for (operation in namespace.operations) {
             if (redirectUrl == null && containsOidcTransferable(operation.result.type)) {
                 classBuilder.addFunction(generateOidcStubMethod(operation))
             } else {
-                val opContext = buildOperationTypeContext(operation, className)
+                val opContext = operationContexts[operation]
                 classBuilder.addFunction(generateImplMethod(operation, namespace.name, index, opContext))
             }
         }
@@ -845,7 +924,14 @@ class KotlinCodeGenerator(
         // Add nested operation objects for operations that have nested types
         for (operation in namespace.operations) {
             if (operation.nestedTypes.isNotEmpty()) {
-                classBuilder.addType(generateOperationObject(operation, index, className))
+                classBuilder.addType(
+                    generateOperationObject(
+                        operation,
+                        index,
+                        serializerRegistry,
+                        operationContexts[operation],
+                    ),
+                )
             }
         }
 
@@ -853,8 +939,9 @@ class KotlinCodeGenerator(
     }
 
     /**
-     * Builds a type context for an operation, mapping short type names to their
-     * relative ClassName paths within the operation object.
+     * Builds both relative and fully qualified paths from one traversal of an operation's
+     * nested types. Relative paths are used in API source; qualified paths are used by
+     * serializers emitted in a separate top-level file.
      */
     private fun buildOperationTypeContext(operation: Operation, apiClassName: String): OperationTypeContext? {
         if (operation.nestedTypes.isEmpty()) return null
@@ -864,16 +951,18 @@ class KotlinCodeGenerator(
         fun walkNodes(
             nodes: List<NestedTypeNode>,
             parentPath: List<String>,
-            serializerPath: List<String>,
+            qualifiedPath: List<String>,
         ) {
             for (node in nodes) {
                 val currentPath = parentPath + node.name
-                val currentSerializerPath = serializerPath + node.name
-                context.typeMap[node.name] = ClassName("", currentPath)
-                context.serializerTypeMap[node.name] =
-                    ClassName(packageName, *currentSerializerPath.toTypedArray())
+                val currentQualifiedPath = qualifiedPath + node.name
+                context.register(
+                    node.type,
+                    ClassName("", currentPath),
+                    ClassName(packageName, *currentQualifiedPath.toTypedArray()),
+                )
                 if (node.children.isNotEmpty()) {
-                    walkNodes(node.children, currentPath, currentSerializerPath)
+                    walkNodes(node.children, currentPath, currentQualifiedPath)
                 }
                 // Walk into variant-scoped nested types for union nodes
                 val type = node.type
@@ -881,7 +970,7 @@ class KotlinCodeGenerator(
                     for (variant in type.variants) {
                         if (variant.nestedTypes.isNotEmpty()) {
                             val variantPath = currentPath + variant.name
-                            walkNodes(variant.nestedTypes, variantPath, currentSerializerPath + variant.name)
+                            walkNodes(variant.nestedTypes, variantPath, currentQualifiedPath + variant.name)
                         }
                     }
                 }
@@ -893,44 +982,14 @@ class KotlinCodeGenerator(
     }
 
     /**
-     * Builds type paths suitable for top-level generated files such as
-     * `Serializers.kt`. Unlike API method bodies, those files need the API class
-     * name as the first nested type segment.
-     */
-    private fun buildSerializerOperationTypeContext(
-        operation: Operation,
-        apiClassName: String,
-    ): OperationTypeContext? {
-        if (operation.nestedTypes.isEmpty()) return null
-        val context = OperationTypeContext(apiClassName)
-
-        fun walkNodes(nodes: List<NestedTypeNode>, parentPath: List<String>) {
-            for (node in nodes) {
-                val currentPath = parentPath + node.name
-                val className = ClassName(packageName, apiClassName, *currentPath.toTypedArray())
-                context.typeMap[node.name] = className
-                context.serializerTypeMap[node.name] = className
-                if (node.children.isNotEmpty()) {
-                    walkNodes(node.children, currentPath)
-                }
-                if (node.type is ResolvedType.Union) {
-                    for (variant in node.type.variants) {
-                        if (variant.nestedTypes.isNotEmpty()) {
-                            walkNodes(variant.nestedTypes, currentPath + variant.name)
-                        }
-                    }
-                }
-            }
-        }
-
-        walkNodes(operation.nestedTypes, listOf(toPascalCase(operation.name)))
-        return context
-    }
-
-    /**
      * Generates an `object OperationName { ... }` containing all nested types for one operation.
      */
-    private fun generateOperationObject(operation: Operation, index: TypeIndex, apiClassName: String): TypeSpec {
+    private fun generateOperationObject(
+        operation: Operation,
+        index: TypeIndex,
+        serializerRegistry: TransferableSerializerRegistry,
+        serializerContext: OperationTypeContext?,
+    ): TypeSpec {
         val objectName = toPascalCase(operation.name)
         val objectBuilder = TypeSpec.objectBuilder(objectName)
 
@@ -940,7 +999,8 @@ class KotlinCodeGenerator(
                     node,
                     index,
                     listOf(objectName),
-                    listOf(apiClassName, objectName),
+                    serializerRegistry,
+                    serializerContext,
                 ),
             )
         }
@@ -960,7 +1020,8 @@ class KotlinCodeGenerator(
         node: NestedTypeNode,
         index: TypeIndex,
         parentPath: List<String> = emptyList(),
-        serializerPath: List<String> = emptyList(),
+        serializerRegistry: TransferableSerializerRegistry,
+        serializerContext: OperationTypeContext? = null,
     ): TypeSpec {
         // Build an OperationTypeContext for this node's children so that field type
         // references resolve to short relative ClassName paths.
@@ -970,24 +1031,22 @@ class KotlinCodeGenerator(
             fun registerChildren(
                 children: List<NestedTypeNode>,
                 currentPath: List<String>,
-                currentSerializerPath: List<String>,
             ) {
                 for (child in children) {
-                    ctx.typeMap[child.name] = ClassName("", currentPath + child.name)
-                    ctx.serializerTypeMap[child.name] =
-                        ClassName(packageName, *(currentSerializerPath + child.name).toTypedArray())
+                    ctx.register(
+                        child.type,
+                        ClassName("", currentPath + child.name),
+                        ClassName(packageName, *(currentPath + child.name).toTypedArray()),
+                    )
                     if (child.children.isNotEmpty()) {
                         registerChildren(
                             child.children,
                             currentPath + child.name,
-                            currentSerializerPath + child.name,
                         )
                     }
                 }
             }
-            ctx.serializerTypeMap[node.name] =
-                ClassName(packageName, *(serializerPath + node.name).toTypedArray())
-            registerChildren(node.children, listOf(node.name), serializerPath + node.name)
+            registerChildren(node.children, listOf(node.name))
             // Register variant-scoped nested types
             if (node.type is ResolvedType.Union) {
                 for (variant in node.type.variants) {
@@ -995,7 +1054,6 @@ class KotlinCodeGenerator(
                         registerChildren(
                             variant.nestedTypes,
                             listOf(node.name, variant.name),
-                            serializerPath + node.name + variant.name,
                         )
                     }
                 }
@@ -1004,9 +1062,23 @@ class KotlinCodeGenerator(
         } else null
 
         val spec = when (val type = node.type) {
-            is ResolvedType.Record -> generateDataClass(node.name, type, index, childContext)
+            is ResolvedType.Record -> generateDataClass(
+                node.name,
+                type,
+                index,
+                childContext,
+                serializerRegistry,
+                serializerContext,
+            )
             is ResolvedType.Enum -> generateEnumClass(node.name, type.values)
-            is ResolvedType.Union -> generateSealedClass(node.name, type, index, childContext)
+            is ResolvedType.Union -> generateSealedClass(
+                node.name,
+                type,
+                index,
+                childContext,
+                serializerRegistry,
+                serializerContext,
+            )
             else -> throw IllegalStateException("Unexpected nested type kind: ${type::class.simpleName}")
         }
 
@@ -1015,7 +1087,15 @@ class KotlinCodeGenerator(
             val currentPath = parentPath + node.name
             return spec.toBuilder().apply {
                 for (child in node.children) {
-                    addType(generateNestedTypeSpec(child, index, currentPath, serializerPath + node.name))
+                    addType(
+                        generateNestedTypeSpec(
+                            child,
+                            index,
+                            currentPath,
+                            serializerRegistry,
+                            serializerContext,
+                        ),
+                    )
                 }
             }.build()
         }
@@ -1218,37 +1298,42 @@ class KotlinCodeGenerator(
 
     // ── Type resolution ──────────────────────────────────────────────
 
-    private fun resolveResolvedType(type: ResolvedType, index: TypeIndex, opContext: OperationTypeContext? = null): TypeName =
+    private fun resolveResolvedType(
+        type: ResolvedType,
+        index: TypeIndex,
+        opContext: OperationTypeContext? = null,
+        qualified: Boolean = false,
+    ): TypeName =
         when (type) {
             is ResolvedType.Primitive -> mapPrimitive(type.kind)
             is ResolvedType.ListType -> {
-                val elementType = resolveResolvedType(type.elementType, index, opContext)
+                val elementType = resolveResolvedType(type.elementType, index, opContext, qualified)
                 List::class.asTypeName().parameterizedBy(elementType)
             }
             is ResolvedType.Nullable -> {
-                resolveResolvedType(type.inner, index, opContext).copy(nullable = true)
+                resolveResolvedType(type.inner, index, opContext, qualified).copy(nullable = true)
             }
             is ResolvedType.Record -> {
-                resolveNamedType(type.name, index, opContext)
+                resolveNamedType(type, index, opContext, qualified)
             }
             is ResolvedType.Enum -> {
-                resolveNamedType(type.name, index, opContext)
+                resolveNamedType(type, index, opContext, qualified)
             }
             is ResolvedType.Union -> {
-                resolveNamedType(type.name, index, opContext)
+                resolveNamedType(type, index, opContext, qualified)
             }
             is ResolvedType.TypeReference -> {
-                resolveNamedType(type.name, index, opContext)
+                resolveNamedType(type, index, opContext, qualified)
             }
             is ResolvedType.FormattedType -> mapFormattedType(type.format)
             is ResolvedType.MapType -> {
-                val valueType = resolveResolvedType(type.valueType, index, opContext)
+                val valueType = resolveResolvedType(type.valueType, index, opContext, qualified)
                 Map::class.asTypeName().parameterizedBy(String::class.asTypeName(), valueType)
             }
             is ResolvedType.TupleType -> {
-                resolveNamedType(type.name, index, opContext)
+                resolveNamedType(type, index, opContext, qualified)
             }
-            is ResolvedType.Transferable -> resolveTransferable(type, index, opContext)
+            is ResolvedType.Transferable -> resolveTransferable(type, index, opContext, qualified)
         }
 
     /**
@@ -1256,24 +1341,37 @@ class KotlinCodeGenerator(
      * First checks the operation context (for inline nested types), then falls back to the
      * global type index (for component schemas).
      */
-    private fun resolveNamedType(name: String, index: TypeIndex, opContext: OperationTypeContext?): ClassName {
+    private fun resolveNamedType(
+        type: ResolvedType,
+        index: TypeIndex,
+        opContext: OperationTypeContext?,
+        qualified: Boolean,
+    ): ClassName {
         // Check operation context first (inline nested types)
-        if (opContext != null && name.isNotEmpty()) {
-            val nestedClassName = opContext.typeMap[name]
-            if (nestedClassName != null) return nestedClassName
+        if (opContext != null) {
+            opContext.resolve(type, qualified)?.let { return it }
+            namedType(type)?.let { name ->
+                opContext.resolveByName(name, qualified)?.let { return it }
+            }
         }
         // Fall back to global type index (component schemas)
+        val name = namedType(type).orEmpty()
         return findClassNameByTypeName(name, index)
             ?: if (name.isNotEmpty()) ClassName(packageName, name)
             else throw IllegalStateException("Type has no name and is not in the type index")
     }
 
-    private fun resolveTransferable(type: ResolvedType.Transferable, index: TypeIndex, opContext: OperationTypeContext? = null): TypeName {
+    private fun resolveTransferable(
+        type: ResolvedType.Transferable,
+        index: TypeIndex,
+        opContext: OperationTypeContext? = null,
+        qualified: Boolean = false,
+    ): TypeName {
         return when (type.transferableName) {
             "realtime/channel" -> {
                 val realtimeChannel = ClassNames.realtimeChannel
                 if (type.typeArgs.isNotEmpty()) {
-                    realtimeChannel.parameterizedBy(type.typeArgs.map { resolveResolvedType(it, index, opContext) })
+                    realtimeChannel.parameterizedBy(type.typeArgs.map { resolveResolvedType(it, index, opContext, qualified) })
                 } else {
                     realtimeChannel.parameterizedBy(JsonElement::class.asTypeName())
                 }
@@ -1283,25 +1381,6 @@ class KotlinCodeGenerator(
             "oidc/client" -> ClassNames.oidcClient
             else -> JsonElement::class.asTypeName()
         }
-    }
-
-    private fun resolveSerializerNameType(
-        type: ResolvedType,
-        index: TypeIndex,
-        opContext: OperationTypeContext?,
-    ): TypeName {
-        val name = when (type) {
-            is ResolvedType.Record -> type.name
-            is ResolvedType.Enum -> type.name
-            is ResolvedType.Union -> type.name
-            is ResolvedType.TypeReference -> type.name
-            is ResolvedType.TupleType -> type.name
-            else -> null
-        }
-        if (name != null) {
-            opContext?.serializerTypeMap?.get(name)?.let { return it }
-        }
-        return resolveResolvedType(type, index, opContext)
     }
 
     private fun isTransferableType(type: ResolvedType): Boolean = when (type) {
@@ -1316,79 +1395,83 @@ class KotlinCodeGenerator(
         else -> null
     }
 
-    private fun getTransferableSerializerName(
-        type: ResolvedType.Transferable,
+    private fun addTransferableSerializerAnnotation(
+        property: PropertySpec.Builder,
+        transferable: ResolvedType.Transferable,
         index: TypeIndex,
-        opContext: OperationTypeContext? = null,
-    ): String {
-        val base = when (type.transferableName) {
-            "realtime/channel" -> "RealtimeChannel"
-            "file-bucket/download" -> "FileDownloadHandle"
-            "file-bucket/upload" -> "FileUploadHandle"
-            "oidc/client" -> "OidcClient"
-            else -> "Unknown"
+        serializerRegistry: TransferableSerializerRegistry,
+        serializerContext: OperationTypeContext?,
+    ) {
+        if (redirectUrl == null && transferable.transferableName == "oidc/client") return
+
+        val returnType = resolveTransferable(transferable, index, serializerContext, qualified = true)
+        val typeArgument = transferable.typeArgs.firstOrNull()?.let {
+            resolveResolvedType(it, index, serializerContext, qualified = true)
         }
-        val suffix = type.typeArgs.joinToString("") { arg ->
-            when (val resolved = resolveSerializerNameType(arg, index, opContext)) {
-                is ClassName -> {
-                    resolved.simpleNames.joinToString("")
-                }
-                else -> "JsonElement"
-            }
-        }
-        return "${base}${suffix}Serializer"
+        val serializerName = serializerRegistry.register(transferable.transferableName, returnType, typeArgument)
+        property.addAnnotation(
+            AnnotationSpec.builder(ClassNames.serializable)
+                .addMember("with = %T::class", ClassName(packageName, serializerName))
+                .build(),
+        )
     }
 
-    private fun collectTransferableEntries(model: CodegenModel, index: TypeIndex): List<TransferableSerializerGenerator.TransferableEntry> {
-        val seen = mutableSetOf<String>()
-        val entries = mutableListOf<TransferableSerializerGenerator.TransferableEntry>()
+    private fun namedType(type: ResolvedType): String? = when (type) {
+        is ResolvedType.Record -> type.name
+        is ResolvedType.Enum -> type.name
+        is ResolvedType.Union -> type.name
+        is ResolvedType.TypeReference -> type.name
+        is ResolvedType.TupleType -> type.name
+        else -> null
+    }
 
-        fun visit(type: ResolvedType, opContext: OperationTypeContext? = null) {
-            when (type) {
-                is ResolvedType.Transferable -> {
-                    if (redirectUrl == null && type.transferableName == "oidc/client") return
-                    val serializerName = getTransferableSerializerName(type, index, opContext)
-                    if (seen.add(serializerName)) {
-                        val returnType = resolveTransferable(type, index, opContext)
-                        entries.add(TransferableSerializerGenerator.TransferableEntry(
-                            transferableName = type.transferableName,
-                            serializerName = serializerName,
-                            returnType = returnType,
-                            typeArgument = type.typeArgs.firstOrNull()?.let { resolveResolvedType(it, index, opContext) },
-                        ))
-                    }
-                }
-                is ResolvedType.Nullable -> visit(type.inner, opContext)
-                is ResolvedType.ListType -> visit(type.elementType, opContext)
-                is ResolvedType.Record -> type.fields.forEach { visit(it.type, opContext) }
-                else -> {}
-            }
+    private class TransferableSerializerRegistry {
+        private data class Key(
+            val transferableName: String,
+            val returnType: TypeName,
+            val typeArgument: TypeName?,
+        )
+
+        private val entriesByKey = LinkedHashMap<Key, TransferableSerializerGenerator.TransferableEntry>()
+        private val allocatedNames = mutableSetOf<String>()
+
+        val entries: Collection<TransferableSerializerGenerator.TransferableEntry>
+            get() = entriesByKey.values
+
+        fun register(transferableName: String, returnType: TypeName, typeArgument: TypeName?): String {
+            val key = Key(transferableName, returnType, typeArgument)
+            return entriesByKey.getOrPut(key) {
+                TransferableSerializerGenerator.TransferableEntry(
+                    transferableName = transferableName,
+                    serializerName = allocateName(transferableName, typeArgument),
+                    returnType = returnType,
+                    typeArgument = typeArgument,
+                )
+            }.serializerName
         }
 
-        for (typeDef in model.typeDefinitions) {
-            when (val t = typeDef.type) {
-                is ResolvedType.Record -> t.fields.forEach { visit(it.type) }
-                else -> {}
+        private fun allocateName(transferableName: String, typeArgument: TypeName?): String {
+            val base = when (transferableName) {
+                "realtime/channel" -> "RealtimeChannel"
+                "file-bucket/download" -> "FileDownloadHandle"
+                "file-bucket/upload" -> "FileUploadHandle"
+                "oidc/client" -> "OidcClient"
+                else -> "Unknown"
             }
+            val suffix = typeArgument?.let(::typeNameSegment).orEmpty()
+            val candidate = "${base}${suffix}Serializer"
+            if (allocatedNames.add(candidate)) return candidate
+
+            var duplicate = 2
+            while (!allocatedNames.add("${candidate}${duplicate}")) duplicate++
+            return "${candidate}${duplicate}"
         }
 
-        fun visitNestedType(node: NestedTypeNode, opContext: OperationTypeContext?) {
-            when (val type = node.type) {
-                is ResolvedType.Record -> type.fields.forEach { visit(it.type, opContext) }
-                else -> {}
-            }
-            node.children.forEach { visitNestedType(it, opContext) }
-        }
-
-        for (namespace in model.apiNamespaces) {
-            val apiClassName = toPascalCase(namespace.name)
-            for (operation in namespace.operations) {
-                val opContext = buildSerializerOperationTypeContext(operation, apiClassName)
-                operation.nestedTypes.forEach { visitNestedType(it, opContext) }
-            }
-        }
-
-        return entries
+        private fun typeNameSegment(type: TypeName): String = when (type) {
+            is ClassName -> type.simpleNames.joinToString("")
+            is ParameterizedTypeName -> typeNameSegment(type.rawType) + type.typeArguments.joinToString("") { typeNameSegment(it) }
+            else -> type.toString().replace(Regex("[^A-Za-z0-9]"), "").ifEmpty { "JsonElement" }
+        } + if (type.isNullable) "Nullable" else ""
     }
 
     private fun mapPrimitive(kind: PrimitiveKind): TypeName = when (kind) {
@@ -1534,15 +1617,7 @@ class KotlinCodeGenerator(
         return when (type.transferableName) {
             "realtime/channel" -> {
                 if (type.typeArgs.isNotEmpty()) {
-                    val typeArgName = (type.typeArgs.first() as? ResolvedType.TypeReference)?.name
-                        ?: (type.typeArgs.first() as? ResolvedType.Record)?.name
-                        ?: ""
-                    val typeArgClassName = if (typeArgName.isNotEmpty()) {
-                        resolveNamedType(typeArgName, index, opContext)
-                    } else {
-                        resolveResolvedType(type.typeArgs.first(), index, opContext) as? ClassName
-                            ?: ClassName(packageName, "Unknown")
-                    }
+                    val typeArgClassName = resolveResolvedType(type.typeArgs.first(), index, opContext)
 
                     CodeBlock.of(
                         "%T.fromJson(%L) { %T.%M<%T>(it) }",

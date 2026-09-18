@@ -20,9 +20,75 @@
                   "required": ["text"]
                 }
               ]
+            },
+            "inner": {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "x-blocks-transferable": "realtime/channel",
+                  "x-blocks-type-args": [
+                    {
+                      "type": "object",
+                      "properties": { "count": { "type": "integer" } },
+                      "required": ["count"]
+                    }
+                  ]
+                }
+              },
+              "required": ["channel"]
+            },
+            "event": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": { "type": "string", "enum": ["message"] },
+                    "channel": {
+                      "x-blocks-transferable": "realtime/channel",
+                      "x-blocks-type-args": [
+                        {
+                          "type": "object",
+                          "properties": { "body": { "type": "string" } },
+                          "required": ["body"]
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["kind", "channel"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": { "type": "string", "enum": ["presence"] },
+                    "channel": {
+                      "x-blocks-transferable": "realtime/channel",
+                      "x-blocks-type-args": [
+                        {
+                          "type": "object",
+                          "properties": { "online": { "type": "boolean" } },
+                          "required": ["online"]
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["kind", "channel"]
+                }
+              ]
+            },
+            "stringValues": {
+              "x-blocks-transferable": "realtime/channel",
+              "x-blocks-type-args": [
+                { "type": "array", "items": { "type": "string" } }
+              ]
+            },
+            "integerValues": {
+              "x-blocks-transferable": "realtime/channel",
+              "x-blocks-type-args": [
+                { "type": "array", "items": { "type": "integer" } }
+              ]
             }
           },
-          "required": ["sessionId", "channel"]
+          "required": ["sessionId", "channel", "inner", "event", "stringValues", "integerValues"]
         }
       }
     },
