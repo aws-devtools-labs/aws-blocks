@@ -11,7 +11,7 @@ situation:
 
 | # | Pattern | One-liner |
 |---|---|---|
-| 1 | **CDK in Blocks** | Bring your own CDK resource (or whole stack) and wire it to the Blocks Lambda via `blocksStack.handler` / `blocksBackend.handler` |
+| 1 | **CDK in Blocks** | Bring your own CDK resource (or whole stack) and wire it to Blocks' compute via `blocksStack.executionRole` (IAM) and `blocksStack.handler` (env vars) |
 | 2 | **`fromExisting` on a BB** | Point a Blocks BB at a pre-deployed AWS resource (DynamoDB table, S3 bucket, RDS, Cognito) — keeps mocks, skips provisioning |
 | 3 | **Custom BB** | Author your own Building Block inside your monorepo (or publish to npm) when no first-party BB exists |
 | 4 | **Vendorize** | Eject a first-party BB's source into `vendor/` and own it outright |
@@ -71,9 +71,9 @@ actually constraining you. Use this to weigh the tradeoffs:
 ## Pattern 1: CDK in Blocks
 
 Blocks gives you two CDK shapes for embedding it in your infrastructure. Both
-expose the same `.handler` Lambda you reach into for IAM and env vars — pick
-based on whether Blocks gets its own stack or shares one with your existing
-infra.
+expose the same `.executionRole` (for IAM) and `.handler` (for env vars) you
+reach into — pick based on whether Blocks gets its own stack or shares one with
+your existing infra.
 
 | Shape | What it is | When to use |
 |---|---|---|
@@ -82,10 +82,17 @@ infra.
 
 Once instantiated, you can:
 
-- attach IAM policies (`blocksStack.handler.addToRolePolicy(...)`)
+- attach IAM policies (`blocksStack.executionRole.addToPrincipalPolicy(...)`)
 - inject env vars (`blocksStack.handler.addEnvironment(...)`)
 - grant access to any CDK resource you create alongside Blocks
-  (`myQueue.grantSendMessages(blocksStack.handler)`)
+  (`myQueue.grantSendMessages(blocksStack.executionRole)`)
+
+> **Prefer `executionRole` for permissions.** It is the single IAM role every
+> Blocks compute assumes, so a grant made on it applies no matter which compute
+> ends up running your code. `blocksStack.handler` is **deprecated** — an app can
+> run on more than one compute, so a single stack-level Lambda is not a reliable
+> handle — and it will be removed once the public compute surface lands. Env vars
+> still go through `handler.addEnvironment(...)` for now.
 
 Then read those env vars from inside your runtime code with the AWS SDK directly.
 
@@ -117,8 +124,9 @@ export const blocksStack = await BlocksStack.create(app, 'my-app', {
 // Pretend this queue was created by another stack you don't own.
 const externalQueue = new sqs.Queue(blocksStack, 'external-queue');
 
-// Grant Blocks' Lambda permission to send to it, and inject the URL.
-externalQueue.grantSendMessages(blocksStack.handler);
+// Grant Blocks' compute permission to send to it, and inject the URL. The grant
+// goes on the shared execution role; the env var on the default compute.
+externalQueue.grantSendMessages(blocksStack.executionRole);
 blocksStack.handler.addEnvironment('EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 ```
 
@@ -169,8 +177,8 @@ export class MyApiStack extends cdk.Stack {
       backendCDKPath: join(__dirname, 'aws-blocks/index.ts'),
     });
 
-    // Same .handler / .apiUrl / .gateway as BlocksStack — wire normally.
-    externalQueue.grantSendMessages(blocks.handler);
+    // Same .executionRole / .apiUrl as BlocksStack — wire normally.
+    externalQueue.grantSendMessages(blocks.executionRole);
     blocks.handler.addEnvironment('EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 
     new cdk.CfnOutput(this, 'BlocksApiUrl', { value: blocks.apiUrl });
@@ -268,11 +276,11 @@ export const api = new ApiNamespace(scope, 'api', () => ({
 
 > **IAM is handled for you.** When you pass `fromExisting(...)`, the BB still
 > calls `grantReadWriteData` / `grantReadWrite` on the bound resource and
-> attaches the policy to `blocksStack.handler`'s role. You do *not* need to wire
+> attaches the policy to `blocksStack.executionRole`. You do *not* need to wire
 > IAM separately. Cross-account references are an exception — CDK's
 > `fromTableName` / `fromBucketName` can't introspect a resource in another
 > account, so for cross-account brownfield setups fall back to Pattern 1
-> (raw IAM via `blocksStack.handler.addToRolePolicy`).
+> (raw IAM via `blocksStack.executionRole.addToPrincipalPolicy`).
 
 ### What this gives you
 
@@ -320,8 +328,8 @@ conditions:
 
 ### Skeleton
 
-**`src/index.cdk.ts`** — provisions the queue, grants Blocks' Lambda access,
-and surfaces config via env vars:
+**`src/index.cdk.ts`** — provisions the queue, grants Blocks' compute access via
+the shared execution role, and surfaces config via env vars:
 
 ```ts
 import { Duration } from 'aws-cdk-lib';
@@ -343,7 +351,7 @@ export class Queue extends Scope {
         : undefined,
     });
 
-    queue.grantSendMessages(this.handler);
+    queue.grantSendMessages(this.executionRole);
     this.handler.addEnvironment(`${envSafe(this.fullId)}_URL`, queue.queueUrl);
   }
 }
@@ -662,7 +670,7 @@ When introducing Blocks into an existing AWS account:
 - **Identify what's mockable.** Inventory which existing resources have a BB
   with a `fromExisting` factory ([Pattern 2](#pattern-2-fromexisting-on-a-building-block));
   those are your highest-leverage integrations.
-- **Wire perms via `blocksStack.handler`** ([Pattern 1](#pattern-1-cdk-in-blocks))
+- **Wire perms via `blocksStack.executionRole`** ([Pattern 1](#pattern-1-cdk-in-blocks))
   for everything else. Resist the urge to mutate Blocks-managed resources from
   outside the BB — that's vendorize territory.
 - **Create a per-app BB package** the moment a Pattern-1 integration has
