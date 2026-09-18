@@ -9,6 +9,7 @@
  * WORKSPACE (containment enforced by the Sandbox); the bash timeout is floored to BASH_MIN_TIMEOUT_SEC.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { Agent, type AgentResult, BedrockModel, ModelStreamUpdateEvent } from '@strands-agents/sdk';
 import { makeBash } from '@strands-agents/sdk/vended-tools/bash';
 import { fileEditor } from '@strands-agents/sdk/vended-tools/file-editor';
@@ -35,6 +36,15 @@ const TASK_PROMPT_PATH = required('TASK_PROMPT', '[bench]');
 const OUTPUT = required('OUTPUT', '[bench]');
 const TRACE_PATH = process.env.TRACE;
 const METRICS_PATH = process.env.METRICS;
+// Point the sandbox's per-command log at commands.jsonl beside the trace (so the
+// bench-trace upload picks it up; absent on a local run with no TRACE). Set before any invoke() so
+// every cycle is captured.
+if (TRACE_PATH && !process.env.BENCH_CMD_LOG) {
+	process.env.BENCH_CMD_LOG = join(dirname(TRACE_PATH), 'commands.jsonl');
+	// Truncate once here (run-shell only appends) so a reused self-hosted runner can't carry a
+	// prior cell's lines into this cell's artifact.
+	writeFileSync(process.env.BENCH_CMD_LOG, '');
+}
 const MODEL_ID = process.env.BENCH_MODEL ?? 'us.anthropic.claude-opus-4-8';
 // Opus rejects the `temperature` parameter (like the judge), so only pin temperature=0 for models
 // that accept it (e.g. Sonnet); keyed off the model id so BENCH_MODEL stays self-configuring.
