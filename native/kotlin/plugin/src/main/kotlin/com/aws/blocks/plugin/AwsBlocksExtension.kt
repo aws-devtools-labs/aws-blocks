@@ -124,7 +124,26 @@ class OidcDsl {
                     "(\"$legacy\") are set to different values. Remove redirectUrl.",
             )
         }
-        return current ?: legacy
+        return (current ?: legacy)?.also { validate(it) }
+    }
+
+    private fun validate(value: String) {
+        if (value.any { it.isWhitespace() }) {
+            throw GradleException("awsBlocks.oidc.relayTo contains whitespace: \"$value\"")
+        }
+        val scheme = value.substringBefore("://")
+        if (scheme.isEmpty() || scheme == value) {
+            throw GradleException(
+                "awsBlocks.oidc.relayTo is missing a scheme: \"$value\". Expected something " +
+                    "like \"com.yourcompany.yourapp://auth/callback\".",
+            )
+        }
+        if (scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)) {
+            throw GradleException(
+                "awsBlocks.oidc.relayTo uses the $scheme scheme: \"$value\". Android and iOS " +
+                    "sign-in needs a custom scheme the app registers with the operating system.",
+            )
+        }
     }
 }
 

@@ -40,4 +40,27 @@ class OidcDslTest : FunSpec({
         error.message!! shouldContain "relayTo"
         error.message!! shouldContain "redirectUrl"
     }
+
+    test("resolve rejects a value with no scheme separator") {
+        val dsl = OidcDsl().apply { relayTo = "myapp" }
+        val error = shouldThrow<GradleException> { dsl.resolve() }
+        error.message!! shouldContain "scheme"
+    }
+
+    test("resolve rejects an https value") {
+        val dsl = OidcDsl().apply { relayTo = "https://example.com/callback" }
+        val error = shouldThrow<GradleException> { dsl.resolve() }
+        error.message!! shouldContain "custom scheme"
+    }
+
+    test("resolve rejects a value containing whitespace") {
+        val dsl = OidcDsl().apply { relayTo = "my app://auth" }
+        val error = shouldThrow<GradleException> { dsl.resolve() }
+        error.message!! shouldContain "whitespace"
+    }
+
+    test("resolve accepts a dotted custom scheme") {
+        val dsl = OidcDsl().apply { relayTo = "com.example.app://auth/callback" }
+        dsl.resolve() shouldBe "com.example.app://auth/callback"
+    }
 })
