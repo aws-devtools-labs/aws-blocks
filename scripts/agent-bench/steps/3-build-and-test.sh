@@ -133,6 +133,11 @@ cleanup_dev_server() {
 }
 trap cleanup_dev_server EXIT
 
+# Dev-server stability (scope note): dev-server startup is flaky
+# under load, but the deep fix (waiting on the BLOCKS_DEPLOYED readiness signal instead of banner-grep +
+# HTTP-poll) ships separately. The reap + free-port + readiness-gate logic below is left untouched.
+# No NODE_OPTIONS heap cap: an OOM fix needs a repro (none yet), and guessing one could mask it.
+# TODO: consume the BLOCKS_DEPLOYED signal in the discovery loop once it lands.
 nohup npm run dev > "${CELL_TMP}/dev.log" 2>&1 &
 echo "$!" > "${CELL_TMP}/dev.pid"
 
@@ -186,6 +191,10 @@ if ! npm install --no-save --silent "@playwright/test@${PW_VERSION}"; then
   echo "::warning::playwright install failed; functional tests will not run"
   exit 0
 fi
+# Chromium is normally pre-provisioned before the agent phase (the "Provision
+# Playwright chromium" workflow step, same job-level PLAYWRIGHT_BROWSERS_PATH), making this a
+# cache-hit no-op. Kept (guarded) as a fallback so step 3 still works standalone; `playwright
+# install` is idempotent, so it self-heals a rare miss.
 if ! npx playwright install chromium > "${CELL_TMP}/pw-install.log" 2>&1; then
   echo "::warning::playwright chromium download failed; functional tests will not run"
   exit 0
