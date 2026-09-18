@@ -1,7 +1,10 @@
+@file:OptIn(InternalBlocksApi::class)
+
 package com.aws.blocks.kotlin.oidc
 
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksServer
+import com.aws.blocks.kotlin.InternalBlocksApi
 import com.aws.blocks.kotlin.json.BlocksJson
 import io.ktor.client.HttpClient
 import io.ktor.client.request.post
@@ -32,7 +35,8 @@ class OidcClient internal constructor(
     val authState: StateFlow<OidcAuthState> = _authState.asStateFlow()
 
     val providers: List<String> = config.providers
-    internal var platformLauncher: OidcPlatformLauncher = createPlatformLauncher()
+    @InternalBlocksApi
+    var platformLauncher: OidcPlatformLauncher = createPlatformLauncher()
 
     // Blocks backend does not append padding
     private val base64 = Base64.UrlSafe.withPadding(Base64.PaddingOption.PRESENT_OPTIONAL)
@@ -42,53 +46,59 @@ class OidcClient internal constructor(
             throw OidcUnknownProviderException(provider)
         }
 
-        val launcher = platformLauncher
         val csrf = Pkce.generateRandom()
         val verifier = Pkce.generateCodeVerifier()
         val challenge = Pkce.calculateCodeChallenge(verifier)
 
-        // Step 1: POST to /auth/authorize-params/<provider> to get the signed state envelope.
-        val params = fetchAuthorizeParams(provider, csrf)
+        // The session owns the relay target: a loopback launcher binds a socket to learn its
+        // own port, which has to happen before the authorize-params request carries it.
+        val session = platformLauncher.openSession(config.relayTo)
+        try {
+            // Step 1: POST to /auth/authorize-params/<provider> to get the signed state envelope.
+            val params = fetchAuthorizeParams(provider, csrf, session.relayTo)
 
-        // Step 2: Build the full authorize URL. redirect_uri points to the BACKEND's callback (HTTPS).
-        val callbackUrl = server.rawRoute(config.callbackPath)
-        val authorizeUrl = buildAuthorizeUrl(params, callbackUrl, challenge)
+            // Step 2: Build the full authorize URL. redirect_uri points to the BACKEND's callback (HTTPS).
+            val callbackUrl = server.rawRoute(config.callbackPath)
+            val authorizeUrl = buildAuthorizeUrl(params, callbackUrl, challenge)
 
-        // Step 3: Open system browser. After user authenticates, the IdP redirects to the
-        // backend's callback, the backend decodes the state envelope, and 302s to our redirect URL.
-        val resultUri = launcher.launch(authorizeUrl)
+            // Step 3: Open the browser. After the user authenticates, the IdP redirects to the
+            // backend's callback, the backend decodes the state envelope, and 302s to the relay target.
+            val resultUri = session.awaitRedirect(authorizeUrl)
 
-        // Step 4: Validate the callback.
-        val resultParams = Url(resultUri).parameters
+            // Step 4: Validate the callback.
+            val resultParams = Url(resultUri).parameters
 
-        val error = resultParams["error"]
-        if (error != null) {
-            val description = resultParams["error_description"] ?: ""
-            throw OidcCallbackException("IdP error: $error — $description")
+            val error = resultParams["error"]
+            if (error != null) {
+                val description = resultParams["error_description"] ?: ""
+                throw OidcCallbackException("IdP error: $error — $description")
+            }
+
+            val code = resultParams["code"]
+                ?: throw OidcCallbackException("Callback URI missing 'code' parameter")
+            val returnedState = resultParams["state"]
+                ?: throw OidcCallbackException("Callback URI missing 'state' parameter")
+
+            if (returnedState != params.state) {
+                throw OidcCallbackException("State mismatch in callback")
+            }
+
+            // Step 5: Verify the CSRF value inside the state envelope matches what we sent.
+            verifyCsrf(returnedState, csrf)
+
+            // Step 6: Exchange the code for tokens.
+            return exchange(
+                code = code,
+                verifier = verifier,
+                state = params.state,
+                nonce = params.nonce ?: "",
+                provider = provider,
+                callbackUrl = callbackUrl,
+                iss = resultParams["iss"]
+            )
+        } finally {
+            session.close()
         }
-
-        val code = resultParams["code"]
-            ?: throw OidcCallbackException("Callback URI missing 'code' parameter")
-        val returnedState = resultParams["state"]
-            ?: throw OidcCallbackException("Callback URI missing 'state' parameter")
-
-        if (returnedState != params.state) {
-            throw OidcCallbackException("State mismatch in callback")
-        }
-
-        // Step 5: Verify the CSRF value inside the state envelope matches what we sent.
-        verifyCsrf(returnedState, csrf)
-
-        // Step 6: Exchange the code for tokens.
-        return exchange(
-            code = code,
-            verifier = verifier,
-            state = params.state,
-            nonce = params.nonce ?: "",
-            provider = provider,
-            callbackUrl = callbackUrl,
-            iss = resultParams["iss"]
-        )
     }
 
     suspend fun exchange(
@@ -133,10 +143,14 @@ class OidcClient internal constructor(
         }
     }
 
-    private suspend fun fetchAuthorizeParams(provider: String, csrf: String): AuthorizeParamsResponse {
+    private suspend fun fetchAuthorizeParams(
+        provider: String,
+        csrf: String,
+        relayTo: String
+    ): AuthorizeParamsResponse {
         val body = buildJsonObject {
             put("csrf", csrf)
-            put("relayTo", config.relayTo)
+            put("relayTo", relayTo)
         }
 
         val authorizeUrl = server.rawRoute(config.authorizeParamsBasePath, provider)
