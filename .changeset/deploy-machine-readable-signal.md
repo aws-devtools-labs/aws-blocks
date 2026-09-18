@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/core": minor
+"@aws-blocks/blocks": patch
 "@aws-blocks/create-blocks-app": patch
 ---
 
