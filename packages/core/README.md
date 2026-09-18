@@ -309,6 +309,46 @@ CDK Pipelines-based CI/CD construct for multi-branch, multi-stage deployments. C
 
 📖 **Full Pipeline documentation (see source repo)**
 
+### API front door
+
+The backend's public HTTP API can sit behind a managed CloudFront distribution — the **API front door**. Its job is origin stability: a fixed public hostname means adding, scaling, or swapping a compute never changes the browser origin, so a `Secure` session cookie is never dropped.
+
+Select it with `apiFrontDoor` on `BlocksStack.create` / `BlocksBackend.create`:
+
+```typescript
+await BlocksStack.create(app, 'MyApp', {
+  backendHandlerPath,
+  backendCDKPath,
+  defaults: BlocksPresets.production,
+  apiFrontDoor: 'cloudfront', // or 'none'
+});
+```
+
+- `'cloudfront'` — provision the managed distribution as the stable public origin.
+- `'none'` — no managed front door; the client calls the API Gateway directly.
+
+When omitted it follows the preset: **on** in `production`, **off** in `sandbox` (a sandbox's dev server is same-origin `localhost` and a deployed sandbox is disposable, so origin stability buys nothing and the CloudFront propagation isn't worth paying).
+
+**With a `Hosting` frontend.** `Hosting` already proxies `/aws-blocks/api/*` on its own distribution, so it *is* the front door. When the `Hosting` construct is in the **same stack** as the backend, Blocks detects it and reuses that distribution instead of creating a second one — no change needed on your side.
+
+When `Hosting` lives in a **different stack** from the backend, Blocks cannot see it, so leaving the front door on would provision a second, redundant CloudFront distribution in front of the same API. Set `apiFrontDoor: 'none'` on the backend and let `Hosting` front the API:
+
+```typescript
+// Backend stack — Hosting is elsewhere, so don't provision a second front door.
+const backend = await BlocksStack.create(app, 'Api', {
+  backendHandlerPath,
+  backendCDKPath,
+  defaults: BlocksPresets.production,
+  apiFrontDoor: 'none',
+});
+
+// Frontend stack — Hosting's distribution is the front door for the API.
+new Hosting(webStack, 'Web', {
+  root: join(__dirname, '..'),
+  api: backend,
+});
+```
+
 ### Hosting
 
 CDK construct (from the `/cdk` entry point) that deploys a frontend on CloudFront + S3, with a single-origin API proxy when a backend stack is provided.

@@ -4,19 +4,19 @@
 /**
  * CDK-synth tests for the managed CloudFront API front door.
  *
- * The API front door is scheduled by core's `scheduleApiFrontDoor` and resolved at
- * synth by a one-shot aspect. Because the aspect runs at synth — after the whole
- * tree exists — these tests must synthesize (`Template.fromStack`) to exercise
- * it. The aspect's branches:
- *   • `provisionApiFrontDoor` on (production) → create one Blocks-owned
- *     distribution + a `ApiFrontDoorUrl` output. The distribution is provisioned
- *     but nothing routes through it yet — the client still calls the gateway,
- *     so the `ApiUrl` output stays the API Gateway URL.
- *   • off (sandbox / opt-out) → no distribution.
+ * The front door is scheduled by core's `scheduleApiFrontDoor` and resolved at
+ * synth by a one-shot aspect (`ApiFrontDoorAspect`). Because the aspect runs at
+ * synth — after the whole tree, including any `Hosting` construct built after
+ * `create()`, exists — these tests must synthesize (`Template.fromStack`) to
+ * exercise it. The aspect's branches:
+ *   • no Hosting + `provisionApiFrontDoor` (prod) → create one Blocks-owned
+ *     distribution; the `ApiUrl` output resolves to the front-door origin.
+ *   • no Hosting + off (sandbox) → no distribution; `ApiUrl` = the API Gateway.
+ *   • Hosting present → no Blocks-owned distribution (Hosting is the front door).
  *
- * The single behavior's origin is built from the stack's API URL via
- * `httpOriginFromApiUrl`. Per-namespace fan-out to multiple computes is deferred
- * to the multi-compute work.
+ * Hosting presence is simulated with `registerHostingDistribution` (the aspect
+ * only checks presence in that branch), so no real Hosting distribution is
+ * needed here.
  *
  * `scheduleApiFrontDoor` / `ApiFrontDoorAspect` / `httpOriginFromApiUrl` are all core
  * code, so these tests live in core. A real app's default compute comes from
@@ -33,13 +33,14 @@ import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import type { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { ScopeParent } from '../common/index.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { Compute } from './compute/compute.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
-import { httpOriginFromApiUrl } from './api-front-door.js';
+import { httpOriginFromApiUrl, registerHostingDistribution } from './api-front-door.js';
 import { type BlocksDefaults, BlocksBackend, BlocksPresets, BlocksStack } from './index.js';
 
 // Inline stand-in for the real LambdaCompute (which lives in bb-lambda-compute,
@@ -106,12 +107,17 @@ after(() => {
 	rmSync(tmpDir, { recursive: true, force: true });
 });
 
-async function makeStack(id: string, defaults: BlocksDefaults): Promise<BlocksStack> {
+async function makeStack(
+	id: string,
+	defaults: BlocksDefaults,
+	apiFrontDoor?: 'cloudfront' | 'none',
+): Promise<BlocksStack> {
 	const app = new cdk.App();
 	return BlocksStack.create(app, id, {
 		backendHandlerPath: handlerPath,
 		backendCDKPath: backendPath,
 		defaults,
+		apiFrontDoor,
 		defaultComputeFactory: stubComputeFactory,
 	});
 }
@@ -122,30 +128,58 @@ function apiUrlOutput(template: Template): string {
 }
 
 describe('API front door (scheduled aspect, gated on defaults.provisionApiFrontDoor)', () => {
-	test('production provisions one distribution + an ApiFrontDoorUrl output; the client is not switched', async () => {
+	test('production, no Hosting: one distribution + ApiUrl points at the front door', async () => {
 		const stack = await makeStack('ApiFrontDoorProd', BlocksPresets.production);
 		const template = Template.fromStack(stack);
+
 		template.resourceCountIs('AWS::CloudFront::Distribution', 1);
 		template.hasOutput('ApiFrontDoorUrl', {});
-		// Nothing routes through the distribution yet: the client-facing ApiUrl
-		// output still points at the API Gateway, not the API front door.
+		// The client-facing ApiUrl output now resolves to the front-door origin —
+		// its value references the front-door distribution, not the raw gateway.
 		assert.ok(
-			!apiUrlOutput(template).includes('BlocksApiFrontDoor'),
-			'ApiUrl should still reference the API Gateway (client not switched yet)',
+			apiUrlOutput(template).includes('BlocksApiFrontDoor'),
+			'ApiUrl output should reference the CloudFront front door',
 		);
 	});
 
-	test('sandbox provisions no API front door (dev is same-origin; deploy tax not worth it)', async () => {
+	test('sandbox, no Hosting: no front door; ApiUrl stays the API Gateway', async () => {
 		const stack = await makeStack('ApiFrontDoorSandbox', BlocksPresets.sandbox);
-		Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 0);
+		const template = Template.fromStack(stack);
+
+		template.resourceCountIs('AWS::CloudFront::Distribution', 0);
+		assert.ok(
+			!apiUrlOutput(template).includes('BlocksApiFrontDoor'),
+			'ApiUrl output should not reference a front door in sandbox',
+		);
 	});
 
-	test('an explicit provisionApiFrontDoor:false opts a prod app out', async () => {
+	test('explicit provisionApiFrontDoor:false opts a prod app out', async () => {
 		const stack = await makeStack('ApiFrontDoorProdOptOut', {
 			...BlocksPresets.production,
 			provisionApiFrontDoor: false,
 		});
 		Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 0);
+	});
+
+	test("apiFrontDoor: 'none' opts a prod app out (prop overrides the preset default)", async () => {
+		const stack = await makeStack('ApiFrontDoorPropNone', BlocksPresets.production, 'none');
+		Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 0);
+	});
+
+	test("apiFrontDoor: 'cloudfront' forces a front door on in sandbox (prop overrides the preset default)", async () => {
+		const stack = await makeStack('ApiFrontDoorPropCloudfront', BlocksPresets.sandbox, 'cloudfront');
+		Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 1);
+	});
+
+	test('Hosting present: reuse it — no Blocks-owned distribution is created', async () => {
+		const stack = await makeStack('ApiFrontDoorWithHosting', BlocksPresets.production);
+		// Simulate a Hosting construct publishing its distribution after create().
+		// The aspect only checks presence in this branch, so a stub suffices.
+		registerHostingDistribution(stack, {} as unknown as Distribution);
+
+		const template = Template.fromStack(stack);
+		// No Blocks-owned distribution — Hosting's own distribution is the front door.
+		template.resourceCountIs('AWS::CloudFront::Distribution', 0);
 	});
 });
 
@@ -173,9 +207,9 @@ describe('multiple front-door-enabled BlocksBackends in one stack', () => {
 		// at the stack level.
 		template.resourceCountIs('AWS::CloudFront::Distribution', 2);
 		const apiFrontDoorOutputs = Object.values(template.findOutputs('*')).filter(
-			(o) => o.Description === 'Blocks API front door URL (CloudFront)',
+			(o) => o.Description === 'Blocks API CloudFront front door URL',
 		);
-		assert.strictEqual(apiFrontDoorOutputs.length, 2, 'one ApiFrontDoorUrl output per backend');
+		assert.strictEqual(apiFrontDoorOutputs.length, 2, 'one FrontDoorUrl output per backend');
 	});
 });
 
