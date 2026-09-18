@@ -13,11 +13,13 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { Distribution, type IOrigin } from 'aws-cdk-lib/aws-cloudfront';
 import {
+	addRouteBehaviors,
 	API_BEHAVIOR_OPTIONS,
 	httpOriginFromEndpoint,
 	resolveApiFrontDoor,
 	scheduleApiFrontDoor,
 } from './api-front-door.js';
+import { clearRouteRegistry, getRegisteredRoutes, registerRoute, registerRoutingEntry } from '../raw-route.js';
 
 function distributionWith(stack: cdk.Stack, origin: IOrigin): Distribution {
 	return new Distribution(stack, 'D', { defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS } });
@@ -95,16 +97,20 @@ describe('API behavior options', () => {
 describe('scheduleApiFrontDoor', () => {
 	const ENDPOINT = 'https://abc.execute-api.us-east-1.amazonaws.com/prod';
 
-	test('provisions one distribution with a single catch-all behavior to the default origin', () => {
+	test('provisions one distribution: the reserved RPC/auth behaviors, all on the default origin', () => {
 		// Every API path resolves to the default compute today, so the managed front
-		// door is one origin behind one default behavior — no per-path CacheBehaviors.
+		// door emits the reserved RPC/auth catch-alls — redundant with the default
+		// behavior and inert — all pointing at the one default origin.
+		clearRouteRegistry();
 		const stack = new cdk.Stack(new cdk.App(), 'S');
 		scheduleApiFrontDoor(stack, true, ENDPOINT);
 
 		const config = soleDistributionConfig(stack);
 		assert.ok(config.DefaultCacheBehavior, 'expected a default behavior');
-		assert.strictEqual(config.CacheBehaviors, undefined, 'expected no per-path behaviors');
-		assert.strictEqual(config.Origins.length, 1, 'expected a single origin');
+		const patterns = (config.CacheBehaviors ?? []).map((b) => b.PathPattern);
+		assert.deepStrictEqual(patterns, ['/aws-blocks/api', '/aws-blocks/api/*', '/aws-blocks/auth/*']);
+		assert.strictEqual(config.Origins.length, 1, 'all behaviors on the single default origin');
+		clearRouteRegistry();
 	});
 
 	test('provisions nothing when the posture opts out', () => {
@@ -129,6 +135,84 @@ describe('scheduleApiFrontDoor', () => {
 		new cdk.aws_sns.Topic(stack, 'T2');
 		scheduleApiFrontDoor(stack, true, ENDPOINT);
 		Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 1);
+	});
+});
+
+describe('addRouteBehaviors', () => {
+	const DEFAULT = 'https://default.execute-api.us-east-1.amazonaws.com/prod';
+	const OTHER = 'https://other.execute-api.us-east-1.amazonaws.com/prod';
+
+	/** A distribution whose default behavior points at `origin` (the caller-owned one). */
+	function seedDistribution(stack: cdk.Stack): { dist: Distribution; origin: IOrigin } {
+		const origin = httpOriginFromEndpoint(DEFAULT);
+		return { dist: distributionWith(stack, origin), origin };
+	}
+
+	test('a default-endpoint namespace still gets a (redundant) behavior, plus the reserved fallbacks', () => {
+		// No mode flag: every API path gets an explicit behavior. A default-endpoint
+		// namespace's behaviors are redundant with the reserved RPC catch-all (all
+		// point at the one default origin) but inert — that redundancy is what lets
+		// one code path serve both distributions.
+		clearRouteRegistry();
+		registerRoutingEntry({ path: '/aws-blocks/api/notes', endpoint: DEFAULT, subtree: true });
+		const stack = new cdk.Stack(new cdk.App(), 'S');
+		const { dist, origin } = seedDistribution(stack);
+		addRouteBehaviors(dist, getRegisteredRoutes(), DEFAULT, new Map([[DEFAULT, origin]]));
+
+		const config = soleDistributionConfig(stack);
+		const patterns = (config.CacheBehaviors ?? []).map((b) => b.PathPattern);
+		assert.deepStrictEqual(patterns, [
+			'/aws-blocks/api/notes',
+			'/aws-blocks/api/notes/*',
+			'/aws-blocks/api',
+			'/aws-blocks/api/*',
+			'/aws-blocks/auth/*',
+		]);
+		assert.strictEqual(config.Origins.length, 1, 'everything on the default origin → one origin');
+		clearRouteRegistry();
+	});
+
+	test('a non-default namespace fans out to its compute origin, before the reserved fallbacks', () => {
+		// The assignment surface (a later PR) flips this namespace's endpoint; the same
+		// registration then carries a non-default endpoint and this code fans it out —
+		// the exact/subtree pair — to a second origin, ahead of the RPC catch-all so it
+		// wins first-match.
+		clearRouteRegistry();
+		registerRoutingEntry({ path: '/aws-blocks/api/heavy', endpoint: OTHER, subtree: true });
+		const stack = new cdk.Stack(new cdk.App(), 'S');
+		const { dist, origin } = seedDistribution(stack);
+		addRouteBehaviors(dist, getRegisteredRoutes(), DEFAULT, new Map([[DEFAULT, origin]]));
+
+		const config = soleDistributionConfig(stack);
+		const patterns = (config.CacheBehaviors ?? []).map((b) => b.PathPattern);
+		assert.deepStrictEqual(patterns, [
+			'/aws-blocks/api/heavy',
+			'/aws-blocks/api/heavy/*',
+			'/aws-blocks/api',
+			'/aws-blocks/api/*',
+			'/aws-blocks/auth/*',
+		]);
+		assert.strictEqual(config.Origins.length, 2, 'default origin plus the assigned compute origin');
+		clearRouteRegistry();
+	});
+
+	test('a RawRoute gets a behavior, and the reserved fallbacks come last', () => {
+		// A RawRoute is diverted like any other API path; the reserved RPC/auth
+		// catch-alls are added last so a per-namespace behavior would win first-match.
+		clearRouteRegistry();
+		registerRoute({ method: 'GET', path: '/health', handler: async () => {}, endpoint: DEFAULT });
+		const stack = new cdk.Stack(new cdk.App(), 'S');
+		const { dist, origin } = seedDistribution(stack);
+		addRouteBehaviors(dist, getRegisteredRoutes(), DEFAULT, new Map([[DEFAULT, origin]]));
+
+		const patterns = (soleDistributionConfig(stack).CacheBehaviors ?? []).map((b) => b.PathPattern);
+		assert.ok(patterns.includes('/health'), 'RawRoute gets a behavior');
+		assert.ok(patterns.includes('/aws-blocks/api'), 'bare RPC path covered');
+		assert.ok(patterns.includes('/aws-blocks/api/*'), 'RPC subtree covered');
+		assert.ok(patterns.includes('/aws-blocks/auth/*'), 'auth subtree covered');
+		// The reserved fallbacks come last so a per-namespace behavior would win first-match.
+		assert.strictEqual(patterns[patterns.length - 1], '/aws-blocks/auth/*');
+		clearRouteRegistry();
 	});
 });
 

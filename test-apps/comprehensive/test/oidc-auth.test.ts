@@ -30,7 +30,7 @@ async function rpcCall(
   args: unknown[],
   init?: { cookies?: string[] },
 ): Promise<{ status: number; result?: any; error?: any }> {
-  const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
+  const resp = await fetch(`${baseUrl}/aws-blocks/api/${apiNamespace}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

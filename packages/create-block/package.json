@@ -16,6 +16,13 @@
   },
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
+  "keywords": [
+    "aws-blocks",
+    "cli",
+    "scaffolding",
+    "building-block",
+    "generator"
+  ],
   "type": "module",
   "bin": {
     "create-block": "./dist/index.js"

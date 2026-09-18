@@ -31,6 +31,8 @@ import {
 } from 'aws-cdk-lib/aws-cloudfront';
 import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import type { Construct, IConstruct } from 'constructs';
+import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX, isAuthPath, isRpcPath } from '../constants.js';
+import { getRegisteredRoutes, type RegisteredRoute } from '../raw-route.js';
 
 /** Construct id of the managed distribution. */
 const FRONT_DOOR_ID = 'ApiFrontDoor';
@@ -96,6 +98,106 @@ export function httpOriginFromEndpoint(endpoint: string): IOrigin {
 	const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
 	const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
 	return new HttpOrigin(hostname, { originPath: `/${stage}` });
+}
+
+/**
+ * Add the CloudFront behaviors that route API traffic, from the shared route
+ * registry — the multi-compute fan-out.
+ *
+ * Both front-door paths call this so they route identically from one table: the
+ * Blocks-owned distribution ({@link ApiFrontDoorAspect}) and a `Hosting` app's own
+ * distribution. Each passes the distribution **it owns**; only endpoint *values*
+ * cross a stack boundary.
+ *
+ * Each route (an `ApiNamespace`'s routing entry, or a `RawRoute`) carries the
+ * `endpoint` of the compute that serves it, and gets a behavior to that compute's
+ * origin. A path assigned to a non-default compute is the fan-out; a path on the
+ * default compute gets a behavior too, redundant with the default (catch-all)
+ * behavior but harmless (it points at the same origin). The reserved RPC/auth
+ * prefixes are added **last**, so a specific `/aws-blocks/api/{ns}` behavior wins
+ * over the `/aws-blocks/api/*` catch-all (CloudFront is first-match-wins by
+ * insertion order).
+ *
+ * There is deliberately **no mode flag**. This function never sets the
+ * distribution's *default* behavior — each caller owns its distribution and has
+ * already wired that (the Blocks-owned distribution → the default compute; a
+ * `Hosting` distribution → the frontend). By emitting an explicit behavior for
+ * every known API path here, whatever is left falls through to the caller's own
+ * default behavior, correctly in both cases. The cost of the redundancy is a few
+ * extra CloudFront behaviors on the Blocks-owned distribution (well within the
+ * per-distribution behavior quota for typical apps).
+ *
+ * Namespaces/endpoints that share a compute share one `IOrigin`, so CloudFront
+ * gets one origin per distinct endpoint rather than one per path.
+ *
+ * @param distribution - The distribution the caller owns.
+ * @param routes - The registry snapshot (`getRegisteredRoutes()`).
+ * @param defaultEndpoint - The default compute's origin base — the fallback.
+ * @param sharedOrigins - Optional endpoint → origin cache, pre-seeded by the
+ *   caller with origins it already built (e.g. the default origin), so an
+ *   endpoint never yields two CloudFront origins. Mutated as new origins are built.
+ */
+export function addRouteBehaviors(
+	distribution: Distribution,
+	routes: readonly RegisteredRoute[],
+	defaultEndpoint: string,
+	sharedOrigins?: Map<string, IOrigin>,
+): void {
+	const originFor = sharedOrigins ?? new Map<string, IOrigin>();
+	const added = new Set<string>();
+
+	const addBehavior = (pattern: string, endpoint: string): void => {
+		if (added.has(pattern)) return;
+		added.add(pattern);
+		let origin = originFor.get(endpoint);
+		if (!origin) {
+			origin = httpOriginFromEndpoint(endpoint);
+			originFor.set(endpoint, origin);
+		}
+		distribution.addBehavior(pattern, origin, API_BEHAVIOR_OPTIONS);
+	};
+
+	for (const route of routes) {
+		const endpoint = route.endpoint ?? defaultEndpoint;
+
+		// Routing-only namespace entry (`/aws-blocks/api/{ns}` + subtree). Always
+		// emitted: on a default-compute namespace this is redundant with the RPC
+		// catch-all added last, but a redundant behavior points at the same origin,
+		// so it is inert — and emitting unconditionally is what lets both front-door
+		// paths share this code with no mode flag.
+		if (route.subtree) {
+			addBehavior(route.path, endpoint);
+			addBehavior(`${route.path}/*`, endpoint);
+			continue;
+		}
+
+		// Other routing-only entries never shape behaviors directly.
+		if (route.handler === undefined) continue;
+
+		// Reserved subtrees are handled by the RPC namespace entries (api) and the
+		// auth fallback below — never as individual RawRoute behaviors.
+		if (isRpcPath(route.path)) continue;
+		if (isAuthPath(route.path)) continue;
+
+		// A path parameter can only be expressed to CloudFront as a prefix
+		// wildcard, which matches more than the route does. (On a shared frontend
+		// distribution such a wildcard can shadow SSR/frontend paths under the same
+		// prefix — `RawRoute`'s docstring warns callers to pick a prefix the frontend
+		// does not serve, since a collision can't be detected here.)
+		const paramIndex = route.path.indexOf('/{');
+		const pattern = paramIndex === -1 ? route.path : `${route.path.substring(0, paramIndex)}/*`;
+		addBehavior(pattern, endpoint);
+	}
+
+	// Reserved subtrees → default compute, added last so per-namespace behaviors
+	// win first-match. The RPC wildcard catches the bare endpoint and any unrouted
+	// namespace; the auth wildcard proxies the whole auth flow with one behavior.
+	// Emitted unconditionally: on the Blocks-owned distribution these duplicate the
+	// default (default-compute) behavior harmlessly; on a shared frontend they are
+	// what diverts RPC/auth off the frontend origin.
+	addBehavior(BLOCKS_RPC_PREFIX, defaultEndpoint);
+	addBehavior(`${BLOCKS_RPC_PREFIX}/*`, defaultEndpoint);
+	addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, defaultEndpoint);
 }
 
 /**
@@ -170,12 +272,20 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		// on this construct id.
 		const distribution = new Distribution(this.owner, FRONT_DOOR_ID, {
 			comment: `Blocks API front door for ${stack.stackName}`,
-			// One catch-all behavior: every API path resolves to the default compute
-			// today, so a single default behavior routes RPC, auth, and raw routes
-			// alike. Per-path behaviors would only carry traffic once a namespace
-			// resolves to a distinct origin.
+			// The default (lowest-precedence) behavior forwards to the default compute
+			// and catches every unrouted path — RPC on the default compute, auth, and
+			// raw routes alike. Per-namespace fan-out behaviors added below take
+			// precedence for their own paths.
 			defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS },
 		});
+
+		// Add a behavior per registered API path. Read the registry here (not at
+		// `create()`) so it reflects every route recorded during synth. Seed the
+		// origin cache with the default endpoint → its origin so a path back on the
+		// default compute reuses it. With no assignments (today) the emitted
+		// behaviors all point at the default origin — redundant with the default
+		// behavior above, and inert; a non-default assignment fans that path out.
+		addRouteBehaviors(distribution, getRegisteredRoutes(), this.defaultEndpoint, new Map([[this.defaultEndpoint, origin]]));
 
 		state.resolvedUrl = `https://${distribution.distributionDomainName}`;
 		new cdk.CfnOutput(this.owner, FRONT_DOOR_OUTPUT_ID, {

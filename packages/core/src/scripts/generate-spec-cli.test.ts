@@ -23,10 +23,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const cliPath = join(__dirname, 'generate-spec-cli.js');
 
 function makeBackend(dir: string, ext: 'ts' | 'js'): string {
-	// Copy the marker module next to the foundation so a relative import
-	// resolves through both ESM and CJS loaders.
+	// Copy the marker module (and its runtime siblings) next to the foundation so
+	// its relative imports resolve through both ESM and CJS loaders. `api.js` now
+	// imports `constants.js` and `raw-route.js` at runtime (the routing registry),
+	// so both must sit alongside it in the temp dir.
 	const distDir = join(__dirname, '..');
-	copyFileSync(join(distDir, 'api.js'), join(dir, 'api.js'));
+	for (const file of ['api.js', 'constants.js', 'raw-route.js']) {
+		copyFileSync(join(distDir, file), join(dir, file));
+	}
 
 	const indexPath = join(dir, `index.${ext}`);
 	writeFileSync(indexPath, `
