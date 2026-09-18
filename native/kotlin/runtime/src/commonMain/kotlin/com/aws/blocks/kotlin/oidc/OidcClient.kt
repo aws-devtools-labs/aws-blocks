@@ -136,7 +136,7 @@ class OidcClient internal constructor(
     private suspend fun fetchAuthorizeParams(provider: String, csrf: String): AuthorizeParamsResponse {
         val body = buildJsonObject {
             put("csrf", csrf)
-            put("relayTo", config.redirectUrl)
+            put("relayTo", config.relayTo)
         }
 
         val authorizeUrl = server.rawRoute(config.authorizeParamsBasePath, provider)
@@ -186,18 +186,18 @@ class OidcClient internal constructor(
     }
 
     companion object {
-        fun fromJson(element: JsonElement, blocksClient: BlocksClient, redirectUrl: String): OidcClient {
-            return fromJson(element, blocksClient.httpClient, blocksClient.server, redirectUrl)
+        fun fromJson(element: JsonElement, blocksClient: BlocksClient, relayTo: String): OidcClient {
+            return fromJson(element, blocksClient.httpClient, blocksClient.server, relayTo)
         }
 
         internal fun fromJson(
             element: JsonElement,
             httpClient: HttpClient,
             server: BlocksServer,
-            redirectUrl: String
+            relayTo: String
         ): OidcClient {
             val config = BlocksJson.decodeFromJsonElement<OidcClientConfig>(element)
-                .copy(redirectUrl = redirectUrl)
+                .copy(relayTo = relayTo)
             return OidcClient(config, httpClient, server)
         }
     }

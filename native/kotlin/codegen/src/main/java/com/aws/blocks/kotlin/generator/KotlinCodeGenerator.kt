@@ -48,7 +48,7 @@ data class GeneratorResult(
 class KotlinCodeGenerator(
     private val packageName: String,
     private val internalVisibility: Boolean = false,
-    private val redirectUrl: String? = null,
+    private val relayTo: String? = null,
 ) {
 
     /** Visibility modifier applied to all top-level generated types. */
@@ -72,15 +72,15 @@ class KotlinCodeGenerator(
         val files = mutableListOf<FileSpec>()
         val warnings = mutableListOf<String>()
 
-        if (redirectUrl == null && model.hasOidcTransferable()) {
+        if (relayTo == null && model.hasOidcTransferable()) {
             warnings.add(
-                "Your Blocks spec includes OIDC auth, but no redirect URL is configured. " +
-                "OIDC operations will not be available. To enable OIDC, add to your build.gradle.kts:\n\n" +
-                "  awsBlocks {\n" +
-                "      oidc {\n" +
-                "          redirectUrl = \"com.yourcompany.yourapp://auth/callback\"\n" +
-                "      }\n" +
-                "  }"
+                "Your Blocks spec includes OIDC auth, but no relay target is configured. " +
+                    "OIDC operations will not be available. To enable OIDC, add to your build.gradle.kts:\n\n" +
+                    "  awsBlocks {\n" +
+                    "      oidc {\n" +
+                    "          relayTo = \"com.yourcompany.yourapp://auth/callback\"\n" +
+                    "      }\n" +
+                    "  }"
             )
         }
 
@@ -832,7 +832,7 @@ class KotlinCodeGenerator(
             )
 
         for (operation in namespace.operations) {
-            if (redirectUrl == null && containsOidcTransferable(operation.result.type)) {
+            if (relayTo == null && containsOidcTransferable(operation.result.type)) {
                 classBuilder.addFunction(generateOidcStubMethod(operation))
             } else {
                 val opContext = buildOperationTypeContext(operation)
@@ -1011,7 +1011,8 @@ class KotlinCodeGenerator(
     }
 
     private fun generateOidcStubMethod(operation: Operation): FunSpec {
-        val message = "OIDC is not configured. Add oidc { redirectUrl = \"...\" } to your awsBlocks block to enable this method."
+        val message = "OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block " +
+            "to enable this method."
         return FunSpec.builder(operation.name)
             .addModifiers(KModifier.SUSPEND)
             .addAnnotation(
@@ -1252,7 +1253,7 @@ class KotlinCodeGenerator(
         fun visit(type: ResolvedType) {
             when (type) {
                 is ResolvedType.Transferable -> {
-                    if (redirectUrl == null && type.transferableName == "oidc/client") return
+                    if (relayTo == null && type.transferableName == "oidc/client") return
                     val serializerName = getTransferableSerializerName(type)
                     if (seen.add(serializerName)) {
                         val returnType = resolveTransferable(type, index)
@@ -1456,8 +1457,8 @@ class KotlinCodeGenerator(
             }
 
             "oidc/client" -> {
-                val url = redirectUrl
-                    ?: error("OIDC operation reached codegen without redirectUrl configured")
+                val url = relayTo
+                    ?: error("OIDC operation reached codegen without relayTo configured")
                 CodeBlock.of("%T.fromJson(%L, client, %S)", ClassNames.oidcClient, expr, url)
             }
 

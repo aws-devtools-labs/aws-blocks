@@ -92,7 +92,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
             it.packageName.set(extension.packageName)
             it.serverOverrides.set(extension.serverOverrides)
             it.visibility.set(extension.visibility)
-            it.redirectUrl.set(extension.redirectUrl)
+            it.relayTo.set(extension.relayTo)
             it.outputDirectory.set(outputDir)
         }
 
@@ -126,7 +126,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
                 it.packageName.set(extension.packageName)
                 it.serverOverrides.set(extension.serverOverrides)
                 it.visibility.set(extension.visibility)
-                it.redirectUrl.set(extension.redirectUrl)
+                it.relayTo.set(extension.relayTo)
                 it.outputDirectory.set(outputDir)
             }
 
@@ -143,7 +143,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
             it.packageName.set(extension.packageName)
             it.serverOverrides.set(extension.serverOverrides)
             it.visibility.set(extension.visibility)
-            it.redirectUrl.set(extension.redirectUrl)
+            it.relayTo.set(extension.relayTo)
             it.outputDirectory.set(outputDir)
         }
 
@@ -154,11 +154,11 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
     private fun injectOidcManifestPlaceholder(project: Project, extension: AwsBlocksExtension) {
         val androidComponents = project.extensions.getByType(AndroidComponentsExtension::class.java)
         androidComponents.onVariants { variant ->
-            val redirectUrl = extension.redirectUrl
-            val hasOidc = redirectUrl != null
-            val scheme = redirectUrl?.substringBefore("://") ?: "disabled"
+            val relayTo = extension.relayTo
+            val hasRedirectScheme = relayTo != null
+            val scheme = relayTo?.substringBefore("://") ?: "disabled"
             variant.manifestPlaceholders.put("oidcRedirectScheme", scheme)
-            variant.manifestPlaceholders.put("oidcActivityExported", if (hasOidc) "true" else "false")
+            variant.manifestPlaceholders.put("oidcActivityExported", if (hasRedirectScheme) "true" else "false")
         }
     }
 }
