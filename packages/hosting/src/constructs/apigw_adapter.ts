@@ -59,9 +59,10 @@ export type ApiGatewayRenderContext = AdapterContext & {
   serverComputeName?: string;
   imageComputeName?: string;
   /**
-   * Which API Gateway flavor to render. `'rest'` uses a REST API
-   * (`lambda:InvokeFunction`, no Function-URL body-hash issue; native
-   * `HTTP_PROXY` backend); `'http'` uses HTTP API v2 (cheaper). Default `'rest'`.
+   * Which API Gateway flavor to render. `'http'` (default) uses HTTP API v2 — its
+   * `$default` stage is rootless, so a SPA's root-absolute assets resolve. `'rest'`
+   * uses a REST API (`lambda:InvokeFunction`, native `HTTP_PROXY` backend) but its
+   * URL carries a `/prod` stage path, so it needs a custom domain / CloudFront.
    */
   apiType?: 'rest' | 'http';
   /** Custom domain(s) for the door — a regional cert + DomainName + mapping + Route 53 alias. */
@@ -111,7 +112,7 @@ export class ApiGatewayAdapter implements FrontDoorAdapter, FrontDoorLayerAdapte
     // REST (default) or HTTP API v2. Both expose `.url`; the REST URL carries a
     // `/prod` stage, so derive the origin host from the URL's host segment
     // (index 2 of `https://host/…`), not the scheme split used for HTTP API.
-    const isRest = (ctx.apiType ?? 'rest') === 'rest';
+    const isRest = (ctx.apiType ?? 'http') === 'rest';
     if (isRest) {
       const apigw = new ApiGatewayRestConstruct(scope, 'ApiGateway', constructProps);
       return {

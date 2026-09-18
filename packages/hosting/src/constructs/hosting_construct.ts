@@ -401,11 +401,16 @@ export type HostingConstructProps = {
     | {
         kind: 'apiGateway';
         /**
-         * The API Gateway flavor. `'rest'` (default) is a REST API — it invokes
-         * the SSR/image Lambdas with `lambda:InvokeFunction` (no Function-URL
-         * body-hash mismatch on POST/PUT) and mirrors the flavor already used
-         * for SSR behind CloudFront. `'http'` is the cheaper HTTP API v2.
-         * @default 'rest'
+         * The API Gateway flavor. `'http'` (default) is an HTTP API v2 — its auto
+         * `$default` stage is **rootless**, so a SPA/SSR app's root-absolute asset
+         * URLs (`/assets/*`, `/favicon.ico`) resolve directly; it's also cheaper.
+         * `'rest'` is a REST API: it invokes the SSR/image Lambdas with
+         * `lambda:InvokeFunction` (no Function-URL body-hash mismatch), but a bare
+         * REST `execute-api` URL always carries a **stage path** (`/prod/`), which
+         * breaks root-absolute asset URLs — so `'rest'` is only suitable behind a
+         * **custom domain** (base-path mapping to the stage) or a CloudFront edge,
+         * not as a bare standalone door for a root SPA.
+         * @default 'http'
          */
         api?: 'rest' | 'http';
         /** Regional ACM certificate for a custom-domain HTTPS listener (same region). */
@@ -1447,7 +1452,7 @@ export class HostingConstruct extends Construct {
         // and streaming are degraded/unsupported and accepted via `degrade`.
         handle = renderGraph(this, composeGraph(plan, 'api-gateway'), plan, {
           ...common,
-          apiType: fd.api ?? 'rest',
+          apiType: fd.api ?? 'http',
           // Custom domain: names come from `domain`; the regional cert is the
           // door's `certificate` (BYO, stack-region) or `domain.certificate`,
           // else DNS-validated against the hosted zone by the construct.
