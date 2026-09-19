@@ -15,4 +15,5 @@ export 'src/oidc_types.dart';
 export 'src/realtime_channel.dart';
 export 'src/session_store.dart';
 export 'src/token_store.dart';
+export 'src/version.dart';
 export 'src/web_socket_pool.dart';
