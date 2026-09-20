@@ -160,7 +160,7 @@ These are enforced at CDK synth time:
 
 ## Local Development
 
-Mock data persists to disk at `.bb-data/settings/{fullId}/value.json` across dev server restarts. Wipe with `rm -rf .bb-data`. Secrets generate a random value locally (no KMS encryption in mock mode).
-
-
+Mock data persists to `.bb-data/settings.json` across dev server restarts, with one
+`{ "fullId": value }` entry per setting. Wipe with `rm -rf .bb-data`. Secrets generate a
+random value locally (no KMS encryption in mock mode).
 
