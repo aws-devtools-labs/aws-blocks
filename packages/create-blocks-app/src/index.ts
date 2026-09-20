@@ -517,6 +517,7 @@ function printMigrationInstructions() {
 
 async function handleAmplifyYml(targetDir: string) {
   const ymlPath = join(targetDir, 'amplify.yml');
+  const cdkNodeOptionsCommand = 'export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions=cdk"';
 
   if (await exists(ymlPath)) {
     let yml = await readFile(ymlPath, 'utf-8');
@@ -527,21 +528,21 @@ async function handleAmplifyYml(targetDir: string) {
     if (yml.includes('npx ampx pipeline-deploy')) {
       yml = yml.replace(
         /^(\s*-\s*)(npx ampx pipeline-deploy.*)/m,
-        '$1export NODE_OPTIONS="--conditions=cdk"\n$1$2'
+        `$1${cdkNodeOptionsCommand}\n$1$2`
       );
       await writeFile(ymlPath, yml);
       console.log('  ✓ Modified amplify.yml (added CDK conditions)');
     } else if (yml.includes('backend:')) {
       yml = yml.replace(
         /(backend:\s*\n\s*phases:\s*\n\s*build:\s*\n\s*commands:\s*\n)/,
-        '$1        - export NODE_OPTIONS="--conditions=cdk"\n'
+        `$1        - ${cdkNodeOptionsCommand}\n`
       );
       await writeFile(ymlPath, yml);
       console.log('  ✓ Modified amplify.yml (added CDK conditions)');
     } else {
       console.log('  ⚠️  amplify.yml exists but could not detect where to add NODE_OPTIONS.');
       console.log('     Please add this to your backend build commands manually:');
-      console.log('       - export NODE_OPTIONS="--conditions=cdk"');
+      console.log(`       - ${cdkNodeOptionsCommand}`);
     }
   } else {
     const yml = `version: 1

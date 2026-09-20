@@ -233,6 +233,35 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('preserves existing NODE_OPTIONS when integrating an Amplify pipeline', () => {
+    const tmpDir = join(__dirname, '../.test-amplify-node-options');
+    mkdirSync(join(tmpDir, 'amplify'), { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'amplify-app', version: '1.0.0' }));
+    writeFileSync(join(tmpDir, 'amplify', 'backend.ts'), 'export const backend = defineBackend({});');
+    writeFileSync(join(tmpDir, 'amplify.yml'), `version: 1
+backend:
+  phases:
+    build:
+      commands:
+        - export NODE_OPTIONS="--max-old-space-size=4096"
+        - npx ampx pipeline-deploy --branch $AWS_BRANCH --app-id $AWS_APP_ID
+`);
+    try {
+      const result = run(['-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0);
+      const yml = readFileSync(join(tmpDir, 'amplify.yml'), 'utf-8');
+      assert.match(yml, /export NODE_OPTIONS="--max-old-space-size=4096"/);
+      assert.match(yml, /export NODE_OPTIONS="\$\{NODE_OPTIONS:-\} --conditions=cdk"/);
+      assert.ok(
+        yml.indexOf('--max-old-space-size=4096') < yml.indexOf('--conditions=cdk')
+          && yml.indexOf('--conditions=cdk') < yml.indexOf('npx ampx pipeline-deploy'),
+        'the condition should be appended after the existing option and before the Amplify deploy command',
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('generates a lazy backend import for the React template Lambda handler', () => {
     const tmpDir = join(__dirname, '../.test-react-lambda-handler');
     mkdirSync(tmpDir, { recursive: true });
