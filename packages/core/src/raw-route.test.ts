@@ -202,10 +202,12 @@ describe('registerRoutingEntry', () => {
     assert.doesNotThrow(() => registerRoutingEntry({ path: '/aws-blocks/api/x', endpoint: 'https://x/prod', subtree: true }));
   });
 
-  it('is idempotent per path — a re-imported module registers once', () => {
-    registerRoutingEntry({ path: '/aws-blocks/api/dup', endpoint: 'https://x/prod', subtree: true });
-    registerRoutingEntry({ path: '/aws-blocks/api/dup', endpoint: 'https://x/prod', subtree: true });
-    assert.strictEqual(getRegisteredRoutes().filter((r) => r.path === '/aws-blocks/api/dup').length, 1);
+  it('is idempotent per path — a re-imported module registers once, first endpoint wins', () => {
+    registerRoutingEntry({ path: '/aws-blocks/api/dup', endpoint: 'https://first/prod', subtree: true });
+    registerRoutingEntry({ path: '/aws-blocks/api/dup', endpoint: 'https://second/prod', subtree: true });
+    const entries = getRegisteredRoutes().filter((r) => r.path === '/aws-blocks/api/dup');
+    assert.strictEqual(entries.length, 1, 'second call must not create a second entry');
+    assert.strictEqual(entries[0].endpoint, 'https://first/prod', 'the first registration wins');
   });
 
   it('matchRoute never dispatches a routing-only entry', () => {

@@ -30,6 +30,13 @@ export type { LambdaComputeProps } from './types.js';
 const LAMBDA_COMPUTE_BRAND: unique symbol = Symbol.for('blocks:LambdaCompute');
 
 /**
+ * Lambda's hard ceiling on function timeout (15 minutes), also the default when a
+ * caller declares no `timeout`. Kept in sync with `SERVERLESS_COMPUTE_LIMITS.maxTimeoutSeconds`
+ * in `@aws-blocks/blocks` — the requirements validator that rejects an out-of-range ask.
+ */
+const LAMBDA_MAX_TIMEOUT_SECONDS = 900;
+
+/**
  * A Lambda-backed {@link Compute}: a `NodejsFunction` fronted by its own API
  * Gateway REST API. The compute *owns* these resources — a BlocksStack /
  * BlocksBackend's `handler` / `gateway` / `apiUrl` delegate to its default
@@ -105,8 +112,15 @@ export class LambdaCompute extends Compute {
 			handler: 'handler',
 			role: this.executionRole,
 			logGroup: this.logGroup,
-			memorySize: 2048,
-			timeout: cdk.Duration.seconds(60 * 15),
+			// Defaults preserve the previous hardcoded values (2048 MiB memory — which
+			// also scales CPU on Lambda — and the 15-minute ceiling). `timeout` accepts
+			// a plain number of seconds as well as a Duration, so a caller that must
+			// stay CDK-free (the requirements-to-Lambda mapping) can set it too.
+			memorySize: options?.memorySize ?? 2048,
+			timeout:
+				typeof options?.timeout === 'number'
+					? cdk.Duration.seconds(options.timeout)
+					: (options?.timeout ?? cdk.Duration.seconds(LAMBDA_MAX_TIMEOUT_SECONDS)),
 			environment: {
 				NODE_ENV: 'production',
 				BLOCKS_STACK_NAME: this.backendStackName,

@@ -149,6 +149,8 @@ import { relayOrigin } from '@aws-blocks/bb-auth-oidc';
 import { ResetPasswordResult } from '@aws-blocks/bb-auth-cognito';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
+import type { Scope } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-blocks/core';
 import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
@@ -287,6 +289,17 @@ export { CodeDeliveryFn }
 export { cognitoFederated }
 
 export { CognitoUser }
+
+// @public
+export const ComputeProvider: {
+    provide(id: string, requirements?: ComputeRequirements, scope?: ScopeParent): Scope;
+};
+
+// @public
+export interface ComputeRequirements {
+    memoryMb?: number;
+    timeoutSeconds?: number;
+}
 
 export { ConditionalDeleteOptions }
 

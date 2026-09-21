@@ -8,10 +8,32 @@ import { CORE_VERSION } from '../version.js';
 import { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 export { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 
+/**
+ * The one property a compute exposes in every bundle: its scoped id.
+ *
+ * A compute is a different object per condition — under `--conditions=cdk` it
+ * owns infrastructure (`Compute`), while the runtime and browser entries are
+ * inert handles — so the shared `ScopeOptions` can only name what they have in
+ * common. The CDK `Scope` narrows an assignment back to the real `Compute`.
+ */
+export type AssignedCompute = { readonly fullId: string };
+
 export interface ScopeOptions {
   parent?: ScopeParent;
   bbName?: string;
   bbVersion?: string;
+  /**
+   * The compute this scope's blocks run on, from `ComputeProvider.provide()`.
+   *
+   * A scope-level default: every block created inside this scope runs there
+   * unless it assigns its own compute, and a nearer assignment wins. Omitted, the
+   * scope's blocks run on the app's default compute — which is what every app
+   * gets today, so this is purely opt-in.
+   *
+   * Only assignment takes effect at synth; at runtime a compute is the
+   * environment the handler already runs in, so this is accepted and ignored.
+   */
+  compute?: AssignedCompute;
 }
 
 export type ScopeParent = Scope | { id: string };

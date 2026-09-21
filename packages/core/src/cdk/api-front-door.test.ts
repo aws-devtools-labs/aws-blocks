@@ -196,6 +196,23 @@ describe('addRouteBehaviors', () => {
 		clearRouteRegistry();
 	});
 
+	test('a namespace assigned to an ingress-less compute fails synth, naming the path', () => {
+		// A namespace's routing entry carries its compute's `endpoint`; a worker-only
+		// compute has none, so the entry resolves to `undefined`. Rather than silently
+		// falling back to the default origin (which would answer the namespace from the
+		// wrong compute), the front door must reject it at synth with an actionable
+		// message that names the offending path.
+		clearRouteRegistry();
+		registerRoutingEntry({ path: '/aws-blocks/api/worker', endpoint: undefined, subtree: true });
+		const stack = new cdk.Stack(new cdk.App(), 'S');
+		const { dist, origin } = seedDistribution(stack);
+		assert.throws(
+			() => addRouteBehaviors(dist, getRegisteredRoutes(), DEFAULT, new Map([[DEFAULT, origin]])),
+			/\/aws-blocks\/api\/worker.*no HTTP endpoint/s,
+		);
+		clearRouteRegistry();
+	});
+
 	test('a RawRoute gets a behavior, and the reserved fallbacks come last', () => {
 		// A RawRoute is diverted like any other API path; the reserved RPC/auth
 		// catch-alls are added last so a per-namespace behavior would win first-match.
