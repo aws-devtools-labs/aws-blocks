@@ -25,7 +25,7 @@
  * headers, no skew-pin, buffered SSR only (no streaming), ~10 MB payload cap,
  * ~29 s integration timeout.
  */
-import { CfnOutput, Duration, Fn } from 'aws-cdk-lib';
+import { CfnOutput, Duration } from 'aws-cdk-lib';
 import {
 	BasePathMapping,
 	ConnectionType,
@@ -45,6 +45,7 @@ import { Construct } from 'constructs';
 import type { CapabilityPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
+import { backendBaseUrl, globToProxyPath } from './apigw_routes.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 export type ApiGatewayRestConstructProps = {
@@ -55,16 +56,6 @@ export type ApiGatewayRestConstructProps = {
 	imageComputeName?: string;
 	/** Custom domain(s) — a regional cert + DomainName + base-path mapping + Route 53 alias. */
 	domain?: ApiGwCustomDomain;
-};
-
-/**
- * Convert a route-table glob pattern to a REST API resource path (or null for
- * the catch-all root). `/assets/*` → `/assets/{proxy+}`; `/about` → `/about`.
- */
-const toRestPath = (pattern: string): string | null => {
-	if (pattern === '/*' || pattern === '*') return null; // → root default
-	if (pattern.endsWith('/*')) return `${pattern.slice(0, -2)}/{proxy+}`;
-	return pattern; // exact
 };
 
 export class ApiGatewayRestConstruct extends Construct {
@@ -155,7 +146,7 @@ export class ApiGatewayRestConstruct extends Construct {
 			// Split the ingress URL on the `/aws-blocks/api` suffix (token-safe) to
 			// get the backend base — same shape whether Lambda API Gateway, an ALB,
 			// or a BYOC endpoint.
-			const base = Fn.select(0, Fn.split('/aws-blocks/api', origin.ingress.url)); // https://…/prod
+			const base = backendBaseUrl(origin.ingress.url); // https://…/prod
 			if (origin.namespace === '*') {
 				addProxyRoute('/aws-blocks/{proxy+}', `${base}/aws-blocks/{proxy}`);
 				addProxyRoute('/aws-blocks-auth/{proxy+}', `${base}/aws-blocks-auth/{proxy}`);
@@ -168,7 +159,7 @@ export class ApiGatewayRestConstruct extends Construct {
 		// Route table → resources (deduped; the catch-all is the root default).
 		const seen = new Set<string>();
 		for (const entry of plan.routes.entries) {
-			const path = toRestPath(entry.pattern);
+			const path = globToProxyPath(entry.pattern);
 			if (path === null || seen.has(path)) continue;
 			if (path.startsWith('/aws-blocks/') || path.startsWith('/aws-blocks-auth/')) continue; // backend owns these
 			seen.add(path);
