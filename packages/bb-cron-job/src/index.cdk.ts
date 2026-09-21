@@ -21,7 +21,10 @@ export class CronJob<T = void> extends Scope {
 	public readonly schedule: scheduler.CfnSchedule;
 
 	constructor(scope: ScopeParent, id: string, options: CronJobOptions<T>) {
-		super(id, { parent: scope });
+		// Forward an assigned compute so `this.compute` resolves to it: the schedule
+		// below targets that compute's Lambda, moving the job's work off the default
+		// compute. Omitted, it inherits the nearest assigned compute else the default.
+		super(id, { parent: scope, compute: options.compute });
 
 		// Fail fast at synth: an invalid schedule/timezone otherwise passes synth
 		// and is only rejected by EventBridge minutes into the deploy. Mirrors the
@@ -42,7 +45,12 @@ export class CronJob<T = void> extends Scope {
 			);
 		}
 		const lambdaArn = compute.fn.functionArn;
-		const schedulerRole = getOrCreateSchedulerRole(cdk.Stack.of(this), lambdaArn);
+		const schedulerRole = getOrCreateSchedulerRole(cdk.Stack.of(this));
+		// Grant invoke on THIS job's compute Lambda. The role is shared per stack, so a
+		// second CronJob assigned a different compute must extend the role to reach its
+		// own Lambda — otherwise its schedule fails at runtime with AccessDenied. grantInvoke
+		// dedupes, so many jobs on the same (default) compute add the statement only once.
+		compute.fn.grantInvoke(schedulerRole);
 
 		// The payload EventBridge sends to the Lambda.
 		// <aws.scheduler.scheduled-time> is resolved by EventBridge at invocation time.
@@ -73,17 +81,16 @@ export class CronJob<T = void> extends Scope {
 
 const SCHEDULER_ROLE_KEY = Symbol.for('BLOCKS_SCHEDULER_ROLE');
 
-function getOrCreateSchedulerRole(stack: cdk.Stack, handlerArn: string): iam.Role {
+function getOrCreateSchedulerRole(stack: cdk.Stack): iam.Role {
 	const existing = (stack as any)[SCHEDULER_ROLE_KEY] as iam.Role | undefined;
 	if (existing) return existing;
 
+	// Created without any invoke permission — each CronJob grants invoke on its own
+	// compute Lambda (see the constructor), so the shared role reaches every compute
+	// its jobs target, not just the first one's.
 	const role = new iam.Role(stack, 'BlocksSchedulerRole', {
 		assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
 	});
-	role.addToPolicy(new iam.PolicyStatement({
-		actions: ['lambda:InvokeFunction'],
-		resources: [handlerArn],
-	}));
 
 	(stack as any)[SCHEDULER_ROLE_KEY] = role;
 	return role;

@@ -15,9 +15,9 @@ export {
 	secret,
 	type ValueKind,
 } from '@aws-blocks/hosting';
-export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
+export { type ApiHandler, ApiNamespace, type ApiNamespaceOptions, type BlocksContext } from './api.js';
 export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
-export { type BuildingBlockMeta, Scope, type ScopeOptions, type ScopeParent } from './common/index.js';
+export { type AssignedCompute, type BuildingBlockMeta, Scope, type ScopeOptions, type ScopeParent } from './common/index.js';
 export {
 	_resetSdkRegistry,
 	getAllSdkIdentifiers,

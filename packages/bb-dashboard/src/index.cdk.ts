@@ -102,17 +102,28 @@ export class Dashboard extends Scope {
 			// display toggles. Metrics are app-wide (rendered once per namespace,
 			// after the compute groups).
 			//
-			// TODO(multi-compute): the dashboard currently always covers EVERY compute
-			// in the app (`getComputes(this)`), which is complete today because there
-			// is exactly one (the default) compute and no customer surface to create
-			// more. When `Compute` becomes a public, customer-instantiable type, add a
-			// `computes?: Compute[]` option to `DashboardOptions` and resolve it here
-			// as `options.computes ?? getComputes(this)` — an explicit list restricts
-			// the dashboard to just those computes (in the given order); omitting it
-			// keeps the "cover every compute" default. It is left out of the public
-			// API until then so we don't leak the internal `Compute` type before a
-			// customer can construct one to pass.
-			const computes = getComputes(this);
+			// The dashboard covers every compute in the app by default. An explicit
+			// `computes` list (customer-facing, of provided compute handles) restricts
+			// it to just those, in the given order — resolved against the app's real
+			// computes by `fullId`. Resolution runs here, at finalize, so every provided
+			// compute is already registered regardless of construction order.
+			const allComputes = getComputes(this);
+			let computes = allComputes;
+			// `?.length` (not just truthiness): an empty `computes: []` means "no subset
+			// given", so keep covering every compute rather than rendering an empty dashboard.
+			if (options?.computes?.length) {
+				computes = options.computes.map((selected) => {
+					const match = allComputes.find((c) => c.fullId === selected.fullId);
+					if (!match) {
+						throw new Error(
+							`Dashboard "${this.fullId}" was given a compute ("${selected.fullId}") that is not part of ` +
+								'this app. Pass computes created in this backend (the default, or a `ComputeProvider.provide()` ' +
+								'handle used somewhere in the app), or omit `computes` to cover every compute.',
+						);
+					}
+					return match;
+				});
+			}
 			const computeSections: ComputeDashboardSection[] = computes.map((compute) => {
 				const section = compute.dashboardSection(region);
 				// Apply the dashboard-wide display toggles uniformly. `logging` is

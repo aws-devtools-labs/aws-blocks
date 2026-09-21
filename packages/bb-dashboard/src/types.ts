@@ -11,6 +11,8 @@
  * mock objects.
  */
 
+import type { AssignedCompute } from '@aws-blocks/core';
+
 // ── Observability BB structural interfaces ──────────────────────────────────
 
 /**
@@ -128,13 +130,24 @@ export interface DashboardOptions {
 	 */
 	title?: string;
 
-	// ── Display toggles ───────────────────────────────────────────────────────
+	/**
+	 * Restrict the dashboard to a specific set of computes, in the given order.
+	 * Pass the handles returned by `ComputeProvider.provide()`:
+	 *
+	 * ```typescript
+	 * const reports = ComputeProvider.provide('reports', { memoryMb: 1024 });
+	 * new Dashboard(scope, 'ops', { computes: [reports] }); // only the reports compute
+	 * ```
+	 *
+	 * Omitted (or empty), the dashboard covers **every** compute in the app (the default
+	 * plus any provided ones) — the common case. An explicit list is for large apps that
+	 * want a focused dashboard per team or workload. Each listed compute contributes
+	 * its health/logs/traces sections just as it would in the default view; a handle
+	 * that does not resolve to a compute in this app fails synth.
+	 */
+	computes?: AssignedCompute[];
 
-	// NOTE: there is intentionally no `computes` option yet. The dashboard always
-	// covers every compute in the app (resolved at finalize). A compute selector
-	// would leak the internal `Compute` type into the public API before customers
-	// can construct a compute to pass — it arrives with the multi-compute surface.
-	// See the TODO in `index.cdk.ts` for the intended behavior when it lands.
+	// ── Display toggles ───────────────────────────────────────────────────────
 
 	/**
 	 * Whether to render the **logs** section for each compute. Logs are always

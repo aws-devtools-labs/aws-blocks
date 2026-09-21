@@ -62,12 +62,60 @@ function writeBackend(): string {
 	return backendPath;
 }
 
-async function synth(id: string): Promise<Template> {
+/**
+ * The same fan-out, but through the customer-facing `{ compute }` option on
+ * `ApiNamespace` directly — no scope-wrapping. This is exactly what an app author
+ * writes: declare a compute by need, then hand it to the namespace.
+ */
+function writeBackendDirectOption(): string {
+	const backendPath = join(tmpDir, `backend-direct-${Math.random().toString(36).slice(2)}.mjs`);
+	writeFileSync(
+		backendPath,
+		`
+		import { ApiNamespace, Scope } from '@aws-blocks/core';
+		import { ComputeProvider } from '@aws-blocks/blocks/cdk';
+		export default (stack) => {
+			const scope = new Scope('app', { parent: stack });
+			// Unassigned: routes to the stack's default compute via the catch-all.
+			new ApiNamespace(scope, 'publicApi', () => ({ run: () => 1 }));
+			// Assigned via the public option — no wrapping Scope needed.
+			const reports = ComputeProvider.provide('reports', { timeoutSeconds: 240, memoryMb: 1024 });
+			new ApiNamespace(scope, 'reportsApi', () => ({ run: () => 1 }), { compute: reports });
+		};
+		`,
+	);
+	return backendPath;
+}
+
+/**
+ * A backend that puts a `RawRoute` under a scope carrying a compute with no HTTP
+ * endpoint (a worker-only compute, simulated by an inert `{ fullId }` handle — no
+ * public API mints one yet). The RawRoute CDK guard must reject this at synth.
+ */
+function writeBackendWorkerRawRoute(): string {
+	const backendPath = join(tmpDir, `backend-worker-${Math.random().toString(36).slice(2)}.mjs`);
+	writeFileSync(
+		backendPath,
+		`
+		import { RawRoute, Scope } from '@aws-blocks/core';
+		export default (stack) => {
+			// An endpoint-less compute: only \`fullId\`, no HTTP ingress.
+			const workerScope = new Scope('workerScope', { parent: stack, compute: { fullId: 'worker' } });
+			new RawRoute(workerScope, 'hook', { method: 'GET', path: '/hook', handler: async () => {} });
+		};
+		`,
+	);
+	return backendPath;
+}
+
+async function synth(id: string, backendCDKPath: string = writeBackend()): Promise<Template> {
+	// A clean registry per synth, so the fan-out assertion is isolated from routes
+	// registered by other tests in this process.
 	clearRouteRegistry();
 	const app = new cdk.App();
 	const stack = await BlocksStack.create(app, id, {
 		backendHandlerPath: handlerPath,
-		backendCDKPath: writeBackend(),
+		backendCDKPath,
 		defaults: BlocksPresets.production,
 	});
 	return Template.fromStack(stack);
@@ -114,6 +162,34 @@ describe('multi-compute front-door fan-out', () => {
 			publicBehavior.TargetOriginId,
 			defaultTarget,
 			'the unassigned namespace must stay on the default origin',
+		);
+	});
+
+	test('the public `{ compute }` option on ApiNamespace fans out the same way', async () => {
+		// PR5's customer surface: `new ApiNamespace(scope, name, handler, { compute })`
+		// must produce the identical topology as the internal scope-wrapping hook —
+		// the option just forwards the compute into the namespace's routing entry.
+		const config = soleDistribution(await synth('FanoutDirectOption', writeBackendDirectOption()));
+
+		assert.strictEqual(config.Origins.length, 2, 'expected the default origin plus the assigned compute origin');
+
+		const behaviors = config.CacheBehaviors ?? [];
+		const reportsBehavior = behaviors.find((b) => b.PathPattern === `${BLOCKS_RPC_PREFIX}/reportsApi`);
+		assert.ok(reportsBehavior, `expected a behavior for the assigned namespace, got ${behaviors.map((b) => b.PathPattern).join(', ')}`);
+		assert.notStrictEqual(
+			reportsBehavior.TargetOriginId,
+			config.DefaultCacheBehavior.TargetOriginId,
+			'the assigned namespace must target its own origin, not the default compute',
+		);
+	});
+
+	test('a RawRoute assigned an ingress-less compute fails synth, naming the path', async () => {
+		// The RawRoute CDK guard is the non-subtree counterpart to the namespace
+		// routability guard: a route served by a worker-only compute has no origin to
+		// route to and must fail loudly rather than silently answer from the default.
+		await assert.rejects(
+			() => synth('WorkerRawRoute', writeBackendWorkerRawRoute()),
+			/RawRoute "\/hook".*no HTTP endpoint/s,
 		);
 	});
 });

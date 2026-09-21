@@ -78,7 +78,14 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 	public readonly dlq: Queue;
 
 	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
+		// Forward an assigned compute so `this.compute` resolves to it: the SQS event
+		// source below attaches to that compute's Lambda, moving the job's work off the
+		// default compute. Omitted, it inherits the nearest assigned compute else the default.
+		super(id, {
+			parent: scope,
+			compute: options.compute,
+			vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] },
+		});
 
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 10;

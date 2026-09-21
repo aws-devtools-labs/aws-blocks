@@ -153,6 +153,39 @@ describe('Dashboard against a real compute (synth)', () => {
 		assert.ok(body.includes('📋 Logs'), 'its logs section renders (logs are always on)');
 	});
 
+	test('an empty computes:[] still covers every compute (not an empty dashboard)', async () => {
+		const stack = await makeStack('DashboardEmptyComputes');
+
+		// `[]` means "no subset given", so it behaves like omitting the option:
+		// cover every compute, rather than rendering a dashboard with no sections.
+		new Dashboard(stack, 'dashboard', { routePath: false, computes: [] });
+		finalizeDashboards(stack);
+
+		const body = dashboardBody(stack);
+		assert.ok(body.includes('🔧 DefaultCompute'), 'default compute section still renders for computes:[]');
+	});
+
+	test('a non-empty computes list restricts the dashboard to just those computes', async () => {
+		const stack = await makeStack('DashboardComputesFilter');
+		const reports = new LambdaCompute(stack, 'Reports');
+
+		// Select only the reports compute — the default compute must be filtered out.
+		new Dashboard(stack, 'dashboard', { routePath: false, computes: [reports] });
+		finalizeDashboards(stack);
+
+		const body = dashboardBody(stack);
+		assert.ok(body.includes('🔧 Reports'), 'the selected reports compute section renders');
+		assert.ok(!body.includes('🔧 DefaultCompute'), 'the unselected default compute is filtered out');
+	});
+
+	test('a computes handle not part of the app fails at finalize, naming the bad fullId', async () => {
+		const stack = await makeStack('DashboardComputesUnknown');
+
+		// An inert handle that matches no real compute in the app.
+		new Dashboard(stack, 'dashboard', { routePath: false, computes: [{ fullId: 'ghost' }] });
+		assert.throws(() => finalizeDashboards(stack), /ghost/, 'the error names the unrecognized compute fullId');
+	});
+
 	test('renders traces when the Dashboard is constructed BEFORE tracing is enabled (order-independent via finalize)', async () => {
 		const stack = await makeStack('DashboardBeforeTracer');
 		const compute = stack._defaultCompute as LambdaCompute;

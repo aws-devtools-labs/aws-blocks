@@ -57,7 +57,7 @@ type AsyncAPI<T extends Record<string, (...args: any[]) => any>> = {
 /** Marker symbol to identify ApiNamespace instances during discovery. */
 export const API_NAMESPACE_MARKER = Symbol.for('blocks:ApiNamespace');
 
-import type { ScopeParent } from './common/index.js';
+import type { AssignedCompute, ScopeParent } from './common/index.js';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
 import { registerRoutingEntry } from './raw-route.js';
 
@@ -84,17 +84,52 @@ type ComputeResolvingScope = { compute?: { endpoint?: string } };
  * here it would signal a genuine lifecycle violation (an `ApiNamespace` built
  * before `create()` resolved), which should surface rather than be swallowed.
  */
-function registerNamespaceRoute(scope: ScopeParent | null | undefined, name: string): void {
+function registerNamespaceRoute(
+  scope: ScopeParent | null | undefined,
+  name: string,
+  assignedCompute?: AssignedCompute,
+): void {
   // An API created without a Scope stays unregistered and routes to the default
   // compute via the front door's catch-all behavior.
   if (!scope || typeof scope !== 'object') return;
-  const compute = (scope as ComputeResolvingScope).compute;
+  // An explicit `{ compute }` on the namespace wins over the scope's resolved
+  // compute — it is the customer-facing way to send one namespace to a sized
+  // compute. `AssignedCompute` only promises `fullId` at the type level; under CDK
+  // it is a real `Compute` carrying `endpoint`, read structurally like `scope.compute`.
+  const compute = (assignedCompute as { endpoint?: string } | undefined) ?? (scope as ComputeResolvingScope).compute;
   if (!compute) return;
   registerRoutingEntry({
     path: `${BLOCKS_RPC_PREFIX}/${name}`,
     endpoint: compute.endpoint,
     subtree: true,
   });
+}
+
+/**
+ * Options for an {@link ApiNamespace}.
+ */
+export interface ApiNamespaceOptions {
+  /**
+   * Run this namespace on a specific compute, sized for its workload, instead of
+   * the app's default compute. Pass the handle returned by
+   * `ComputeProvider.provide()`:
+   *
+   * ```typescript
+   * const reports = ComputeProvider.provide('reports', { timeoutSeconds: 240, memoryMb: 1024 });
+   * export const reportsApi = new ApiNamespace(scope, 'reports', (ctx) => ({ ... }), { compute: reports });
+   * ```
+   *
+   * The whole app runs from one bundle, so any compute can serve any namespace;
+   * assigning one here makes the API front door route `/aws-blocks/api/reports`
+   * (and its subtree) to that compute's origin, while every other namespace stays
+   * on the default. Omitted, the namespace runs on the default compute — which is
+   * what every namespace does unless assigned.
+   *
+   * Assignment only takes effect at synth (it shapes CloudFront routing); it has
+   * no effect in local dev or the mock, where one in-process server serves
+   * everything.
+   */
+  compute?: AssignedCompute;
 }
 
 /**
@@ -189,15 +224,16 @@ function registerNamespaceRoute(scope: ScopeParent | null | undefined, name: str
  * - Use Building Blocks (KVStore, DistributedTable) for state
  */
 export interface ApiNamespaceConstructor {
-  new <T extends Record<string, (...args: any[]) => any>>(scope: ScopeParent, name: string, handler: ApiHandler<T>): AsyncAPI<T>;
+  new <T extends Record<string, (...args: any[]) => any>>(scope: ScopeParent, name: string, handler: ApiHandler<T>, options?: ApiNamespaceOptions): AsyncAPI<T>;
 }
 
 export const ApiNamespace: ApiNamespaceConstructor = class ApiNamespace {
-  constructor(scope: ScopeParent, name: string, handler: any) {
+  constructor(scope: ScopeParent, name: string, handler: any, options?: ApiNamespaceOptions) {
     handler[API_NAMESPACE_MARKER] = name;
     // Register the namespace's routing entry for per-compute front-door fan-out.
-    // No-op outside CDK synth. Signature and returned handler are unchanged.
-    registerNamespaceRoute(scope, name);
+    // No-op outside CDK synth. Signature and returned handler are unchanged; an
+    // assigned `options.compute` routes this namespace to that compute's origin.
+    registerNamespaceRoute(scope, name, options?.compute);
     return handler;
   }
 } as any;
