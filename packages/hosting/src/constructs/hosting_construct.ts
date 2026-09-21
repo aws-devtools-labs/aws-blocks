@@ -455,10 +455,12 @@ export class HostingConstruct extends Construct {
    */
   readonly distribution?: Distribution;
   /**
-   * The Application Load Balancer, present when `frontDoor: { kind: 'alb' }`.
-   * Mutually exclusive with {@link distribution}.
+   * The Application Load Balancer's DNS name, present when the front door is an
+   * ALB (`frontDoor: { kind: 'alb' }`, or the ALB router built for the composed
+   * CF → ALB door). Mutually exclusive with {@link distribution}. The composed
+   * door's edge reads this to point CloudFront's single origin at the ALB.
    */
-  readonly loadBalancer?: import('aws-cdk-lib/aws-elasticloadbalancingv2').IApplicationLoadBalancer;
+  loadBalancerDnsName?: string;
   /**
    * The PUBLIC website bucket, present only for `frontDoor: 'none'` (served
    * directly from S3 website hosting — its own public bucket, from root). The Blocks
@@ -1444,6 +1446,9 @@ export class HostingConstruct extends Construct {
           monitoring: Boolean(props.monitoring),
           degrade: fd.degrade,
         });
+        // The ALB's DNS (from the layer's origin handle) — the composed CF → ALB
+        // edge reads this to point CloudFront's single origin at the ALB.
+        this.loadBalancerDnsName = handle.originHandle?.domainName;
       } else if (fd?.kind === 'apiGateway') {
         // API Gateway owns routing: a route per origin (asset-proxy → private S3,
         // SSR/image Lambdas) plus native same-origin backend proxy. `api` picks

@@ -18,7 +18,7 @@
  * headers, no skew-pin, buffered SSR only (HTTP API can't stream), ~6 MB
  * response cap.
  */
-import { CfnOutput, Duration, Fn } from 'aws-cdk-lib';
+import { CfnOutput, Duration } from 'aws-cdk-lib';
 import { ApiMapping, DomainName, HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration, HttpUrlIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { Code, Function as LambdaFunction, type IFunction } from 'aws-cdk-lib/aws-lambda';
@@ -29,6 +29,7 @@ import { Construct } from 'constructs';
 import type { CapabilityPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
+import { backendBaseUrl, globToProxyPath } from './apigw_routes.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 export type ApiGatewayConstructProps = {
@@ -39,13 +40,6 @@ export type ApiGatewayConstructProps = {
   imageComputeName?: string;
   /** Custom domain(s) — a regional cert + DomainName + API mapping + Route 53 alias. */
   domain?: ApiGwCustomDomain;
-};
-
-/** Convert a route-table glob pattern to an API Gateway HTTP API route path (or null for the catch-all). */
-const toApiGwPath = (pattern: string): string | null => {
-  if (pattern === '/*' || pattern === '*') return null; // → $default
-  if (pattern.endsWith('/*')) return `${pattern.slice(0, -2)}/{proxy+}`;
-  return pattern; // exact
 };
 
 export class ApiGatewayConstruct extends Construct {
@@ -97,7 +91,7 @@ export class ApiGatewayConstruct extends Construct {
       // Split the ingress URL on the `/aws-blocks/api` suffix (token-safe) to get
       // the backend base — the same URL shape whether it is a Lambda API Gateway,
       // a container ALB, or a BYOC endpoint.
-      const base = Fn.select(0, Fn.split('/aws-blocks/api', origin.ingress.url)); // https://…/prod
+      const base = backendBaseUrl(origin.ingress.url); // https://…/prod
       if (origin.namespace === '*') {
         this.api.addRoutes({
           path: '/aws-blocks/{proxy+}',
@@ -122,7 +116,7 @@ export class ApiGatewayConstruct extends Construct {
     // Route table → routes (deduped; catch-all handled by defaultIntegration).
     const seen = new Set<string>();
     for (const entry of plan.routes.entries) {
-      const path = toApiGwPath(entry.pattern);
+      const path = globToProxyPath(entry.pattern);
       if (path === null || seen.has(path)) continue;
       if (path.startsWith('/aws-blocks/') || path.startsWith('/aws-blocks-auth/')) continue; // backend owns these
       seen.add(path);

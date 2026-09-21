@@ -972,14 +972,13 @@ export class Hosting extends Construct {
     hosting: HostingConstruct,
     props: HostingProps,
   ): { distribution: Distribution; url: string } {
-    // The L3 built the full ALB router as its front door, exposing its URL
-    // (`http://<alb-dns>`) as `distributionUrl`. Derive the host for the origin;
-    // the internal edge → ALB hop is always HTTP.
-    const albUrl = hosting.distributionUrl;
-    if (!albUrl) {
+    // The L3 built the full ALB router as its front door and exposes its DNS
+    // name. CloudFront's single origin is that ALB; the internal edge → ALB hop
+    // is always HTTP.
+    const albDns = hosting.loadBalancerDnsName;
+    if (!albDns) {
       throw new Error('Composed CF → ALB door: the ALB router was not provisioned by the hosting construct.');
     }
-    const albDns = cdk.Fn.select(1, cdk.Fn.split('://', albUrl));
     const origin = new HttpOrigin(albDns, { protocolPolicy: OriginProtocolPolicy.HTTP_ONLY });
 
     // Cache policy that HONORS the ALB's origin Cache-Control (defaultTtl 0): the

@@ -1896,6 +1896,27 @@ describe('Hosting', () => {
     });
   });
 
+  describe("frontDoor: { kind: 'alb' } (regional ALB — no CloudFront)", () => {
+    it('static SPA → an ALB + listener + Lambda target groups (asset-proxy + API-forwarder), NO CloudFront', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'AlbStaticStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } });
+
+      const t = Template.fromStack(stack);
+      t.resourceCountIs('AWS::CloudFront::Distribution', 0);
+      t.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
+      t.resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 1);
+      // The ALB routes to Lambda targets (asset-proxy → S3, API-forwarder → backend).
+      t.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', { TargetType: 'lambda' });
+      // Private assets bucket read by the asset-proxy (no public website bucket).
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: { Variables: { ASSET_KEY_PREFIX: Match.stringLikeRegexp('^builds/') } },
+      });
+    });
+  });
+
   describe('composed CF → ALB front door', () => {
     it('stacks a CloudFront edge OVER a FULL ALB router (both exist), not one instead of the other', () => {
       createSpaBuildOutput(tmpDir);
