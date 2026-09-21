@@ -90,3 +90,7 @@ export { ApiGatewayAdapter, type ApiGatewayRenderContext } from './apigw_adapter
 export { ApiGatewayConstruct, type ApiGatewayConstructProps } from './apigw_construct.js';
 export { S3WebsiteAdapter, type S3WebsiteRenderContext } from './s3_website_adapter.js';
 export { S3WebsiteConstruct, type S3WebsiteConstructProps } from './s3_website_construct.js';
+// Security-headers ResponseHeadersPolicy factory — reused by core.Hosting to
+// attach HSTS / X-Frame-Options / X-Content-Type-Options on the thin CloudFront
+// edge of the composed CF → ALB door (parity with the default CloudFront door).
+export { createSecurityHeadersPolicy, type SecurityHeadersProps } from './security_headers.js';

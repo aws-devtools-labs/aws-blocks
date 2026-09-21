@@ -1965,6 +1965,25 @@ describe('Hosting', () => {
       });
     });
 
+    it('the thin edge stamps security headers (HSTS / frame / content-type) — parity with the default CloudFront door', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'CfOverAlbSecHeadersStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { edge: 'cloudfront', router: 'alb' } });
+
+      const t = Template.fromStack(stack);
+      // A ResponseHeadersPolicy with the security headers, attached to the edge's
+      // default behavior — the ALB can't inject these, so CloudFront owns them.
+      t.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+        ResponseHeadersPolicyConfig: Match.objectLike({
+          SecurityHeadersConfig: Match.objectLike({
+            StrictTransportSecurity: Match.objectLike({ Override: true }),
+          }),
+        }),
+      });
+    });
+
     it('the default CloudFront door still fronts API Gateway directly (no ALB)', () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();

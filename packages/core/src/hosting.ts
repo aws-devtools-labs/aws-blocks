@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
 import { detectFramework, type FrameworkAdapterFn, getAdapter, normalizeBasePath } from '@aws-blocks/hosting/adapters';
 import {
+  createSecurityHeadersPolicy,
   generateBuildId,
   HostingConstruct,
   type HostingConstructProps,
@@ -1002,6 +1003,14 @@ export class Hosting extends Construct {
     // CloudFront door until then.
     const webAclId = props.waf?.webAclArn;
 
+    // Stamp HSTS / X-Frame-Options / X-Content-Type-Options at the edge, exactly
+    // as the default CloudFront door does — the ALB can't inject per-response
+    // security headers, so CloudFront (still the edge here) owns them, keeping
+    // Design B at parity with the standard door.
+    const securityHeaders = createSecurityHeadersPolicy(this, 'CfOverAlbSecurityHeaders', {
+      contentSecurityPolicy: props.contentSecurityPolicy,
+    });
+
     const distribution = new Distribution(this, 'CfOverAlb', {
       comment: 'Blocks composed CF → ALB edge (single origin: the ALB router)',
       defaultBehavior: {
@@ -1010,6 +1019,7 @@ export class Hosting extends Construct {
         cachePolicy,
         originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        responseHeadersPolicy: securityHeaders,
       },
       webAclId,
     });
