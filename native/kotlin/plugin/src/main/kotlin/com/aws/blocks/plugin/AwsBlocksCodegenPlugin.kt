@@ -106,14 +106,9 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
         // has to wait until the project is evaluated. A plain value keeps the task input
         // configuration-cache friendly.
         project.afterEvaluate {
-            val registersScheme = kmpExtension.targets.any { target ->
-                target.platformType == KotlinPlatformType.androidJvm ||
-                    target.platformType == KotlinPlatformType.native
-            }
+            val requirement = relayToRequirementFor(kmpExtension.targets.map { it.platformType })
             task.configure {
-                it.relayToRequirement.set(
-                    if (registersScheme) RelayToRequirement.Recommended else RelayToRequirement.NotNeeded,
-                )
+                it.relayToRequirement.set(requirement)
             }
         }
 
@@ -182,3 +177,30 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
         }
     }
 }
+
+/**
+ * Maps a multiplatform module's target platforms to how strongly it needs a relay target.
+ *
+ * A module emits one shared source set, so the decision covers every target at once: if they
+ * all register a URL scheme with the operating system then a missing value cannot work
+ * anywhere, while a module that also builds for a platform receiving the relay on loopback
+ * still has a working target without one.
+ *
+ * [KotlinPlatformType.common] is excluded because the metadata target is added automatically
+ * and compiles no platform code.
+ */
+internal fun relayToRequirementFor(
+    targetPlatformTypes: Collection<KotlinPlatformType>,
+): RelayToRequirement {
+    val platformTypes = targetPlatformTypes.filter { it != KotlinPlatformType.common }
+    return when {
+        platformTypes.isEmpty() -> RelayToRequirement.NotNeeded
+        platformTypes.all { it.registersUrlScheme() } -> RelayToRequirement.Required
+        platformTypes.any { it.registersUrlScheme() } -> RelayToRequirement.Recommended
+        else -> RelayToRequirement.NotNeeded
+    }
+}
+
+/** Whether apps built for this platform register their relay scheme with the operating system. */
+private fun KotlinPlatformType.registersUrlScheme(): Boolean =
+    this == KotlinPlatformType.androidJvm || this == KotlinPlatformType.native
