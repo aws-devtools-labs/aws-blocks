@@ -10,6 +10,7 @@ import {
   type Field,
 } from '@aws-sdk/client-rds-data';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
+import { installClientUserAgent } from '@aws-blocks/core';
 import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES, wrapError, serializationConflict, uniqueConstraintConflict } from '../errors.js';
 
 /**
@@ -153,6 +154,7 @@ export class DataApiEngine implements DatabaseEngine {
     this.client = config.client ?? new RDSDataClient({
       ...(config.customUserAgent ? { customUserAgent: config.customUserAgent } : {}),
     });
+    if (!config.client) installClientUserAgent(this.client);
   }
 
   /** Execute a SQL query via ExecuteStatement and return rows mapped from column metadata. */
