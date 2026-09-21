@@ -29,7 +29,7 @@
  */
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME, getBlocksRoot } from '@aws-blocks/core/cdk';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { AppSetting, SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
@@ -329,15 +329,19 @@ export class AuthOIDC<
 		});
 
 		// A `secret: true` AppSetting's SecureString value is written by the shared
-		// bb-app-setting bulk-init custom resource (a direct child of the stack).
-		// Depend on it so the parameter exists before this handler reads it — a hard
-		// ordering guarantee rather than leaving it to the handler's read-retry. The
-		// construct id comes from bb-app-setting's exported `SECRETS_BULK_CONSTRUCT_ID`
-		// (not a hard-coded string), so a rename there can't silently break this
-		// cross-package coupling — it's a compile-time dependency. The lookup can
-		// still legitimately miss (e.g. a non-BlocksStack test harness, or no secret
-		// AppSetting at all), in which case the read-retry remains the fallback.
-		const bulkSecrets = cdk.Stack.of(this).node.tryFindChild(SECRETS_BULK_CONSTRUCT_ID);
+		// bb-app-setting bulk-init custom resource (a direct child of the owning
+		// backend root — `BlocksStack`/`BlocksBackend`, not necessarily the enclosing
+		// `cdk.Stack`). Depend on it so the parameter exists before this handler reads
+		// it — a hard ordering guarantee rather than leaving it to the handler's
+		// read-retry. The construct id comes from bb-app-setting's exported
+		// `SECRETS_BULK_CONSTRUCT_ID` (not a hard-coded string), so a rename there
+		// can't silently break this cross-package coupling — it's a compile-time
+		// dependency. Resolve via `getBlocksRoot(this)` (the same root bb-app-setting
+		// parents the resource under), so this holds for an embedded `BlocksBackend`
+		// where the root is not the stack. The lookup can still legitimately miss
+		// (e.g. no secret AppSetting at all), in which case the read-retry is the
+		// fallback.
+		const bulkSecrets = getBlocksRoot(this).node.tryFindChild(SECRETS_BULK_CONSTRUCT_ID);
 		if (bulkSecrets) cr.node.addDependency(bulkSecrets);
 
 		return cr;

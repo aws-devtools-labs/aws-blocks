@@ -18,7 +18,9 @@ import { BlocksBackend } from './blocks-backend.js';
 import { BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
+import { getConfigLocation } from './config-registry.js';
 import { Scope } from './index.js';
+import { getBlocksRoot, isBlocksBackendRoot } from './root-registry.js';
 import { getVpcContext } from './vpc.js';
 
 // A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
@@ -417,6 +419,55 @@ describe('infrastructure defaults (backend-anchored)', () => {
 		const inner = new Scope('inner', { parent: outer });
 		assert.strictEqual(inner.defaults, backend.defaults);
 		assert.strictEqual(inner.defaults, BlocksPresets.sandbox);
+	});
+});
+
+describe('resource ownership scoping (backend root)', () => {
+	test('a real BlocksBackend is a branded backend root and resolves to itself', async () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'BrandStack');
+
+		const backend = await makeBackend(stack, 'Blocks', sideEffectBackendPath);
+
+		// The brand is what lets the registries and shared-infra BBs key on the
+		// owning backend (via getBlocksRoot) rather than on cdk.Stack.of(scope).
+		assert.strictEqual(isBlocksBackendRoot(backend), true);
+		// A branded root resolves to itself, and a construct under it resolves up to it.
+		assert.strictEqual(getBlocksRoot(backend), backend);
+		// create() set globalThis.CURRENT_BLOCKS_STACK = backend, so a parent-less
+		// Scope attaches under it (the same way a real backend module's top-level
+		// blocks do); the tree-walk from there resolves back to the backend.
+		const child = new Scope('child');
+		assert.strictEqual(getBlocksRoot(child), backend);
+	});
+
+	test('two BlocksBackends in one stack each get their own config bucket', async () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'TwoBucketStack');
+
+		const a = await makeBackend(stack, 'BackendA', sideEffectBackendPath);
+		const b = await makeBackend(stack, 'BackendB', sideEffectBackendPath);
+
+		// The config bucket is keyed on the resolved backend root, not the shared
+		// stack — so each backend provisions its own. Keyed on the stack, the
+		// second call would return the first's bucket and B would read A's config.
+		getConfigLocation(a);
+		getConfigLocation(b);
+
+		const template = Template.fromStack(stack);
+		const bucketIds = Object.keys(template.findResources('AWS::S3::Bucket')).filter((k) =>
+			k.includes('BlocksConfigBucket'),
+		);
+		assert.strictEqual(bucketIds.length, 2, 'each backend root must own a distinct config bucket');
+		// Logical IDs encode the construct path, so each bucket nests under its backend.
+		assert.ok(
+			bucketIds.some((k) => k.startsWith('BackendA')),
+			`expected a config bucket under BackendA, got ${JSON.stringify(bucketIds)}`,
+		);
+		assert.ok(
+			bucketIds.some((k) => k.startsWith('BackendB')),
+			`expected a config bucket under BackendB, got ${JSON.stringify(bucketIds)}`,
+		);
 	});
 });
 
