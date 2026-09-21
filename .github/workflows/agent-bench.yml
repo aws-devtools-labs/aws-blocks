@@ -109,6 +109,14 @@ jobs:
       BENCH_CELL_INDEX: ${{ strategy.job-index }}
       BENCH_STAGGER_STEP_SEC: '7'
       BENCH_STAGGER_WAVE_SIZE: '5' # keep in sync with strategy.max-parallel above
+      # One shared browser cache dir so the agent phase (step 2, whose shell inherits
+      # this job env) and the verifier (step 3) resolve chromium from the same path. Under the
+      # workspace to stay on the checkout's volume.
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw-browsers
+      # Single source of truth for the per-command log path: 2-agent-run.ts honours a pre-set
+      # BENCH_CMD_LOG (else derives it beside TRACE), and the trace-upload step references the same
+      # env — so the writer and the uploader can't drift if the path ever changes.
+      BENCH_CMD_LOG: /tmp/commands.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -221,6 +229,26 @@ jobs:
         run: bash scripts/agent-bench/steps/1-init-bench-app.sh "$TEMPLATE"
         env:
           BLOCKS_TELEMETRY_CANARY_ID: ${{ secrets.BLOCKS_TELEMETRY_CANARY_ID }}
+
+      # Provision the browser once, before the agent phase — step 2 used to run with
+      # no chromium, so the agent wasted turns hunting for one. `--with-deps` pulls the OS libs;
+      # version-pinned to the verifier's PW_VERSION (1.60.0). Then wrap the system chromium so every
+      # launch (the agent's ad-hoc CDP sessions included) starts cleanly instead of aborting on
+      # crashpad. Best-effort (continue-on-error): a blip must not red the cell — step 3's guarded
+      # fallback covers the install, and an unwrapped chromium still runs, just less reliably.
+      - name: Provision Playwright chromium (before agent phase)
+        id: pwprovision
+        continue-on-error: true
+        if: steps.init.outcome == 'success'
+        run: |
+          npx playwright@1.60.0 install --with-deps chromium
+          # sudo env_reset strips job-level env, so pass PLAYWRIGHT_BROWSERS_PATH through explicitly —
+          # the shim wraps the Playwright-installed chromium under it, which is the binary reliably
+          # present on a stock runner (npx install above runs unprivileged and writes it there).
+          # The wrapper is root-owned by design (the shim also wraps system-PATH binaries that need
+          # root). Step 3's guarded `npx playwright install` fallback runs unprivileged, but no-ops on
+          # the warm cache this step just populated, so it never tries to overwrite the root-owned file.
+          sudo PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" bash scripts/agent-bench/steps/install-chromium-shim.sh
 
       # SECURITY: this step runs an LLM agent (shell tool), so a prompt-injected task could reach any
       # AWS API in the CURRENT session's scope — which the OIDC step's inline session policy has
@@ -355,6 +383,7 @@ jobs:
           path: |
             /tmp/trace.json
             /tmp/metrics.json
+            ${{ env.BENCH_CMD_LOG }}
           retention-days: 90
           overwrite: true
           if-no-files-found: ignore
