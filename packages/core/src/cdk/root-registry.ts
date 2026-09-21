@@ -87,7 +87,7 @@ export function getBlocksRootId(scope: Construct): string {
 export function getOrCreateOnRoot<T>(scope: Construct, key: symbol, factory: (root: Construct) => T): T {
 	const root = getBlocksRoot(scope);
 	const store = root as unknown as Record<symbol, unknown>;
-	if (!Object.prototype.hasOwnProperty.call(store, key)) {
+	if (!Object.hasOwn(store, key)) {
 		store[key] = factory(root);
 	}
 	return store[key] as T;
