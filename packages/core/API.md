@@ -106,6 +106,13 @@ export function hasAuthError<T extends {
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS';
 
 // @public
+export function installClientUserAgent(client: {
+    middlewareStack: {
+        add: (middleware: any, options: any) => void;
+    };
+}): void;
+
+// @public
 export function isBlocksError<N extends string>(e: unknown, name: N): e is Error & {
     name: N;
 };
