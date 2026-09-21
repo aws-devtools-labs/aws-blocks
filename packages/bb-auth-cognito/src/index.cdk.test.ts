@@ -671,19 +671,31 @@ const LIFECYCLE_ADMIN_ACTIONS = [
 	'cognito-idp:AdminUserGlobalSignOut',
 ];
 // Actions granted by BOTH slices — excluded from the "does not grant the other
-// slice's actions" cross-checks below.
+// slice's actions" cross-checks below. AdminListGroupsForUser is additionally a
+// client-facing baseline grant (see BASELINE_ADMIN_ACTIONS) because `requireRole`
+// reads live membership.
 const SHARED_ADMIN_ACTIONS = ['cognito-idp:AdminListGroupsForUser'];
 const groupOnlyActions = GROUP_ADMIN_ACTIONS.filter((a) => !SHARED_ADMIN_ACTIONS.includes(a));
 const lifecycleOnlyActions = LIFECYCLE_ADMIN_ACTIONS.filter((a) => !SHARED_ADMIN_ACTIONS.includes(a));
+// Admin actions granted unconditionally to the execution role, independent of
+// the opt-in `admin` surface. `requireRole` is a client-facing guard that reads
+// live group membership via AdminListGroupsForUser, so that one action is always
+// present — every other Admin* action still requires opt-in.
+const BASELINE_ADMIN_ACTIONS = ['cognito-idp:AdminListGroupsForUser'];
 
 describe('AuthCognito (CDK) — admin IAM grant', () => {
-	test('no admin option → NO Admin* actions granted (least privilege)', () => {
+	test('no admin option → only the client-facing baseline Admin action granted (least privilege)', () => {
 		const template = synth((stack) => {
 			new AuthCognito(scope(stack), 'auth', { groups: ['admins'] });
 		});
 		const actions = grantedActions(template);
 		for (const a of [...GROUP_ADMIN_ACTIONS, ...LIFECYCLE_ADMIN_ACTIONS]) {
+			if (BASELINE_ADMIN_ACTIONS.includes(a)) continue;
 			assert.ok(!actions.has(a), `unexpected admin action granted without opt-in: ${a}`);
+		}
+		// requireRole reads live membership, so its one Admin action is the baseline.
+		for (const a of BASELINE_ADMIN_ACTIONS) {
+			assert.ok(actions.has(a), `missing client-facing baseline action ${a}`);
 		}
 	});
 
