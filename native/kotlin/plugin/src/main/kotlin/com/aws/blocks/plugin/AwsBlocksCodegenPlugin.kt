@@ -8,6 +8,9 @@ import org.gradle.api.Project
 import org.gradle.api.plugins.JavaPluginExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import org.jetbrains.kotlin.konan.target.Family
+import org.jetbrains.kotlin.konan.target.KonanTarget
 
 /**
  * Gradle plugin that registers an [AwsBlocksCodegenTask] to generate
@@ -106,7 +109,14 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
         // has to wait until the project is evaluated. A plain value keeps the task input
         // configuration-cache friendly.
         project.afterEvaluate {
-            val requirement = relayToRequirementFor(kmpExtension.targets.map { it.platformType })
+            val requirement = relayToRequirementFor(
+                kmpExtension.targets.map { target ->
+                    TargetPlatform(
+                        platformType = target.platformType,
+                        konanTarget = (target as? KotlinNativeTarget)?.konanTarget,
+                    )
+                },
+            )
             task.configure {
                 it.relayToRequirement.set(requirement)
             }
@@ -179,7 +189,17 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
 }
 
 /**
- * Maps a multiplatform module's target platforms to how strongly it needs a relay target.
+ * One of a module's compilation targets, reduced to what the relay decision depends on.
+ *
+ * [konanTarget] is null for every target that is not Kotlin/Native.
+ */
+internal data class TargetPlatform(
+    val platformType: KotlinPlatformType,
+    val konanTarget: KonanTarget? = null,
+)
+
+/**
+ * Maps a multiplatform module's targets to how strongly it needs a relay target.
  *
  * A module emits one shared source set, so the decision covers every target at once: if they
  * all register a URL scheme with the operating system then a missing value cannot work
@@ -189,18 +209,25 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
  * [KotlinPlatformType.common] is excluded because the metadata target is added automatically
  * and compiles no platform code.
  */
-internal fun relayToRequirementFor(
-    targetPlatformTypes: Collection<KotlinPlatformType>,
-): RelayToRequirement {
-    val platformTypes = targetPlatformTypes.filter { it != KotlinPlatformType.common }
+internal fun relayToRequirementFor(targets: Collection<TargetPlatform>): RelayToRequirement {
+    val platforms = targets.filter { it.platformType != KotlinPlatformType.common }
     return when {
-        platformTypes.isEmpty() -> RelayToRequirement.NotNeeded
-        platformTypes.all { it.registersUrlScheme() } -> RelayToRequirement.Required
-        platformTypes.any { it.registersUrlScheme() } -> RelayToRequirement.Recommended
+        platforms.isEmpty() -> RelayToRequirement.NotNeeded
+        platforms.all { it.registersUrlScheme() } -> RelayToRequirement.Required
+        platforms.any { it.registersUrlScheme() } -> RelayToRequirement.Recommended
         else -> RelayToRequirement.NotNeeded
     }
 }
 
-/** Whether apps built for this platform register their relay scheme with the operating system. */
-private fun KotlinPlatformType.registersUrlScheme(): Boolean =
-    this == KotlinPlatformType.androidJvm || this == KotlinPlatformType.native
+/**
+ * Whether apps built for this target register their relay scheme with the operating system.
+ *
+ * Only the platforms known to need one qualify. A platform this does not recognise is treated
+ * as not needing a relay target, so adding a target never turns a working build into one that
+ * emits stubs.
+ */
+private fun TargetPlatform.registersUrlScheme(): Boolean = when (platformType) {
+    KotlinPlatformType.androidJvm -> true
+    KotlinPlatformType.native -> konanTarget?.family == Family.IOS
+    else -> false
+}
