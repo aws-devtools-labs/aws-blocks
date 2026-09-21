@@ -59,6 +59,40 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 			await api.authCAdminDeleteUser(u);
 		});
 
+		test('requireRole reads live membership — group change hits an existing session without re-login', async () => {
+			const api = getApi();
+			const u = uniqueUser();
+			await api.authCAdminCreateUser(u, PW);
+			await api.authCAdminSetPassword(u, PW);
+
+			// Sign in BEFORE any group grant — the session token carries no groups.
+			await api.authCSignIn(u, PW);
+			await assert.rejects(
+				() => api.authCRequireRole('admins'),
+				(e: unknown) => isBlocksError(e, 'NotAuthorizedException'),
+				'a non-member must be 403 before the grant',
+			);
+
+			// Grant membership on the already-signed-in session. requireRole reads
+			// AdminListGroupsForUser live, so it must pass with NO re-login — this is
+			// the fix (previously the stale cognito:groups claim kept returning 403).
+			await api.authCAdminAddToGroup(u, 'admins');
+			const granted = await api.authCRequireRole('admins');
+			assert.strictEqual(granted.username, u);
+			assert.ok(granted.groups.includes('admins'), `returned groups reflect the live read: ${JSON.stringify(granted.groups)}`);
+
+			// Revoke on the same live session — access must drop immediately, again
+			// with no re-login (the stale claim would still say 'admins').
+			await api.authCAdminRemoveFromGroup(u, 'admins');
+			await assert.rejects(
+				() => api.authCRequireRole('admins'),
+				(e: unknown) => isBlocksError(e, 'NotAuthorizedException'),
+				'removal must lock the live session out immediately',
+			);
+
+			await api.authCAdminDeleteUser(u);
+		});
+
 		test('admin.revokeUserSessions revokes Cognito refresh tokens (succeeds end-to-end)', async () => {
 			const api = getApi();
 			const u = uniqueUser();
