@@ -14,8 +14,7 @@ export type {
 	DashboardOptions,
 	MetricConfig,
 	MetricsBBRef,
-	LoggerBBRef,
-	TracerBBRef,
+	MetricsSource,
 } from './types.js';
 
 export class Dashboard {

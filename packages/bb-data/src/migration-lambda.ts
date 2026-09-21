@@ -4,6 +4,7 @@
 import { runMigrations, loadMigrationsFromDir } from '@aws-blocks/data-common';
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
 import { DataApiEngine } from './engines/data-api-engine.js';
+import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES } from './errors.js';
 
 // Set by the CDK construct's environment config. Default is the Lambda deployment root
 // where CDK's afterBundling hook copies the .sql files.
@@ -13,20 +14,45 @@ const INITIAL_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
 
 /**
- * Execute a function with exponential backoff on BadRequestException.
- * Aurora Serverless v2 can take time to become available after cluster creation;
- * the writer instance may not be ready when the migration Lambda first fires.
+ * True when the error means "the cluster isn't accepting statements yet" rather
+ * than "the statement is wrong" — i.e. waiting and retrying may succeed.
+ *
+ * Covers both a freshly created cluster whose writer isn't up and a
+ * `minCapacity: 0` (scale-to-zero) cluster resuming from auto-pause.
+ *
+ * `DataApiEngine` rewrites `error.name` to a `DatabaseErrors` name before it
+ * reaches here, so `ConnectionFailed` is the check that actually fires in the
+ * Lambda; the raw SDK names are kept for errors raised outside the engine.
  */
-const withRetry = async <T>(fn: () => Promise<T>): Promise<T> => {
+export const isRetryableMigrationError = (e: unknown): boolean =>
+  e instanceof Error && (
+    e.name === DatabaseErrors.ConnectionFailed ||
+    TRANSIENT_DATA_API_ERROR_NAMES.has(e.name) ||
+    e.name === 'BadRequestException' ||
+    // JDBC-style but load-bearing: only check for a not-yet-ready writer, whose
+    // name the engine rewrites while leaving the message intact.
+    e.message.includes('Communications link failure')
+  );
+
+/**
+ * Execute a function with exponential backoff while Aurora is unreachable.
+ * Aurora Serverless v2 can take time to become available after cluster creation
+ * (the writer instance may not be ready when the migration Lambda first fires),
+ * and a scale-to-zero cluster needs to resume from auto-pause before it accepts
+ * the first statement of a deploy.
+ *
+ * @throws the last underlying error once MAX_RETRIES retryable attempts are
+ *         exhausted, unwrapped, so the caller sees the real failure.
+ */
+export const withRetry = async <T>(fn: () => Promise<T>): Promise<T> => {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       return await fn();
-    } catch (e: any) {
-      const isBadRequest = e?.name === 'BadRequestException' ||
-        e?.message?.includes('Communications link failure');
-      if (!isBadRequest || attempt === MAX_RETRIES) throw e;
+    } catch (e) {
+      if (!isRetryableMigrationError(e) || attempt === MAX_RETRIES) throw e;
       const delay = Math.min(INITIAL_DELAY_MS * 2 ** attempt, MAX_DELAY_MS);
-      console.log(`[migration-lambda] Aurora not ready, retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`);
+      const name = e instanceof Error ? e.name : 'unknown';
+      console.log(`[migration-lambda] Aurora not ready (${name}), retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
@@ -40,9 +66,9 @@ const withRetry = async <T>(fn: () => Promise<T>): Promise<T> => {
  * (at MIGRATIONS_DIR). The CFN resource property `migrationsHash` triggers
  * re-invocation when migration files change.
  *
- * Retries with exponential backoff (1s → 30s, up to 8 attempts) on
- * BadRequestException, which occurs when Aurora's writer instance isn't
- * ready yet after initial cluster creation.
+ * Retries with exponential backoff (1s → 30s, up to 8 attempts) while Aurora is
+ * unreachable — the writer instance isn't ready yet after initial cluster
+ * creation, or a `minCapacity: 0` cluster is resuming from auto-pause.
  */
 export const handler = async (event: CloudFormationCustomResourceEvent): Promise<{ PhysicalResourceId: string }> => {
   console.log('[migration-lambda] Event:', JSON.stringify({

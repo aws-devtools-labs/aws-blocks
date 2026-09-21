@@ -167,17 +167,21 @@ jobs:
           role-duration-seconds: 7200
           # LEAST PRIVILEGE (canonical explanation): the effective session permissions are the
           # INTERSECTION of the role's policy and this inline policy, so this narrows the initial
-          # session to Bedrock Converse ONLY — steps 1→4b (agent, judge, per-cell analysis) run with
-          # no s3:PutObject. It cannot widen the role, so the shared AWS_ROLE_ARN and every other
+          # session to Bedrock model-invocation ONLY — steps 1→4b (agent, judge, per-cell analysis) run
+          # with no s3:PutObject. It cannot widen the role, so the shared AWS_ROLE_ARN and every other
           # workflow that uses it are untouched — no new IAM roles or environment secrets. The
-          # allow-list is exactly the two model-invocation paths the harness uses: ConverseStream for
-          # the Strands BedrockModel (builder/judge stream — see the ModelStreamUpdateEvent hook in
-          # 2-agent-run.ts) and Converse for the CLI `bedrock-runtime converse` analysis. InvokeModel
-          # / InvokeModelWithResponseStream are intentionally omitted — no path uses them. Resources
-          # stay on model-invocation ARNs (inference-profile + foundation-model), robust to the us.*
-          # geo profile's cross-region routing and a BENCH_MODEL override — the role itself already
-          # pins the exact model. "Persist to S3" re-assumes the same role below WITHOUT this policy
-          # to regain the s3 write for that step.
+          # allow-list is exactly the model-invocation actions with a verified call site: the Strands
+          # `BedrockModel` (builder/judge stream — see the ModelStreamUpdateEvent hook in 2-agent-run.ts
+          # and 4-judge.ts) calls `bedrock:InvokeModelWithResponseStream`, and the CLI
+          # `bedrock-runtime converse` analysis (analysis.mjs bedrockConverse) calls `bedrock:Converse`.
+          # Non-streaming `InvokeModel` and `ConverseStream` are intentionally omitted — no path uses
+          # them. (Earlier this list omitted the Invoke* actions on the false assumption that the SDK
+          # used ConverseStream — that is what 403'd every cell. NOTE: this is the SESSION half only;
+          # the role's own identity policy must ALSO grant these actions or the intersection is still
+          # empty.) Resources stay on model-invocation ARNs (inference-profile + foundation-model),
+          # robust to the us.* geo profile's cross-region routing and a BENCH_MODEL override. "Persist
+          # to S3" re-assumes the same role below WITHOUT this policy to regain the s3 write for that
+          # step.
           inline-session-policy: >-
             {
               "Version": "2012-10-17",
@@ -186,8 +190,8 @@ jobs:
                   "Sid": "BedrockInvokeOnly",
                   "Effect": "Allow",
                   "Action": [
-                    "bedrock:Converse",
-                    "bedrock:ConverseStream"
+                    "bedrock:InvokeModelWithResponseStream",
+                    "bedrock:Converse"
                   ],
                   "Resource": [
                     "arn:aws:bedrock:*:*:inference-profile/*",
@@ -395,14 +399,15 @@ jobs:
           bash scripts/agent-bench/steps/lib/s3-put.sh /tmp/result.json "s3://${BUCKET}/$KEY" "cell archive"
 
   summary:
-    needs: bench
+    needs: [bench, build-blocks]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # id-token: OIDC -> S3 to read/write the baseline. No pull-requests:write — the scoreboard IS
-    # the Actions run summary.
+    # id-token: OIDC -> S3 to read/write the baseline. pull-requests: write posts the scoreboard as a
+    # sticky PR comment (in addition to the Actions run summary) so the delta is visible on the PR.
     permissions:
       id-token: write
       contents: read
+      pull-requests: write
     # `publish` env holds AWS_ROLE_ARN / S3_BUCKET, needed to read + write the S3 baseline.
     environment: publish
     # Defense-in-depth same-repo gate (caller already gates). always() so the table renders even
@@ -472,16 +477,23 @@ jobs:
             fi
           fi
 
-      # The ONLY step intentionally not green-regardless: summary.mjs fails the job only if the
-      # optional BENCH_MIN_SCORE merge gate is set and unmet, or if summary.mjs itself crashes.
+      # The ONLY step intentionally not green-regardless: summary.mjs fails the job when an enabled
+      # merge gate is unmet (floor / regression-vs-main / harness-errors — see lib/gates.mjs), or if
+      # summary.mjs itself crashes. Each gate is opt-in via its env var below; all unset => observational.
       - name: Render summary table
         timeout-minutes: 5
         run: node scripts/agent-bench/steps/summary.mjs
         env:
           RESULTS_DIR: results
-          # Optional opt-in merge gate: unset => observational (exits 0); set to a number => fails
-          # the job when the scored-cell mean is below it.
+          # ── Merge gates (all opt-in; unset => observational, exits 0) ──
+          # 1. Absolute floor: fail when the scored-cell mean composite is below this.
           BENCH_MIN_SCORE: ${{ vars.BENCH_MIN_SCORE }}
+          # 2. Regression vs main: fail when the mean composite drops more than this many points vs the
+          #    main baseline. No baseline (first run) => not evaluated.
+          BENCH_MAX_REGRESSION: ${{ vars.BENCH_MAX_REGRESSION }}
+          # 3. Harness/infra failures: fail when more than this many cells are harness_error (a broken
+          #    measurement, distinct from a low agent score). Set to 0 to block on ANY infra failure.
+          BENCH_MAX_HARNESS_ERRORS: ${{ vars.BENCH_MAX_HARNESS_ERRORS }}
           # PR-vs-baseline overview inputs (all optional; summary.mjs degrades gracefully):
           BENCH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           BENCH_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -493,6 +505,35 @@ jobs:
           AGGREGATE_PATH: ${{ github.workspace }}/bench-aggregate.json
           # summary.mjs writes one NDJSON line per scored cell here; persisted to the Athena prefix.
           ATHENA_NDJSON_PATH: ${{ github.workspace }}/bench-athena.ndjson
+          # summary.mjs also writes the rendered report here so the next step can post it as a PR
+          # comment. Written BEFORE the gate can exit 1, so a blocking run still comments.
+          # Exported ONLY on pull_request: the comment step below runs only on PRs, so on a push-to-main
+          # run there is no consumer — leaving it unset makes summary.mjs skip the write instead of
+          # leaving a dead temp file. summary.mjs already no-ops when the env var is absent.
+          COMMENT_MD_PATH: ${{ github.event_name == 'pull_request' && format('{0}/bench-comment.md', github.workspace) || '' }}
+          # The upstream job results, passed by the workflow (success | failure | cancelled | skipped).
+          # Lets the harness gate red the check when the matrix produced ZERO artifacts because an
+          # upstream job did not succeed. BENCH_BUILD_RESULT is load-bearing: `bench` has
+          # `needs: build-blocks` with no `if:`, so a build-blocks FAILURE makes GitHub SKIP bench and
+          # needs.bench.result is 'skipped' not 'failure' — the build result is the only signal that the
+          # skip was a failure (the path allowlist gates the whole workflow at the caller, so bench is
+          # never skipped by a per-cell path filter mid-run).
+          BENCH_JOB_RESULT: ${{ needs.bench.result }}
+          BENCH_BUILD_RESULT: ${{ needs.build-blocks.result }}
+
+      # Post the SAME report as a single sticky PR comment (upsert by marker), so the PR-vs-main delta
+      # is visible on the PR itself — not only in the Actions run summary. Only on a same-repo PR (a
+      # fork PR has no token to comment with; push-to-main has no PR). if: always() so a BLOCKING run
+      # (summary.mjs exited 1) still posts the verdict that explains the red check.
+      - name: Comment bench report on PR (sticky)
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BODY_FILE: ${{ github.workspace }}/bench-comment.md
+        run: bash scripts/agent-bench/steps/lib/pr-comment.sh
 
       # Best-effort, isolated top-level roll-up: synthesizes an executive summary from each cell's
       # `analysis` via one Bedrock call and appends it to the step summary. Never reds the job.

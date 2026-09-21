@@ -275,6 +275,16 @@ export interface HostingProps {
   /** Retain the S3 bucket when the stack is deleted. Default: false. */
   retainOnDelete?: boolean;
 
+  /**
+   * Days to retain SUPERSEDED build artifacts in S3 before they are expired.
+   * Default: 30. The build currently referenced by CloudFront KVS (`meta.b`)
+   * is NEVER expired regardless of this value — only builds that have been
+   * replaced by a newer deploy are cleaned up (issue #480). Raise this to keep
+   * a longer rollback window. Must be at least `skewProtection.maxAge`
+   * (converted to days), or synth throws `InvalidSkewProtectionMaxAgeError`.
+   */
+  buildRetentionDays?: number;
+
   /** Custom Content-Security-Policy header value. */
   contentSecurityPolicy?: string;
 
@@ -391,8 +401,16 @@ export interface HostingProps {
    */
   monitoring?: {
     enabled?: boolean;
-    /** ARN of an existing SNS topic to send alarm actions to. */
-    snsTopicArn?: string;
+    /**
+     * Endpoint subscriptions applied to every hosting alarm topic (the
+     * app-region topic and, off-region, the us-east-1 CloudFront topic).
+     * `EmailSubscription` / `UrlSubscription` only — resource-target
+     * subscriptions (Lambda/SQS) are not yet supported.
+     */
+    subscriptions?: Array<
+      | cdk.aws_sns_subscriptions.EmailSubscription
+      | cdk.aws_sns_subscriptions.UrlSubscription
+    >;
   };
 
   /**
@@ -515,8 +533,17 @@ export class Hosting extends Construct {
   public readonly ssrFunction?: cdk.aws_lambda.Function;
   /** S3 bucket for framework build caches (present when `buildCache.enabled` is true). */
   public readonly buildCacheBucket?: cdk.aws_s3.Bucket;
-  /** SNS topic for hosting CloudWatch alarms (present when `monitoring.enabled` is true). */
-  public readonly monitoringTopic?: cdk.aws_sns.ITopic;
+  /**
+   * Hosting monitoring surface (present when `monitoring.enabled` is true):
+   * `alarms` (every CloudWatch alarm, both regions) and `alarmTopics`
+   * (the alarm SNS topics — app-region plus the us-east-1 CloudFront
+   * topic off-region). Subscriptions from `monitoring.subscriptions` are
+   * already attached.
+   */
+  public readonly monitoring?: {
+    alarms: cdk.aws_cloudwatch.Alarm[];
+    alarmTopics: cdk.aws_sns.ITopic[];
+  };
 
   /**
    * Async constructor. Required when a `secret()` / `config()` value resolves at
@@ -740,7 +767,17 @@ export class Hosting extends Construct {
       environment: Object.keys(plainEnv).length ? plainEnv : undefined,
       domain: resolvedDomain,
       waf: props.waf,
-      storage: props.retainOnDelete != null ? { retainOnDelete: props.retainOnDelete } : undefined,
+      storage:
+        props.retainOnDelete != null || props.buildRetentionDays != null
+          ? {
+              ...(props.retainOnDelete != null
+                ? { retainOnDelete: props.retainOnDelete }
+                : {}),
+              ...(props.buildRetentionDays != null
+                ? { buildRetentionDays: props.buildRetentionDays }
+                : {}),
+            }
+          : undefined,
       cdn:
         props.contentSecurityPolicy || props.priceClass || props.geoRestriction || props.quotas
           ? {
@@ -753,6 +790,9 @@ export class Hosting extends Construct {
       logging: props.logging,
       buildCache: props.buildCache,
       errorPages: skipPropsErrorPages ? undefined : props.errorPages,
+      // subscriptions and enabled flow straight through to the L3; the
+      // core layer adds nothing here beyond the monitoringTopic → monitoring
+      // surface rename on the output side.
       monitoring: props.monitoring,
       skewProtection: props.skewProtection,
       // For the ALB front door, thread the backend API Gateway URL so the L3
@@ -889,6 +929,9 @@ export class Hosting extends Construct {
       for (const dep of assetDeployments) {
         configDeployment.node.addDependency(dep);
       }
+
+      // Delay route cutover until resolved config replaces the static placeholder.
+      hosting.addBuildAssetDependency(configDeployment);
     }
 
     // ── 9. Register public origin + CORS hosting origin into S3 config ──
@@ -918,7 +961,7 @@ export class Hosting extends Construct {
     this.url = publicUrl;
     this.ssrFunction = primaryFunction;
     this.buildCacheBucket = hosting.buildCacheBucket;
-    this.monitoringTopic = hosting.monitoringTopic;
+    this.monitoring = hosting.monitoring;
 
     // ── 11. CfnOutput ────────────────────────────────────────────
     new cdk.CfnOutput(this, 'HostingUrl', {

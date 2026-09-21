@@ -190,6 +190,59 @@ is parse-to-type: the schema object isn't shipped to the runtime (it can't cross
 synth→runtime bundle boundary), so it parses to the declared type rather than
 deep-re-validating on read.
 
+### Transport markers across a JSON / build boundary
+
+A marker is branded with a `Symbol` (and may carry a non-serializable `schema`), so
+it does **not** survive a plain `JSON.stringify` → `JSON.parse`: the brand is dropped
+and `isManagedValue()` returns `false` on the far side. If you carry a config object
+containing markers across a JSON boundary — e.g. an orchestrator that serializes
+per-stage config into a build **environment variable** and reads it back in a later
+build phase — use the codec for a lossless round-trip:
+
+```ts
+import {
+  managedValueReplacer,
+  managedValueReviver,
+  encodeManagedValue,
+  decodeManagedValue,
+  isManagedValueJSON,
+  ManagedValueCodecError,
+} from '@aws-blocks/hosting';
+
+// Producer (phase 1): stringify with the replacer, stash in an env var.
+process.env.STAGE_CONFIG = JSON.stringify({ domain: config('DOMAIN'), apiKey: secret('API_KEY') }, managedValueReplacer);
+
+// Consumer (phase 2, possibly a different process): parse with the reviver.
+const cfg = JSON.parse(process.env.STAGE_CONFIG, managedValueReviver);
+isSecret(cfg.apiKey); // true — brand restored
+```
+
+`encodeManagedValue` / `decodeManagedValue` are the single-value primitives; the
+`managedValueReplacer` / `managedValueReviver` are drop-in `JSON.stringify` /
+`JSON.parse` hooks that apply them across a whole (possibly nested) object.
+
+Contract of the wire form (it is a **published, cross-build compatibility boundary**):
+
+- **Versioned.** Every encoded value carries a protocol version
+  (`MANAGED_VALUE_JSON_VERSION`). A decoder rejects a version it does not understand
+  instead of guessing, so producer and consumer on different package versions fail
+  predictably rather than silently misreading each other.
+- **Malformed input.** `decodeManagedValue(v: unknown)` validates exhaustively and
+  throws a typed `ManagedValueCodecError` on an unsupported version, unknown kind,
+  invalid key, or any other malformed shape. The `managedValueReviver`, by contrast,
+  **never throws**: anything that is not an exact wire value is left untouched, so a
+  stray or future-versioned tagged object passes through as ordinary data.
+- **No collisions.** Only an object whose *sole* property is the codec tag is revived
+  into a marker. An ordinary object that merely also happens to carry the tag (plus
+  other fields) is **not** treated as a wire value, so no sibling data is silently
+  dropped.
+- **Schema.** A marker's `schema` object is not serializable and is **not**
+  transported; what is transported is its operational bit, so the runtime
+  **JSON-parse behavior is preserved** across the boundary (a schema-bearing value
+  still comes back parsed, not raw). Deep re-validation, however, needs the real
+  schema **re-declared on the far side** — the runtime getter is parse-only either
+  way (see "Typed, parsed values with a schema" above).
+
 ### Set the values (out of band, never in git)
 
 Standalone hosting apps get two bundled CLIs:
@@ -252,6 +305,44 @@ immediate — SSM Parameter Store has no recovery window.)
 │  - Lambda compute (SSR / API / middleware)   │
 │  - Optional: WAF, DNS, monitoring, warmup    │
 └──────────────────────────────────────────────┘
+```
+
+## Build retention & rollback
+
+Each deploy uploads its assets under an immutable `builds/<buildId>/` prefix and
+flips a CloudFront KeyValueStore pointer (`meta.b`) to the new build. Old builds
+are retained for `storage.buildRetentionDays` (default **30**) so you can roll
+back, then expired by an S3 lifecycle rule.
+
+- **The build currently being served is never expired**, no matter how long ago
+  it was deployed. Only *superseded* builds (ones a later deploy replaced) are
+  eligible for cleanup — they are tagged `aws-blocks:build-state=superseded` at
+  the cutover, and the lifecycle rule matches only that tag.
+- Raise `storage.buildRetentionDays` for a longer rollback window. It must be at
+  least `skewProtection.maxAge` (converted to days), or synth throws
+  `InvalidSkewProtectionMaxAgeError` — a skew cookie must not outlive the build
+  it pins to.
+- Optional `storage.deployIntervalDays` is an advisory hint: if you set it and
+  it is ≥ `buildRetentionDays`, synth prints a warning that superseded builds
+  may expire before your next deploy (shrinking the rollback window). It never
+  blocks a deploy and never affects the live build.
+
+> **Cleanup caveat:** a build is tagged superseded only during a normal deploy
+> cutover (an `Update` that flips `meta.b`). Builds that become stale outside
+> that path — every build already present before upgrading to this version, or
+> builds left by an aborted/rolled-back deploy — are never tagged, so the
+> lifecycle rule never expires them and they accumulate until you remove them
+> manually. This is safe (nothing deletes the live build), just not
+> self-cleaning for pre-existing artifacts.
+
+```ts
+new HostingConstruct(stack, 'Hosting', {
+  manifest,
+  storage: {
+    buildRetentionDays: 90,   // keep 90 days of rollback targets
+    deployIntervalDays: 30,   // advisory only
+  },
+});
 ```
 
 ## Custom domains
@@ -334,6 +425,60 @@ phases around the deploy:
 3. **After deploy:** in your DNS provider, create a CNAME from your domain
    (`app.example.com`) to the `DistributionDomainName` value. For an apex
    domain, use an ALIAS or ANAME record if your provider supports it.
+
+## Off-region CloudFront alarm parity
+
+AWS CloudFront metrics only publish in `us-east-1`. A CloudWatch alarm
+can only evaluate a metric in its own region, so the CloudFront 5xx
+alarm cannot be placed in a non-`us-east-1` hosting stack.
+
+When `HostingConstruct` detects that the stack's region is **not**
+`us-east-1` it automatically synthesizes a companion stack named
+`<stackName>-CfMonitoring-<addr>` (the `<addr>` suffix keeps the id
+unique when several hosting constructs share a stage) pinned to
+`us-east-1`. That stack:
+
+- creates its own encrypted SNS topic (the alarm action target),
+- wires the CloudFront 5xx rate alarm to that topic,
+- applies the same `monitoring.subscriptions` you pass to the hosting
+  construct, so you subscribe in one place and both regions are covered,
+  and
+- emits a `MonitoringTopicArnUsEast1` CloudFormation output so operators
+  who want the raw ARN can find it.
+
+> **Requirement:** because the companion stack is region-pinned you must
+> set `env: { account, region }` on the parent hosting stack when
+> deploying outside `us-east-1`, exactly as you would for a WAF stack
+> (see `waf_construct.ts`). If the region is resolved but the account is
+> unresolved, only the CloudFront alarm is skipped (with a loud synth
+> warning); all other alarms are kept. A fully env-agnostic stack
+> (unresolved-token region) creates the alarm locally and warns that it
+> will never fire if the app deploys outside `us-east-1`. See D-016.
+
+Off-region placement is **always on**; there is no opt-out. The
+CloudFront 5xx alarm is the whole point of `monitoring`, and a
+silently-missing alarm is exactly the bug this fixes (#481).
+
+Subscribe with endpoint subscriptions (`EmailSubscription` /
+`UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions`):
+
+```ts
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
+
+new HostingConstruct(this, 'Hosting', {
+  // ...
+  monitoring: {
+    subscriptions: [new subs.EmailSubscription('oncall@example.com')],
+  },
+});
+```
+
+Resource-target subscriptions (Lambda/SQS) are not yet supported —
+applying them to the us-east-1 topic would create an unresolvable
+cross-region reference. For a custom action, reach the alarms directly
+via `hosting.monitoring.alarms`. In `us-east-1` no companion stack is
+created — the alarm stays local.
+
 
 ## Development
 

@@ -18,6 +18,7 @@ export {
 	type ValueKind,
 } from '@aws-blocks/hosting';
 export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
+export type { BlocksVpcOptions, ScopeOptions, SubnetRole, VpcContext, VpcRequirements } from './cdk/index.js';
 export {
 	BlocksBackend,
 	type BlocksBackendProps,
@@ -25,13 +26,20 @@ export {
 	BlocksPresets,
 	BlocksStack,
 	type BlocksThrottling,
+	BuildingBlockScope,
 	blocksNodejsBundling,
 	type CoreBlocksBackendProps,
 	type CoreBlocksStackProps,
 	DEFAULT_NODE_RUNTIME,
 	ensureApiGatewayAccount,
 	finalizeConfigRegistry,
+	finalizeDashboards,
+	finalizeTracing,
+	getConfigLocation,
+	getVpcContext,
 	registerConfig,
+	registerDashboardFinalizer,
+	registerTracer,
 	SandboxDisableDeletionProtection,
 	Scope,
 	SHARED_HANDLER_TIMEOUT_SECONDS,
@@ -46,7 +54,7 @@ export {
 	registerSdkIdentifiers,
 } from './common/sdk-registry.js';
 export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
-export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
+export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
 export {
 	type BlocksStackApi,
 	type ComputeConfig,

@@ -1,13 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test } from 'node:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
-import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Template } from 'aws-cdk-lib/assertions';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { materialize } from './infra.js';
 
 function synthWithRemovalPolicy(removalPolicy?: cdk.RemovalPolicy): Template {
@@ -74,4 +75,18 @@ test('CDK: migration Lambda log group adopts the resolved logRetention', () => {
   } finally {
     fs.rmSync(migrationsDir, { recursive: true, force: true });
   }
+});
+
+test('CDK: an explicit clusterSubnets override is honored (placement resolves without throwing)', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'SubnetOverrideStack', { env: { account: '123456789012', region: 'us-east-1' } });
+  // No vpcContext → materialize builds its own standalone isolated VPC. Passing
+  // clusterSubnets takes the override branch (instead of the default selection);
+  // an isolated selection matches that standalone VPC's tier and synthesizes.
+  materialize(stack, 'testdb', {
+    databaseName: 'mydb',
+    clusterSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+  });
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::RDS::DBSubnetGroup', 1);
 });

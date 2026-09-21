@@ -9,11 +9,6 @@
 /** Log severity levels, ordered from most verbose to least. */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-/** CloudWatch Logs retention periods (in days). Matches the AWS API. */
-export type RetentionDays =
-	| 1 | 3 | 5 | 7 | 14 | 30 | 60 | 90 | 120 | 150 | 180
-	| 365 | 400 | 545 | 731 | 1096 | 1827 | 2192 | 2557 | 2922 | 3288 | 3653;
-
 /** Configuration for the Logger building block. */
 export interface LoggingOptions {
 	/** Minimum log level. Messages below this are silently dropped. Default: 'info'. */
@@ -27,14 +22,6 @@ export interface LoggingOptions {
 	 * the entry's real level/message/etc.
 	 */
 	defaultContext?: Record<string, unknown>;
-	/**
-	 * CloudWatch Logs retention period for the shared handler log group. When
-	 * set, it overrides the stack-wide `defaults.logRetention` on the single,
-	 * framework-owned handler log group (the Logger does not create its own
-	 * group). When omitted, the stack-wide default retention applies. Ignored in
-	 * local dev.
-	 */
-	retention?: RetentionDays;
 }
 
 /** A structured log entry as emitted to stdout/stderr. */

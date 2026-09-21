@@ -1,6 +1,13 @@
 {
   "name": "@aws-blocks/bb-cron-job",
-  "version": "0.1.5",
+  "version": "0.2.1",
+  "keywords": [
+    "aws-blocks",
+    "cron",
+    "scheduler",
+    "eventbridge",
+    "lambda"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -39,8 +46,9 @@
     "test": "node --test --test-force-exit dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/bb-logger": "^0.1.5",
-    "@aws-blocks/core": "^0.3.0"
+    "@aws-blocks/bb-logger": "^0.2.0",
+    "@aws-blocks/bb-lambda-compute": "^0.5.0",
+    "@aws-blocks/core": "^0.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

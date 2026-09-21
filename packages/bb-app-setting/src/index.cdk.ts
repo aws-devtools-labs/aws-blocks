@@ -7,13 +7,17 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import { Scope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { AppSettingErrors } from './errors.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 
 export { AppSettingErrors } from './errors.js';
 export type { AppSettingOptions } from './types.js';
+export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
+
+import { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 /**
  * CDK construct for AppSetting. Creates a single SSM parameter (String or
@@ -26,7 +30,7 @@ export type { AppSettingOptions } from './types.js';
  *   or with a customer-managed key when `kmsKeyArn` is provided (the handler is
  *   then granted `kms:Decrypt`/`Encrypt` on that specific key ARN).
  */
-export class AppSetting<T = string> extends Scope {
+export class AppSetting<T = string> extends BuildingBlockScope {
 	/**
 	 * Reference an SSM parameter that is created and owned **outside this stack**
 	 * (e.g. a connection string seeded by `ensureSecrets` before deploy). The
@@ -50,7 +54,7 @@ export class AppSetting<T = string> extends Scope {
 	}
 
 	constructor(scope: ScopeParent, id: string, options: AppSettingOptions<T>) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 
 		// `external` is package-internal (set only by fromExisting), not on the
 		// public AppSettingOptions — read it via the internal options type.
@@ -347,7 +351,7 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 		onEventHandler: secretInitFn,
 	});
 
-	new cdk.CustomResource(stack, 'BlocksSecretsBulk', {
+	new cdk.CustomResource(stack, SECRETS_BULK_CONSTRUCT_ID, {
 		serviceToken: provider.serviceToken,
 		properties: {
 			Parameters: cdk.Lazy.any({ produce: () => state!.params }),

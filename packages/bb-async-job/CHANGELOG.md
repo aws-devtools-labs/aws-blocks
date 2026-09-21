@@ -1,5 +1,127 @@
 # @aws-blocks/bb-async-job
 
+## 0.2.1
+
+### Patch Changes
+
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- d7312f9: test: adapt CDK test doubles to the compute-driven observability contract
+  
+  Test-only change: both packages' CDK tests use a stub `Compute` that must satisfy
+  the `Compute` base class. The compute-driven observability work adds abstract
+  observability hooks to `Compute` (`healthWidgets` / `loggingWidgets` /
+  `tracingWidgets`, and `applyTracing`), so the stubs now implement them (as no-ops
+  that fail the test if the block ever pokes the compute). No runtime or public API
+  change.
+- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
+- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
+  
+  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
+  
+  **Building Blocks declare VPC requirements via the constructor, not a method.**
+  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
+  requirements (a value, or a callback for values that depend on `fullId`) and
+  registers them in a central per-stack registry. This keeps the compile-time
+  forcing the previous `abstract getVpcRequirements()` provided — a block can't
+  silently omit its requirements — without a standing method on every subclass, and
+  gives the framework one place to read, deduplicate, and answer "does anything here
+  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
+  
+  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
+  function without a VPC declares `requiresVpc: true`; when one is needed and the
+  customer didn't bring their own, Blocks lazily creates a single shared VPC
+  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
+  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
+  bring-your-own override.
+  
+  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
+  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
+  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
+  compliance requirement to use specific subnets. Omit it to keep the default
+  (prefer isolated, fall back to `private-with-egress`).
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-distributed-table@0.2.0
+  - @aws-blocks/bb-lambda-compute@0.5.0
+  - @aws-blocks/bb-logger@0.2.0
+
+## 0.2.0
+
+### Minor Changes
+
+- 4a830a6: feat: route event-block resources to their resolved compute
+  
+  AsyncJob, CronJob, and Realtime now attach their compute-bound resources to a
+  compute resolved at synth rather than the stack's shared handler:
+  
+  - AsyncJob attaches its SQS event source to the resolved compute's function;
+  - CronJob points its EventBridge Scheduler target at the resolved compute's function;
+  - Realtime binds its shared WebSocket API integrations to the stack's **default**
+    compute (its routes are a stack-level singleton) and grants `postToConnection`
+    to the shared execution role, so `publish()` works from any compute.
+  
+  Each block requires a Lambda compute today and fails at synth with a typed
+  `UnsupportedCompute` error (assertable via `isBlocksError`) on any other type.
+  The check uses a duplicate-copy-safe brand (`LambdaCompute.isLambdaCompute`,
+  backed by a `Symbol.for` marker) instead of `instanceof`, so it does not misfire
+  when two copies of `bb-lambda-compute` resolve in one dependency tree.
+  
+  On the default single-Lambda setup the resolved/default compute is the stack's
+  default, whose function is the shared handler — so this is non-breaking with no
+  change to synthesized infrastructure. AsyncJob also grants SQS send to the shared
+  execution role rather than the handler directly.
+  
+  New public surface (hence `minor`):
+  
+  - `@aws-blocks/core` exports `blocksError(name, message)` (the producer half of
+    the `isBlocksError` contract) and `sanitizeConfigKey(id)` from `./bb-utils`
+    (the single env-var-key sanitizer both config writers and runtime readers use).
+  - `@aws-blocks/bb-lambda-compute` adds a `./cdk` subpath exposing the CDK-typed
+    `LambdaCompute` and its `LambdaCompute.isLambdaCompute` guard.
+  - `bb-async-job` / `bb-cron-job` / `bb-realtime` add an `UnsupportedCompute`
+    error member.
+  
+  `@aws-blocks/bb-agent` builds AsyncJob and Realtime internally, so its CDK test
+  moves onto the `BlocksStack.create` harness instead of a handler-only stub.
+  Test-only change — no runtime behavior change to the Agent.
+
+### Patch Changes
+
+- Updated dependencies [df667c5]
+- Updated dependencies [df667c5]
+- Updated dependencies [64ddd74]
+- Updated dependencies [df667c5]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [8de4a56]
+- Updated dependencies [4a830a6]
+- Updated dependencies [f2f186c]
+- Updated dependencies [46b7c89]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+  - @aws-blocks/bb-distributed-table@0.1.7
+  - @aws-blocks/bb-lambda-compute@0.4.0
+
 ## 0.1.5
 
 ### Patch Changes

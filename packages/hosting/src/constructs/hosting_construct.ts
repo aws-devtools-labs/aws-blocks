@@ -10,6 +10,8 @@ import {
   RemovalPolicy,
   Size,
   Stack,
+  Stage,
+  Token,
 } from 'aws-cdk-lib';
 import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import {
@@ -31,11 +33,16 @@ import type { IHostedZone } from 'aws-cdk-lib/aws-route53';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deployment';
-import { type ITopic, Topic } from 'aws-cdk-lib/aws-sns';
+import { type ITopic } from 'aws-cdk-lib/aws-sns';
+import type {
+  EmailSubscription,
+  UrlSubscription,
+} from 'aws-cdk-lib/aws-sns-subscriptions';
+import type { Alarm } from 'aws-cdk-lib/aws-cloudwatch';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { Provider } from 'aws-cdk-lib/custom-resources';
-import { Construct } from 'constructs';
+import { Construct, type IDependable } from 'constructs';
 import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -56,10 +63,11 @@ import { composeGraph } from '../plan/compose.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
+import { UsEast1MonitoringStack } from './us_east_1_monitoring_stack.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
-import { StorageConstruct } from './storage_construct.js';
+import { StorageConstruct, DEFAULT_BUILD_RETENTION_DAYS } from './storage_construct.js';
 import { WafConstruct } from './waf_construct.js';
 
 // Re-export build ID helpers for public API + tests
@@ -250,6 +258,8 @@ export type HostingConstructProps = {
     encryptionKey?: IKey;
     retainOnDelete?: boolean;
     buildRetentionDays?: number;
+    /** Advisory hint used at synth to warn when deploy cadence ≥ retention (#480). */
+    deployIntervalDays?: number;
     /** 3.3 — opt-in daily S3 inventory of `builds/`. */
     inventory?: { enabled: boolean };
     /**
@@ -323,7 +333,15 @@ export type HostingConstructProps = {
   monitoring?: {
     /** @default true */
     enabled?: boolean;
-    snsTopicArn?: string;
+    /**
+     * Endpoint subscriptions applied to both hosting alarm topics (the
+     * app-region topic and, off-region, the us-east-1 CloudFront topic).
+     * `EmailSubscription` / `UrlSubscription` from
+     * `aws-cdk-lib/aws-sns-subscriptions` only — resource-target
+     * subscriptions (Lambda/SQS) are not yet supported (they'd create an
+     * unresolvable cross-region reference to the us-east-1 topic).
+     */
+    subscriptions?: Array<EmailSubscription | UrlSubscription>;
   };
   /**
    * Cookie-based skew protection.
@@ -476,6 +494,9 @@ export class HostingConstruct extends Construct {
    */
   readonly buildId: string;
   readonly computeFunctions: Map<string, LambdaFunction | experimental.EdgeFunction> = new Map();
+  // Present only for the default CloudFront door; a non-CloudFront front door
+  // (ALB / API Gateway / S3-website) builds no CdnConstruct.
+  private readonly cdn?: CdnConstruct;
   readonly computeFunctionUrls: Map<string, FunctionUrl> = new Map();
   /**
    * `live` aliases for compute resources with provisioned concurrency.
@@ -492,18 +513,34 @@ export class HostingConstruct extends Construct {
   readonly revalidationDlq?: Queue;
   readonly cacheBucket?: Bucket;
   /**
-   * SNS topic alarm actions are sent to. Set when monitoring is on
-   * (the default). The user subscribes (email, Slack via webhook,
-   * PagerDuty, etc.) via `monitoringTopic.addSubscription(...)` or by
-   * configuring an external listener with the topic ARN.
+   * Monitoring surface, set when monitoring is on (the default).
    *
-   * Not declared `readonly` because the `MonitoringConstruct` that
-   * owns the topic is built mid-constructor (after the SSR / image-opt
-   * Lambdas it alarms on are wired up), so the value is assigned
-   * after the field declaration runs. Treat it as logically immutable
+   * - `alarms`: every CloudWatch alarm created, across both regions
+   *   (includes the us-east-1 CloudFront alarm off-region). Attach
+   *   custom actions via `alarms.forEach(a => a.addAlarmAction(...))`.
+   * - `alarmTopics`: the alarm SNS topics (the app-region topic, plus
+   *   the us-east-1 topic off-region). Subscriptions passed via
+   *   `monitoring.subscriptions` are already attached to all of them;
+   *   this is for advanced callers who want the raw topics.
+   *
+   * Not declared `readonly` because the `MonitoringConstruct` that owns
+   * these is built mid-constructor (after the SSR / image-opt Lambdas it
+   * alarms on are wired up). Treat it as logically immutable
    * post-construction — do not reassign from outside the constructor.
    */
-  monitoringTopic?: ITopic;
+  monitoring?: {
+    alarms: Alarm[];
+    alarmTopics: ITopic[];
+  };
+
+  /**
+   * Registers a dependency that must finish before the new build becomes
+   * reachable through the KVS route table.
+   */
+  addBuildAssetDependency(dependency: IDependable): void {
+    // No-op for non-CloudFront doors — there's no KVS route table to gate.
+    this.cdn?.addBuildAssetDependency(dependency);
+  }
 
   /**
    * Creates the hosting infrastructure from a framework-agnostic deploy manifest.
@@ -538,7 +575,7 @@ export class HostingConstruct extends Construct {
     // viewer present a cookie for a build whose `builds/<id>/` prefix the
     // S3 lifecycle rule has already deleted → hard 403 on every asset.
     if (props.skewProtection?.enabled && props.skewProtection.maxAge) {
-      const retentionDays = props.storage?.buildRetentionDays ?? 30;
+      const retentionDays = props.storage?.buildRetentionDays ?? DEFAULT_BUILD_RETENTION_DAYS;
       const retentionSeconds = retentionDays * 24 * 60 * 60;
       if (props.skewProtection.maxAge > retentionSeconds) {
         throw new HostingError('InvalidSkewProtectionMaxAgeError', {
@@ -546,6 +583,26 @@ export class HostingConstruct extends Construct {
           resolution:
             'Lower skewProtection.maxAge to at most storage.buildRetentionDays (in seconds), or raise storage.buildRetentionDays. A cookie that outlives the build prefix pins returning viewers to a deleted build → 403.',
         });
+      }
+    }
+
+    // #480: advisory (NOT fatal) — a deploy cadence at or beyond the retention
+    // window means a superseded build can age out before the next deploy,
+    // shrinking the rollback window. The IN-SERVICE build is never expired
+    // (only superseded builds carry the lifecycle tag), so this is a
+    // rollback-window note, not a 403 risk — hence warn, not throw (mirrors the
+    // rewrite-proxy warning above: never block a deployable, working app).
+    const deployIntervalDays = props.storage?.deployIntervalDays;
+    if (deployIntervalDays != null) {
+      const retentionDays = props.storage?.buildRetentionDays ?? DEFAULT_BUILD_RETENTION_DAYS;
+      if (deployIntervalDays >= retentionDays) {
+        process.stderr.write(
+          `⚠️  Hosting: storage.deployIntervalDays (${deployIntervalDays}d) is >= ` +
+            `storage.buildRetentionDays (${retentionDays}d). Superseded builds may be ` +
+            `expired before your next deploy, shrinking the rollback window. The build ` +
+            `currently being served is unaffected. Raise storage.buildRetentionDays to ` +
+            `keep more rollback targets available.\n`,
+        );
       }
     }
 
@@ -1239,6 +1296,7 @@ export class HostingConstruct extends Construct {
         : undefined,
     });
 
+    this.cdn = cdn;
     this.distribution = cdn.distribution;
     this.distributionUrl = cdn.distributionUrl;
 
@@ -1276,9 +1334,7 @@ export class HostingConstruct extends Construct {
     // externally without touching the construct again.
     const monitoringEnabled = props.monitoring?.enabled ?? true;
     if (monitoringEnabled) {
-      const userTopic = props.monitoring?.snsTopicArn
-        ? Topic.fromTopicArn(this, 'AlarmTopicImport', props.monitoring.snsTopicArn)
-        : undefined;
+      const subscriptions = props.monitoring?.subscriptions ?? [];
       const ssrComputeName = this.computeFunctions.has('default')
         ? 'default'
         : this.computeFunctions.has('server')
@@ -1286,23 +1342,124 @@ export class HostingConstruct extends Construct {
           : undefined;
       const ssrFn = ssrComputeName ? this.computeFunctions.get(ssrComputeName) : undefined;
       const imgFn = this.computeFunctions.get('image-optimization');
+
+      // CloudFront metrics only exist in us-east-1 and an alarm can't
+      // watch a metric cross-region (issue #481). Off-region, defer the
+      // CloudFront alarm to a dedicated us-east-1 support stack.
+      //
+      // NOTE on the three region cases:
+      //   - region === 'us-east-1'      → alarm created locally (correct).
+      //   - region resolved, off-region → alarm deferred to the us-east-1
+      //     support stack below.
+      //   - region UNRESOLVED (token)   → we cannot decide at synth where
+      //     the app deploys, so the alarm is created locally. If that
+      //     deploy target turns out NOT to be us-east-1, the alarm can
+      //     never fire (the #481 bug). We can't fix that at synth, but we
+      //     refuse to do it silently. Warn so it's visible in build
+      //     output rather than a green-but-dead alarm.
+      const hostingStack = Stack.of(this);
+      const region = hostingStack.region;
+      const regionResolved = !Token.isUnresolved(region);
+      const offRegion = regionResolved && region !== 'us-east-1';
+
+      if (!regionResolved && this.distribution) {
+        Annotations.of(this).addWarningV2(
+          '@aws-blocks/hosting:CloudFrontAlarmRegionUnresolved',
+          `The hosting stack is environment-agnostic (region is an ` +
+            `unresolved token), so the CloudFront 5xx alarm is created ` +
+            `locally. AWS/CloudFront metrics only publish in us-east-1, so ` +
+            `if this app deploys outside us-east-1 the alarm will never ` +
+            `fire. Set env: { account, region } on the stack so the alarm ` +
+            `can be placed in a us-east-1 support stack (issue #481).`,
+        );
+      }
+
       const monitoring = new MonitoringConstruct(this, 'Monitoring', {
         enabled: true,
-        snsTopic: userTopic,
-        distribution: cdn.distribution,
+        subscriptions,
+        distribution: this.distribution,
         // Lambda@Edge functions don't accept the CW metric helpers we
         // use; only attach when the SSR compute is a regional Lambda.
         ssrFunction: ssrFn instanceof LambdaFunction ? ssrFn : undefined,
         imageFunction: imgFn instanceof LambdaFunction ? imgFn : undefined,
         revalidationDlq: this.revalidationDlq,
+        createCloudFrontAlarmLocally: !offRegion,
       });
-      this.monitoringTopic = monitoring.topic;
+
+      const alarmTopics: ITopic[] = monitoring.topic ? [monitoring.topic] : [];
+      const alarms: Alarm[] = [...monitoring.alarms];
+
       if (monitoring.topic) {
         new CfnOutput(this, 'MonitoringTopicArn', {
           value: monitoring.topic.topicArn,
-          description: 'SNS topic for hosting alarms. Subscribe an email/Slack/PagerDuty endpoint here.',
+          description: 'SNS topic for hosting alarms. Subscribe via monitoring.subscriptions, or an email/Slack/PagerDuty endpoint here.',
         });
       }
+
+      // Off-region: place the CloudFront alarm in a us-east-1 support
+      // stack, always (no opt-out). The same subscriptions are applied to
+      // its topic so callers subscribe in one place and both topics are
+      // covered.
+      if (this.distribution && monitoring.cloudFrontAlarmDeferred) {
+        if (Token.isUnresolved(hostingStack.account)) {
+          // Off-region + unresolved account (a legitimate single-synth,
+          // multi-account pipeline shape): we CANNOT build the us-east-1
+          // support stack, because a cross-region stack pairing needs a
+          // concrete account at synth. CDK bakes real ARNs into the
+          // cross-region export machinery, and Aws.ACCOUNT_ID / Ref is
+          // rejected. See docs/DECISIONS.md D-016.
+          //
+          // Rather than hard-throw (which forced monitoring.enabled:false
+          // and took down the working regional SSR/image/DLQ alarms too),
+          // skip ONLY the CloudFront alarm and warn loudly. A visible
+          // synth warning is not the silent-alarm failure #481 is about.
+          // The operator is told, in build output, exactly what is missing
+          // and how to get it (set env: { account, region }).
+          Annotations.of(this).addWarningV2(
+            '@aws-blocks/hosting:CloudFrontAlarmSkippedNoAccount',
+            `Skipping the off-region CloudFront 5xx alarm: the stack's ` +
+              `region is '${region}' but its account is unresolved, and a ` +
+              `us-east-1 support stack cannot be synthesized without a ` +
+              `concrete account. All other hosting alarms (SSR, image, ` +
+              `DLQ) are unaffected. Set env: { account, region } on the ` +
+              `stack to enable CloudFront 5xx coverage (issue #481).`,
+          );
+        } else {
+          // Belt-and-suspenders: only reachable for a Hosting construct with no enclosing App/Stage
+          // (CDK's App extends Stage, so Stage.of(this) resolves in normal use). Fail loud rather
+          // than synthesize a mis-scoped us-east-1 support stack.
+          const stage = Stage.of(this);
+          if (!stage) {
+            throw new HostingError('MonitoringStageRequiredError', {
+              message:
+                `Cannot create the us-east-1 CloudFront monitoring stack: no ` +
+                `enclosing App/Stage was found for this construct.`,
+              resolution:
+                `Instantiate hosting within a CDK App (or Stage).`,
+            });
+          }
+          // The us-east-1 CloudFront alarm must reference the regional
+          // distribution's id; CDK bridges that with its standard
+          // cross-region export reader/writer custom resources (added to
+          // both stacks automatically). The support stack applies the same
+          // subscriptions to its own us-east-1 topic. Its id folds in the
+          // construct's node addr so two Hosting constructs in one stage
+          // don't collide.
+          const cfMonitoring = new UsEast1MonitoringStack(
+            stage,
+            `${hostingStack.stackName}-CfMonitoring-${this.node.addr.slice(0, 8)}`,
+            {
+              env: { account: hostingStack.account, region: 'us-east-1' },
+              distributionId: this.distribution.distributionId,
+              subscriptions,
+            },
+          );
+          alarmTopics.push(cfMonitoring.topic);
+          alarms.push(cfMonitoring.alarm);
+        }
+      }
+
+      this.monitoring = { alarms, alarmTopics };
     }
 
     // ---- 9a. OPEN_NEXT_ORIGIN env var for URL construction ----
