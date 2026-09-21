@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { CapabilityPlan } from '../plan/types.js';
 import { S3WebsiteConstruct } from './s3_website_construct.js';
 import { S3WebsiteAdapter } from './s3_website_adapter.js';
@@ -29,6 +29,23 @@ describe('S3WebsiteConstruct — static/SPA', () => {
     t.hasResourceProperties('AWS::S3::Bucket', {
       WebsiteConfiguration: { IndexDocument: 'index.html', ErrorDocument: 'index.html' },
     });
+  });
+
+  it('grants anonymous s3:ListBucket so a missing key 404s → error document (SPA deep-link fallback)', () => {
+    t.hasResourceProperties('AWS::S3::BucketPolicy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({ Effect: 'Allow', Principal: { AWS: '*' }, Action: 's3:ListBucket' }),
+        ]),
+      },
+    });
+  });
+
+  it('publishes the static dir without pruning and EXCLUDES the .blocks-sandbox placeholder (real config wins)', () => {
+    // The build ships a placeholder .blocks-sandbox/config.json; the real config
+    // is written by the separate BlocksConfigDeployment. The website deploy must
+    // not upload the placeholder or prune the real config.
+    t.hasResourceProperties('Custom::CDKBucketDeployment', { Prune: false, Exclude: ['.blocks-sandbox/*'] });
   });
 });
 
