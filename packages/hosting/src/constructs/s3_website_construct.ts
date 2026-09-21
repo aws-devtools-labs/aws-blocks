@@ -16,6 +16,7 @@
  * explicit.
  */
 import { CfnOutput, RemovalPolicy } from 'aws-cdk-lib';
+import { AnyPrincipal, Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
@@ -53,11 +54,37 @@ export class S3WebsiteConstruct extends Construct {
       autoDeleteObjects: true,
     });
 
+    // SPA deep-link fallback: without public `s3:ListBucket`, a request for a
+    // missing key returns 403 (AccessDenied), and S3 website hosting then serves
+    // its OWN 403 page instead of the `index.html` error document — so client-side
+    // deep links (e.g. `/auth`) break with a 403. Granting anonymous `ListBucket`
+    // makes a missing key a 404 (NoSuchKey), which S3 routes to the error document
+    // (→ `index.html`), so the client router can take over. (`publicReadAccess`
+    // only grants object reads, not this.) Trade-off: the object list is publicly
+    // enumerable — acceptable for a public static-website bucket.
+    this.bucket.addToResourcePolicy(
+      new PolicyStatement({
+        effect: Effect.ALLOW,
+        principals: [new AnyPrincipal()],
+        actions: ['s3:ListBucket'],
+        resources: [this.bucket.bucketArn],
+      }),
+    );
+
     // Publish the built static dir to the bucket ROOT (no build-id prefix).
+    // EXCLUDE `.blocks-sandbox/*`: the build ships a placeholder
+    // `.blocks-sandbox/config.json` (`{_placeholder:true}`), and the REAL config
+    // (with the absolute cross-origin `apiUrl` this door needs) is written to the
+    // same key by the separate `BlocksConfigDeployment`. Uploading the placeholder
+    // here — plus `prune` — races/ clobbers that real config, leaving the SPA with
+    // no `apiUrl` (it then falls back to a relative `/aws-blocks/api`, which the
+    // S3 website 405s). Excluding the prefix and not pruning lets the config
+    // deployment solely own `.blocks-sandbox/config.json`, deterministically.
     new BucketDeployment(this, 'WebsiteDeployment', {
       sources: [Source.asset(staticDir)],
       destinationBucket: this.bucket,
-      prune: true,
+      exclude: ['.blocks-sandbox/*'],
+      prune: false,
     });
 
     this.url = this.bucket.bucketWebsiteUrl; // http://<bucket>.s3-website-<region>.amazonaws.com
