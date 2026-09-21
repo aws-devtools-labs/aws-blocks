@@ -81,6 +81,18 @@ export class ApiGatewayRestConstruct extends Construct {
 
 		// Asset-proxy Lambda → private S3. Payload-format-agnostic: the REST API
 		// delivers a v1 event (`event.path`), which the shared generator reads.
+		//
+		// Why a Lambda and not a native S3 service integration? REST API *can*
+		// integrate S3 directly (`arn:aws:apigateway:…:s3:path/{bucket}/{key}`),
+		// which would drop this Lambda. But a raw S3 integration is only a keyed
+		// GET — it can't do SPA fallback (a missing key must serve `index.html`,
+		// not 403/404), directory-index resolution (`/about` → `/about/index.html`),
+		// or content-type inference, all of which the asset-proxy does. So S3-direct
+		// is only viable for a PURE static/SSG site (real files, real 404s), not a
+		// SPA — and it's REST-only (HTTP API v2 has no S3 service integration at
+		// all). We keep the asset-proxy so a single code path serves every
+		// framework on both flavors; a static/SSG-only S3-direct fast path is a
+		// possible future optimization, not a general win.
 		const stripPrefix = plan.policies.basePath ?? plan.policies.assetPrefix ?? '';
 		const spaFallback = plan.policies.spaFallback && !serverFn;
 		const assetProxy = new LambdaFunction(this, 'AssetProxy', {
