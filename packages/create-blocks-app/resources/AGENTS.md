@@ -22,11 +22,11 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
   ```
 
   At runtime that import resolves to an auto-generated **client proxy** (`aws-blocks/client.js`), not the server module — the types come from your backend, the transport is injected. **The JSON-RPC transport is invisible: never build request payloads by hand or `fetch()` the API directly** (only for one-off connectivity troubleshooting). Just import the namespace and call the method.
-- **Pitfall:** do not `import ... from './aws-blocks/index.ts'` in a script/test to call the API — that gives you the *server* definition object, which behaves differently from the client. Import from `'aws-blocks'` (the package name) so you get the client, exactly as `src/` does.
+- **Pitfall:** do not `import ... from '../aws-blocks/index.ts'` in a script/test to call the API — that gives you the *server* definition object, which behaves differently from the client. Import from `'aws-blocks'` (the package name) so you get the client, exactly as `src/` does.
 
 ### Methods are namespaced
 
-A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `authApi.signUp(...)`. The namespace is the first argument you passed to `new ApiNamespace(scope, '<name>', …)`. A bare method name with no namespace will not resolve.
+A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the string you passed as the **second** argument to `new ApiNamespace(scope, '<name>', …)`. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
 
 ### Auth is a Building Block, not hand-rolled
 
@@ -73,7 +73,6 @@ const res = await api.ping('world');   // { message: 'hi world' }
 - **Use Building Blocks** for all persistence and cloud abstractions — never local files, in-memory arrays, or local databases.
 - **To store data, reach for a storage Building Block** — `KVStore` for key–value, `DistributedTable` for a queryable table (rows + indexes). Both are constructed with a `Scope` and used inside your API methods; read their `README.md`/`API.md` (see the docs pointer above) for the exact API. The full catalog (auth, files, realtime, email, scheduled/async work, …) is in the docs `README.md`.
 - **The framework model above covers the common path.** Read a block's own docs (`README.md`, then `API.md` / `DESIGN.md` where present) when you need a block's specific API surface — not every block has all three, so a missing file is not an error (see the **AWS Blocks docs** bullet for where the docs folder lives).
-- **The JSON-RPC transport is invisible** — do not construct RPC payloads manually. Import and call the typed API directly.
 
 ## Deploying (requires AWS credentials)
 
