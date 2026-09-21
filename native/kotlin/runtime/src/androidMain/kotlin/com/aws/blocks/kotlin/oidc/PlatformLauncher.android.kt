@@ -1,10 +1,7 @@
-@file:OptIn(InternalBlocksApi::class)
-
 package com.aws.blocks.kotlin.oidc
 
 import android.content.Intent
 import com.aws.blocks.kotlin.ContextProvider
-import com.aws.blocks.kotlin.InternalBlocksApi
 import kotlinx.coroutines.CompletableDeferred
 
 internal actual fun createPlatformLauncher(): OidcPlatformLauncher = AndroidOidcLauncher()

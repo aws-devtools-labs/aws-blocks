@@ -1,8 +1,7 @@
-@file:OptIn(ExperimentalForeignApi::class, InternalBlocksApi::class)
+@file:OptIn(ExperimentalForeignApi::class)
 
 package com.aws.blocks.kotlin.oidc
 
-import com.aws.blocks.kotlin.InternalBlocksApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.suspendCancellableCoroutine
 import platform.AuthenticationServices.ASPresentationAnchor

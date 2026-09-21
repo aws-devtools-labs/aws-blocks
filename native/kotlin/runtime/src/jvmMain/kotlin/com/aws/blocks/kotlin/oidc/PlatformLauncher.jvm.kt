@@ -1,8 +1,5 @@
-@file:OptIn(InternalBlocksApi::class)
-
 package com.aws.blocks.kotlin.oidc
 
-import com.aws.blocks.kotlin.InternalBlocksApi
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.net.InetAddress

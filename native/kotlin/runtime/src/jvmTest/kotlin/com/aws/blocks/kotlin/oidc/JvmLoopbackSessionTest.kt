@@ -1,8 +1,5 @@
-@file:OptIn(InternalBlocksApi::class)
-
 package com.aws.blocks.kotlin.oidc
 
-import com.aws.blocks.kotlin.InternalBlocksApi
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
