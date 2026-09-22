@@ -44,8 +44,11 @@ const FRONT_DOOR_OUTPUT_ID = 'ApiFrontDoorUrl';
  * No caching, and forward everything except `Host` — an API response is
  * request-specific, and the origin is API Gateway, which rejects a forwarded
  * `Host` that isn't its own domain. All methods, since RPC is `POST` and raw
- * routes can be anything. HTTPS-only, redirecting rather than blocking so a
- * plain-HTTP client recovers instead of failing.
+ * routes can be anything. HTTPS-only via redirect rather than block: a
+ * plain-HTTP GET (a raw route) is recovered — the browser follows the 301. A
+ * plain-HTTP RPC `POST` is NOT recovered: the redirect re-issues it as a GET
+ * with the body dropped. That path is marginal (SDK clients always use HTTPS),
+ * so the redirect is kept for the GET UX rather than blocking plain-HTTP outright.
  *
  * Exported so `Hosting` can apply the same settings when it fronts the API, and
  * the two paths cannot drift.
@@ -134,6 +137,21 @@ export function resolvedApiFrontDoorUrl(stack: cdk.Stack): string | undefined {
  *
  * One-shot: CDK invokes an aspect once per construct in the tree, and this has
  * to run exactly once, after the tree is complete.
+ *
+ * Why an aspect that *creates* a construct (rather than mutating one): the
+ * distribution must be built after `Hosting` is constructed, so a Hosting
+ * front-door claim can suppress it (see `registerHostingDistribution`). Hosting
+ * is usually built after `create()` returns, which is after the in-`create()`
+ * `finalize*` registries have already run — too early. `Lazy` was considered but
+ * only defers *value* resolution, not construct *creation*; a stack-synthesis
+ * hook carries the same "add a node late" caveat this does. So we add the
+ * `Distribution` from `visit()`.
+ *
+ * CDK-version assumption: aws-cdk-lib (pinned in this repo) permits adding a
+ * construct from an aspect's `visit()`. Newer CDK may warn or throw "cannot add
+ * nodes during synthesis"; if that lands, move this into an explicit
+ * post-`create()` finalize step the app invokes, keeping the Hosting-claim
+ * ordering. Build + e2e cover the current pin.
  */
 class ApiFrontDoorAspect implements cdk.IAspect {
 	private done = false;
