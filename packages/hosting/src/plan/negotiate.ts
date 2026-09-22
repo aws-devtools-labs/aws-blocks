@@ -2,8 +2,7 @@
  * Capability negotiation — the conscious-degradation contract.
  *
  * Given a {@link CapabilityPlan} and a {@link FrontDoorAdapter}, decide whether
- * the chosen front door can serve the deploy, and how. The rule (see the revamp
- * design docs):
+ * the chosen front door can serve the deploy, and how. The rule:
  *   - a REQUIRED capability the adapter marks `unsupported` → hard error.
  *   - a REQUIRED capability the adapter marks `degraded` → error UNLESS the app
  *     explicitly opted into degrading it, in which case a warning.

@@ -8,13 +8,9 @@
  * renders a plan by materializing the existing {@link HostingConstruct}-owned
  * {@link CdnConstruct}.
  *
- * NOTE (Phase 1): `HostingConstruct` still constructs `CdnConstruct` directly;
- * this adapter is the declared, tested implementor of the seam. Routing all
- * front-door construction through `render()` is deferred until a SECOND adapter
- * (ALB) exists to justify the abstraction — an interface with a single caller is
- * a guess, so we prove the seam with a second implementation first (see the
- * revamp plan). CloudFront's capability matrix, however, is real and consumed by
- * tests now.
+ * NOTE: `HostingConstruct` still constructs `CdnConstruct` directly; this adapter
+ * is the declared, tested implementor of the seam, and its capability matrix is
+ * consumed by the negotiator and tests.
  */
 import type { Construct } from 'constructs';
 import type {

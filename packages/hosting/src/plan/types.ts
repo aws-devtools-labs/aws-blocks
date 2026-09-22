@@ -120,10 +120,9 @@ export type BackendIngress = {
 };
 
 /**
- * One API-namespace → ingress route. This is the neutral form of the
- * multi-compute front-door problem (see the "Multi-Compute Front Door" one-pager):
- * a request for `/aws-blocks/api/{namespace}/*` must reach the compute that owns
- * that namespace. A single `namespace: '*'` origin is the common single-compute,
+ * One API-namespace → ingress route. This is the neutral form of multi-compute
+ * backend routing: a request for `/aws-blocks/api/{namespace}/*` must reach the
+ * compute that owns that namespace. A single `namespace: '*'` origin is the common single-compute,
  * same-origin case (the whole `/aws-blocks/*` + `/aws-blocks-auth/*` API subtree
  * proxied to one backend).
  */
@@ -178,7 +177,7 @@ export type CapabilityPlan = {
  * A hosting capability — one thing a front door may be asked to do. A service
  * adapter declares, per capability, how well it supports it (its
  * {@link SupportTier}). The negotiator uses these declarations to fail or warn
- * at synth (see the design docs), so degradation is never silent.
+ * at synth, so degradation is never silent.
  */
 export type CapabilityId =
   | 'RouteRequest'
@@ -229,9 +228,6 @@ export type FrontDoorResult = {
  * {@link CapabilityPlan} and materializes the service (CloudFront distribution,
  * ALB + listener rules, API Gateway, …), and declares its per-capability
  * {@link SupportTier} so the negotiator can enforce conscious degradation.
- *
- * NOTE: this is the Phase-1 contract (types only). The CloudFront renderer is
- * refactored to implement it in a later step; no adapter is wired to it yet.
  */
 export interface FrontDoorAdapter {
   /** Stable id for diagnostics/presets (e.g. `cloudfront`, `alb`, `api-gateway`). */
@@ -249,11 +245,7 @@ export interface FrontDoorAdapter {
 // data model for that composition: a tree rooted at the single public entry
 // point. A layer forwards a matched request down to either a NESTED layer
 // (composition — e.g. CloudFront edge in front of an ALB router) or a terminal
-// {@link OriginRef}. See the design docs (hosting-revamp 05 §5.10 / 06 / 07).
-//
-// NOTE (Commit 1 — representation only): these types + `composeGraph` describe
-// the topology; nothing renders from the graph yet, so the deploy path is
-// unchanged. Each current door maps to a degenerate one-node graph.
+// {@link OriginRef}.
 
 /** What a layer is FOR in the stack — drives negotiation and rendering order. */
 export type LayerRole = 'edge' | 'router' | 'origin';

@@ -802,7 +802,7 @@ export class Hosting extends Construct {
       // the L3 (`frontDoor: undefined`); the ALB is stacked in below, between
       // the edge and the backend, by re-pointing the API behaviors at it. So the
       // L3 only ever sees a `kind`-based door or the default.
-      // Design B — the composed CF → ALB door: the L3 builds the FULL ALB router
+      // Composed CF → ALB door: the L3 builds the FULL ALB router
       // (asset-proxy → S3, SSR, image, API-forwarder → backend), exactly the
       // standalone ALB door. A thin CloudFront edge is stacked in front below
       // (its single default behavior → the ALB), so CloudFront's ONE origin is
@@ -827,7 +827,7 @@ export class Hosting extends Construct {
     let publicDistribution = hosting.distribution;
 
     if (cfOverRouter) {
-      // Design B — composed CF → ALB. The L3 already built the FULL ALB router
+      // Composed CF → ALB. The L3 already built the FULL ALB router
       // (it routes static/SSR/image/API). Stack a thin CloudFront edge whose
       // single default behavior forwards EVERYTHING to that ALB: CloudFront's one
       // origin is the ALB, and the ALB routes to the rest of the infra. The app
@@ -1003,7 +1003,7 @@ export class Hosting extends Construct {
   }
 
   /**
-   * Design B — front the full ALB router (already built by the L3) with a THIN
+   * Front the full ALB router (already built by the L3) with a THIN
    * CloudFront edge whose SINGLE default behavior forwards everything to the ALB.
    * CloudFront's one origin is the ALB, and the ALB routes to the rest of the
    * infra (asset-proxy → S3, SSR, image, API-forwarder → backend). The edge keeps
@@ -1049,7 +1049,7 @@ export class Hosting extends Construct {
     // Stamp HSTS / X-Frame-Options / X-Content-Type-Options at the edge, exactly
     // as the default CloudFront door does — the ALB can't inject per-response
     // security headers, so CloudFront (still the edge here) owns them, keeping
-    // Design B at parity with the standard door.
+    // the composed door at parity with the standard door.
     const securityHeaders = createSecurityHeadersPolicy(this, 'CfOverAlbSecurityHeaders', {
       contentSecurityPolicy: props.contentSecurityPolicy,
     });

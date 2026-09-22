@@ -1,6 +1,7 @@
 /**
- * API Gateway (HTTP API v2) front-door construct — a cheap, regional,
- * HTTPS-by-default, no-CloudFront door.
+ * API Gateway (HTTP API v2) front-door construct — a regional,
+ * HTTPS-by-default, no-CloudFront door (the serverless sibling of the ALB door:
+ * no VPC/NAT, scale-to-zero, pay-per-request).
  *
  * Serves the whole deploy from ONE HTTP API at the domain root (the auto
  * `$default` stage is rootless, so framework root-absolute URLs resolve):
@@ -13,10 +14,12 @@
  *     straight to the backend API Gateway (same-origin; no forwarder Lambda
  *     needed, unlike ALB — HTTP API can proxy an external HTTPS URL natively).
  *
- * Trade-offs (declared `degraded`/`unsupported` on {@link ApiGatewayAdapter},
- * enforced by the negotiator): no global edge cache, no per-route response
- * headers, no skew-pin, buffered SSR only (HTTP API can't stream), ~6 MB
- * response cap.
+ * Capabilities NOT provided (declared `degraded`/`unsupported` on
+ * {@link ApiGatewayAdapter}, enforced by the negotiator): no global edge cache,
+ * no per-route response-header injection, no skew-pin, buffered SSR only (HTTP
+ * API can't stream). API Gateway also imposes a ~29 s request timeout and a
+ * ~10 MB payload / ~6 MB response cap. Stage-level config (WAF, TLS/domain,
+ * access logs, throttle) applies to the whole API, not per route.
  */
 import { CfnOutput, Duration } from 'aws-cdk-lib';
 import { ApiMapping, DomainName, HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';

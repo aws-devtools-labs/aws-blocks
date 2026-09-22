@@ -1,9 +1,6 @@
 /**
- * ALB front-door adapter — the SECOND {@link FrontDoorAdapter}, and the first
- * that is NOT CloudFront. Its existence is what proves the Phase-1 seam is a
- * real abstraction and not a CloudFront-shaped guess: the same
- * {@link CapabilityPlan} the CloudFront adapter renders, this one renders onto
- * an Application Load Balancer (see {@link AlbConstruct}).
+ * ALB front-door adapter — renders the same {@link CapabilityPlan} as the
+ * CloudFront adapter onto an Application Load Balancer (see {@link AlbConstruct}).
  *
  * Its {@link supports} matrix is the ALB column of the capability × service
  * table: routing/static/atomic are `extended` (a different mechanism — listener
