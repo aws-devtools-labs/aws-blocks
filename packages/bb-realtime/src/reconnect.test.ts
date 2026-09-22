@@ -407,6 +407,45 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 		assert.strictEqual(events[events.length - 1], 'reconn', 'onReconnect fires only after the set fully drains');
 	});
 
+	// (c') onReconnect must NOT fire when EVERY channel's resubscribe is rejected
+	// (all replayed tokens stale — the 8h-session vs ~1h/2h-TTL case). The set
+	// still drains, but nothing is live, so onReconnect would be a false signal;
+	// the per-channel onDisconnect('error') is the correct notification instead.
+	it('onReconnect does NOT fire when every channel resubscribe is rejected (all-stale)', () => {
+		const clientA = hydrateClientFor('my-app-rt/chat/room-A', 'token-A');
+		const clientB = hydrateClientFor('my-app-rt/chat/room-B', 'token-B');
+		const events: string[] = [];
+		clientA.subscribe({
+			onMessage: () => {},
+			onDisconnect: (reason) => { events.push(`disc:${reason}`); },
+			onReconnect: () => { events.push('reconn'); },
+		});
+		clientB.subscribe(() => {});
+
+		const s0 = FakeWebSocket.instances[0];
+		s0.emitOpen();
+		s0.emitMessage({ type: 'subscribe_success', channel: 'my-app-rt/chat/room-A' });
+		s0.emitMessage({ type: 'subscribe_success', channel: 'my-app-rt/chat/room-B' });
+
+		s0.emitServerClose(1006);
+		mock.timers.tick(60_000);
+
+		const s1 = FakeWebSocket.instances[1];
+		assert.ok(s1, 'middleware should reconnect');
+		s1.emitOpen();
+		// BOTH channels' replayed tokens are stale — every resubscribe is rejected.
+		s1.emitMessage({ type: 'error', channel: 'my-app-rt/chat/room-A', message: 'token expired' });
+		s1.emitMessage({ type: 'error', channel: 'my-app-rt/chat/room-B', message: 'token expired' });
+
+		// onReconnect must NOT fire — nothing re-confirmed.
+		assert.ok(!events.includes('reconn'), 'onReconnect must not fire when no channel re-confirmed');
+		// The failure is still surfaced via onDisconnect('error') (drop + each stale channel).
+		assert.ok(
+			events.filter((e) => e === 'disc:error').length >= 2,
+			'each stale-token failure must surface onDisconnect(\'error\')',
+		);
+	});
+
 	// (d) BLOCKING 3: onerror must not reject an in-flight established promise —
 	// a transient drop should be resolved by the resubscribe on reconnect.
 	it('onerror during a transient drop does not reject an in-flight established promise', async () => {

@@ -85,6 +85,16 @@ function doConnect(wsUrl: string, isReconnect = false) {
 	const conn = getOrCreateConnection(wsUrl);
 	try {
 		conn.ws = new WebSocket(wsUrl);
+		// Per-socket guard so a single drop notifies onDisconnect exactly ONCE even when
+		// the runtime fires onerror immediately followed by onclose (abnormal closure) —
+		// matching aws-middleware.ts's disconnectNotified dedupe. A fresh socket gets a
+		// fresh flag on each (re)connect, so the NEXT drop still notifies.
+		let disconnectNotified = false;
+		const notifyDisconnect = (reason: DisconnectReason): void => {
+			if (disconnectNotified) { return; }
+			disconnectNotified = true;
+			conn.disconnectHandlers.forEach(h => { try { h(reason); } catch {} });
+		};
 		conn.ws.onopen = () => {
 			conn.isConnected = true;
 			conn.reconnectAttempts = 0;
@@ -147,21 +157,20 @@ function doConnect(wsUrl: string, isReconnect = false) {
 			// therefore suppressed there. aws-middleware.ts now mirrors this via its
 			// intentionalClose flag instead of the old close-code classification.
 			conn.isConnected = false;
-			// Fire onDisconnect for this drop but KEEP the handlers registered, so a
-			// SECOND drop on the same logical subscription notifies again — matching
-			// aws-middleware.ts's every-drop contract (its onclose keeps
-			// disconnectHandlers intact on the reconnecting branch and clears them only
+			// Fire onDisconnect for this drop (deduped per-socket via notifyDisconnect, so an
+			// abnormal drop that also fired onerror('error') is not double-reported) but KEEP
+			// the handlers registered, so a SECOND drop on the same logical subscription
+			// notifies again — matching aws-middleware.ts's every-drop contract (its onclose
+			// keeps disconnectHandlers intact on the reconnecting branch and clears them only
 			// on a terminal close). Genuine teardown still clears these elsewhere:
 			// scheduleReconnect's tornDown/subscriptions.size guard stops the reconnect,
-			// unsubscribe() removes the handler, and __resetConnectionsForTest() clears
-			// the set. (Previously this cleared unconditionally, so onDisconnect fired
-			// only on the FIRST drop locally — a mock↔AWS parity gap.)
-			conn.disconnectHandlers.forEach(h => { try { h('unknown'); } catch {} });
+			// unsubscribe() removes the handler, and __resetConnectionsForTest() clears the set.
+			notifyDisconnect('unknown');
 			scheduleReconnect(wsUrl);
 		};
 		conn.ws.onerror = (e) => {
 			console.error('[Realtime] WS error:', e);
-			conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
+			notifyDisconnect('error');
 		};
 	} catch (e) { console.error('[Realtime] Connection error:', e); scheduleReconnect(wsUrl); }
 }
