@@ -775,6 +775,7 @@ export class CdnConstruct extends Construct {
     // ---- KvKeys: live KVS update, gated on asset upload (atomic cutover) ----
     const kvKeys = new KvKeys(this, 'RouteStoreKeys', {
       store: routeStore,
+      bucket, // #480: handler tags the outgoing build superseded at cutover
       entries: kvsEntries,
     });
     // The KV write that flips buildId/routes to the new build must happen only
@@ -1312,6 +1313,11 @@ export class CdnConstruct extends Construct {
             resources: ['*'],
           }),
         ]),
+        // CloudFront.createInvalidation is a stable API bundled in the Lambda
+        // runtime's AWS SDK v3. This resource fires on every hosting deploy, so
+        // the default (true) would make the provider Lambda npm-install the SDK
+        // at invoke time on each deploy (~15-30s cold start + 512MB bump).
+        installLatestAwsSdk: false,
       });
       // Gate AFTER the atomic KVS cutover so we only flush the previous build's
       // pages (see ordering note above).

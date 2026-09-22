@@ -5,16 +5,47 @@ import { describe, it, beforeEach } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
 	buildDashboardWidgets,
-	buildLambdaWidgets,
 	buildMetricsWidgets,
-	buildLoggingWidgets,
-	buildTracingWidgets,
 	resolveConfig,
-	TraceWidget,
 } from './widgets.js';
+import type { ComputeDashboardSection } from '@aws-blocks/core/cdk/internal';
 import type { DashboardOptions } from './types.js';
 import { DashboardErrors } from './errors.js';
+import { GraphWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+
+/**
+ * Stand-ins for a compute's self-reported widget rows (`Compute.dashboardWidgets`
+ * / `loggingWidgets` / `tracingWidgets`). The Dashboard forwards whatever the
+ * resolved compute returns; these use distinct titles so tests can assert the
+ * rows are passed through without depending on Lambda-specific widget content.
+ */
+function stubHealthRows(region: string): IWidget[][] {
+	return [
+		[new GraphWidget({ title: 'Compute Health A', width: 12, height: 6, region })],
+		[new GraphWidget({ title: 'Compute Health B', width: 12, height: 6, region })],
+	];
+}
+function stubLoggingRows(region: string): IWidget[][] {
+	return [[new GraphWidget({ title: 'Stub Recent Errors', width: 24, height: 6, region })]];
+}
+function stubTracingRows(region: string): IWidget[][] {
+	return [[new GraphWidget({ title: 'Stub Traces', width: 24, height: 9, region })]];
+}
+/** Build a one-element ComputeSection[] from stub rows (the single-compute case). */
+function stubComputeSections(
+	region: string,
+	opts?: { label?: string; logging?: boolean; tracing?: boolean },
+): ComputeDashboardSection[] {
+	return [
+		{
+			label: opts?.label ?? 'DefaultCompute',
+			health: stubHealthRows(region),
+			logging: opts?.logging ? stubLoggingRows(region) : undefined,
+			tracing: opts?.tracing ? stubTracingRows(region) : undefined,
+		},
+	];
+}
 import { getRegisteredRoutes, clearRouteRegistry } from '@aws-blocks/core';
 import { mountDashboardRoute, BB_DASHBOARD_URL_ENV } from './routes.js';
 import type { BlocksContext } from '@aws-blocks/core';
@@ -35,21 +66,18 @@ describe('resolveConfig', () => {
 		const config = resolveConfig('test-dash');
 		assert.equal(config.title, 'test-dash');
 		assert.equal(config.dashboardName, 'test-dash');
-		assert.equal(config.metricsNamespace, undefined);
-		assert.equal(config.logGroupName, undefined);
-		assert.equal(config.tracingEnabled, false);
-		assert.deepEqual(config.metricConfigs, []);
+		assert.deepEqual(config.metrics, []);
 		assert.equal(config.defaultTimeRange, '-PT3H');
 	});
 
 	it('uses scopeFullId as default dashboardName when provided', () => {
-		const config = resolveConfig('dash', undefined, undefined, 'mystack-Blocks-dash');
+		const config = resolveConfig('dash', undefined, 'mystack-Blocks-dash');
 		assert.equal(config.title, 'dash');
 		assert.equal(config.dashboardName, 'mystack-Blocks-dash');
 	});
 
 	it('explicit dashboardName takes priority over scopeFullId', () => {
-		const config = resolveConfig('dash', { dashboardName: 'custom-name' }, undefined, 'mystack-Blocks-dash');
+		const config = resolveConfig('dash', { dashboardName: 'custom-name' }, 'mystack-Blocks-dash');
 		assert.equal(config.dashboardName, 'custom-name');
 	});
 
@@ -59,7 +87,7 @@ describe('resolveConfig', () => {
 	});
 
 	it('title always uses id, not scopeFullId', () => {
-		const config = resolveConfig('dash', undefined, undefined, 'mystack-Blocks-dash');
+		const config = resolveConfig('dash', undefined, 'mystack-Blocks-dash');
 		assert.equal(config.title, 'dash');
 	});
 
@@ -72,13 +100,13 @@ describe('resolveConfig', () => {
 
 	it('truncates scopeFullId-derived dashboardName to 255 characters', () => {
 		const longScopeFullId = 'mystack-'.repeat(40) + 'dashboard';
-		const config = resolveConfig('dash', undefined, undefined, longScopeFullId);
+		const config = resolveConfig('dash', undefined, longScopeFullId);
 		assert.equal(config.dashboardName.length, 255);
 		assert.equal(config.dashboardName, longScopeFullId.substring(0, 255));
 	});
 
 	it('sanitizes invalid CloudWatch characters in dashboardName', () => {
-		const config = resolveConfig('dash', undefined, undefined, 'my/stack.scope/dashboard');
+		const config = resolveConfig('dash', undefined, 'my/stack.scope/dashboard');
 		assert.equal(config.dashboardName, 'my-stack-scope-dashboard');
 	});
 
@@ -89,48 +117,40 @@ describe('resolveConfig', () => {
 
 	it('sanitizes before truncating', () => {
 		const longWithDots = 'a.b'.repeat(200);
-		const config = resolveConfig('dash', undefined, undefined, longWithDots);
+		const config = resolveConfig('dash', undefined, longWithDots);
 		assert.equal(config.dashboardName.length, 255);
 		assert.ok(/^[A-Za-z0-9\-_]+$/.test(config.dashboardName));
 	});
 
 	it('uses metrics BB namespace', () => {
 		const options: DashboardOptions = {
-			metrics: { namespace: 'MyApp' },
-			metricConfigs: [{ name: 'Latency' }],
+			metrics: { metrics: { namespace: 'MyApp' }, metricConfigs: [{ name: 'Latency' }] },
 		};
 		const config = resolveConfig('dash', options);
-		assert.equal(config.metricsNamespace, 'MyApp');
-		assert.deepEqual(config.metricConfigs, [{ name: 'Latency' }]);
+		assert.equal(config.metrics.length, 1);
+		assert.equal(config.metrics[0].namespace, 'MyApp');
+		assert.deepEqual(config.metrics[0].metricConfigs, [{ name: 'Latency' }]);
 	});
 
 	it('BB instances provide namespace via metrics.namespace', () => {
 		const options: DashboardOptions = {
-			metrics: { namespace: 'myapp-metrics' },
+			metrics: { metrics: { namespace: 'myapp-metrics' } },
 		};
 		const config = resolveConfig('dash', options);
-		assert.equal(config.metricsNamespace, 'myapp-metrics');
+		assert.equal(config.metrics[0].namespace, 'myapp-metrics');
 	});
 
-	it('logger BB enables log widgets when functionName provided', () => {
+	it('accepts an array of metrics sources — one per namespace', () => {
 		const options: DashboardOptions = {
-			logger: { fullId: 'myapp-logger' },
-		};
-		const config = resolveConfig('dash', options, 'my-handler-fn');
-		assert.equal(config.logGroupName, '/aws/lambda/my-handler-fn');
-	});
-
-	it('tracer BB presence enables tracer widgets', () => {
-		const options: DashboardOptions = {
-			tracer: { fullId: 'myapp-tracer' },
+			metrics: [{ metrics: { namespace: 'orders' } }, { metrics: { namespace: 'billing' } }],
 		};
 		const config = resolveConfig('dash', options);
-		assert.equal(config.tracingEnabled, true);
+		assert.deepEqual(config.metrics.map((m) => m.namespace), ['orders', 'billing']);
 	});
 
-	it('no tracer BB means tracer disabled', () => {
-		const config = resolveConfig('dash', {});
-		assert.equal(config.tracingEnabled, false);
+	it('metrics is empty when no metrics BB provided', () => {
+		assert.deepEqual(resolveConfig('dash', {}).metrics, []);
+		assert.deepEqual(resolveConfig('dash').metrics, []);
 	});
 
 	it('uses custom title and dashboardName', () => {
@@ -139,85 +159,22 @@ describe('resolveConfig', () => {
 		assert.equal(config.dashboardName, 'custom-name');
 	});
 
-	it('logGroupName is undefined when no logger BB and no functionName', () => {
-		const config = resolveConfig('dash', undefined, 'my-handler-fn');
-		assert.equal(config.logGroupName, undefined);
-	});
-
-	it('logGroupName derived from functionName when logger BB present', () => {
-		const config = resolveConfig('dash', { logger: { fullId: 'myapp-log' } }, 'my-handler-fn');
-		assert.equal(config.logGroupName, '/aws/lambda/my-handler-fn');
-	});
-
-	it('logGroupName remains undefined when no logger BB even with functionName', () => {
-		const config = resolveConfig('dash', {}, 'my-handler-fn');
-		assert.equal(config.logGroupName, undefined);
-	});
-
-	it('logGroupName remains undefined when no functionName and no options', () => {
-		const config = resolveConfig('dash');
-		assert.equal(config.logGroupName, undefined);
-	});
-
 	it('extracts defaultDimensions from metrics BB ref', () => {
 		const options: DashboardOptions = {
-			metrics: { namespace: 'MyApp', defaultDimensions: { service: 'orders', env: 'prod' } },
+			metrics: { metrics: { namespace: 'MyApp', defaultDimensions: { service: 'orders', env: 'prod' } } },
 		};
 		const config = resolveConfig('dash', options);
-		assert.deepEqual(config.metricsDefaultDimensions, { service: 'orders', env: 'prod' });
+		assert.deepEqual(config.metrics[0].defaultDimensions, { service: 'orders', env: 'prod' });
 	});
 
-	it('metricsDefaultDimensions is undefined when metrics BB has no defaultDimensions', () => {
-		const options: DashboardOptions = {
-			metrics: { namespace: 'MyApp' },
-		};
-		const config = resolveConfig('dash', options);
-		assert.equal(config.metricsDefaultDimensions, undefined);
+	it('defaultDimensions is undefined when metrics BB has none', () => {
+		const config = resolveConfig('dash', { metrics: { metrics: { namespace: 'MyApp' } } });
+		assert.equal(config.metrics[0].defaultDimensions, undefined);
 	});
 
-	it('metricsDefaultDimensions is undefined when defaultDimensions is empty object', () => {
-		const options: DashboardOptions = {
-			metrics: { namespace: 'MyApp', defaultDimensions: {} },
-		};
-		const config = resolveConfig('dash', options);
-		assert.equal(config.metricsDefaultDimensions, undefined);
-	});
-
-	it('metricsDefaultDimensions is undefined when no metrics BB provided', () => {
-		const config = resolveConfig('dash', {});
-		assert.equal(config.metricsDefaultDimensions, undefined);
-	});
-});
-
-describe('buildLambdaWidgets', () => {
-	it('produces 4 GraphWidgets in 2 rows', () => {
-		const rows = buildLambdaWidgets('my-function', 'us-east-1');
-		assert.equal(rows.length, 2);
-		assert.equal(rows[0].length, 2);
-		assert.equal(rows[1].length, 2);
-
-		const json = flattenWidgetJson(rows);
-		assert.equal(json.length, 4);
-		const titles = json.map((w: any) => w.properties.title);
-		assert.ok(titles.includes('Lambda Invocations'));
-		assert.ok(titles.includes('Lambda Errors'));
-		assert.ok(titles.includes('Lambda Duration'));
-		assert.ok(titles.includes('Lambda Concurrent Executions'));
-	});
-
-	it('uses the passed region', () => {
-		const json = flattenWidgetJson(buildLambdaWidgets('fn', 'eu-west-1'));
-		for (const widget of json) {
-			assert.equal(widget.properties.region, 'eu-west-1');
-		}
-	});
-
-	it('each widget is 12 units wide', () => {
-		const json = flattenWidgetJson(buildLambdaWidgets('fn', 'us-east-1'));
-		for (const widget of json) {
-			assert.equal(widget.width, 12);
-			assert.equal(widget.height, 6);
-		}
+	it('defaultDimensions is undefined when defaultDimensions is empty object', () => {
+		const config = resolveConfig('dash', { metrics: { metrics: { namespace: 'MyApp', defaultDimensions: {} } } });
+		assert.equal(config.metrics[0].defaultDimensions, undefined);
 	});
 });
 
@@ -422,99 +379,42 @@ describe('buildMetricsWidgets', () => {
 	});
 });
 
-describe('buildLoggingWidgets', () => {
-	it('produces a log query widget and a log volume graph', () => {
-		const rows = buildLoggingWidgets('/aws/lambda/test-fn', 'us-east-1');
-		const json = flattenWidgetJson(rows);
-
-		assert.equal(json.length, 2);
-		const titles = json.map((w: any) => w.properties.title);
-		assert.ok(titles.includes('Recent Errors'));
-		assert.ok(titles.includes('Log Volume'));
-	});
-
-	it('log query widget is type "log"', () => {
-		const json = flattenWidgetJson(buildLoggingWidgets('/aws/lambda/fn', 'us-east-1'));
-		const logWidget = json.find((w: any) => w.properties.title === 'Recent Errors');
-		assert.equal(logWidget.type, 'log');
-	});
-});
-
-describe('buildTracingWidgets', () => {
-	it('produces a trace widget', () => {
-		const rows = buildTracingWidgets('my-function', 'us-east-1');
-		const json = flattenWidgetJson(rows);
-
-		assert.equal(json.length, 1);
-		assert.equal(json[0].type, 'trace');
-		assert.equal(json[0].properties.title, 'Traces');
-		assert.equal(json[0].width, 24);
-		assert.equal(json[0].height, 9);
-	});
-
-	it('includes correct filter query with function name', () => {
-		const json = flattenWidgetJson(buildTracingWidgets('handler-fn', 'eu-west-1'));
-		assert.equal(json[0].properties.region, 'eu-west-1');
-		assert.ok(json[0].properties.filters.query.includes('handler-fn'));
-		assert.ok(json[0].properties.filters.query.includes('AWS::Lambda::Function'));
-	});
-});
-
-describe('TraceWidget', () => {
-	it('extends ConcreteWidget and implements toJson', () => {
-		const widget = new TraceWidget({
-			title: 'My Traces',
-			functionName: 'test-fn',
-			region: 'us-west-2',
-			width: 24,
-			height: 9,
-		});
-
-		const json = widget.toJson();
-		assert.equal(json.length, 1);
-		assert.equal(json[0].type, 'trace');
-		assert.equal(json[0].properties.title, 'My Traces');
-		assert.equal(json[0].properties.region, 'us-west-2');
-		assert.equal(json[0].width, 24);
-		assert.equal(json[0].height, 9);
-	});
-
-	it('uses default width/height when not specified', () => {
-		const widget = new TraceWidget({
-			functionName: 'fn',
-			region: 'us-east-1',
-		});
-		assert.equal(widget.width, 24);
-		assert.equal(widget.height, 9);
-	});
-});
-
 describe('buildDashboardWidgets', () => {
-	it('always includes Lambda handler section with header', () => {
+	it('includes a per-compute header (the compute label) and forwards its health rows', () => {
 		const config = resolveConfig('dash');
-		const rows = buildDashboardWidgets(config, 'my-function', 'us-east-1');
+		const rows = buildDashboardWidgets(stubComputeSections('us-east-1', { label: 'api' }), config, 'us-east-1');
 		const json = flattenWidgetJson(rows);
 
-		// First widget should be the section header
+		// First widget is the compute group header, titled with the compute label.
 		assert.equal(json[0].type, 'text');
-		assert.ok(json[0].properties.markdown.includes('Lambda Handler'));
+		assert.ok(json[0].properties.markdown.includes('api'));
 
-		// Should have Lambda widgets
+		// The compute's self-reported health rows are forwarded verbatim.
 		const titles = json.map((w: any) => w.properties?.title ?? w.properties?.markdown);
-		assert.ok(titles.some((t: string) => t?.includes('Lambda Invocations')));
-		assert.ok(titles.some((t: string) => t?.includes('Lambda Errors')));
-		assert.ok(titles.some((t: string) => t?.includes('Lambda Duration')));
-		assert.ok(titles.some((t: string) => t?.includes('Lambda Concurrent Executions')));
+		assert.ok(titles.some((t: string) => t?.includes('Compute Health A')));
+		assert.ok(titles.some((t: string) => t?.includes('Compute Health B')));
+	});
+
+	it('renders one group per compute, in order', () => {
+		const config = resolveConfig('dash');
+		const computes: ComputeDashboardSection[] = [
+			{ label: 'api', health: stubHealthRows('us-east-1') },
+			{ label: 'worker', health: stubHealthRows('us-east-1') },
+		];
+		const json = flattenWidgetJson(buildDashboardWidgets(computes, config, 'us-east-1'));
+		const headers = json
+			.filter((w: any) => w.type === 'text' && w.properties.markdown?.startsWith('## 🔧'))
+			.map((w: any) => w.properties.markdown);
+		assert.deepEqual(headers, ['## 🔧 api', '## 🔧 worker']);
 	});
 
 	it('uses the passed region in all widget properties', () => {
 		const config = resolveConfig('dash', {
-			metrics: { namespace: 'MyApp' },
-			metricConfigs: [{ name: 'Latency' }],
-			logger: { fullId: 'myapp-log' },
-			tracer: { fullId: 'myapp-tracer' },
-		}, 'fn');
-		const json = flattenWidgetJson(buildDashboardWidgets(config, 'my-function', 'eu-west-1'));
+			metrics: { metrics: { namespace: 'MyApp' }, metricConfigs: [{ name: 'Latency' }] },
+		});
+		const json = flattenWidgetJson(
+			buildDashboardWidgets(stubComputeSections('eu-west-1', { logging: true, tracing: true }), config, 'eu-west-1'),
+		);
 
 		const widgetsWithRegion = json.filter((w: any) => w.properties?.region);
 		assert.ok(widgetsWithRegion.length > 0);
@@ -523,15 +423,14 @@ describe('buildDashboardWidgets', () => {
 		}
 	});
 
-	it('includes metrics section when metrics BB is provided', () => {
+	it('includes an app-wide metrics section when metrics BB is provided', () => {
 		const config = resolveConfig('dash', {
-			metrics: { namespace: 'MyApp' },
-			metricConfigs: [
-				{ name: 'RequestCount' },
-				{ name: 'Latency' },
-			],
+			metrics: {
+				metrics: { namespace: 'MyApp' },
+				metricConfigs: [{ name: 'RequestCount' }, { name: 'Latency' }],
+			},
 		});
-		const json = flattenWidgetJson(buildDashboardWidgets(config, 'fn', 'us-east-1'));
+		const json = flattenWidgetJson(buildDashboardWidgets(stubComputeSections('us-east-1'), config, 'us-east-1'));
 
 		const titles = json.map((w: any) => w.properties?.title ?? w.properties?.markdown ?? '');
 		assert.ok(titles.some((t: string) => t.includes('📊 Metrics')));
@@ -539,69 +438,81 @@ describe('buildDashboardWidgets', () => {
 		assert.ok(titles.includes('Latency'));
 	});
 
-	it('includes logger section when logger BB is provided', () => {
+	it('includes one metrics section per namespace for an array of metrics', () => {
 		const config = resolveConfig('dash', {
-			logger: { fullId: 'myapp-log' },
-		}, 'test-fn');
-		const json = flattenWidgetJson(buildDashboardWidgets(config, 'fn', 'us-east-1'));
+			metrics: [
+				{ metrics: { namespace: 'orders' }, metricConfigs: [{ name: 'Count' }] },
+				{ metrics: { namespace: 'billing' }, metricConfigs: [{ name: 'Count' }] },
+			],
+		});
+		const json = flattenWidgetJson(buildDashboardWidgets(stubComputeSections('us-east-1'), config, 'us-east-1'));
+		const metricHeaders = json
+			.filter((w: any) => w.type === 'text' && w.properties.markdown?.includes('📊 Metrics'))
+			.map((w: any) => w.properties.markdown);
+		assert.equal(metricHeaders.length, 2);
+		assert.ok(metricHeaders.some((h: string) => h.includes('orders')));
+		assert.ok(metricHeaders.some((h: string) => h.includes('billing')));
+	});
+
+	it('includes the logs section (forwarding the compute log rows) when a Logger is attached', () => {
+		const config = resolveConfig('dash');
+		const json = flattenWidgetJson(
+			buildDashboardWidgets(stubComputeSections('us-east-1', { logging: true }), config, 'us-east-1'),
+		);
 
 		const titles = json.map((w: any) => w.properties?.title ?? w.properties?.markdown ?? '');
 		assert.ok(titles.some((t: string) => t.includes('📋 Logs')));
-		assert.ok(titles.some((t: string) => t.includes('Recent Errors')));
-		assert.ok(titles.some((t: string) => t.includes('Log Volume')));
+		assert.ok(titles.some((t: string) => t.includes('Stub Recent Errors')));
 	});
 
-	it('includes tracer section when tracer BB is provided', () => {
-		const config = resolveConfig('dash', { tracer: { fullId: 'myapp-tracer' } });
-		const json = flattenWidgetJson(buildDashboardWidgets(config, 'fn', 'us-east-1'));
+	it('includes the traces section (forwarding the compute trace rows) when a Tracer is attached', () => {
+		const config = resolveConfig('dash');
+		const json = flattenWidgetJson(
+			buildDashboardWidgets(stubComputeSections('us-east-1', { tracing: true }), config, 'us-east-1'),
+		);
 
 		const titles = json.map((w: any) => w.properties?.title ?? w.properties?.markdown ?? '');
 		assert.ok(titles.some((t: string) => t.includes('🔍 Traces')));
-
-		const traceWidget = json.find((w: any) => w.type === 'trace');
-		assert.ok(traceWidget, 'Should include a trace widget');
-		assert.equal(traceWidget.properties.title, 'Traces');
+		assert.ok(titles.some((t: string) => t.includes('Stub Traces')));
 	});
 
 	it('does not include metrics section when no metrics config', () => {
 		const config = resolveConfig('dash');
-		const json = flattenWidgetJson(buildDashboardWidgets(config, 'fn', 'us-east-1'));
+		const json = flattenWidgetJson(buildDashboardWidgets(stubComputeSections('us-east-1'), config, 'us-east-1'));
 
 		const titles = json.map((w: any) => w.properties?.title ?? w.properties?.markdown ?? '');
 		assert.ok(!titles.some((t: string) => t.includes('Custom Metrics')));
 		assert.ok(!titles.some((t: string) => t.includes('📊 Metrics')));
 	});
 
-	it('does not include logger section when no logger config', () => {
+	it('does not include logs section when the compute has no logging rows', () => {
 		const config = resolveConfig('dash');
-		const json = flattenWidgetJson(buildDashboardWidgets(config, 'fn', 'us-east-1'));
+		const json = flattenWidgetJson(buildDashboardWidgets(stubComputeSections('us-east-1'), config, 'us-east-1'));
 
 		const titles = json.map((w: any) => w.properties?.title ?? w.properties?.markdown ?? '');
-		assert.ok(!titles.some((t: string) => t.includes('Recent Errors')));
+		assert.ok(!titles.some((t: string) => t.includes('Stub Recent Errors')));
 		assert.ok(!titles.some((t: string) => t.includes('📋 Logs')));
 	});
 
-	it('does not include tracer section when tracer disabled', () => {
+	it('does not include traces section when the compute has no tracing rows', () => {
 		const config = resolveConfig('dash');
-		const json = flattenWidgetJson(buildDashboardWidgets(config, 'fn', 'us-east-1'));
+		const json = flattenWidgetJson(buildDashboardWidgets(stubComputeSections('us-east-1'), config, 'us-east-1'));
 
-		const traceWidget = json.find((w: any) => w.type === 'trace');
-		assert.ok(!traceWidget, 'Should not include a trace widget');
 		const titles = json.map((w: any) => w.properties?.title ?? w.properties?.markdown ?? '');
+		assert.ok(!titles.some((t: string) => t.includes('Stub Traces')));
 		assert.ok(!titles.some((t: string) => t.includes('🔍 Traces')));
 	});
 
 	it('section headers use full-width TextWidgets', () => {
 		const config = resolveConfig('dash', {
-			metrics: { namespace: 'NS' },
-			metricConfigs: [{ name: 'A' }],
-			logger: { fullId: 'myapp-log' },
-			tracer: { fullId: 'myapp-tracer' },
-		}, 'fn');
-		const json = flattenWidgetJson(buildDashboardWidgets(config, 'fn', 'us-east-1'));
+			metrics: { metrics: { namespace: 'NS' }, metricConfigs: [{ name: 'A' }] },
+		});
+		const json = flattenWidgetJson(
+			buildDashboardWidgets(stubComputeSections('us-east-1', { logging: true, tracing: true }), config, 'us-east-1'),
+		);
 
-		const headers = json.filter((w: any) => w.type === 'text' && w.properties.markdown?.startsWith('##'));
-		assert.ok(headers.length >= 4); // Lambda, Metrics, Traces, Logs
+		const headers = json.filter((w: any) => w.type === 'text' && w.properties.markdown?.startsWith('#'));
+		assert.ok(headers.length >= 4); // compute, Traces, Logs, Metrics
 		for (const header of headers) {
 			assert.equal(header.width, 24);
 		}
@@ -609,12 +520,14 @@ describe('buildDashboardWidgets', () => {
 
 	it('passes defaultDimensions from metrics BB through to metric widgets', () => {
 		const config = resolveConfig('dash', {
-			metrics: { namespace: 'MyApp', defaultDimensions: { service: 'orders', env: 'prod' } },
-			metricConfigs: [{ name: 'OrderCount' }],
+			metrics: {
+				metrics: { namespace: 'MyApp', defaultDimensions: { service: 'orders', env: 'prod' } },
+				metricConfigs: [{ name: 'OrderCount' }],
+			},
 		});
-		const json = flattenWidgetJson(buildDashboardWidgets(config, 'fn', 'us-east-1'));
+		const json = flattenWidgetJson(buildDashboardWidgets(stubComputeSections('us-east-1'), config, 'us-east-1'));
 
-		// Find the metric widget (not the section header or Lambda widgets)
+		// Find the metric widget (not the section header or health widgets)
 		const metricWidget = json.find((w: any) => w.properties?.title === 'OrderCount');
 		assert.ok(metricWidget, 'Should have a metric widget for OrderCount');
 

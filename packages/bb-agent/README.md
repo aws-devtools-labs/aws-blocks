@@ -48,7 +48,7 @@ const agent = new Agent(scope, id, config)
 | `getPendingInterrupts(conversationId)` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). |
 | `getChannel(channelId)` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. |
 
-`stream()` submits the message to AsyncJob and returns immediately — no API Gateway timeout risk. The agent runs asynchronously and publishes chunks to Realtime. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
+`stream()` invokes the AgentCore Runtime (`InvokeAgentRuntime`) and returns immediately — no API Gateway timeout risk. The loop runs on the runtime (sessions up to 8h) and publishes chunks to Realtime as it goes. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
 
 **Important: Subscribe before sending.** The agent starts emitting chunks immediately after `stream()` is called. If you subscribe to the channel after calling `stream()`, early chunks may be dropped. Always subscribe first, await `established`, then send:
 
@@ -136,6 +136,8 @@ The `useChat` hook only surfaces `user`, `assistant`, and `approval` messages to
 | `inferenceOnly` | `boolean` | Skip persistence infra. Default: `false`. |
 | `conversation` | `ConversationManagerConfig` | How the agent trims message history (sliding-window or summarizing). |
 | `streamingMode` | `'token' \| 'block'` | How text chunks are published to the client. Default: `'block'`. |
+| `maxLlmCalls` | `number \| false` | Max model invocations per turn before the turn is stopped; `false` disables. Default: `20`. See [Limiting runaway cost](#limiting-runaway-cost). |
+| `maxToolIterations` | `number \| false` | Max tool calls per turn before the turn is stopped; `false` disables. Default: `20`. See [Limiting runaway cost](#limiting-runaway-cost). |
 
 ### Model Configuration
 
@@ -358,6 +360,38 @@ const agent = new Agent(scope, 'support', {
   ...
 });
 ```
+
+### Limiting runaway cost
+
+An agent runs a reason→act loop: each iteration is one **model call**, optionally followed by tool calls, and a model call that requests no tools ends the turn. A misbehaving agent — or a prompt that induces one — can loop this cycle far longer than intended; an unbounded loop can run up unexpected cost.
+
+> **These caps are a safety backstop, not a way to guide the agent.** The defaults exist only to stop a runaway from racking up cost — they are *not* tuned for your agent and should not be used to shape its behavior. An agent that legitimately needs more steps or tools will be cut off mid-task at the default. **Set these values deliberately for your own agent** based on how many steps and tool calls a healthy turn takes, so a normal turn always completes and only genuine runaways are stopped.
+
+Two per-turn safety caps bound this, and **both default to `20`**:
+
+- **`maxLlmCalls`** — the maximum number of model invocations in a single turn. This is the most direct spend guard (model calls are the billing unit), and because every tool round needs a model call it transitively bounds tool loops too.
+- **`maxToolIterations`** — the maximum number of tool calls in a single turn (parallel tool batches count each call).
+
+When either cap is hit, the turn is stopped and the client receives an `error` chunk (so `complete()` rejects) instead of `done`. The counts cover the whole turn, including across a [tool-approval interrupt](#tool-approval-human-in-the-loop): they are kept in the agent's session state, so a turn that pauses for approval and continues via `resume()` keeps its existing budget instead of starting a fresh one. Only a new message starts a new budget.
+
+```typescript
+const agent = new Agent(scope, 'support', {
+  systemPrompt: '...',
+  maxLlmCalls: 40,          // agent legitimately reasons over many steps
+  maxToolIterations: 60,    // ...and chains many tools per turn
+});
+
+// Or disable a cap entirely with `false`:
+const unbounded = new Agent(scope, 'batch', {
+  systemPrompt: '...',
+  maxLlmCalls: false,       // no per-turn model-call limit
+  maxToolIterations: false,
+});
+```
+
+Raise the caps for agents that legitimately take many steps so they aren't cut off mid-task, or set a cap to `false` to disable it — tuning these to your agent is part of delivering a good agentic experience, not just a cost lever. The caps bound call *count*, not tokens or wall-clock — for real cost protection, also configure a [billing alarm](https://docs.aws.amazon.com/cost-management/latest/userguide/monitor-charges.html) or a CloudWatch alarm on Bedrock spend.
+
+When sizing the caps for an agent that uses [tool approval](#tool-approval-human-in-the-loop), remember that approved and trusted tool calls both count: a `trustable` tool that's been trusted runs without interrupting, and a tool approved through `resume()` continues on the same budget, so a long approve-and-continue turn can still reach the cap.
 
 ## Tools
 
@@ -640,8 +674,40 @@ The CannedProvider is a custom Strands model provider that requires no network o
 
 - Returns simple mock responses
 - Triggers tool calls when the prompt mentions a tool name (e.g., "get order" triggers `getOrderStatus`)
-- Generates valid tool inputs from Zod schemas using type-based placeholders
+- Generates valid tool inputs from Zod schemas, respecting schema `default` values (from `.default()`) before falling back to type-based placeholders (`'sample'`, `1`, `true`, `[]`)
 - Streams responses word by word, matching the same protocol as real providers
+
+#### Canned Hints — `cannedExamples` and `cannedTriggers`
+
+Two optional tool fields make the canned provider more useful for local prototyping. Both are **ignored by the real bedrock/openai providers**, so they're safe to leave on production tools:
+
+| Field | Type | Effect (canned provider only) |
+| --- | --- | --- |
+| `cannedExamples` | `Record<string, JSONValue>` | Realistic tool input, shallow-merged over the generated placeholder — your fields win, unspecified fields fall back to schema defaults / placeholders. The merge is one level deep: a nested-object example replaces that whole generated sub-object rather than deep-merging into it. |
+| `cannedTriggers` | `string[]` | Extra keyword phrases that make the provider select this tool, beyond its name and camelCase words. Single and multi-word phrases match on word boundaries (so `'log in'` won't fire on `"backlog in"`); internal whitespace is flexible. |
+
+Building on the [KnowledgeBase tool](#using-knowledgebase-with-the-agent) above: without hints the mock calls `searchDocs` with `{ query: 'sample' }`, which matches nothing in your documents, so local testing returns empty results. A `cannedExamples` query that actually appears in *your* docs makes the mock return real hits, and `cannedTriggers` lets natural phrasings fire the tool:
+
+```typescript
+tools: (tool) => ({
+  searchDocs: tool({
+    description: 'Search product documentation for relevant information',
+    parameters: z.object({
+      query: z.string().describe('The search query'),
+      maxResults: z.number().optional().describe('Max results to return (default: 5)'),
+    }),
+    handler: async ({ input }) => kb.retrieve(input.query, { maxResults: input.maxResults ?? 5 }),
+
+    // Canned provider hints (ignored by real models):
+    // Without this the mock would search for the literal 'sample' and match nothing —
+    // use a query that hits YOUR documents so local runs return meaningful results.
+    cannedExamples: { query: 'how do I reset my password' },
+    // The name already matches "search"/"docs"/"searchDocs"; these add phrasings that don't
+    // contain the name, so "help me find the manual" or "look up the guide" also fire the tool.
+    cannedTriggers: ['find', 'look up'],
+  }),
+}),
+```
 
 
 ## Client Hook — `useChat`
@@ -697,7 +763,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { conversationId: await agent.createConversationId(userId) };
   },
   async sendMessage(conversationId: string, message: string, channelId: string, userId: string) {
-    await agent.stream(message, { conversationId, channelId, userId });
+    const result = await agent.stream(message, { conversationId, channelId, userId });
+    return { channelId: result.channelId };
   },
   async getConversation(conversationId: string) {
     const messages = await agent.getConversation(conversationId);
@@ -737,7 +804,87 @@ await chat.sendMessage('Hello!');
 await chat.loadConversation('conv-123');
 ```
 
-### 2. Support Agent with Tools
+The example above is framework-agnostic on purpose — `useChat` has no React import and works with any UI layer. The two examples below show how to bridge it into a specific framework's reactivity.
+
+### 2. React: hold the instance once, drive `useState` from the callbacks
+
+`useChat` is a factory, not a React hook, so it must **not** run on every render — recreating it drops the WebSocket subscription and conversation state each time. Hold the single instance in a `useRef` (created lazily so it survives re-renders), and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. This example keeps the `api` wiring minimal — it omits the `userId` that the End-to-End example (#1) threads through `createConversation` / `sendMessage`; thread it the same way here when your API needs it (or resolve the user server-side).
+
+```tsx
+'use client'; // Next.js only — see the note below. Plain React (Vite/CRA) can omit this.
+
+import { useRef, useState, useEffect } from 'react';
+import { useChat, type ChatMessage } from '@aws-blocks/bb-agent/client';
+import { api } from './api'; // your generated aws-blocks API client
+
+export function Chat() {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [input, setInput] = useState('');
+
+  // Create the instance exactly once. The ref survives every re-render,
+  // so the subscription and conversation state are never torn down.
+  // Type the ref as `| undefined` and initialize with `undefined` — @types/react 19
+  // tightened the useRef overloads, so a bare useRef<T>() no longer compiles.
+  const chatRef = useRef<ReturnType<typeof useChat> | undefined>(undefined);
+  if (!chatRef.current) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- useChat is a factory, not a hook; the use-prefix trips the linter's hook heuristic.
+    chatRef.current = useChat({
+      api: {
+        sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId),
+        createConversation: () => api.createConversation(),
+        getConversation: (id) => api.getConversation(id),
+      },
+      subscribe: async (channelId, handler) => {
+        const channel = await api.getChannel(channelId);
+        return channel.subscribe(handler);
+      },
+      // Bridge the mutable instance into React state — these fire on every change.
+      onMessagesChange: setMessages,
+      onLoadingChange: setIsLoading,
+    });
+  }
+  const chat = chatRef.current!; // guaranteed set by the block above
+
+  // Tear down the WebSocket subscription when the component unmounts.
+  useEffect(() => () => chat.destroy(), [chat]);
+
+  async function handleSend(e: React.FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || isLoading) return;
+    setInput('');
+    await chat.sendMessage(text);
+  }
+
+  return (
+    <div>
+      <ul>
+        {messages.map((m) => (
+          <li key={m.id} data-role={m.role}>
+            <strong>{m.role}:</strong> {m.content}
+          </li>
+        ))}
+      </ul>
+      <form onSubmit={handleSend}>
+        <input value={input} onChange={(e) => setInput(e.target.value)} disabled={isLoading} />
+        <button type="submit" disabled={isLoading}>Send</button>
+      </form>
+    </div>
+  );
+}
+```
+
+Key points:
+
+- **One instance, held in a ref.** `useRef` + the lazy `if (!chatRef.current)` guard is the React idiom for "construct once." Because the identifier is `use`-prefixed, `eslint-plugin-react-hooks` (bundled in the default Next.js and CRA configs) flags the guarded call as a conditional hook (`react-hooks/rules-of-hooks`). `useChat` is a factory, not a hook, so this is a false positive — the inline `eslint-disable-next-line` above the call silences it. What you must **not** do is call `useChat(...)` unguarded on every render: that recreates the instance each time and is the footgun the factory note warns about.
+- **Callbacks are your reactivity bridge.** `useChat` mutates its own message list in place; `onMessagesChange` / `onLoadingChange` hand you the new value so you can `setState` and trigger a render. Passing `setMessages` / `setIsLoading` directly is enough.
+- **Clean up on unmount** with `chat.destroy()` in a `useEffect` cleanup, so the Realtime subscription is closed.
+- **Approvals:** wire `resume: (chId, responses, convId) => api.resume(chId, responses, convId)` into the `api` object above (mirroring your backend's resume method — `respondToInterrupt` throws if it is absent), add `onInterrupt: setInterrupts` (with `const [interrupts, setInterrupts] = useState<Array<{ id: string; name: string; reason?: unknown }>>([])` — a bare `useState([])` infers `never[]` and rejects the payload) to render an approval UI, then call `chat.respondToInterrupt([{ interruptId, approved: true }])`.
+
+**Next.js:** this is the same component — just keep the `'use client'` directive at the top of the file. `useChat` opens a browser WebSocket and holds client state, so it must run in a Client Component, never a Server Component. No other changes are needed.
+
+### 3. Support Agent with Tools
 
 Agent with tools that can look up orders and search documentation. Uses tool context to scope queries to the authenticated user.
 
@@ -800,7 +947,8 @@ The Agent BB composes several internal Building Blocks automatically:
 | `FileBucket` | S3 | Session snapshot storage (Strands agent state between turns) |
 | `DistributedTable` × 2 | DynamoDB | Conversations table + messages table |
 | `Realtime` | API Gateway WebSocket | Streaming chunks to connected clients |
-| `AsyncJob` | SQS + Lambda | Runs the agent asynchronously (no API Gateway timeout) |
+
+The streaming loop itself runs on a **Bedrock AgentCore Runtime** (provisioned by `AgentCoreRuntime` — not a composed BB). It's invoked via `InvokeAgentRuntime`, runs the loop for the length of the session (up to 8h), and publishes chunks over the Realtime BB above.
 
 When `inferenceOnly: true`, the two DistributedTables are skipped (no conversation persistence).
 
@@ -809,9 +957,8 @@ When `inferenceOnly: true`, the two DistributedTables are skipped (no conversati
 - **Model:** Bedrock pay-per-token pricing. See [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/).
 - **Persistence:** DynamoDB (DistributedTable) — PAY_PER_REQUEST, single-digit ms latency.
 - **Session storage:** S3 (FileBucket) — ~$0.023 per GB/month.
-- **Async execution:** SQS (AsyncJob) — $0.40 per million messages.
-- **Streaming:** AppSync Events (Realtime) — $1.00 per million connection minutes.
-- **No timeout limit:** Agent runs in AsyncJob consumer Lambda (up to 15 min), not behind API Gateway.
+- **Loop compute:** Bedrock AgentCore Runtime — consumption-based (vCPU + memory while a session is active). See [AgentCore Runtime pricing](https://aws.amazon.com/bedrock/agentcore/pricing/).
+- **Streaming:** API Gateway WebSocket (Realtime) — per-message + per-connection-minute pricing.
 
 ## Troubleshooting
 
@@ -827,4 +974,5 @@ When `inferenceOnly: true`, the two DistributedTables are skipped (no conversati
 - [Bedrock supported models](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html)
 - [Cross-region inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html)
 - [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/)
+- [Bedrock AgentCore Runtime pricing](https://aws.amazon.com/bedrock/agentcore/pricing/)
 - [Ollama model library](https://ollama.com/library)

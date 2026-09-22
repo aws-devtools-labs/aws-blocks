@@ -3,7 +3,35 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { ApiError, isBlocksError, hasAuthError } from './errors.js';
+import { ApiError, DEFAULT_API_ERROR_NAME, isBlocksError, hasAuthError } from './errors.js';
+
+describe('ApiError constructor', () => {
+  it('exposes message and status, and stays a real Error', () => {
+    const e = new ApiError('Not found', 404);
+    assert.ok(e instanceof Error);
+    assert.strictEqual(e.message, 'Not found');
+    assert.strictEqual(e.status, 404);
+  });
+
+  it('defaults name to ApiError and retriable to false', () => {
+    const e = new ApiError('boom', 500);
+    assert.strictEqual(e.name, DEFAULT_API_ERROR_NAME);
+    assert.strictEqual(e.retriable, false);
+  });
+
+  it('takes name, cause and retriable from the options argument', () => {
+    const cause = new Error('root');
+    const e = new ApiError('Username already taken', 409, {
+      name: 'ConditionalCheckFailedException',
+      cause,
+      retriable: true,
+    });
+    assert.strictEqual(e.name, 'ConditionalCheckFailedException');
+    assert.strictEqual(e.status, 409);
+    assert.strictEqual(e.retriable, true);
+    assert.strictEqual(e.cause, cause);
+  });
+});
 
 describe('isBlocksError', () => {
   it('matches a thrown ApiError by name', () => {

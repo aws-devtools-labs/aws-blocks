@@ -2,7 +2,7 @@
 // (packed off this repo) and run the real user commands — `npm run dev`,
 // `npm run sandbox` (+destroy), `npm run deploy` (+destroy). Readiness is keyed
 // off product artifacts (config/outputs files), not log strings. Run from the
-// repo root after `npm ci`, `npm run build`, and `npm run publish:dry-run`,
+// repo root after `npm ci`, `npm run build`, and `npm run publish:local`,
 // with AWS creds in the env. Fail-fast; always tears down what it deployed.
 
 import { spawn, spawnSync, execSync } from 'node:child_process';
@@ -16,7 +16,7 @@ const ROOT = process.cwd();
 const REGISTRY = 'http://localhost:4873/registry/';
 
 if (!existsSync(join(ROOT, 'dist-registry'))) {
-  console.error('dist-registry not found — run `npm run publish:dry-run` first.');
+  console.error('dist-registry not found — run `npm run publish:local` first.');
   process.exit(1);
 }
 

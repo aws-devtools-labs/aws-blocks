@@ -1,0 +1,24 @@
+{
+  "name": "bb-test-telemetry",
+  "version": "0.1.0",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "E2E telemetry test application for AWS Blocks",
+  "blocksTemplate": "telemetry-e2e",
+  "blocksTemplateVersion": "1.2.3",
+  "scripts": {
+    "dev:server": "tsx aws-blocks/scripts/server.ts",
+    "test": "echo 'Telemetry E2E tests run via root test:telemetry'",
+    "test:telemetry": "tsx test/telemetry-e2e.test.ts"
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}

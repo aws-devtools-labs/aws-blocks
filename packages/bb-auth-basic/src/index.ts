@@ -13,6 +13,7 @@ import crypto from 'crypto';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { AuthBasicErrors } from './errors.js';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 export type { BlocksAuth, AuthUser, AuthState, AuthActionInput } from '@aws-blocks/auth-common';
 export type { AuthAction, AuthField } from '@aws-blocks/auth-common';
@@ -160,7 +161,7 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	protected log: ChildLogger;
 
 	constructor(scope: ScopeParent, id: string, options?: AuthBasicOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.users = new KVStore(this, 'users');
 		this.jwtSecret = new AppSetting(this, 'jwt-secret', { secret: true });

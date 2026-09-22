@@ -49,6 +49,28 @@ afterEach(() => {
 	server.close();
 });
 
+
+// ── CORS headers ────────────────────────────────────────────────────────────
+
+describe('file-server: CORS headers', () => {
+	test('OPTIONS preflight does NOT send Access-Control-Allow-Credentials', async () => {
+		// Reflecting an arbitrary Origin together with credentials:true is an
+		// unsafe combination; the dev server must not advertise credentialed CORS.
+		const res = await fetch(`http://localhost:${port}/.bb-file-bucket/fsrv-cors/ping.txt`, {
+			method: 'OPTIONS',
+			headers: { Origin: 'https://evil.example.com' },
+		});
+		assert.strictEqual(res.status, 200);
+		assert.strictEqual(
+			res.headers.get('access-control-allow-credentials'),
+			null,
+			'dev server must not send Access-Control-Allow-Credentials',
+		);
+		// The other CORS headers remain intact.
+		assert.strictEqual(res.headers.get('access-control-allow-origin'), 'https://evil.example.com');
+		assert.ok(res.headers.get('access-control-allow-methods'));
+	});
+});
 // ── Basic presigned URL round-trip ──────────────────────────────────────────
 
 describe('file-server: basic GET/PUT', () => {
@@ -72,6 +94,38 @@ describe('file-server: basic GET/PUT', () => {
 		assert.strictEqual(await getRes.text(), 'hello world');
 	});
 
+	test('GET hardens against stored XSS: nosniff + attachment disposition', async () => {
+		// A client uploads an HTML payload under a text/html content type — the
+		// classic stored-XSS setup. When the dev server serves it back it must
+		// never let the browser render it inline in the app's origin.
+		const bucket = new FileBucket(scope, 'fs-xss');
+		const putUrl = await bucket.putUrl('payload.html', { contentType: 'text/html' });
+		const adjustedPut = putUrl.replace(/localhost:\d+/, `localhost:${port}`);
+		const putRes = await fetch(adjustedPut, {
+			method: 'PUT',
+			body: '<script>alert(document.domain)</script>',
+			headers: { 'Content-Type': 'text/html' },
+		});
+		assert.strictEqual(putRes.status, 200, `PUT failed: ${putRes.status}`);
+
+		const getUrl = await bucket.getUrl('payload.html');
+		const adjustedGet = getUrl.replace(/localhost:\d+/, `localhost:${port}`);
+		const getRes = await fetch(adjustedGet);
+		assert.strictEqual(getRes.status, 200, `GET failed: ${getRes.status}`);
+		assert.strictEqual(
+			getRes.headers.get('x-content-type-options'),
+			'nosniff',
+			'GET must send X-Content-Type-Options: nosniff',
+		);
+		assert.match(
+			getRes.headers.get('content-disposition') ?? '',
+			/^attachment/,
+			'GET must force download via Content-Disposition: attachment',
+		);
+		// consume the body so the socket closes cleanly
+		await getRes.arrayBuffer();
+	});
+
 	test('GET non-existent file returns 404', async () => {
 		const bucket = new FileBucket(scope, 'fs-404');
 		const url = await bucket.getUrl('missing.txt');
@@ -85,6 +139,23 @@ describe('file-server: basic GET/PUT', () => {
 		const url = `http://localhost:${port}/.bb-file-bucket/root-test/file.txt?token=invalid.token`;
 		const res = await fetch(url);
 		assert.strictEqual(res.status, 403);
+	});
+
+	test('a token forged with the former hardcoded secret is rejected', async () => {
+		// The signing secret used to be a fixed, source-visible literal, so anyone
+		// could mint a valid token offline for any fullId/path without ever calling
+		// getUrl()/putUrl(). It is now a per-process random secret. A token signed
+		// with the old literal must no longer validate.
+		const bucket = new FileBucket(scope, 'fs-forge');
+		const putUrl = await bucket.putUrl('secret.txt', { contentType: 'text/plain' });
+		const adjustedPut = putUrl.replace(/localhost:\d+/, `localhost:${port}`);
+		await fetch(adjustedPut, { method: 'PUT', body: 'data', headers: { 'Content-Type': 'text/plain' } });
+
+		const forged = mintFileToken('fsrv-fs-forge', 'secret.txt', 'GET', 3600, '__blocks_file_bucket_dev_secret__');
+		const url = `http://localhost:${port}/.bb-file-bucket/fsrv-fs-forge/secret.txt?token=${forged}`;
+		const res = await fetch(url);
+		await res.arrayBuffer();
+		assert.strictEqual(res.status, 403, 'a token forged with the old hardcoded secret must be rejected');
 	});
 
 	test('PUT for an unregistered bucket fails loud (500), no silent write', async () => {

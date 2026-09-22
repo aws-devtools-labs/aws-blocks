@@ -53,11 +53,18 @@ Error translation happens at the engine layer, not the database layer. Each engi
 
 | pg error code | DatabaseErrors name |
 |---------------|-------------------|
-| `23505` | `UniqueConstraintViolation` |
+| `40001` | `SerializationFailure` (→ `ApiError` 409, retriable) |
+| `23505` | `UniqueConstraintViolation` (→ `ApiError` 409, not retriable) |
 | `08xxx` | `ConnectionFailed` |
 | (other) | `QueryFailed` |
 
+Data API errors that carry no SQLState are classified by their SDK exception name: `ServiceUnavailableException`, `InternalServerErrorException`, and `DatabaseResumingException` (a `minCapacity: 0` cluster waking from auto-pause) all map to `ConnectionFailed` — transient, and worth retrying. Everything else falls through to `QueryFailed`.
+
 The `DatabaseBase` subclass only adds `TransactionFailed` naming for errors that escape the engine's transaction methods without a recognized name.
+
+An OCC serialization failure (SQLSTATE `40001`) is translated to an `ApiError` with status **409 (Conflict)**, retriable, preserving the `SerializationFailure` name so the JSON-RPC serializer emits 409 instead of a generic 500. This mapping is verified by translator/engine **unit tests** (`pg-error-translator.test.ts`, `data-api-engine.test.ts`), not an over-the-wire e2e test: the single-connection PGlite mock has no conflict-injection hook and cannot deterministically produce a `40001` serialization conflict over the wire, so unit tests are the verification ceiling for this Block. (The same holds for DistributedDatabase: its `40001` → 409 mapping is likewise covered by translator/engine unit tests only, not an over-the-wire e2e test — consistent with `bb-distributed-data/DESIGN.md`.)
+
+A duplicate-key unique-constraint violation (SQLSTATE `23505`) is likewise translated to an `ApiError` with status **409 (Conflict)** — via the shared `uniqueConstraintConflict()` helper across the PGlite, pg-client, and Data API engines (both the SQLState-parsed and message-matched Data API paths) — preserving the `UniqueConstraintViolation` name. It is **not** retriable: a duplicate key is deterministic, so a blind retry of the same insert fails identically. Unlike `40001`, a `23505` conflict **is** deterministically inducible in the PGlite mock (which enforces the PK constraint), so this mapping is additionally verified by an **over-the-wire e2e test** (`test-apps/comprehensive/test/database.test.ts`) asserting `error.status === 409` on the client — per AGENTS.md §11 for a serialization/behavior-affecting change. The raw driver text is retained only as `cause` (server-side); the client message is a fixed string.
 
 ## RLS Implementation
 
@@ -84,9 +91,9 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 | Aurora Serverless v2 cluster | PostgreSQL database |
 | VPC + private subnets | Network isolation |
 | RDS Proxy | Connection pooling |
-| Security group | Inbound 5432 from Lambda SG only |
+| Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
 | Secrets Manager secret | Auto-generated credentials |
-| Migration Lambda + CustomResource | Runs .sql files on deploy |
+| Migration Lambda + CustomResource | Runs .sql files on deploy (retries with exponential backoff, 1s → 30s × 8, while the cluster is unreachable — a new cluster's writer coming up, or a scale-to-zero cluster resuming from auto-pause) |
 | IAM grants | `rds-data:*`, `secretsmanager:GetSecretValue` |
 
 Removal policy: DESTROY in sandbox, RETAIN in production.

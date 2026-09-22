@@ -6,6 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { ApiError } from '@aws-blocks/core';
 import {
   translateDsqlError,
   DistributedDatabaseErrors,
@@ -14,24 +15,46 @@ import {
   PG_CONNECTION_EXCEPTION_CLASS,
 } from './errors.js';
 
+test('translateDsqlError: serialization failure (40001) → ApiError status 409, retriable', () => {
+  const err = Object.assign(new Error('conflict'), { code: PG_SERIALIZATION_FAILURE });
+  assert.throws(
+    () => translateDsqlError(err),
+    (e: unknown) => {
+      assert.ok(e instanceof ApiError, 'expected an ApiError');
+      assert.equal(e.status, 409);
+      assert.equal(e.name, DistributedDatabaseErrors.SerializationFailure);
+      assert.equal(e.retriable, true);
+      assert.equal(e.message, 'The transaction failed due to a serialization conflict');
+      assert.equal((e.cause as Error).message, 'conflict');
+      return true;
+    }
+  );
+});
+
 test('translateDsqlError: serialization failure (40001) → SerializationFailure', () => {
   const err = Object.assign(new Error('conflict'), { code: PG_SERIALIZATION_FAILURE });
   assert.throws(
     () => translateDsqlError(err),
     (e: Error) => {
       assert.equal(e.name, DistributedDatabaseErrors.SerializationFailure);
-      assert.equal(e.message, 'conflict');
+      assert.equal(e.message, 'The transaction failed due to a serialization conflict');
       return true;
     }
   );
 });
 
-test('translateDsqlError: unique violation (23505) → UniqueConstraintViolation', () => {
-  const err = Object.assign(new Error('duplicate key'), { code: PG_UNIQUE_VIOLATION });
+test('translateDsqlError: unique violation (23505) → ApiError status 409, name preserved, not retriable', () => {
+  const err = Object.assign(new Error('duplicate key value violates unique constraint "dsql_items_pkey"'), { code: PG_UNIQUE_VIOLATION });
   assert.throws(
     () => translateDsqlError(err),
-    (e: Error) => {
+    (e: unknown) => {
+      assert.ok(e instanceof ApiError, 'expected an ApiError');
+      assert.equal(e.status, 409);
       assert.equal(e.name, DistributedDatabaseErrors.UniqueConstraintViolation);
+      assert.strictEqual(e.retriable, false, 'a duplicate-key retry fails identically → not retriable');
+      assert.equal(e.message, 'The item violates a unique constraint');
+      // Raw driver error retained server-side as `cause`, not leaked into the message.
+      assert.equal(e.cause, err);
       return true;
     }
   );

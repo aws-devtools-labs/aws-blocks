@@ -17,10 +17,14 @@ import type { z } from 'zod';
 // @public (undocumented)
 export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
     constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>);
+    // @internal
+    protected dispatchTurn(payload: AgentTurnPayload<TContext>): Promise<void>;
 }
 
 // @public (undocumented)
 export interface AgentConfig<TContext = DefaultToolContext> {
+    // @internal
+    agentcoreAssetPath?: string;
     // Warning: (ae-forgotten-export) The symbol "ConversationManagerConfig" needs to be exported by the entry point index.aws.d.ts
     //
     // (undocumented)
@@ -29,6 +33,8 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     description?: string;
     inferenceOnly?: boolean;
     logger?: ChildLogger;
+    maxLlmCalls?: number | false;
+    maxToolIterations?: number | false;
     // (undocumented)
     model?: {
         deployed?: ModelConfig | ModelConfig[];
@@ -38,8 +44,6 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     name?: string;
     removalPolicy?: 'destroy' | 'retain';
     streamingMode?: 'token' | 'block';
-    // (undocumented)
-    structuredOutput?: z.ZodType;
     // (undocumented)
     systemPrompt: string;
     toolContextSchema?: z.ZodType<TContext>;
@@ -103,6 +107,21 @@ export interface AgentStreamResult {
 export type AgentTool<TContext = DefaultToolContext> = ToolDefinition<TContext, any> & {
     readonly [AGENT_TOOL_BRAND]: true;
 };
+
+// Warning: (ae-internal-missing-underscore) The name "AgentTurnPayload" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal
+export interface AgentTurnPayload<TContext = DefaultToolContext> {
+    channelId: string;
+    context?: TContext;
+    conversationId?: string;
+    interruptResponses?: Array<{
+        interruptId: string;
+        response: string;
+    }>;
+    message: string;
+    userId: string;
+}
 
 // @public
 export const BedrockModels: {
@@ -282,6 +301,8 @@ export interface ToolCallRecord {
 
 // @public (undocumented)
 export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z.ZodType = z.ZodType<any>> {
+    cannedExamples?: Record<string, JSONValue>;
+    cannedTriggers?: string[];
     // (undocumented)
     description: string;
     handler: (args: ToolHandlerArgs<z.infer<TParams>, TContext>) => Promise<JSONValue>;

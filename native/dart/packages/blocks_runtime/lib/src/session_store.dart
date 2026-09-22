@@ -33,8 +33,9 @@ class InMemorySessionStore implements SessionStore {
       final nameValue = cookie.trim().split(';')[0];
       final eqIdx = nameValue.indexOf('=');
       if (eqIdx > 0) {
-        _cookies[nameValue.substring(0, eqIdx).trim()] =
-            nameValue.substring(eqIdx + 1).trim();
+        _cookies[nameValue.substring(0, eqIdx).trim()] = nameValue
+            .substring(eqIdx + 1)
+            .trim();
       }
     }
   }
@@ -78,8 +79,8 @@ class PersistentSessionStore implements SessionStore {
   PersistentSessionStore({
     required TokenStore store,
     String storageKey = '_session_cookies',
-  })  : _store = store,
-        _storageKey = storageKey;
+  }) : _store = store,
+       _storageKey = storageKey;
 
   /// Hydrates the in-memory cache from the backing [TokenStore]. Call once at
   /// startup before issuing authenticated requests. Safe to call repeatedly.
@@ -87,8 +88,8 @@ class PersistentSessionStore implements SessionStore {
     final raw = await _store.get(_storageKey);
     if (raw == null || raw.isEmpty) return;
     try {
-      final map =
-          (jsonDecode(raw) as Map<String, dynamic>).cast<String, String>();
+      final map = (jsonDecode(raw) as Map<String, dynamic>)
+          .cast<String, String>();
       for (final entry in map.entries) {
         _cache.setCookies('${entry.key}=${entry.value}');
       }

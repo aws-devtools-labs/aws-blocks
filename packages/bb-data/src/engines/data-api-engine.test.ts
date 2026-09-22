@@ -3,6 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { ApiError } from '@aws-blocks/core';
 import { DataApiEngine, toField, fromField } from './data-api-engine.js';
 import { DatabaseErrors } from '../errors.js';
 
@@ -160,7 +161,7 @@ test('execute returns rowCount', async () => {
 
 // --- error translation ---
 
-test('BadRequestException with unique constraint maps to UniqueConstraintViolation', async () => {
+test('BadRequestException with unique constraint maps to UniqueConstraintViolation (ApiError 409)', async () => {
   const engine = createEngine({
     ExecuteStatementCommand: () => {
       const err = new Error('duplicate key value violates unique constraint');
@@ -170,14 +171,17 @@ test('BadRequestException with unique constraint maps to UniqueConstraintViolati
   });
   await assert.rejects(
     () => engine.execute('INSERT INTO t VALUES (1)'),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409, 'duplicate key must be 409, not 500');
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
+      assert.strictEqual(err.retriable, false);
       return true;
     }
   );
 });
 
-test('non-BadRequestException with unique constraint message maps to UniqueConstraintViolation', async () => {
+test('non-BadRequestException with unique constraint message maps to UniqueConstraintViolation (ApiError 409)', async () => {
   const engine = createEngine({
     ExecuteStatementCommand: () => {
       const err = new Error('ERROR: duplicate key value violates unique constraint "t_pkey"; SQLState: 23505');
@@ -187,7 +191,9 @@ test('non-BadRequestException with unique constraint message maps to UniqueConst
   });
   await assert.rejects(
     () => engine.execute('INSERT INTO t VALUES (1)'),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409);
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
       return true;
     }
@@ -330,9 +336,9 @@ test('serialization failure surfaced on CommitTransaction (SQLState 40001) is cl
   );
 });
 
-test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to UniqueConstraintViolation', async () => {
+test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to UniqueConstraintViolation (ApiError 409)', async () => {
   // Confirms the real exception name is DatabaseErrorException (not BadRequestException),
-  // and code-based classification keeps unique-violation mapping working.
+  // and code-based classification maps unique-violation to a 409 ApiError.
   const engine = createEngine({
     ExecuteStatementCommand: () => {
       const err = new Error(
@@ -344,8 +350,11 @@ test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to
   });
   await assert.rejects(
     () => engine.execute('INSERT INTO t VALUES ($1)', ['dup']),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409, 'duplicate key must be 409, not 500');
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
+      assert.strictEqual(err.retriable, false);
       return true;
     },
   );
@@ -363,6 +372,30 @@ test('a genuine non-serialization query error still maps to QueryFailed', async 
     () => engine.query('SELCT 1'),
     (err: Error) => {
       assert.strictEqual(err.name, DatabaseErrors.QueryFailed);
+      return true;
+    },
+  );
+});
+
+test('Data API auto-pause resume error (DatabaseResumingException) maps to ConnectionFailed', async () => {
+  // A scale-to-zero cluster (minCapacity: 0) auto-pauses after ~5 minutes idle.
+  // The first Data API call wakes it and fails with DatabaseResumingException —
+  // transient, and retryable. Classifying it as QueryFailed hides that from
+  // callers (notably the migration Lambda's retry helper), so a deploy against a
+  // paused cluster fails outright. The message carries no SQLState.
+  const engine = createEngine({
+    ExecuteStatementCommand: () => {
+      const err = new Error(
+        'The Aurora DB instance db-XXXXXXXXXXXXXXXXXXXXXXXXXX is resuming after being auto-paused. Please wait a few seconds and try again.',
+      );
+      err.name = 'DatabaseResumingException';
+      throw err;
+    },
+  });
+  await assert.rejects(
+    () => engine.execute('CREATE TABLE IF NOT EXISTS _migrations (id SERIAL PRIMARY KEY)'),
+    (err: Error) => {
+      assert.strictEqual(err.name, DatabaseErrors.ConnectionFailed);
       return true;
     },
   );
