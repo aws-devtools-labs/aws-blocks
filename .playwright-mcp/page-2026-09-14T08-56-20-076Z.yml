@@ -1,0 +1,362 @@
+- generic [active] [ref=f1e1]:
+  - navigation [ref=f1e2]:
+    - link "Home" [ref=f1e3] [cursor=pointer]:
+      - /url: /
+    - text: ·
+    - link "About (prerendered)" [ref=f1e4] [cursor=pointer]:
+      - /url: /about
+    - text: ·
+    - link "Blog (SSR)" [ref=f1e5] [cursor=pointer]:
+      - /url: /blog/hello
+    - text: ·
+    - link "Islands" [ref=f1e6] [cursor=pointer]:
+      - /url: /islands
+    - text: ·
+    - link "Server-only" [ref=f1e7] [cursor=pointer]:
+      - /url: /server-only
+    - text: ·
+    - link "Image opt" [ref=f1e8] [cursor=pointer]:
+      - /url: /image-opt
+    - text: ·
+    - link "Image remote" [ref=f1e9] [cursor=pointer]:
+      - /url: /image-remote
+    - text: ·
+    - link "Cookies" [ref=f1e10] [cursor=pointer]:
+      - /url: /cookies
+    - text: ·
+    - link "Request URL" [ref=f1e11] [cursor=pointer]:
+      - /url: /request-url
+    - text: ·
+    - link "Products" [ref=f1e12] [cursor=pointer]:
+      - /url: /products
+    - text: ·
+    - link "View transitions" [ref=f1e13] [cursor=pointer]:
+      - /url: /view-transitions
+    - text: ·
+    - link "Headers" [ref=f1e14] [cursor=pointer]:
+      - /url: /headers-test
+    - text: ·
+    - link "Secure headers" [ref=f1e15] [cursor=pointer]:
+      - /url: /secure-headers
+    - text: ·
+    - link "Upload" [ref=f1e16] [cursor=pointer]:
+      - /url: /upload
+    - text: ·
+    - link "Slow" [ref=f1e17] [cursor=pointer]:
+      - /url: /slow
+    - text: ·
+    - link "Catch-all" [ref=f1e18] [cursor=pointer]:
+      - /url: /catchall
+    - text: ·
+    - link "API tester" [ref=f1e19] [cursor=pointer]:
+      - /url: /api-test
+  - generic [ref=f1e20]:
+    - strong [ref=f1e21]: "Framework:"
+    - code [ref=f1e22]: Astro
+    - text: ·
+    - strong [ref=f1e23]: "Variant:"
+    - code [ref=f1e24]: "SSR (output: server, @astrojs/node + LWA)"
+    - text: ·
+    - strong [ref=f1e25]: "Render mode:"
+    - code [ref=f1e26]: Server-rendered per request
+    - strong [ref=f1e27]: "Built:"
+    - code [ref=f1e28]: Sep 13, 2026, 4:56:36 PM UTC
+    - text: ·
+    - strong [ref=f1e29]: "Served:"
+    - code [ref=f1e30]: Sep 14, 2026, 8:56:19 AM UTC
+    - text: ·
+    - emphasis [ref=f1e31]: "SSR pages: served-time changes per request; build stays. Prerendered (/about): both frozen."
+  - main [ref=f1e32]:
+    - heading "Home" [level=1] [ref=f1e33]
+    - paragraph [ref=f1e34]:
+      - text: Astro static multi-page stress dashboard. Click
+      - strong [ref=f1e35]: Run probes
+      - text: to fetch every route from the browser and auto-check status / body / header. Each row maps to a test-matrix ID.
+    - button "▶ Run probes" [ref=f1e36] [cursor=pointer]
+    - text: 0 pass · 0 fail
+    - group [ref=f1e37]:
+      - generic "Rendering (6)" [ref=f1e38] [cursor=pointer]
+      - table [ref=f1e39]:
+        - rowgroup [ref=f1e40]:
+          - row [ref=f1e41]:
+            - columnheader "●" [ref=f1e42]
+            - columnheader "Matrix" [ref=f1e43]
+            - columnheader "Route / feature" [ref=f1e44]
+            - columnheader "How to test" [ref=f1e45]
+            - columnheader "Expected" [ref=f1e46]
+        - rowgroup [ref=f1e47]:
+          - row [ref=f1e48]:
+            - cell "○" [ref=f1e49]
+            - cell [ref=f1e50]:
+              - code [ref=f1e51]: M1.2 / AS1.2
+            - cell "/ SSR home (fresh per request) output:server → this page renders in the SSR Lambda on every request (served-time changes)." [ref=f1e52]:
+              - link / [ref=f1e53] [cursor=pointer]:
+                - /url: /
+              - generic [ref=f1e54]: SSR home (fresh per request)
+              - generic [ref=f1e55]: output:server → this page renders in the SSR Lambda on every request (served-time changes).
+            - cell "Refresh twice — served-time changes, build stays." [ref=f1e56]
+            - cell "200; served-time updates per request." [ref=f1e57]
+          - row [ref=f1e58]:
+            - cell "○" [ref=f1e59]
+            - cell [ref=f1e60]:
+              - code [ref=f1e61]: AS1.3
+            - cell "/about Prerendered route /about export const prerender=true → frozen HTML in dist/client, routed to S3 (no Lambda)." [ref=f1e62]:
+              - link "/about" [ref=f1e63] [cursor=pointer]:
+                - /url: /about
+              - generic [ref=f1e64]: Prerendered route /about
+              - generic [ref=f1e65]: export const prerender=true → frozen HTML in dist/client, routed to S3 (no Lambda).
+            - cell "GET /about; served-time frozen at build." [ref=f1e66]
+            - cell "200; served from S3." [ref=f1e67]
+          - row [ref=f1e68]:
+            - cell "○" [ref=f1e69]
+            - cell [ref=f1e70]:
+              - code [ref=f1e71]: M1.10 / AS1.2
+            - cell "/blog/hello-world Dynamic SSR [slug] Dynamic route, no prerender. Each slug renders on demand in the SSR Lambda." [ref=f1e72]:
+              - link "/blog/hello-world" [ref=f1e73] [cursor=pointer]:
+                - /url: /blog/hello-world
+              - generic [ref=f1e74]: Dynamic SSR [slug]
+              - generic [ref=f1e75]: Dynamic route, no prerender. Each slug renders on demand in the SSR Lambda.
+            - cell "GET /blog/anything → 200 echoing the slug." [ref=f1e76]
+            - cell "200; slug echoed." [ref=f1e77]
+          - row [ref=f1e78]:
+            - cell "○" [ref=f1e79]
+            - cell [ref=f1e80]:
+              - code [ref=f1e81]: M1.2
+            - cell "/server-only Request introspection Reads Astro.request.headers — proves LWA proxies the original HTTP request." [ref=f1e82]:
+              - link "/server-only" [ref=f1e83] [cursor=pointer]:
+                - /url: /server-only
+              - generic [ref=f1e84]: Request introspection
+              - generic [ref=f1e85]: Reads Astro.request.headers — proves LWA proxies the original HTTP request.
+            - cell "GET /server-only; UA matches your client." [ref=f1e86]
+            - cell "200; request headers visible." [ref=f1e87]
+          - row [ref=f1e88]:
+            - cell "○" [ref=f1e89]
+            - cell [ref=f1e90]:
+              - code [ref=f1e91]: M10 (astro image)
+            - cell "/image-opt Image optimization (astro:assets) astro:assets <Image>. The /_image endpoint rides the SSR Lambda and REALLY resizes (the adapter bundles a linux-x64 sharp), returning distinct image/webp bytes per width; raw asset under /_astro/ is static." [ref=f1e92]:
+              - link "/image-opt" [ref=f1e93] [cursor=pointer]:
+                - /url: /image-opt
+              - generic [ref=f1e94]: Image optimization (astro:assets)
+              - generic [ref=f1e95]: astro:assets <Image>. The /_image endpoint rides the SSR Lambda and REALLY resizes (the adapter bundles a linux-x64 sharp), returning distinct image/webp bytes per width; raw asset under /_astro/ is static.
+            - cell "Open /image-opt; Run validation — /_image returns resized image/* per width + /_astro asset 200." [ref=f1e96]
+            - cell "200; optimized (resized) + raw image both image/*." [ref=f1e97]
+          - row [ref=f1e98]:
+            - cell "○" [ref=f1e99]
+            - cell [ref=f1e100]:
+              - code [ref=f1e101]: AS10.3
+            - cell "/server-island Server Island (server:defer) server:defer fragment fetched via /_server-islands/ on the SSR Lambda after the shell." [ref=f1e102]:
+              - link "/server-island" [ref=f1e103] [cursor=pointer]:
+                - /url: /server-island
+              - generic [ref=f1e104]: Server Island (server:defer)
+              - generic [ref=f1e105]: server:defer fragment fetched via /_server-islands/ on the SSR Lambda after the shell.
+            - cell "Open /server-island; the deferred clock resolves." [ref=f1e106]
+            - cell "200; deferred island renders." [ref=f1e107]
+    - group [ref=f1e108]:
+      - generic "Islands (1)" [ref=f1e109] [cursor=pointer]
+      - table [ref=f1e110]:
+        - rowgroup [ref=f1e111]:
+          - row [ref=f1e112]:
+            - columnheader "●" [ref=f1e113]
+            - columnheader "Matrix" [ref=f1e114]
+            - columnheader "Route / feature" [ref=f1e115]
+            - columnheader "How to test" [ref=f1e116]
+            - columnheader "Expected" [ref=f1e117]
+        - rowgroup [ref=f1e118]:
+          - row [ref=f1e119]:
+            - cell "○" [ref=f1e120]
+            - cell [ref=f1e121]:
+              - code [ref=f1e122]: AS (islands)
+            - cell "/islands Selective hydration Preact islands client:load + client:visible on an SSR page." [ref=f1e123]:
+              - link "/islands" [ref=f1e124] [cursor=pointer]:
+                - /url: /islands
+              - generic [ref=f1e125]: Selective hydration
+              - generic [ref=f1e126]: Preact islands client:load + client:visible on an SSR page.
+            - cell "Open /islands; click counter increments." [ref=f1e127]
+            - cell "200; islands hydrate." [ref=f1e128]
+    - group [ref=f1e129]:
+      - generic "API (7)" [ref=f1e130] [cursor=pointer]
+      - table [ref=f1e131]:
+        - rowgroup [ref=f1e132]:
+          - row [ref=f1e133]:
+            - columnheader "●" [ref=f1e134]
+            - columnheader "Matrix" [ref=f1e135]
+            - columnheader "Route / feature" [ref=f1e136]
+            - columnheader "How to test" [ref=f1e137]
+            - columnheader "Expected" [ref=f1e138]
+        - rowgroup [ref=f1e139]:
+          - row [ref=f1e140]:
+            - cell "○" [ref=f1e141]
+            - cell [ref=f1e142]:
+              - code [ref=f1e143]: M1.2
+            - cell "/api/health GET /api/health Plain JSON endpoint; smoke-tests the Astro endpoint layer + LWA." [ref=f1e144]:
+              - link "/api/health" [ref=f1e145] [cursor=pointer]:
+                - /url: /api/health
+              - generic [ref=f1e146]: GET /api/health
+              - generic [ref=f1e147]: Plain JSON endpoint; smoke-tests the Astro endpoint layer + LWA.
+            - 'cell "GET /api/health → JSON {status:\"ok\"}." [ref=f1e148]'
+            - cell "200 application/json." [ref=f1e149]
+          - row [ref=f1e150]:
+            - cell "○" [ref=f1e151]
+            - cell [ref=f1e152]:
+              - code [ref=f1e153]: M11.5
+            - cell "POST /api/echo POST /api/echo (body round-trip) Round-trips a request body through CloudFront->APIGW->Lambda->LWA." [ref=f1e154]:
+              - link "POST /api/echo" [ref=f1e155] [cursor=pointer]:
+                - /url: /api/echo
+              - generic [ref=f1e156]: POST /api/echo (body round-trip)
+              - generic [ref=f1e157]: Round-trips a request body through CloudFront->APIGW->Lambda->LWA.
+            - cell "POST JSON; body.echoed matches." [ref=f1e158]
+            - cell "200; body preserved." [ref=f1e159]
+          - row [ref=f1e160]:
+            - cell "○" [ref=f1e161]
+            - cell [ref=f1e162]:
+              - code [ref=f1e163]: M11.1
+            - cell "/api/stream Streaming response ReadableStream, 5 chunks. Tests Lambda response-stream through CloudFront." [ref=f1e164]:
+              - link "/api/stream" [ref=f1e165] [cursor=pointer]:
+                - /url: /api/stream
+              - generic [ref=f1e166]: Streaming response
+              - generic [ref=f1e167]: ReadableStream, 5 chunks. Tests Lambda response-stream through CloudFront.
+            - cell "curl -N /api/stream — chunks arrive over time." [ref=f1e168]
+            - cell "200; chunk-0..4 present." [ref=f1e169]
+          - row [ref=f1e170]:
+            - cell "○" [ref=f1e171]
+            - cell [ref=f1e172]:
+              - code [ref=f1e173]: M2.4-cousin
+            - cell "/api/cookies Multi Set-Cookie Sets 3 separate cookies; verifies CloudFront/APIGW does not collapse multiple Set-Cookie." [ref=f1e174]:
+              - link "/api/cookies" [ref=f1e175] [cursor=pointer]:
+                - /url: /api/cookies
+              - generic [ref=f1e176]: Multi Set-Cookie
+              - generic [ref=f1e177]: Sets 3 separate cookies; verifies CloudFront/APIGW does not collapse multiple Set-Cookie.
+            - cell "curl -i /api/cookies — 3 set-cookie lines." [ref=f1e178]
+            - cell "200; 3 cookies set." [ref=f1e179]
+          - row [ref=f1e180]:
+            - cell "○" [ref=f1e181]
+            - cell [ref=f1e182]:
+              - code [ref=f1e183]: M7.3-cousin
+            - cell "/api/throw Error path (500) Endpoint returns 500 with JSON body; security headers still applied." [ref=f1e184]:
+              - link "/api/throw" [ref=f1e185] [cursor=pointer]:
+                - /url: /api/throw
+              - generic [ref=f1e186]: Error path (500)
+              - generic [ref=f1e187]: Endpoint returns 500 with JSON body; security headers still applied.
+            - cell "curl -i /api/throw -> 500." [ref=f1e188]
+            - cell "500 application/json." [ref=f1e189]
+          - row [ref=f1e190]:
+            - cell "○" [ref=f1e191]
+            - cell [ref=f1e192]:
+              - code [ref=f1e193]: single-origin
+            - cell "POST /aws-blocks/api Blocks API via same origin POST to relative /aws-blocks/api — CloudFront proxies to the Blocks API GW (no CORS)." [ref=f1e194]:
+              - link "POST /aws-blocks/api" [ref=f1e195] [cursor=pointer]:
+                - /url: /aws-blocks/api
+              - generic [ref=f1e196]: Blocks API via same origin
+              - generic [ref=f1e197]: POST to relative /aws-blocks/api — CloudFront proxies to the Blocks API GW (no CORS).
+            - 'cell "POST {method:\"api.ping\"} -> 200." [ref=f1e198]'
+            - cell "200; backend reachable." [ref=f1e199]
+          - row [ref=f1e200]:
+            - cell "○" [ref=f1e201]
+            - cell [ref=f1e202]:
+              - code [ref=f1e203]: AS10.4
+            - cell "/actions Astro Actions (defineAction) actions.echo POSTs to /_actions/echo (SSR Lambda) and returns a typed, Zod-validated result." [ref=f1e204]:
+              - link "/actions" [ref=f1e205] [cursor=pointer]:
+                - /url: /actions
+              - generic [ref=f1e206]: Astro Actions (defineAction)
+              - generic [ref=f1e207]: actions.echo POSTs to /_actions/echo (SSR Lambda) and returns a typed, Zod-validated result.
+            - cell "Open /actions; click Call action → result echoed." [ref=f1e208]
+            - cell "200; action RPC round-trips." [ref=f1e209]
+    - group [ref=f1e210]:
+      - generic "Lifecycle (4)" [ref=f1e211] [cursor=pointer]
+      - table [ref=f1e212]:
+        - rowgroup [ref=f1e213]:
+          - row [ref=f1e214]:
+            - columnheader "●" [ref=f1e215]
+            - columnheader "Matrix" [ref=f1e216]
+            - columnheader "Route / feature" [ref=f1e217]
+            - columnheader "How to test" [ref=f1e218]
+            - columnheader "Expected" [ref=f1e219]
+        - rowgroup [ref=f1e220]:
+          - row [ref=f1e221]:
+            - cell "○" [ref=f1e222]
+            - cell [ref=f1e223]:
+              - code [ref=f1e224]: AS3.1
+            - cell "/server-only Middleware header injection src/middleware.ts adds x-stress-mw:1 to every response (runs in the SSR Lambda)." [ref=f1e225]:
+              - link "/server-only" [ref=f1e226] [cursor=pointer]:
+                - /url: /server-only
+              - generic [ref=f1e227]: Middleware header injection
+              - generic [ref=f1e228]: src/middleware.ts adds x-stress-mw:1 to every response (runs in the SSR Lambda).
+            - cell "curl -I /server-only -> x-stress-mw:1." [ref=f1e229]
+            - cell "header on every SSR response." [ref=f1e230]
+          - row [ref=f1e231]:
+            - cell "○" [ref=f1e232]
+            - cell [ref=f1e233]:
+              - code [ref=f1e234]: M5.1
+            - cell "/headers-test Custom response headers Page sets custom headers via Astro.response.headers." [ref=f1e235]:
+              - link "/headers-test" [ref=f1e236] [cursor=pointer]:
+                - /url: /headers-test
+              - generic [ref=f1e237]: Custom response headers
+              - generic [ref=f1e238]: Page sets custom headers via Astro.response.headers.
+            - cell "curl -I /headers-test -> x-astro-page." [ref=f1e239]
+            - cell "custom + security headers." [ref=f1e240]
+          - row [ref=f1e241]:
+            - cell "○" [ref=f1e242]
+            - cell [ref=f1e243]:
+              - code [ref=f1e244]: M4 (runtime)
+            - cell "/redirected Runtime redirect (in Lambda) Astro.redirect(\"/\",307) — runs in the SSR Lambda (costs an invocation)." [ref=f1e245]:
+              - link "/redirected" [ref=f1e246] [cursor=pointer]:
+                - /url: /redirected
+              - generic [ref=f1e247]: Runtime redirect (in Lambda)
+              - generic [ref=f1e248]: Astro.redirect("/",307) — runs in the SSR Lambda (costs an invocation).
+            - cell "curl -I /redirected -> 307 Location:/." [ref=f1e249]
+            - cell "307 -> /." [ref=f1e250]
+          - row [ref=f1e251]:
+            - cell "○" [ref=f1e252]
+            - cell [ref=f1e253]:
+              - code [ref=f1e254]: AS6.3 / M4.1
+            - cell "/legacy-about Lifted redirect (edge, 308) astro.config redirect lifted to the CloudFront viewer-request function (no Lambda)." [ref=f1e255]:
+              - link "/legacy-about" [ref=f1e256] [cursor=pointer]:
+                - /url: /legacy-about
+              - generic [ref=f1e257]: Lifted redirect (edge, 308)
+              - generic [ref=f1e258]: astro.config redirect lifted to the CloudFront viewer-request function (no Lambda).
+            - cell "curl -I /legacy-about -> 308 Location:/about." [ref=f1e259]
+            - cell "308 at the edge." [ref=f1e260]
+    - group [ref=f1e261]:
+      - generic "Errors (1)" [ref=f1e262] [cursor=pointer]
+      - table [ref=f1e263]:
+        - rowgroup [ref=f1e264]:
+          - row [ref=f1e265]:
+            - columnheader "●" [ref=f1e266]
+            - columnheader "Matrix" [ref=f1e267]
+            - columnheader "Route / feature" [ref=f1e268]
+            - columnheader "How to test" [ref=f1e269]
+            - columnheader "Expected" [ref=f1e270]
+        - rowgroup [ref=f1e271]:
+          - row [ref=f1e272]:
+            - cell "○" [ref=f1e273]
+            - cell [ref=f1e274]:
+              - code [ref=f1e275]: M7.1
+            - cell "/this-does-not-exist-xyz Custom 404 Falls through to src/pages/404.astro." [ref=f1e276]:
+              - link "/this-does-not-exist-xyz" [ref=f1e277] [cursor=pointer]:
+                - /url: /this-does-not-exist-xyz
+              - generic [ref=f1e278]: Custom 404
+              - generic [ref=f1e279]: Falls through to src/pages/404.astro.
+            - cell "GET /nope -> 404." [ref=f1e280]
+            - cell "404 status + custom page." [ref=f1e281]
+    - group [ref=f1e282]:
+      - generic "Headers (1)" [ref=f1e283] [cursor=pointer]
+      - table [ref=f1e284]:
+        - rowgroup [ref=f1e285]:
+          - row [ref=f1e286]:
+            - columnheader "●" [ref=f1e287]
+            - columnheader "Matrix" [ref=f1e288]
+            - columnheader "Route / feature" [ref=f1e289]
+            - columnheader "How to test" [ref=f1e290]
+            - columnheader "Expected" [ref=f1e291]
+        - rowgroup [ref=f1e292]:
+          - row [ref=f1e293]:
+            - cell "○" [ref=f1e294]
+            - cell [ref=f1e295]:
+              - code [ref=f1e296]: M6.5/M6.6
+            - cell "/ L3 security headers L3 attaches HSTS / X-Frame-Options / nosniff on every response." [ref=f1e297]:
+              - link / [ref=f1e298] [cursor=pointer]:
+                - /url: /
+              - generic [ref=f1e299]: L3 security headers
+              - generic [ref=f1e300]: L3 attaches HSTS / X-Frame-Options / nosniff on every response.
+            - cell "curl -I / -> headers present." [ref=f1e301]
+            - cell "security headers everywhere." [ref=f1e302]

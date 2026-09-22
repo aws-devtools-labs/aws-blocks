@@ -106,6 +106,13 @@ describe('AlbConstruct — BYO VPC vs default', () => {
   it('creates a default VPC when none is provided', () => {
     synth(staticPlan).resourceCountIs('AWS::EC2::VPC', 1);
   });
+
+  it('default VPC is public-only — no idle NAT Gateway (public ALB + non-VPC Lambdas need none)', () => {
+    const t = synth(staticPlan);
+    t.resourceCountIs('AWS::EC2::NatGateway', 0);
+    // No PRIVATE_WITH_EGRESS tier, so no default route to a NAT Gateway.
+    t.resourceCountIs('AWS::EC2::Route', 2); // one public default route per AZ (maxAzs: 2)
+  });
 });
 
 describe('AlbConstruct — same-origin backend routing (plan.backend)', () => {
