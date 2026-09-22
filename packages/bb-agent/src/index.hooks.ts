@@ -83,7 +83,7 @@ export interface UseChatOptions {
 	onChunk?: (chunk: AgentStreamChunk) => void;
 	/** Called when the agent encounters an error. */
 	onError?: (error: string) => void;
-	/** Called when the agent needs human approval before continuing. */
+	/** Called when the agent needs human approval before continuing. The same interrupt may be surfaced more than once — on the initial `loadConversation` and again on a reconnect re-sync — so handlers should key/dedupe by interrupt `id`. */
 	onInterrupt?: (interrupts: Array<{ id: string; name: string; reason?: any }>) => void;
 }
 
@@ -398,6 +398,17 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		const subscribeArg: ChatSubscribeOptions = {
 			onMessage: handleChunk,
 			onReconnect: () => { void handleReconnect(); },
+			// The transport's terminal failure paths — every channel's resubscribe rejected
+			// (all-stale tokens), or reconnect retries exhausted past the ~2h connect-token
+			// ceiling — surface onDisconnect('error') but deliberately do NOT fire onReconnect
+			// (nothing is live). Without wiring this, an in-flight turn's spinner would hang
+			// with no signal. On a terminal 'error' drop while loading, arm the bounded
+			// failsafe: it re-arms on any subsequent chunk (so a still-live turn is unaffected)
+			// and otherwise clears loading + surfaces onError, so the spinner can never hang.
+			// 'client' (our own unsubscribe) is ignored.
+			onDisconnect: (reason) => {
+				if (reason === 'error' && loading) { armFailsafe(); }
+			},
 		};
 
 		const sub = await options.subscribe(channelId, subscribeArg);

@@ -122,7 +122,7 @@ the transport's transparent reconnect (bb-realtime). Because WebSocket pub/sub i
 the hook treats the **persisted conversation as the source of truth** and recovers around the gap:
 
 - **Subscribe adapter must forward verbatim.** `useChat` calls the consumer's `subscribe` with a
-  `ChatSubscribeOptions` *object* (`onMessage`/`onReconnect`/`onDisconnect`/`refresh`), and the
+  `ChatSubscribeOptions` *object* (`onMessage`/`onReconnect`/`onDisconnect`), and the
   adapter must pass that argument straight to `channel.subscribe(...)`. Both middlewares branch on
   `typeof arg === 'function'` first, so a callable-with-props hybrid would silently drop the extra
   callbacks and disable reconnect recovery.
@@ -136,7 +136,11 @@ the hook treats the **persisted conversation as the source of truth** and recove
   by every received chunk, so it fires only after *complete silence* — never during a long tool-call
   gap or a slow post-reconnect stream. It must exceed the API Gateway 10-min idle timeout + reconnect
   budget, otherwise a normal idle→disconnect→reconnect cycle would trip a spurious 'Timed out'. It is
-  the backstop, not the primary recovery (which is the `done` chunk / DB re-sync).
+  the backstop, not the primary recovery (which is the `done` chunk / DB re-sync). It is armed on
+  reconnect AND on a terminal `onDisconnect('error')` while loading — the give-up / all-stale-token
+  paths (past the transport's ~2h connect-token ceiling) surface `onDisconnect('error')` but NOT
+  `onReconnect`, so wiring the failsafe to that reason too is what guarantees the spinner clears even
+  when no channel comes back.
 - **Send-path failsafe.** `sendMessage`/`respondToInterrupt` wrap the RPC in try/catch → `handleSendFailure`,
   which resets `loading`, drops the empty assistant placeholder, and reports the error once. A 504 may
   still have started the turn server-side; that started turn is recovered via the reconnect → `getConversation`

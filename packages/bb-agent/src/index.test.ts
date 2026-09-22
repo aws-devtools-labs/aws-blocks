@@ -1557,6 +1557,40 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
+	test('terminal onDisconnect(error) while loading arms the failsafe (all-stale/give-up path, no onReconnect)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			subscribe,
+			onError: (e) => { errorReceived = e; },
+		});
+
+		await chat.sendMessage('hello');
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// The transport gives up / every resubscribe is stale: it surfaces a terminal
+		// onDisconnect('error') and does NOT fire onReconnect. This must arm the failsafe
+		// so the spinner cannot hang forever with no other signal.
+		assert.ok(cap.disconnect, 'useChat must forward onDisconnect to the transport');
+		cap.disconnect!('error');
+		await flush();
+
+		// A benign 'client' disconnect (our own unsubscribe) must NOT arm it.
+		assert.strictEqual(chat.isLoading(), true, 'still loading — failsafe is armed, not immediate');
+
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'terminal-error failsafe clears the stuck spinner');
+		assert.ok(errorReceived, 'terminal-error failsafe surfaces an error');
+		chat.destroy();
+	});
+
 	test('reconnect does not clobber final text delivered by a live done that arrived before getConversation resolved', async () => {
 		const { cap, subscribe } = subscribeCapture();
 		// Gate getConversation so the reconnect re-sync resolves AFTER a live `done` chunk.
