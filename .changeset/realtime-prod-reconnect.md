@@ -13,8 +13,11 @@ ping timer is re-armed on the fresh socket. Only a client-initiated teardown —
 channel (or the internal reset/give-up paths) — is treated as terminal; an unexpected drop reconnects on ANY close code, including a clean `1000`/`1005`.
 
 `SubscribeOptions` gains an optional `onReconnect` callback, fired once after a successful
-reconnect when every channel on the connection has been re-confirmed by the server (after the
-corresponding `onDisconnect` for the drop that triggered it; never on the initial subscribe).
+reconnect for a channel once THAT channel's resubscribe has been re-confirmed by the server
+(after the corresponding `onDisconnect` for the drop that triggered it; never on the initial
+subscribe). Callbacks are routed per-channel: a channel whose resubscribe is rejected (e.g. a
+stale replayed token) receives `onDisconnect('error')` and NOT `onReconnect`, and never sees a
+sibling channel's rejection.
 
 This change is behavior-additive: existing `subscribe(handler)` / `SubscribeOptions` callers are
 unaffected and need no changes. Note for maintainers: on a `0.x` package this ships as a `minor`

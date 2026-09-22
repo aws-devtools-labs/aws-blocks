@@ -398,9 +398,9 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 		const clientA = hydrateClientFor('my-app-rt/chat/room-A', 'token-A');
 		const clientB = hydrateClientFor('my-app-rt/chat/room-B', 'token-B');
 		const events: string[] = [];
-		// Callbacks live on channel A (the one that resubscribes cleanly). Because
-		// disconnect/reconnect handlers are connection-level, A's onDisconnect also
-		// observes the surfaced failure of channel B.
+		// Callbacks live on channel A (the one that resubscribes cleanly). Handlers are
+		// keyed PER-CHANNEL, so A observes only its OWN lifecycle — the socket-drop
+		// disconnect — and NOT channel B's surfaced stale-token error.
 		clientA.subscribe({
 			onMessage: () => {},
 			onDisconnect: (reason) => {
@@ -428,17 +428,16 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 		s1.emitMessage({ type: 'subscribe_success', channel: 'my-app-rt/chat/room-A' });
 		s1.emitMessage({ type: 'error', channel: 'my-app-rt/chat/room-B', message: 'token expired' });
 
-		// The stale-token failure is surfaced via onDisconnect (in addition to the
-		// original drop), so it is not lost silently.
+		// Channel A's owner sees ONLY the socket-drop disconnect — NOT channel B's
+		// stale-token error, which is now routed per-channel to B's handlers only.
 		assert.strictEqual(
 			events.filter((e) => e === 'disc:error').length,
-			2,
-			'expected one disconnect for the drop and one for the surfaced stale-token error',
+			1,
+			'channel A observes only its own socket-drop disconnect, not sibling B\'s stale-token error',
 		);
-		// onReconnect still fires: resubscribePending drained even though one
-		// channel failed, so the successful channel is not wedged.
-		assert.ok(events.includes('reconn'), 'onReconnect must still fire for the channel that resubscribed');
-		assert.strictEqual(events[events.length - 1], 'reconn', 'onReconnect fires only after the set fully drains');
+		// A's own onReconnect still fires: A re-confirmed, so it is not wedged by B's failure.
+		assert.ok(events.includes('reconn'), 'onReconnect must fire for the channel that resubscribed');
+		assert.strictEqual(events[events.length - 1], 'reconn', 'onReconnect fires after A re-confirms');
 	});
 
 	// (c') onReconnect must NOT fire when EVERY channel's resubscribe is rejected
@@ -477,6 +476,54 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 		assert.ok(
 			events.filter((e) => e === 'disc:error').length >= 2,
 			'each stale-token failure must surface onDisconnect(\'error\')',
+		);
+	});
+
+	// (c'') Per-channel routing: the FAILED channel must NOT receive onReconnect.
+	// This is the precise stuck-stream class the PR prevents — a channel whose own
+	// resubscribe was rejected should get onDisconnect('error') only, NOT a false
+	// onReconnect that would make its owner backfill once then go silent. Callbacks
+	// live on channel B, the one that FAILS; channel A succeeds independently.
+	it('the channel whose resubscribe is rejected gets onDisconnect(error) but NOT onReconnect', () => {
+		const clientA = hydrateClientFor('my-app-rt/chat/room-A', 'token-A');
+		const clientB = hydrateClientFor('my-app-rt/chat/room-B', 'token-B');
+		const aEvents: string[] = [];
+		const bEvents: string[] = [];
+		clientA.subscribe({
+			onMessage: () => {},
+			onDisconnect: (r) => { aEvents.push(`disc:${r}`); },
+			onReconnect: () => { aEvents.push('reconn'); },
+		});
+		clientB.subscribe({
+			onMessage: () => {},
+			onDisconnect: (r) => { bEvents.push(`disc:${r}`); },
+			onReconnect: () => { bEvents.push('reconn'); },
+		});
+
+		const s0 = FakeWebSocket.instances[0];
+		s0.emitOpen();
+		s0.emitMessage({ type: 'subscribe_success', channel: 'my-app-rt/chat/room-A' });
+		s0.emitMessage({ type: 'subscribe_success', channel: 'my-app-rt/chat/room-B' });
+
+		s0.emitServerClose(1006);
+		mock.timers.tick(60_000);
+
+		const s1 = FakeWebSocket.instances[1];
+		assert.ok(s1, 'middleware should reconnect');
+		s1.emitOpen();
+		// A re-confirms; B's replayed token is stale and is rejected.
+		s1.emitMessage({ type: 'subscribe_success', channel: 'my-app-rt/chat/room-A' });
+		s1.emitMessage({ type: 'error', channel: 'my-app-rt/chat/room-B', message: 'token expired' });
+
+		// The FAILED channel B: gets onDisconnect('error'), and must NOT get onReconnect.
+		assert.ok(bEvents.includes('disc:error'), 'failed channel B must be told it is gone');
+		assert.ok(!bEvents.includes('reconn'), 'failed channel B must NOT receive a false onReconnect');
+		// The SUCCEEDING channel A: gets its own onReconnect, and does NOT see B's error.
+		assert.ok(aEvents.includes('reconn'), 'succeeding channel A gets its own onReconnect');
+		assert.strictEqual(
+			aEvents.filter((e) => e === 'disc:error').length,
+			1,
+			'channel A sees only its own socket-drop disconnect, not sibling B\'s rejection',
 		);
 	});
 

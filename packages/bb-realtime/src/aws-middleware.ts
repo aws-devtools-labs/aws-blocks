@@ -66,14 +66,12 @@ interface Connection {
 	channelTokens: Map<string, string>;
 	/** Per-channel established promise callbacks. */
 	pendingEstablished: Map<string, PendingSubscribe[]>;
-	/** Subscriptions queued before WebSocket is open. */
-	pendingSubs: { channel: string; token: string }[];
 	/** Keep-alive interval handle. */
 	keepAliveTimer: ReturnType<typeof setInterval> | null;
-	/** Registered onDisconnect callbacks (called on unexpected close). */
-	disconnectHandlers: Set<(reason: DisconnectReason) => void>;
-	/** Registered onReconnect callbacks (called after a successful resubscribe). */
-	reconnectHandlers: Set<() => void>;
+	/** Per-channel onDisconnect callbacks — keyed by channel so a drop/rejection notifies only that channel's owners. */
+	disconnectHandlers: Map<string, Set<(reason: DisconnectReason) => void>>;
+	/** Per-channel onReconnect callbacks — keyed by channel so only a channel that actually re-confirmed fires its own onReconnect. */
+	reconnectHandlers: Map<string, Set<() => void>>;
 	/** Consecutive reconnect attempts since the last successful open. */
 	reconnectAttempts: number;
 	/** Pending reconnect timer, tracked so it can be cleared on teardown. */
@@ -113,10 +111,9 @@ function getOrCreateConnection(wsUrl: string, connectToken: string): Connection 
 		subscriptions: new Map(),
 		channelTokens: new Map(),
 		pendingEstablished: new Map(),
-		pendingSubs: [],
 		keepAliveTimer: null,
-		disconnectHandlers: new Set(),
-		reconnectHandlers: new Set(),
+		disconnectHandlers: new Map(),
+		reconnectHandlers: new Map(),
 		reconnectAttempts: 0,
 		reconnectTimer: null,
 		resubscribePending: null,
@@ -148,35 +145,45 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 	// for a 1006 abnormal closure). A fresh socket gets a fresh flag, so the NEXT
 	// drop still notifies — onDisconnect must fire on every drop, not just the first.
 	let disconnectNotified = false;
+	// Socket-wide drop: notify EVERY channel's onDisconnect handlers exactly once per
+	// socket (deduped), because a socket close affects all multiplexed channels.
 	const notifyDisconnect = (reason: DisconnectReason): void => {
 		if (disconnectNotified) { return; }
 		disconnectNotified = true;
-		conn.disconnectHandlers.forEach(h => { try { h(reason); } catch {} });
+		for (const handlers of conn.disconnectHandlers.values()) {
+			handlers.forEach(h => { try { h(reason); } catch {} });
+		}
+	};
+	// Channel-scoped disconnect: notify ONLY the given channel's handlers. Used for a
+	// per-channel resubscribe rejection (a stale token), which must not fan a spurious
+	// 'error' out to healthy sibling channels on the same connection.
+	const notifyChannelDisconnect = (channel: string, reason: DisconnectReason): void => {
+		conn.disconnectHandlers.get(channel)?.forEach(h => { try { h(reason); } catch {} });
 	};
 
 	// Settle one channel of the post-reconnect resubscribe set. When the set
-	// drains, the reconnect is confirmed: reset the retry counter (so the cap is
-	// per-outage — a socket that reopens but never confirms a resubscribe still
-	// exhausts MAX_RECONNECT) and fire onReconnect for the channels that came
-	// back. Called on both a successful resubscribe and a stale-token error so a
-	// single failed channel cannot wedge onReconnect for the ones that succeeded.
+	// drains, reset the retry counter (so the cap is per-outage — a socket that
+	// reopens but never confirms a resubscribe still exhausts MAX_RECONNECT).
+	// onReconnect is fired PER-CHANNEL only for the channels that actually
+	// re-confirmed: a channel whose resubscribe was rejected (stale token) must NOT
+	// receive onReconnect — that would be a false-recovery signal on a channel that
+	// was just removed, so its owner would backfill once and then get no live messages.
 	const settleResubscribe = (channel: string, succeeded: boolean): void => {
 		if (!conn.resubscribePending?.has(channel)) { return; }
 		conn.resubscribePending.delete(channel);
-		if (succeeded) { conn.resubscribeAnySucceeded = true; }
+		if (succeeded) {
+			conn.resubscribeAnySucceeded = true;
+			// Fire only THIS channel's onReconnect — it is the one that re-confirmed.
+			conn.reconnectHandlers.get(channel)?.forEach(h => { try { h(); } catch {} });
+		}
 		if (conn.resubscribePending.size === 0) {
 			conn.resubscribePending = null;
 			// The whole set has settled — reset the retry cap regardless of outcome
 			// (the socket reopened and every channel got an answer, so this outage is over).
+			// onReconnect has already fired per-channel above for each channel that
+			// re-confirmed; a channel whose resubscribe was rejected fired onDisconnect('error')
+			// instead and correctly receives NO onReconnect.
 			conn.reconnectAttempts = 0;
-			// Fire onReconnect ONLY if at least one channel actually re-confirmed. An
-			// all-failed resubscribe (every replayed token stale — the 8h-session/2h-TTL
-			// case) drains the set but leaves nothing live, so firing onReconnect would
-			// contradict its contract ("every channel re-confirmed by the server"); the
-			// per-channel onDisconnect('error') already signals that all-failed case.
-			if (conn.resubscribeAnySucceeded) {
-				conn.reconnectHandlers.forEach(h => { try { h(); } catch {} });
-			}
 		}
 	};
 
@@ -198,14 +205,6 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 		for (const channel of channels) {
 			ws.send(JSON.stringify({ action: 'subscribe', channel, token: conn.channelTokens.get(channel) }));
 		}
-		// Flush subscribes queued while the socket was down (skip any already
-		// resent above).
-		for (const sub of conn.pendingSubs) {
-			if (!conn.subscriptions.has(sub.channel)) {
-				ws.send(JSON.stringify({ action: 'subscribe', channel: sub.channel, token: sub.token }));
-			}
-		}
-		conn.pendingSubs.length = 0;
 		// (Re-)establish keep-alive on the current socket.
 		if (conn.keepAliveTimer) { clearInterval(conn.keepAliveTimer); }
 		conn.keepAliveTimer = setInterval(() => {
@@ -239,17 +238,22 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 				// has expired: channel tokens carry a ~1h TTL, so a socket that was
 				// down long enough reconnects and replays a stale token the server
 				// now refuses. Don't drop the channel silently — surface it through
-				// the existing disconnect plumbing (reason 'error') so the caller
-				// learns this channel is gone. Fire the handlers directly (not via
-				// the per-socket notifyDisconnect) because this is a channel-level
-				// failure, not a socket close, and must not suppress the disconnect
-				// notification for a later real drop on this same socket.
+				// the disconnect plumbing (reason 'error') so the caller learns THIS
+				// channel is gone. Notify ONLY this channel's handlers (not the
+				// per-socket notifyDisconnect, and not a connection-wide fanout): a
+				// stale sibling must not fire a spurious 'error' on healthy channels,
+				// and it must not suppress the disconnect notification for a later
+				// real drop on this same socket.
+				notifyChannelDisconnect(msg.channel, 'error');
+				// Drain the failed channel from the resubscribe set (settle as NOT
+				// succeeded, so this channel gets NO onReconnect) so the channels that
+				// DID succeed can still settle instead of wedging.
+				settleResubscribe(msg.channel, false);
+				// Remove all per-channel state for the now-dead channel.
 				conn.subscriptions.delete(msg.channel);
 				conn.channelTokens.delete(msg.channel);
-				conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
-				// Drain the failed channel from the resubscribe set so the channels
-				// that DID succeed can still fire onReconnect instead of wedging.
-				settleResubscribe(msg.channel, false);
+				conn.disconnectHandlers.delete(msg.channel);
+				conn.reconnectHandlers.delete(msg.channel);
 			} else if (msg.type === 'message' && msg.channel) {
 				const handlers = conn.subscriptions.get(msg.channel);
 				if (handlers) {
@@ -348,7 +352,9 @@ function scheduleReconnect(conn: Connection): void {
 			pending.forEach(p => { p.reject(err); });
 		}
 		conn.pendingEstablished.clear();
-		conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
+		for (const handlers of conn.disconnectHandlers.values()) {
+			handlers.forEach(h => { try { h('error'); } catch {} });
+		}
 		conn.disconnectHandlers.clear();
 		if (conn.keepAliveTimer) { clearInterval(conn.keepAliveTimer); conn.keepAliveTimer = null; }
 		if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
@@ -415,8 +421,16 @@ function subscribeTo(
 	conn.subscriptions.get(channel)!.add(handler);
 	// Store the channel token so it can be replayed on resubscribe after a reconnect.
 	conn.channelTokens.set(channel, token);
-	if (onDisconnect) conn.disconnectHandlers.add(onDisconnect);
-	if (onReconnect) conn.reconnectHandlers.add(onReconnect);
+	// Register callbacks PER-CHANNEL so a drop/rejection/reconnect notifies only this
+	// channel's owners, never a sibling multiplexed on the same connection.
+	if (onDisconnect) {
+		if (!conn.disconnectHandlers.has(channel)) { conn.disconnectHandlers.set(channel, new Set()); }
+		conn.disconnectHandlers.get(channel)!.add(onDisconnect);
+	}
+	if (onReconnect) {
+		if (!conn.reconnectHandlers.has(channel)) { conn.reconnectHandlers.set(channel, new Set()); }
+		conn.reconnectHandlers.get(channel)!.add(onReconnect);
+	}
 
 	let establishedResolve: () => void;
 	let establishedReject: (err: Error) => void;
@@ -430,19 +444,24 @@ function subscribeTo(
 	}
 	conn.pendingEstablished.get(channel)!.push({ resolve: establishedResolve!, reject: establishedReject! });
 
+	// Subscribe now if the socket is open; otherwise onopen resubscribes every stored
+	// channel from `subscriptions`/`channelTokens` (covers initial connect + reconnect),
+	// so no separate pending queue is needed.
 	if (conn.connected && conn.ws?.readyState === WebSocket.OPEN) {
 		conn.ws.send(JSON.stringify({ action: 'subscribe', channel, token }));
-	} else {
-		conn.pendingSubs.push({ channel, token });
 	}
 
 	return {
 		unsubscribe() {
 			if (onDisconnect) {
 				try { onDisconnect('client'); } catch {}
-				conn.disconnectHandlers.delete(onDisconnect);
+				const ds = conn.disconnectHandlers.get(channel);
+				if (ds) { ds.delete(onDisconnect); if (ds.size === 0) { conn.disconnectHandlers.delete(channel); } }
 			}
-			if (onReconnect) conn.reconnectHandlers.delete(onReconnect);
+			if (onReconnect) {
+				const rs = conn.reconnectHandlers.get(channel);
+				if (rs) { rs.delete(onReconnect); if (rs.size === 0) { conn.reconnectHandlers.delete(channel); } }
+			}
 			const handlers = conn.subscriptions.get(channel);
 			if (handlers) {
 				handlers.delete(handler);
