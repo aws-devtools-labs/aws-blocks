@@ -36,7 +36,7 @@ TARGET_REL="Sources/BlocksRuntime/Version.swift"
 
 # --- Case 1: generate writes the constant, header, and token ---
 PROJECT_DIR="$WORK1" bash "$GEN" >/dev/null
-grep -q '^public let blocksRuntimeVersion = "9.9.9"$' "$WORK1/$TARGET_REL" \
+grep -q '^let blocksRuntimeVersion = "9.9.9"$' "$WORK1/$TARGET_REL" \
   || fail "Case 1: version constant not generated"
 grep -q 'blocksUserAgentToken = "aws-blocks-swift/\\(blocksRuntimeVersion)"' "$WORK1/$TARGET_REL" \
   || fail "Case 1: user-agent token not generated"

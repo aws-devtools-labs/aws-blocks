@@ -61,11 +61,11 @@ $HEADER
 // Source of truth: native/swift/package.json
 
 /// Semver of this AWS Blocks Swift runtime library.
-public let blocksRuntimeVersion = "$VERSION"
+let blocksRuntimeVersion = "$VERSION"
 
 /// The user agent token for this runtime, e.g. \`aws-blocks-swift/$VERSION\`.
 /// Keep the \`aws-blocks\` prefix: rows without it do not appear in reporting.
-public let blocksUserAgentToken = "aws-blocks-swift/\(blocksRuntimeVersion)"
+let blocksUserAgentToken = "aws-blocks-swift/\(blocksRuntimeVersion)"
 EOF
 )"
 

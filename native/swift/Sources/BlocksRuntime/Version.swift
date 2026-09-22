@@ -9,8 +9,8 @@
 // Source of truth: native/swift/package.json
 
 /// Semver of this AWS Blocks Swift runtime library.
-public let blocksRuntimeVersion = "0.1.1"
+let blocksRuntimeVersion = "0.1.1"
 
 /// The user agent token for this runtime, e.g. `aws-blocks-swift/0.1.1`.
 /// Keep the `aws-blocks` prefix: rows without it do not appear in reporting.
-public let blocksUserAgentToken = "aws-blocks-swift/\(blocksRuntimeVersion)"
+let blocksUserAgentToken = "aws-blocks-swift/\(blocksRuntimeVersion)"
