@@ -33,7 +33,7 @@ import {
   Runtime,
 } from 'aws-cdk-lib/aws-lambda';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
-import { Topic } from 'aws-cdk-lib/aws-sns';
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { MonitoringConstruct } from './monitoring_construct.js';
 
 const createStack = (): Stack => {
@@ -107,17 +107,20 @@ void describe('MonitoringConstruct', () => {
       template.resourceCountIs('AWS::SNS::Topic', 1);
     });
 
-    void it('reuses a BYO SNS topic and creates no new one', () => {
+    void it('applies provided subscriptions to the auto-created topic', () => {
       const stack = createStack();
-      const userTopic = new Topic(stack, 'UserTopic');
       new MonitoringConstruct(stack, 'Monitoring', {
         enabled: true,
-        snsTopic: userTopic,
+        subscriptions: [
+          new subs.EmailSubscription('oncall@example.com'),
+        ],
       });
-      // Synthesize once at the end. If the construct created its own
-      // topic, the count would be 2.
       const template = Template.fromStack(stack);
       template.resourceCountIs('AWS::SNS::Topic', 1);
+      template.hasResourceProperties('AWS::SNS::Subscription', {
+        Protocol: 'email',
+        Endpoint: 'oncall@example.com',
+      });
     });
 
     void it('creates no alarms when no monitorable resources are supplied', () => {
@@ -164,6 +167,49 @@ void describe('MonitoringConstruct', () => {
 
       // No alarm at all because no distribution / Lambda / DLQ given.
       template.resourceCountIs('AWS::CloudWatch::Alarm', 0);
+    });
+
+    // Issue #481: off-region, the CloudFront alarm is deferred to a
+    // us-east-1 support stack by the parent instead of created here.
+    void it('is deferred (not created locally) when createCloudFrontAlarmLocally is false', () => {
+      const stack = createStack();
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        distribution: newDistribution(stack),
+        createCloudFrontAlarmLocally: false,
+      });
+      const template = Template.fromStack(stack);
+
+      assert.strictEqual(m.cloudFrontAlarmDeferred, true);
+      // No AWS/CloudFront alarm was created in this (regional) stack.
+      template.resourcePropertiesCountIs(
+        'AWS::CloudWatch::Alarm',
+        Match.objectLike({ Namespace: 'AWS/CloudFront' }),
+        0,
+      );
+    });
+
+    void it('still creates the regional alarms (SSR/image/DLQ) when the CF alarm is deferred', () => {
+      const stack = createStack();
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        distribution: newDistribution(stack),
+        ssrFunction: newLambda(stack, 'Ssr'),
+        imageFunction: newLambda(stack, 'Img'),
+        revalidationDlq: new Queue(stack, 'Dlq'),
+        createCloudFrontAlarmLocally: false,
+      });
+      const template = Template.fromStack(stack);
+
+      assert.strictEqual(m.cloudFrontAlarmDeferred, true);
+      // 4 regional alarms (2 SSR + 1 image + 1 DLQ); the CF alarm is deferred.
+      template.resourceCountIs('AWS::CloudWatch::Alarm', 4);
+      assert.strictEqual(m.alarms.length, 4);
+      template.resourcePropertiesCountIs(
+        'AWS::CloudWatch::Alarm',
+        Match.objectLike({ Namespace: 'AWS/CloudFront' }),
+        0,
+      );
     });
   });
 
@@ -408,18 +454,6 @@ void describe('MonitoringConstruct', () => {
         (alarm as any)['Properties']['AlarmActions'],
         [{ Ref: encryptedTopicId }],
       );
-    });
-
-    void it('creates no key for a BYO topic — the caller owns its encryption', () => {
-      const stack = createStack();
-      const m = new MonitoringConstruct(stack, 'Monitoring', {
-        enabled: true,
-        snsTopic: new Topic(stack, 'UserTopic'),
-      });
-      const template = Template.fromStack(stack);
-
-      template.resourceCountIs('AWS::KMS::Key', 0);
-      assert.strictEqual(m.encryptionKey, undefined);
     });
 
     void it('creates no key when monitoring is disabled', () => {

@@ -666,8 +666,11 @@ describe('extractMethodTypes — namespace returned by a factory, then destructu
 			// direct namespace's qualified `widgets.create` is unaffected above, and
 			// `generate-spec` prefers the qualified key (see the collision test in
 			// generate-spec.test.ts, which asserts this end-to-end in the output).
-			// So the bare entry can't reintroduce the #445 cross-assignment here.
-			assert.strictEqual((types.get('widgets.create')?.params[0].schema as any)?.type, 'string');
+			// So the bare entry can't reintroduce the #445 cross-assignment here. Assert
+			// the documented lingering-bare-key behavior directly: a bare `create` key is
+			// still emitted by the first-pass walk (rather than re-asserting the qualified
+			// `widgets.create` type, which is unchanged from above).
+			assert.strictEqual(types.has('create'), true);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -679,6 +682,8 @@ describe('extractMethodTypes — namespace returned by a factory, then destructu
 		// falls through to the bare-key path — the schema is still recovered (the
 		// AST walk found `new ApiNamespace(...)`), just under the bare method name,
 		// which generate-spec's #498 fallback resolves when there's no collision.
+		// Attributing array/tuple & nested destructuring (which would hit the #445
+		// class on a colliding method name) is tracked in #552.
 		const dir = createTempProject({
 			'tsconfig.json': JSON.stringify({
 				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
