@@ -78,8 +78,6 @@ interface Connection {
 	reconnectTimer: ReturnType<typeof setTimeout> | null;
 	/** Channels awaiting resubscribe confirmation after a reconnect; when it drains, onReconnect fires. `null` outside a reconnect. */
 	resubscribePending: Set<string> | null;
-	/** Whether ≥1 channel in the current resubscribe set was re-CONFIRMED (not just settled). Gates onReconnect so an all-failed resubscribe (every replayed token stale) does NOT fire onReconnect for a connection with nothing live — the per-channel onDisconnect('error') signals that case instead. */
-	resubscribeAnySucceeded: boolean;
 	/**
 	 * Set TRUE only on a client-initiated teardown (unsubscribe of the last
 	 * channel, `__resetConnectionsForTest`, or the MAX_RECONNECT give-up path).
@@ -117,7 +115,6 @@ function getOrCreateConnection(wsUrl: string, connectToken: string): Connection 
 		reconnectAttempts: 0,
 		reconnectTimer: null,
 		resubscribePending: null,
-		resubscribeAnySucceeded: false,
 		intentionalClose: false,
 	};
 	connections.set(wsUrl, conn);
@@ -172,7 +169,6 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 		if (!conn.resubscribePending?.has(channel)) { return; }
 		conn.resubscribePending.delete(channel);
 		if (succeeded) {
-			conn.resubscribeAnySucceeded = true;
 			// Fire only THIS channel's onReconnect — it is the one that re-confirmed.
 			conn.reconnectHandlers.get(channel)?.forEach(h => { try { h(); } catch {} });
 		}
@@ -200,7 +196,6 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 		const channels = [...conn.subscriptions.keys()];
 		if (isReconnect) {
 			conn.resubscribePending = new Set(channels);
-			conn.resubscribeAnySucceeded = false;
 		}
 		for (const channel of channels) {
 			ws.send(JSON.stringify({ action: 'subscribe', channel, token: conn.channelTokens.get(channel) }));
