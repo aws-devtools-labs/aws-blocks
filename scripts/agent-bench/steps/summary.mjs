@@ -5,8 +5,8 @@
 // scored cells; observational unless BENCH_MIN_SCORE gates.
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cellCost, compositeBand, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
-import { buildAggregate, cellComposite, deltaBall, diffAgainstBaseline, renderDetailed, renderOverview } from './lib/overview.mjs';
+import { cellCost, compositeBand, isCountedFailKlass, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
+import { buildAggregate, cellComposite, deltaBall, diffAgainstBaseline, renderDetailed, renderPreword } from './lib/overview.mjs';
 import { evaluateGates } from './lib/gates.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
@@ -156,35 +156,27 @@ const min = floorGate.value;
 const builderModel = (process.env.BENCH_MODEL ?? '').trim() || null;
 const judgeModel = (process.env.BENCH_JUDGE_MODEL ?? '').trim() || null;
 
-// Deterministic headline under the Overview heading (the LLM exec summary is separate, from analyze.mjs).
-function headlineLine() {
-	if (compositeCells.length === 0) {
-		if (cells.length > 0 && harnessErrors.length === cells.length) {
-			return `⚠️ All ${cells.length} cell(s) were harness_error — nothing was scored, no composite headline.`;
-		}
-		const g = floorEnabled ? ` (\`BENCH_MIN_SCORE=${min}\` set, but with no scored cells the floor is skipped — conservative.)` : '';
-		return `_No cells produced test results — no composite headline to report._${g}`;
+// Message shown in place of the preword when NO cell produced test results (nothing to average).
+function noScoreMessage() {
+	if (cells.length > 0 && harnessErrors.length === cells.length) {
+		return `- ⚠️ All ${cells.length} cell(s) were harness_error — nothing was scored, no composite headline.`;
 	}
-	const g = gateEnabled ? ` (\`BENCH_MIN_SCORE=${min}\` set, but with no scored cells the gate is skipped — conservative.)` : '';
+	const g = floorEnabled ? ` (\`BENCH_MIN_SCORE=${min}\` set, but with no scored cells the gate is skipped — conservative.)` : '';
 	return `- _No cells produced test results — no composite headline to report._${g}`;
 }
 
-// The merge gate over the composite mean (scored cells only). Sets gateFailed; returns a bullet when
-// BENCH_MIN_SCORE is set, else an observational note. Called only when there ARE scored cells.
+// The floor line under the preword: the composite mean vs BENCH_MIN_SCORE. Read-only — the actual
+// pass/fail comes from gateResult (floorGate); the enforcing decision + exit live in the Merge
+// verdict block below, so this never reassigns gateFailed.
 function gateLine() {
 	const mean = aggregate.mean_composite;
-	const judgeNote = judgeMean !== null ? ` · judge mean **${judgeMean.toFixed(2)}**/10` : '';
 	// Composite mean delta vs the baseline (🟢/🔴/🟡 over the ±5 band), when present.
 	const deltaNote =
 		diff.hasBaseline && diff.meanDelta !== null
 			? ` · ${deltaBall(diff.meanDelta)} ${diff.meanDelta > 0 ? '+' : ''}${diff.meanDelta.toFixed(1)} vs \`main\``
 			: '';
-	const head = `Mean composite **${mean.toFixed(1)}**/100 ${compositeBand(mean)} across ${compositeCells.length} scored cell(s)${judgeNote}${deltaNote}.`;
+	const head = `Mean composite **${mean.toFixed(1)}**/100 ${compositeBand(mean)} across ${compositeCells.length} scored cell(s)${deltaNote}.`;
 	if (!floorEnabled) return `${head} _Observational — \`BENCH_MIN_SCORE\` unset, so the floor does not gate the merge._`;
-	// Defensive/unreachable: the early return above already handled compositeCells.length === 0, and
-	// the floor gate only skips on scoredCells === 0 — so with scored cells present it never skips.
-	// Kept so this doesn't silently render a wrong headline if that early return is ever changed.
-	if (floorGate.skipped) return `${head} _\`BENCH_MIN_SCORE=${min}\` set, but no scored cells — floor skipped._`;
 	const pass = !floorGate.failed;
 	return `${pass ? '✅' : '❌'} ${head} Threshold **${min}** — ${pass ? 'pass' : 'FAIL'}.`;
 }

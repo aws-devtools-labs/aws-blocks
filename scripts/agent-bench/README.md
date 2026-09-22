@@ -242,7 +242,9 @@ job non-zero (the intentional exception to green-regardless, below):
   (e.g. `build-blocks` failed so every cell was skipped), the summary reds the
   check — a total upstream failure must not report green.
 
-A negative or non-numeric value for any gate variable is treated as unset.
+A negative or non-numeric value for any gate variable is treated as unset. The
+PR-vs-baseline results table is observational; the regression *gate* above
+(`BENCH_MAX_REGRESSION`), not the table's ±5-pt display band, is what blocks.
 
 **Check status — green regardless.** A bench cell never turns the PR check red.
 Every fallible cell step (`npm ci`, OIDC, `1-init`, `2-agent`, `3-build-and-test`,
@@ -311,7 +313,7 @@ Reading/writing the baseline uses the same OIDC role (`s3:GetObject` /
 | `steps/lib/gates.mjs` | **Single source of truth** for the merge gate: `parseThreshold` + `evaluateGates` decide pass/fail from the floor (`BENCH_MIN_SCORE`), regression-vs-`main` (`BENCH_MAX_REGRESSION`) and harness/infra (`BENCH_MAX_HARNESS_ERRORS`, incl. the whole-run upstream-failure case). Pure; imported by summary |
 | `steps/lib/pr-comment.sh` | Upsert the report as one sticky PR comment keyed by a hidden marker (update oldest, delete duplicates); same-repo PR only, best-effort |
 | `steps/finalize-result.mjs` | Run with `if: always()`; stamps `status` + `failed_at` from per-step outcomes, then `klass`, `test_rate`, `verdict`, `composite` via `lib/scoring.mjs` |
-| `steps/summary.mjs` | Render the report to `$GITHUB_STEP_SUMMARY` **and** to a file for the sticky PR comment: a collapsible **Glossary**, the colors-only **Overview** + numbers **Detailed results** tables (vs the `main` baseline), a **Merge verdict** section (each enabled gate's decision), and a deterministic caveats block; reads one `result.json` per cell (N=1); writes the run's schema-2 aggregate (+ Athena NDJSON) for the S3 baseline; runs the three gates via `lib/gates.mjs` and exits non-zero when any trips |
+| `steps/summary.mjs` | Render the report to `$GITHUB_STEP_SUMMARY` **and** to a file for the sticky PR comment: a collapsible **Glossary**, the headline (mean composite + delta), the single **results table** — current value + colored signed delta per cell — vs the `main` baseline, a **Merge verdict** section (each enabled gate's decision), and a deterministic caveats block; reads one `result.json` per cell (N=1); writes the run's schema-2 aggregate (+ Athena NDJSON) for the S3 baseline; runs the three gates via `lib/gates.mjs` and exits non-zero when any trips |
 | `package.json` | Workspace metadata; `private: true` |
 
 Failure handling: every cell starts with `0-init-result.mjs` writing a
@@ -323,9 +325,9 @@ upload step also runs with `if: always()`, so the cell always shows up in the
 summary table — never silently missing.
 
 The report is written to the **GitHub Actions run summary**
-(`$GITHUB_STEP_SUMMARY`) and renders in the run UI — the Glossary, the Overview +
-Detailed tables, then the executive summary / potential issues / per-cell
-analysis. The bench also posts the report as **one sticky PR comment** — the
+(`$GITHUB_STEP_SUMMARY`) and renders in the run UI — the Glossary, the headline,
+the single results table, then the executive summary / potential issues /
+per-cell analysis. The bench also posts the report as **one sticky PR comment** — the
 `Comment bench report on PR` step upserts a single comment keyed by a hidden
 `<!-- agent-bench-report -->` marker (`steps/lib/pr-comment.sh`): it updates the
 oldest marker comment in place and deletes any duplicates, so re-runs never spam
