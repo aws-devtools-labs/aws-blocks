@@ -1,4 +1,4 @@
-import 'package:blocks_runtime/src/version.dart';
+import 'package:blocks_runtime/src/user_agent.dart';
 import 'package:test/test.dart';
 
 /// The version constant is generated and committed, so the compiler checks nothing.

@@ -3,7 +3,8 @@
 
 // Unit tests for scripts/generate-native-versions.mjs. Drift cases copy the real
 // script into a temp repo (it roots at `import.meta.url/..`) and runs it for real:
-// real fs, no stubs. The dart target is used there because it needs no licence-header source.
+// real fs, no stubs. The swift target drives the generic drift cases; its
+// .swiftformat header source is supplied by the swiftRepo helper.
 //
 // Run: node --test scripts/generate-native-versions.test.mjs
 
@@ -17,8 +18,6 @@ import { describe, it } from "node:test";
 const SCRIPTS_DIR = import.meta.dirname;
 const SCRIPT_SRC = join(SCRIPTS_DIR, "generate-native-versions.mjs");
 const REPO_ROOT = join(SCRIPTS_DIR, "..");
-const DART_PUBSPEC = "native/dart/packages/blocks_runtime/pubspec.yaml";
-const DART_TARGET = "native/dart/packages/blocks_runtime/lib/src/version.dart";
 const SWIFT_PKG = "native/swift/package.json";
 const SWIFT_CONFIG = "native/swift/.swiftformat";
 const SWIFT_TARGET = "native/swift/Sources/BlocksRuntime/Version.swift";
@@ -55,17 +54,18 @@ function makeRepo(t, files) {
 
 const scriptIn = (dir) => join(dir, "scripts", "generate-native-versions.mjs");
 
+const HEADER_LINE = '--header "//\\n// Copyright Example.\\n//"\n';
+const swiftRepo = (t, { version = "9.9.9", config = HEADER_LINE } = {}) => {
+	const dir = makeRepo(t, { [SWIFT_PKG]: JSON.stringify({ version }), [SWIFT_CONFIG]: config });
+	mkdirSync(join(dir, "native/swift/Sources/BlocksRuntime"), { recursive: true });
+	return dir;
+};
+
 describe("generate-native-versions --check against the real repo", () => {
 	it("passes for the committed Swift constant", () => {
 		const { status, output } = run(["--swift", "--check"]);
 		assert.equal(status, 0, output);
 		assert.match(output, /ok\s+swift/);
-	});
-
-	it("passes for the committed Dart constant", () => {
-		const { status, output } = run(["--dart", "--check"]);
-		assert.equal(status, 0, output);
-		assert.match(output, /ok\s+dart/);
 	});
 });
 
@@ -89,66 +89,53 @@ describe("generate-native-versions argument handling", () => {
 	});
 });
 
-describe("generate-native-versions drift detection (dart, temp repo)", () => {
-	const dartRepo = (t, version = "9.9.9") => {
-		const dir = makeRepo(t, { [DART_PUBSPEC]: `name: blocks_runtime\nversion: ${version}\n` });
-		mkdirSync(join(dir, "native/dart/packages/blocks_runtime/lib/src"), { recursive: true });
-		return dir;
-	};
-
+describe("generate-native-versions drift detection (swift, temp repo)", () => {
 	it("reports DRIFT and exits 1 when the target is missing", (t) => {
-		const dir = dartRepo(t);
-		const { status, output } = run(["--dart", "--check"], dir, scriptIn(dir));
+		const dir = swiftRepo(t);
+		const { status, output } = run(["--swift", "--check"], dir, scriptIn(dir));
 		assert.equal(status, 1, output);
 		assert.match(output, /DRIFT/);
 	});
 
 	it("generates a file that then passes --check", (t) => {
-		const dir = dartRepo(t);
-		const gen = run(["--dart"], dir, scriptIn(dir));
+		const dir = swiftRepo(t);
+		const gen = run(["--swift"], dir, scriptIn(dir));
 		assert.equal(gen.status, 0, gen.output);
-		assert.match(readFileSync(join(dir, DART_TARGET), "utf-8"), /const String blocksRuntimeVersion = '9\.9\.9';/);
+		assert.match(readFileSync(join(dir, SWIFT_TARGET), "utf-8"), /public let blocksRuntimeVersion = "9\.9\.9"/);
 
-		const check = run(["--dart", "--check"], dir, scriptIn(dir));
+		const check = run(["--swift", "--check"], dir, scriptIn(dir));
 		assert.equal(check.status, 0, check.output);
-		assert.match(check.output, /ok\s+dart/);
+		assert.match(check.output, /ok\s+swift/);
 	});
 
 	it("reports DRIFT and exits 1 after the committed file is edited by hand", (t) => {
-		const dir = dartRepo(t);
-		run(["--dart"], dir, scriptIn(dir));
-		writeFileSync(join(dir, DART_TARGET), "// tampered\n");
-		const { status, output } = run(["--dart", "--check"], dir, scriptIn(dir));
+		const dir = swiftRepo(t);
+		run(["--swift"], dir, scriptIn(dir));
+		writeFileSync(join(dir, SWIFT_TARGET), "// tampered\n");
+		const { status, output } = run(["--swift", "--check"], dir, scriptIn(dir));
 		assert.equal(status, 1, output);
 		assert.match(output, /DRIFT/);
 	});
 
 	it("tolerates CRLF line endings (Windows checkout)", (t) => {
-		const dir = dartRepo(t);
-		run(["--dart"], dir, scriptIn(dir));
-		const target = join(dir, DART_TARGET);
+		const dir = swiftRepo(t);
+		run(["--swift"], dir, scriptIn(dir));
+		const target = join(dir, SWIFT_TARGET);
 		writeFileSync(target, readFileSync(target, "utf-8").replaceAll("\n", "\r\n"));
-		const { status, output } = run(["--dart", "--check"], dir, scriptIn(dir));
+		const { status, output } = run(["--swift", "--check"], dir, scriptIn(dir));
 		assert.equal(status, 0, output);
-		assert.match(output, /ok\s+dart/);
+		assert.match(output, /ok\s+swift/);
 	});
 
 	it("exits 1 when the version carries build metadata (+build)", (t) => {
-		const dir = dartRepo(t, "9.9.9+5");
-		const { status, output } = run(["--dart"], dir, scriptIn(dir));
+		const dir = swiftRepo(t, { version: "9.9.9+5" });
+		const { status, output } = run(["--swift"], dir, scriptIn(dir));
 		assert.equal(status, 1, output);
 		assert.match(output, /not a valid token semver/);
 	});
 });
 
 describe("generate-native-versions Swift header sourcing (temp repo)", () => {
-	const HEADER_LINE = '--header "//\\n// Copyright Example.\\n//"\n';
-	const swiftRepo = (t, config = HEADER_LINE) => {
-		const dir = makeRepo(t, { [SWIFT_PKG]: JSON.stringify({ version: "9.9.9" }), [SWIFT_CONFIG]: config });
-		mkdirSync(join(dir, "native/swift/Sources/BlocksRuntime"), { recursive: true });
-		return dir;
-	};
-
 	it("reads the header from .swiftformat into the generated file", (t) => {
 		const dir = swiftRepo(t);
 		const { status, output } = run(["--swift"], dir, scriptIn(dir));
@@ -167,7 +154,7 @@ describe("generate-native-versions Swift header sourcing (temp repo)", () => {
 	});
 
 	it("exits 1 when --header carries no quoted value (e.g. strip)", (t) => {
-		const dir = swiftRepo(t, "--header strip\n");
+		const dir = swiftRepo(t, { config: "--header strip\n" });
 		const { status, output } = run(["--swift"], dir, scriptIn(dir));
 		assert.equal(status, 1, output);
 		assert.match(output, /No quoted --header value/);

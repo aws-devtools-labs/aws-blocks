@@ -10,8 +10,6 @@ on:
   pull_request:
     paths:
       - 'native/dart/packages/**'
-      - 'scripts/generate-native-versions.mjs'
-      - 'scripts/generate-native-versions.test.mjs'
       - '.github/workflows/native-dart-analysis.yml'
   workflow_dispatch:
 
@@ -39,15 +37,18 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: dart-lang/setup-dart@v1
         with:
-          node-version-file: '.nvmrc'
+          sdk: stable
 
-      - name: Check Dart version constant matches pubspec.yaml
-        run: node scripts/generate-native-versions.mjs --dart --check
-
-      - name: Test the version generator
-        run: node --test scripts/generate-native-versions.test.mjs
+      # version.dart is generated from pubspec.yaml by build_version. Regenerate
+      # and fail if it differs from the committed file, so the version cannot drift.
+      - name: Verify generated version.dart is up to date
+        working-directory: native/dart/packages/blocks_runtime
+        run: |
+          dart pub get
+          dart run build_runner build
+          git diff --exit-code lib/src/version.dart
 
   analyze:
     name: ${{ matrix.package-name }} (${{ matrix.sdk }})
