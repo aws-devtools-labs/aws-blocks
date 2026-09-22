@@ -56,8 +56,8 @@ export {
 	wireManagedValue,
 } from '../secret-resolve.js';
 export { FrameworkType, HostingProps, HostingResources } from '../types.js';
-// Front-door adapters (the swappable-door seam). CloudFront is the default door;
-// ALB is the first non-CloudFront door.
+// Front-door adapters. CloudFront is the default door; ALB, API Gateway, and
+// S3-website are the alternatives.
 export type {
 	AdapterContext,
 	BackendIngress,

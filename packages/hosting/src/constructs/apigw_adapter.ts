@@ -1,5 +1,5 @@
 /**
- * API Gateway front-door adapter — a cheap, regional, HTTPS-by-default,
+ * API Gateway front-door adapter — a regional, HTTPS-by-default,
  * no-CloudFront door. Renders the same {@link CapabilityPlan} as CloudFront/ALB
  * onto either an HTTP API v2 ({@link ApiGatewayConstruct}, the **default** — its
  * auto `$default` stage is rootless, so a SPA's root-absolute assets resolve) or
@@ -7,9 +7,8 @@
  * CloudFront — a bare REST URL's `/prod` stage path breaks root-absolute assets),
  * selected by `ctx.apiType`.
  *
- * Best fit: a SPA/SSR app that doesn't want a CDN — pay-per-request,
- * scale-to-zero, no ALB/NAT idle cost, same-origin `/aws-blocks/*` (so cookie
- * auth works with no CORS).
+ * Serverless — pay-per-request, scale-to-zero, no VPC/NAT. Serves
+ * `/aws-blocks/*` same-origin (so cookie auth works with no CORS).
  */
 import { Fn } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';

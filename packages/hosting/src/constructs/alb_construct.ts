@@ -1,5 +1,5 @@
 /**
- * ALB front-door construct — the first NON-CloudFront door.
+ * ALB front-door construct — backs the front door with an Application Load Balancer.
  *
  * Renders a service-agnostic {@link CapabilityPlan} onto an Application Load
  * Balancer (ALB): a VPC (bring-your-own or a default one), an ALB + listener,
