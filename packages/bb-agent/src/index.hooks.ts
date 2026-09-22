@@ -17,6 +17,8 @@
 import type { AgentStreamChunk } from './types.js';
 
 export type { AgentStreamChunk } from './types.js';
+/** Re-exported so customers can type conversation `metadata` (and other JSON payloads) on the client. */
+export type { JSONValue } from './types.js';
 
 // The compute-agnostic client API. Prefer these over useChat() — see createChat().
 export {

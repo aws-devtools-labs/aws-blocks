@@ -277,7 +277,7 @@ console.log('[Comprehensive Test App] Loaded — all Building Blocks wired up');
 // Agent Chat
 // ============================================================================
 
-import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
+import { createChat, realtimeTransport, type JSONValue } from '@aws-blocks/bb-agent/client';
 
 const chatMessages = document.getElementById('chat-messages')!;
 const chatInput = document.getElementById('chat-input') as HTMLInputElement;
@@ -332,7 +332,12 @@ function createChatForConvo(conversationId: string) {
 		}),
 		api: {
 			createConversation: async () => ({ conversationId }),
-			getConversation: async (id) => await api.agentGetConversation(id),
+			getConversation: async (id) => {
+				const { messages } = await api.agentGetConversation(id);
+				// The Agent BB's Message.metadata is JSON-serializable; surface it as the
+				// JSONValue record createChat renders (app owns this RPC-shape adaptation).
+				return { messages: messages.map(m => ({ ...m, metadata: m.metadata as Record<string, JSONValue> })) };
+			},
 			getPendingInterrupts: async (id) => await api.agentGetPendingInterrupts(id),
 		},
 		onMessagesChange: (msgs) => {
@@ -370,24 +375,24 @@ function createChatForConvo(conversationId: string) {
 
 				// Custom interrupt — show message with Yes/No (or freeform input in future)
 				if (isCustomInterrupt) {
-					return `<div class="blocks-approval-box" id="approval-${i.id}" style="margin:12px 0; padding:12px; border:2px solid #1565c0; border-radius:8px; background:#e3f2fd; color:#333;">
+					return `<div class="blocks-approval-box" id="approval-${i.interruptId}" style="margin:12px 0; padding:12px; border:2px solid #1565c0; border-radius:8px; background:#e3f2fd; color:#333;">
 						<strong style="font-size:1.1em; color:#1565c0;">⚡ ${toolName}:</strong> ${reason.message}<br/>
 						<pre style="margin:8px 0; font-size:0.85em; background:#e8eaf6; padding:8px; border-radius:4px; color:#333;">${JSON.stringify(reason.input, null, 2)}</pre>
-						<button style="padding:8px 16px; margin:4px; background:#4caf50; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.respondInterrupt('${i.id}', 'yes', '${toolName}')">✅ Yes</button>
-						<button style="padding:8px 16px; margin:4px; background:#f44336; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.respondInterrupt('${i.id}', 'no', '${toolName}')">❌ No</button>
+						<button style="padding:8px 16px; margin:4px; background:#4caf50; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.respondInterrupt('${i.interruptId}', 'yes', '${toolName}')">✅ Yes</button>
+						<button style="padding:8px 16px; margin:4px; background:#f44336; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.respondInterrupt('${i.interruptId}', 'no', '${toolName}')">❌ No</button>
 					</div>`;
 				}
 
 				// Standard approval interrupt
 				const trustBtn = reason.trustable
-					? `<button style="padding:8px 16px; margin:4px; background:#2196f3; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.id}', true, '${toolName}', true)">🤝 Trust</button>`
+					? `<button style="padding:8px 16px; margin:4px; background:#2196f3; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.interruptId}', true, '${toolName}', true)">🤝 Trust</button>`
 					: '';
-				return `<div class="blocks-approval-box" id="approval-${i.id}" style="margin:12px 0; padding:12px; border:2px solid #e65100; border-radius:8px; background:#fff3e0; color:#333;">
+				return `<div class="blocks-approval-box" id="approval-${i.interruptId}" style="margin:12px 0; padding:12px; border:2px solid #e65100; border-radius:8px; background:#fff3e0; color:#333;">
 					<strong style="font-size:1.1em; color:#e65100;">🔒 Approval needed:</strong> ${toolName}<br/>
 					<pre style="margin:8px 0; font-size:0.85em; background:#fff8e1; padding:8px; border-radius:4px; color:#333;">${JSON.stringify(reason.input, null, 2)}</pre>
-					<button style="padding:8px 16px; margin:4px; background:#4caf50; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.id}', true, '${toolName}')">✅ Yes</button>
+					<button style="padding:8px 16px; margin:4px; background:#4caf50; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.interruptId}', true, '${toolName}')">✅ Yes</button>
 					${trustBtn}
-					<button style="padding:8px 16px; margin:4px; background:#f44336; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.id}', false, '${toolName}')">❌ No</button>
+					<button style="padding:8px 16px; margin:4px; background:#f44336; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.interruptId}', false, '${toolName}')">❌ No</button>
 				</div>`;
 			}).join('');
 		},

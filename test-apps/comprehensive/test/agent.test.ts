@@ -5,7 +5,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
 import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
-import type { AgentStreamChunk } from '@aws-blocks/bb-agent/client';
+import type { AgentStreamChunk, JSONValue } from '@aws-blocks/bb-agent/client';
 import { codePoller } from './poll-for-code.js';
 
 /**
@@ -487,7 +487,10 @@ export function agentTests(getApi: () => typeof apiType) {
           transport: cannedTransport(api),
           api: {
             createConversation: async () => ({ conversationId }),
-            getConversation: (id) => api.cannedGetConversation(id),
+            getConversation: async (id) => {
+              const { messages } = await api.cannedGetConversation(id);
+              return { messages: messages.map(m => ({ ...m, metadata: m.metadata as Record<string, JSONValue> })) };
+            },
             getPendingInterrupts: (id) => api.cannedGetPendingInterrupts(id),
           },
           onChunk: (chunk) => chunks.push(chunk),
@@ -516,12 +519,15 @@ export function agentTests(getApi: () => typeof apiType) {
         const { conversationId } = await api.cannedCreateConversationId();
 
         const chunks: AgentStreamChunk[] = [];
-        let interrupts: Array<{ id: string; name: string }> = [];
+        let interrupts: Array<{ interruptId: string; name: string; reason?: unknown }> = [];
         const chat = createChat({
           transport: cannedTransport(api),
           api: {
             createConversation: async () => ({ conversationId }),
-            getConversation: (id) => api.cannedGetConversation(id),
+            getConversation: async (id) => {
+              const { messages } = await api.cannedGetConversation(id);
+              return { messages: messages.map(m => ({ ...m, metadata: m.metadata as Record<string, JSONValue> })) };
+            },
             getPendingInterrupts: (id) => api.cannedGetPendingInterrupts(id),
           },
           onChunk: (chunk) => chunks.push(chunk),
@@ -546,7 +552,7 @@ export function agentTests(getApi: () => typeof apiType) {
           }, 200);
         });
 
-        await chat.sendMessage({ interruptResponses: interrupts.map(i => ({ interruptId: i.id, approved: true })) });
+        await chat.sendMessage({ interruptResponses: interrupts.map(i => ({ interruptId: i.interruptId, approved: true })) });
         await completed;
 
         assert.ok(chunks.some(c => c.type === 'done'), 'resume should complete the turn');

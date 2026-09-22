@@ -776,7 +776,7 @@ export function Chat() {
   const [isLoading, setIsLoading] = useState(false);
   const [input, setInput] = useState('');
   // Interrupts need a typed initializer — a bare useState([]) infers never[] and rejects the payload.
-  const [interrupts, setInterrupts] = useState<Array<{ id: string; name: string; reason?: unknown }>>([]);
+  const [interrupts, setInterrupts] = useState<Array<{ interruptId: string; name: string; reason?: unknown }>>([]);
 
   // Create the instance exactly once. The ref survives every re-render, so the
   // transport subscription and conversation state are never torn down.
@@ -835,10 +835,10 @@ export function Chat() {
         ))}
       </ul>
       {interrupts.map((i) => (
-        <div key={i.id}>
+        <div key={i.interruptId}>
           Run {i.name}?
-          <button onClick={() => approve(i.id, true)}>Approve</button>
-          <button onClick={() => approve(i.id, false)}>Deny</button>
+          <button onClick={() => approve(i.interruptId, true)}>Approve</button>
+          <button onClick={() => approve(i.interruptId, false)}>Deny</button>
         </div>
       ))}
       <form onSubmit={handleSend}>
@@ -854,7 +854,7 @@ Key points:
 
 - **One instance, held in a ref.** `useRef` + the lazy `if (!chatRef.current)` guard is the React idiom for "construct once." Unlike `useChat`, `createChat` is **not** `use`-prefixed, so `eslint-plugin-react-hooks` does not flag the guarded call — no `eslint-disable` is needed. What you must **not** do is call `createChat(...)` unguarded on every render: that recreates the instance (and its transport) each time and drops the subscription.
 - **Callbacks are your reactivity bridge.** `createChat` mutates its own message list in place; `onMessagesChange` / `onLoadingChange` hand you the new value so you can `setState` and trigger a render. Passing `setMessages` / `setIsLoading` directly is enough.
-- **Approvals reuse `sendMessage`.** `onInterrupt` populates state to render an approval UI; continue the turn with `chat.sendMessage({ interruptResponses })` — there is no separate resume method. Type the interrupts `useState` explicitly (`Array<{ id: string; name: string; reason?: unknown }>`), because a bare `useState([])` infers `never[]` and rejects the payload.
+- **Approvals reuse `sendMessage`.** `onInterrupt` populates state to render an approval UI; continue the turn with `chat.sendMessage({ interruptResponses })` — there is no separate resume method. Each interrupt carries `interruptId` (the same field you pass back in the response — no remap). Type the interrupts `useState` explicitly (`Array<{ interruptId: string; name: string; reason?: unknown }>`), because a bare `useState([])` infers `never[]` and rejects the payload.
 - **Clean up on unmount** with `chat.destroy()` in a `useEffect` cleanup, so the transport subscription is closed.
 
 **Next.js:** keep the `'use client'` directive at the top of the file — `createChat` opens a browser WebSocket and holds client state, so it must run in a Client Component, never a Server Component. No other changes are needed.

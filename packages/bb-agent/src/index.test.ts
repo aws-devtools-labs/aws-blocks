@@ -1653,7 +1653,7 @@ describe('createChat', () => {
 	});
 
 	test('interrupt fires onInterrupt and resume via sendMessage continues the turn', async () => {
-		const interruptsSeen: Array<{ id: string }[]> = [];
+		const interruptsSeen: Array<{ interruptId: string }[]> = [];
 		let call = 0;
 		const chat = createChat({
 			// First turn interrupts; the resume turn completes.
@@ -1685,7 +1685,7 @@ describe('createChat', () => {
 		await chat.sendMessage('do risky thing');
 		await new Promise(r => setTimeout(r, 10));
 		assert.strictEqual(interruptsSeen.length, 1, 'interrupt chunk should fire onInterrupt');
-		assert.strictEqual(interruptsSeen[0][0].id, 'i1');
+		assert.strictEqual(interruptsSeen[0][0].interruptId, 'i1');
 		assert.strictEqual(chat.isLoading(), false, 'interrupt clears loading while awaiting the decision');
 
 		await chat.sendMessage({ interruptResponses: [{ interruptId: 'i1', approved: true }] });

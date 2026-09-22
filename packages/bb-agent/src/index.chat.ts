@@ -28,6 +28,7 @@
 
 import type { ChatTransport, ChunkStream } from './transport.js';
 import type { AgentStreamChunk, InterruptResponse, JSONValue } from './types.js';
+import { AgentErrors, blocksAgentError } from './errors.js';
 
 export type { ChatTransport, ChunkStream, TurnRequest } from './transport.js';
 export { realtimeTransport } from './transport.js';
@@ -48,7 +49,7 @@ export interface ChatConversationApi {
 	/** Load a conversation's message history for rendering. */
 	getConversation(
 		id: string,
-	): Promise<{ messages: { role: string; content: string; metadata?: unknown }[] }>;
+	): Promise<{ messages: { role: string; content: string; metadata?: Record<string, JSONValue> }[] }>;
 	/** Check whether a conversation has unanswered interrupts (e.g. the user left mid-approval). */
 	getPendingInterrupts?(
 		conversationId: string,
@@ -74,8 +75,9 @@ export interface CreateChatOptions {
 	 * `isBlocksError(cause, ...)` to branch on error type.
 	 */
 	onError?: (error: string, cause?: unknown) => void;
-	/** Called when the agent pauses for human approval. Continue with `sendMessage({ interruptResponses })`. */
-	onInterrupt?: (interrupts: Array<{ id: string; name: string; reason?: unknown }>) => void;
+	/** Called when the agent pauses for human approval. Continue with `sendMessage({ interruptResponses })`.
+	 *  Each interrupt's `interruptId` is the same field you pass back in `InterruptResponse` — no remap. */
+	onInterrupt?: (interrupts: Array<{ interruptId: string; name: string; reason?: unknown }>) => void;
 }
 
 /** A message to start a turn, or the interrupt responses that resume a paused one. */
@@ -85,10 +87,11 @@ export type SendInput = string | { interruptResponses: InterruptResponse[] };
 export interface ChatController {
 	/**
 	 * Drive the current turn — start a new message OR resume a paused one. Fuses
-	 * subscribe + run (no race). If a turn is already in flight the call is a no-op
-	 * (silently dropped) — check {@link isLoading} before calling if you need to know.
+	 * subscribe + run (no race). Resolves `true` when the turn was accepted, `false`
+	 * when it was dropped because a turn is already in flight (so the caller can tell
+	 * "sent" from "ignored" without pre-checking {@link isLoading}).
 	 */
-	sendMessage(input: SendInput): Promise<void>;
+	sendMessage(input: SendInput): Promise<boolean>;
 	/** Primitive: run a turn (produce only; chunks go to subscribers). Lazily creates the conversation if new. */
 	run(input: SendInput): Promise<{ channelId: string }>;
 	/**
@@ -230,7 +233,9 @@ export function createChat(options: CreateChatOptions): ChatController {
 			}
 			assistantId = null;
 			setLoading(false);
-			options.onInterrupt?.(chunk.interrupts);
+			// The stream chunk carries `id`; expose it as `interruptId` so it matches the
+			// field the caller passes back in InterruptResponse (no remap at the call site).
+			options.onInterrupt?.(chunk.interrupts.map((i) => ({ interruptId: i.id, name: i.name, reason: i.reason })));
 		}
 	}
 
@@ -283,7 +288,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 
 	return {
 		async sendMessage(input: SendInput) {
-			if (loading) return;
+			if (loading) return false;
 
 			if (typeof input === 'string') {
 				const userMsg: ChatMessage = { id: nextId(), role: 'user', content: input };
@@ -340,6 +345,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 				setLoading(false);
 				options.onError?.(err instanceof Error ? err.message : String(err), err);
 			}
+			return true;
 		},
 
 		async run(input: SendInput): Promise<{ channelId: string }> {
@@ -357,7 +363,10 @@ export function createChat(options: CreateChatOptions): ChatController {
 		subscribe(opts?: { channelId?: string; observer?: boolean }): ChunkStream {
 			const channelId = opts?.channelId ?? conversationId;
 			if (!channelId)
-				throw new Error('subscribe() needs a channelId — start a conversation first or pass one explicitly.');
+				throw blocksAgentError(
+					AgentErrors.InvalidUsage,
+					'subscribe() needs a channelId — start a conversation first or pass one explicitly.',
+				);
 			return transport.subscribe(channelId, opts?.observer ? { observer: true } : undefined);
 		},
 
@@ -383,15 +392,14 @@ export function createChat(options: CreateChatOptions): ChatController {
 					id: nextId(),
 					role: m.role as 'user' | 'assistant' | 'approval',
 					content: m.content,
-					// Incoming metadata is Record<string, unknown> (any backend shape); coerce
-					// to the JSONValue ChatMessage renders. Undefined stays undefined.
-					metadata: m.metadata === undefined ? undefined : (toJSONValue(m.metadata) as Record<string, JSONValue>),
+					metadata: m.metadata,
 				}));
 			options.onMessagesChange?.(messages);
 
 			if (api.getPendingInterrupts) {
 				const { interrupts } = await api.getPendingInterrupts(id);
-				if (interrupts.length) options.onInterrupt?.(interrupts);
+				if (interrupts.length)
+					options.onInterrupt?.(interrupts.map((i) => ({ interruptId: i.id, name: i.name, reason: i.reason })));
 			}
 		},
 
