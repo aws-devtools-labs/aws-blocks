@@ -41,6 +41,11 @@ jobs:
         working-directory: native/kotlin
         run: scripts/sync-version.sh --check
 
+      # Run the drift guard's own tests so its behavior cannot silently regress.
+      - name: Run version-sync script tests
+        working-directory: native/kotlin
+        run: bash scripts/sync-version.test.sh
+
   build-and-test:
     name: Build & Test (runtime)
     runs-on: ubuntu-latest
@@ -63,3 +68,36 @@ jobs:
 
       - name: Run runtime unit tests (JVM)
         run: ./gradlew :runtime:jvmTest
+
+      # Version.kt is a generated commonMain source, so also cover Android host
+      # and common-metadata compile; iOS runs in the macOS job below.
+      - name: Run runtime unit tests (Android host)
+        run: ./gradlew :runtime:testAndroidHostTest
+
+      - name: Compile common metadata
+        run: ./gradlew :runtime:compileCommonMainKotlinMetadata
+
+  ios-test:
+    name: Build & Test (runtime, iOS)
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: native/kotlin
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      # Runs VersionTest on the iOS simulator, proving the generated commonMain
+      # constant is wired into the Kotlin/Native iOS target.
+      - name: Run runtime unit tests (iOS simulator)
+        run: ./gradlew :runtime:iosSimulatorArm64Test
