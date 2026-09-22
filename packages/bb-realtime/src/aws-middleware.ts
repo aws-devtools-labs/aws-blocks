@@ -226,7 +226,7 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 					conn.pendingEstablished.delete(msg.channel);
 				}
 				// A resubscribe can be rejected when the channel's replayed token
-				// has expired: channel tokens carry a ~2h TTL, so a socket that was
+				// has expired: channel tokens carry a ~1h TTL, so a socket that was
 				// down long enough reconnects and replays a stale token the server
 				// now refuses. Don't drop the channel silently — surface it through
 				// the existing disconnect plumbing (reason 'error') so the caller
