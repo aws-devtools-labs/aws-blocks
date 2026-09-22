@@ -206,6 +206,40 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 		);
 	});
 
+	// Connect-token-expiry boundary: past the connect token's ~2h TTL the server
+	// rejects the $connect handshake, so a reconnect socket CLOSES WITHOUT EVER
+	// OPENING (no onopen, no resubscribe). This must not hang — the connection
+	// exhausts MAX_RECONNECT and tears down with a terminal onDisconnect('error').
+	// Pins the documented 2h transparent-reconnect ceiling (refresh is the escape hatch).
+	it('reconnect whose $connect is rejected (close without open) gives up with onDisconnect(error)', () => {
+		const client = hydrateClient();
+		const reasons: string[] = [];
+		client.subscribe({ onMessage: () => {}, onDisconnect: (r) => { reasons.push(r); } });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// The live socket drops; every subsequent reconnect's $connect is rejected —
+		// the socket closes without ever emitting open.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		for (let i = 0; i < MAX_RECONNECT + 5; i++) {
+			const latest = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+			latest.emitServerClose(1006); // 403 at $connect → close, NO emitOpen()
+			mock.timers.tick(60_000);
+		}
+
+		// Bounded: 1 original + MAX_RECONNECT attempts, then give up (no infinite spin).
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1 + MAX_RECONNECT,
+			`expected 1 original + ${MAX_RECONNECT} capped reconnects, saw ${FakeWebSocket.instances.length}`,
+		);
+		// A terminal onDisconnect('error') is surfaced on give-up.
+		assert.ok(reasons.includes('error'), 'give-up must surface a terminal onDisconnect(\'error\')');
+	});
+
 	it('production middleware resubscribes stored channels with the replayed token on reconnect', () => {
 		const client = hydrateClient();
 		client.subscribe(() => {});

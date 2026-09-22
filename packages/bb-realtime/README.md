@@ -191,6 +191,13 @@ If a resubscribe is ultimately rejected (a stored token that has passed its ~1h/
 revoked channel) or retries are exhausted, the transport surfaces it as `onDisconnect('error')`
 — that is the fallback point to re-fetch the channel and re-subscribe manually.
 
+> **Transparent reconnect spans the connect token's ~2h life.** The reconnect replays the
+> *stored* connect token (~2h TTL, matching API Gateway's 2h max connection). Past 2h the
+> `$connect` handshake is rejected and reconnect gives up with a terminal `onDisconnect('error')`,
+> so drops are recovered transparently only within that ~2h window. A subscription that must
+> outlive 2h needs a token-refresh mechanism (see the `refresh` option) to re-mint fresh tokens
+> on reconnect.
+
 ## Schema Validation
 
 Every `publish()` validates against the schema at runtime:

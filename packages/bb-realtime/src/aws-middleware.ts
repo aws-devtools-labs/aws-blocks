@@ -31,7 +31,17 @@ const KEEP_ALIVE_MS = 9 * 60 * 1000;
 
 // ── Auto-reconnect caps (mirrors mock-middleware.ts) ────────────────────────
 
-/** Maximum reconnect attempts after an unexpected drop before giving up. */
+// The cap is PER-OUTAGE, not per-session: reconnectAttempts resets once a
+// resubscribe settles (see settleResubscribe), so an 8h agent stream that drops
+// and cleanly recovers many times is never itself capped — the cap only bounds a
+// single unrecoverable outage. 5 attempts with min(1000·2^(n-1), 30_000) backoff
+// spends ~1+2+4+8+16 ≈ 31s before giving up, which is tuned for a transient blip
+// (GW recycle, brief network flap): recovery within seconds is the norm, and a
+// partition that outlasts 31s is better surfaced to the app (terminal
+// onDisconnect('error') + pool teardown, so a later subscribe() rebuilds fresh)
+// than hidden behind minutes of silent backoff. A longer partition on a live
+// stream is the app's cue to re-fetch the channel and re-subscribe.
+/** Maximum reconnect attempts within a SINGLE outage before giving up (reset per settled resubscribe). */
 const MAX_RECONNECT = 5;
 /** Ceiling for exponential backoff between reconnect attempts. */
 const MAX_DELAY_MS = 30_000;
