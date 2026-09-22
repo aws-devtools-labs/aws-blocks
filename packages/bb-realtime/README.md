@@ -194,9 +194,9 @@ revoked channel) or retries are exhausted, the transport surfaces it as `onDisco
 > **Transparent reconnect spans the connect token's ~2h life.** The reconnect replays the
 > *stored* connect token (~2h TTL, matching API Gateway's 2h max connection). Past 2h the
 > `$connect` handshake is rejected and reconnect gives up with a terminal `onDisconnect('error')`,
-> so drops are recovered transparently only within that ~2h window. A subscription that must
-> outlive 2h needs a token-refresh mechanism (see the `refresh` option) to re-mint fresh tokens
-> on reconnect.
+> so drops are recovered transparently only within that ~2h window. This is a known limitation:
+> a subscription that must outlive 2h should treat the terminal `onDisconnect('error')` as the
+> cue to re-fetch a fresh channel handle (new tokens) and re-subscribe.
 
 ## Schema Validation
 
