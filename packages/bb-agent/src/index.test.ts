@@ -1733,7 +1733,6 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
-<<<<<<< HEAD
 	test('a send-rejected-but-server-started turn is NOT auto-adopted by reconnect, but recovers on a later loadConversation', async () => {
 		const { cap, subscribe } = subscribeCapture();
 		// The turn started server-side (the 504 was on the response, not the dispatch), so the
