@@ -148,11 +148,11 @@ describe('addRouteBehaviors', () => {
 		return { dist: distributionWith(stack, origin), origin };
 	}
 
-	test('a default-endpoint namespace still gets a (redundant) behavior, plus the reserved fallbacks', () => {
-		// No mode flag: every API path gets an explicit behavior. A default-endpoint
-		// namespace's behaviors are redundant with the reserved RPC catch-all (all
-		// point at the one default origin) but inert — that redundancy is what lets
-		// one code path serve both distributions.
+	test('a default-endpoint namespace gets no dedicated behavior — it falls through to the reserved catch-all', () => {
+		// A default-compute namespace needs no behavior of its own: the RPC catch-all
+		// (`/aws-blocks/api/*`) already routes it to the default origin. Emitting a
+		// dedicated pair would be inert (same origin) but not free — two behaviors per
+		// namespace toward CloudFront's 25-per-distribution quota — so it is skipped.
 		clearRouteRegistry();
 		registerRoutingEntry({ path: '/aws-blocks/api/notes', endpoint: DEFAULT, subtree: true });
 		const stack = new cdk.Stack(new cdk.App(), 'S');
@@ -161,13 +161,7 @@ describe('addRouteBehaviors', () => {
 
 		const config = soleDistributionConfig(stack);
 		const patterns = (config.CacheBehaviors ?? []).map((b) => b.PathPattern);
-		assert.deepStrictEqual(patterns, [
-			'/aws-blocks/api/notes',
-			'/aws-blocks/api/notes/*',
-			'/aws-blocks/api',
-			'/aws-blocks/api/*',
-			'/aws-blocks/auth/*',
-		]);
+		assert.deepStrictEqual(patterns, ['/aws-blocks/api', '/aws-blocks/api/*', '/aws-blocks/auth/*']);
 		assert.strictEqual(config.Origins.length, 1, 'everything on the default origin → one origin');
 		clearRouteRegistry();
 	});

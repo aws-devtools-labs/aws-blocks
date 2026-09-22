@@ -84,10 +84,11 @@ describe('managed API front door', () => {
 		const config = soleDistribution(template);
 
 		// Every API path resolves to the default compute today, so the managed front
-		// door emits an explicit behavior per API path (redundant with the default
-		// behavior, and inert) — but they all target the one default origin. Fan-out
-		// becomes load-bearing only once a namespace is assigned a distinct compute,
-		// which is when a second origin appears.
+		// door emits only the reserved RPC/auth catch-alls (namespaces fall through
+		// to them rather than getting a dedicated pair) — all on the one default
+		// origin. Fan-out becomes load-bearing only once a namespace is assigned a
+		// distinct compute, which is when a second origin and its per-namespace
+		// behaviors appear.
 		assert.ok(config.DefaultCacheBehavior, 'expected a default behavior');
 		assert.strictEqual(config.Origins.length, 1, 'expected a single origin (the default compute) — no fan-out');
 		const patterns = (config.CacheBehaviors ?? []).map((b) => b.PathPattern);
@@ -191,12 +192,11 @@ describe('Hosting reuse', () => {
 		// No managed front door was built, so it published no URL of its own.
 		assert.deepStrictEqual(Object.keys(template.findOutputs('ApiFrontDoorUrl')), []);
 
-		// Hosting proxies the API on its own distribution: a behavior for the
-		// `reportsApi` namespace subtree and for each app RawRoute (here the built-in
-		// console routes and `/health`), plus the reserved RPC and auth subtrees added
-		// last. Every path resolves to the default compute today, so these are all
-		// redundant with the default behavior and target one origin — but each is
-		// emitted explicitly (no mode flag).
+		// Hosting proxies the API on its own distribution: a behavior for each app
+		// RawRoute (here the built-in console routes and `/health`), plus the reserved
+		// RPC and auth subtrees added last. Every namespace resolves to the default
+		// compute today, so none gets a dedicated behavior — they fall through to the
+		// RPC catch-all, all on the one origin (no mode flag).
 		const config = soleDistribution(template);
 		const patterns = (config.CacheBehaviors ?? []).map((b) => b.PathPattern);
 		for (const expected of [
@@ -208,6 +208,16 @@ describe('Hosting reuse', () => {
 		]) {
 			assert.ok(patterns.includes(expected), `expected a behavior for ${expected}, got ${patterns.join(', ')}`);
 		}
+
+		// And no per-namespace behavior is emitted: every namespace is on the default
+		// compute, so it must fall through to the RPC catch-all rather than spend a
+		// dedicated behavior. The only `/aws-blocks/api`-prefixed patterns allowed are
+		// the two reserved RPC subtrees themselves.
+		const RESERVED_RPC = new Set([BLOCKS_RPC_PREFIX, `${BLOCKS_RPC_PREFIX}/*`]);
+		assert.ok(
+			!patterns.some((p) => p.startsWith(`${BLOCKS_RPC_PREFIX}/`) && !RESERVED_RPC.has(p)),
+			`no namespace-specific behavior may be emitted for a default-compute namespace, got: ${patterns.join(', ')}`,
+		);
 
 		// And the client is pointed at that distribution, not the gateway.
 		const apiUrl = JSON.stringify(template.findOutputs('ApiUrl').ApiUrl.Value);

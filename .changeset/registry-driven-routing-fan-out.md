@@ -15,19 +15,20 @@ dedupes origins by endpoint. Both front-door paths (the managed distribution and
 Hosting's own) now route identically from that table.
 
 Today every route resolves to the default compute, so `addRouteBehaviors()` emits
-an explicit behavior per known API path (each namespace subtree, each app
-`RawRoute`, and the reserved `/aws-blocks/api` RPC and `/aws-blocks/auth`
-subtrees) all pointing at the one default origin. There is deliberately **no mode
-flag**: `addRouteBehaviors()` never sets a distribution's default behavior — each
-caller (the managed distribution → the default compute; Hosting → the frontend)
-owns that — so emitting a behavior for every API path lets whatever is left fall
-through to the caller's own default, correctly in both cases. On the managed
-distribution these per-path behaviors are redundant with the default behavior and
-inert; the cost is a few extra CloudFront behaviors (well within the per-distribution
-quota for typical apps). This is a no-op on the wire until an assignment surface (a
-later change) gives a namespace a non-default compute — at which point the *same*
-registration carries a non-default endpoint and the *same* front-door code fans
-that path out to the assigned origin, with no change here.
+only the behaviors that actually route somewhere distinct: each app `RawRoute` and
+the reserved `/aws-blocks/api` RPC and `/aws-blocks/auth` subtrees, all pointing at
+the one default origin. A namespace on the default compute gets **no** dedicated
+behavior — it falls through to the RPC catch-all — so the behavior count does not
+grow with the number of namespaces (which would otherwise add two behaviors each and
+push a ~11-namespace app past CloudFront's 25-behaviors-per-distribution quota for no
+routing gain). There is deliberately **no mode flag**: `addRouteBehaviors()` never
+sets a distribution's default behavior — each caller (the managed distribution → the
+default compute; Hosting → the frontend) owns that — so everything unrouted falls
+through to the caller's own default, correctly in both cases. This is a no-op on the
+wire until an assignment surface (a later change) gives a namespace a non-default
+compute — at which point the *same* registration carries a non-default endpoint and
+the *same* front-door code emits that namespace's exact/subtree pair to fan it out to
+the assigned origin, with no change here.
 
 Two things are deliberately deferred to that later change, since neither has an
 observable effect while every route resolves to the default endpoint: per-stack

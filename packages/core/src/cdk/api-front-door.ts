@@ -110,22 +110,25 @@ export function httpOriginFromEndpoint(endpoint: string): IOrigin {
  * cross a stack boundary.
  *
  * Each route (an `ApiNamespace`'s routing entry, or a `RawRoute`) carries the
- * `endpoint` of the compute that serves it, and gets a behavior to that compute's
- * origin. A path assigned to a non-default compute is the fan-out; a path on the
- * default compute gets a behavior too, redundant with the default (catch-all)
- * behavior but harmless (it points at the same origin). The reserved RPC/auth
- * prefixes are added **last**, so a specific `/aws-blocks/api/{ns}` behavior wins
- * over the `/aws-blocks/api/*` catch-all (CloudFront is first-match-wins by
- * insertion order).
+ * `endpoint` of the compute that serves it. A path assigned to a **non-default**
+ * compute gets a behavior to that compute's origin — the fan-out. A namespace on
+ * the **default** compute gets **no** dedicated behavior: the `/aws-blocks/api/*`
+ * catch-all already routes it to the default origin, so a per-namespace pair would
+ * be inert *and* would spend two behaviors each toward CloudFront's per-distribution
+ * quota (a ~11-namespace app would exceed the default of 25 for no routing gain).
+ * The reserved RPC/auth prefixes are added **last**, so a specific
+ * `/aws-blocks/api/{ns}` fan-out behavior wins over the `/aws-blocks/api/*` catch-all
+ * (CloudFront is first-match-wins by insertion order).
  *
  * There is deliberately **no mode flag**. This function never sets the
  * distribution's *default* behavior — each caller owns its distribution and has
  * already wired that (the Blocks-owned distribution → the default compute; a
- * `Hosting` distribution → the frontend). By emitting an explicit behavior for
- * every known API path here, whatever is left falls through to the caller's own
- * default behavior, correctly in both cases. The cost of the redundancy is a few
- * extra CloudFront behaviors on the Blocks-owned distribution (well within the
- * per-distribution behavior quota for typical apps).
+ * `Hosting` distribution → the frontend). Because only fan-out paths and the
+ * reserved subtrees get behaviors, everything else (including every default-compute
+ * namespace) falls through to the caller's own default behavior, correctly in both
+ * cases. The behavior count is therefore bounded by the RawRoutes plus the reserved
+ * subtrees plus the *assigned* namespaces — it does not grow with the total number
+ * of namespaces.
  *
  * Namespaces/endpoints that share a compute share one `IOrigin`, so CloudFront
  * gets one origin per distinct endpoint rather than one per path.
@@ -160,14 +163,20 @@ export function addRouteBehaviors(
 	for (const route of routes) {
 		const endpoint = route.endpoint ?? defaultEndpoint;
 
-		// Routing-only namespace entry (`/aws-blocks/api/{ns}` + subtree). Always
-		// emitted: on a default-compute namespace this is redundant with the RPC
-		// catch-all added last, but a redundant behavior points at the same origin,
-		// so it is inert — and emitting unconditionally is what lets both front-door
-		// paths share this code with no mode flag.
+		// Routing-only namespace entry (`/aws-blocks/api/{ns}` + subtree). Emit a
+		// dedicated behavior pair only when the namespace actually fans out to a
+		// non-default origin. On the default compute the pair would be redundant
+		// with the RPC catch-all added last (same origin, so inert) — but not free:
+		// each namespace would add two behaviors toward CloudFront's 25-per-
+		// distribution quota, so an app with ~11 namespaces would fail to deploy for
+		// no routing gain. Skipping the pair here lets a default-compute namespace
+		// fall through to the catch-all, and still leaves both front-door paths
+		// sharing this one code path with no mode flag.
 		if (route.subtree) {
-			addBehavior(route.path, endpoint);
-			addBehavior(`${route.path}/*`, endpoint);
+			if (endpoint !== defaultEndpoint) {
+				addBehavior(route.path, endpoint);
+				addBehavior(`${route.path}/*`, endpoint);
+			}
 			continue;
 		}
 

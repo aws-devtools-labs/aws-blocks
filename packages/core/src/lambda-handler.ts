@@ -4,7 +4,7 @@
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ApiError } from './errors.js';
-import { BLOCKS_RPC_PREFIX, isRpcPath } from './constants.js';
+import { isRpcPath } from './constants.js';
 import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
@@ -531,26 +531,28 @@ function createHandler(backend: any) {
       if (matched) {
         return handleRawRoute(event, matched.route, matched.params, corsHeaders, signal);
       }
-      // No RawRoute matched and path is not the RPC endpoint — return 404.
-      // Log it: an unmatched route used to be entirely silent, which is what
-      // made a split route registry (duplicate @aws-blocks/core copies)
-      // undiagnosable from CloudWatch alone. The path is already in the API
-      // Gateway access logs, so this adds no new category of data.
-      if (!requestPath.startsWith(BLOCKS_RPC_PREFIX)) {
-        const copies = getLoadedCoreCopies();
-        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
-        console.error(
-          `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
-        );
-        return {
-          statusCode: 404,
-          headers: {
-            'Content-Type': 'application/json',
-            ...corsHeaders,
-          },
-          body: JSON.stringify({ error: 'Not Found' }),
-        };
-      }
+      // No RawRoute matched and the path is not the RPC subtree (`isRpcPath` is
+      // false in this branch), so it dispatches nowhere — return 404. Guarding on
+      // `isRpcPath` above rather than a raw `startsWith(BLOCKS_RPC_PREFIX)` here is
+      // what closes the boundary case: `/aws-blocks/apiXYZ` shares the prefix but is
+      // not the RPC subtree, and must 404 rather than fall through to RPC dispatch.
+      // Log it: an unmatched route used to be entirely silent, which is what made a
+      // split route registry (duplicate @aws-blocks/core copies) undiagnosable from
+      // CloudWatch alone. The path is already in the API Gateway access logs, so this
+      // adds no new category of data.
+      const copies = getLoadedCoreCopies();
+      const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+      console.error(
+        `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
+      );
+      return {
+        statusCode: 404,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders,
+        },
+        body: JSON.stringify({ error: 'Not Found' }),
+      };
     }
 
     const rpcHeaders = {

@@ -62,3 +62,20 @@ test('ApiNamespace registers a namespace routing entry at most once', () => {
   const dupEntries = getRegisteredRoutes().filter((r) => r.path === `${BLOCKS_RPC_PREFIX}/dup`);
   assert.strictEqual(dupEntries.length, 1);
 });
+
+test('ApiNamespace rejects a name that is not URL-path-safe', () => {
+  clearRouteRegistry();
+  // The name becomes the `/aws-blocks/api/<name>` path segment (client URL AND the
+  // CloudFront behavior pattern), so a path-unsafe character must fail at definition
+  // time rather than silently diverge the two. Validation runs before the
+  // scope/compute check, so it fires in every bundle, not just at synth.
+  assert.throws(() => new ApiNamespace(scope, 'my.api', () => ({ x: () => 1 })), /is not URL-path-safe/);
+  assert.throws(() => new ApiNamespace(scope, 'a/b', () => ({ x: () => 1 })), /is not URL-path-safe/);
+  assert.strictEqual(getRegisteredRoutes().length, 0, 'a rejected name registers nothing');
+});
+
+test('ApiNamespace accepts names with hyphens and underscores', () => {
+  // `-` and `_` are the only non-alphanumeric characters the guard allows; both are
+  // valid URL path-segment characters.
+  assert.doesNotThrow(() => new ApiNamespace(new Scope('safe'), 'my-api_v2', () => ({ x: () => 1 })));
+});

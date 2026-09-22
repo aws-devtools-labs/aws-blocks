@@ -72,11 +72,16 @@ type ComputeResolvingScope = { compute?: { endpoint?: string } };
  * Register a routing-only entry for this namespace so the front door can route
  * `/aws-blocks/api/{name}` (and its subtree) to the compute that serves it.
  *
- * CDK-synth concern only: in the CDK bundle `scope.compute` resolves to the
- * namespace's compute (the stack default today) and carries its `endpoint`. In
- * the mock/runtime bundles — or a scopeless test — `compute` is absent, so there
- * is nothing to route and this is a silent no-op. Dispatch reads the namespace
- * from the RPC body, not the path; the entry only shapes CloudFront behaviors.
+ * Two things happen here. First, the name is validated for URL-path safety in
+ * **every** bundle (see below) — it becomes the `/aws-blocks/api/{name}` path
+ * segment the client posts to and the front door matches on, so a malformed name
+ * must fail at definition time, not silently at deploy. Second, the actual routing
+ * registration is a **CDK-synth concern only**: in the CDK bundle `scope.compute`
+ * resolves to the namespace's compute (the stack default today) and carries its
+ * `endpoint`; in the mock/runtime bundles — or a scopeless test — `compute` is
+ * absent, so there is nothing to route and the registration is a silent no-op.
+ * Dispatch reads the namespace from the RPC body, not the path; the entry only
+ * shapes CloudFront behaviors.
  *
  * No `try/catch`: `BlocksBackend.create()` initializes the default compute
  * before it imports the backend module that constructs any `ApiNamespace`, so
@@ -85,6 +90,19 @@ type ComputeResolvingScope = { compute?: { endpoint?: string } };
  * before `create()` resolved), which should surface rather than be swallowed.
  */
 function registerNamespaceRoute(scope: ScopeParent | null | undefined, name: string): void {
+  // The name becomes a URL path segment: the client posts to
+  // `${BLOCKS_RPC_PREFIX}/${name}` and the front door matches a CloudFront behavior
+  // on that exact path. A path-unsafe character would make the client URL and the
+  // behavior pattern disagree (or be rejected by CloudFront), so fail fast at
+  // definition time rather than encoding it away and silently diverging the two.
+  // Names are JS identifiers in practice, so this only trips a genuinely malformed
+  // one.
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+    throw new Error(
+      `ApiNamespace name ${JSON.stringify(name)} is not URL-path-safe: use only letters, digits, '-' and '_' ` +
+        `(the name becomes the '${BLOCKS_RPC_PREFIX}/<name>' path segment).`,
+    );
+  }
   // An API created without a Scope stays unregistered and routes to the default
   // compute via the front door's catch-all behavior.
   if (!scope || typeof scope !== 'object') return;
