@@ -4,6 +4,10 @@
 import { AppSettingErrors } from './errors.js';
 import type { InternalAppSettingOptions } from './types.js';
 
+// Unlike the `blocksError` in index.mock.ts / index.aws.ts (which prefix the
+// message with `${name}: `), this one leaves the message unprefixed on purpose:
+// these checks moved out of the CDK constructor, which threw a plain message, so
+// keeping it unprefixed preserves the exact pre-refactor CDK synth error text.
 function blocksError(name: string, message: string): Error {
 	const err = new Error(message);
 	err.name = name;
