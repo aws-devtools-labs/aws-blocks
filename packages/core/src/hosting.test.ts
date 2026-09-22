@@ -1477,7 +1477,7 @@ describe('Hosting', () => {
   // ── Monitoring ─────────────────────────────────────────────────
 
   describe('Monitoring', () => {
-    it('exposes monitoringTopic when monitoring is enabled', () => {
+    it('exposes monitoring surface (alarms + alarmTopics) when enabled', () => {
       createNextjsBuildOutput(tmpDir);
 
       const app = new App();
@@ -1490,8 +1490,15 @@ describe('Hosting', () => {
         monitoring: { enabled: true },
       });
 
-      // The L3 should create an SNS topic for alarms
-      assert.ok(hosting.monitoringTopic, 'Should expose monitoringTopic when enabled');
+      assert.ok(hosting.monitoring, 'Should expose monitoring when enabled');
+      assert.ok(
+        hosting.monitoring.alarmTopics.length >= 1,
+        'Should expose at least one alarm topic',
+      );
+      assert.ok(
+        hosting.monitoring.alarms.length >= 1,
+        'Should expose alarms',
+      );
     });
   });
 
