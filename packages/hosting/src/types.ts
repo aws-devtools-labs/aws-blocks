@@ -1,14 +1,33 @@
-import { Duration } from 'aws-cdk-lib';
-import {
+import type { Duration } from 'aws-cdk-lib';
+import type {
   Distribution,
   IResponseHeadersPolicy,
   PriceClass,
 } from 'aws-cdk-lib/aws-cloudfront';
-import { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
-import { IKey } from 'aws-cdk-lib/aws-kms';
-import { RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
-import { FrameworkAdapterFn } from './adapters/index.js';
+import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
+import type { IKey } from 'aws-cdk-lib/aws-kms';
+import type { RetentionDays } from 'aws-cdk-lib/aws-logs';
+import type {
+  EmailSubscription,
+  UrlSubscription,
+} from 'aws-cdk-lib/aws-sns-subscriptions';
+import type { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
+import type { FrameworkAdapterFn } from './adapters/index.js';
+
+/**
+ * Alarm subscription types supported by Hosting monitoring.
+ *
+ * Restricted to endpoint subscriptions (`EmailSubscription`,
+ * `UrlSubscription`) because each subscription is applied to BOTH the
+ * app-region alarm topic and the us-east-1 CloudFront alarm topic, and
+ * a resource-target subscription (Lambda/SQS) would create a
+ * cross-region reference from the app-region resource to the us-east-1
+ * topic that CDK cannot resolve without explicit physical names. Endpoint
+ * subscriptions carry no resource reference, so they attach cleanly to
+ * both topics. Resource-target support can be added later (e.g. via a
+ * forwarder) by widening this type — a non-breaking change.
+ */
+export type HostingAlarmSubscription = EmailSubscription | UrlSubscription;
 
 /**
  * Open union type for framework names.
@@ -216,20 +235,31 @@ export type HostingProps = {
   /**
    * Custom environment variables injected into all compute Lambda functions at runtime.
    *
-   * Values appear in plaintext in the CloudFormation template. For sensitive values
-   * (database passwords, API secrets), use AWS Systems Manager Parameter Store or
-   * Secrets Manager and read them at runtime instead.
+   * A plain string here appears **in plaintext in the CloudFormation template** — use
+   * it only for non-sensitive literals (feature flags, non-secret URLs, region config,
+   * service names). For a sensitive value (an API key, a credential) or a
+   * change-without-redeploy value, do **not** put it here: reference it with
+   * `secret('KEY')` (→ AWS Secrets Manager) or `config('KEY')` (→ SSM Parameter Store)
+   * and read it at runtime with `getSecret('KEY')` / `getConfig('KEY')` from the
+   * CDK-free `@aws-blocks/hosting` value API. Only the store locator is injected —
+   * never the value — and the value never enters the template.
    *
-   * Safe for: feature flags, non-secret URLs, region config, service names.
    * @example
    * ```typescript
    * defineHosting({
    *   environment: {
-   *     DATABASE_URL: process.env.DATABASE_URL,
-   *     FEATURE_FLAGS_API_KEY: process.env.FF_KEY,
+   *     APP_REGION: 'us-east-1', // non-sensitive literal
    *   },
    * });
+   *
+   * // sensitive / rotatable values — reference by key, set out of band, read at runtime:
+   * //   environment: { STRIPE_KEY: secret('STRIPE_KEY') }   // → getSecret('STRIPE_KEY')
+   * //   environment: { FEATURE_FLAGS: config('FEATURE_FLAGS') } // → getConfig('FEATURE_FLAGS')
    * ```
+   *
+   * @remarks The marker form (`secret()` / `config()`) is wired by the
+   * `HostingConstruct` / Blocks `Hosting` today; `defineHosting` gains it with the
+   * Amplify hosting integration.
    */
   environment?: Record<string, string>;
 
@@ -300,6 +330,14 @@ export type HostingProps = {
     /** Days to retain build artifacts in S3. Default: 30. */
     buildRetentionDays?: number;
     /**
+     * Optional advisory hint: how often you expect to deploy, in days. Used
+     * ONLY at synth to emit a warning when your rollback window
+     * (`buildRetentionDays`) is shorter than your deploy cadence, which would
+     * let superseded builds expire before your next deploy. The live build is
+     * never affected (#480), so this is a rollback-window note, not an error.
+     */
+    deployIntervalDays?: number;
+    /**
      * Opt-in S3 inventory of `builds/` (3.3). When enabled, a daily
      * CSV report of every object under `builds/` lands in a
      * dedicated inventory bucket. Useful for cost audits — find
@@ -328,18 +366,25 @@ export type HostingProps = {
    * Idle cost is a few cents per month per alarm — set
    * `monitoring: { enabled: false }` to opt out.
    *
-   * If `snsTopicArn` is omitted, an SNS topic is created and surfaced
-   * via the construct's `monitoringTopic` field for the caller to
-   * subscribe to.
+   * If `subscriptions` is omitted, the alarm topics are still created
+   * and surfaced via the construct's `monitoring.alarmTopics` field so
+   * the caller can subscribe later.
    */
   monitoring?: {
     /** @default true */
     enabled?: boolean;
     /**
-     * BYO SNS topic ARN for alarm actions. When omitted, an SNS topic
-     * is created.
+     * Subscriptions to attach to the hosting alarm topics. Each entry is
+     * applied to BOTH the app-region topic and the us-east-1 CloudFront
+     * topic, so a single entry covers every hosting alarm regardless of
+     * which region its metric lives in.
+     *
+     * Restricted to endpoint subscriptions — `EmailSubscription` and
+     * `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions`. See
+     * {@link HostingAlarmSubscription} for why resource-target
+     * subscriptions (Lambda/SQS) are not yet supported.
      */
-    snsTopicArn?: string;
+    subscriptions?: HostingAlarmSubscription[];
   };
 
   /**

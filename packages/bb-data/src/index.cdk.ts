@@ -1,13 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, getVpcContext, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { materialize, grantExternalDataApi } from './infra.js';
 import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX } from './constants.js';
-import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
+import type { DatabaseOptions, ExternalDatabaseRef, SubnetSelection } from './types.js';
 
 /**
  * CDK layer for the Database Building Block.
@@ -29,11 +30,57 @@ import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
  * // With custom capacity:
  * const db = new Database(scope, 'analytics', { minCapacity: 1, maxCapacity: 8 });
  */
-export class Database extends Scope {
-  constructor(scope: ScopeParent, id: string, options?: DatabaseOptions) {
-    super(id, { parent: scope });
 
-    const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
+/** Map the CDK-free `subnetType` string to the CDK enum. */
+const SUBNET_TYPE_MAP: Record<NonNullable<SubnetSelection['subnetType']>, ec2.SubnetType> = {
+  isolated: ec2.SubnetType.PRIVATE_ISOLATED,
+  'private-with-egress': ec2.SubnetType.PRIVATE_WITH_EGRESS,
+  public: ec2.SubnetType.PUBLIC,
+};
+
+/**
+ * Resolve the customer's CDK-free {@link SubnetSelection} (from `Database({ subnets })`)
+ * into a real `ec2.SubnetSelection`. Returns `undefined` when no override was
+ * given, so the default isolated-preferred placement applies. Enforces CDK's
+ * mutual exclusion (at most one of subnetType / subnetGroupName / subnetIds)
+ * with a BB-named error instead of a cryptic CDK one.
+ */
+function resolveClusterSubnets(scope: BuildingBlockScope, sel?: SubnetSelection): ec2.SubnetSelection | undefined {
+  if (!sel) return undefined;
+  const primaries = [sel.subnetType, sel.subnetGroupName, sel.subnetIds].filter((v) => v !== undefined);
+  if (primaries.length > 1) {
+    throw new Error(
+      `Database "${scope.fullId}": at most one of 'subnetType', 'subnetGroupName', or 'subnetIds' ` +
+        `may be set in 'subnets'.`,
+    );
+  }
+  return {
+    ...(sel.subnetType ? { subnetType: SUBNET_TYPE_MAP[sel.subnetType] } : {}),
+    ...(sel.subnetGroupName ? { subnetGroupName: sel.subnetGroupName } : {}),
+    ...(sel.subnetIds
+      ? { subnets: sel.subnetIds.map((sid, i) => ec2.Subnet.fromSubnetId(scope, `${scope.node.id}Subnet${i}`, sid)) }
+      : {}),
+    ...(sel.availabilityZones ? { availabilityZones: sel.availabilityZones } : {}),
+    ...(sel.onePerAz !== undefined ? { onePerAz: sel.onePerAz } : {}),
+  };
+}
+
+export class Database extends BuildingBlockScope {
+  constructor(scope: ScopeParent, id: string, options?: DatabaseOptions) {
+    // Aurora is reached over the RDS Data API, so it needs Secrets Manager + RDS
+    // Data interface endpoints. It does NOT declare `requiresEgress`: the Data
+    // API is called from the shared runtime over HTTPS (via those endpoints), so
+    // the runtime's own placement is unconstrained. The cluster's placement is
+    // resolved by the Database construct itself via `selectSubnets`, not here.
+    super(id, {
+      parent: scope,
+      vpc: {
+        interfaceEndpoints: [
+          ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
+          ec2.InterfaceVpcEndpointAwsService.RDS_DATA,
+        ],
+      },
+    });
 
     if (options?.connection) {
       // External database — skip provisioning, just grant permissions and inject env vars
@@ -45,7 +92,7 @@ export class Database extends Scope {
         registerConfig(this, `${ENV_VAR_PREFIX}_${envName}_CLUSTER_ARN`, conn.host);
         registerConfig(this, `${ENV_VAR_PREFIX}_${envName}_SECRET_ARN`, conn.secretArn);
         registerConfig(this, `${ENV_VAR_PREFIX}_${envName}_DATABASE`, conn.database);
-        grantExternalDataApi(this, this.fullId, conn, this.handler);
+        grantExternalDataApi(this, this.fullId, conn, this.executionRole);
       }
       // connectionString variant: AppSetting handles parameter creation, IAM grants, and env var injection.
 
@@ -67,8 +114,11 @@ export class Database extends Scope {
       snapshot: cdk.RemovalPolicy.SNAPSHOT,
     } as const;
 
-    // In sandbox mode, default to DESTROY so sandbox:destroy can clean up.
-    const defaultRemovalPolicy = isSandbox ? cdk.RemovalPolicy.DESTROY : undefined;
+    // Removal policy: the per-block option wins, otherwise the stack-wide
+    // `defaults` (sandbox → DESTROY so sandbox:destroy can clean up; production
+    // → RETAIN). Deletion protection is derived from the resolved policy in
+    // materialize() (protected unless DESTROY).
+    const defaultRemovalPolicy = this.defaults.removalPolicy;
 
     const infra = materialize(this, this.fullId, {
       minCapacity: options?.minCapacity,
@@ -76,7 +126,14 @@ export class Database extends Scope {
       databaseName,
       migrationsPath: options?.migrationsPath ? resolve(options.migrationsPath) : undefined,
       removalPolicy: options?.removalPolicy ? REMOVAL_POLICY_MAP[options.removalPolicy] : defaultRemovalPolicy,
+      // Read independently from defaults (not derived from removalPolicy), so
+      // an override like `{ ...production, deletionProtection: false }` is honored.
+      deletionProtection: this.defaults.deletionProtection,
       postgresVersion: options?.postgresVersion,
+      vpcContext: getVpcContext(this),
+      clusterSubnets: resolveClusterSubnets(this, options?.subnets),
+      // Migration Lambda log retention follows the stack-wide default.
+      logRetention: this.defaults.logRetention,
     });
 
     // Inject config so DataApiEngine can read them at runtime
@@ -84,8 +141,8 @@ export class Database extends Scope {
       registerConfig(this, key, value);
     });
 
-    // Grant Data API permissions to the Lambda handler
-    infra.grantDataApi(this.handler);
+    // Grant Data API permissions to the shared execution role
+    infra.grantDataApi(this.executionRole);
   }
 
   /**

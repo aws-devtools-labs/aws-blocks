@@ -9,7 +9,8 @@ import { join, relative, dirname, extname, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { buildIndex, search, type TfIdfIndex } from './tfidf.js';
 import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, ChunkingStrategy, WaitUntilSyncedOptions } from './types.js';
-import { KnowledgeBaseErrors } from './errors.js';
+import { blocksError, KnowledgeBaseErrors } from './errors.js';
+import { normalizeMaxResults } from './normalize.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -34,12 +35,6 @@ interface Chunk {
 	text: string;
 	source: string;
 	metadata: Record<string, string>;
-}
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
 }
 
 function walkDir(dir: string): string[] {
@@ -201,7 +196,7 @@ export class KnowledgeBase extends Scope {
 	 * @param query - Natural language search query. Must be non-empty.
 	 * @param options - Optional retrieval parameters (maxResults, filter).
 	 * @returns Chunks ranked by relevance score (highest first). Empty array if no matches.
-	 * @throws {KnowledgeBaseValidationError} If query is empty or whitespace-only.
+	 * @throws {KnowledgeBaseValidationError} If query is empty or whitespace-only, or `maxResults` is a non-integer.
 	 * @throws {InvalidSourceConfigException} If the source folder does not exist or is not a string path.
 	 *
 	 * @example
@@ -220,7 +215,7 @@ export class KnowledgeBase extends Scope {
 			throw blocksError(KnowledgeBaseErrors.ValidationError, 'Query must be a non-empty string.');
 		}
 
-		const maxResults = Math.min(Math.max(options?.maxResults ?? 10, 1), 100);
+		const maxResults = normalizeMaxResults(options?.maxResults);
 		const filter = options?.filter;
 
 		await this.ensureLoaded();

@@ -777,7 +777,7 @@ void describe('nextjsAdapter', () => {
           edgeFn1: {
             bundle: '.open-next/server-functions/edgeFn1',
             handler: 'index.handler',
-            runtime: 'nodejs20.x',
+            runtime: 'nodejs24.x',
           },
         },
         behaviors: [

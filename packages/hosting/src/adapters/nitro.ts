@@ -27,6 +27,7 @@ import fg from 'fast-glob';
 import semver from 'semver';
 import { getPackageInfoSync, isPackageExists } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
+import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import type {
   ComputeResource,
   DeployManifest,
@@ -1378,7 +1379,7 @@ const presetToCompute = (
       entrypoint: 'index.mjs',
       port: 3000,
       placement: 'regional',
-      runtime: 'nodejs20.x',
+      runtime: FRAMEWORK_COMPUTE_RUNTIME,
     };
   }
 
@@ -1392,7 +1393,7 @@ const presetToCompute = (
     handler: 'index.handler',
     placement: 'regional',
     streaming: awsLambdaStreaming,
-    runtime: 'nodejs20.x',
+    runtime: FRAMEWORK_COMPUTE_RUNTIME,
   };
 };
 

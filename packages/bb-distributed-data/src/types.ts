@@ -9,8 +9,10 @@ export interface DistributedDatabaseOptions {
   /** Path to directory containing numbered .sql migration files. */
   migrationsPath?: string;
   /**
-   * CloudFormation removal policy.
-   * @default 'retain'
+   * CloudFormation removal policy for the DSQL cluster. When omitted, the
+   * stack-wide `defaults` apply (`production` → RETAIN, `sandbox` → DESTROY).
+   * Pass `'destroy'`/`'retain'` to override for this one database. Deletion
+   * protection follows: on unless the cluster is being destroyed.
    */
   removalPolicy?: 'destroy' | 'retain';
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */

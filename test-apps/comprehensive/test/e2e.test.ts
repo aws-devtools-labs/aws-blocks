@@ -11,6 +11,7 @@ import type { api as apiType } from 'aws-blocks';
 import { installCookieJar } from './cookie-jar.js';
 import { kvStoreTests } from './kv-store.test.js';
 import { distributedTableTests } from './distributed-table.test.js';
+import { distributedTableSecureDefaultsTests } from './distributed-table-secure-defaults.test.js';
 import { realtimeTests } from './realtime.test.js';
 import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
@@ -190,6 +191,9 @@ kvStoreTests(() => api);
 
 // DistributedTable tests (separate file)
 distributedTableTests(() => api);
+
+// DistributedTable secure-defaults deploy coverage (separate file)
+distributedTableSecureDefaultsTests(() => api);
 
 // Database tests (separate file)
 databaseTests(() => api);

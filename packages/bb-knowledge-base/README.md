@@ -49,7 +49,7 @@ const kb = new KnowledgeBase(scope, id, options)
 | `chunking` | `ChunkingConfig` | `{ strategy: 'semantic' }` | How documents are split into chunks. |
 | `embeddingDimensions` | `256 \| 512 \| 1024` | `1024` | Embedding model dimensions. |
 | `description` | `string` | — | Human-readable description for the knowledge base. |
-| `removalPolicy` | `'destroy' \| 'retain'` | `'retain'` | CDK removal behavior for BB-created data buckets (imported `s3://` URI sources are unaffected). Defaults to RETAIN (bucket and documents preserved on `cdk destroy`) unless sandbox mode. Pass `'destroy'` for ephemeral stacks — also enables `autoDeleteObjects`. |
+| `removalPolicy` | `'destroy' \| 'retain'` | stack `defaults` | CDK removal behavior for BB-created data buckets (imported `s3://` URI sources are unaffected). When omitted, follows the stack-wide `defaults` (`production` → RETAIN, `sandbox` → DESTROY). Pass `'destroy'` to drop the bucket on teardown for this KB — also enables `autoDeleteObjects`. |
 | `logger` | `ChildLogger` | — | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 
 ### Source Configuration

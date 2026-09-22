@@ -6,13 +6,15 @@ import { pathToFileURL, URL } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
 import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createConnection } from 'node:net';
+import { createConnection, type Socket } from 'node:net';
+import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
 import { ApiError } from '../errors.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX } from '../constants.js';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
+import { CORS_MAX_AGE } from '../cors.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import {
   parseRpcRequest,
@@ -43,6 +45,24 @@ export const LOCALHOST_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
  */
 export function resolveDevCorsOrigin(origin: string): string {
   return LOCALHOST_PATTERN.test(origin) ? origin : 'http://localhost:3000';
+}
+
+/**
+ * Build the CORS response headers the dev server sets on every request.
+ *
+ * Mirrors the Lambda path's cache posture — same {@link CORS_MAX_AGE} and the
+ * same `Vary: Origin` — so the reflected `Access-Control-Allow-Origin` can't be
+ * served across origins by a shared cache, and so the two sites can't drift.
+ */
+export function buildDevCorsHeaders(requestOrigin: string): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': resolveDevCorsOrigin(requestOrigin),
+    'Vary': 'Origin',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Max-Age': CORS_MAX_AGE,
+  };
 }
 
 /** Shape of the client runtime config the browser fetches to discover the API URL. */
@@ -86,6 +106,39 @@ export interface DevServerOptions {
   frontendCommand?: string;
   /** Port the frontend dev server listens on. Default: 3100. */
   frontendPort?: number;
+  /**
+   * Watch `secret()` / `config()` calls and regenerate the type-safe key
+   * augmentation (so `getSecret`/`getConfig` autocomplete and reject typos) as you
+   * edit — all under this one `npm run dev`, no second command. Auto-detected: a
+   * no-op unless the app actually declares a `secret()`/`config()`, and never fatal
+   * (a failure only logs a warning). Set `false` to disable. Default: enabled.
+   */
+  typegen?: boolean;
+}
+
+/**
+ * Bootstrap the type-safe `getSecret`/`getConfig` key generation for the dev
+ * session. Auto-detected and non-fatal: scans the app for `secret()`/`config()`
+ * calls and, only if it finds any, generates the augmentation `.d.ts` and starts a
+ * watcher that regenerates on save — so a single `npm run dev` gives type-safe keys
+ * with no second command. Returns a `stop()` (or `undefined` when the app declares
+ * no secrets, typegen is unavailable, or it is disabled). The watcher is `unref`'d
+ * so it can never block the dev server's shutdown.
+ */
+async function startTypegenWatch(): Promise<(() => void) | undefined> {
+  try {
+    const { scanValueKeys, watchHostingValues } = await import('@aws-blocks/hosting/scripts');
+    const scan = await scanValueKeys();
+    if (scan.secretKeys.length === 0 && scan.configKeys.length === 0) {
+      return undefined; // app doesn't use secret()/config() → nothing to type, skip silently
+    }
+    console.log('🔑 Type-safe secret()/config() keys — watching for changes...');
+    return await watchHostingValues({ unref: true });
+  } catch (error) {
+    // Never break the dev server over typegen (e.g. `typescript` not installed).
+    console.warn(`⚠️  hosting-typegen skipped: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
 }
 
 /**
@@ -854,12 +907,9 @@ export async function startDevServer(options: DevServerOptions) {
 
     // CORS headers
     const requestOrigin = req.headers.origin || '';
-    const allowedOrigin = resolveDevCorsOrigin(requestOrigin);
-    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Max-Age', '86400');
+    for (const [name, value] of Object.entries(buildDevCorsHeaders(requestOrigin))) {
+      res.setHeader(name, value);
+    }
 
     if (method === 'OPTIONS') {
       res.writeHead(200);
@@ -903,6 +953,10 @@ export async function startDevServer(options: DevServerOptions) {
 
   // WebSocket upgrade — route to frontend (HMR) or dev attachments
   server.on('upgrade', (req, socket, head) => {
+    // A stale client can reset the connection mid-upgrade (ECONNRESET). The raw
+    // socket has no 'error' listener at this point, so Node's default handler
+    // would kill the dev server. Attach one before any parsing/routing.
+    socket.on('error', () => socket.destroy());
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     if (url.pathname === '/realtime') return; // handled by dev attachment (noServer mode)
     if (frontendProxy) {
@@ -936,6 +990,12 @@ export async function startDevServer(options: DevServerOptions) {
     console.log('📝 Generating client code...');
     await writeClientCode(resolvedPath, clientPath);
   }
+
+  // Type-safe getSecret/getConfig: generate + watch the key augmentation so the
+  // getters autocomplete and reject typos, regenerating on save — all under this
+  // one `npm run dev`. Auto-detected (no-op unless the app uses secret()/config())
+  // and non-fatal.
+  const stopTypegen = options.typegen === false ? undefined : await startTypegenWatch();
 
   // ── Startup reclaim ──────────────────────────────────────────────────────
   // Free any port left bound by a crashed / SIGKILL'd predecessor before we bind
@@ -988,6 +1048,12 @@ export async function startDevServer(options: DevServerOptions) {
     onExhausted: () => process.exit(1),
     warn: (msg) => console.error(msg),
   });
+  // Malformed/aborted requests must not become unhandled socket errors.
+  server.on('clientError', (_err: Error, socket: Duplex) => {
+    if ((socket as Socket).writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+    else socket.destroy();
+  });
+
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       // Keep the telemetry signal (unchanged) …
@@ -1023,6 +1089,7 @@ export async function startDevServer(options: DevServerOptions) {
     console.log('\nShutting down...');
 
     if (respawnTimer) { clearTimeout(respawnTimer); respawnTimer = null; }
+    stopTypegen?.(); // tear down the typegen watcher (unref'd, but close it cleanly)
     // Detach our own listeners so repeated signals can't pile up handlers.
     for (const sig of signals) process.removeListener(sig, cleanup);
 

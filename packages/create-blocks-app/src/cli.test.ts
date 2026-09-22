@@ -132,6 +132,27 @@ describe('create-blocks-app CLI argument parsing', () => {
   });
 });
 
+describe('create-blocks-app template metadata', () => {
+  it('every deployable template has a build script', () => {
+    const templatesDir = join(__dirname, '..', 'templates');
+    const templates = readdirSync(templatesDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    const missing: string[] = [];
+    for (const name of templates) {
+      const pkgPath = join(templatesDir, name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+      const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
+      // Keep this in step with the standard vendorize-script guard below:
+      // a template with a sandbox lifecycle is deployable and must expose build.
+      if (scripts.sandbox && (typeof scripts.build !== 'string' || scripts.build.length === 0)) {
+        missing.push(name);
+      }
+    }
+    assert.deepStrictEqual(missing, [], `Deployable templates missing "build": ${missing.join(', ')}`);
+  });
+});
+
 describe('create-blocks-app auto-detection', () => {
   it('detects existing project with package.json when no target dir given', () => {
     const tmpDir = join(__dirname, '../.test-autodetect-no-arg');
@@ -145,6 +166,32 @@ describe('create-blocks-app auto-detection', () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
+  });
+
+  it('deployable templates declare a floating CDK CLI dependency', () => {
+    const templatesDir = join(__dirname, '..', 'templates');
+    const missingOrPinned: string[] = [];
+
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+
+      const pkgPath = join(templatesDir, entry.name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+
+      const packageJson = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+      if (!packageJson.scripts?.sandbox) continue;
+
+      const cdkVersion = packageJson.devDependencies?.['aws-cdk'];
+      if (typeof cdkVersion !== 'string' || !cdkVersion.startsWith('^2.')) {
+        missingOrPinned.push(entry.name);
+      }
+    }
+
+    assert.deepStrictEqual(
+      missingOrPinned,
+      [],
+      `Deployable templates must declare a floating aws-cdk 2.x dependency: ${missingOrPinned.join(', ')}`,
+    );
   });
 
   it('detects existing project with package.json when "." is given', () => {
@@ -181,6 +228,21 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-blocks\/blocks'/);
       assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-blocks\/core/);
       assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-blocks\/core/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('generates a lazy backend import for the React template Lambda handler', () => {
+    const tmpDir = join(__dirname, '../.test-react-lambda-handler');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'react-app', version: '1.0.0' }));
+    try {
+      const result = run(['-y', '--skip-install', '--template', 'react'], tmpDir);
+      assert.strictEqual(result.exitCode, 0);
+      const handler = readFileSync(join(tmpDir, 'aws-blocks', 'index.handler.ts'), 'utf-8');
+      assert.match(handler, /createLambdaHandler\(\(\) => import\('\.\/index\.js'\)\)/);
+      assert.doesNotMatch(handler, /import \* as backend/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

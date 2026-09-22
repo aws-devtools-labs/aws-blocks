@@ -34,11 +34,11 @@ jobs:
       # .github/actions/seed-telemetry-id/action.yml).
       BLOCKS_E2E_TELEMETRY_ID: '00000000-0000-0000-0000-000000000e2e'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm

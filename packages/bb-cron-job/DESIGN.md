@@ -63,14 +63,21 @@ Local Mock
 - **One-time schedules** — Scheduler supports `at()` expressions for one-time invocations.
 - **Dedicated service** — Scheduler is purpose-built for invoking targets on a schedule; Rules is a broader event routing service.
 
-### D-CJ-4: Schedule validation at construction time (mock only)
+### D-CJ-4: Schedule validation at construction/synth time (both layers)
 
-**Decision:** `schedule` and `timezone` are validated immediately in the mock constructor. Invalid expressions throw synchronously. The CDK construct does not validate — it defers to EventBridge's own validation at deploy time.
+**Decision:** `schedule` and `timezone` are validated up front in **both** layers, via the shared `schedule` module (`schedule.ts`):
+- The **mock** constructor fully parses the expression (`parseSchedule`) — it must model the schedule to fire locally — and throws synchronously on anything it can't parse.
+- The **CDK** construct validates at synth (`validateSchedule`) so an invalid expression fails in seconds rather than minutes into an EventBridge-rejected deploy.
+
+**The synth gate is deliberately more lenient than the mock parser**, to avoid the false-negative risk this decision originally guarded against:
+- `rate(...)` is fully validated (unit ∈ minute/hour/day, plural agreement, value ≥ 1) — this catches `rate(10 seconds)`, `rate(1 minutes)`, etc.
+- `cron(...)` is validated for its **6-field shape only**. Field-level semantics — `L` (last day), `W` (nearest weekday), `#` (nth weekday), named days, and the year field — are **left to EventBridge**, because the mock parser models only a subset and gating the deploy on it would reject advanced-but-valid cron.
 
 **Rationale:**
-- **Fail fast in local dev** — developers see errors immediately when running locally, not after a 2-minute CDK deploy.
+- **Fail fast** — clear mistakes (`rate(10 seconds)`, malformed shape) fail at synth/local dev, not after a 2-minute deploy.
 - **No partial state** — if the mock constructor throws, no timer is started.
-- **CDK defers intentionally** — EventBridge may support expressions the mock parser doesn't understand; deferring avoids false negatives.
+- **No false negatives at the gate** — the CDK synth check is a superset of what EventBridge accepts for cron, so it never blocks a schedule EventBridge would run. (Trade-off: the **mock** still can't *fire* advanced cron forms locally — those work on deploy but not in local dev; see the Mock vs AWS table.)
+- **Local "unsupported" ≠ "invalid"** — when the mock can't model an advanced-but-valid form (`L`/`W`/`#`, year field), it throws `CronJobErrors.ScheduleNotSupported` (not `InvalidSchedule`), so local dev doesn't call a deployable schedule "invalid". Genuinely bad values (e.g. minute `100`, an inverted range, `rate(10 seconds)`) still throw `InvalidSchedule` in both the mock and the gate.
 
 ### D-CJ-5: Shared IAM role across CronJob instances
 
@@ -148,7 +155,7 @@ This is a brute-force approach that trades performance for correctness. Acceptab
 | Handler runs in-process (not isolated) | Shared memory, no cold start, no timeout enforcement | No mitigation — shared Lambda in AWS is also not isolated per-job |
 | No concurrency control | Multiple invocations can overlap locally | No mitigation — same behavior in AWS (no per-job concurrency option) |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation — IAM is handled by the shared Lambda's grants |
-| No schedule validation in CDK | Invalid expressions only fail at deploy time (EventBridge rejects) | Mock validates locally; developers catch errors in local dev first |
+| Advanced cron forms (`L`, `W`, `#`, year field) don't fire in the mock | The mock's parser models a subset of AWS cron, so these throw in local dev even though EventBridge (and the CDK synth gate) accept them | Deploy to a sandbox to exercise advanced cron; the synth gate validates only the 6-field shape for cron (see D-CJ-4) so it never blocks a valid schedule |
 
 ## Trade-offs
 

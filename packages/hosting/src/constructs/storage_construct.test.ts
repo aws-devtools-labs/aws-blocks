@@ -3,7 +3,11 @@ import assert from 'node:assert';
 import { App, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Key } from 'aws-cdk-lib/aws-kms';
-import { StorageConstruct } from './storage_construct.js';
+import {
+  StorageConstruct,
+  BUILD_STATE_TAG_KEY,
+  BUILD_STATE_SUPERSEDED,
+} from './storage_construct.js';
 
 // ---- Test helpers ----
 
@@ -544,5 +548,36 @@ void describe('StorageConstruct', () => {
         'BucketOwnerPreferred',
       );
     });
+  });
+});
+
+// #480: DeleteOldBuilds must only expire builds tagged SUPERSEDED, so the
+// live build (KVS meta.b) — which is never tagged — is never expired,
+// regardless of deploy cadence. This is the core regression guard.
+void describe('DeleteOldBuilds excludes the live build (#480)', () => {
+  void it('scopes DeleteOldBuilds to the superseded tag filter', () => {
+    const stack = createStack();
+    new StorageConstruct(stack, 'Storage');
+    const template = Template.fromStack(stack);
+
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      LifecycleConfiguration: Match.objectLike({
+        Rules: Match.arrayWith([
+          Match.objectLike({
+            Id: 'DeleteOldBuilds',
+            Prefix: 'builds/',
+            Status: 'Enabled',
+            TagFilters: Match.arrayWith([
+              { Key: BUILD_STATE_TAG_KEY, Value: BUILD_STATE_SUPERSEDED },
+            ]),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  void it('exposes the superseded tag constants (shared with the cutover handler)', () => {
+    assert.strictEqual(BUILD_STATE_TAG_KEY, 'aws-blocks:build-state');
+    assert.strictEqual(BUILD_STATE_SUPERSEDED, 'superseded');
   });
 });

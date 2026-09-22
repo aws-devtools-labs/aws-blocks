@@ -19,10 +19,11 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import type * as lambda from 'aws-cdk-lib/aws-lambda';
-import { Scope } from '@aws-blocks/core/cdk';
+
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
@@ -64,7 +65,7 @@ export * from './types.js';
  * Grants the Lambda `cognito-idp:*` scoped to this pool's ARN; the SSM
  * secret's IAM is granted by AppSetting itself.
  */
-export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> extends Scope {
+export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> extends BuildingBlockScope {
 	public readonly userPool: cognito.IUserPool;
 	public readonly userPoolClient: cognito.IUserPoolClient;
 	private readonly sessions: KVStore;
@@ -72,7 +73,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	private readonly adminOptions?: AdminOptions;
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);
 		this.adminOptions = opts.admin;
@@ -283,15 +284,17 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		new AppSetting(this, 'session-secret', { secret: true });
 
 		// 5. Session store (KVStore). Propagate `removalPolicy` so retain-mode
-		// customers don't lose live sessions on stack delete.
-		this.sessions = new KVStore(this, 'sessions', { removalPolicy: opts.removalPolicy });
+		// customers don't lose live sessions on stack delete. TTL is enabled so
+		// session records — which hold live Cognito refresh tokens — expire with
+		// the session instead of accumulating forever; the runtime stamps each
+		// write with `now + sessionTtlSeconds`.
+		this.sessions = new KVStore(this, 'sessions', { removalPolicy: opts.removalPolicy, ttl: true });
 
 		// 6. Env vars + IAM
-		const fn = this.handler as lambda.Function;
 		registerConfig(this, env.USER_POOL_ID, this.userPool.userPoolId);
 		registerConfig(this, env.CLIENT_ID, this.userPoolClient.userPoolClientId);
 		registerConfig(this, env.REGION, cdk.Stack.of(this).region);
-		this.grantCognitoPermissions(fn);
+		this.grantCognitoPermissions(this.executionRole);
 	}
 
 	/**
@@ -317,10 +320,10 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 
 	// ─── IAM helpers ──────────────────────────────────────────────────────
 
-	private grantCognitoPermissions(fn: lambda.Function): void {
+	private grantCognitoPermissions(role: iam.IRole): void {
 		const poolArn = this.userPool.userPoolArn;
 		// Client-facing actions — work on the signed-in user via their access token.
-		fn.addToRolePolicy(new iam.PolicyStatement({
+		role.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: [
 				'cognito-idp:SignUp',
 				'cognito-idp:ConfirmSignUp',
@@ -364,7 +367,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		if (admin) {
 			const adminActions = adminIamActions(admin.actions);
 			if (adminActions.length > 0) {
-				fn.addToRolePolicy(new iam.PolicyStatement({
+				role.addToPrincipalPolicy(new iam.PolicyStatement({
 					actions: adminActions,
 					resources: [poolArn],
 				}));
