@@ -31,6 +31,28 @@ function cannedTransport(api: typeof apiType) {
   });
 }
 
+/**
+ * Map the app's message metadata (a fixed-key `MessageMetadata`) into the
+ * `Record<string, JSONValue>` shape `createChat`'s `getConversation` expects.
+ * Builds the record field by field so no `as` cast is needed — each known field
+ * is already a JSON value, and unset fields are simply omitted. The input type is
+ * derived from `cannedGetConversation`'s own return, so it tracks the source shape.
+ */
+type CannedMessage = Awaited<ReturnType<typeof apiType.cannedGetConversation>>['messages'][number];
+function toMetadataRecord(metadata: CannedMessage['metadata'] | undefined): Record<string, JSONValue> {
+  const out: Record<string, JSONValue> = {};
+  if (!metadata) return out;
+  if (metadata.toolName !== undefined) out.toolName = metadata.toolName;
+  if (metadata.toolInput !== undefined) out.toolInput = metadata.toolInput;
+  if (metadata.toolOutput !== undefined) out.toolOutput = metadata.toolOutput;
+  if (metadata.latencyMs !== undefined) out.latencyMs = metadata.latencyMs;
+  if (metadata.error !== undefined) out.error = metadata.error;
+  if (metadata.usage !== undefined) {
+    out.usage = { ...metadata.usage };
+  }
+  return out;
+}
+
 /** Poll getConversation until expected message count is reached or timeout. */
 async function waitForMessages(api: typeof apiType, conversationId: string, expectedCount: number, timeoutMs = 60000, useCanned = false): Promise<any[]> {
   const start = Date.now();
@@ -489,7 +511,7 @@ export function agentTests(getApi: () => typeof apiType) {
             createConversation: async () => ({ conversationId }),
             getConversation: async (id) => {
               const { messages } = await api.cannedGetConversation(id);
-              return { messages: messages.map(m => ({ ...m, metadata: m.metadata as Record<string, JSONValue> })) };
+              return { messages: messages.map(m => ({ ...m, metadata: toMetadataRecord(m.metadata) })) };
             },
             getPendingInterrupts: (id) => api.cannedGetPendingInterrupts(id),
           },
@@ -526,7 +548,7 @@ export function agentTests(getApi: () => typeof apiType) {
             createConversation: async () => ({ conversationId }),
             getConversation: async (id) => {
               const { messages } = await api.cannedGetConversation(id);
-              return { messages: messages.map(m => ({ ...m, metadata: m.metadata as Record<string, JSONValue> })) };
+              return { messages: messages.map(m => ({ ...m, metadata: toMetadataRecord(m.metadata) })) };
             },
             getPendingInterrupts: (id) => api.cannedGetPendingInterrupts(id),
           },
