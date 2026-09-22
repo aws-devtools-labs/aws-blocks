@@ -48,6 +48,11 @@ export class ApiError extends Error {
 	 * when `retriable === true`; non-retriable errors (expired session,
 	 * tampered envelope, too-many-attempts lockouts) require restarting the
 	 * flow. Defaults to `false` when unspecified.
+	 *
+	 * This marks whether the *kind* of failure is retriable in principle, not a
+	 * guarantee that a given retry will succeed — e.g. an optimistic-lock
+	 * conflict against a missing row is flagged retriable, yet a blind retry
+	 * fails identically.
 	 */
 	readonly retriable: boolean;
 
@@ -76,6 +81,27 @@ export class ApiError extends Error {
  */
 export function isBlocksError<N extends string>(e: unknown, name: N): e is Error & { name: N } {
 	return e instanceof Error && e.name === name;
+}
+
+/**
+ * Build a named `Error` whose `name` is a BB error constant, so it is matchable
+ * with {@link isBlocksError} on both server and client. The name is also
+ * prefixed into the message for readable logs.
+ *
+ * This is the producer half of the {@link isBlocksError} contract: throw via
+ * this helper so the `name` a consumer matches on is set consistently. It has
+ * no runtime dependencies, so it is safe to use in every bundle — mock,
+ * aws-runtime, and CDK synth.
+ *
+ * @example
+ * ```typescript
+ * throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'Key already exists');
+ * ```
+ */
+export function blocksError(name: string, message: string): Error {
+	const err = new Error(`${name}: ${message}`);
+	err.name = name;
+	return err;
 }
 
 /**

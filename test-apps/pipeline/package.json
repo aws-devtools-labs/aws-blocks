@@ -9,6 +9,7 @@
     "test": "npx tsx --test test/pipeline-synth.test.ts"
   },
   "dependencies": {
+    "@aws-blocks/blocks": "*",
     "@aws-blocks/core": "*",
     "@aws-blocks/pipeline": "*",
     "aws-cdk-lib": "2.257.0",

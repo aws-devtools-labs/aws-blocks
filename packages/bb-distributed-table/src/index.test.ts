@@ -4,7 +4,7 @@
 import { test, describe } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { DistributedTable, DistributedTableErrors } from './index.mock.js';
-import { Scope } from '@aws-blocks/core';
+import { ApiError, isBlocksError, Scope } from '@aws-blocks/core';
 import { z } from 'zod';
 
 // ── Schemas ─────────────────────────────────────────────────────────────────
@@ -143,6 +143,110 @@ describe('DistributedTable', () => {
 		});
 	});
 
+	// ── OCC conflicts map to HTTP 409 (Conflict) ─────────────────────────────
+	// A conditional-write conflict must serialize to JSON-RPC code 409, not 500.
+	// The mock must throw an ApiError (status 409) that preserves the
+	// ConditionalCheckFailed name, matching the aws-runtime path. `retriable` is
+	// scoped to the assertion kind: true only for optimistic-lock ifFieldEquals
+	// conflicts (a re-read and retry can succeed), false for existence/uniqueness
+	// assertions (a blind retry fails identically).
+
+	describe('OCC conflicts map to 409', () => {
+		test('put ifNotExists conflict is an ApiError with status 409, not retriable', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			const user = { userId: 'user1', email: 'test@example.com', name: 'Test', createdAt: 1000 };
+			await table.put(user);
+			await assert.rejects(
+				() => table.put(user, { ifNotExists: true }),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, false);
+					return true;
+				},
+			);
+		});
+
+		test('put ifFieldEquals conflict is an ApiError with status 409, retriable', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await table.put({ userId: 'u1', email: 'a@b.com', name: 'Test', createdAt: 1000 });
+			await assert.rejects(
+				() => table.put({ userId: 'u1', email: 'a@b.com', name: 'Fail', createdAt: 1000 }, { ifFieldEquals: { name: 'Wrong' } }),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, true);
+					return true;
+				},
+			);
+		});
+
+		test('put ifNotExists + ifFieldEquals conflict is 409, not retriable (existence wins)', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await table.put({ userId: 'u1', email: 'a@b.com', name: 'Test', createdAt: 1000 });
+			// The typed API forbids combining ifNotExists with ifFieldEquals; force
+			// the combined shape to verify the runtime derivation is existence-wins
+			// (not retriable) for parity with the aws path and bb-kv-store.
+			const combined = { ifNotExists: true, ifFieldEquals: { name: 'Wrong' } } as unknown as Parameters<typeof table.put>[1];
+			await assert.rejects(
+				() => table.put({ userId: 'u1', email: 'a@b.com', name: 'Fail', createdAt: 1000 }, combined),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, false);
+					return true;
+				},
+			);
+		});
+
+		test('delete ifExists conflict is an ApiError with status 409, not retriable', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await assert.rejects(
+				() => table.delete({ userId: 'missing', createdAt: 1 }, { ifExists: true }),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, false);
+					return true;
+				},
+			);
+		});
+
+		test('delete ifFieldEquals conflict is an ApiError with status 409, retriable', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await table.put({ userId: 'u1', email: 'a@b.com', name: 'Test', createdAt: 1000 });
+			await assert.rejects(
+				() => table.delete({ userId: 'u1', createdAt: 1000 }, { ifFieldEquals: { name: 'Wrong' } }),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, true);
+					return true;
+				},
+			);
+		});
+	});
+
 	// ── Conditional delete ──────────────────────────────────────────────────
 
 	describe('conditional delete', () => {
@@ -216,6 +320,211 @@ describe('DistributedTable', () => {
 				]),
 				(err: any) => err.name === 'ValidationFailedException',
 			);
+		});
+	});
+
+	// ── readValidation (off | coerce | strict) ────────────────────────────────
+	// Regression for the bug bash finding #1007: get() returned raw stored values
+	// without reconciling them against the schema, so after a schema change a legacy
+	// row no longer conformed to T — an added field was absent (a schema .default()
+	// was neither applied nor persisted on write-back) and a required-no-default
+	// field made the put() half of the read-modify-write cycle throw ValidationFailed.
+	// `readValidation` defaults to 'coerce', which closes the coercible gap.
+
+	describe('readValidation', () => {
+		// V1: no `currency`. V2: adds `currency` with a default.
+		const orderV1 = z.object({ orderId: z.string(), total: z.number() });
+		const orderV2 = z.object({
+			orderId: z.string(),
+			total: z.number(),
+			currency: z.string().default('USD'),
+		});
+
+		// Fixed scope so a V1 writer and a V2 reader share the same on-disk table,
+		// simulating a schema augmentation over pre-existing (legacy) rows.
+		function legacyScope() {
+			return new Scope(`dt-legacy-${++scopeCounter}-${Date.now()}`);
+		}
+
+		test("default is 'coerce': get() coerces the legacy row through the current schema (fills default)", async () => {
+			const scope = legacyScope();
+			const v1 = new DistributedTable(scope, 'orders', { schema: orderV1, key: { partitionKey: 'orderId' } });
+			await v1.put({ orderId: 'o1', total: 10 });
+
+			// No readValidation option → defaults to 'coerce'.
+			const v2 = new DistributedTable(scope, 'orders', { schema: orderV2, key: { partitionKey: 'orderId' } });
+			const row = await v2.get({ orderId: 'o1' });
+			assert.deepEqual(row, { orderId: 'o1', total: 10, currency: 'USD' });
+		});
+
+		test("default 'coerce': coerced read can be written back (fixes the read-modify-write cycle)", async () => {
+			const scope = legacyScope();
+			const v1 = new DistributedTable(scope, 'orders', { schema: orderV1, key: { partitionKey: 'orderId' } });
+			await v1.put({ orderId: 'o1', total: 10 });
+
+			const v2 = new DistributedTable(scope, 'orders', { schema: orderV2, key: { partitionKey: 'orderId' } });
+			const row = await v2.get({ orderId: 'o1' });
+			assert.ok(row);
+			await v2.put({ ...row, total: 20 }); // must NOT throw ValidationFailed
+			assert.deepEqual(await v2.get({ orderId: 'o1' }), { orderId: 'o1', total: 20, currency: 'USD' });
+		});
+
+		test("'off': get() returns the raw legacy row unchanged (opt-out of coercion)", async () => {
+			const scope = legacyScope();
+			const v1 = new DistributedTable(scope, 'orders', { schema: orderV1, key: { partitionKey: 'orderId' } });
+			await v1.put({ orderId: 'o1', total: 10 });
+
+			const v2 = new DistributedTable(scope, 'orders', {
+				schema: orderV2, key: { partitionKey: 'orderId' }, readValidation: 'off',
+			});
+			const row = await v2.get({ orderId: 'o1' });
+			assert.deepEqual(row, { orderId: 'o1', total: 10 }); // no currency injected
+		});
+
+		test("'coerce': an unrecoverable row is returned RAW (never throws) so it stays readable", async () => {
+			const scope = legacyScope();
+			// Write a row that violates the strict schema (total is a string, no coercion path).
+			const loose = z.object({ orderId: z.string(), total: z.any() });
+			const strict = z.object({ orderId: z.string(), total: z.number() });
+			const w = new DistributedTable(scope, 'orders', { schema: loose, key: { partitionKey: 'orderId' } });
+			await w.put({ orderId: 'bad', total: 'not-a-number' });
+
+			const r = new DistributedTable(scope, 'orders', {
+				schema: strict, key: { partitionKey: 'orderId' }, readValidation: 'coerce',
+			});
+			const row = await r.get({ orderId: 'bad' }); // must NOT throw
+			assert.deepEqual(row, { orderId: 'bad', total: 'not-a-number' }); // raw fallback
+		});
+
+		test("'coerce' PRESERVES stored keys not in the schema (no silent data loss)", async () => {
+			const scope = legacyScope();
+			// Row stored under a schema that had an extra `legacyNote` field.
+			const wide = z.object({ orderId: z.string(), total: z.number(), legacyNote: z.string() });
+			const narrow = z.object({ orderId: z.string(), total: z.number() }); // current schema no longer declares legacyNote
+			const w = new DistributedTable(scope, 'orders', { schema: wide, key: { partitionKey: 'orderId' } });
+			await w.put({ orderId: 'o1', total: 10, legacyNote: 'keep me' });
+
+			// coerce (default): unknown key is preserved (coerced output merged over the raw item).
+			const coerceReader = new DistributedTable(scope, 'orders', { schema: narrow, key: { partitionKey: 'orderId' } });
+			assert.deepEqual(await coerceReader.get({ orderId: 'o1' }), { orderId: 'o1', total: 10, legacyNote: 'keep me' });
+
+			// off also preserves (raw passthrough) — same observable result here.
+			const offReader = new DistributedTable(scope, 'orders', {
+				schema: narrow, key: { partitionKey: 'orderId' }, readValidation: 'off',
+			});
+			assert.deepEqual(await offReader.get({ orderId: 'o1' }), { orderId: 'o1', total: 10, legacyNote: 'keep me' });
+		});
+
+		test("'coerce' read-modify-write does NOT drop an unknown stored key (the reviewer's scenario)", async () => {
+			const scope = legacyScope();
+			const wide = z.object({ orderId: z.string(), total: z.number(), couponCode: z.string() });
+			const narrow = z.object({ orderId: z.string(), total: z.number() }); // couponCode no longer in schema
+			const seed = new DistributedTable(scope, 'orders', { schema: wide, key: { partitionKey: 'orderId' } });
+			await seed.put({ orderId: 'A1', total: 10, couponCode: 'SAVE10' });
+
+			// Read, change an unrelated field, write back — couponCode must survive.
+			const t = new DistributedTable(scope, 'orders', { schema: narrow, key: { partitionKey: 'orderId' } });
+			const row = await t.get({ orderId: 'A1' });
+			assert.ok(row);
+			await t.put({ ...row, total: 50 });
+			const after = await t.get({ orderId: 'A1' });
+			assert.deepEqual(after, { orderId: 'A1', total: 50, couponCode: 'SAVE10' });
+		});
+
+		test("'coerce' adds a new default AND preserves an unknown key at the same time", async () => {
+			const scope = legacyScope();
+			const v1 = new DistributedTable(scope, 'orders', {
+				schema: z.object({ orderId: z.string(), total: z.number(), couponCode: z.string() }),
+				key: { partitionKey: 'orderId' },
+			});
+			await v1.put({ orderId: 'o1', total: 10, couponCode: 'X' });
+
+			// V2 adds currency (default) and no longer declares couponCode.
+			const v2 = new DistributedTable(scope, 'orders', {
+				schema: z.object({ orderId: z.string(), total: z.number(), currency: z.string().default('USD') }),
+				key: { partitionKey: 'orderId' },
+			});
+			assert.deepEqual(await v2.get({ orderId: 'o1' }), { orderId: 'o1', total: 10, currency: 'USD', couponCode: 'X' });
+		});
+
+		test("'coerce' preserves unknown keys nested inside a known object (deep)", async () => {
+			const scope = legacyScope();
+			const wide = z.object({ orderId: z.string(), meta: z.object({ a: z.number(), legacy: z.boolean() }) });
+			const narrow = z.object({ orderId: z.string(), meta: z.object({ a: z.number() }) }); // dropped meta.legacy
+			const w = new DistributedTable(scope, 'orders', { schema: wide, key: { partitionKey: 'orderId' } });
+			await w.put({ orderId: 'o1', meta: { a: 1, legacy: true } });
+
+			const t = new DistributedTable(scope, 'orders', { schema: narrow, key: { partitionKey: 'orderId' } });
+			assert.deepEqual(await t.get({ orderId: 'o1' }), { orderId: 'o1', meta: { a: 1, legacy: true } });
+		});
+
+		test("'coerce' replaces arrays wholesale — never duplicates elements", async () => {
+			const scope = legacyScope();
+			const schema = z.object({ orderId: z.string(), tags: z.array(z.string()) });
+			const w = new DistributedTable(scope, 'orders', { schema, key: { partitionKey: 'orderId' } });
+			await w.put({ orderId: 'o1', tags: ['a', 'b'] });
+
+			// Same schema on read: coerced tags === raw tags; merge must NOT concat them.
+			const t = new DistributedTable(scope, 'orders', { schema, key: { partitionKey: 'orderId' } });
+			assert.deepEqual(await t.get({ orderId: 'o1' }), { orderId: 'o1', tags: ['a', 'b'] });
+		});
+
+		test("'strict': get() throws ValidationFailed on a non-conforming stored row", async () => {
+			const scope = legacyScope();
+			const loose = z.object({ orderId: z.string(), total: z.any() });
+			const strict = z.object({ orderId: z.string(), total: z.number() });
+			const w = new DistributedTable(scope, 'orders', { schema: loose, key: { partitionKey: 'orderId' } });
+			await w.put({ orderId: 'bad', total: 'not-a-number' });
+
+			const r = new DistributedTable(scope, 'orders', {
+				schema: strict, key: { partitionKey: 'orderId' }, readValidation: 'strict',
+			});
+			await assert.rejects(
+				() => r.get({ orderId: 'bad' }),
+				(err: any) => err.name === 'ValidationFailedException',
+			);
+		});
+
+		test("'strict': a conforming row reads back fine", async () => {
+			const scope = legacyScope();
+			const v1 = new DistributedTable(scope, 'orders', { schema: orderV1, key: { partitionKey: 'orderId' } });
+			await v1.put({ orderId: 'o1', total: 10 });
+			const r = new DistributedTable(scope, 'orders', {
+				schema: orderV1, key: { partitionKey: 'orderId' }, readValidation: 'strict',
+			});
+			assert.deepEqual(await r.get({ orderId: 'o1' }), { orderId: 'o1', total: 10 });
+		});
+
+		test('get() still returns null for a missing item (all modes)', async () => {
+			for (const readValidation of ['off', 'coerce', 'strict'] as const) {
+				const table = new DistributedTable(testScope(), 'orders', {
+					schema: orderV2, key: { partitionKey: 'orderId' }, readValidation,
+				});
+				assert.equal(await table.get({ orderId: 'nope' }), null);
+			}
+		});
+
+		test("default 'coerce': scan() and query() coerce yielded items", async () => {
+			const scope = legacyScope();
+			const v1 = new DistributedTable(scope, 'orders', { schema: orderV1, key: { partitionKey: 'orderId' } });
+			await v1.put({ orderId: 'o1', total: 10 });
+			await v1.put({ orderId: 'o2', total: 20 });
+
+			const v2 = new DistributedTable(scope, 'orders', { schema: orderV2, key: { partitionKey: 'orderId' } });
+			const scanned = await collect(v2.scan());
+			assert.ok(scanned.every(o => o.currency === 'USD'));
+			const queried = await collect(v2.query({ where: { orderId: { equals: 'o1' } } }));
+			assert.deepEqual(queried, [{ orderId: 'o1', total: 10, currency: 'USD' }]);
+		});
+
+		test("default 'coerce': getBatch() coerces each hit and preserves null holes", async () => {
+			const scope = legacyScope();
+			const v1 = new DistributedTable(scope, 'orders', { schema: orderV1, key: { partitionKey: 'orderId' } });
+			await v1.put({ orderId: 'o1', total: 10 });
+
+			const v2 = new DistributedTable(scope, 'orders', { schema: orderV2, key: { partitionKey: 'orderId' } });
+			const rows = await v2.getBatch([{ orderId: 'o1' }, { orderId: 'missing' }]);
+			assert.deepEqual(rows, [{ orderId: 'o1', total: 10, currency: 'USD' }, null]);
 		});
 	});
 
@@ -652,6 +961,51 @@ describe('DistributedTable', () => {
 				async () => { for await (const _ of table.query({ index: 'doesNotExist', where: { userId: { equals: 'u1' } } })) {} },
 				/Index 'doesNotExist' not found/,
 			);
+		});
+	});
+
+	// ── Query: index sort-key ties are ordered deterministically ────────────
+	describe('query (index sort-key ties)', () => {
+		const cardSchema = z.object({ boardId: z.string(), cardId: z.string(), position: z.number() });
+		// Base key is (boardId, cardId); the GSI sorts by `position`, which is NOT
+		// unique — several cards can share a position. DynamoDB tie-breaks such
+		// index rows by the base-table key, so the mock must too (not by Map
+		// insertion order, which varies by write order / disk reload).
+		function cardTable() {
+			return new DistributedTable(testScope(), 'cards', {
+				schema: cardSchema,
+				key: { partitionKey: 'boardId', sortKey: 'cardId' },
+				indexes: { byPosition: { partitionKey: 'boardId', sortKey: 'position' } },
+			});
+		}
+		const q = (t: ReturnType<typeof cardTable>, order?: 'asc' | 'desc') =>
+			collect(t.query({ index: 'byPosition', where: { boardId: { equals: 'b1' } }, ...(order ? { order } : {}) }));
+
+		test('ties on the index sort key order by the base-table key, regardless of write order', async () => {
+			const t1 = cardTable();
+			// All position=1; insert cardIds out of order.
+			for (const cardId of ['c3', 'c1', 'c2']) await t1.put({ boardId: 'b1', cardId, position: 1 });
+			assert.deepEqual((await q(t1)).map((c) => c.cardId), ['c1', 'c2', 'c3']);
+
+			// A different write order must yield the SAME result (deterministic).
+			const t2 = cardTable();
+			for (const cardId of ['c2', 'c3', 'c1']) await t2.put({ boardId: 'b1', cardId, position: 1 });
+			assert.deepEqual((await q(t2)).map((c) => c.cardId), ['c1', 'c2', 'c3']);
+		});
+
+		test('desc reverses ties too (whole index order flips)', async () => {
+			const t = cardTable();
+			for (const cardId of ['c1', 'c3', 'c2']) await t.put({ boardId: 'b1', cardId, position: 1 });
+			assert.deepEqual((await q(t, 'desc')).map((c) => c.cardId), ['c3', 'c2', 'c1']);
+		});
+
+		test('primary order stays by index sort key; base key only breaks ties', async () => {
+			const t = cardTable();
+			await t.put({ boardId: 'b1', cardId: 'zzz', position: 1 });
+			await t.put({ boardId: 'b1', cardId: 'aaa', position: 2 });
+			await t.put({ boardId: 'b1', cardId: 'mmm', position: 1 });
+			// position asc first (1,1,2); within position=1, base key (cardId) breaks the tie.
+			assert.deepEqual((await q(t)).map((c) => [c.position, c.cardId]), [[1, 'mmm'], [1, 'zzz'], [2, 'aaa']]);
 		});
 	});
 });

@@ -8,6 +8,10 @@ For the basics (`Authenticator`, `AccountMenuBar`, `AuthenticatedContent`,
 `onAuthChange`, `broadcastAuthChange`, and the type reference), see the
 [README](./README.md). This guide assumes you've read it.
 
+If you're here to write e2e tests rather than restyle anything, skip to
+[Test hooks](#test-hooks) — the built-in components ship a stable `data-testid`
+contract, so you don't need to fork them to get selectors.
+
 ## The one rule
 
 Auth is a server-driven state machine. The server returns an `AuthState` that
@@ -194,6 +198,66 @@ Based on the current implementation, that includes:
 
 If you need any of these, prefer Depth 1 or 2. You stay on the built-in
 handling and still get your custom look.
+
+## Test hooks
+
+Every interactive element the built-in auth components render carries a stable
+`data-testid`, so e2e suites can drive the shipped UI instead of forking it for
+selectors. Treat the names as public API: renaming one is a breaking change.
+
+Inputs, buttons, and the containers you assert against are hooked. Purely
+presentational markup is not, on purpose: hint text from `fields.<name>.hint`,
+the bordered panel inside the `authenticator` container, the `AccountMenuBar`
+layout row, and the modal's inner content box carry no `data-testid`. Hooking
+those would pin our styling structure into your tests, so read the text off the
+nearest hooked ancestor instead.
+
+| Hook | Element |
+|---|---|
+| `authenticator` | Root element returned by `Authenticator` |
+| `authenticator-heading` | Heading above the actions |
+| `authenticator-signed-in` | Heading rendered when `state === 'signedIn'`; text is `Signed in as: <username>` |
+| `authenticator-error` | Inline error message. Absent when the state carries no error |
+| `authenticator-action-<action>` | One wrapper per rendered action, e.g. `authenticator-action-signIn`. Federated actions keep their provider suffix, so `signIn:google` gives `authenticator-action-signIn:google` |
+| `authenticator-<field>` | One per input, named after the field the server declared, e.g. `authenticator-username`, `authenticator-password`, `authenticator-code`. Hidden fields (session tokens, echoed usernames) carry it too |
+| `authenticator-submit` | The action's submit button |
+| `authenticated-content` | Container returned by `AuthenticatedContent` |
+| `account-menu` | Container returned by `AccountMenuBar` |
+| `account-menu-username` | Signed-in username in the bar |
+| `account-menu-signout` | Sign-out button in the bar |
+| `account-menu-signin` | Sign-in button in the bar, shown when signed out |
+| `account-menu-modal` | Modal the bar opens, hosting an `Authenticator` |
+| `account-menu-modal-close` | Close button on that modal |
+
+Action and field names come from the server, so the hooks follow whatever the
+Building Block emits: `authenticator-action-confirmSignUp`,
+`authenticator-newPassword`, and so on.
+
+Federated actions are named `<action>:<provider>`, and the hook keeps the suffix
+verbatim: an action named `signIn:google` renders as
+`authenticator-action-signIn:google`. The colon is safe in the selectors you'd
+normally write. `page.getByTestId('authenticator-action-signIn:google')` matches
+on the attribute value, and
+`querySelector('[data-testid="authenticator-action-signIn:google"]')` works
+because that value is a quoted string rather than selector grammar. Keep the
+quotes though: a bare `[data-testid=authenticator-action-signIn:google]` is
+invalid, because an unquoted attribute value has to be a CSS identifier.
+
+Field and submit hooks repeat once per action, because a state can offer more
+than one. The signed-out state renders `signIn` and `signUp` side by side and
+both declare a `username`, so scope through the action wrapper:
+
+```typescript
+const signIn = page.getByTestId('authenticator-action-signIn');
+await signIn.getByTestId('authenticator-username').fill('alice');
+await signIn.getByTestId('authenticator-password').fill('correct-horse');
+await signIn.getByTestId('authenticator-submit').click();
+await expect(page.getByTestId('authenticator-signed-in')).toContainText('alice');
+```
+
+Depth 2 and 3 render your DOM instead of ours, so hooks inside a replaced action
+or field are yours to add. Whatever the `Authenticator` still renders around them
+(the container, the heading, the error) keeps its hook.
 
 ## See also
 

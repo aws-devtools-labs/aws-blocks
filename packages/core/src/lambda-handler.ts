@@ -5,9 +5,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ApiError } from './errors.js';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
-import { matchRoute, lockRouteRegistry } from './raw-route.js';
+import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
-import { loadConfigToProcessEnv } from './common/config.js';
+import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
 import {
   parseRpcRequest,
   successResponse,
@@ -15,7 +15,7 @@ import {
   errorResponseFromCatch,
   methodNotFoundResponse,
 } from './rpc.js';
-import { getCorsPatterns, isOriginAllowed, corsRejection } from './cors.js';
+import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -38,21 +38,6 @@ export const requestCookies = new AsyncLocalStorage<string>();
 export const EventSourceMapping = {
   SQS: 'aws:sqs',
 } as const;
-
-// ── CORS helpers (private to handler) ───────────────────────────────────────
-
-function buildCorsHeaders(origin: string): Record<string, string> {
-  const headers: Record<string, string> = {};
-  if (isOriginAllowed(origin)) {
-    headers['Access-Control-Allow-Origin'] = origin;
-    headers['Access-Control-Allow-Credentials'] = 'true';
-  } else if (origin) {
-    console.warn(
-      `[CORS] Origin "${origin}" is not allowed. Set the CORS_ALLOWED_ORIGINS environment variable to allow this origin. Example: CORS_ALLOWED_ORIGINS=https://myapp\\.com,^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$`
-    );
-  }
-  return headers;
-}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -312,6 +297,26 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
   async function initialize() {
     await loadConfigToProcessEnv();
 
+    // If the app has config coordinates (BLOCKS_CONFIG_BUCKET/KEY set) but the
+    // load didn't actually resolve the config, we're in the transient post-deploy
+    // S3 window where blocks-config.json isn't readable yet. loadConfigFromS3()
+    // deliberately does NOT cache that empty result, so throw a typed transient
+    // error here — BEFORE importing the backend — so the createLambdaHandler()
+    // catch resets initPromise and the next request re-runs initialize(), which
+    // re-fetches from S3 and picks up the now-present config. Without this throw,
+    // initialize() would succeed with empty config, `handler` would be assigned,
+    // and the `if (!handler)` guard below would never fire again, poisoning the
+    // container for its whole life (it would import the backend against empty
+    // process.env and serve "not configured" 500s forever).
+    //
+    // A genuinely config-less app does NOT throw: the no-bucket local-dev path
+    // and a real empty `{}` config both cache their result, so isConfigResolved()
+    // is true and the retry never spins. Once the blob is readable the successful
+    // load caches, so there is no unbounded per-request S3 re-fetch either.
+    if (process.env.BLOCKS_CONFIG_BUCKET && process.env.BLOCKS_CONFIG_KEY && !isConfigResolved()) {
+      throw new TransientConfigError();
+    }
+
     // Merge hosting-provided CORS origins into the main env var so the lazy
     // getCorsPatterns() sees a combined value on first access.
     // loadConfigToProcessEnv() won't override CORS_ALLOWED_ORIGINS if it's
@@ -333,7 +338,18 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
 
   return async (event: any, context?: LambdaContext) => {
     if (!handler) {
-      if (!initPromise) initPromise = initialize();
+      // Retry init on failure instead of caching the rejection. If initialize() throws (most often
+      // because loadConfigToProcessEnv() couldn't read blocks-config.json during the brief
+      // post-deploy window before it's readable), a memoized rejected promise would poison this
+      // container for its whole lifetime — every later request re-awaits the same rejection and 500s.
+      // Resetting initPromise lets the next invocation re-run initialize() (config.ts re-fetches,
+      // since it doesn't cache failures), so the handler self-heals once config is available.
+      if (!initPromise) {
+        initPromise = initialize().catch((err) => {
+          initPromise = null;
+          throw err;
+        });
+      }
       await initPromise;
     }
 
@@ -377,7 +393,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
         // Timeout won the race — build a 504 response. Format depends on
         // whether the request targeted an RPC endpoint (structured JSON-RPC
         // error envelope) or a plain HTTP path (simple error JSON).
-        const origin = event.headers?.origin || event.headers?.Origin || '*';
+        const origin = event.headers?.origin || event.headers?.Origin || '';
         const requestPath = getRequestPath(event);
         const isRpcPath = requestPath === BLOCKS_RPC_PREFIX || requestPath.startsWith(BLOCKS_RPC_PREFIX + '/');
         const body = isRpcPath
@@ -387,8 +403,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
           statusCode: 504,
           headers: {
             'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': origin,
-            'Access-Control-Allow-Credentials': 'true',
+            ...buildCorsHeaders(origin),
           },
           body,
         };
@@ -403,6 +418,27 @@ class HandlerTimeoutError extends Error {
   constructor() {
     super('Handler timeout');
     this.name = 'HandlerTimeoutError';
+  }
+}
+
+/**
+ * Thrown by `initialize()` when the app has config coordinates
+ * (BLOCKS_CONFIG_BUCKET/KEY) but the S3 config load resolved empty because
+ * blocks-config.json wasn't readable yet — the transient window right after a
+ * deploy, before the BucketDeployment settles.
+ *
+ * It flows through the `createLambdaHandler()` init catch, which resets
+ * `initPromise` so the NEXT request re-runs `initialize()` and picks up the
+ * now-present config (config.ts does not cache a not-found result, so the retry
+ * re-fetches). A distinct type keeps the recovery path greppable and testable
+ * and separates it from real init failures, which surface with their own error.
+ *
+ * @internal Exported for testing only.
+ */
+export class TransientConfigError extends Error {
+  constructor() {
+    super('[Blocks] Config not readable yet (transient post-deploy S3 window); will retry on next request');
+    this.name = 'TransientConfigError';
   }
 }
 
@@ -472,7 +508,7 @@ function createHandler(backend: any) {
           ...corsHeaders,
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-          'Access-Control-Max-Age': '86400',
+          'Access-Control-Max-Age': CORS_MAX_AGE,
         },
         body: '',
       };
@@ -493,8 +529,17 @@ function createHandler(backend: any) {
       if (matched) {
         return handleRawRoute(event, matched.route, matched.params, corsHeaders, signal);
       }
-      // No RawRoute matched and path is not the RPC endpoint — return 404
+      // No RawRoute matched and path is not the RPC endpoint — return 404.
+      // Log it: an unmatched route used to be entirely silent, which is what
+      // made a split route registry (duplicate @aws-blocks/core copies)
+      // undiagnosable from CloudWatch alone. The path is already in the API
+      // Gateway access logs, so this adds no new category of data.
       if (!requestPath.startsWith(BLOCKS_RPC_PREFIX)) {
+        const copies = getLoadedCoreCopies();
+        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+        console.error(
+          `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
+        );
         return {
           statusCode: 404,
           headers: {

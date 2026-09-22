@@ -16,7 +16,7 @@ class FlutterBrowserLauncher implements BrowserLauncher {
   final AppLinks _appLinks;
 
   FlutterBrowserLauncher({AppLinks? appLinks})
-      : _appLinks = appLinks ?? AppLinks();
+    : _appLinks = appLinks ?? AppLinks();
 
   @override
   Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
@@ -24,8 +24,9 @@ class FlutterBrowserLauncher implements BrowserLauncher {
 
     // Wait for the relay (or direct) redirect whose scheme matches the
     // registered custom scheme, ignoring any unrelated deep links.
-    final uri = await _appLinks.uriLinkStream
-        .firstWhere((uri) => uri.scheme == callbackScheme);
+    final uri = await _appLinks.uriLinkStream.firstWhere(
+      (uri) => uri.scheme == callbackScheme,
+    );
 
     return uri;
   }

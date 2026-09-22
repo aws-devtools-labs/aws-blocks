@@ -131,6 +131,27 @@ describe('config — S3 errors', () => {
 		assert.strictEqual(result, '', 'Should return empty string (empty config) on 404');
 	});
 
+	it('does not cache a not-found result — a later call re-fetches once the config exists', async () => {
+		process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
+		process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
+
+		// Simulate the transient post-deploy window: the object isn't written yet on the first
+		// fetch, then becomes available. A not-found result must NOT be cached, or the container
+		// would be poisoned with empty config for its lifetime.
+		let call = 0;
+		const notFound = new Error('The specified key does not exist.');
+		(notFound as any).name = 'NoSuchKey';
+		_setS3Fetcher(async () => {
+			call++;
+			if (call === 1) throw notFound;
+			return JSON.stringify({ READY_KEY: 'ready-value' });
+		});
+
+		assert.strictEqual(await getConfig('READY_KEY'), '', 'first call sees the not-yet-written config as empty');
+		assert.strictEqual(await getConfig('READY_KEY'), 'ready-value', 'later call re-fetches once the config exists');
+		assert.strictEqual(call, 2, 'a not-found result must not be cached — S3 is retried');
+	});
+
 	it('throws with clear message on S3 network error', async () => {
 		process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
 		process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';

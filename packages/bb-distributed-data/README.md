@@ -36,7 +36,7 @@ const { rowCount } = await db.execute(
 DSQL uses OCC — transactions may fail at commit if another transaction modified the same rows. The callback executes exactly once unless you opt into retry.
 
 ```typescript
-// Default: no retry. Throws SerializationFailureException on conflict.
+// Default: no retry. Throws SerializationFailureException (HTTP 409 Conflict, retriable) on conflict.
 await db.transaction(async (tx) => {
   await tx.execute(sql`UPDATE accounts SET balance = balance - ${100} WHERE id = ${fromId}`);
   await tx.execute(sql`UPDATE accounts SET balance = balance + ${100} WHERE id = ${toId}`);
@@ -89,6 +89,10 @@ CREATE INDEX ASYNC idx_users_email ON users(email);
 ```
 
 Migrations are validated at dev time — unsupported features (FK, SERIAL, TRUNCATE, etc.) are caught before deploy.
+
+> **Set `migrationsPath` to a path relative to your project root** (e.g. `'./aws-blocks/dsql-migrations'`); it's resolved at synth from the directory you run `cdk` / `npm run deploy` in. That's the simplest reliable pattern.
+>
+> You don't need `fileURLToPath(import.meta.url)` for this. Your backend module runs as ESM locally but is bundled to **CommonJS** in Lambda, where `import.meta` is empty. AWS Blocks shims `import.meta.url` / `import.meta.dirname` in the bundle so it won't crash at load — but at runtime those resolve to the **bundled output** location, not your source tree. So don't use `import.meta.url` to read a file relative to your source at request time; inline the data or ship it as a Lambda asset instead.
 
 ## DSQL Limitations
 
@@ -153,10 +157,12 @@ try {
   await db.transaction(async (tx) => { /* ... */ });
 } catch (e: unknown) {
   if (isBlocksError(e, DistributedDatabaseErrors.SerializationFailure)) {
-    // OCC conflict — transaction was NOT committed. Safe to retry.
+    // OCC conflict — transaction was NOT committed. Serialized as HTTP 409
+    // (Conflict), retriable — safe to retry.
   }
   if (isBlocksError(e, DistributedDatabaseErrors.UniqueConstraintViolation)) {
-    // Duplicate key
+    // Duplicate key — serialized as HTTP 409 (Conflict), not retriable
+    // (a blind retry of the same insert fails identically).
   }
   if (isBlocksError(e, DistributedDatabaseErrors.QueryFailed)) {
     // General query failure

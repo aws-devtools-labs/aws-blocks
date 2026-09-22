@@ -88,6 +88,56 @@ interface SpawnResult {
 }
 
 /**
+ * Grace period (ms) between the polite abort signal and the SIGKILL fallback.
+ *
+ * When a spawned CLI is terminated by the test (timeout, teardown), a bare
+ * SIGKILL on the process group kills it before `trackCommand`'s `finally`
+ * block runs, so the telemetry event is never written to `--telemetry-file`
+ * and the SUCCESS-path assertions fail with "telemetry file not written"
+ * (`exit=null`). The CLI's own signal contract (see
+ * packages/core/src/scripts/deploy-stream.ts `decideSignalResponse`) aborts an
+ * in-flight deploy on the FIRST SIGINT — that abort throws `DeployProcessError`,
+ * which propagates into `trackCommand`, whose `finally` flushes telemetry. So
+ * we send SIGINT first, give the process this long to exit gracefully (running
+ * its telemetry flush), and only escalate to SIGKILL if it is still alive.
+ */
+const TERMINATION_GRACE_MS = 8_000;
+
+/**
+ * Terminate a detached child process (and its group) gracefully, giving it a
+ * chance to flush telemetry before escalating to SIGKILL.
+ *
+ * Sends SIGINT to the child's process group so the CLI's signal handlers run
+ * their graceful-abort path (which flushes telemetry via `trackCommand`'s
+ * `finally`). If the process has not exited within {@link TERMINATION_GRACE_MS},
+ * escalates to SIGKILL on the group as a hard fallback so a wedged child can
+ * never hang the suite.
+ *
+ * Safe on a process that has already exited (the kills are best-effort and
+ * swallow ESRCH). The child is spawned `detached`, so `-pid` targets its group,
+ * never the test runner's.
+ */
+function gracefulTerminate(child: ChildProcess): void {
+  const pid = child.pid;
+  if (!pid) return;
+  let exited = false;
+  child.once('exit', () => { exited = true; });
+
+  // Polite first: SIGINT is aborted-on-first-delivery by the deploy/sandbox
+  // runner, triggering the telemetry flush before the process exits.
+  try { process.kill(-pid, 'SIGINT'); } catch {}
+
+  // Hard fallback: if the graceful path did not exit in time, kill the group.
+  const killTimer = globalThis.setTimeout(() => {
+    if (exited) return;
+    try { process.kill(-pid, 'SIGKILL'); } catch {}
+    try { child.kill('SIGKILL'); } catch {}
+  }, TERMINATION_GRACE_MS);
+  // Never let the fallback timer keep the event loop alive on its own.
+  killTimer.unref?.();
+}
+
+/**
  * Spawn a command with NODE_DEBUG=blocks-telemetry and --telemetry-file.
  * Returns stdout, stderr (for delivery verification), and exit code.
  */
@@ -124,7 +174,10 @@ function runCommand(
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
 
     const timer = globalThis.setTimeout(() => {
-      try { process.kill(-child.pid!, 'SIGKILL'); } catch {}
+      // Graceful abort (SIGINT) so the CLI flushes telemetry before it exits;
+      // escalates to SIGKILL only if it doesn't exit within the grace window.
+      // The child's `close` handler below still resolves the promise.
+      gracefulTerminate(child);
     }, timeoutMs);
 
     child.on('close', (code) => {
@@ -161,7 +214,7 @@ function spawnDevServer(options: {
     });
 
     const timeout = globalThis.setTimeout(() => {
-      try { process.kill(-child.pid!, 'SIGKILL'); } catch {}
+      gracefulTerminate(child);
       reject(new Error(`Dev server timeout.\nstdout: ${output.stdout}\nstderr: ${output.stderr}`));
     }, 45_000);
 
@@ -183,11 +236,13 @@ function spawnDevServer(options: {
 
 function killProcess(proc: ChildProcess): void {
   try {
-    // Process is detached (own group) — kill the group directly with SIGKILL.
-    // This is safe because detached means it's NOT in the test runner's group.
-    if (proc.pid) { try { process.kill(-proc.pid, 'SIGKILL'); } catch {} }
-    proc.kill('SIGKILL');
-    proc.removeAllListeners();
+    // Graceful abort first (SIGINT) so a long-lived dev server can flush its
+    // telemetry before exiting; escalates to SIGKILL after the grace window.
+    // Process is detached (own group), so -pid targets the child's group, not
+    // the test runner's. Note: we intentionally do NOT removeAllListeners here —
+    // gracefulTerminate registers an 'exit' listener it uses to skip the SIGKILL
+    // fallback once the process has exited cleanly.
+    gracefulTerminate(proc);
   } catch {}
 }
 

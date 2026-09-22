@@ -1,0 +1,3 @@
+{
+  "app": "npx tsx vpc-test-stack.ts"
+}

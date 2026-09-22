@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
-import { Hosting, BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+import { Hosting, BlocksStack, BlocksPresets, secret, config } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -24,11 +23,11 @@ const stackName = sandboxMode
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
+  // Disposable CI test stack: force the sandbox posture (DESTROY, no deletion
+  // protection) so teardown works in every deploy mode. A real app would use
+  // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
+  defaults: BlocksPresets.sandbox,
 });
-
-// E2E test stacks must be fully deletable.
-RemovalPolicies.of(blocksStack).destroy();
-Mixins.of(blocksStack).apply(new SandboxDisableDeletionProtection());
 
 // Hosting — Next.js SSR (CloudFront + Lambda)
 new Hosting(blocksStack, 'Hosting', {
@@ -40,6 +39,13 @@ new Hosting(blocksStack, 'Hosting', {
   compute: {
     memorySize: 1024,
     timeout: cdk.Duration.seconds(30),
+  },
+  // E2E: secret() → Secrets Manager, config() → SSM Parameter Store. The values
+  // are written out of band by the CLI (see test/e2e.test.ts) and read at runtime
+  // via getSecret/getConfig in /api/probe/secret.
+  environment: {
+    DEMO_SECRET: secret('DEMO_SECRET'),
+    DEMO_CONFIG: config('DEMO_CONFIG'),
   },
 });
 
