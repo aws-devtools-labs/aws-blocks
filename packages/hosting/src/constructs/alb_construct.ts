@@ -84,8 +84,21 @@ export class AlbConstruct extends Construct {
     const serverFn = props.serverComputeName ? compute.get(props.serverComputeName) : undefined;
     const imageFn = props.imageComputeName ? compute.get(props.imageComputeName) : undefined;
 
-    // ── VPC (BYO or a default 2-AZ VPC) ──
-    this.vpc = props.vpc ?? new ec2.Vpc(this, 'Vpc', { maxAzs: 2, natGateways: 1 });
+    // ── VPC (BYO or a default 2-AZ, PUBLIC-ONLY VPC) ──
+    // A public ALB lives in public subnets and the front-door Lambdas are not
+    // VPC-attached, so the default VPC needs no private subnets and — crucially —
+    // no NAT Gateway. `ec2.Vpc`'s defaults would add a PRIVATE_WITH_EGRESS tier
+    // plus a billed-but-idle NAT Gateway (~$32/mo + per-GB) that nothing here
+    // uses; a public-only `subnetConfiguration` avoids that cost. A future
+    // VPC-attached (container / private-Lambda) backend can bring its own VPC
+    // with private egress instead.
+    this.vpc =
+      props.vpc ??
+      new ec2.Vpc(this, 'Vpc', {
+        maxAzs: 2,
+        natGateways: 0,
+        subnetConfiguration: [{ name: 'public', subnetType: ec2.SubnetType.PUBLIC, cidrMask: 24 }],
+      });
 
     // ── Static asset-proxy Lambda (ALB can't target S3 directly) ──
     const stripPrefix = plan.policies.basePath ?? plan.policies.assetPrefix ?? '';

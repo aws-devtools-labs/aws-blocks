@@ -57,5 +57,11 @@ effect on the (already-lowercase) CloudFront path.
   support tiers were corrected to match what each construct actually builds today
   (e.g. the ALB door no longer overclaims WAF).
 
+- **ALB door's auto-created VPC is now public-only (no idle NAT Gateway).** A public
+  ALB lives in public subnets and the front-door Lambdas are not VPC-attached, so the
+  default VPC previously provisioned a `PRIVATE_WITH_EGRESS` tier plus a billed-but-idle
+  NAT Gateway (~$32/mo + per-GB) that nothing used. The default is now a public-only
+  `subnetConfiguration` with `natGateways: 0`; bring your own VPC for private egress.
+
 Backward compatible — `frontDoor` defaults to `cloudfront` and all new exports are
 additive.
