@@ -830,7 +830,14 @@ export function Chat() {
       <ul>
         {messages.map((m) => (
           <li key={m.id} data-role={m.role}>
-            <strong>{m.role}:</strong> {m.content}
+            {m.role === 'approval' ? (
+              // `ChatMessage` is a discriminated union on `role`: narrowing to
+              // 'approval' types `metadata` as `ApprovalMetadata`, so you read
+              // `m.metadata?.approved` / `.toolName` with no cast.
+              <strong>{m.metadata?.approved ? '✓' : '✗'} {m.metadata?.toolName}: {m.content}</strong>
+            ) : (
+              <><strong>{m.role}:</strong> {m.content}</>
+            )}
           </li>
         ))}
       </ul>

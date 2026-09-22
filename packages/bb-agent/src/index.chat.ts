@@ -34,13 +34,25 @@ export type { ChatTransport, ChunkStream, TurnRequest } from './transport.js';
 export { realtimeTransport } from './transport.js';
 export type { AgentStreamChunk } from './types.js';
 
-/** A message in the conversation (for UI rendering). */
-export interface ChatMessage {
-	id: string;
-	role: 'user' | 'assistant' | 'approval';
-	content: string;
-	metadata?: Record<string, JSONValue>;
+/** Typed metadata carried by an `approval` message — the recorded decision for a
+ * resumed interrupt. All fields optional: a message records only what was set. */
+export interface ApprovalMetadata {
+	approved?: boolean;
+	trust?: boolean;
+	toolName?: string;
+	/** The tool input the decision applied to (audit-only), coerced to a JSON value. */
+	input?: JSONValue;
 }
+
+/**
+ * A message in the conversation (for UI rendering), as a discriminated union on
+ * `role`. Narrowing on `role === 'approval'` types `metadata` as {@link ApprovalMetadata}
+ * — so a consumer reads `m.metadata?.approved` with no cast — while a plain
+ * user/assistant message carries free-form JSON metadata.
+ */
+export type ChatMessage =
+	| { id: string; role: 'user' | 'assistant'; content: string; metadata?: Record<string, JSONValue> }
+	| { id: string; role: 'approval'; content: string; metadata?: ApprovalMetadata };
 
 /** Conversation CRUD — plain request/response RPC to the backend, the same across every runtime. */
 export interface ChatConversationApi {
@@ -299,10 +311,10 @@ export function createChat(options: CreateChatOptions): ChatController {
 			} else {
 				// Resuming a paused turn — record the decisions, reuse/insert an assistant placeholder.
 				for (const r of input.interruptResponses) {
-					// Build audit metadata as JSONValue (no `undefined`, no `any`): include only
-					// the fields that are set. `input` is InterruptResponse.input (audit-only) — coerce
-					// to a JSON string when it isn't already a JSON scalar/structure.
-					const metadata: Record<string, JSONValue> = {};
+					// Build the approval decision as typed ApprovalMetadata (no `any`, no cast):
+					// include only the fields that are set. `input` is InterruptResponse.input
+					// (audit-only) — coerce to a JSON value when it isn't already one.
+					const metadata: ApprovalMetadata = {};
 					if (r.approved !== undefined) metadata.approved = r.approved;
 					if (r.trust !== undefined) metadata.trust = r.trust;
 					if (r.toolName !== undefined) metadata.toolName = r.toolName;
@@ -386,14 +398,23 @@ export function createChat(options: CreateChatOptions): ChatController {
 		async loadConversation(id: string) {
 			conversationId = id;
 			const { messages: history } = await api.getConversation(id);
-			messages = history
-				.filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'approval')
-				.map((m) => ({
-					id: nextId(),
-					role: m.role as 'user' | 'assistant' | 'approval',
-					content: m.content,
-					metadata: m.metadata,
-				}));
+			messages = history.flatMap<ChatMessage>((m) => {
+				if (m.role === 'user' || m.role === 'assistant') {
+					return [{ id: nextId(), role: m.role, content: m.content, metadata: m.metadata }];
+				}
+				if (m.role === 'approval') {
+					// Project the stored JSON metadata into the typed ApprovalMetadata
+					// shape (no cast): read the known keys, keep the JSON-safe types.
+					const meta: ApprovalMetadata = {};
+					const src = m.metadata ?? {};
+					if (typeof src.approved === 'boolean') meta.approved = src.approved;
+					if (typeof src.trust === 'boolean') meta.trust = src.trust;
+					if (typeof src.toolName === 'string') meta.toolName = src.toolName;
+					if (src.input !== undefined) meta.input = src.input;
+					return [{ id: nextId(), role: 'approval', content: m.content, metadata: meta }];
+				}
+				return [];
+			});
 			options.onMessagesChange?.(messages);
 
 			if (api.getPendingInterrupts) {
