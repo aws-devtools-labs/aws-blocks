@@ -5,8 +5,6 @@ on:
     branches: [main]
     paths:
       - 'native/swift/**'
-      - 'scripts/generate-native-versions.mjs'
-      - 'scripts/generate-native-versions.test.mjs'
   workflow_dispatch:
 
 concurrency:
@@ -32,10 +30,14 @@ jobs:
           node-version-file: '.nvmrc'
 
       - name: Check Swift version constant matches package.json
-        run: node scripts/generate-native-versions.mjs --swift --check
+        run: native/swift/scripts/generate-version.sh --check
 
-      - name: Test the version generator
-        run: node --test scripts/generate-native-versions.test.mjs
+      - name: Test the Swift scripts
+        run: |
+          for test in native/swift/scripts/*.test.sh; do
+            echo "== $test =="
+            bash "$test"
+          done
 
   build-and-test-macos:
     name: Build & Test (macOS)
