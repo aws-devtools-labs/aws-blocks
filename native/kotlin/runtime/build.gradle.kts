@@ -68,7 +68,7 @@ val generateVersion by tasks.registering {
     outputs.dir(versionOutputDir)
     doLast {
         // Reject a non-semver VERSION_NAME rather than baking a malformed token.
-        require(Regex("""^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,20})?$""").matches(versionValue)) {
+        require(Regex("""^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$""").matches(versionValue)) {
             "VERSION_NAME \"$versionValue\" is not a valid token semver (N.N.N, optional -prerelease, no build metadata)."
         }
         val pkgDir = versionOutputDir.get().dir("com/aws/blocks/kotlin").asFile

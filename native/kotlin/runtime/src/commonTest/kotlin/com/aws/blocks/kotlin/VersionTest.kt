@@ -10,7 +10,7 @@ class VersionTest {
 
     // The token format this library commits to: aws-blocks-<lang>/<semver> —
     // a bounded lowercase-alphanumeric language segment plus a strict semver.
-    private val grammar = Regex("""^aws-blocks-([a-z][a-z0-9]{0,15})/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,20})?)$""")
+    private val grammar = Regex("""^aws-blocks-([a-z][a-z0-9]{0,15})/(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$""")
 
     @Test
     fun `user agent token matches the expected format`() {
@@ -29,7 +29,7 @@ class VersionTest {
 
     @Test
     fun `runtime version is valid semver`() {
-        blocksRuntimeVersion shouldMatch Regex("""^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,20})?$""")
+        blocksRuntimeVersion shouldMatch Regex("""^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$""")
     }
 
     @Test

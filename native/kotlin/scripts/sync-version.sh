@@ -26,9 +26,8 @@ if ! grep -q '^VERSION_NAME=' "$PROPS"; then
   exit 1
 fi
 
-# --check verifies VERSION_NAME matches package.json without writing. A stale
-# value silently bakes the wrong runtime constant at build time and publishes
-# the wrong version, so CI runs this on every native/kotlin change.
+# --check compares VERSION_NAME with package.json without writing. CI runs it
+# for native/kotlin pull requests to prevent stale runtime and release versions.
 if [[ "$CHECK" == true ]]; then
   CURRENT=$(grep '^VERSION_NAME=' "$PROPS" | head -1 | cut -d= -f2-)
   if [[ "$CURRENT" == "$VERSION" ]]; then

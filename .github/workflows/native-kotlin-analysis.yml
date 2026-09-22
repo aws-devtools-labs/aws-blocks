@@ -1,7 +1,7 @@
 name: Native Kotlin Analysis
 
 # Version-sync drift check + runtime unit tests for the native Kotlin SDK.
-# Path-filtered so it only runs for PRs that touch native/kotlin.
+# Runs for pull requests that change native/kotlin or this workflow.
 
 on:
   pull_request:
