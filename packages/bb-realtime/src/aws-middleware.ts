@@ -218,7 +218,7 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 				// failure — surface onDisconnect('error') and fall back to backoff so a
 				// later attempt can re-mint (mirrors the .catch below).
 				if (!applyFreshDescriptor(conn, fresh)) {
-					conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
+					for (const hs of conn.disconnectHandlers.values()) { hs.forEach(h => { try { h('error'); } catch {} }); }
 					scheduleReconnect(conn);
 					return;
 				}
@@ -233,7 +233,7 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 				// disconnect plumbing (reason 'error') so callers learn the reconnect
 				// stalled, then fall back to exponential-backoff retry so a later
 				// attempt can re-mint and reopen.
-				conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
+				for (const hs of conn.disconnectHandlers.values()) { hs.forEach(h => { try { h('error'); } catch {} }); }
 				scheduleReconnect(conn);
 			});
 		return;
