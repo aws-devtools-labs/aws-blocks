@@ -8,8 +8,8 @@ import kotlin.test.Test
 
 class VersionTest {
 
-    // The token format this library commits to: aws-blocks-<lang>/<semver> —
-    // a bounded lowercase-alphanumeric language segment plus a strict semver.
+    // Token format: aws-blocks-<lang>/<version>. The language is 1-16 lowercase alphanumeric
+    // characters starting with a letter; version is numeric X.Y.Z with an optional prerelease and no build metadata.
     private val grammar = Regex("""^aws-blocks-([a-z][a-z0-9]{0,15})/(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$""")
 
     @Test

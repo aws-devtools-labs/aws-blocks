@@ -67,9 +67,9 @@ val generateVersion by tasks.registering {
     inputs.property("version", versionValue)
     outputs.dir(versionOutputDir)
     doLast {
-        // Reject a non-semver VERSION_NAME rather than baking a malformed token.
+        // Reject versions outside the N.N.N[-prerelease] token format.
         require(Regex("""^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$""").matches(versionValue)) {
-            "VERSION_NAME \"$versionValue\" is not a valid token semver (N.N.N, optional -prerelease, no build metadata)."
+            "VERSION_NAME \"$versionValue\" is outside the N.N.N[-prerelease] token format (no build metadata)."
         }
         val pkgDir = versionOutputDir.get().dir("com/aws/blocks/kotlin").asFile
         pkgDir.mkdirs()
@@ -77,7 +77,6 @@ val generateVersion by tasks.registering {
             """
             |package com.aws.blocks.kotlin
             |
-            |/** Semver of this AWS Blocks Kotlin runtime library. */
             |internal const val blocksRuntimeVersion = "$versionValue"
             |
             |/** User agent token for this runtime, e.g. `aws-blocks-kotlin/$versionValue`. */

@@ -1,8 +1,5 @@
 name: Native Kotlin Analysis
 
-# Version-sync drift check + runtime unit tests for the native Kotlin SDK.
-# Runs for pull requests that change native/kotlin or this workflow.
-
 on:
   pull_request:
     paths:
@@ -32,19 +29,18 @@ jobs:
         with:
           node-version-file: '.nvmrc'
 
-      # The runtime version constant is generated at build time from
-      # gradle.properties VERSION_NAME; this asserts that stays in sync with
-      # package.json (the changesets source of truth). Token-semver validation
-      # lives in the generateVersion Gradle task, exercised by the runtime
-      # unit tests below.
+      # Keep the generated runtime version aligned with package.json, the changesets source of truth.
+      # Runtime tests exercise the generateVersion task's token-semver validation.
       - name: Check gradle.properties version matches package.json
         working-directory: native/kotlin
         run: scripts/sync-version.sh --check
 
-      # Run the drift guard's own tests so its behavior cannot silently regress.
-      - name: Run version-sync script tests
-        working-directory: native/kotlin
-        run: bash scripts/sync-version.test.sh
+      - name: Test the Kotlin scripts
+        run: |
+          for test in native/kotlin/scripts/*.test.sh; do
+            echo "== $test =="
+            bash "$test"
+          done
 
   build-and-test:
     name: Build & Test (runtime)
