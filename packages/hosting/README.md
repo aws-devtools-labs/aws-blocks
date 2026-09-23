@@ -426,6 +426,60 @@ phases around the deploy:
    (`app.example.com`) to the `DistributionDomainName` value. For an apex
    domain, use an ALIAS or ANAME record if your provider supports it.
 
+## Off-region CloudFront alarm parity
+
+AWS CloudFront metrics only publish in `us-east-1`. A CloudWatch alarm
+can only evaluate a metric in its own region, so the CloudFront 5xx
+alarm cannot be placed in a non-`us-east-1` hosting stack.
+
+When `HostingConstruct` detects that the stack's region is **not**
+`us-east-1` it automatically synthesizes a companion stack named
+`<stackName>-CfMonitoring-<addr>` (the `<addr>` suffix keeps the id
+unique when several hosting constructs share a stage) pinned to
+`us-east-1`. That stack:
+
+- creates its own encrypted SNS topic (the alarm action target),
+- wires the CloudFront 5xx rate alarm to that topic,
+- applies the same `monitoring.subscriptions` you pass to the hosting
+  construct, so you subscribe in one place and both regions are covered,
+  and
+- emits a `MonitoringTopicArnUsEast1` CloudFormation output so operators
+  who want the raw ARN can find it.
+
+> **Requirement:** because the companion stack is region-pinned you must
+> set `env: { account, region }` on the parent hosting stack when
+> deploying outside `us-east-1`, exactly as you would for a WAF stack
+> (see `waf_construct.ts`). If the region is resolved but the account is
+> unresolved, only the CloudFront alarm is skipped (with a loud synth
+> warning); all other alarms are kept. A fully env-agnostic stack
+> (unresolved-token region) creates the alarm locally and warns that it
+> will never fire if the app deploys outside `us-east-1`. See D-016.
+
+Off-region placement is **always on**; there is no opt-out. The
+CloudFront 5xx alarm is the whole point of `monitoring`, and a
+silently-missing alarm is exactly the bug this fixes (#481).
+
+Subscribe with endpoint subscriptions (`EmailSubscription` /
+`UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions`):
+
+```ts
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
+
+new HostingConstruct(this, 'Hosting', {
+  // ...
+  monitoring: {
+    subscriptions: [new subs.EmailSubscription('oncall@example.com')],
+  },
+});
+```
+
+Resource-target subscriptions (Lambda/SQS) are not yet supported —
+applying them to the us-east-1 topic would create an unresolvable
+cross-region reference. For a custom action, reach the alarms directly
+via `hosting.monitoring.alarms`. In `us-east-1` no companion stack is
+created — the alarm stays local.
+
+
 ## Development
 
 ```bash

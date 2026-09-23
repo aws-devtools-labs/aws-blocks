@@ -62,3 +62,37 @@ kotlin {
         }
     }
 }
+
+// Kotlin ships a compiled artifact, so the version is generated at build time
+// from VERSION_NAME (unlike Swift/Dart, which commit the constant).
+val versionOutputDir = layout.buildDirectory.dir("generated/version/commonMain/kotlin")
+
+val generateVersion by tasks.registering {
+    val outputDir = versionOutputDir
+    val versionValue = (project.findProperty("VERSION_NAME") as String?)
+        ?: error("VERSION_NAME is not set in gradle.properties")
+    inputs.property("version", versionValue)
+    outputs.dir(outputDir)
+    doLast {
+        // Reject versions outside the N.N.N[-prerelease] token format.
+        require(Regex("""^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$""").matches(versionValue)) {
+            "VERSION_NAME \"$versionValue\" is outside the N.N.N[-prerelease] token format (no build metadata)."
+        }
+        val pkgDir = outputDir.get().dir("com/aws/blocks/kotlin").asFile
+        pkgDir.mkdirs()
+        pkgDir.resolve("Version.kt").writeText(
+            """
+            |package com.aws.blocks.kotlin
+            |
+            |internal const val blocksRuntimeVersion = "$versionValue"
+            |
+            |/** User agent token for this runtime, e.g. `aws-blocks-kotlin/$versionValue`. */
+            |internal const val blocksUserAgentToken = "aws-blocks-kotlin/${'$'}blocksRuntimeVersion"
+            |""".trimMargin(),
+        )
+    }
+}
+
+kotlin.sourceSets.named("commonMain") {
+    kotlin.srcDir(generateVersion.map { versionOutputDir })
+}
