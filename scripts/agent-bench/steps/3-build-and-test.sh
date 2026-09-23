@@ -80,13 +80,16 @@ else
   } >> "$GITHUB_OUTPUT"
 fi
 
-# ── Dev server: launch fresh + discover its port from the framework banner ───
+# ── Dev server: launch fresh + discover its port two independent ways ────────
 # The verifier OWNS the server. Step 2 may have left a `tsx watch` supervisor alive, so first reap
 # that tree and free the front-door ports (3000/3001 only, never :3100). Under shell isolation the
 # agent's procs are benchagent-owned, so reap/free/probe go through sudo (unprivileged fallback).
-# Discovery anchors on the exact banner `AWS Blocks local server running on http://localhost:<port>`,
-# then a readiness gate waits (~60s) for it to answer HTTP <500; if it never does, APP_BASE_URL stays
-# empty and we proceed (the cell fails honestly rather than hanging).
+# Discovery uses TWO independent readiness paths over a ~90s window (either confirms): Path A parses
+# the port from the framework banner `AWS Blocks local server running on http://localhost:<port>` and
+# HTTP-probes it; Path B (deterministic) probes the candidate ports directly for the app's readiness
+# artifact `/.blocks-sandbox/config.json`, which the app writes only once it is genuinely serving —
+# independent of the banner text/timing. If neither confirms, APP_BASE_URL stays empty and we proceed
+# (the cell fails honestly rather than hanging). See the inline block at the launch site for detail.
 
 # Reap any dev server the agent left running. The framework records each in
 # .blocks-sandbox/dev-server.<port>.pid as {pid, ppid, port}; `ppid` is the `tsx watch` supervisor
