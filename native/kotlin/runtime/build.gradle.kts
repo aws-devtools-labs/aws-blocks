@@ -62,16 +62,17 @@ kotlin {
 val versionOutputDir = layout.buildDirectory.dir("generated/version/commonMain/kotlin")
 
 val generateVersion by tasks.registering {
+    val outputDir = versionOutputDir
     val versionValue = (project.findProperty("VERSION_NAME") as String?)
         ?: error("VERSION_NAME is not set in gradle.properties")
     inputs.property("version", versionValue)
-    outputs.dir(versionOutputDir)
+    outputs.dir(outputDir)
     doLast {
         // Reject versions outside the N.N.N[-prerelease] token format.
         require(Regex("""^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$""").matches(versionValue)) {
             "VERSION_NAME \"$versionValue\" is outside the N.N.N[-prerelease] token format (no build metadata)."
         }
-        val pkgDir = versionOutputDir.get().dir("com/aws/blocks/kotlin").asFile
+        val pkgDir = outputDir.get().dir("com/aws/blocks/kotlin").asFile
         pkgDir.mkdirs()
         pkgDir.resolve("Version.kt").writeText(
             """
