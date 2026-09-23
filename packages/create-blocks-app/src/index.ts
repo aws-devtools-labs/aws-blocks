@@ -77,16 +77,17 @@ async function confirm(message: string): Promise<boolean> {
 }
 
 // Directory entries that do not block fresh scaffolding: common VCS, editor,
-// and OS metadata, plus a few files that are commonly present in an otherwise
-// empty working directory (agent/benchmark seed files). Matched by exact name;
-// *.iml is matched by the pattern below.
+// and OS metadata that a scaffold neither reads nor writes, plus INSTRUCTIONS.md
+// (a common seed file). Deliberately excludes anything the template itself
+// writes (e.g. README.md, .gitignore) and directory entries that can hold user
+// content, so a real user file blocks scaffolding rather than being overwritten.
+// Matched by exact name; *.iml is matched by the pattern below.
 const SAFE_TO_SCAFFOLD_ENTRIES = new Set([
   '.claude', '.cursor', '.DS_Store', '.git', '.gitattributes',
-  '.gitignore', '.gitlab-ci.yml', '.hg', '.hgcheck', '.hgignore',
-  '.idea', '.npmignore', '.travis.yml', '.vscode', '.zed',
-  'LICENSE', 'Thumbs.db', 'docs', 'mkdocs.yml', 'npm-debug.log',
-  'yarn-debug.log', 'yarn-error.log', 'yarnrc.yml', '.yarn',
-  'INSTRUCTIONS.md', 'README.md', '.gitkeep',
+  '.gitlab-ci.yml', '.hg', '.hgcheck', '.hgignore', '.idea',
+  '.npmignore', '.travis.yml', '.vscode', '.zed', 'LICENSE',
+  'Thumbs.db', 'mkdocs.yml', 'npm-debug.log', 'yarn-debug.log',
+  'yarn-error.log', 'yarnrc.yml', 'INSTRUCTIONS.md',
 ]);
 const SAFE_TO_SCAFFOLD_PATTERN = /\.iml$/; // IntelliJ IDEA project files
 
@@ -700,7 +701,10 @@ The mode is auto-detected based on the target directory:
      Works with any framework — Vite, Next.js, SvelteKit, Astro, etc.
 
   3. Empty or new directory:
-     Creates a standalone Blocks starter app from a template.
+     Creates a standalone Blocks starter app from a template. A directory
+     that contains only benign metadata (e.g. .git, editor config) or an
+     INSTRUCTIONS.md is still treated as empty; any other pre-existing file
+     blocks scaffolding so it is never overwritten.
 
 Arguments:
   directory              Target directory (default: ".")

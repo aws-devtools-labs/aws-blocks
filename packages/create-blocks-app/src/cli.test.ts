@@ -301,7 +301,6 @@ describe('create-blocks-app auto-detection', () => {
     // Benign, allowlisted seed files (e.g. a benchmark-seeded INSTRUCTIONS.md)
     // must not block a fresh scaffold.
     writeFileSync(join(tmpDir, 'INSTRUCTIONS.md'), '# seed instructions');
-    writeFileSync(join(tmpDir, '.gitignore'), 'node_modules\n');
     try {
       const result = run([tmpDir, '-y', '--skip-install']);
       assert.strictEqual(result.exitCode, 0);
@@ -327,6 +326,40 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(result.exitCode, 1);
       assert.match(result.stderr, /realfile\.txt/);
       assert.doesNotMatch(result.stderr, /INSTRUCTIONS\.md/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('blocks scaffolding on a pre-existing README.md and preserves it (no overwrite)', () => {
+    const tmpDir = join(__dirname, '../.test-nonempty-readme');
+    mkdirSync(tmpDir, { recursive: true });
+    // The template ships a README.md, so a user's README.md must block
+    // scaffolding rather than being silently overwritten.
+    writeFileSync(join(tmpDir, 'README.md'), '# my original readme');
+    try {
+      const result = run([tmpDir]);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /README\.md/);
+      // The original file is untouched on disk.
+      assert.strictEqual(readFileSync(join(tmpDir, 'README.md'), 'utf-8'), '# my original readme');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('blocks scaffolding on a pre-existing .gitignore and preserves it (no overwrite)', () => {
+    const tmpDir = join(__dirname, '../.test-nonempty-gitignore');
+    mkdirSync(tmpDir, { recursive: true });
+    // The template ships a .gitignore (renamed from gitignore), so a user's
+    // .gitignore must block scaffolding rather than being silently overwritten.
+    writeFileSync(join(tmpDir, '.gitignore'), '# my original gitignore');
+    try {
+      const result = run([tmpDir]);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /\.gitignore/);
+      // The original file is untouched on disk.
+      assert.strictEqual(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), '# my original gitignore');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

@@ -2,6 +2,4 @@
 "@aws-blocks/create-blocks-app": patch
 ---
 
-Scaffold a fresh Blocks app into a directory that contains only benign files.
-
-`create-blocks-app` previously aborted with "Target directory is not empty and no package.json found." whenever the target directory held any file. It now scaffolds a fresh project into a directory that contains only benign files — common VCS, editor, and OS metadata, plus `README.md`, `INSTRUCTIONS.md`, and `.gitkeep` — instead of aborting. When the directory contains genuinely conflicting files, the error now lists each conflicting entry.
+create-blocks-app now scaffolds a fresh project into a directory that contains only benign metadata files (VCS, editor, and OS entries) or an INSTRUCTIONS.md seed, instead of aborting. Any other pre-existing file (including a README.md or .gitignore) still blocks scaffolding, and the error now lists each conflicting entry — so no existing file is overwritten.
