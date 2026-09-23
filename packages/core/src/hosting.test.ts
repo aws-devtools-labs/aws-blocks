@@ -2019,7 +2019,7 @@ describe('Hosting', () => {
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
-        frontDoor: { edge: 'cloudfront', router: 'alb' },
+        frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
       });
 
       const t = Template.fromStack(stack);
@@ -2040,7 +2040,7 @@ describe('Hosting', () => {
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
-        frontDoor: { edge: 'cloudfront', router: 'alb' },
+        frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
       });
 
       const t = Template.fromStack(stack);
@@ -2063,7 +2063,7 @@ describe('Hosting', () => {
       const app = new App();
       const stack = new Stack(app, 'CfOverAlbSecHeadersStack', { env: { account: '111111111111', region: 'us-east-1' } });
 
-      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { edge: 'cloudfront', router: 'alb' } });
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
 
       const t = Template.fromStack(stack);
       // A ResponseHeadersPolicy with the security headers, attached to the edge's

@@ -441,7 +441,7 @@ export interface HostingProps {
    * `'http'` (HTTP API v2). Edge capabilities and response streaming are
    * degraded/unsupported and must be accepted via `degrade`.
    *
-   * Pass `{ edge: 'cloudfront', router: 'alb' }` to STACK the two — a CloudFront
+   * Pass `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` to STACK the two — a CloudFront
    * edge (static/SSR/image served as today) that forwards the same-origin API
    * subtree (`/aws-blocks/*`, `/aws-blocks-auth/*`) through a regional ALB before
    * it reaches the backend. This is the composed "CF → ALB → rest of infra" door:
@@ -452,7 +452,7 @@ export interface HostingProps {
    * @example
    * ```ts
    * new Hosting(stack, 'Web', { root, framework: 'nuxt', frontDoor: { kind: 'alb' } });
-   * new Hosting(stack, 'Web', { root, api, frontDoor: { edge: 'cloudfront', router: 'alb' } });
+   * new Hosting(stack, 'Web', { root, api, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
    * ```
    */
   frontDoor?: HostingConstructProps['frontDoor'] | CloudFrontOverRouterFrontDoor;
@@ -465,6 +465,8 @@ export interface HostingProps {
  * backend instead of CloudFront → backend directly. See {@link HostingProps.frontDoor}.
  */
 export interface CloudFrontOverRouterFrontDoor {
+  /** Discriminant — a stacked (edge-over-router) door. */
+  kind: 'stacked';
   /** The edge layer. Only CloudFront today. */
   edge: 'cloudfront';
   /** The router layer the edge forwards the API subtree to. Only ALB today. */
@@ -591,7 +593,9 @@ export class Hosting extends Construct {
     // through a regional ALB. Detected up front so the L3 stays on the default
     // CloudFront path and the ALB is stacked in during API-behavior wiring.
     const cfOverRouter: CloudFrontOverRouterFrontDoor | undefined =
-      typeof props.frontDoor === 'object' && 'edge' in props.frontDoor ? props.frontDoor : undefined;
+      typeof props.frontDoor === 'object' && 'kind' in props.frontDoor && props.frontDoor.kind === 'stacked'
+        ? props.frontDoor
+        : undefined;
 
     // ── 1. Detect framework ──────────────────────────────────────
     const framework = props.framework ?? detectFramework(root);

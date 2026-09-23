@@ -79,7 +79,7 @@ export const composeGraph = (plan: CapabilityPlan, choice: FrontDoorChoice): Fro
  * layer (e.g. `alb`) it forwards the backend/API subtree to.
  *
  * NOTE: this is the graph-layer *representation* of the nested composition. The
- * user-facing `frontDoor: { edge: 'cloudfront', router: 'alb' }` door is realized
+ * user-facing `frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' }` door is realized
  * directly in `core.Hosting` (`addCloudFrontOverAlb`): CloudFront's single origin
  * is a full ALB router that routes to everything.
  */
