@@ -114,33 +114,22 @@ Two jobs share one `container` compute and set their own deadlines. Neither can 
 
 ---
 
-## Disqualified options
-
-Two patterns were raised before this doc and are ruled out by goal 4. Both **divine** the compute type from opaque attributes (time limits, memory) instead of asking the customer to state it.
-
-### Disqualified 1 — BB constructor that infers the type
-
-```ts
-const reports = new Compute(scope, 'reports', { timeoutSeconds: 1800, memoryMb: 2048 });
-// 30-min timeout > Lambda's 15-min ceiling, so this silently resolves to a container
-```
-
-Disqualified: the customer never states a category; the compute type is reverse-engineered from `timeoutSeconds`. A time limit is a property of work, not of compute, so it is the wrong axis to select on. See Appendix A.
-
-### Disqualified 2 — factory that infers the type
-
-```ts
-const reports = ComputeProvider.provide('reports', { timeoutSeconds: 1800, memoryMb: 2048 });
-// same inference, behind a factory instead of a constructor
-```
-
-Disqualified: same divination, different door. Moving the inference into a factory does not make the category explicit — the customer still can't see or state which kind of compute they got. See Appendix A.
-
----
-
 ## Options — declaration surface
 
-This is the one part the options differ on. Each produces the same core `Compute` type settled above, so any of them can be injected into `new AsyncJob(..., { compute })`. A power user can always bypass the sugar and construct a concrete compute directly (goal 2). The options differ only in the front-door ergonomics.
+This is the one part the options differ on. Each produces the same core `Compute` type settled above (a `Scope`-backed compute), so any of them can be injected into `new AsyncJob(..., { compute })`. A power user can always bypass the sugar and construct a concrete compute directly (goal 2). The options differ only in the front-door ergonomics.
+
+**Recommended: Option 2 (category factory methods).** The category is the method name, so the choice is unmissable (goal 4) and reads as Cloud-not-AWS (`Compute.container`, not `FargateService`). One surface, and each method exposes only the attributes its category can honor.
+
+```ts
+import { Compute } from '@aws-blocks/blocks';
+
+const reports = Compute.container(scope, 'reports', { memory: 2048, cpu: 1024 });
+const api     = Compute.ephemeral(scope, 'api', { memory: 512 });
+
+new AsyncJob(scope, 'reports', { compute: reports, timeoutSeconds: 60 * 30, handler });
+```
+
+The alternatives considered follow.
 
 ### Option 1 — one `Compute` block, `category` attribute
 
@@ -190,15 +179,39 @@ new ApiNamespace(scope, 'api', { compute: simple, /* ... */ });
 new AsyncJob(scope, 'reports', { compute: complex, handler });
 ```
 
-Two doors: a zero-config provider for customers who don't want to think about compute, and direct construction for customers who do. Both yield a `Compute`. This is the shape in PR #573. It satisfies "don't obfuscate the category" only at the concrete-block door; the provider door states no category at all, which reads as "default" rather than "hidden."
+Two doors: a zero-config provider for customers who don't want to think about compute, and direct construction for customers who do. Both yield a `Compute`. This is the shape in PR #573. It states no category at the provider door, which reads as "default" rather than "hidden." The provider can be layered on top of Option 1 or 2 later without changing the category surface.
 
-### Recommendation
+### Trade-offs
 
-**Option 2 (category factory methods).** It states the category unmissably (goal 4), keeps one coherent surface that produces the core `Compute` type, and exposes only the attributes each category can honor. It reads as Cloud-not-AWS (`Compute.container`, not `FargateService`), and Option 3's concrete classes remain available underneath for power users (goal 2) and for "bring your own compute" (goal 3).
+Option 1 is the close runner-up to the recommended Option 2 and is simpler to implement; the only thing it gives up is per-category attribute narrowing (an `ephemeral` compute accepts `cpu` in the type and rejects it at synth, rather than not offering it at all). Option 3 stays available underneath any choice for power users (goal 2) and "bring your own compute" (goal 3).
 
-Option 1 is the close runner-up and is simpler to implement; the only thing it gives up is per-category attribute narrowing (an `ephemeral` compute would accept `cpu` in the type and reject it at synth, rather than not offering it at all). Option 4's provider can be layered on top of either 1 or 2 later as the zero-config door without changing the category surface.
+### On `Scope`
 
-Whichever we pick, the compute produced must extend `Scope` (so workloads and finalize steps get a `fullId`, tree position, and registry entry), and the `AsyncJob` `compute` + `timeoutSeconds` surface above is the same.
+The produced compute extends `Scope`, so workloads and finalize steps get a `fullId`, tree position, and registry entry. This is a live decision, not a constraint: the concrete computes already extend `Scope` in the container-jobs branch. A provider (Option 4) can still return a `Scope`-backed compute typed as an opaque handle, so "produces the core `Compute`" and "is a `Scope`" are not in tension. The `AsyncJob` `compute` + `timeoutSeconds` surface is the same across all options.
+
+---
+
+## Disqualified patterns
+
+Two patterns were raised before this doc and are ruled out by goal 4. Both **divine** the compute type from opaque attributes (time limits, memory) instead of asking the customer to state it.
+
+### Disqualified 1 — BB constructor that infers the type
+
+```ts
+const reports = new Compute(scope, 'reports', { timeoutSeconds: 1800, memoryMb: 2048 });
+// 30-min timeout > Lambda's 15-min ceiling, so this silently resolves to a container
+```
+
+The customer never states a category; the compute type is reverse-engineered from `timeoutSeconds`. A time limit is a property of work, not of compute, so it is the wrong axis to select on. See Appendix A.
+
+### Disqualified 2 — factory that infers the type
+
+```ts
+const reports = ComputeProvider.provide('reports', { timeoutSeconds: 1800, memoryMb: 2048 });
+// same inference, behind a factory instead of a constructor
+```
+
+Same divination, different door. Moving the inference into a factory does not make the category explicit; the customer still can't see or state which kind of compute they got. See Appendix A.
 
 ---
 
