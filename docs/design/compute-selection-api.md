@@ -33,7 +33,7 @@ The proposed solution is a single `Compute` Block or factory that clearly asks c
 
 ## Design
 
-The design has three parts: a set of **options common to all** compute (the type and the tuning attributes), how a compute is **consumed** by a workload such as `AsyncJob`, and the **declaration surface** itself — the one part the options below actually differ on. The common options and the consumption contract are the same no matter which declaration surface we choose, so they are settled first and the options section is left to argue only the surface.
+The design has three parts: the **compute types** a customer chooses from, the **tuning attributes** common to every type, and how a compute is **consumed** by a workload such as `AsyncJob`. The tuning attributes and the consumption contract are the same no matter which declaration surface we pick, so they are settled first; how a customer *states the type* is the only thing the API options below differ on.
 
 ### Compute types
 
@@ -46,18 +46,16 @@ type ComputeType =
   | 'dedicated';   // reserved capacity (EC2/EKS later)
 ```
 
-### Common options
+### Tuning attributes
 
-Every option below accepts the same tuning attributes. The type selects the compute; these configure it. Attributes that don't apply to a type are a synth-time error rather than silently ignored, so a customer can't set `vcpu` on an `ephemeral` compute and wonder why nothing changed.
+Every API option accepts the same tuning attributes; the only thing that differs between them is how the **type** is stated (a field, a method, or a class — see below). The type selects the compute; these attributes configure it. Attributes that don't apply to the chosen type are a synth-time error rather than silently ignored, so a customer can't set `vcpu` on an `ephemeral` compute and wonder why nothing changed.
 
 ```ts
 /** Valid vCPU sizes. Not an open number: the platform allows only a fixed set. */
 type Vcpu = 0.25 | 0.5 | 1 | 2 | 4 | 8 | 16;
 
-interface ComputeOptions {
-  /** The general kind of compute. Required — never inferred from other attributes. */
-  type: ComputeType;
-
+/** Shared by every API option. `type` is NOT here — each option states it differently. */
+interface ComputeTuning {
   /** Memory (MB). Applies to all types. */
   memory?: number;
 
@@ -136,10 +134,13 @@ const api     = new Compute(scope, 'api',     { type: 'ephemeral', memory: 512 }
 new AsyncJob(scope, 'reports', { compute: reports, timeoutSeconds: 60 * 30, handler });
 ```
 
-The `options` parameter shares the common `ComputeOptions` type and adds `type: ComputeType`:
+The `options` parameter is the shared `ComputeTuning` plus a required `type`:
 
 ```ts
-
+interface ComputeOptions extends ComputeTuning {
+  /** The general kind of compute. Required — never inferred from other attributes. */
+  type: ComputeType;
+}
 ```
 
 ### Option 2 &mdash; type as a factory method
@@ -153,6 +154,8 @@ const api     = Compute.ephemeral(scope, 'api', { memory: 512 });
 
 The type becomes the method name. Autocomplete lists the types, the choice can't be misspelled, and each method exposes only the attributes valid for its type (no `vcpu` on `ephemeral`). Adding a type later is a new method (additive). The cost is departing from the uniform `new X(scope, id, options)` shape every other block uses, and a slightly larger surface (one method per type) to document.
 
+The options object is `ComputeTuning` (above) with no `type` field — the method name carries the type.
+
 ### Option 3 &mdash; distinct blocks per type
 
 ```ts
@@ -163,6 +166,8 @@ const api     = new EphemeralCompute(scope, 'api', { memory: 512 });
 ```
 
 The type *is* the class, named by the general kind of compute (`ContainerCompute`, `EphemeralCompute`) rather than the service. Explicit and discoverable, but it multiplies the block surface (one class per type) and makes "which types exist" a matter of knowing which classes to import rather than reading one `type` union. Service-named variants (`EcsCompute`, `LambdaCompute`) are discarded outright for leaking the service into the IFC layer (goals 1 and 4) — see Appendix B.
+
+Each class takes `ComputeTuning` (above) with no `type` field — the class carries the type.
 
 ### Customizing and extending
 
