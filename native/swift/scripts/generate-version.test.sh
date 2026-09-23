@@ -2,9 +2,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Tests for generate-version.sh. Each case builds a throwaway package fixture
-# (package.json + .swiftformat) and runs the real script against it via
-# PROJECT_DIR, so it exercises the actual file IO with no stubs.
+# Exercises generator file I/O against temporary package fixtures via PROJECT_DIR.
 
 set -euo pipefail
 
@@ -15,7 +13,7 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 
 HEADER='--header "//\n// Copyright Example.\n//"'
 
-# Builds a fixture package and echoes its dir. version defaults to 9.9.9.
+# Echoes a fixture directory; version defaults to 9.9.9.
 make_fixture() {
   local dir version="${1:-9.9.9}"
   dir="$(mktemp -d)"

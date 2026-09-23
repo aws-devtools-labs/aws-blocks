@@ -8,13 +8,12 @@
 import XCTest
 @testable import BlocksRuntime
 
-/// The version constant is generated and committed, so the compiler checks nothing.
-/// These tests guard the token format and the version constant.
+/// Validates the generated version constant and user-agent token grammar.
 final class BlocksVersionTests: XCTestCase {
 
     /// The token format this library commits to: `aws-blocks-<lang>/<semver>` —
     /// a bounded lowercase-alphanumeric language segment plus a strict semver.
-    private let grammar = #"^aws-blocks-([a-z][a-z0-9]{0,15})/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,20})?)$"#
+    private let grammar = #"^aws-blocks-([a-z][a-z0-9]{0,15})/(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$"#
 
     func testUserAgentTokenMatchesExpectedFormat() throws {
         let regex = try NSRegularExpression(pattern: grammar)
@@ -37,7 +36,7 @@ final class BlocksVersionTests: XCTestCase {
     }
 
     func testRuntimeVersionIsSemver() throws {
-        let regex = try NSRegularExpression(pattern: #"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,20})?$"#)
+        let regex = try NSRegularExpression(pattern: #"^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"#)
         let range = NSRange(blocksRuntimeVersion.startIndex..., in: blocksRuntimeVersion)
 
         XCTAssertNotNil(
@@ -46,7 +45,6 @@ final class BlocksVersionTests: XCTestCase {
         )
     }
 
-    /// Guards against the generator emitting the `0.0.0` placeholder.
     func testRuntimeVersionIsNotAPlaceholder() {
         XCTAssertNotEqual(blocksRuntimeVersion, "0.0.0")
     }

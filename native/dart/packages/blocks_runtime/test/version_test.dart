@@ -1,14 +1,13 @@
 import 'package:blocks_runtime/src/user_agent.dart';
 import 'package:test/test.dart';
 
-/// The version constant is generated and committed, so the compiler checks nothing.
-/// These tests guard the token format and the version constant.
+/// Validates the generated version constant and user-agent token grammar.
 void main() {
   group('blocksUserAgentToken', () {
     // The token format this library commits to: `aws-blocks-<lang>/<semver>` —
     // a bounded lowercase-alphanumeric language segment plus a strict semver.
     final grammar = RegExp(
-      r'^aws-blocks-([a-z][a-z0-9]{0,15})/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,20})?)$',
+      r'^aws-blocks-([a-z][a-z0-9]{0,15})/(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$',
     );
 
     test('matches the expected token format', () {
@@ -37,7 +36,7 @@ void main() {
 
   group('blocksRuntimeVersion', () {
     test('is valid semver', () {
-      final semver = RegExp(r'^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,20})?$');
+      final semver = RegExp(r'^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$');
       expect(
         semver.hasMatch(blocksRuntimeVersion),
         isTrue,
@@ -45,7 +44,6 @@ void main() {
       );
     });
 
-    // Guards against the generator emitting the `0.0.0` placeholder.
     test('is not a placeholder', () {
       expect(blocksRuntimeVersion, isNot(equals('0.0.0')));
     });
