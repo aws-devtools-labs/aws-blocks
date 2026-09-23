@@ -33,14 +33,14 @@ The proposed solution is a single `Compute` Block or factory that clearly asks c
 
 ## Design
 
-The design has three parts: a set of **options common to all** compute (the category and the tuning attributes), how a compute is **consumed** by a workload such as `AsyncJob`, and the **declaration surface** itself — the one part the options below actually differ on. The common options and the consumption contract are the same no matter which declaration surface we choose, so they are settled first and the options section is left to argue only the surface.
+The design has three parts: a set of **options common to all** compute (the type and the tuning attributes), how a compute is **consumed** by a workload such as `AsyncJob`, and the **declaration surface** itself — the one part the options below actually differ on. The common options and the consumption contract are the same no matter which declaration surface we choose, so they are settled first and the options section is left to argue only the surface.
 
-### Compute categories
+### Compute types
 
-The category is the one thing a customer must state. It names the general kind of compute, not the AWS service.
+The type is the one thing a customer must state. It names the general kind of compute, not the AWS service.
 
 ```ts
-type ComputeCategory =
+type ComputeType =
   | 'ephemeral'    // pay-as-you-go, per-request, short-lived (Lambda today)
   | 'container'    // long-running / long-lived process (Fargate today)
   | 'dedicated';   // reserved capacity (EC2/EKS later)
@@ -48,14 +48,14 @@ type ComputeCategory =
 
 ### Common options
 
-Every option below accepts the same tuning attributes. The category selects the compute; these configure it. Attributes that don't apply to a category are a synth-time error rather than silently ignored, so a customer can't set `cpu` on an `ephemeral` compute and wonder why nothing changed.
+Every option below accepts the same tuning attributes. The type selects the compute; these configure it. Attributes that don't apply to a type are a synth-time error rather than silently ignored, so a customer can't set `cpu` on an `ephemeral` compute and wonder why nothing changed.
 
 ```ts
 interface ComputeOptions {
   /** The general kind of compute. Required — never inferred from other attributes. */
-  category: ComputeCategory;
+  type: ComputeType;
 
-  /** Memory (MB). Applies to all categories. */
+  /** Memory (MB). Applies to all types. */
   memory?: number;
 
   /** vCPU units. `container`/`dedicated` only. */
@@ -69,7 +69,7 @@ interface ComputeOptions {
 }
 ```
 
-Note what is *not* here: there is no `timeout` on the compute. Time limits are a property of work, not of compute (Appendix A). A ceiling could live on an `ephemeral` compute because the platform enforces one anyway, but hoisting it onto every category is the contradiction goal 4 rules out. Timeouts live on the workload — see below.
+Note what is *not* here: there is no `timeout` on the compute. Time limits are a property of work, not of compute (Appendix A). A ceiling could live on an `ephemeral` compute because the platform enforces one anyway, but hoisting it onto every type is the contradiction goal 4 rules out. Timeouts live on the workload — see below.
 
 ### How `AsyncJob` consumes a `Compute`
 
@@ -116,33 +116,22 @@ Two jobs share one `container` compute and set their own deadlines. Neither can 
 
 ## Options — declaration surface
 
-This is the one part the options differ on. Each produces the same core `Compute` type settled above (a `Scope`-backed compute), so any of them can be injected into `new AsyncJob(..., { compute })`. A power user can always bypass the sugar and construct a concrete compute directly (goal 2). The options differ only in the front-door ergonomics.
+This is the one part the options differ on. Each produces the same core `Compute` type settled above (a `Scope`-backed compute), so any of them can be injected into `new AsyncJob(..., { compute })`. The options differ only in how the customer states the compute type.
 
-**Recommended: Option 2 (category factory methods).** The category is the method name, so the choice is unmissable (goal 4) and reads as Cloud-not-AWS (`Compute.container`, not `FargateService`). One surface, and each method exposes only the attributes its category can honor.
+**Recommended: Option 1 (`new Compute` with a `type`).** A single `Compute` block whose required `type` field states the kind of compute. Same `new X(scope, id, options)` shape as every other Building Block, so it composes uniformly and gets a `fullId`, tree position, and registry entry. The type is explicit and greppable, and there is one class and one options type to learn.
 
 ```ts
 import { Compute } from '@aws-blocks/blocks';
 
-const reports = Compute.container(scope, 'reports', { memory: 2048, cpu: 1024 });
-const api     = Compute.ephemeral(scope, 'api', { memory: 512 });
+const reports = new Compute(scope, 'reports', { type: 'container', memory: 2048, cpu: 1024 });
+const api     = new Compute(scope, 'api', { type: 'ephemeral', memory: 512 });
 
 new AsyncJob(scope, 'reports', { compute: reports, timeoutSeconds: 60 * 30, handler });
 ```
 
 The alternatives considered follow.
 
-### Option 1 — one `Compute` block, `category` attribute
-
-```ts
-import { Compute } from '@aws-blocks/blocks';
-
-const reports = new Compute(scope, 'reports', { category: 'container', memory: 2048, cpu: 1024 });
-const api     = new Compute(scope, 'api', { category: 'ephemeral', memory: 512 });
-```
-
-Same `new X(scope, id, options)` shape as every other block. Category is a required field, so the choice is explicit and greppable. One class, one options type.
-
-### Option 2 — category factory methods
+### Option 2 — type as a factory method
 
 ```ts
 import { Compute } from '@aws-blocks/blocks';
@@ -151,67 +140,26 @@ const reports = Compute.container(scope, 'reports', { memory: 2048, cpu: 1024 })
 const api     = Compute.ephemeral(scope, 'api', { memory: 512 });
 ```
 
-The category is the method name. Autocomplete lists the categories, the choice can't be misspelled, and each method exposes only the attributes valid for its category (no `cpu` on `ephemeral`). Adding a category later is a new method (additive).
+The type becomes the method name. Autocomplete lists the types, the choice can't be misspelled, and each method exposes only the attributes valid for its type (no `cpu` on `ephemeral`). Adding a type later is a new method (additive). The cost is departing from the uniform `new X(scope, id, options)` shape every other block uses, and a slightly larger surface (one method per type) to document.
 
-### Option 3 — concrete blocks, no category abstraction
+### Option 3 — distinct blocks per type
 
 ```ts
-import { LambdaCompute, ContainerCompute } from '@aws-blocks/blocks';
+import { EphemeralCompute, ContainerCompute } from '@aws-blocks/blocks';
 
 const reports = new ContainerCompute(scope, 'reports', { memory: 2048, cpu: 1024 });
-const api     = new LambdaCompute(scope, 'api', { memory: 512 });
+const api     = new EphemeralCompute(scope, 'api', { memory: 512 });
 ```
 
-The category *is* the class. Maximum control and clarity for power users, but the class name leaks the service tier and the customer must know which class maps to which category. This is the original design the Problem section rejects for the default path, kept here as the always-available power-user escape (goal 2), not the recommended front door.
+The type *is* the class, named by the general kind of compute (`ContainerCompute`, `EphemeralCompute`) rather than the service. Explicit and discoverable, but it multiplies the block surface (one class per type) and makes "which types exist" a matter of knowing which classes to import rather than reading one `type` union. Service-named variants (`EcsCompute`, `LambdaCompute`) are discarded outright for leaking the service into the IFC layer (goals 1 and 4) — see Appendix B.
 
-### Option 4 — provider for the "don't care" path, concrete blocks for control
+### Customizing and extending
 
-```ts
-import { ComputeProvider, ContainerCompute } from '@aws-blocks/blocks';
-
-// "give me something sensible" — resolves to the app default (ephemeral today)
-const simple  = ComputeProvider.provide('simple');
-
-// "I care about the details" — full control
-const complex = new ContainerCompute(scope, 'reports', { memory: 2048, cpu: 1024, maxConcurrency: 4 });
-
-new ApiNamespace(scope, 'api', { compute: simple, /* ... */ });
-new AsyncJob(scope, 'reports', { compute: complex, handler });
-```
-
-Two doors: a zero-config provider for customers who don't want to think about compute, and direct construction for customers who do. Both yield a `Compute`. This is the shape in PR #573. It states no category at the provider door, which reads as "default" rather than "hidden." The provider can be layered on top of Option 1 or 2 later without changing the category surface.
-
-### Trade-offs
-
-Option 1 is the close runner-up to the recommended Option 2 and is simpler to implement; the only thing it gives up is per-category attribute narrowing (an `ephemeral` compute accepts `cpu` in the type and rejects it at synth, rather than not offering it at all). Option 3 stays available underneath any choice for power users (goal 2) and "bring your own compute" (goal 3).
+Whichever option we choose, a customer who wants finer control configures the compute through the same options (`memory`, `cpu`, `maxConcurrency`, `image`), and can drop into raw CDK for anything the options don't cover (goal 2). This is ordinary Blocks customization, not an escape from Blocks — the same way any block exposes configuration and a CDK drop-through. Nothing here is a separate "power-user" path; it is the same surface with more of it filled in.
 
 ### On `Scope`
 
-The produced compute extends `Scope`, so workloads and finalize steps get a `fullId`, tree position, and registry entry. This is a live decision, not a constraint: the concrete computes already extend `Scope` in the container-jobs branch. A provider (Option 4) can still return a `Scope`-backed compute typed as an opaque handle, so "produces the core `Compute`" and "is a `Scope`" are not in tension. The `AsyncJob` `compute` + `timeoutSeconds` surface is the same across all options.
-
----
-
-## Disqualified patterns
-
-Two patterns were raised before this doc and are ruled out by goal 4. Both **divine** the compute type from opaque attributes (time limits, memory) instead of asking the customer to state it.
-
-### Disqualified 1 — BB constructor that infers the type
-
-```ts
-const reports = new Compute(scope, 'reports', { timeoutSeconds: 1800, memoryMb: 2048 });
-// 30-min timeout > Lambda's 15-min ceiling, so this silently resolves to a container
-```
-
-The customer never states a category; the compute type is reverse-engineered from `timeoutSeconds`. A time limit is a property of work, not of compute, so it is the wrong axis to select on. See Appendix A.
-
-### Disqualified 2 — factory that infers the type
-
-```ts
-const reports = ComputeProvider.provide('reports', { timeoutSeconds: 1800, memoryMb: 2048 });
-// same inference, behind a factory instead of a constructor
-```
-
-Same divination, different door. Moving the inference into a factory does not make the category explicit; the customer still can't see or state which kind of compute they got. See Appendix A.
+The produced compute extends `Scope`, so workloads and finalize steps get a `fullId`, tree position, and registry entry. This is a live decision, not a constraint: the concrete computes already extend `Scope` in the container-jobs branch. A future zero-config provider (PR #573's `ComputeProvider.provide()`) can still return a `Scope`-backed compute typed as an opaque handle, so "produces the core `Compute`" and "is a `Scope`" are not in tension. The `AsyncJob` `compute` + `timeoutSeconds` surface is the same across all options.
 
 ---
 
@@ -226,3 +174,30 @@ Customers may not be experts in the underlying AWS services or may not care to t
 Time limits were proposed as a deciding factor for which compute is selected by the `Compute` block. But, time limits aren't a property of compute (generally). They're a property of "work."
 
 These contradictions preclude options that *completely* hide the compute type selection. Hiding the AWS service is AWS Block's job. Hiding an entire category of technical **concepts** is not the point.
+
+---
+
+## Appendix B - Discarded Options
+
+Several patterns were raised before this doc and are ruled out by goals 1 and 4. Both **derive** the compute type from requested attributes (time limits, memory) instead of asking the customer to state it.
+
+```ts
+// Sub-option 1: Using distinct BB for each compute service
+// Ruled out by goals 1 and 4, since it names the service.
+const compute = new EcsCompute(scope, 'reports', { timeoutSeconds: 1800, memoryMb: 2048 });
+
+// Sub-option 2: Using a `Compute` constructor
+// Ruled out by goal 4
+const compute = new Compute(scope, 'reports', { timeoutSeconds: 1800, memoryMb: 2048 });
+
+// Sub-option 3: As a Factory function
+// Ruled out by goal 4
+const compute = ComputeProvider.provide('reports', { timeoutSeconds: 1800, memoryMb: 2048 });
+const compute = chooseCompute('reports', { timeoutSeconds: 1800, memoryMb: 2048 });
+```
+
+The *proposed* options are also more open-ended. I.e., if we later find that customers *do* want to be completely ignorant of where their code runs, we can explore explicit `automatic` or `inferred` options:
+
+```ts
+const compute = new Compute(scope, 'reports', { type: 'inferred', timeoutSeconds: 1800 });
+```
