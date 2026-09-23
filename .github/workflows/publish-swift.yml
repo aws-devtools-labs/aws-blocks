@@ -64,6 +64,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
         run: npx changeset version
 
+      # changeset version bumps package.json; regenerate the committed constant
+      # so the release carries the new version.
+      - name: Regenerate Swift version constant
+        run: scripts/generate-version.sh
+
       - name: Read version
         id: version
         run: |
