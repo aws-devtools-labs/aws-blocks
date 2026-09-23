@@ -21,19 +21,9 @@ Specific to Multi-compute:
 
 And a proposed goal of this specific are of concern:
 
-4. The design SHOULD NOT obfuscate the "general type" or "category" of `Compute` being used.
+4. The design MUST NOT obfuscate the "general type" or "category" of `Compute` being used.
 
-This proposed fourth goal stands on the assumption that most customers understand the difference between broad categories of compute. They may not be experts in the underlying AWS services or may not care to tinker; but they understand the difference between a *short lived container*, a *long lived container*, and *dedicated hardware*. This document assumes that customers broadly understand the cost and performance implications of each of these and that the implications can be easily documented for customers who *don't* understand.
-
-Ultimately, I would argue that putting the "what kind of compute" decision behind opaque "attributes" like `requiredMemoryMB` and `requiredTimeout` creates interfaces that contradict the overarching design goals in two ways.
-
-**Firstly**, it forces even semi-knowledable customers to reverse engineer their decisions. Customers who understand they want the "pay-as-you" go `Compute` option would need to understand *more* about the AWS services than if we just clearly forced them to deliberately choose an `short-lived`, `pay-as-you-go`, or similar.
-
-**Secondly**, some attributes would need to be "hoisted" into `Compute` that are not inherent properties of all types of `Compute`. Anything related to "time limits" becomes meaningless at the `Compute` layer once the 15 minute Lambda timeout is exceeded, for example. For Lambda (or "ephemeral" or "short-lived") compute, a ceiling could be set on the `Compute` itself, but the more "appropriate" place to establish timeouts may be on "job" definitions themselves. This is especially true for customers running a variety of jobs on anything other than Lambda &mdash; a customer SHOULD NOT be forced to give *carte blanche* permission for any job running on a shared container to run for hours in order to allow ONE or TWO jobs permission to do so.
-
-Time limits were proposed as a deciding factor for which compute is selected by the `Compute` block. But, time limits aren't a property of compute (generally). They're a property of "work."
-
-So, I propose that these two contradictions rule out some options previously discussed *ad hoc* in Slack, small groups, etc.
+This proposed fourth goal stands on the assumption that customers both CAN, SHOULD, and DESIRE TO understand the difference between broad categories of compute. (See Appendix A for more detail.)
 
 ## Proposed Solution
 
@@ -239,3 +229,17 @@ Guidance: whatever vocabulary we settle, keep serverless-satisfiable attributes
 (`timeoutSeconds`, `memory`) separate in the docs from container-only ones (`cpu`,
 `longLived`, `image`, `maxConcurrency`, `scaling`) so it's obvious which attributes
 can force a container.
+
+--
+
+## Appendix A - Why favor explicit compute types
+
+Customers may not be experts in the underlying AWS services or may not care to tinker; but they understand the difference between a *short lived container*, a *long lived container*, and *dedicated hardware*. This document assumes that customers broadly understand the cost and performance implications of each of these and that the implications can be easily documented for customers who *don't* understand. In contrast, hiding the decision behind opaque attributes like `requiredMemoryMB` and `requiredTimeout` creates an interface that contradicts the overarching design goals in two ways.
+
+**Firstly**, it forces even semi-knowledable customers to reverse engineer their decisions. Customers who understand they want the "pay-as-you" go `Compute` option would need to understand *more* about the AWS services than if we just clearly forced them to deliberately choose an `short-lived`, `pay-as-you-go`, or similar.
+
+**Secondly**, some attributes would need to be "hoisted" into `Compute` that are not inherent properties of all types of `Compute`. Anything related to "time limits" becomes meaningless at the `Compute` layer once the 15 minute Lambda timeout is exceeded, for example. For Lambda (or "ephemeral" or "short-lived") compute, a ceiling could be set on the `Compute` itself, but the more "appropriate" place to establish timeouts may be on "job" definitions themselves. This is especially true for customers running a variety of jobs on anything other than Lambda &mdash; a customer SHOULD NOT be forced to give *carte blanche* permission for any job running on a shared container to run for hours in order to allow ONE or TWO jobs permission to do so.
+
+Time limits were proposed as a deciding factor for which compute is selected by the `Compute` block. But, time limits aren't a property of compute (generally). They're a property of "work."
+
+These contradictions preclude options that *completely* hide the compute type selection. Hiding the AWS service is AWS Block's job. Hiding an entire category of technical **concepts** is not the point.
