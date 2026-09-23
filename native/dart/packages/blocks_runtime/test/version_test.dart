@@ -4,8 +4,8 @@ import 'package:test/test.dart';
 /// Validates the generated version constant and user-agent token grammar.
 void main() {
   group('blocksUserAgentToken', () {
-    // The token format this library commits to: `aws-blocks-<lang>/<semver>` —
-    // a bounded lowercase-alphanumeric language segment plus a strict semver.
+    // Token format: aws-blocks-<lang>/<version>. The language is 1-16 lowercase alphanumeric
+    // characters starting with a letter; version is numeric X.Y.Z with an optional prerelease and no build metadata.
     final grammar = RegExp(
       r'^aws-blocks-([a-z][a-z0-9]{0,15})/(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$',
     );
@@ -36,7 +36,9 @@ void main() {
 
   group('blocksRuntimeVersion', () {
     test('is valid semver', () {
-      final semver = RegExp(r'^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$');
+      final semver = RegExp(
+        r'^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$',
+      );
       expect(
         semver.hasMatch(blocksRuntimeVersion),
         isTrue,

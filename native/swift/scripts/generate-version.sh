@@ -32,8 +32,8 @@ TARGET="$PROJECT_DIR/Sources/BlocksRuntime/Version.swift"
 VERSION=$(node -p "require('$PKG_JSON').version")
 
 # The version half of the token grammar: N.N.N, optional -prerelease, no build metadata.
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]{1,20})?$ ]]; then
-  echo "Version \"$VERSION\" in package.json is not a valid token semver (N.N.N, optional -prerelease, no build metadata)." >&2
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  echo "Version \"$VERSION\" in package.json is outside the N.N.N[-prerelease] token format (no build metadata)." >&2
   exit 1
 fi
 
