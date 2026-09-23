@@ -288,6 +288,59 @@ describe('create-blocks-app auto-detection', () => {
       const result = run([tmpDir]);
       assert.strictEqual(result.exitCode, 1);
       assert.match(result.stderr, /not empty/);
+      // The error now lists the conflicting (non-allowlisted) entries.
+      assert.match(result.stderr, /somefile\.txt/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('scaffolds a fresh project into a directory containing only allowlisted files (e.g. INSTRUCTIONS.md)', () => {
+    const tmpDir = join(__dirname, '../.test-nonempty-allowlisted');
+    mkdirSync(tmpDir, { recursive: true });
+    // Benign, allowlisted seed files (e.g. a benchmark-seeded INSTRUCTIONS.md)
+    // must not block a fresh scaffold.
+    writeFileSync(join(tmpDir, 'INSTRUCTIONS.md'), '# seed instructions');
+    writeFileSync(join(tmpDir, '.gitignore'), 'node_modules\n');
+    try {
+      const result = run([tmpDir, '-y', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      // A fresh Blocks app was scaffolded into the directory.
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks')), 'expected aws-blocks/ to be scaffolded');
+      assert.ok(existsSync(join(tmpDir, 'package.json')), 'expected root package.json to be created');
+      // The original seed file is preserved.
+      assert.strictEqual(readFileSync(join(tmpDir, 'INSTRUCTIONS.md'), 'utf-8'), '# seed instructions');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('lists conflicting files but omits allowlisted siblings from the conflict output', () => {
+    const tmpDir = join(__dirname, '../.test-nonempty-mixed');
+    mkdirSync(tmpDir, { recursive: true });
+    // A mix of an allowlisted seed file and a genuine conflict: only the
+    // conflict should be reported, proving allowlisted entries are filtered out.
+    writeFileSync(join(tmpDir, 'INSTRUCTIONS.md'), '# seed instructions');
+    writeFileSync(join(tmpDir, 'realfile.txt'), 'content');
+    try {
+      const result = run([tmpDir]);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /realfile\.txt/);
+      assert.doesNotMatch(result.stderr, /INSTRUCTIONS\.md/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('treats an editor project file as safe and scaffolds a fresh project', () => {
+    const tmpDir = join(__dirname, '../.test-nonempty-iml');
+    mkdirSync(tmpDir, { recursive: true });
+    // A stray *.iml file is safe-to-scaffold-over and must not block a fresh scaffold.
+    writeFileSync(join(tmpDir, 'project.iml'), '<module />');
+    try {
+      const result = run([tmpDir, '-y', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks')), 'expected aws-blocks/ to be scaffolded');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

@@ -76,10 +76,29 @@ async function confirm(message: string): Promise<boolean> {
   });
 }
 
-async function isEmptyDir(dir: string): Promise<boolean> {
-  if (!(await exists(dir))) return true;
+// Directory entries that do not block fresh scaffolding: common VCS, editor,
+// and OS metadata, plus a few files that are commonly present in an otherwise
+// empty working directory (agent/benchmark seed files). Matched by exact name;
+// *.iml is matched by the pattern below.
+const SAFE_TO_SCAFFOLD_ENTRIES = new Set([
+  '.claude', '.cursor', '.DS_Store', '.git', '.gitattributes',
+  '.gitignore', '.gitlab-ci.yml', '.hg', '.hgcheck', '.hgignore',
+  '.idea', '.npmignore', '.travis.yml', '.vscode', '.zed',
+  'LICENSE', 'Thumbs.db', 'docs', 'mkdocs.yml', 'npm-debug.log',
+  'yarn-debug.log', 'yarn-error.log', 'yarnrc.yml', '.yarn',
+  'INSTRUCTIONS.md', 'README.md', '.gitkeep',
+]);
+const SAFE_TO_SCAFFOLD_PATTERN = /\.iml$/; // IntelliJ IDEA project files
+
+/** Returns the entries in `dir` that would block a fresh scaffold (i.e. not in the allowlist). Empty array => safe to scaffold. */
+async function conflictingEntries(dir: string): Promise<string[]> {
+  if (!(await exists(dir))) return [];
   const entries = await readdir(dir);
-  return entries.length === 0;
+  return entries.filter((e) => !SAFE_TO_SCAFFOLD_ENTRIES.has(e) && !SAFE_TO_SCAFFOLD_PATTERN.test(e));
+}
+
+async function isEmptyDir(dir: string): Promise<boolean> {
+  return (await conflictingEntries(dir)).length === 0;
 }
 
 async function isAmplifyGen2Project(dir: string): Promise<boolean> {
@@ -782,9 +801,15 @@ async function create() {
       return;
     }
 
-    // None of the above — error
+    // None of the above: dir has entries that are not in the safe-to-scaffold allowlist.
+    const conflicts = await conflictingEntries(resolvedDir);
     console.error('Error: Target directory is not empty and no package.json found.');
     console.error('');
+    if (conflicts.length > 0) {
+      console.error('The directory contains files that would conflict with scaffolding:');
+      for (const entry of conflicts) console.error(`  ${entry}`);
+      console.error('');
+    }
     console.error('To add Blocks to an existing project, run from the project root:');
     console.error('  npx @aws-blocks/create-blocks-app');
     console.error('');
