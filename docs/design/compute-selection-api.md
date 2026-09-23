@@ -114,6 +114,30 @@ Two jobs share one `container` compute and set their own deadlines. Neither can 
 
 ---
 
+## Disqualified options
+
+Two patterns were raised before this doc and are ruled out by goal 4. Both **divine** the compute type from opaque attributes (time limits, memory) instead of asking the customer to state it.
+
+### Disqualified 1 — BB constructor that infers the type
+
+```ts
+const reports = new Compute(scope, 'reports', { timeoutSeconds: 1800, memoryMb: 2048 });
+// 30-min timeout > Lambda's 15-min ceiling, so this silently resolves to a container
+```
+
+Disqualified: the customer never states a category; the compute type is reverse-engineered from `timeoutSeconds`. A time limit is a property of work, not of compute, so it is the wrong axis to select on. See Appendix A.
+
+### Disqualified 2 — factory that infers the type
+
+```ts
+const reports = ComputeProvider.provide('reports', { timeoutSeconds: 1800, memoryMb: 2048 });
+// same inference, behind a factory instead of a constructor
+```
+
+Disqualified: same divination, different door. Moving the inference into a factory does not make the category explicit — the customer still can't see or state which kind of compute they got. See Appendix A.
+
+---
+
 ## Options — declaration surface
 
 This is the one part the options differ on. Each produces the same core `Compute` type settled above, so any of them can be injected into `new AsyncJob(..., { compute })`. A power user can always bypass the sugar and construct a concrete compute directly (goal 2). The options differ only in the front-door ergonomics.
