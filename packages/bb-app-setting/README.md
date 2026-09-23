@@ -144,7 +144,7 @@ const apiUrl = new AppSetting(scope, 'apiUrl', {
 
 ## Validation Rules
 
-These are enforced at CDK synth time:
+These are enforced at CDK synth time and in local development (the mock rejects the same combinations at construction):
 
 - `secret` + `schema` → error (secrets are plain strings)
 - `schema` without `value` → error (parameter needs a valid initial value)
