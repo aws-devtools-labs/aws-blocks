@@ -29,208 +29,154 @@ This proposed fourth goal stands on the assumption that customers both CAN, SHOU
 
 The proposed solution is a single `Compute` Block or factory that clearly asks customers to state the *type* of `Compute` they want as an attribute. The `type` (or possibly `category`) will communicate everything that both new and advanced customers need to know about the cost, scaling, and performance implications.
 
-
 ---
 
-## Question 1 — how you declare a compute
+## Design
 
-Two interfaces exist in open PRs, plus a couple of variants worth naming.
+The design has three parts: a set of **options common to all** compute (the category and the tuning attributes), how a compute is **consumed** by a workload such as `AsyncJob`, and the **declaration surface** itself — the one part the options below actually differ on. The common options and the consumption contract are the same no matter which declaration surface we choose, so they are settled first and the options section is left to argue only the surface.
 
-### Option A — `new Compute(scope, id, caps)` (PR #574, this branch)
+### Compute categories
 
-A constructor. Returns the concrete backing compute (a branded `LambdaCompute` or
-`ContainerCompute`); the customer holds a `ComputeHandle` and passes it to a
-handler-bearing block.
+The category is the one thing a customer must state. It names the general kind of compute, not the AWS service.
 
 ```ts
-const worker = new Compute(scope, 'worker', { timeoutSeconds: 1800, memory: 2048 });
-const jobs   = new AsyncJob(scope, 'jobs', { compute: worker, handler });
+type ComputeCategory =
+  | 'ephemeral'    // pay-as-you-go, per-request, short-lived (Lambda today)
+  | 'container'    // long-running / long-lived process (Fargate today)
+  | 'dedicated';   // reserved capacity (EC2/EKS later)
 ```
 
-- Capabilities: `timeoutSeconds`, `memory`, `cpu`, `longLived`, `image`, `maxConcurrency`,
-	`scaling` (reserved).
-- Resolves **now**: `selectComputeKind()` picks Lambda vs container from the caps. Container
-	is a real fulfillment on this branch.
-- Nothing exceeds a limit and "fails" — a bigger requirement selects a bigger compute.
-	Clamps nothing.
+### Common options
 
-Pros
-- Selection is live today (Lambda + container), so the interface is exercised, not
-	just declared.
-- Constructor is the same shape as every other block (`new X(scope, id, opts)`),
-	so it reads consistently and gets a `fullId`, tree position, registry entry.
-- Attribute set already covers container-only dials (cpu, longLived, image,
-	concurrency) that a serverless-only vocabulary has no place for.
-
-Cons
-- Constructor returning a *different* class than the one named is a mild
-	surprise (JS return-override). It works and is typed as a handle, but it's a
-	raised eyebrow in review.
-- Richer attribute set is more surface to commit to now.
-
-### Option B — `ComputeProvider.provide(id, requirements, scope?)` (PR #573)
-
-A factory. Returns the condition-resolved compute as an opaque handle. Requirements
-are the minimal serverless-shaped pair.
+Every option below accepts the same tuning attributes. The category selects the compute; these configure it. Attributes that don't apply to a category are a synth-time error rather than silently ignored, so a customer can't set `cpu` on an `ephemeral` compute and wonder why nothing changed.
 
 ```ts
-const reports = ComputeProvider.provide('reports', { timeoutSeconds: 240, memoryMb: 1024 });
+interface ComputeOptions {
+  /** The general kind of compute. Required — never inferred from other attributes. */
+  category: ComputeCategory;
+
+  /** Memory (MB). Applies to all categories. */
+  memory?: number;
+
+  /** vCPU units. `container`/`dedicated` only. */
+  cpu?: number;
+
+  /** Max concurrent units of work per instance. `container`/`dedicated` only; the per-task cost lever. */
+  maxConcurrency?: number;
+
+  /** Custom image. `container`/`dedicated` only. */
+  image?: string;
+}
 ```
 
-- Requirements: `timeoutSeconds`, `memoryMb` (note `memoryMb`, not `memory`).
-- Resolves to serverless **only** today; a requirement beyond serverless limits
-	**throws** (fail-fast, names the field/value/ceiling) rather than selecting a
-	bigger compute — because there is no other fulfillment in its branch.
-- Validation is pure and runs in every condition (local dev fails the same as
-	synth).
+Note what is *not* here: there is no `timeout` on the compute. Time limits are a property of work, not of compute (Appendix A). A ceiling could live on an `ephemeral` compute because the platform enforces one anyway, but hoisting it onto every category is the contradiction goal 4 rules out. Timeouts live on the workload — see below.
 
-Pros
-- Smallest surface; declares intent without naming a service; easy to review.
-- Fail-fast-with-a-named-ceiling is a good error UX when there genuinely is no
-	bigger compute to pick.
-- Factory that returns an opaque handle avoids the return-override sleight of hand.
+### How `AsyncJob` consumes a `Compute`
 
-Cons
-- "Select by requirements" is aspirational in this PR — today it validates and
-	configures one fulfillment. The selection claim isn't tested against a second
-	fulfillment.
-- Vocabulary is serverless-shaped (`timeoutSeconds`, `memoryMb`) with no room for
-	container-only dials (cpu, long-lived, image, concurrency). Those have to be
-	added later, and `memoryMb` vs our `memory` is a naming fork to reconcile.
-- "Fails rather than selects" is the opposite policy from Option A. Once a second
-	fulfillment exists, the *same* over-limit input must flip from "throw" to
-	"select container." That's a behavior change to a shipped surface.
-
-### Option C — one surface, provider semantics, capability vocabulary (merge of A+B)
-
-Keep #573's `provide()` factory shape (opaque handle, no return-override, pure
-validation in every condition) but adopt #574's fuller capability vocabulary and
-its **select-don't-fail** policy the moment a second fulfillment exists.
+A workload takes a `compute` and its own `timeoutSeconds`, regardless of which option we pick for declaring the compute. This is additive to the existing `AsyncJobOptions`.
 
 ```ts
-const worker = ComputeProvider.provide('worker', { timeoutSeconds: 1800, memory: 2048 });
+interface AsyncJobOptions<T> {
+  handler: (payload: T, ctx: AsyncJobContext) => Promise<void>;
+  // ...existing options (schema, maxRetries, batchSize, trackStatus)...
+
+  /** Where this job runs. Omit to use the app default (ephemeral). */
+  compute?: Compute;
+
+  /**
+   * Wall-clock limit for one delivery, in seconds. A property of THIS work, not
+   * of the compute it shares. Enforced by the runtime (on a container, by
+   * terminating the worker); on an ephemeral compute it is bounded by the
+   * platform ceiling. A per-job value may only tighten that ceiling, never
+   * raise it — a job asking for more than the compute can offer is a synth error.
+   */
+  timeoutSeconds?: number;
+}
 ```
 
-- One attribute vocabulary (settle `memory` vs `memoryMb` once).
-- Validation still fails-fast when *no* fulfillment can satisfy the request; it
-	*selects* when a larger one can. Same rule, both PRs, no later flip.
-- Container attributes (cpu, longLived, image, maxConcurrency, scaling) live in
-	the same vocabulary from day one, ignored while only serverless exists.
+```ts
+const reports = /* one of the options below */;
 
-Pros
-- Removes the competing-interfaces problem before it hardens: one factory, one
-	vocabulary, one selection policy.
-- Keeps the better bits of each — B's handle/validation ergonomics, A's real
-	selection and container dials.
+const nightly = new AsyncJob(scope, 'nightly-report', {
+  compute: reports,
+  timeoutSeconds: 60 * 30,   // this job may run 30 min
+  handler: async (payload) => { /* ... */ },
+});
 
-Cons
-- Requires reconciling the two PRs rather than merging both as-is (coordination
-	cost now to avoid a breaking reconciliation later).
+const quick = new AsyncJob(scope, 'thumbnail', {
+  compute: reports,          // same compute, different deadline
+  timeoutSeconds: 30,        // this job must finish in 30s
+  handler: async (payload) => { /* ... */ },
+});
+```
 
-### Option D — status quo: ship both
-
-`new Compute()` and `ComputeProvider.provide()` both exist.
-
-- Two ways to do the same thing, with different names, attribute spellings
-	(`memory` vs `memoryMb`), and opposite over-limit policies (select vs throw).
-- Whichever the assignment surface (`{ compute }`) consumes wins by attrition;
-	the other becomes legacy. Predictably confusing; not recommended.
+Two jobs share one `container` compute and set their own deadlines. Neither can outlive the compute; each can be stricter than it. That is the whole point of putting the timeout on the job.
 
 ---
 
-## Recommendation for Question 1
+## Options — declaration surface
 
-Option C. The two PRs are solving the same problem with different shapes, and the
-cheapest time to converge is before either is consumed by the assignment surface.
-Concretely: adopt #573's `provide()` factory and validation ergonomics, adopt
-#574's capability vocabulary and select-don't-fail policy, and settle the
-`memory`/`memoryMb` spelling once. Fail-fast is retained for the genuine
-no-fulfillment-fits case; it is not used to reject a request a larger compute
-could serve.
+This is the one part the options differ on. Each produces the same core `Compute` type settled above, so any of them can be injected into `new AsyncJob(..., { compute })`. A power user can always bypass the sugar and construct a concrete compute directly (goal 2). The options differ only in the front-door ergonomics.
 
-If C is too much coordination right now, prefer A over B on the single ground
-that A's selection is real and tested against two fulfillments today, whereas B's
-is declared but unexercised — and B's serverless-shaped vocabulary and
-throw-on-over-limit policy are the two things most likely to need a breaking
-change once containers land.
+### Option 1 — one `Compute` block, `category` attribute
 
----
+```ts
+import { Compute } from '@aws-blocks/blocks';
 
-## Question 2 — should `AsyncJob` also have a timeout?
+const reports = new Compute(scope, 'reports', { category: 'container', memory: 2048, cpu: 1024 });
+const api     = new Compute(scope, 'api', { category: 'ephemeral', memory: 512 });
+```
 
-Context: the compute already carries `timeoutSeconds`, which the container poller
-enforces by terminating the worker. The question is whether a job additionally
-sets its own timeout.
+Same `new X(scope, id, options)` shape as every other block. Category is a required field, so the choice is explicit and greppable. One class, one options type.
 
-### The case for a per-job timeout
+### Option 2 — category factory methods
 
-- A compute is shared across handlers (a scope-level or reused compute can back
-	several jobs/namespaces). Different jobs on the same compute may want different
-	deadlines. Only a per-job value expresses that.
-- It reads naturally at the job call site — the place you reason about how long
-	*this* work should take.
+```ts
+import { Compute } from '@aws-blocks/blocks';
 
-### The case against (or for keeping it subordinate)
+const reports = Compute.container(scope, 'reports', { memory: 2048, cpu: 1024 });
+const api     = Compute.ephemeral(scope, 'api', { memory: 512 });
+```
 
-- The compute timeout is a *capacity/cost* bound (it's what selects a container
-	and what sizes/limits the runtime). A per-job value that could *exceed* it would
-	be meaningless — the compute can't run longer than its own ceiling.
-- Two timeouts invite the question "which wins," which is exactly the ambiguity to
-	avoid in a public API.
+The category is the method name. Autocomplete lists the categories, the choice can't be misspelled, and each method exposes only the attributes valid for its category (no `cpu` on `ephemeral`). Adding a category later is a new method (additive).
 
-### Resolution: lesser-of-the-two, with the compute as the hard ceiling
+### Option 3 — concrete blocks, no category abstraction
 
-If both are set, the effective deadline is `min(compute.timeoutSeconds,
-job.timeoutSeconds)`. Rationale:
+```ts
+import { LambdaCompute, ContainerCompute } from '@aws-blocks/blocks';
 
-- The compute's value is a **ceiling** — a job can ask to be *stricter* (finish
-	sooner) but never *looser* (a job can't outlive the runtime that hosts it, and
-	on Lambda the platform enforces the function timeout regardless).
-- So a per-job timeout is only ever a *tightening*. `min` is the whole rule; there
-	is no case where the job value legitimately raises the limit.
-- Validation: reject a per-job `timeoutSeconds` greater than the compute's at
-	synth with a named error, rather than silently clamping — same fail-fast posture
-	as the requirements validation. (Silent `min` is defensible too, but an explicit
-	"job asks for 30m on a 15m compute" error is clearer than quietly running 15m.)
+const reports = new ContainerCompute(scope, 'reports', { memory: 2048, cpu: 1024 });
+const api     = new LambdaCompute(scope, 'api', { memory: 512 });
+```
 
-This keeps one enforcement mechanism (the compute/worker deadline) and treats the
-per-job value as a downward override, so "which wins" has a one-line answer: the
-smaller one, and the compute is always the cap.
+The category *is* the class. Maximum control and clarity for power users, but the class name leaks the service tier and the customer must know which class maps to which category. This is the original design the Problem section rejects for the default path, kept here as the always-available power-user escape (goal 2), not the recommended front door.
 
-### Interaction with selection (important)
+### Option 4 — provider for the "don't care" path, concrete blocks for control
 
-If we add a per-job timeout, be careful it does **not** feed compute *selection* —
-only the compute's own attributes select the compute. A job asking for 30 minutes
-should not silently *upgrade* a Lambda compute to a container; that would make the
-job's timeout a hidden infrastructure switch. The job timeout tightens an
-already-selected compute; it never changes which compute is chosen. (If a customer
-wants a container, they express it on the compute, where cost lives.)
+```ts
+import { ComputeProvider, ContainerCompute } from '@aws-blocks/blocks';
+
+// "give me something sensible" — resolves to the app default (ephemeral today)
+const simple  = ComputeProvider.provide('simple');
+
+// "I care about the details" — full control
+const complex = new ContainerCompute(scope, 'reports', { memory: 2048, cpu: 1024, maxConcurrency: 4 });
+
+new ApiNamespace(scope, 'api', { compute: simple, /* ... */ });
+new AsyncJob(scope, 'reports', { compute: complex, handler });
+```
+
+Two doors: a zero-config provider for customers who don't want to think about compute, and direct construction for customers who do. Both yield a `Compute`. This is the shape in PR #573. It satisfies "don't obfuscate the category" only at the concrete-block door; the provider door states no category at all, which reads as "default" rather than "hidden."
+
+### Recommendation
+
+**Option 2 (category factory methods).** It states the category unmissably (goal 4), keeps one coherent surface that produces the core `Compute` type, and exposes only the attributes each category can honor. It reads as Cloud-not-AWS (`Compute.container`, not `FargateService`), and Option 3's concrete classes remain available underneath for power users (goal 2) and for "bring your own compute" (goal 3).
+
+Option 1 is the close runner-up and is simpler to implement; the only thing it gives up is per-category attribute narrowing (an `ephemeral` compute would accept `cpu` in the type and reject it at synth, rather than not offering it at all). Option 4's provider can be layered on top of either 1 or 2 later as the zero-config door without changing the category surface.
+
+Whichever we pick, the compute produced must extend `Scope` (so workloads and finalize steps get a `fullId`, tree position, and registry entry), and the `AsyncJob` `compute` + `timeoutSeconds` surface above is the same.
 
 ---
-
-## Other attributes worth considering (parking lot)
-
-Named here so they're weighed alongside, not to decide now:
-
-- `cpu` — container-only; Lambda derives CPU from memory. Already in A; absent in B.
-- `longLived` / persistence — selects a container; also the future WebSocket/stream
-	signal. Naming: `longLived` reads as a workload trait; `persistent` reads as
-	storage. Prefer `longLived`.
-- `image` — BYO container image; intrinsically a container request.
-- `maxConcurrency` — per-task cost lever (jobs-in-flight); container-only.
-- `scaling` (min/max tasks, backlog-per-task) — reserved for task autoscaling;
-	additive.
-- `ephemeralStorageMb` / disk — not yet needed; note as a likely future serverless
-	*and* container dial.
-- `architecture` (arm64/x86) — exists internally on Lambda today; could surface as
-	a capability once there's a reason to.
-
-Guidance: whatever vocabulary we settle, keep serverless-satisfiable attributes
-(`timeoutSeconds`, `memory`) separate in the docs from container-only ones (`cpu`,
-`longLived`, `image`, `maxConcurrency`, `scaling`) so it's obvious which attributes
-can force a container.
-
---
 
 ## Appendix A - Why favor explicit compute types
 
