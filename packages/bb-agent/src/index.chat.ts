@@ -139,7 +139,11 @@ function nextId(): string {
  */
 function toJSONValue(value: unknown): JSONValue {
 	try {
-		return JSON.parse(JSON.stringify(value)) as JSONValue;
+		// JSON.parse returns `any`, which is assignable to JSONValue without an
+		// assertion — annotate the local so the type comes from the declaration,
+		// not a cast. The round-trip guarantees the result is JSON-shaped.
+		const parsed: JSONValue = JSON.parse(JSON.stringify(value));
+		return parsed;
 	} catch {
 		return String(value);
 	}
