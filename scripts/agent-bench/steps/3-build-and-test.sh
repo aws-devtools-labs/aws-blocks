@@ -140,25 +140,42 @@ cleanup_dev_server() {
 }
 trap cleanup_dev_server EXIT
 
-# Dev-server stability (scope note): dev-server startup is flaky
-# under load, but the deep fix (waiting on the BLOCKS_DEPLOYED readiness signal instead of banner-grep +
-# HTTP-poll) ships separately. The reap + free-port + readiness-gate logic below is left untouched.
+# Dev-server stability: readiness is detected two INDEPENDENT ways, so a slow or
+# mismatched startup banner no longer false-negatives `dev_server_started` (which hard-caps
+# selector_contract + functional_completeness in scoring.mjs — a flaky miss was punishing apps that
+# were actually up). Path A: parse the port from the startup banner, then HTTP-probe it. Path B (the
+# deterministic gate): probe the candidate ports directly for the app's real readiness artifact
+# `/.blocks-sandbox/config.json`, which the app writes only once it is genuinely serving — this does
+# not depend on the banner text or timing. Either path confirming marks the server ready.
 # No NODE_OPTIONS heap cap: an OOM fix needs a repro (none yet), and guessing one could mask it.
-# TODO: consume the BLOCKS_DEPLOYED signal in the discovery loop once it lands.
 nohup npm run dev > "${CELL_TMP}/dev.log" 2>&1 &
 echo "$!" > "${CELL_TMP}/dev.pid"
 
+# Candidate ports the free-port/reap logic above treats as canonical for the dev server.
+DEV_PORTS="3000 3001"
+
 APP_BASE_URL=""
-for i in $(seq 1 60); do
+for i in $(seq 1 90); do
+  # Path A — banner-derived port (exact port, when the banner shows up).
   port=$(grep -oE 'AWS Blocks local server running on http://localhost:[0-9]+' "${CELL_TMP}/dev.log" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)
   if [ -n "${port:-}" ]; then
     code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${port}") || code=000
     if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
       APP_BASE_URL="http://localhost:${port}"
-      echo "[discover] dev server ready on :${port} (HTTP $code) after ${i}s"
+      echo "[discover] dev server ready on :${port} (HTTP $code) after ${i}s (banner)"
       break
     fi
   fi
+  # Path B — deterministic readiness: the app writes /.blocks-sandbox/config.json only when serving,
+  # so a 2xx/3xx there confirms readiness independent of the banner text/timing.
+  for p in $DEV_PORTS; do
+    ccode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}/.blocks-sandbox/config.json") || ccode=000
+    if [ "$ccode" != "000" ] && [ "$ccode" -lt 400 ]; then
+      APP_BASE_URL="http://localhost:${p}"
+      echo "[discover] dev server ready on :${p} (config.json HTTP $ccode) after ${i}s (readiness probe)"
+      break 2
+    fi
+  done
   sleep 1
 done
 
@@ -166,9 +183,10 @@ if [ -n "$APP_BASE_URL" ]; then
   echo "dev_server_started=true" >> "$GITHUB_OUTPUT"
   echo "[discover] APP_BASE_URL=${APP_BASE_URL}"
 else
-  # Banner never appeared / port never became ready within the window. Record the signal + a brief
-  # diagnostic (pid liveness + log tail) onto result.json, then proceed with APP_BASE_URL empty.
-  echo "::warning::dev server banner never appeared / port never became ready within ~60s"
+  # Neither the banner NOR the config.json readiness probe confirmed within the window. Record the
+  # signal + a brief diagnostic (pid liveness + log tail) onto result.json, then proceed with
+  # APP_BASE_URL empty.
+  echo "::warning::dev server never became ready within ~90s (no banner and no config.json on :3000/:3001)"
   # Distinct dead-server / backend-crash signal so downstream can tell this apart from an agent that
   # built a genuinely broken app (mirrors how build_succeeded/dev_server_started are emitted above).
   echo "dev_server_status=dead" >> "$GITHUB_OUTPUT"
