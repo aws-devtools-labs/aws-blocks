@@ -246,9 +246,16 @@ jobs:
           # the shim wraps the Playwright-installed chromium under it, which is the binary reliably
           # present on a stock runner (npx install above runs unprivileged and writes it there).
           # The wrapper is root-owned by design (the shim also wraps system-PATH binaries that need
-          # root). Step 3's guarded `npx playwright install` fallback runs unprivileged, but no-ops on
-          # the warm cache this step just populated, so it never tries to overwrite the root-owned file.
+          # root).
           sudo PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" bash scripts/agent-bench/steps/install-chromium-shim.sh
+          # The agent phase (step 2) runs as a DIFFERENT unprivileged user (benchagent) than the user
+          # that populated $PLAYWRIGHT_BROWSERS_PATH above, so the browser cache dir is not owned by the
+          # agent. If the agent then runs `npx playwright install` (it does, defensively), it fails to
+          # take the install lock (`.pw-browsers/__dirlock`) with EACCES and falls back to hunting for a
+          # chromium binary — the exact churn this pre-provision exists to remove. Make the cache dir
+          # writable by whatever user the agent phase runs as so that fallback is a true no-op. It is a
+          # throwaway per-cell browser cache under the workspace, so loosening its perms is harmless.
+          chmod -R a+rwX "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || sudo chmod -R a+rwX "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || true
 
       # SECURITY: this step runs an LLM agent (shell tool), so a prompt-injected task could reach any
       # AWS API in the CURRENT session's scope — which the OIDC step's inline session policy has
