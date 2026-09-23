@@ -8,6 +8,11 @@ import type { InternalAppSettingOptions } from './types.js';
 // message with `${name}: `), this one leaves the message unprefixed on purpose:
 // these checks moved out of the CDK constructor, which threw a plain message, so
 // keeping it unprefixed preserves the exact pre-refactor CDK synth error text.
+//
+// NOTE: do not "DRY" these three helpers into one that prefixes — re-prefixing
+// this one would change the CDK synth text that existing behavior pins.
+// @see index.mock.ts `blocksError` (prefixes `${name}: `)
+// @see index.aws.ts `blocksError` (prefixes `${name}: `)
 function blocksError(name: string, message: string): Error {
 	const err = new Error(message);
 	err.name = name;
