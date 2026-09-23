@@ -10,7 +10,7 @@ Adds a **composed** front door that stacks a CloudFront edge over a regional
 Application Load Balancer, rather than choosing one door instead of the other:
 
 ```ts
-new Hosting(stack, 'Web', { root, api, frontDoor: { edge: 'cloudfront', router: 'alb' } });
+new Hosting(stack, 'Web', { root, api, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
 ```
 
 **Design B — CloudFront's single origin is the ALB, and the ALB routes to
