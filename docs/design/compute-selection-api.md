@@ -48,9 +48,12 @@ type ComputeType =
 
 ### Common options
 
-Every option below accepts the same tuning attributes. The type selects the compute; these configure it. Attributes that don't apply to a type are a synth-time error rather than silently ignored, so a customer can't set `cpu` on an `ephemeral` compute and wonder why nothing changed.
+Every option below accepts the same tuning attributes. The type selects the compute; these configure it. Attributes that don't apply to a type are a synth-time error rather than silently ignored, so a customer can't set `vcpu` on an `ephemeral` compute and wonder why nothing changed.
 
 ```ts
+/** Valid vCPU sizes. Not an open number: the platform allows only a fixed set. */
+type Vcpu = 0.25 | 0.5 | 1 | 2 | 4 | 8 | 16;
+
 interface ComputeOptions {
   /** The general kind of compute. Required — never inferred from other attributes. */
   type: ComputeType;
@@ -58,8 +61,8 @@ interface ComputeOptions {
   /** Memory (MB). Applies to all types. */
   memory?: number;
 
-  /** vCPU units. `container`/`dedicated` only. */
-  cpu?: number;
+  /** vCPUs. `container`/`dedicated` only. A closed set, not an arbitrary number. */
+  vcpu?: Vcpu;
 
   /** Max concurrent units of work per instance. `container`/`dedicated` only; the per-task cost lever. */
   maxConcurrency?: number;
@@ -68,6 +71,8 @@ interface ComputeOptions {
   image?: string;
 }
 ```
+
+`vcpu` is a closed union, not an open `number`, because the container platform accepts only a fixed set of sizes. `vcpu` and `memory` are also **coupled** — each vCPU size permits only a range of memory values — so an invalid pair (e.g. `0.25` vCPU with 16GB) is a synth-time error naming the valid range, not a silent clamp. (An alternative worth weighing in review: collapse both into a single `size` enum of named CPU+memory combos, so an invalid pair is impossible by construction. That trades granularity for guaranteed validity.)
 
 Note what is *not* here: there is no `timeout` on the compute. Time limits are a property of work, not of compute (Appendix A). A ceiling could live on an `ephemeral` compute because the platform enforces one anyway, but hoisting it onto every type is the contradiction goal 4 rules out. Timeouts live on the workload — see below.
 
@@ -114,40 +119,46 @@ Two jobs share one `container` compute and set their own deadlines. Neither can 
 
 ---
 
-## Options — declaration surface
+## API Options
 
-This is the one part the options differ on. Each produces the same core `Compute` type settled above (a `Scope`-backed compute), so any of them can be injected into `new AsyncJob(..., { compute })`. The options differ only in how the customer states the compute type.
+Each option below produces a `Compute` object that can be injected into "job"-type blocks like `AsyncJob`. The differences hinge on how customers navigate imports and instantiate the `Compute`.
 
-**Recommended: Option 1 (`new Compute` with a `type`).** A single `Compute` block whose required `type` field states the kind of compute. Same `new X(scope, id, options)` shape as every other Building Block, so it composes uniformly and gets a `fullId`, tree position, and registry entry. The type is explicit and greppable, and there is one class and one options type to learn.
+### Option 1 &mdash; `new Compute` with `type: ComputeType` (RECOMMENDED)
+
+In this option, we present a single `Compute` block with a required `type` field. This fits the `new X(scope, id, options)` shape that other Building Block use, so it composes uniformly and gets a `fullId`, tree position, and registry entry.
 
 ```ts
 import { Compute } from '@aws-blocks/blocks';
 
-const reports = new Compute(scope, 'reports', { type: 'container', memory: 2048, cpu: 1024 });
-const api     = new Compute(scope, 'api', { type: 'ephemeral', memory: 512 });
+const reports = new Compute(scope, 'reports', { type: 'container', memory: 2048, vcpu: 1 });
+const api     = new Compute(scope, 'api',     { type: 'ephemeral', memory: 512 });
 
 new AsyncJob(scope, 'reports', { compute: reports, timeoutSeconds: 60 * 30, handler });
 ```
 
-The alternatives considered follow.
+The `options` parameter shares the common `ComputeOptions` type and adds `type: ComputeType`:
 
-### Option 2 — type as a factory method
+```ts
+
+```
+
+### Option 2 &mdash; type as a factory method
 
 ```ts
 import { Compute } from '@aws-blocks/blocks';
 
-const reports = Compute.container(scope, 'reports', { memory: 2048, cpu: 1024 });
+const reports = Compute.container(scope, 'reports', { memory: 2048, vcpu: 1 });
 const api     = Compute.ephemeral(scope, 'api', { memory: 512 });
 ```
 
-The type becomes the method name. Autocomplete lists the types, the choice can't be misspelled, and each method exposes only the attributes valid for its type (no `cpu` on `ephemeral`). Adding a type later is a new method (additive). The cost is departing from the uniform `new X(scope, id, options)` shape every other block uses, and a slightly larger surface (one method per type) to document.
+The type becomes the method name. Autocomplete lists the types, the choice can't be misspelled, and each method exposes only the attributes valid for its type (no `vcpu` on `ephemeral`). Adding a type later is a new method (additive). The cost is departing from the uniform `new X(scope, id, options)` shape every other block uses, and a slightly larger surface (one method per type) to document.
 
-### Option 3 — distinct blocks per type
+### Option 3 &mdash; distinct blocks per type
 
 ```ts
 import { EphemeralCompute, ContainerCompute } from '@aws-blocks/blocks';
 
-const reports = new ContainerCompute(scope, 'reports', { memory: 2048, cpu: 1024 });
+const reports = new ContainerCompute(scope, 'reports', { memory: 2048, vcpu: 1 });
 const api     = new EphemeralCompute(scope, 'api', { memory: 512 });
 ```
 
@@ -155,7 +166,7 @@ The type *is* the class, named by the general kind of compute (`ContainerCompute
 
 ### Customizing and extending
 
-Whichever option we choose, a customer who wants finer control configures the compute through the same options (`memory`, `cpu`, `maxConcurrency`, `image`), and can drop into raw CDK for anything the options don't cover (goal 2). This is ordinary Blocks customization, not an escape from Blocks — the same way any block exposes configuration and a CDK drop-through. Nothing here is a separate "power-user" path; it is the same surface with more of it filled in.
+Whichever option we choose, a customer who wants finer control configures the compute through the same options (`memory`, `vcpu`, `maxConcurrency`, `image`), and can drop into raw CDK for anything the options don't cover (goal 2). This is ordinary Blocks customization, not an escape from Blocks — the same way any block exposes configuration and a CDK drop-through. Nothing here is a separate "power-user" path; it is the same surface with more of it filled in.
 
 ### On `Scope`
 
