@@ -99,7 +99,11 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 				size: result.ContentLength ?? bytes.length,
 			};
 		} catch (e: any) {
-			if (e.name === 'NoSuchKey') return null;
+			// A missing object OR a missing version both mean "not found" — return
+			// null per get()'s documented contract and to match the mock, which
+			// returns null for an unknown `versionId`. Without NoSuchVersion here, an
+			// unknown versionId threw on AWS while the mock returned null (parity break).
+			if (e.name === 'NoSuchKey' || e.name === 'NoSuchVersion') return null;
 			throw e;
 		}
 	}
@@ -206,11 +210,25 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 	async restoreVersion(path: string, versionId: string): Promise<void> {
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
-		await this.s3.send(new CopyObjectCommand({
-			Bucket: getSdkIdentifiers(this).bucketName,
-			Key: path,
-			CopySource: `${getSdkIdentifiers(this).bucketName}/${path}?versionId=${versionId}`,
-		}));
+		try {
+			await this.s3.send(new CopyObjectCommand({
+				Bucket: getSdkIdentifiers(this).bucketName,
+				Key: path,
+				CopySource: `${getSdkIdentifiers(this).bucketName}/${encodedPath}?versionId=${versionId}`,
+			}));
+		} catch (e: any) {
+			// An unknown version (or a missing key) surfaces as a violated
+			// precondition. Match the mock: throw a clean, `NoSuchVersion`-named error
+			// (matchable via `isBlocksError(e, 'NoSuchVersion')`) rather than the raw
+			// S3 error, whose enumerable `$metadata`/ARNs would leak to the client if
+			// serialized (see Core rule 5). The mock throws the same name + message.
+			if (e?.name === 'NoSuchVersion' || e?.name === 'NoSuchKey') {
+				const err = new Error(`Version "${versionId}" does not exist for "${path}"`);
+				err.name = 'NoSuchVersion';
+				throw err;
+			}
+			throw e;
+		}
 	}
 
 	static fromExisting(bucketName: string): ExternalBucketRef {
