@@ -1,5 +1,6 @@
 /** Shared shell Sandbox + backgrounded-process-safe runner for the builder and judge steps. */
 import { spawn, spawnSync } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
 	type ExecuteOptions,
@@ -152,6 +153,27 @@ export class WorkspaceSandbox extends PosixShellSandbox {
 		// minTimeoutSec; `undefined` means the caller opted out of a timeout — leave untouched.
 		const timeout = options?.timeout === undefined ? undefined : Math.max(options.timeout, this.minTimeoutSec);
 		const result = await runShell(command, cwd, timeout, options?.signal, options?.env, this.isolate);
+		// Persist each command's exit code + output — the Strands trace records tool
+		// CALLS but not shell OUTPUT. Opt-in via BENCH_CMD_LOG; best-effort so logging can't break a
+		// command; sliced to 4000 chars/side.
+		const cmdLogPath = process.env.BENCH_CMD_LOG;
+		if (cmdLogPath) {
+			try {
+				appendFileSync(
+					cmdLogPath,
+					`${JSON.stringify({
+						ts: new Date().toISOString(),
+						cwd,
+						command,
+						exitCode: result.exitCode,
+						stdout: result.stdout.slice(0, 4000),
+						stderr: result.stderr.slice(0, 4000),
+					})}\n`,
+				);
+			} catch {
+				/* best-effort: never let command logging break a command */
+			}
+		}
 		if (result.stdout) yield { type: 'streamChunk', data: result.stdout, streamType: 'stdout' };
 		if (result.stderr) yield { type: 'streamChunk', data: result.stderr, streamType: 'stderr' };
 		yield result;
