@@ -12,8 +12,8 @@ import { CHECKPOINT_STOP_REASON } from './scoring.mjs';
  * envelopes so finalize-result folds it identically, but with the non-terminal
  * {@link CHECKPOINT_STOP_REASON} + `checkpoint:true` so a surviving checkpoint classifies as
  * harness_error (excluded) while still carrying tokens for the cost signal.
- * @param {{model: string, startedMs: number, tokensIn: number, tokensOut: number, cycles: number, isolationActive?: boolean, now?: number}} state
- * @returns {{model: string, duration_sec: number, tokens_in: number, tokens_out: number, stop_reason: string, cycle_count: number, final_message: string, partial: true, checkpoint: true, isolation_active: boolean}}
+ * @param {{model: string, startedMs: number, tokensIn: number, tokensOut: number, cacheRead?: number, cacheWrite?: number, cycles: number, isolationActive?: boolean, now?: number}} state
+ * @returns {{model: string, duration_sec: number, tokens_in: number, tokens_out: number, cache_read_tokens: number, cache_write_tokens: number, stop_reason: string, cycle_count: number, final_message: string, partial: true, checkpoint: true, isolation_active: boolean}}
  */
 export function buildCheckpointEnvelope(state) {
 	const now = typeof state.now === 'number' ? state.now : Date.now();
@@ -22,6 +22,10 @@ export function buildCheckpointEnvelope(state) {
 		duration_sec: Math.round((now - state.startedMs) / 1000),
 		tokens_in: state.tokensIn,
 		tokens_out: state.tokensOut,
+		// Cache tokens are DISPLAYED only (never in cost/SCORE); carried on the checkpoint so an
+		// ungraceful teardown still preserves them alongside tokens_in/out.
+		cache_read_tokens: state.cacheRead ?? 0,
+		cache_write_tokens: state.cacheWrite ?? 0,
 		stop_reason: CHECKPOINT_STOP_REASON,
 		cycle_count: state.cycles,
 		final_message: '',
