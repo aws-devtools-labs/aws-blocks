@@ -84,12 +84,13 @@ fi
 # The verifier OWNS the server. Step 2 may have left a `tsx watch` supervisor alive, so first reap
 # that tree and free the front-door ports (3000/3001 only, never :3100). Under shell isolation the
 # agent's procs are benchagent-owned, so reap/free/probe go through sudo (unprivileged fallback).
-# Discovery uses TWO independent readiness paths over a ~90s window (either confirms): Path A parses
-# the port from the framework banner `AWS Blocks local server running on http://localhost:<port>` and
-# HTTP-probes it; Path B (deterministic) probes the candidate ports directly for the app's readiness
-# artifact `/.blocks-sandbox/config.json`, which the app writes only once it is genuinely serving —
-# independent of the banner text/timing. If neither confirms, APP_BASE_URL stays empty and we proceed
-# (the cell fails honestly rather than hanging). See the inline block at the launch site for detail.
+# Discovery uses TWO independent readiness paths over a 90-attempt window (either confirms): Path A
+# parses the port from the framework banner `AWS Blocks local server running on http://localhost:<port>`
+# and HTTP-probes it; Path B (deterministic) probes the candidate ports directly for the app's readiness
+# artifact `/.blocks-sandbox/config.json`, which the app serves only once it is genuinely listening —
+# independent of the banner text and grep/parse timing (a redundant, drift-proof path, not a faster
+# one; both go live at the same onListening). If neither confirms, APP_BASE_URL stays empty and we
+# proceed (the cell fails honestly rather than hanging). See the inline block at the launch site for detail.
 
 # Reap any dev server the agent left running. The framework records each in
 # .blocks-sandbox/dev-server.<port>.pid as {pid, ppid, port}; `ppid` is the `tsx watch` supervisor
@@ -153,8 +154,13 @@ trap cleanup_dev_server EXIT
 # selector_contract + functional_completeness in scoring.mjs — a flaky miss was punishing apps that
 # were actually up). Path A: parse the port from the startup banner, then HTTP-probe it. Path B (the
 # deterministic gate): probe the candidate ports directly for the app's real readiness artifact
-# `/.blocks-sandbox/config.json`, which the app writes only once it is genuinely serving — this does
-# not depend on the banner text or timing. Either path confirming marks the server ready.
+# `/.blocks-sandbox/config.json`, which the app serves only once it is genuinely listening. Path B does
+# not depend on the banner TEXT or on grep/parse timing — that is its win (it survives a banner-string
+# change or a slow/garbled log write). It does NOT beat the banner in wall-clock time: in
+# packages/core/src/scripts/dev-server.ts the config.json HTTP route only answers after
+# server.listen(port, onListening) fires, and that same onListening logs the banner as its first line,
+# so both paths become live at the same instant. Path B is a redundant, drift-proof readiness path, not
+# a faster one. Either path confirming marks the server ready.
 # No NODE_OPTIONS heap cap: an OOM fix needs a repro (none yet), and guessing one could mask it.
 nohup npm run dev > "${CELL_TMP}/dev.log" 2>&1 &
 echo "$!" > "${CELL_TMP}/dev.pid"
@@ -202,7 +208,7 @@ else
   # Neither the banner NOR the config.json readiness probe confirmed within the window. Record the
   # signal + a brief diagnostic (pid liveness + log tail) onto result.json, then proceed with
   # APP_BASE_URL empty.
-  echo "::warning::dev server never became ready within ~90s (no banner and no config.json on :3000/:3001)"
+  echo "::warning::dev server never became ready within the readiness window (90 attempts: no banner and no config.json on :3000/:3001)"
   # Distinct dead-server / backend-crash signal so downstream can tell this apart from an agent that
   # built a genuinely broken app (mirrors how build_succeeded/dev_server_started are emitted above).
   echo "dev_server_status=dead" >> "$GITHUB_OUTPUT"
