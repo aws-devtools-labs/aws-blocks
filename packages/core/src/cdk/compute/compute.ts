@@ -31,13 +31,6 @@ import { registerCompute } from './compute-registry.js';
  */
 export abstract class Compute extends Scope {
 	/**
-	 * API namespaces assigned to run on this compute — recorded so request
-	 * routing can map a namespace to the compute that hosts it. Currently
-	 * unpopulated (no compute assignment surface yet).
-	 */
-	readonly namespaces: string[] = [];
-
-	/**
 	 * This compute's origin base — scheme + host + stage, with no
 	 * `/aws-blocks/api` suffix and no trailing slash. The API front door routes
 	 * to this value; a client-facing RPC URL is `endpoint + BLOCKS_RPC_PREFIX`,

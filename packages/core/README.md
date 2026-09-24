@@ -66,6 +66,8 @@ The typed `import { api } from 'aws-blocks'` client is the normal path. The HTTP
 - Local dev: `http://localhost:3000/aws-blocks/api` (the default template serves the backend and frontend from a single front door on `:3000`). Only the `backend` and `amplify` templates serve the API on `:3001`.
 - Deployed: the API Gateway stage URL + `/aws-blocks/api`
 
+The typed client posts to a namespace-addressed path, `/aws-blocks/api/<namespace>` (e.g. `/aws-blocks/api/api`), so the front door can route a namespace to the compute that serves it. The namespace still travels in the JSON-RPC `method` and the server dispatches on it, so the whole `/aws-blocks/api` subtree — the bare path and any `/aws-blocks/api/<namespace>` under it — is accepted RPC; the `curl` examples below use the bare path and work unchanged.
+
 The body is JSON-RPC 2.0:
 
 ```json
