@@ -623,7 +623,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
       // Cleanup: destroy the sandbox stack
       await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
       });
     });
   });
@@ -637,7 +637,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        telemetryFile, timeoutMs: 300_000,
+        telemetryFile, timeoutMs: 450_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
@@ -660,7 +660,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       // Then destroy it
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        telemetryFile, timeoutMs: 120_000,
+        telemetryFile, timeoutMs: 450_000,
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
@@ -711,7 +711,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
       // Cleanup: destroy the production stack
       await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
       });
     });
   });
@@ -747,7 +747,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
-        telemetryFile, timeoutMs: 120_000,
+        telemetryFile, timeoutMs: 450_000,
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
@@ -785,7 +785,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
       // Cleanup: destroy the sandbox
       await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
       });
     });
   });

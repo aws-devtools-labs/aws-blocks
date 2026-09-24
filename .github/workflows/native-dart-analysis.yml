@@ -27,6 +27,29 @@ env:
   MIN_FLUTTER: '3.41.0'
 
 jobs:
+  version-constant:
+    name: Version constant is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      # version.dart is generated from pubspec.yaml by build_version. Regenerate
+      # and fail if it differs from the committed file, so the version cannot drift.
+      - name: Verify generated version.dart is up to date
+        working-directory: native/dart/packages/blocks_runtime
+        run: |
+          dart pub get
+          dart run build_runner build
+          git diff --exit-code lib/src/version.dart
+
   analyze:
     name: ${{ matrix.package-name }} (${{ matrix.sdk }})
     runs-on: ubuntu-latest
