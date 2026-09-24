@@ -289,9 +289,19 @@ new AsyncJob(scope, 'emails', {
 
 Like Option 2, concurrency is per-job and compute-conditional (the knob only exists when the compute is one that has vCPUs to multiply against, so serverless rejects it at compile time). The difference is the unit: instead of an absolute per-instance count, the job states concurrency **per vCPU**, and Blocks multiplies by the compute's `size.vcpu` to get the per-instance figure. This ties a job's parallelism to the compute it lands on, so the same job scales its concurrency with the instance size rather than being pinned to an absolute number that a customer must re-tune when they resize the box.
 
+**v1 scope.** We deliberately do not expose threading control or a soft-vs-hard time-limit choice yet. So for now **one unit of concurrency is one thread**, which keeps hard time limits enforceable (a job bound 1:1 to a thread can be forcibly terminated). What `maxConcurrencyPerCPU` *does* give the customer is control over how IO-bound vs CPU-bound their work is: IO-bound work that spends most of its time awaiting can set a higher value; CPU-bound work sets 1 (or omits it).
+
+**Rounding.** `size.vcpu` can be fractional and concurrency must be a whole number ≥ 1, so:
+
+```
+perInstanceConcurrency = max(1, ceil(maxConcurrencyPerCPU × size.vcpu))
+```
+
+`ceil` because rounding up never silently drops below the requested ratio; `max(1, …)` because a container always runs at least one unit of work. Examples: `0.25 vCPU × 8 = 2`; `0.25 vCPU × 1 = 1` (a quarter-vCPU box still runs one thread). A consequence is that at fractional vCPUs the "per CPU" ratio rounds up — a `0.25` vCPU compute runs at least one thread regardless of the multiplier — so treat `maxConcurrencyPerCPU` as a target that floors at one thread per instance, not an exact multiplier at the low end.
+
 ### Recommendation
 
-**Option 4 (selected.)** It keeps concurrency where it belongs — per-job and compute-conditional, so the default (serverless) compute can't be handed a knob it ignores (compile error, not a silent no-op) — while expressing the amount as a multiplier of the compute's vCPUs rather than an absolute count. Effective per-instance concurrency is `maxConcurrencyPerCPU × size.vcpu`, so resizing the compute scales a job's parallelism with it instead of stranding a hand-tuned absolute. Option 2 was the runner-up (same placement, absolute count); Option 1 reintroduces carte blanche across co-located jobs; Option 3's mapper is only worth its extra construct if reusable named profiles become a real requirement.
+**Option 4 (selected.)** It keeps concurrency where it belongs — per-job and compute-conditional, so the default (serverless) compute can't be handed a knob it ignores (compile error, not a silent no-op) — while expressing the amount as a multiplier of the compute's vCPUs rather than an absolute count. Effective per-instance concurrency is `max(1, ceil(maxConcurrencyPerCPU × size.vcpu))`, so resizing the compute scales a job's parallelism with it instead of stranding a hand-tuned absolute. Option 2 was the runner-up (same placement, absolute count); Option 1 reintroduces carte blanche across co-located jobs; Option 3's mapper is only worth its extra construct if reusable named profiles become a real requirement.
 
 ---
 
