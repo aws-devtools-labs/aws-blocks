@@ -4,9 +4,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+	FAILURE_CATEGORY_BADGE,
 	LOW_THRESHOLD,
 	MAX_CELL_ISSUES,
 	MAX_ERROR_LINES,
+	MAX_EVIDENCE_CHARS,
 	MAX_FAILING_TESTS,
 	MAX_FAILURE_ERR_LEN,
 	MAX_FAILURE_TITLES,
@@ -21,11 +23,14 @@ import {
 	buildRollupUserText,
 	deterministicCellAnalysis,
 	extractFailingTests,
+	fdisp,
 	isFailureCell,
 	oneLine,
 	parseCellAnalysis,
 	parseFailureAnalysis,
 	redactSecrets,
+	renderFailureAnalyses,
+	summarizeFailures,
 	summarizeMetrics,
 	trimTrace,
 	truthy,
@@ -378,6 +383,17 @@ describe('extractFailingTests(pwResults)', () => {
 		assert.match(out.groups[0].error, /nested boom/);
 	});
 
+	it('lifts the error from an errors[] array when a result has no .error', () => {
+		// A Playwright reporter shape that emits results[].errors[] (no `.error`) — exercises the
+		// `Array.isArray(res.errors) ? res.errors[0]?.message` fallback in firstError.
+		const spec = { title: 'errors-array spec', ok: false, tests: [{ results: [{ status: 'unexpected', errors: [{ message: 'boom from errors[]' }] }] }] };
+		const out = extractFailingTests(pwReport([spec]));
+		assert.equal(out.totalFailing, 1);
+		assert.equal(out.groups.length, 1);
+		assert.match(out.groups[0].error, /boom from errors\[\]/);
+		assert.equal(out.groups[0].titles[0], 'errors-array spec');
+	});
+
 	it('is null/shape-safe', () => {
 		assert.deepEqual(extractFailingTests(null), { totalFailing: 0, groups: [] });
 		assert.deepEqual(extractFailingTests(undefined), { totalFailing: 0, groups: [] });
@@ -387,9 +403,79 @@ describe('extractFailingTests(pwResults)', () => {
 	});
 });
 
+describe('fdisp(v, fallback)', () => {
+	it('returns a trimmed non-empty string', () => {
+		assert.equal(fdisp('  hi  '), 'hi');
+	});
+	it('falls back for empty / whitespace / non-strings', () => {
+		assert.equal(fdisp(''), '—');
+		assert.equal(fdisp('   '), '—');
+		assert.equal(fdisp(undefined), '—');
+		assert.equal(fdisp(null), '—');
+		assert.equal(fdisp(42), '—');
+		assert.equal(fdisp(undefined, 'n/a'), 'n/a');
+	});
+});
+
+describe('summarizeFailures(failureRows)', () => {
+	it('returns null when there are no failures', () => {
+		assert.equal(summarizeFailures([]), null);
+	});
+	it('tallies a mixed category + owner set, sorted by count desc', () => {
+		const rows = [
+			{ failure_analysis: { category: 'build', owner: 'agent' } },
+			{ failure_analysis: { category: 'build', owner: 'framework' } },
+			{ failure_analysis: { category: 'dev-server', owner: 'agent' } },
+		];
+		const s = summarizeFailures(rows);
+		assert.match(s, /^\*\*3 failing cell\(s\) diagnosed:\*\*/);
+		// build (2) leads dev-server (1); agent (2) leads framework (1)
+		assert.match(s, /2 build, 1 dev-server · owners: 2 agent, 1 framework\.$/);
+	});
+	it('falls back to uncategorized / unknown for missing fields', () => {
+		const s = summarizeFailures([{ failure_analysis: {} }, {}]);
+		assert.match(s, /2 uncategorized/);
+		assert.match(s, /owners: 2 unknown\./);
+	});
+});
+
+describe('renderFailureAnalyses(failureRows)', () => {
+	it('renders a category badge + owner header and the root cause / fix', () => {
+		const out = renderFailureAnalyses([
+			{ task: 'auth-notes', template: 'demo', failure_analysis: { category: 'build', owner: 'agent', root_cause: 'tsc error', likely_fix: 'add a type' } },
+		]).join('\n');
+		assert.match(out, new RegExp(`^### ${FAILURE_CATEGORY_BADGE.build} \`auth-notes/demo\` — build · owner: agent`));
+		assert.match(out, /- \*\*Root cause:\*\* tsc error/);
+		assert.match(out, /- \*\*Likely fix:\*\* add a type/);
+	});
+	it('uses the generic 🔴 badge for an unknown category', () => {
+		const out = renderFailureAnalyses([{ task: 't', template: 'x', failure_analysis: { category: 'mystery' } }]).join('\n');
+		assert.match(out, /^### 🔴 `t\/x` — mystery/);
+	});
+	it('clips evidence over MAX_EVIDENCE_CHARS and blockquotes each line', () => {
+		const evidence = 'E'.repeat(MAX_EVIDENCE_CHARS + 250);
+		const out = renderFailureAnalyses([{ task: 't', template: 'x', failure_analysis: { evidence } }]).join('\n');
+		assert.match(out, /- \*\*Evidence:\*\*/);
+		// The rendered evidence line is blockquoted and clipped to the cap (+ the ellipsis).
+		const evLine = out.split('\n').find((l) => l.trimStart().startsWith('> '));
+		assert.ok(evLine, 'an evidence blockquote line is present');
+		assert.ok(evLine.includes('…'), 'clipped evidence ends with an ellipsis');
+		assert.ok(evLine.replace(/^\s*> /, '').replace('…', '').length <= MAX_EVIDENCE_CHARS);
+	});
+	it('omits the Evidence block when there is no evidence', () => {
+		const out = renderFailureAnalyses([{ task: 't', template: 'x', failure_analysis: { root_cause: 'r' } }]).join('\n');
+		assert.doesNotMatch(out, /\*\*Evidence:\*\*/);
+	});
+	it('is defensive against a missing failure_analysis', () => {
+		const out = renderFailureAnalyses([{ task: 't', template: 'x' }]).join('\n');
+		assert.match(out, /uncategorized · owner: unknown/);
+		assert.match(out, /- \*\*Root cause:\*\* —/);
+		assert.match(out, /- \*\*Likely fix:\*\* —/);
+	});
+});
+
 describe('buildFailureUserText(input)', () => {
-	it('includes signals, deduped failing tests, and log tails', () => {
-		const text = buildFailureUserText({
+	it('includes signals, deduped failing tests, and log tails', () => {		const text = buildFailureUserText({
 			task: 'auth-notes',
 			template: 'demo',
 			verdict: 'fail',

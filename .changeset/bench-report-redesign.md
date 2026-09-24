@@ -19,10 +19,10 @@ Internal CI tooling — no published-package changes.
   current value with its signed delta vs the `main` baseline, colored by the
   significance + direction of the change via the per-metric `DELTA_THRESHOLDS`
   (composite/score ±5, judge ±0.3, tests ±1, cost ±10%, turns ±3;
-  tests/judge/score higher-better, cost/turns lower-better; within band → 🟡,
-  beyond → 🟢/🔴). The JUDGE cell is compacted onto that one line — the overall
+  tests/judge/score higher-better, cost/turns lower-better; within band → ✅,
+  beyond → ✨/⚠️/❌). The JUDGE cell is compacted onto that one line — the overall
   judge score with its signed delta. When the baseline has no value
-  for a field, the cell still shows the current value tagged `⚪ (new)` — decided
+  for a field, the cell still shows the current value tagged `🆕 (new)` — decided
   per field, so a partial baseline no longer forces the whole row to be treated
   as new.
 - New **SCORE = composite ÷ cost** (composite points per dollar) priced from

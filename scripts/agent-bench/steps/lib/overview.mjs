@@ -68,7 +68,7 @@ const SCORE_DIR = SCORE_HIGHER_BETTER ? 'up' : 'down';
 export const DELTA_THRESHOLDS = {
 	composite: 5, // composite points — also the headline mean-delta band (deltaBall)
 	score: 5, // composite-per-$ points
-	judge: 0.3, // judge score (0-10) — applied per-dimension too
+	judge: 0.3, // judge score (0-10) — overall only; per-dimension scores are not thresholded
 	tests: 1, // test pass count (a ±1 nudge is noise)
 	costPct: 0.1, // cost: ±10% of the baseline cost
 	turns: 3, // cycle_count (lower-better): ±3 turns is within run-to-run noise at N=1
@@ -328,14 +328,18 @@ function scalarCell(base, pr, { threshold, dir, fmtVal, fmtDelta }) {
 	return `${deltaColor(bv, pv, t, dir)} ${value} (${fmtDelta(pv - bv)})`;
 }
 
-// TESTS: "passed/denom", colored by the pass COUNT (higher better, ±1 noise). denom 0 → NONE.
+// TESTS: "passed/denom", colored by the pass COUNT (higher better, ±1 noise). denom 0 → NONE. Coloring
+// by count is only valid while the spec set is frozen across runs; if the baseline's denominator differs
+// (a task's spec count changed, e.g. 4/4 → 4/10) the pass RATE isn't comparable on a constant scale, so
+// treat it as 🆕 rather than diffing count-vs-count and mislabeling a rate regression as ✅.
 function testsCell(base, pr) {
 	const pp = numOrNull(pr?.tests_passed);
 	const pd = numOrNull(pr?.tests_denom);
 	if (pp === null || pd === null || pd === 0) return NONE;
 	const value = `${pp}/${pd}`;
 	const bp = numOrNull(base?.tests_passed);
-	if (bp === null) return `${WHITE} ${value} (new)`;
+	const bd = numOrNull(base?.tests_denom);
+	if (bp === null || bd === null || bd !== pd) return `${WHITE} ${value} (new)`;
 	return `${deltaColor(bp, pp, DELTA_THRESHOLDS.tests, 'up')} ${value} (${signedInt(pp - bp)})`;
 }
 

@@ -6,7 +6,7 @@
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cellCost, compositeBand, isCountedFailKlass, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
-import { buildAggregate, cellComposite, deltaBall, diffAgainstBaseline, renderDetailed, renderPreword } from './lib/overview.mjs';
+import { buildAggregate, cellComposite, diffAgainstBaseline, renderDetailed, renderPreword } from './lib/overview.mjs';
 import { evaluateGates } from './lib/gates.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
@@ -165,20 +165,16 @@ function noScoreMessage() {
 	return `- _No cells produced test results — no composite headline to report._${g}`;
 }
 
-// The floor line under the preword: the composite mean vs BENCH_MIN_SCORE. Read-only — the actual
-// pass/fail comes from gateResult (floorGate); the enforcing decision + exit live in the Merge
-// verdict block below, so this never reassigns gateFailed.
+// The floor line under the preword: the composite mean vs BENCH_MIN_SCORE. The preword's first bullet
+// already owns the mean composite + Δ-vs-`main` line, so this emits only the band + threshold pass/fail
+// (no re-print of the mean/delta). Read-only — the actual pass/fail comes from gateResult (floorGate);
+// the enforcing decision + exit live in the Merge verdict block below, so this never reassigns gateFailed.
 function gateLine() {
 	const mean = aggregate.mean_composite;
-	// Composite mean delta vs the baseline (🟢/🔴/🟡 over the ±5 band), when present.
-	const deltaNote =
-		diff.hasBaseline && diff.meanDelta !== null
-			? ` · ${deltaBall(diff.meanDelta)} ${diff.meanDelta > 0 ? '+' : ''}${diff.meanDelta.toFixed(1)} vs \`main\``
-			: '';
-	const head = `Mean composite **${mean.toFixed(1)}**/100 ${compositeBand(mean)} across ${compositeCells.length} scored cell(s)${deltaNote}.`;
-	if (!floorEnabled) return `${head} _Observational — \`BENCH_MIN_SCORE\` unset, so the floor does not gate the merge._`;
+	const band = `Composite band ${compositeBand(mean)} across ${compositeCells.length} scored cell(s).`;
+	if (!floorEnabled) return `${band} _Observational — \`BENCH_MIN_SCORE\` unset, so the floor does not gate the merge._`;
 	const pass = !floorGate.failed;
-	return `${pass ? '✅' : '❌'} ${head} Threshold **${min}** — ${pass ? 'pass' : 'FAIL'}.`;
+	return `${pass ? '✅' : '❌'} ${band} Threshold **${min}** — ${pass ? 'pass' : 'FAIL'}.`;
 }
 
 // ── Assemble the report ───────────────────────────────────────────────────────
@@ -203,7 +199,7 @@ md.push(
 	'  - composite/score: **±5 points** — a change ≤5 pts is ✅; >5 improving is ✨; >5 worsening is ⚠️; >10 worsening is ❌.',
 );
 md.push(
-	'  - judge (overall + each dimension): **±0.3** — a shift ≤0.3 is ✅; >0.3 improving is ✨; >0.3 worsening is ⚠️; >0.6 worsening is ❌.',
+	'  - judge (overall): **±0.3** — a shift ≤0.3 is ✅; >0.3 improving is ✨; >0.3 worsening is ⚠️; >0.6 worsening is ❌.',
 );
 md.push(
 	'  - tests: **±1 pass** — a ≤1 pass change is ✅; >1 improving is ✨; >1 worsening is ⚠️; >2 worsening is ❌.',
@@ -215,7 +211,7 @@ md.push(
 	'  - turns: **±3 cycles** — a ≤3 turn change is ✅; >3 fewer is ✨; >3 more is ⚠️; >6 more is ❌.',
 );
 md.push(
-	'- **Directions:** higher is better for tests, judge (+ dimensions), and score; lower is better for cost and turns.',
+	'- **Directions:** higher is better for tests, judge, and score; lower is better for cost and turns.',
 );
 md.push(
 	'- **Composite (0-100)** = `round(60·test_rate + 4·judge·min(1, 4·test_rate), 1)` — 60% objective pass-rate + 40% judge, the judge term gated below a 25% pass-rate.',

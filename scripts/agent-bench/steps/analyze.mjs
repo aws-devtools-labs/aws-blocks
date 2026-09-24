@@ -16,6 +16,8 @@ import {
 	bedrockConverse,
 	buildRollupUserText,
 	fmt,
+	renderFailureAnalyses,
+	summarizeFailures,
 } from './lib/analysis.mjs';
 import { compositeBand, verdictOf } from './lib/scoring.mjs';
 import { buildAggregate, diffAgainstBaseline } from './lib/overview.mjs';
@@ -156,65 +158,9 @@ function main() {
 }
 
 // Badge per failure category (falls back to a generic marker for unknown categories).
-const FAILURE_CATEGORY_BADGE = {
-	build: '🏗️',
-	'dev-server': '🖥️',
-	'api-shape': '🔌',
-	auth: '🔑',
-	persistence: '💾',
-	timeout: '⏱️',
-	flake: '🎲',
-	'agent-logic': '🧠',
-};
-const MAX_EVIDENCE_CHARS = 500;
-
-function fdisp(v, fallback = '—') {
-	return typeof v === 'string' && v.trim() ? v.trim() : fallback;
-}
-
-// One deterministic sentence folding the structured failures by category + owner into the exec summary
-// (rendered even if the Bedrock roll-up call failed). Returns null when there are no structured failures.
-function summarizeFailures(failureRows) {
-	if (failureRows.length === 0) return null;
-	const byCat = new Map();
-	const byOwner = new Map();
-	for (const r of failureRows) {
-		const cat = fdisp(r.failure_analysis?.category, 'uncategorized');
-		const owner = fdisp(r.failure_analysis?.owner, 'unknown');
-		byCat.set(cat, (byCat.get(cat) ?? 0) + 1);
-		byOwner.set(owner, (byOwner.get(owner) ?? 0) + 1);
-	}
-	const catParts = [...byCat.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${n} ${c}`);
-	const ownerParts = [...byOwner.entries()].sort((a, b) => b[1] - a[1]).map(([o, n]) => `${n} ${o}`);
-	const n = failureRows.length;
-	return `**${n} failing cell(s) diagnosed:** ${catParts.join(', ')} · owners: ${ownerParts.join(', ')}.`;
-}
-
-// Per-cell structured root-cause blocks. Each: category badge + owner header, root cause, quoted
-// evidence (as a blockquote, clipped), and likely fix. Defensive against missing fields.
-function renderFailureAnalyses(failureRows) {
-	const out = [];
-	for (const r of failureRows) {
-		const fa = r.failure_analysis ?? {};
-		const cat = fdisp(fa.category, 'uncategorized');
-		const badge = FAILURE_CATEGORY_BADGE[cat] ?? '🔴';
-		const owner = fdisp(fa.owner, 'unknown');
-		out.push(`### ${badge} \`${r.task}/${r.template}\` — ${cat} · owner: ${owner}`, '');
-		out.push(`- **Root cause:** ${fdisp(fa.root_cause)}`);
-		const evidence = fdisp(fa.evidence, '');
-		if (evidence) {
-			const clipped = (evidence.length > MAX_EVIDENCE_CHARS ? `${evidence.slice(0, MAX_EVIDENCE_CHARS)}…` : evidence)
-				.split('\n')
-				.map((l) => `  > ${l}`)
-				.join('\n');
-			out.push('- **Evidence:**');
-			out.push(clipped);
-		}
-		out.push(`- **Likely fix:** ${fdisp(fa.likely_fix)}`);
-		out.push('');
-	}
-	return out;
-}
+// The failure roll-up helpers (fdisp / summarizeFailures / renderFailureAnalyses) and their constants
+// (FAILURE_CATEGORY_BADGE / MAX_EVIDENCE_CHARS) live in lib/analysis.mjs, colocated with the other pure
+// helpers so they are unit-tested; imported above.
 
 // Deterministic "Potential issues": harness/agent failures + low/regressed composites first, then
 // every per-cell issue, each attributed to its cell.
