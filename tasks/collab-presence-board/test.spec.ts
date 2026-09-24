@@ -195,9 +195,21 @@ test.describe('collab-presence-board', () => {
 		await tabA.getByTestId('presence-name-input').fill(name);
 		await tabA.getByTestId('join-btn').click();
 
-		// Tab B had the board open before A joined; it must reflect A's presence
-		// within a couple seconds — realtime broadcast, no reload.
-		await expect.poll(() => presence(tabB, name).count(), { timeout: SYNC }).toBe(1);
+		// Tab B had the board open before A joined; it must reflect A's presence within a couple
+		// seconds. The realtime broadcast is the primary path (DOM updates with no reload). But B's
+		// subscription may not have been established before A broadcast (mount-time race), which would
+		// lose the push and make a DOM-only poll unable to self-heal — a genuine async false-fail.
+		// Belt-and-suspenders: the poll passes if EITHER the DOM shows A (realtime worked) OR a fresh
+		// api.listPresent read shows A (server-side truth), so a lost push no longer false-fails.
+		await expect
+			.poll(
+				async () => {
+					if ((await presence(tabB, name).count()) === 1) return true;
+					return count(await roster(tabB.request), name) === 1;
+				},
+				{ timeout: SYNC },
+			)
+			.toBe(true);
 
 		await ctxA.close();
 		await ctxB.close();

@@ -57,7 +57,7 @@ const indicesOf = (rows: any[], tokens: string[]) =>
 test.describe('oidc-dsql-notes', () => {
 	// --- Framework surface: notes stored/queried through the api + DSQL ---
 
-	test('api.addNote inserts a row that api.listNotes reads back with a numeric id', async ({ page }) => {
+	test('api.addNote inserts a row that api.listNotes reads back with a stable id', async ({ page }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signIn(page);
@@ -65,7 +65,14 @@ test.describe('oidc-dsql-notes', () => {
 		const text = uniq('note');
 		const { body } = await rpc(page.request, 'api.addNote', [text]);
 		expect(body?.error, `JSON-RPC error from addNote: ${JSON.stringify(body?.error)}`).toBeFalsy();
-		expect(typeof body?.result?.id, 'addNote must return a numeric id').toBe('number');
+		// Accept any stable, non-empty id — numeric OR string/UUID. Aurora DSQL has no
+		// SERIAL/SEQUENCE/IDENTITY and steers toward gen_random_uuid()/client-generated ids, so the
+		// most idiomatic solution is UUID-keyed; requiring a numeric id would false-fail it.
+		const id = body?.result?.id;
+		expect(
+			(typeof id === 'number' && Number.isFinite(id)) || (typeof id === 'string' && id.length > 0),
+			`addNote must return a stable non-empty id (number or string), got ${JSON.stringify(id)}`,
+		).toBe(true);
 		expect(body?.result?.text).toBe(text);
 
 		const rows = await listNotes(page.request);
@@ -129,11 +136,12 @@ test.describe('oidc-dsql-notes', () => {
 		const rows = await listNotes(page.request);
 		const [i1, i2, i3] = indicesOf(rows, [t1, t2, t3]);
 		expect([i1, i2, i3].every((i) => i >= 0), `missing notes: ${JSON.stringify([i1, i2, i3])}`).toBe(true);
-		// Creation order preserved by an explicit ORDER BY.
+		// Creation order preserved by an explicit ORDER BY (PROMPT mandate). We assert oldest-first via
+		// the returned ROW ORDER, not via id monotonicity: a UUID/client-generated id is not ordered,
+		// so requiring increasing ids would false-fail an idiomatic DSQL (UUID-keyed, ORDER BY created_at)
+		// solution. The i1<i2<i3 row-position checks are the real proof of ordering.
 		expect(i1).toBeLessThan(i2);
 		expect(i2).toBeLessThan(i3);
-		expect(rows[i1].id).toBeLessThan(rows[i2].id);
-		expect(rows[i2].id).toBeLessThan(rows[i3].id);
 
 		// A fresh query yields the identical relative order (not unspecified row order).
 		const again = await listNotes(page.request);

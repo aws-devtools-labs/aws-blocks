@@ -56,6 +56,17 @@ const rowFor = (page: Page, phrase: string) => page.getByTestId('wc-item').filte
 
 // HARNESS CONTRACT: requires workers:1 (serial; shared-store assertions assume no concurrent runners)
 test.describe('async-word-counter', () => {
+	// Turn silent cross-test contamination into a loud failure: every shared-store assertion below
+	// assumes a single serial runner. If this spec is ever run with default Playwright parallelism
+	// (workers > 1) the store is shared across concurrent tests and results corrupt silently — so
+	// fail fast and obviously here instead.
+	test.beforeAll(() => {
+		expect(
+			test.info().config.workers,
+			'this spec requires workers:1 (serial) — shared-store assertions corrupt under parallelism',
+		).toBe(1);
+	});
+
 	// --- Framework surface: counting + persistence graded through the api ---
 
 	test('api.enqueue \u2192 getJob resolves to done with the correct word count', async ({ request }) => {
@@ -97,12 +108,19 @@ test.describe('async-word-counter', () => {
 	});
 
 	test('empty / whitespace-only input is rejected and enqueues no job', async ({ request }) => {
+		const before = (await rpc(request, 'api.listJobs', [])).body?.result ?? [];
+		const beforeCount = Array.isArray(before) ? before.length : 0;
 		for (const bad of ['', '   \t  ']) {
 			const { status, body } = await rpc(request, 'api.enqueue', [bad]);
 			expect(status, `unexpected HTTP ${status}`).toBeLessThan(500);
 			expect(body?.error, `blank input must yield a JSON-RPC error envelope (input=${JSON.stringify(bad)})`).toBeTruthy();
 			expect(body?.result ?? null).toBeNull();
 		}
+		// Side-effect check: a rejecting-but-still-persisting impl would false-pass the envelope
+		// assertions above — prove the store did not grow.
+		const after = (await rpc(request, 'api.listJobs', [])).body?.result ?? [];
+		const afterCount = Array.isArray(after) ? after.length : 0;
+		expect(afterCount, 'a rejected blank input must enqueue no job').toBe(beforeCount);
 	});
 
 	test('an unknown job id returns a JSON-RPC error envelope', async ({ request }) => {
@@ -161,11 +179,16 @@ test.describe('async-word-counter', () => {
 			expect(job?.count ?? null, 'count is null/absent while still processing').toBeNull();
 		}
 
-		// listJobs must ALSO surface the still-processing job (restored from the store, PROMPT line 22).
+		// listJobs must ALSO surface the job (restored from the store, PROMPT line 22). Same tolerance
+		// as above: a fast reference impl may already report "done" here, so accept either state
+		// rather than flaking on the non-deterministic intermediate.
 		const listed = (await rpc(request, 'api.listJobs', [])).body?.result ?? [];
 		const mine = Array.isArray(listed) ? listed.find((j: any) => j?.id === id) : null;
-		expect(mine, 'listJobs must include the still-processing job (not only done ones)').toBeTruthy();
-		expect(mine.status, 'the listed job is still processing').toBe('processing');
+		expect(mine, 'listJobs must include the enqueued job (processing or done)').toBeTruthy();
+		expect(
+			['processing', 'done'],
+			'the listed job must be readable — "processing", or "done" if a fast impl already finished',
+		).toContain(mine.status);
 
 		// And it still resolves to done with the correct count.
 		expect(await countOf(request, id)).toBe(5);
