@@ -124,12 +124,17 @@ reap_stale_dev_servers() {
 }
 reap_stale_dev_servers
 
-for p in 3000 3001; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
+# The front-door ports the dev server may bind (3000/3001 only, never :3100). Single source of truth:
+# the reap/free-port loop below AND the readiness probe further down both read $DEV_PORTS, so changing
+# the canonical set updates both.
+DEV_PORTS="3000 3001"
+
+for p in $DEV_PORTS; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
 for i in $(seq 1 10); do
   # Probe via sudo too: an isolated squatter is benchagent-owned and invisible to an unprivileged fuser.
-  { sudo -n fuser 3000/tcp 3001/tcp >/dev/null 2>&1 || fuser 3000/tcp 3001/tcp >/dev/null 2>&1; } || break
+  { sudo -n fuser $(printf '%s/tcp ' $DEV_PORTS) >/dev/null 2>&1 || fuser $(printf '%s/tcp ' $DEV_PORTS) >/dev/null 2>&1; } || break
   # Still held — re-issue the privileged kill before waiting.
-  for p in 3000 3001; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
+  for p in $DEV_PORTS; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
   sleep 1
 done
 
@@ -154,12 +159,18 @@ trap cleanup_dev_server EXIT
 nohup npm run dev > "${CELL_TMP}/dev.log" 2>&1 &
 echo "$!" > "${CELL_TMP}/dev.pid"
 
-# Candidate ports the free-port/reap logic above treats as canonical for the dev server.
-DEV_PORTS="3000 3001"
+# Candidate ports for the readiness probe: $DEV_PORTS, defined once above with the reap/free-port loop.
 
 APP_BASE_URL=""
+# Up to 90 attempts, one per ~1s idle plus the curl time. NOT a hard 90s wall-clock bound: each
+# attempt issues up to 3 `curl -m 5` probes (Path A + one per DEV_PORT), and a port that ACCEPTS then
+# hangs — the loaded scenario this targets — can stretch an attempt toward ~15s, so worst-case wall
+# clock exceeds 90s. The attempt cap, not a timer, is what bounds the loop.
 for i in $(seq 1 90); do
-  # Path A — banner-derived port (exact port, when the banner shows up).
+  # Path A — banner-derived port (exact port, when the banner shows up). Accepts any non-5xx (`< 500`):
+  # this probes the app ROOT, where a 2xx/3xx/4xx all mean "the server is up and answering" (a 404 root
+  # is still a live server). Path B below is stricter (`< 400`) because it probes a SPECIFIC artifact
+  # that must exist — do not unify the two thresholds.
   port=$(grep -oE 'AWS Blocks local server running on http://localhost:[0-9]+' "${CELL_TMP}/dev.log" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)
   if [ -n "${port:-}" ]; then
     code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${port}") || code=000
@@ -170,7 +181,9 @@ for i in $(seq 1 90); do
     fi
   fi
   # Path B — deterministic readiness: the app writes /.blocks-sandbox/config.json only when serving,
-  # so a 2xx/3xx there confirms readiness independent of the banner text/timing.
+  # so it must return 2xx/3xx (`< 400`) — a 404 here means "serving but not ready yet", NOT ready.
+  # (Aware: if the reap above failed and a stale app still served config.json on a DEV_PORT, this — like
+  # Path A — could attach to it; the thorough reap + fuser-kill loop makes that unlikely, not a regression.)
   for p in $DEV_PORTS; do
     ccode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}/.blocks-sandbox/config.json") || ccode=000
     if [ "$ccode" != "000" ] && [ "$ccode" -lt 400 ]; then
