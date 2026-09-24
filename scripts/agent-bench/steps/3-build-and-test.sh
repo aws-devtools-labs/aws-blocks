@@ -186,10 +186,13 @@ for i in $(seq 1 90); do
       break
     fi
   fi
-  # Path B — deterministic readiness: the app writes /.blocks-sandbox/config.json only when serving,
-  # so it must return 2xx/3xx (`< 400`) — a 404 here means "serving but not ready yet", NOT ready.
-  # (Aware: if the reap above failed and a stale app still served config.json on a DEV_PORT, this — like
-  # Path A — could attach to it; the thorough reap + fuser-kill loop makes that unlikely, not a regression.)
+  # Path B — deterministic readiness: OUR dev server serves /.blocks-sandbox/config.json (a reserved
+  # front-door route, dev-server.ts) with a 200 the moment it accepts connections — the route is
+  # registered synchronously and gated on no "ready" flag. So we require 2xx/3xx (`< 400`): a 404 means
+  # whatever answered on this port is NOT our app (a different/stale server, or a framework dev server
+  # that proxies and can't serve this reserved path), so we must not attach to it.
+  # (Aware: if the reap above failed and a stale copy of OUR app still served config.json on a DEV_PORT,
+  # this — like Path A — could attach to it; the thorough reap + fuser-kill loop makes that unlikely, not a regression.)
   for p in $DEV_PORTS; do
     ccode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}/.blocks-sandbox/config.json") || ccode=000
     if [ "$ccode" != "000" ] && [ "$ccode" -lt 400 ]; then
