@@ -47,15 +47,14 @@ Blocks supports three compute types:
 
 ### Compute options
 
-Each type has its own options. Options that don't apply to a type are absent from its interface, so an unsupported attribute is a compile error rather than a runtime surprise.
+Each type has its own options. Options that don't apply to a type are absent from its interface, so an unsupported attribute is a static compile-time error rather than a deploy time error.
 
-A container's CPU and memory are not independent: each vCPU size permits only a fixed set of memory values. `ContainerSize` encodes that as a discriminated union, so an invalid pair (`0.25` vCPU with 16GB) is unrepresentable — the IDE narrows `memory` to the values legal for the chosen `vcpu`.
+A container's CPU and memory are not independent: each vCPU size permits only a fixed set of memory values. `ContainerSize` encodes that as a discriminated union. Invalid pairs (`0.25` vCPU with 16GB) cannot be represented, and the IDE will help funnel human coders into valid combinations.
 
 ```ts
 /**
  * Valid container vCPU + memory (MB) combinations. Each vCPU permits only its
- * listed memory values. Invalid pairs fail at build time. This matrix is
- * container-specific; `vm` and `kubernetes` will have their own combinations.
+ * listed memory values. Invalid pairs fail at build time.
  */
 type ContainerSize =
   | { vcpu: 0.25; memory: 512 | 1024 | 2048 }
@@ -69,6 +68,14 @@ type ContainerSize =
 interface ServerlessComputeOptions {
   /** Memory (MB). CPU scales with memory on a serverless compute. */
   memory?: number;
+  /**
+   * The compute's inherent max runtime ceiling, in seconds — the Lambda function
+   * timeout (up to 900). A platform property of serverless, not present on
+   * container or VM, which have no inherent runtime limit. This is a *ceiling*,
+   * not a job's deadline: a job's `timeoutSeconds` must be less than or equal to
+   * it. Defaults to the platform maximum.
+   */
+  maxTimeoutSeconds?: number;
 }
 
 interface ContainerComputeOptions {
@@ -88,8 +95,7 @@ type ContainerScaling = {
   /**
    * One or more signals that drive scaling. With several, scale-out satisfies
    * whichever signal demands the most instances; scale-in happens only when all
-   * agree it is safe. Omit and Blocks picks one by workload: queue depth for a
-   * job worker, CPU for a request-serving compute. At most one signal per metric.
+   * agree it is safe. Leave empty for Blocks to assign sane defaults.
    */
   strategy?: ScalingSignal | ScalingSignal[];
 };
@@ -100,13 +106,7 @@ type ScalingSignal =
   | { on: 'queue-depth'; backlogPerInstance: number };
 ```
 
-`scaling` bounds the instance count for horizontal redundancy and names what drives it. It defaults to a single instance (`minInstances: 1, maxInstances: 1`); today only a single instance is honored, and `maxInstances` > 1 is reserved for when the autoscaling policy lands. Fargate supports it via Application Auto Scaling (an `AWS::ApplicationAutoScaling::ScalableTarget` for the bounds plus a `ScalingPolicy` per signal); the bounds map to `minCapacity`/`maxCapacity`.
-
-`strategy` is optional — omit it and Blocks infers one by workload (queue depth for a job worker, CPU for a request-serving compute). It accepts a single signal or an array. Each signal is its own target-tracking policy on the same scalable target: `cpu`/`memory` track the standard ECS utilization metrics; `queue-depth` is the right signal for a job worker — Blocks sums `ApproximateNumberOfMessagesVisible` (messages waiting, not yet picked up) across **every queue this compute drains** (known at synth from the AsyncJobs assigned to it), divides by running instances, and target-tracks `backlogPerInstance`. With multiple signals, scale-out follows whichever demands the most instances and scale-in requires all to agree; mixing signals that move in opposite directions (e.g. low CPU while backlog is high) can cause flapping, so combine them deliberately. At most one signal per metric — a duplicate (two `cpu`) is a synth error. Because instances are shared across all jobs on the compute (one instance drains every queue), queue-depth scaling is necessarily **aggregate**, not per-job; for per-job scaling isolation, give that job its own compute.
-
-`scaling` is distinct from a job's `maxConcurrencyPerInstance`: `scaling` moves the number of instances, `maxConcurrencyPerInstance` caps in-flight work within each; total drain rate is roughly `instances × maxConcurrencyPerInstance` summed across the compute's jobs. `serverless` has neither knob — the platform scales it.
-
-There is no timeout on a compute. Time limits are a property of work, not of compute (Appendix A), so they live on the workload — see below.
+Not all forms of compute have inherent time limits. A job's time limit is primarily a property of work, not of compute (Appendix A), so it lives on the workload as `AsyncJob.timeoutSeconds`. Where a compute type *does* have an inherent ceiling — serverless, whose platform caps every function at 15 minutes — that ceiling is a per-type option (`ServerlessComputeOptions.maxTimeoutSeconds`), and a job's `timeoutSeconds` must fit under it. Container and VM carry no such field because they have no inherent runtime limit.
 
 > `image` on serverless: Lambda supports container images, but they must implement the Lambda Runtime API and are not the same artifact as a Fargate image. A custom serverless image is an advanced case deferred for now; Blocks builds the serverless bundle.
 
