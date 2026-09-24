@@ -63,11 +63,20 @@ type ComputeSize =
   | { vcpu: 16; memory: 32768 | 40960 | /* 8GB steps */ 114688 | 122880 };
 
 /** Named presets, each a member of ComputeSize. */
+/**
+ * Named presets, one per vCPU tier. These names are Blocks' own proposals — AWS
+ * gives Fargate task sizes no t-shirt names — and each is a valid `ComputeSize`
+ * (memory picked at a balanced ~1:2 vCPU:GB ratio). Other valid combinations are
+ * still expressible via the explicit `{ vcpu, memory }` form.
+ */
 const ContainerSize = {
-  small:  { vcpu: 0.5, memory: 1024 },
-  medium: { vcpu: 1,   memory: 2048 },
-  large:  { vcpu: 2,   memory: 4096 },
-  xlarge: { vcpu: 4,   memory: 8192 },
+  xsmall:  { vcpu: 0.25, memory: 512 },
+  small:   { vcpu: 0.5,  memory: 1024 },
+  medium:  { vcpu: 1,    memory: 2048 },
+  large:   { vcpu: 2,    memory: 4096 },
+  xlarge:  { vcpu: 4,    memory: 8192 },
+  '2xlarge': { vcpu: 8,  memory: 16384 },
+  '4xlarge': { vcpu: 16, memory: 32768 },
 } as const satisfies Record<string, ComputeSize>;
 
 interface ServerlessComputeOptions {
