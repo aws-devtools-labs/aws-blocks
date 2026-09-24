@@ -146,6 +146,16 @@ describe('installClientUserAgent middleware', () => {
     assert.strictEqual(headers['x-amz-user-agent'], 'aws-sdk-js/3.700.0 client/kotlin/0.2.0');
   });
 
+  test('appends to both headers when both are present (SDK v3 node)', async () => {
+    const fc = fakeClient();
+    installClientUserAgent(fc.client);
+    const headers = await als.run('client/swift/0.1.1', () =>
+      fc.run({ 'user-agent': 'aws-sdk-js/3.700.0', 'x-amz-user-agent': 'aws-sdk-js/3.700.0' }),
+    );
+    assert.strictEqual(headers['user-agent'], 'aws-sdk-js/3.700.0 client/swift/0.1.1');
+    assert.strictEqual(headers['x-amz-user-agent'], 'aws-sdk-js/3.700.0 client/swift/0.1.1');
+  });
+
   test('is a no-op when no token is set for the request', async () => {
     const fc = fakeClient();
     installClientUserAgent(fc.client);
