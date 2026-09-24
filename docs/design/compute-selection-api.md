@@ -38,14 +38,11 @@ The design has three parts: the **compute types** a customer chooses from, the *
 
 Blocks supports three compute types:
 
-```ts
-type ComputeType =
-  | 'ephemeral'    // pay-as-you-go, per-request, short-lived (Lambda today)
-  | 'container'    // long-running / long-lived process (Fargate today)
-  | 'dedicated';   // reserved capacity (EC2/EKS later)
-```
-
-The type is surfaced as an explicit value only in Option 1. In Options 2 and 3 the type is the factory method or the class, so the string never appears in customer code.
+| Type | Model | Backed by (today) |
+| --- | --- | --- |
+| `ephemeral` | Pay-as-you-go, per-request, short-lived | Lambda |
+| `container` | Long-running / long-lived process | Fargate |
+| `dedicated` | Reserved capacity | EC2 / EKS (later) |
 
 ### Compute options
 
@@ -141,6 +138,8 @@ new AsyncJob(scope, 'reports', { compute: reports, timeoutSeconds: 60 * 30, hand
 The `options` parameter is a discriminated union on `type`, so each type offers only its own options and an unsupported attribute is a compile error:
 
 ```ts
+type ComputeType = 'ephemeral' | 'container' | 'dedicated';
+
 type ComputeOptions =
   | ({ type: 'ephemeral' } & EphemeralComputeOptions)
   | ({ type: 'container' } & ContainerComputeOptions);
