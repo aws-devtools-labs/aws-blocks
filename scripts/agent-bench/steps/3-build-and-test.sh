@@ -198,6 +198,19 @@ export APP_BASE_URL
 # while the failure root-cause still attributes owner=framework. The pessimistic defaults (tests 0/0/0,
 # dev_server_started=false) carry the honest signal and control still falls through to the
 # stable-evidence copy below.
+
+# Clear any stale /tmp evidence copies from a PRIOR cell BEFORE the Playwright guard below, so this
+# always runs even when a Playwright-install/chromium early-exit fires inside the guard (those `exit 0`
+# paths would otherwise skip the clear and leave the previous cell's pw-results.json/dev.log/build.log
+# for analyze-cell to misread as this cell's). The fresh `cp` staging stays after the guard (it needs
+# the evidence to exist first); on an early-exit there is nothing to stage, and a cleared /tmp is the
+# honest state — analyze-cell degrades to null on a missing file.
+# /tmp is sticky (+t): a stale copy may be benchagent-owned (the agent's isolated phase wrote it), so a
+# plain `rm` as the runner uid hits EPERM and — under `set -e` — would abort the step. Mirror the
+# reap/fuser lines above: `sudo -n rm` clears benchagent-owned files, unprivileged `rm` is the fallback,
+# and the trailing `|| true` guarantees this cleanup never aborts the step.
+sudo -n rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || true
+
 if [ -n "$APP_BASE_URL" ]; then
 # Record whether Playwright installed; on failure tests can't run, so emit the signal and bail.
 # Both the package install AND the chromium download must succeed before the signal flips true.
@@ -282,15 +295,9 @@ fi
 # Stage the deep-failure evidence to STABLE /tmp paths for the later "analyze cell" step. CELL_TMP is
 # keyed on this script's PID, so it's gone by the time analyze-cell.mjs runs — mirror how the
 # trace/metrics already land at /tmp. Best-effort: a missing source or copy failure must never break
-# the green-regardless exit (analyze-cell degrades to null when a file is absent). Clear any stale
-# copies from a PRIOR cell first (runner-agnostic) so a skipped / again-missing source can't leave the
-# previous cell's evidence in place for analyze-cell to misread.
-# /tmp is sticky (+t): a stale copy from a PRIOR cell may be benchagent-owned (the agent's isolated
-# phase wrote it), so a plain `rm` as the runner uid hits EPERM and — under `set -e` — would abort the
-# step BEFORE the green-regardless `exit 0` below, mis-recording a cell that actually built + passed.
-# Mirror the reap/fuser lines above: `sudo -n rm` clears benchagent-owned files, unprivileged `rm` is
-# the fallback, and the trailing `|| true` guarantees this cleanup never aborts the step.
-sudo -n rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || true
+# the green-regardless exit (analyze-cell degrades to null when a file is absent). Stale copies from a
+# PRIOR cell were already cleared before the Playwright guard above, so these cp's only ever add THIS
+# cell's evidence.
 cp "$PW_RESULTS_JSON" /tmp/pw-results.json 2>/dev/null || true
 cp "${CELL_TMP}/dev.log" /tmp/dev.log 2>/dev/null || true
 cp "${CELL_TMP}/build.log" /tmp/build.log 2>/dev/null || true
