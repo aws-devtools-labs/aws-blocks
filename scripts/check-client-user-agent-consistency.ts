@@ -37,8 +37,8 @@ function isBuildingBlockSource(absPath: string): boolean {
 }
 
 /**
- * Counts `customUserAgent` client-construction sites in a file, ignoring type
- * fields, reassignments, and options merely forwarded to a non-client helper.
+ * Estimates client-construction sites by counting `customUserAgent` property
+ * lines in files that contain an SDK client constructor.
  */
 function countClientUserAgentSites(content: string): number {
   let sites = 0;

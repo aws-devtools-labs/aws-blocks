@@ -516,7 +516,7 @@ function createHandler(backend: any) {
         headers: {
           ...corsHeaders,
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Access-Control-Allow-Headers': `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
           'Access-Control-Max-Age': CORS_MAX_AGE,
         },
         body: '',

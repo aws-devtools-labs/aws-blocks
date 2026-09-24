@@ -1411,4 +1411,10 @@ describe('createLambdaHandler — native client user-agent forwarding', () => {
     const body = JSON.parse(result.body);
     assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
   });
+
+  it('allows the client user-agent header through the CORS preflight', async () => {
+    const result = await invoke(uaProbeBackend(), makeEvent({ httpMethod: 'OPTIONS', body: '' }));
+    assert.strictEqual(result.statusCode, 200);
+    assert.match(result.headers['Access-Control-Allow-Headers'], /x-blocks-user-agent/);
+  });
 });
