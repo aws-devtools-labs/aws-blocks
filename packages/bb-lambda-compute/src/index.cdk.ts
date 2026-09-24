@@ -57,6 +57,11 @@ export class LambdaCompute extends Compute {
 	/** The RPC endpoint URL (`{gateway}/aws-blocks/api`). */
 	readonly apiUrl: string;
 	/**
+	 * The `/aws-blocks/api` gateway resource. Per-namespace ingress resources
+	 * ({@link mountNamespaceRoutes}) are mounted under it.
+	 */
+	private readonly rpcResource: apigateway.Resource;
+	/**
 	 * The handler's CloudWatch log group. Logs are always captured here; the
 	 * retention comes from this compute's `logRetention` prop, falling back to the
 	 * stack-wide `defaults.logRetention`. Named `logGroup` (not `handlerLogGroup`)
@@ -187,9 +192,9 @@ export class LambdaCompute extends Compute {
 		const awsBlocksResource = this.apiGateway.root.addResource(BLOCKS_NAMESPACE.slice(1));
 		awsBlocksResource.addProxy({ defaultIntegration: integration, anyMethod: true });
 
-		const apiResource = awsBlocksResource.addResource('api');
-		apiResource.addMethod('POST', integration);
-		apiResource.addMethod('OPTIONS', integration);
+		this.rpcResource = awsBlocksResource.addResource('api');
+		this.rpcResource.addMethod('POST', integration);
+		this.rpcResource.addMethod('OPTIONS', integration);
 
 		this.apiGateway.root.addProxy({ defaultIntegration: integration, anyMethod: true });
 
@@ -237,5 +242,29 @@ export class LambdaCompute extends Compute {
 			throw new Error(`Compute "${this.id}": tracingWidgets requires a Tracer — call enableTracing() first`);
 		}
 		return buildTracingWidgets(this.fn.functionName, region);
+	}
+
+	/**
+	 * Mount `/aws-blocks/api/{namespace}` (and `/aws-blocks/api/{namespace}/*`)
+	 * for each recorded namespace, both proxying to the same Lambda.
+	 *
+	 * Purely additive: dispatch still reads the namespace from the request body,
+	 * and the runtime handler already treats every path under `/aws-blocks/api`
+	 * as an RPC request, so no runtime change is involved and `/aws-blocks/api`
+	 * keeps serving. The per-namespace resource exists so routing infrastructure
+	 * (which matches on path, not body) has a deterministic target for the
+	 * compute that owns a namespace. Called at synth finalize once namespaces are
+	 * recorded; idempotent, so a repeated finalize won't duplicate resources.
+	 */
+	override mountNamespaceRoutes(): void {
+		if (this.namespaces.length === 0) return;
+		const integration = new apigateway.LambdaIntegration(this.fn);
+		for (const ns of this.namespaces) {
+			// Idempotent across repeated finalize passes / duplicate namespaces.
+			if (this.rpcResource.getResource(ns)) continue;
+			const nsResource = this.rpcResource.addResource(ns);
+			nsResource.addMethod('ANY', integration);
+			nsResource.addProxy({ defaultIntegration: integration, anyMethod: true });
+		}
 	}
 }
