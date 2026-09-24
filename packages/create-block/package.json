@@ -1,6 +1,9 @@
 {
   "name": "@aws-blocks/create-block",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "keywords": [
+    "aws-blocks"
+  ],
   "description": "Scaffold a new AWS Blocks Building Block (bb-*) — inside the monorepo (contributor mode) or in your own project (external mode).",
   "repository": {
     "type": "git",
@@ -29,6 +32,8 @@
   "files": [
     "dist",
     "templates",
+    "README.md",
+    "DESIGN.md",
     "LICENSE"
   ]
 }

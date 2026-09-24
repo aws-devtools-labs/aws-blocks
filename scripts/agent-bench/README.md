@@ -42,9 +42,10 @@ Nine steps per cell, all on the GitHub runner (4b and 6b are best-effort auxilia
 
 No microVM, no S3 transport between runner and sandbox. The runner is the
 sandbox; Bedrock provides the model. Builder and judge currently both run on
-Opus 4.8 (the builder model is the `BENCH_MODEL` knob, default Opus 4.8); set
-`BENCH_MODEL` back to a Sonnet id to de-correlate and limit same-model
-self-evaluation bias.
+Opus 4.8 (builder via `BENCH_MODEL`, judge via `BENCH_JUDGE_MODEL`, both
+defaulting to Opus 4.8). To de-correlate and limit same-model self-evaluation
+bias, give the builder and judge different ids — set `BENCH_MODEL` (builder) and
+`BENCH_JUDGE_MODEL` (judge) to distinct values.
 
 ## Security
 
@@ -137,14 +138,20 @@ and a broken (composite 0) cell scores 0 no matter how cheap it was. A cell with
 no recorded tokens renders `—` (never a fake `$0`). Flip the single
 `SCORE_PER_DOLLAR` constant in `lib/scoring.mjs` for cost-per-point instead.
 
-**Colors vs baseline (per metric).** In the report every metric cell is colored
-against the baseline value for that metric: 🟢 same-or-better · 🟡 worse but
-within the margin · 🔴 worse beyond it · 🆕 no baseline value (new cell) · `—`
-nothing to diff · 🗑️ cell gone since the baseline. The margin is a SINGLE tunable,
-`MARGIN_PCT` (5% relative) in `lib/overview.mjs`; for integer metrics (test
-counts, 0–10 judge dims) it is floored to 1, so a single-point nudge reads 🟡,
-never 🔴. Directions: tests ↑, judge ↑, score ↑ are better (higher = 🟢); cost ↓,
-tokens ↓ are better (lower = 🟢).
+**Indicators vs baseline (per metric).** In the report every metric cell shows its
+current value with a **signed delta vs the baseline value**
+for that metric, using an emoji indicator for the SIGNIFICANCE + DIRECTION of the change (not
+absolute quality): ✨ noticeably improved · ✅ OK / no significant change (within noise band) ·
+⚠️ slight regression (beyond 1× threshold) · ❌ serious regression (beyond 2× threshold) ·
+🆕 no baseline value for that field (a new cell, or a
+metric the baseline predates) — the current value is still shown, tagged `(new)`
+· `—` nothing to show this run · 🗑️ cell gone since the baseline. Directions:
+tests, judge, score are higher-better; cost, turns are lower-better. The
+per-metric noise bands are a SINGLE tunable, `DELTA_THRESHOLDS` in
+`lib/overview.mjs`, consumed by `deltaColor`: composite/score ±5 points, judge
+±0.3, tests ±1 pass, cost ±10% (relative, floor $0.02), turns ±3. A
+change within its band reads ✅ (noise, since N=1); beyond 1× threshold ✨/⚠️ by
+direction; beyond 2× threshold ❌ (serious regression).
 
 **Verdict tiers** are pure pass-rate — the judge plays no part, so an LLM
 failure can never flip a verdict:
@@ -209,19 +216,35 @@ data so identifiers stay collision-free across a spec's internal navigation.
 **Re-derivability.** Each `result.json` publishes `tests_passed`/`tests_total`,
 `test_rate`, the raw per-dimension judge scores (pre-cap `judge_dimensions_raw`
 and post-cap `judge_dimensions`), `judge_overall`, `composite`, `verdict`,
-`klass`, the builder `tokens_in`/`tokens_out`, and `stop_reason`. The **Detailed
-results** table renders every post-cap dimension inline (one colored
-`baseline -> pr` line per dimension in its Judge cell), and the cost + score are
-derived from the published tokens via `lib/scoring.mjs`. A reader can re-derive —
-or re-weight — every composite, cost and score from the published data without
-re-running anything.
+`klass`, the builder `tokens_in`/`tokens_out`, and `stop_reason`. The results
+table renders the overall judge score, tests, cost, turns and score per cell,
+and the cost + score are derived from the published tokens via `lib/scoring.mjs`.
+A reader can re-derive — or re-weight — every composite, cost and score from the
+published data without re-running anything.
 
-**Gating.** Observational by default: with the repo/org variable
-`BENCH_MIN_SCORE` unset the summary only reports the mean composite. Set it to a
-number to gate — the summary job exits non-zero when the mean composite across
-scored cells falls below it; this is the **one** intentional exception to
-green-regardless (below). There is no baseline-*delta* gate — the PR-vs-baseline
-overview (below) is observational only.
+**Gating.** Observational by default: with all three gate variables unset the
+summary only reports the mean composite and never turns the check red. Each gate
+is opt-in via its own repo/org variable, and any one tripping exits the summary
+job non-zero (the intentional exception to green-regardless, below):
+
+- `BENCH_MIN_SCORE` — absolute floor. Fails when the mean composite across scored
+  cells falls below it. Skipped (never fails) when no cell scored.
+- `BENCH_MAX_REGRESSION` — regression vs `main`. Fails when the mean composite
+  drops more than this many points below the `main` baseline. Skipped on the
+  first run / when no baseline exists (nothing to diff).
+- `BENCH_MAX_HARNESS_ERRORS` — infra-failure ceiling. Fails when more than this
+  many cells are `harness_error` — an unreadable/corrupt `result.json` artifact
+  counts too, since it is also a broken measurement. Distinct from a low agent
+  score: this catches a broken *measurement*. Must be a whole number — a negative
+  or fractional value is treated as unset (a negative count would invert the gate;
+  a fractional count is nonsensical). One case fires with **no variable set
+  at all**: if the bench matrix did not succeed AND produced zero result artifacts
+  (e.g. `build-blocks` failed so every cell was skipped), the summary reds the
+  check — a total upstream failure must not report green.
+
+A negative or non-numeric value for any gate variable is treated as unset. The
+PR-vs-baseline results table is observational; the regression *gate* above
+(`BENCH_MAX_REGRESSION`), not the table's ±5-pt display band, is what blocks.
 
 **Check status — green regardless.** A bench cell never turns the PR check red.
 Every fallible cell step (`npm ci`, OIDC, `1-init`, `2-agent`, `3-build-and-test`,
@@ -229,28 +252,31 @@ Every fallible cell step (`npm ci`, OIDC, `1-init`, `2-agent`, `3-build-and-test
 `if: steps.<prev>.outcome == 'success'` chain that reproduces the old implicit
 skip-chain — so an agent timeout still skips its tests/judge and scores composite
 0, rather than scoring a partial app. A cell's outcome lives in `result.json` +
-the run summary, not the check status, and the summary job is green too (unless
-`BENCH_MIN_SCORE` is set and trips). A new commit cancels the prior in-flight run
+the run summary, not the check status, and the summary job is green too (unless a
+gate above is set and trips). A new commit cancels the prior in-flight run
 via the workflow `concurrency` group.
 
-**The report — Overview + Detailed vs the `main` baseline.** Each run writes a
-compact **aggregate** (per cell: composite/verdict, test counts, per-dimension
+**The report — a single results table vs the `main` baseline.** Each run writes
+a compact **aggregate** (per cell: composite/verdict, test counts, per-dimension
 judge scores, builder tokens, cost, and score-per-$, plus the mean) to S3 at
 `bench/runs/<sha>/results.json`; a push-to-`main` run also updates the stable
 pointer `bench/runs/latest-main.json`. The summary job fetches a baseline and
-renders TWO tables from the SAME rows (`lib/overview.mjs`):
+renders ONE results table (`renderDetailed` in `lib/overview.mjs`):
+`TASK · TEMPLATE · TESTS · JUDGE · COST · TURNS · SCORE · STOP REASON`.
+Each metric cell is a single inline line — `<indicator> <value> (<Δ vs main>)`: the
+current value with its signed delta vs the baseline (`🆕 (new)` when the baseline
+has no value for that field — the value is still shown), indicated by `deltaColor`
+per the `DELTA_THRESHOLDS` bands. The JUDGE cell shows the overall judge score
+with its signed delta; the per-dimension breakdown lives in the judge artifact
+JSON. There is no separate colors-only Overview and no standalone `Δ vs base`
+column — the delta is baked into every cell.
 
-- **Overview** — colors ONLY (🟢/🟡/🔴 per metric vs baseline), at-a-glance:
-  `TASK · TEMPLATE · TESTS · JUDGE · COST · TOKENS (in/out) · SCORE`.
-- **Detailed results** — the same rows widened WITH numbers (`baseline -> pr`),
-  including a multi-line per-dimension Judge cell and the cell's stop reason.
-
-A collapsible **Glossary** (scoring, colors, the ±5% margin) sits at the very
-top; a best-effort roll-up step (`analyze.mjs`) then appends an **Executive
-summary** (a short paragraph + bullets), a **Potential issues** section (fed by
-each cell's own analysis), and a collapsed **Per-cell analysis** (each cell also
-collapsed within it). The old `build` / `verdict` / `composite` columns and the
-raw per-dimension blurb are gone — folded into the two tables above.
+A collapsible **Glossary** (scoring, colors, the per-metric thresholds) sits at
+the very top; the deterministic **headline** (mean composite + delta) prints just
+above the table; a best-effort roll-up step (`analyze.mjs`) then appends an
+**Executive summary** (a short paragraph + bullets), a **Potential issues**
+section (fed by each cell's own analysis), and a collapsed **Per-cell analysis**
+(each cell also collapsed within it).
 
 **Baseline selection.** The baseline a **PR** diffs against is ALWAYS the most
 recent `main`-branch bench, `bench/runs/latest-main.json` — the current tip of
@@ -260,8 +286,9 @@ so an exact-base-sha lookup can silently diff against an outdated or never-bench
 commit; `latest-main.json`, refreshed on every push to `main`, can't. A **push to
 `main`** instead diffs against the immediately preceding main commit
 (`github.event.before`) by exact sha — the ONLY place a commit-keyed baseline is
-read — with `latest-main` as the fallback. With no baseline found the tables show
-absolute values (every metric 🆕) and a "no baseline" note (never an error).
+read — with `latest-main` as the fallback. With no baseline found the table shows
+current values only (every metric 🆕 `(new)`) and a "no baseline" note (never an
+error).
 Reading/writing the baseline uses the same OIDC role (`s3:GetObject` /
 `s3:PutObject` on `bench/*`); a missing grant just degrades to "no baseline".
 
@@ -279,12 +306,14 @@ Reading/writing the baseline uses the same OIDC role (`s3:GetObject` /
 | `steps/4-judge.ts` | Judge agent (Strands + Bedrock); one vended `bash` tool over a spec-blinded, disposable source-only copy; grades on the fixed shared rubric (`COMMON_DIMENSIONS`) and applies hard caps |
 | `steps/lib/run-shell.ts` | Shared shell infrastructure for the builder + judge: the `WorkspaceSandbox` (host-execution Sandbox rooted at a fixed dir) + a backgrounded-process-safe runner. The containment fix lives here once; imported by `2-agent-run.ts` and `4-judge.ts` |
 | `steps/lib/scoring.mjs` | **Single source of truth** for scoring: `classifyCell`, `testStats`/`testRate`, `verdict`/`verdictOf`, `composite`/`compositeBand`, `isScoredCell`, plus the cost/score model — `PRICING`/`BUILDER_PRICING`, `cellCost`, `scorePerDollar` (+ the `SCORE_PER_DOLLAR` knob). Imported by finalize, summary, and overview |
-| `steps/lib/overview.mjs` | Pure helpers for the two report tables: `buildAggregate` (schema-2 aggregate — per-cell composite/tests/judge-dims/tokens/cost/score/stop_reason + mean), `diffAgainstBaseline`, the color engine (`MARGIN_PCT`, `metricColor`), formatters, and `renderOverview` (colors) + `renderDetailed` (numbers). Imported by summary + analyze |
+| `steps/lib/overview.mjs` | Pure helpers for the report table: `buildAggregate` (schema-2 aggregate — per-cell composite/tests/judge-dims/tokens/cost/score/stop_reason + mean), `diffAgainstBaseline`, the color engine (`DELTA_THRESHOLDS`, `deltaColor`), formatters, and `renderDetailed` (the single results table: current value + colored signed delta per cell). Imported by summary + analyze |
 | `steps/lib/analysis.mjs` | Shared, mostly-pure helpers for the trace/metrics analysis feature: trace trimming, prompt builders, and `parseCellAnalysis` (splits the per-cell model output into an analysis string + a bounded potential-issues list). Imported by `analyze-cell.mjs` (per-cell) and `analyze.mjs` (roll-up) |
 | `steps/analyze-cell.mjs` | Step 4b: per-cell trace/metrics analysis via the judge model; writes a concise `analysis` string **and** an `analysis_issues[]` (potential issues) back into the cell's `result.json` |
 | `steps/analyze.mjs` | Summary-job roll-up: synthesizes the per-cell analyses into a short **Executive summary** (paragraph + bullets) via one best-effort Bedrock call, aggregates a **Potential issues** section, and renders a collapsed **Per-cell analysis** (each cell also collapsed) |
+| `steps/lib/gates.mjs` | **Single source of truth** for the merge gate: `parseThreshold` + `evaluateGates` decide pass/fail from the floor (`BENCH_MIN_SCORE`), regression-vs-`main` (`BENCH_MAX_REGRESSION`) and harness/infra (`BENCH_MAX_HARNESS_ERRORS`, incl. the whole-run upstream-failure case). Pure; imported by summary |
+| `steps/lib/pr-comment.sh` | Upsert the report as one sticky PR comment keyed by a hidden marker (update oldest, delete duplicates); same-repo PR only, best-effort |
 | `steps/finalize-result.mjs` | Run with `if: always()`; stamps `status` + `failed_at` from per-step outcomes, then `klass`, `test_rate`, `verdict`, `composite` via `lib/scoring.mjs` |
-| `steps/summary.mjs` | Render the report to `$GITHUB_STEP_SUMMARY`: a collapsible **Glossary**, the colors-only **Overview** + numbers **Detailed results** tables (vs the `main` baseline), and a deterministic caveats block; reads one `result.json` per cell (N=1); writes the run's schema-2 aggregate (+ Athena NDJSON) for the S3 baseline; optional `BENCH_MIN_SCORE` gate |
+| `steps/summary.mjs` | Render the report to `$GITHUB_STEP_SUMMARY` **and** to a file for the sticky PR comment: a collapsible **Glossary**, the headline (mean composite + delta), the single **results table** — current value + colored signed delta per cell — vs the `main` baseline, a **Merge verdict** section (each enabled gate's decision), and a deterministic caveats block; reads one `result.json` per cell (N=1); writes the run's schema-2 aggregate (+ Athena NDJSON) for the S3 baseline; runs the three gates via `lib/gates.mjs` and exits non-zero when any trips |
 | `package.json` | Workspace metadata; `private: true` |
 
 Failure handling: every cell starts with `0-init-result.mjs` writing a
@@ -296,12 +325,18 @@ upload step also runs with `if: always()`, so the cell always shows up in the
 summary table — never silently missing.
 
 The report is written to the **GitHub Actions run summary**
-(`$GITHUB_STEP_SUMMARY`) and renders in the run UI — the Glossary, the Overview +
-Detailed tables, then the executive summary / potential issues / per-cell
-analysis. The bench posts **no PR comment** — the github-script commenting step in
-`agent-bench.yml` is intentionally left in place but commented out, so it can be
-restored if commenting is ever wanted again. When the bench matrix produces no
-results, `summary.mjs` renders a benign "no results" note and still exits 0.
+(`$GITHUB_STEP_SUMMARY`) and renders in the run UI — the Glossary, the headline,
+the single results table, then the executive summary / potential issues /
+per-cell analysis. The bench also posts the report as **one sticky PR comment** — the
+`Comment bench report on PR` step upserts a single comment keyed by a hidden
+`<!-- agent-bench-report -->` marker (`steps/lib/pr-comment.sh`): it updates the
+oldest marker comment in place and deletes any duplicates, so re-runs never spam
+the thread. It runs same-repo PRs only (a fork PR has no token) and is
+`continue-on-error`, so a comment failure never reds the bench — the report is
+also in the Actions run summary. Requires `pull-requests: write`, granted on the
+caller `bench` job in `pr-agent-bench.yml` (a reusable workflow's token is capped
+down to the caller's). When the bench matrix produces no results, `summary.mjs`
+renders a benign "no results" note and still exits 0.
 
 ## Local development
 

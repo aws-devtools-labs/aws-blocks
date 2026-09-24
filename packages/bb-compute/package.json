@@ -42,8 +42,8 @@
     "test": "node --conditions=cdk --test dist/index.cdk.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.4.0",
-    "@aws-blocks/bb-lambda-compute": "^0.4.0",
+    "@aws-blocks/core": "^0.5.0",
+    "@aws-blocks/bb-lambda-compute": "^0.5.0",
     "@aws-blocks/bb-container-compute": "^0.1.0"
   },
   "devDependencies": {
