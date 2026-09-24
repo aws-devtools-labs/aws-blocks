@@ -230,8 +230,12 @@ export class ContainerCompute extends Compute {
 			} else if (signal.on === 'memory') {
 				scalable.scaleOnMemoryUtilization(`MemoryScaling`, { targetUtilizationPercent: signal.targetPercent });
 			} else {
-				// queue-depth: sum visible messages across every owned queue, tracked
-				// per instance. Metric math because the target divides by task count.
+				// queue-depth: sum visible messages across every owned queue and step
+				// scale on the total. Target tracking rejects a math expression (CDK's
+				// scaleToTrackCustomMetric wants a direct metric), so the sum-across-
+				// queues signal uses step scaling: add capacity as the backlog grows in
+				// multiples of backlogPerInstance, remove it as it shrinks. The steps
+				// are relative to the current task count via changeInCapacity.
 				if (ownedQueues.length === 0) continue;
 				const using: Record<string, cloudwatch.IMetric> = {};
 				ownedQueues.forEach((q, i) => {
@@ -241,10 +245,20 @@ export class ContainerCompute extends Compute {
 					expression: Object.keys(using).join(' + '),
 					usingMetrics: using,
 					label: 'BacklogVisible',
+					period: cdk.Duration.minutes(1),
 				});
-				scalable.scaleToTrackCustomMetric(`QueueDepthScaling`, {
+				const per = signal.backlogPerInstance;
+				scalable.scaleOnMetric(`QueueDepthScaling`, {
 					metric: backlog,
-					targetValue: signal.backlogPerInstance,
+					// Below one instance's worth of backlog → scale toward min; each
+					// additional `per` messages adds an instance.
+					scalingSteps: [
+						{ upper: per, change: 0 },
+						{ lower: per, change: +1 },
+						{ lower: per * 5, change: +3 },
+					],
+					adjustmentType: cdk.aws_applicationautoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
+					cooldown: cdk.Duration.minutes(1),
 				});
 			}
 		}
