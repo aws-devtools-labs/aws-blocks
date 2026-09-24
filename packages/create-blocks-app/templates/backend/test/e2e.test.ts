@@ -53,11 +53,13 @@ test('app: server serves its Blocks config', async () => {
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
 
-// Example test for the sample `greet` API. It is skipped by default so that
-// removing or renaming the sample API does not leave you with a failing test
-// before you have written any code. Once you add your own API methods, copy
-// this block, drop the `skip`, and assert against them.
-test('greet returns message and timestamp', { skip: 'sample API — replace with tests for your own methods' }, async () => {
+// This test runs against the sample `greet` API the template ships with, so a
+// freshly-scaffolded app is validated end to end. It self-skips only once you
+// remove or rename `greet`, so replacing the sample API never leaves a failing
+// test. Copy this block for your own methods.
+test('greet returns message and timestamp', {
+  skip: 'greet' in api ? false : 'sample greet API removed — replace with tests for your own methods',
+}, async () => {
   const result = await api.greet('World');
   assert.strictEqual(result.message, 'Hello, World!');
   assert.ok(typeof result.timestamp === 'number');
