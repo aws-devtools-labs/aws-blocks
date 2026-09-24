@@ -1,0 +1,6 @@
+{
+  "name": "InternalServerErrorException",
+  "message": "An internal error occurred.",
+  "expected": "ConnectionFailed",
+  "provenance": "SDK-exception-name classification path (no SQLState); message text is the SDK's generic wording, pending real capture"
+}
