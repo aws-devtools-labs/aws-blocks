@@ -55,9 +55,8 @@ test('app: server serves its Blocks config', async () => {
 
 // Runs against the sample `greet` API so a scaffolded app is validated end to end.
 // Self-skips once you remove or rename `greet`; copy this block for your own methods.
-test('greet returns message and timestamp', {
-  skip: 'greet' in api ? false : 'sample greet API removed — replace with tests for your own methods',
-}, async () => {
+test('greet returns message and timestamp', async (t) => {
+  if (!('greet' in api)) return t.skip('sample greet API removed — replace with tests for your own methods');
   const result = await api.greet('World');
   assert.strictEqual(result.message, 'Hello, World!');
   assert.ok(typeof result.timestamp === 'number');

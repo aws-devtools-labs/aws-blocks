@@ -57,17 +57,15 @@ test('app: server serves its Blocks config', async () => {
 
 // Run against the sample API so a scaffolded app is validated end to end.
 // Each self-skips once you remove the method it exercises; copy a block for your own.
-test('greet returns message and timestamp', {
-  skip: 'greet' in hello ? false : 'sample greet API removed — replace with your own',
-}, async () => {
+test('greet returns message and timestamp', async (t) => {
+  if (!('greet' in hello)) return t.skip('sample greet API removed — replace with your own');
   const result = await hello.greet('World');
   assert.strictEqual(result.message, 'Hello, World!');
   assert.ok(typeof result.timestamp === 'number');
 });
 
-test('KV Store - set and get', {
-  skip: 'setValue' in api ? false : 'sample KV API removed — replace with your own',
-}, async () => {
+test('KV Store - set and get', async (t) => {
+  if (!('setValue' in api)) return t.skip('sample KV API removed — replace with your own');
   const setResult = await api.setValue('test-key', 'test-value');
   assert.strictEqual(setResult.success, true);
 
