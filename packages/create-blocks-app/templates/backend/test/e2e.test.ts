@@ -53,10 +53,8 @@ test('app: server serves its Blocks config', async () => {
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
 
-// This test runs against the sample `greet` API the template ships with, so a
-// freshly-scaffolded app is validated end to end. It self-skips only once you
-// remove or rename `greet`, so replacing the sample API never leaves a failing
-// test. Copy this block for your own methods.
+// Runs against the sample `greet` API so a scaffolded app is validated end to end.
+// Self-skips once you remove or rename `greet`; copy this block for your own methods.
 test('greet returns message and timestamp', {
   skip: 'greet' in api ? false : 'sample greet API removed — replace with tests for your own methods',
 }, async () => {
