@@ -30,9 +30,6 @@ import platform.Security.kSecAttrAccount
 import platform.Security.kSecAttrService
 import platform.Security.kSecClass
 import platform.Security.kSecClassGenericPassword
-import platform.Security.kSecMatchLimit
-import platform.Security.kSecMatchLimitAll
-import platform.Security.kSecReturnAttributes
 import platform.Security.kSecReturnData
 import platform.Security.kSecValueData
 import platform.darwin.OSStatus
@@ -130,38 +127,4 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
         }
     }
 
-    override fun getAll(): Map<String, String> = withQuery({
-        constant(kSecClass, kSecClassGenericPassword)
-        bridged(kSecAttrService, service as NSString)
-        constant(kSecReturnAttributes, kCFBooleanTrue)
-        constant(kSecReturnData, kCFBooleanTrue)
-        constant(kSecMatchLimit, kSecMatchLimitAll)
-    }) { query ->
-        memScoped {
-            val result = alloc<CFTypeRefVar>()
-            val status: OSStatus = SecItemCopyMatching(query, result.ptr)
-            if (status != errSecSuccess) return@memScoped emptyMap()
-
-            @Suppress("UNCHECKED_CAST")
-            val items = CFBridgingRelease(result.value) as? List<Map<Any?, Any?>>
-                ?: return@memScoped emptyMap()
-            items.mapNotNull { item ->
-                val account = item[kSecAttrAccount.bridgedKey()] as? String ?: return@mapNotNull null
-                val data = item[kSecValueData.bridgedKey()] as? NSData ?: return@mapNotNull null
-                val value = NSString.create(data = data, encoding = NSUTF8StringEncoding) as? String
-                    ?: return@mapNotNull null
-                account to value
-            }.toMap()
-        }
-    }
 }
-
-/**
- * The dictionary returned by `SecItemCopyMatching` is bridged to a Kotlin `Map` whose keys
- * are the `kSec*` attribute constants as bridged `NSString`s. `CFBridgingRelease` of a
- * retained copy yields that same `NSString` for lookup, without consuming the immortal
- * constant's own reference.
- */
-@OptIn(ExperimentalForeignApi::class)
-private fun CFTypeRef?.bridgedKey(): Any? =
-    CFBridgingRelease(this?.let { platform.CoreFoundation.CFRetain(it) })

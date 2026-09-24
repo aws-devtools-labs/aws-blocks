@@ -44,12 +44,4 @@ private class AndroidKeyValueStore(
             prefs.edit()?.remove(key)?.apply()
         }
     }
-
-    override fun getAll(): Map<String, String> {
-        return synchronized(this) {
-            prefs.all.orEmpty().mapNotNull { (key, value) ->
-                (value as? String)?.let { key to it }
-            }.toMap()
-        }
-    }
 }

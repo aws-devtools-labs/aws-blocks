@@ -4,7 +4,6 @@ internal interface KeyValueStore {
     fun put(key: String, value: String)
     fun get(key: String): String?
     fun remove(key: String)
-    fun getAll(): Map<String, String>
 }
 
 internal expect fun encryptedKeyValueStore(name: String): KeyValueStore
