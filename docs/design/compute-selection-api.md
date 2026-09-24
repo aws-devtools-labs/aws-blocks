@@ -49,11 +49,15 @@ Blocks supports three compute types:
 
 Each type has its own options. Options that don't apply to a type are absent from its interface, so an unsupported attribute is a compile error rather than a runtime surprise.
 
-A container's CPU and memory are not independent: each vCPU size permits only a fixed set of memory values. `ComputeSize` encodes that as a discriminated union, so an invalid pair (`0.25` vCPU with 16GB) is unrepresentable — the IDE narrows `memory` to the values legal for the chosen `vcpu`.
+A container's CPU and memory are not independent: each vCPU size permits only a fixed set of memory values. `ContainerSize` encodes that as a discriminated union, so an invalid pair (`0.25` vCPU with 16GB) is unrepresentable — the IDE narrows `memory` to the values legal for the chosen `vcpu`.
 
 ```ts
-/** Valid vCPU + memory (MB) combinations. Each vCPU permits only its listed memory values. */
-type ComputeSize =
+/**
+ * Valid Fargate vCPU + memory (MB) combinations. Each vCPU permits only its
+ * listed memory values, so an invalid pair is unrepresentable. This matrix is
+ * container-specific; `vm` and `kubernetes` will bring their own size types.
+ */
+type ContainerSize =
   | { vcpu: 0.25; memory: 512 | 1024 | 2048 }
   | { vcpu: 0.5; memory: 1024 | 2048 | 3072 | 4096 }
   | { vcpu: 1; memory: 2048 | 3072 | 4096 | 5120 | 6144 | 7168 | 8192 }
@@ -62,31 +66,14 @@ type ComputeSize =
   | { vcpu: 8; memory: 16384 | 20480 | /* 4GB steps */ 57344 | 61440 }
   | { vcpu: 16; memory: 32768 | 40960 | /* 8GB steps */ 114688 | 122880 };
 
-/** Named presets, each a member of ComputeSize. */
-/**
- * Named presets, one per vCPU tier. These names are Blocks' own proposals — AWS
- * gives Fargate task sizes no t-shirt names — and each is a valid `ComputeSize`
- * (memory picked at a balanced ~1:2 vCPU:GB ratio). Other valid combinations are
- * still expressible via the explicit `{ vcpu, memory }` form.
- */
-const ContainerSize = {
-  xsmall:  { vcpu: 0.25, memory: 512 },
-  small:   { vcpu: 0.5,  memory: 1024 },
-  medium:  { vcpu: 1,    memory: 2048 },
-  large:   { vcpu: 2,    memory: 4096 },
-  xlarge:  { vcpu: 4,    memory: 8192 },
-  '2xlarge': { vcpu: 8,  memory: 16384 },
-  '4xlarge': { vcpu: 16, memory: 32768 },
-} as const satisfies Record<string, ComputeSize>;
-
 interface ServerlessComputeOptions {
   /** Memory (MB). CPU scales with memory on a serverless compute. */
   memory?: number;
 }
 
 interface ContainerComputeOptions {
-  /** CPU + memory as a valid combination, or a `ContainerSize` preset. */
-  size?: ComputeSize;
+  /** A valid vCPU + memory combination. */
+  size?: ContainerSize;
   /** Task-count bounds; defaults to a single task. See the scaling note below. */
   scaling?: { min: number; max: number };
   /** Custom container image (ECR URI or build context). */
@@ -188,7 +175,7 @@ type ComputeOptions =
 ```ts
 import { Compute } from '@aws-blocks/blocks';
 
-const reports = Compute.container(scope, 'reports', { size: ContainerSize.medium });
+const reports = Compute.container(scope, 'reports', { size: { vcpu: 1, memory: 2048 } });
 const api     = Compute.serverless(scope, 'api', { memory: 512 });
 ```
 
