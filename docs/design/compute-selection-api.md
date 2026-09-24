@@ -32,12 +32,11 @@ The proposed solution is a single `Compute` Block or factory that clearly asks c
 ---
 
 ## Design
-
-The design has three parts: the **compute types** a customer chooses from, the **tuning attributes** common to every type, and how a compute is **consumed** by a workload such as `AsyncJob`. The tuning attributes and the consumption contract are the same no matter which declaration surface we pick, so they are settled first; how a customer *states the type* is the only thing the API options below differ on.
+The design has three parts: the **compute types** a customer chooses from, the **options** that configure each type, and how a compute is **consumed** by a workload such as `AsyncJob`. The options and the consumption contract hold across all three API options below; those options differ only in how the customer states the type.
 
 ### Compute types
 
-The type is the one thing a customer must state. It names the general kind of compute, not the AWS service.
+Blocks supports three compute types:
 
 ```ts
 type ComputeType =
@@ -46,37 +45,42 @@ type ComputeType =
   | 'dedicated';   // reserved capacity (EC2/EKS later)
 ```
 
-### Tuning attributes
+The type is surfaced as an explicit value only in Option 1. In Options 2 and 3 the type is the factory method or the class, so the string never appears in customer code.
 
-Every API option accepts the same tuning attributes; the only thing that differs between them is how the **type** is stated (a field, a method, or a class — see below). The type selects the compute; these attributes configure it. Attributes that don't apply to the chosen type are a synth-time error rather than silently ignored, so a customer can't set `vcpu` on an `ephemeral` compute and wonder why nothing changed.
+### Compute options
+
+Each type has its own options. Options that don't apply to a type are absent from its interface, so an unsupported attribute is a compile error rather than a runtime surprise.
 
 ```ts
-/** Valid vCPU sizes. Not an open number: the platform allows only a fixed set. */
+/** Valid vCPU sizes: a fixed set the platform accepts, not an open number. */
 type Vcpu = 0.25 | 0.5 | 1 | 2 | 4 | 8 | 16;
 
-/** Shared by every API option. `type` is NOT here — each option states it differently. */
-interface ComputeTuning {
-  /** Memory (MB). Applies to all types. */
+interface EphemeralComputeOptions {
+  /** Memory (MB). CPU scales with memory on an ephemeral compute. */
   memory?: number;
+}
 
-  /** vCPUs. `container`/`dedicated` only. A closed set, not an arbitrary number. */
+interface ContainerComputeOptions {
+  /** Memory (MB). */
+  memory?: number;
+  /** vCPUs. Paired with memory into a valid task size. */
   vcpu?: Vcpu;
-
-  /** Max concurrent units of work per instance. `container`/`dedicated` only; the per-task cost lever. */
+  /** Max concurrent units of work per instance; the per-task cost lever. */
   maxConcurrency?: number;
-
-  /** Custom image. `container`/`dedicated` only. */
+  /** Custom container image (ECR URI or build context). */
   image?: string;
 }
 ```
 
-`vcpu` is a closed union, not an open `number`, because the container platform accepts only a fixed set of sizes. `vcpu` and `memory` are also **coupled** — each vCPU size permits only a range of memory values — so an invalid pair (e.g. `0.25` vCPU with 16GB) is a synth-time error naming the valid range, not a silent clamp. (An alternative worth weighing in review: collapse both into a single `size` enum of named CPU+memory combos, so an invalid pair is impossible by construction. That trades granularity for guaranteed validity.)
+`vcpu` and `memory` are coupled: each vCPU size permits only a range of memory values, so an invalid pair (`0.25` vCPU with 16GB) is a synth error naming the valid range. A single `size` enum of named CPU+memory combos is an alternative that makes invalid pairs unrepresentable, trading granularity for guaranteed validity.
 
-Note what is *not* here: there is no `timeout` on the compute. Time limits are a property of work, not of compute (Appendix A). A ceiling could live on an `ephemeral` compute because the platform enforces one anyway, but hoisting it onto every type is the contradiction goal 4 rules out. Timeouts live on the workload — see below.
+There is no timeout on a compute. Time limits are a property of work, not of compute (Appendix A), so they live on the workload — see below.
+
+> `image` on ephemeral: Lambda supports container images, but they must implement the Lambda Runtime API and are not the same artifact as a Fargate image. A custom ephemeral image is an advanced case deferred for now; Blocks builds the ephemeral bundle.
 
 ### How `AsyncJob` consumes a `Compute`
 
-A workload takes a `compute` and its own `timeoutSeconds`, regardless of which option we pick for declaring the compute. This is additive to the existing `AsyncJobOptions`.
+A workload takes a `compute` and its own `timeoutSeconds`. This is additive to the existing `AsyncJobOptions`.
 
 ```ts
 interface AsyncJobOptions<T> {
@@ -87,33 +91,33 @@ interface AsyncJobOptions<T> {
   compute?: Compute;
 
   /**
-   * Wall-clock limit for one delivery, in seconds. A property of THIS work, not
-   * of the compute it shares. Enforced by the runtime (on a container, by
-   * terminating the worker); on an ephemeral compute it is bounded by the
-   * platform ceiling. A per-job value may only tighten that ceiling, never
-   * raise it — a job asking for more than the compute can offer is a synth error.
+   * Wall-clock limit for one delivery, in seconds. A property of the work, not
+   * the compute. Enforced by the runtime (on a container, by terminating the
+   * worker); on an ephemeral compute it is bounded by the platform ceiling. A
+   * per-job value may only tighten the compute's ceiling, never raise it; a
+   * larger value is a synth error.
    */
   timeoutSeconds?: number;
 }
 ```
 
 ```ts
-const reports = /* one of the options below */;
+const reports = /* a Compute from one of the options below */;
 
 const nightly = new AsyncJob(scope, 'nightly-report', {
   compute: reports,
-  timeoutSeconds: 60 * 30,   // this job may run 30 min
+  timeoutSeconds: 60 * 30,   // may run 30 min
   handler: async (payload) => { /* ... */ },
 });
 
 const quick = new AsyncJob(scope, 'thumbnail', {
-  compute: reports,          // same compute, different deadline
-  timeoutSeconds: 30,        // this job must finish in 30s
+  compute: reports,          // same compute
+  timeoutSeconds: 30,        // must finish in 30s
   handler: async (payload) => { /* ... */ },
 });
 ```
 
-Two jobs share one `container` compute and set their own deadlines. Neither can outlive the compute; each can be stricter than it. That is the whole point of putting the timeout on the job.
+Two jobs share one compute and set their own deadlines. Each may be stricter than the compute's ceiling; neither may exceed it.
 
 ---
 
@@ -134,13 +138,13 @@ const api     = new Compute(scope, 'api',     { type: 'ephemeral', memory: 512 }
 new AsyncJob(scope, 'reports', { compute: reports, timeoutSeconds: 60 * 30, handler });
 ```
 
-The `options` parameter is the shared `ComputeTuning` plus a required `type`:
+The `options` parameter is a discriminated union on `type`, so each type offers only its own options and an unsupported attribute is a compile error:
 
 ```ts
-interface ComputeOptions extends ComputeTuning {
-  /** The general kind of compute. Required — never inferred from other attributes. */
-  type: ComputeType;
-}
+type ComputeOptions =
+  | ({ type: 'ephemeral' } & EphemeralComputeOptions)
+  | ({ type: 'container' } & ContainerComputeOptions);
+  // dedicated added when it lands
 ```
 
 ### Option 2 &mdash; type as a factory method
@@ -152,9 +156,7 @@ const reports = Compute.container(scope, 'reports', { memory: 2048, vcpu: 1 });
 const api     = Compute.ephemeral(scope, 'api', { memory: 512 });
 ```
 
-The type becomes the method name. Autocomplete lists the types, the choice can't be misspelled, and each method exposes only the attributes valid for its type (no `vcpu` on `ephemeral`). Adding a type later is a new method (additive). The cost is departing from the uniform `new X(scope, id, options)` shape every other block uses, and a slightly larger surface (one method per type) to document.
-
-The options object is `ComputeTuning` (above) with no `type` field — the method name carries the type.
+Each method takes that type's options directly (`Compute.container` takes `ContainerComputeOptions`, `Compute.ephemeral` takes `EphemeralComputeOptions`), so the type is fixed by the method and the discriminant disappears. Autocomplete lists the types and the choice can't be misspelled. The cost is departing from the `new X(scope, id, options)` shape other blocks use, and one method per type to document.
 
 ### Option 3 &mdash; distinct blocks per type
 
@@ -165,17 +167,15 @@ const reports = new ContainerCompute(scope, 'reports', { memory: 2048, vcpu: 1 }
 const api     = new EphemeralCompute(scope, 'api', { memory: 512 });
 ```
 
-The type *is* the class, named by the general kind of compute (`ContainerCompute`, `EphemeralCompute`) rather than the service. Explicit and discoverable, but it multiplies the block surface (one class per type) and makes "which types exist" a matter of knowing which classes to import rather than reading one `type` union. Service-named variants (`EcsCompute`, `LambdaCompute`) are discarded outright for leaking the service into the IFC layer (goals 1 and 4) — see Appendix B.
-
-Each class takes `ComputeTuning` (above) with no `type` field — the class carries the type.
+Each class is named by the compute type (`ContainerCompute`, `EphemeralCompute`) and takes that type's options (`ContainerComputeOptions`, `EphemeralComputeOptions`). It multiplies the block surface to one class per type, and "which types exist" is a matter of which classes are importable rather than one `type` union. Service-named variants (`EcsCompute`, `LambdaCompute`) are discarded for naming the service — see Appendix B.
 
 ### Customizing and extending
 
-Whichever option we choose, a customer who wants finer control configures the compute through the same options (`memory`, `vcpu`, `maxConcurrency`, `image`), and can drop into raw CDK for anything the options don't cover (goal 2). This is ordinary Blocks customization, not an escape from Blocks — the same way any block exposes configuration and a CDK drop-through. Nothing here is a separate "power-user" path; it is the same surface with more of it filled in.
+A customer who wants finer control sets more of the same options (`memory`, `vcpu`, `maxConcurrency`, `image`) and can drop into raw CDK for anything the options don't cover (goal 2). This is the same customization surface every block exposes, filled in further.
 
 ### On `Scope`
 
-The produced compute extends `Scope`, so workloads and finalize steps get a `fullId`, tree position, and registry entry. This is a live decision, not a constraint: the concrete computes already extend `Scope` in the container-jobs branch. A future zero-config provider (PR #573's `ComputeProvider.provide()`) can still return a `Scope`-backed compute typed as an opaque handle, so "produces the core `Compute`" and "is a `Scope`" are not in tension. The `AsyncJob` `compute` + `timeoutSeconds` surface is the same across all options.
+The produced compute extends `Scope`, so workloads and finalize steps get a `fullId`, tree position, and registry entry. The concrete computes already extend `Scope` in the container-jobs branch. A zero-config provider (PR #573's `ComputeProvider.provide()`) can return a `Scope`-backed compute typed as an opaque handle, so producing the core `Compute` and being a `Scope` are compatible. The `AsyncJob` `compute` + `timeoutSeconds` surface is identical across all options.
 
 ---
 
