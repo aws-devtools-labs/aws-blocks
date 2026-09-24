@@ -69,11 +69,8 @@ interface ServerlessComputeOptions {
   /** Memory (MB). CPU scales with memory on a serverless compute. */
   memory?: number;
   /**
-   * The compute's inherent max runtime ceiling, in seconds — the Lambda function
-   * timeout (up to 900). A platform property of serverless, not present on
-   * container or VM, which have no inherent runtime limit. This is a *ceiling*,
-   * not a job's deadline: a job's `timeoutSeconds` must be less than or equal to
-   * it. Defaults to the platform maximum.
+   * The maximum number of seconds an assigned job can run on this compute.
+   * The maximum possible setting is 900.
    */
   maxTimeoutSeconds?: number;
 }
@@ -106,13 +103,11 @@ type ScalingSignal =
   | { on: 'queue-depth'; backlogPerInstance: number };
 ```
 
-Not all forms of compute have inherent time limits. A job's time limit is primarily a property of work, not of compute (Appendix A), so it lives on the workload as `AsyncJob.timeoutSeconds`. Where a compute type *does* have an inherent ceiling — serverless, whose platform caps every function at 15 minutes — that ceiling is a per-type option (`ServerlessComputeOptions.maxTimeoutSeconds`), and a job's `timeoutSeconds` must fit under it. Container and VM carry no such field because they have no inherent runtime limit.
-
-> `image` on serverless: Lambda supports container images, but they must implement the Lambda Runtime API and are not the same artifact as a Fargate image. A custom serverless image is an advanced case deferred for now; Blocks builds the serverless bundle.
+Not all forms of compute have inherent time limits. A job's time limit is primarily a property of work, not of compute (Appendix A). Where a compute type *does* have an inherent ceiling ("serverless") whose platform caps every function at 15 minutes, that ceiling sets absolute maximum runtime. Individual workloads additionally specify their own max runtimes which must be *under* the ceiling enforced by the compute. Since containers and VMs have no ceiling, the only relevant limit is the limit defined on the job.
 
 ### How `AsyncJob` consumes a `Compute`
 
-A workload takes a `compute` and a universal `timeoutSeconds`, additive to the existing `AsyncJobOptions`. Where per-instance **concurrency** is declared is a separate decision (see Concurrency Options); it is omitted here because it is compute-conditional, not universal.
+A workload takes a `compute` and a universal `timeoutSeconds`, additive to the existing `AsyncJobOptions`. We have options for how to let customers define per-instance **concurrency**. Those are presented later in the doc.
 
 ```ts
 interface AsyncJobOptions<T> {
@@ -123,16 +118,15 @@ interface AsyncJobOptions<T> {
   compute?: Compute;
 
   /**
-   * Wall-clock limit for one delivery, in seconds. Universal — enforced on every
-   * compute type (container: the worker is terminated; serverless: the platform
-   * function timeout). A per-job value may only tighten the compute's ceiling,
-   * never raise it; a larger value is a synth error.
+   * Wall-clock limit for one delivery in seconds.
    */
   timeoutSeconds?: number;
 
   // maxConcurrencyPerInstance — placement is the "Concurrency Options" decision below.
 }
 ```
+
+Example usage:
 
 ```ts
 const reports = /* a Compute from one of the options below */;
@@ -191,7 +185,7 @@ const reports = Compute.container(scope, 'reports', { size: { vcpu: 1, memory: 2
 const api     = Compute.serverless(scope, 'api', { memory: 512 });
 ```
 
-Each method takes that type's options directly (`Compute.container` takes `ContainerComputeOptions`, `Compute.serverless` takes `ServerlessComputeOptions`), so the type is fixed by the method and the discriminant disappears. Autocomplete lists the types and the choice can't be misspelled. The cost is departing from the `new X(scope, id, options)` shape other blocks use, and one method per type to document.
+This is nearly identical to Option 1 except the compute type is a factory method instead of a `type` property in the `options` parameter. This technically reduces "keystrokes", but breaks the Building Block instantiation pattern.
 
 ### Option 3 &mdash; distinct blocks per type
 
@@ -202,25 +196,21 @@ const reports = new ContainerCompute(scope, 'reports', { size: { vcpu: 1, memory
 const api     = new ServerlessCompute(scope, 'api', { memory: 512 });
 ```
 
-Each class is named by the compute type (`ContainerCompute`, `ServerlessCompute`) and takes that type's options (`ContainerComputeOptions`, `ServerlessComputeOptions`). It multiplies the block surface to one class per type, and "which types exist" is a matter of which classes are importable rather than one `type` union. Service-named variants (`EcsCompute`, `LambdaCompute`) are discarded for naming the service — see Appendix B.
+Each class is named by the compute type (`ContainerCompute`, `ServerlessCompute`) and takes that type's options (`ContainerComputeOptions`, `ServerlessComputeOptions`). It multiplies the block surface to one class per type, and "which types exist" is a matter of which classes are importable rather than one `type` union. (Service-named variants like `EcsCompute` and `LambdaCompute` are contrary to the Blocks goals. Examples discussed in Appendix B.).
+
+This option is not technically a violation of current Blocks goals, but it is a "spiritually" contradiction with recent decisions to consolidate where possible. (Examples being in the `Auth` block and *possibly* the `Database` block(s).)
 
 ### Customizing and extending
 
-A customer who wants finer control sets more of the same options (`size`, `scaling`, `image`) and can drop into raw CDK for anything the options don't cover (goal 2). This is the same customization surface every block exposes, filled in further.
-
-### On `Scope`
-
-The produced compute extends `Scope`, so workloads and finalize steps get a `fullId`, tree position, and registry entry. The concrete computes already extend `Scope` in the container-jobs branch. A zero-config provider (PR #573's `ComputeProvider.provide()`) can return a `Scope`-backed compute typed as an opaque handle, so producing the core `Compute` and being a `Scope` are compatible. The `AsyncJob` `compute` + `timeoutSeconds` surface is identical across all options.
+As usual, a customer who wants finer control sets more of the same options (`size`, `scaling`, `image`) and can drop into raw CDK and/or vendorize for anything the options don't cover (goal 2).
 
 ---
 
 ## Concurrency Options
 
-This is a second, separable decision: where a job's **per-instance concurrency** (`maxConcurrencyPerInstance` — how many deliveries of a job run at once on one compute instance) is declared.
+We need to decide how a a compute and job combination accounts for concurrency. The tension is that `container`, `ec2`, and `kubernetes` options will all have the concept of threads or processes that we could leverage. And, `concurrency` isn't strictly a function of how many threads or processes are assigned to a job or handler. Further complicating the story, time limits aren't strictly enforcible outside of `serverless` unless we restrict each thread to a concurrency of **one**. (You can "ask" a running job to stop, but unless it's bound 1-to-1 with a thread or process, you cannot forcefully terminate it without collateral damage.)
 
-`timeoutSeconds` is not part of this decision. It is universal — enforced on every compute type (container: the worker is terminated; serverless: the platform function timeout) — so it lives on `AsyncJob` regardless. Concurrency is different: it is **compute-conditional**. It is a real, enforced knob on a container (the poller's per-instance cap) but has no per-instance meaning on serverless, where each invocation handles one message and the platform scales instances. So the open question is where to put a knob that only some compute types honor, without letting the default (serverless) compute expose a setting it ignores.
-
-Instance-count `scaling` (`{ minInstances, maxInstances, strategy? }`) is a separate axis and stays on the compute in all three options — it describes how many instances run, which is a property of the machine, not the work. Total throughput for a job worker is `instances × maxConcurrencyPerInstance`.
+This is the least fleshed out decision we have to make. Everything below this point (up to the Appendixes) is AI written, since I (Jon) am still personally wrestling with the tension between allowing strict time limits and broad thread x concurrency control. **Ideas are welcome!**
 
 ### Option 1 — on the compute
 
