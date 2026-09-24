@@ -117,7 +117,11 @@ test('auth: unauthenticated access is rejected', (t) => runSampleApiTest(t, asyn
 
   await assert.rejects(
     () => api.listTodos(),
-    (err: any) => err.message.includes('Authentication') || err.message.includes('Session') || err.message.includes('401'),
+    // A removed `listTodos` rejects with "Method not found"; let that propagate
+    // so the test self-skips (via runSampleApiTest) instead of passing here.
+    (err: any) =>
+      !(err instanceof ApiError && err.message.startsWith('Method not found')) &&
+      (err.message.includes('Authentication') || err.message.includes('Session') || err.message.includes('401')),
   );
 
   // Sign back in for remaining tests
