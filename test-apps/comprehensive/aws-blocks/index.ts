@@ -565,18 +565,20 @@ const versionedBucket = new FileBucket(scope, 'versioned-files', { versioned: tr
 // backend runs on the container, which self-starts an owner-matched SQS poller
 // for the jobs assigned to it. Locally this is transparent (in-process).
 const containerCompute = new Compute(scope, 'worker', {
-  timeoutSeconds: 1800,
-  longLived: true,
-  memory: 1024,
-  cpu: 512,
+  type: 'container',
+  size: { vcpu: 0.5, memory: 1024 },
+  scaling: { minInstances: 1, maxInstances: 3 },
 });
 
 // A job dispatched to the container. Its handler reads from the payload and
 // writes to BOTH a KVStore and a FileBucket — proving the container can reach
 // Blocks resources exactly as the Lambda handler does (shared execution role,
-// same config, same SDK-identifier resolution).
+// same config, same SDK-identifier resolution). timeoutSeconds and
+// maxConcurrencyPerCPU are properties of the work and live on the job.
 const containerJob = new AsyncJob(scope, 'container-job', {
   compute: containerCompute,
+  timeoutSeconds: 1800,
+  maxConcurrencyPerCPU: 4,
   handler: async (payload: { key: string; value: string }, ctx) => {
     // KVStore write — the canonical "did the handler run" signal.
     await jobResults.put(`container:${payload.key}`, JSON.stringify({
@@ -596,15 +598,16 @@ const containerJob = new AsyncJob(scope, 'container-job', {
 // A container job whose handler deliberately runs longer than the compute's
 // per-handler wall-clock limit, so the poller aborts it. maxRetries: 1 makes the
 // first (timed-out) delivery terminal, so it lands in the DLQ without a long
-// redrive wait. The timeout here (2s) is far below the compute's default; the
-// AsyncJob-level compute limit is what the container poller enforces.
+// redrive wait. The 3s limit lives on the JOB (timeoutSeconds) and is enforced
+// by the container runtime terminating the job's worker thread.
 const timeoutCompute = new Compute(scope, 'slow-worker', {
-  timeoutSeconds: 3,
-  longLived: true,
+  type: 'container',
+  size: { vcpu: 0.25, memory: 512 },
 });
 
 const containerTimeoutJob = new AsyncJob(scope, 'container-timeout-job', {
   compute: timeoutCompute,
+  timeoutSeconds: 3,
   maxRetries: 1,
   handler: async (payload: { key: string }) => {
     // Deliberately NON-cooperative: a tight CPU busy-loop that never yields and
