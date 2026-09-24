@@ -110,6 +110,27 @@ export interface BlocksDefaults {
 	 * to derive one on demand even when this is unset.
 	 */
 	vpc?: BlocksVpcOptions;
+
+	/**
+	 * Whether to provision a managed CloudFront **API front door** — one
+	 * distribution that becomes the stable public origin for the backend HTTP
+	 * surface, path-routing `/aws-blocks/api/{namespace}/*` to the owning
+	 * compute's ingress. Its purpose is **origin stability**: a fixed browser
+	 * origin means adding or scaling a compute never changes the hostname, so a
+	 * `Secure` session cookie is never dropped.
+	 *
+	 * **On in `production`, off in `sandbox`** — a sandbox's dev server is
+	 * same-origin `localhost` and a deployed sandbox is disposable, so origin
+	 * stability is moot and the API front door's minutes-long CloudFront propagation
+	 * isn't worth paying on every throwaway deploy. Single-compute production
+	 * apps still get the API front door so a later single→multi transition never
+	 * changes the origin.
+	 *
+	 * When a frontend is present, Blocks reuses Hosting's distribution instead of
+	 * creating a second one (see the front-door design); this flag only controls
+	 * whether Blocks provisions/uses an API front door at all.
+	 */
+	provisionApiFrontDoor: boolean;
 }
 
 /**
@@ -130,6 +151,10 @@ export const BlocksPresets = {
 		logRetention: RetentionDays.ONE_WEEK,
 		throttling: { rateLimit: 200, burstLimit: 400 },
 		accessLogging: false,
+		// No API front door for sandbox: dev is same-origin localhost and a deployed
+		// sandbox is disposable, so origin stability is moot and the CloudFront
+		// deploy tax isn't worth paying.
+		provisionApiFrontDoor: false,
 	},
 	/**
 	 * Durable, protected posture for permanent deployments. A higher throttle
@@ -149,5 +174,8 @@ export const BlocksPresets = {
 		// per stack once you've confirmed a single Blocks stack owns it in the
 		// region — see the `accessLogging` field doc.
 		accessLogging: false,
+		// On for production: a stable CloudFront origin from day one so adding or
+		// scaling a compute never changes the hostname (keeps auth cookies).
+		provisionApiFrontDoor: true,
 	},
 } satisfies Record<string, BlocksDefaults>;
