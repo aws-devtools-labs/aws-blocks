@@ -50,10 +50,16 @@ describe('ContainerCompute — Fargate in the shared VPC', () => {
 		} as never);
 
 		const compute = new ContainerCompute(stack as never, 'worker', {
-			capabilities: { timeoutSeconds: 1800, longLived: true, cpu: 512, memory: 1024 },
+			size: { vcpu: 0.5, memory: 1024 },
+			scaling: { minInstances: 1, maxInstances: 5, strategy: { on: 'cpu', targetPercent: 65 } },
 		});
 		assert.ok(ContainerCompute.isContainerCompute(compute));
 		assert.strictEqual(compute.kind, 'container');
+		assert.strictEqual(compute.vcpu, 0.5);
+
+		// Autoscaling is wired at finalize (after the backend import) so queue-depth
+		// can see owned queues; call it directly here to exercise the policy wiring.
+		compute.finalize();
 
 		const template = Template.fromStack(stack as unknown as cdk.Stack);
 		// A VPC was lazily derived (the container requires one).
@@ -65,6 +71,11 @@ describe('ContainerCompute — Fargate in the shared VPC', () => {
 			RequiresCompatibilities: ['FARGATE'],
 			Cpu: '512',
 			Memory: '1024',
+		});
+		// Application Auto Scaling was provisioned (scalable target + a CPU policy).
+		template.resourceCountIs('AWS::ApplicationAutoScaling::ScalableTarget', 1);
+		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalingPolicy', {
+			PolicyType: 'TargetTrackingScaling',
 		});
 		// The shared role trusts ecs-tasks (appended by the container compute).
 		template.hasResourceProperties('AWS::IAM::Role', {

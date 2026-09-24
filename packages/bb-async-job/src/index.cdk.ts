@@ -7,6 +7,7 @@ import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import { registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
+import { resolvePerInstanceConcurrency } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
@@ -175,24 +176,26 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 			// native event source). Grant the shared task role permission to
 			// receive, delete, and change-visibility on this queue — the poller does
 			// all three (delete-on-success + visibility heartbeat for long jobs). The
-			// DLQ redrive is enforced by SQS via the queue's redrive policy, exactly
-			// as on the Lambda path.
+			// DLQ redrive is enforced by SQS via the queue's redrive policy.
 			this.queue.grantConsumeMessages(this.executionRole);
-			// The per-handler wall-clock limit the container poller ENFORCES (by
-			// terminating the job's worker thread) comes from the compute's
-			// capabilities.timeoutSeconds; stamp it so the runtime reads it without
-			// re-deriving the compute.
-			const timeoutSeconds = compute.capabilities.timeoutSeconds;
-			if (timeoutSeconds !== undefined) {
-				registerConfig(this, `BLOCKS_HANDLER_TIMEOUT_${idKey}`, String(timeoutSeconds));
+
+			// Per-delivery wall-clock limit (the job's own timeoutSeconds), enforced
+			// by the container poller terminating the job's worker thread.
+			if (options.timeoutSeconds !== undefined) {
+				registerConfig(this, `BLOCKS_HANDLER_TIMEOUT_${idKey}`, String(options.timeoutSeconds));
 			}
-			// Per-task concurrency cap (the cost lever): how many jobs — each in its
-			// own worker thread — run at once. Stamped when set; the runtime uses a
-			// conservative default otherwise.
-			const maxConcurrency = compute.capabilities.maxConcurrency;
-			if (maxConcurrency !== undefined) {
-				registerConfig(this, `BLOCKS_HANDLER_CONCURRENCY_${idKey}`, String(maxConcurrency));
+
+			// Per-instance concurrency = maxConcurrencyPerCPU × the compute's vCPU,
+			// rounded up, floored at one. Resolved at synth against the compute's
+			// vcpu so the runtime reads a concrete count.
+			if (options.maxConcurrencyPerCPU !== undefined) {
+				const vcpu = compute.vcpu ?? 1;
+				const perInstance = resolvePerInstanceConcurrency(options.maxConcurrencyPerCPU, vcpu);
+				registerConfig(this, `BLOCKS_HANDLER_CONCURRENCY_${idKey}`, String(perInstance));
 			}
+
+			// Let the container's queue-depth autoscaling see this queue.
+			(compute as ContainerCompute).registerOwnedQueue(this.queue);
 		}
 
 		// Same child id and options as the runtime entry points, so the provisioned

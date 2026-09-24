@@ -108,7 +108,16 @@ export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
  * Full docs: `README.md` in the package directory above.
  */
 export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
-export type { ComputeCapabilities, ComputeHandle } from '@aws-blocks/core';
+export type {
+	ComputeHandle,
+	ComputeOptions,
+	ComputeType,
+	ContainerComputeOptions,
+	ContainerScaling,
+	ContainerSize,
+	ScalingSignal,
+	ServerlessComputeOptions,
+} from '@aws-blocks/core';
 /**
  * **Username/password authentication with JWT sessions.**
  *

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Verifies the generic `Compute` block selects the correct backing compute from
- * capability attributes and returns the concrete, branded instance (not a
- * wrapper) — so the framework's delivery logic recognizes it.
+ * Verifies the generic `Compute` block returns the concrete, branded backing
+ * compute for the stated `type` (not a wrapper) — so the framework's delivery
+ * logic recognizes it.
  *
  * Runs under `--conditions=cdk` so the compute packages resolve their CDK
  * entries (real constructs) rather than the mock stubs.
@@ -19,15 +19,11 @@ import { Compute } from './index.cdk.js';
 
 /** A minimal stub compute so BlocksStack.create wires a default without pulling the real one. */
 function stubFactory(root: unknown): unknown {
-	// The default compute is irrelevant to these selection tests; a tiny stub with
-	// the members the stack's accessors touch keeps create() happy.
 	return new LambdaCompute(root as never, 'DefaultCompute');
 }
 
 async function makeStack(): Promise<cdk.Stack> {
 	const app = new cdk.App();
-	// A real BlocksStack so `new Compute(stack, ...)` has a proper root, VPC
-	// registry, and compute registry.
 	const stack = await BlocksStack.create(app, 'ComputeSelStack', {
 		backendHandlerPath: `${process.cwd()}/dist/index.cdk.js`,
 		backendCDKPath: `${process.cwd()}/dist/index.cdk.js`,
@@ -37,29 +33,26 @@ async function makeStack(): Promise<cdk.Stack> {
 	return stack as unknown as cdk.Stack;
 }
 
-describe('Compute — capability-driven selection', () => {
-	test('a modest workload selects a LambdaCompute', async () => {
+describe('Compute — explicit type selection', () => {
+	test("type: 'serverless' returns a LambdaCompute", async () => {
 		const stack = await makeStack();
-		const c = new Compute(stack as never, 'lambda-ish', { memory: 512 });
+		const c = new Compute(stack as never, 'api', { type: 'serverless', memory: 512 });
 		assert.ok(LambdaCompute.isLambdaCompute(c), 'should be a LambdaCompute');
 		assert.ok(!ContainerCompute.isContainerCompute(c), 'should not be a ContainerCompute');
 	});
 
-	test('a long timeout selects a ContainerCompute', async () => {
+	test("type: 'container' returns a ContainerCompute", async () => {
 		const stack = await makeStack();
-		const c = new Compute(stack as never, 'long', { timeoutSeconds: 1800 });
-		assert.ok(ContainerCompute.isContainerCompute(c), 'over-15-min budget → container');
+		const c = new Compute(stack as never, 'worker', { type: 'container', size: { vcpu: 1, memory: 2048 } });
+		assert.ok(ContainerCompute.isContainerCompute(c), 'should be a ContainerCompute');
+		assert.ok(!LambdaCompute.isLambdaCompute(c), 'should not be a LambdaCompute');
 	});
 
-	test('longLived selects a ContainerCompute', async () => {
+	test('container carries its vcpu for per-CPU concurrency math', async () => {
 		const stack = await makeStack();
-		const c = new Compute(stack as never, 'lived', { longLived: true });
-		assert.ok(ContainerCompute.isContainerCompute(c), 'long-lived → container');
-	});
-
-	test('an explicit cpu request selects a ContainerCompute', async () => {
-		const stack = await makeStack();
-		const c = new Compute(stack as never, 'cpu', { cpu: 1024 });
-		assert.ok(ContainerCompute.isContainerCompute(c), 'explicit cpu → container');
+		const c = new Compute(stack as never, 'worker2', { type: 'container', size: { vcpu: 2, memory: 4096 } }) as unknown as {
+			vcpu: number;
+		};
+		assert.strictEqual(c.vcpu, 2);
 	});
 });

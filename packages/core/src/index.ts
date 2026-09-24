@@ -17,12 +17,16 @@ export {
 } from '@aws-blocks/hosting';
 export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
 export {
-	type ComputeCapabilities,
 	type ComputeHandle,
-	type ComputeKind,
-	LAMBDA_MAX_MEMORY_MB,
+	type ComputeOptions,
+	type ComputeType,
+	type ContainerComputeOptions,
+	type ContainerScaling,
+	type ContainerSize,
 	LAMBDA_MAX_TIMEOUT_SECONDS,
-	selectComputeKind,
+	resolvePerInstanceConcurrency,
+	type ScalingSignal,
+	type ServerlessComputeOptions,
 } from './common/compute-capabilities.js';
 export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
 export { type BuildingBlockMeta, Scope, type ScopeOptions, type ScopeParent } from './common/index.js';

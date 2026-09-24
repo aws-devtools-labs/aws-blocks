@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
-import type { ComputeCapabilities, ComputeKind } from '../../common/compute-capabilities.js';
+import type { ComputeType } from '../../common/compute-capabilities.js';
 import type { ScopeOptions } from '../../common/index.js';
 import { Scope } from '../index.js';
 import { registerCompute } from './compute-registry.js';
@@ -39,23 +39,21 @@ export abstract class Compute extends Scope {
 	readonly namespaces: string[] = [];
 
 	/**
-	 * Which backing service this compute is — `'lambda'` (per-invocation function)
-	 * or `'container'` (long-lived Fargate task). Set by the concrete subclass and
-	 * read by delivery logic that must branch on the runtime model (e.g. AsyncJob
-	 * wires a native SQS event source on Lambda but leaves a container to
-	 * self-poll). Defaults to `'lambda'` so pre-existing subclasses that don't set
-	 * it keep today's behavior.
+	 * The compute type — `'serverless'` (per-invocation function) or `'container'`
+	 * (long-running task). Set by the concrete subclass and read by delivery logic
+	 * that branches on the runtime model (e.g. AsyncJob wires a native SQS event
+	 * source on serverless but leaves a container to self-poll). Defaults to
+	 * `'serverless'` so a subclass that doesn't set it keeps today's behavior.
 	 */
-	readonly kind: ComputeKind = 'lambda';
+	readonly kind: ComputeType = 'serverless';
 
 	/**
-	 * The capability attributes this compute was resolved from ({@link
-	 * ComputeCapabilities}). Read by delivery logic that needs the *values* rather
-	 * than just the kind — notably the container SQS poller, which enforces
-	 * `timeoutSeconds` as a per-handler wall-clock limit. Empty for a compute
-	 * built without explicit capabilities (e.g. the default Lambda).
+	 * The compute's vCPU count, when it has one (a container's `size.vcpu`). Read
+	 * by delivery logic that scales a per-vCPU value — notably AsyncJob's
+	 * `maxConcurrencyPerCPU`, which multiplies by this to get per-instance
+	 * concurrency. `undefined` for a serverless compute, which has no vCPU knob.
 	 */
-	readonly capabilities: ComputeCapabilities = {};
+	readonly vcpu?: number;
 
 	/**
 	 * Whether tracing has been enabled on this compute — flipped by
@@ -98,6 +96,15 @@ export abstract class Compute extends Scope {
 		this.tracerEnabled = true;
 		this.applyTracing();
 	}
+
+	/**
+	 * Finalize-time hook, called once per registered compute by `create()` after
+	 * the backend import — the point where cross-cutting state (e.g. which queues a
+	 * container drains) is fully known. Default no-op; a concrete compute overrides
+	 * it to wire things that can't be built in its constructor (e.g. queue-depth
+	 * autoscaling). Ordering-independent with the other finalize steps.
+	 */
+	finalize(): void {}
 
 	/**
 	 * Turn on this compute's active tracing (e.g. X-Ray) and grant its role the

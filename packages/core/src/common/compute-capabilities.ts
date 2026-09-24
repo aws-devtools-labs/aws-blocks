@@ -2,147 +2,145 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Capability attributes that describe *what* a workload needs from its compute,
- * expressed as service-agnostic traits rather than an AWS service name. Blocks
- * reads these to select the backing service (see {@link selectComputeKind}): a
- * short, memory-modest, request/response workload fits Lambda; anything that
- * exceeds Lambda's envelope — a longer wall-clock budget, more memory, an
- * explicit long-lived process, or a custom container image — is placed on a
- * container (Fargate) instead.
+ * The compute type model. A customer states the *type* of compute explicitly
+ * (never inferred from other attributes) and configures it with options scoped
+ * to that type. Service names never appear in the surface — `serverless`,
+ * `container`, etc. name the general kind of compute, not the AWS service that
+ * backs it.
  *
- * This is the single source of truth for both the customer-facing `Compute`
- * block (which takes these as its options) and the internal selection logic, so
- * the block's public surface never mentions Lambda or Fargate.
+ * See `docs/design/compute-selection-api.md` for the design rationale.
  */
-export interface ComputeCapabilities {
-	/**
-	 * Wall-clock budget for a single unit of work, in seconds. On a Lambda-backed
-	 * compute this maps to the function timeout (hard-capped at 900s by the
-	 * platform); on a container it is enforced in-process by the poller, which
-	 * aborts a handler that runs past it. A value above
-	 * {@link LAMBDA_MAX_TIMEOUT_SECONDS} therefore forces a container.
-	 *
-	 * @default undefined — the compute uses its platform default.
-	 */
-	timeoutSeconds?: number;
 
-	/**
-	 * Memory available to the workload, in MB. Above {@link LAMBDA_MAX_MEMORY_MB}
-	 * (Lambda's ceiling) this forces a container. On a container it sets the task
-	 * memory.
-	 *
-	 * @default undefined — the compute uses its platform default.
-	 */
-	memory?: number;
+/**
+ * The general kind of compute. Stated explicitly by the customer.
+ *
+ * - `serverless` — pay-as-you-go, per-request, short-lived (Lambda today).
+ * - `container` — a long-running / long-lived process (Fargate today).
+ *
+ * `vm` (an instance you manage) and `kubernetes` (container orchestration) are
+ * reserved for future release.
+ *
+ * NOTE: these names are provisional; a forward-compatible naming axis across all
+ * types is still being settled (see the design doc).
+ */
+export type ComputeType = 'serverless' | 'container';
 
-	/**
-	 * vCPU units for the workload (1024 = 1 vCPU), Fargate's unit. Lambda derives
-	 * CPU from memory and has no independent CPU knob, so setting this forces a
-	 * container (there is no way to honor an explicit CPU request on Lambda).
-	 *
-	 * @default undefined
-	 */
-	cpu?: number;
+/** AWS Lambda's maximum function timeout (15 minutes), in seconds. */
+export const LAMBDA_MAX_TIMEOUT_SECONDS = 900;
 
-	/**
-	 * Whether the workload is a **long-lived process** rather than a
-	 * per-invocation function — e.g. it drains a queue continuously, holds
-	 * persistent connections, or keeps warm state between units of work. A
-	 * long-lived workload cannot run on Lambda's per-invocation model, so this
-	 * forces a container.
-	 *
-	 * @default false
-	 */
-	longLived?: boolean;
+/**
+ * Valid Fargate vCPU + memory (MB) combinations. Each vCPU size permits only its
+ * listed memory values, so an invalid pair cannot be represented. This matrix is
+ * container-specific; future `vm`/`kubernetes` types bring their own size types.
+ *
+ * Memory steps: 1 GB up to 4 vCPU, 4 GB at 8 vCPU, 8 GB at 16 vCPU — the real
+ * Fargate task-size constraints.
+ */
+export type ContainerSize =
+	| { vcpu: 0.25; memory: 512 | 1024 | 2048 }
+	| { vcpu: 0.5; memory: 1024 | 2048 | 3072 | 4096 }
+	| { vcpu: 1; memory: 2048 | 3072 | 4096 | 5120 | 6144 | 7168 | 8192 }
+	| {
+			vcpu: 2;
+			memory:
+				| 4096 | 5120 | 6144 | 7168 | 8192 | 9216 | 10240
+				| 11264 | 12288 | 13312 | 14336 | 15360 | 16384;
+	  }
+	| {
+			vcpu: 4;
+			memory:
+				| 8192 | 9216 | 10240 | 11264 | 12288 | 13312 | 14336 | 15360 | 16384
+				| 17408 | 18432 | 19456 | 20480 | 21504 | 22528 | 23552 | 24576
+				| 25600 | 26624 | 27648 | 28672 | 29696 | 30720;
+	  }
+	| {
+			vcpu: 8;
+			memory: 16384 | 20480 | 24576 | 28672 | 32768 | 36864 | 40960 | 45056 | 49152 | 53248 | 57344 | 61440;
+	  }
+	| {
+			vcpu: 16;
+			memory: 32768 | 40960 | 49152 | 57344 | 65536 | 73728 | 81920 | 90112 | 98304 | 106496 | 114688 | 122880;
+	  };
 
-	/**
-	 * A custom container image reference (an ECR image URI or a local build
-	 * context path) to run instead of the Blocks-built default image. Supplying
-	 * one is intrinsically a container request, so it forces a container.
-	 *
-	 * @default undefined — Blocks builds and runs its standard image.
-	 */
-	image?: string;
+/** A signal that drives container autoscaling between the instance bounds. */
+export type ScalingSignal =
+	| { on: 'cpu'; targetPercent: number }
+	| { on: 'memory'; targetPercent: number }
+	| { on: 'queue-depth'; backlogPerInstance: number };
 
-	/**
-	 * On a container, the maximum number of jobs this compute processes at once
-	 * per task. This is the primary **per-task cost lever**: each in-flight job
-	 * runs in its own worker thread, so this bounds concurrent CPU/memory use, and
-	 * you size the task's `cpu`/`memory` to match. Ignored on Lambda (which scales
-	 * by concurrent invocations, not an in-process cap).
-	 *
-	 * @default a conservative framework default (container jobs are typically
-	 * heavy); raise it alongside `cpu`/`memory` for higher throughput per task.
-	 */
-	maxConcurrency?: number;
-
-	/**
-	 * Task-count autoscaling for a container compute — the layer above
-	 * {@link maxConcurrency} (which caps jobs *per task*). Scales the number of
-	 * tasks between `minTasks` and `maxTasks`, targeting roughly
-	 * `backlogPerTask` visible queue messages per task. Reserved for a future
-	 * release; declaring it today has no effect yet. It is an options field so
-	 * adding the behavior later is non-breaking.
-	 *
-	 * @default undefined — a single task (no autoscaling).
-	 */
-	scaling?: {
-		/** Minimum running tasks. */
-		minTasks?: number;
-		/** Maximum running tasks. */
-		maxTasks?: number;
-		/** Target visible-queue-messages per task for target tracking. */
-		backlogPerTask?: number;
-	};
+/**
+ * Container instance-count bounds and scaling strategy.
+ *
+ * `minInstances`/`maxInstances` bound the running task count. `strategy` (one
+ * signal or several) drives scaling between them; with several, scale-out
+ * follows whichever signal demands the most instances and scale-in requires all
+ * to agree. Omit `strategy` and Blocks infers one by workload — queue depth for
+ * a compute that drains AsyncJob queues, CPU otherwise.
+ */
+export interface ContainerScaling {
+	minInstances: number;
+	maxInstances: number;
+	strategy?: ScalingSignal | ScalingSignal[];
 }
 
 /**
- * Which backing service a {@link Compute} resolves to. `'lambda'` for a
- * per-invocation function; `'container'` for a long-lived Fargate task. Internal
- * — customers only ever see the generic `Compute` block.
- * @internal
+ * Options for a `serverless` compute. `serverless` has an inherent runtime
+ * ceiling (the platform function timeout); container/VM do not, so this field is
+ * unique to this type.
  */
-export type ComputeKind = 'lambda' | 'container';
+export interface ServerlessComputeOptions {
+	/** Memory (MB). CPU scales with memory on a serverless compute. */
+	memory?: number;
+	/**
+	 * The compute's inherent max runtime ceiling, in seconds (the Lambda function
+	 * timeout, up to {@link LAMBDA_MAX_TIMEOUT_SECONDS}). A ceiling, not a job's
+	 * deadline: a job's `timeoutSeconds` must be ≤ it. Defaults to the platform
+	 * maximum.
+	 */
+	maxTimeoutSeconds?: number;
+}
+
+/** Options for a `container` compute. */
+export interface ContainerComputeOptions {
+	/** A valid vCPU + memory combination. */
+	size?: ContainerSize;
+	/** Instance-count bounds and scaling strategy. */
+	scaling?: ContainerScaling;
+	/** Custom container image (an ECR image URI). Blocks builds one when omitted. */
+	image?: string;
+}
 
 /**
- * The public-facing handle for a compute a customer can hand to a handler-bearing
- * block (e.g. `new AsyncJob(scope, id, { compute })`). It is intentionally opaque:
- * a Building Block only needs to *pass it back* to the framework, which resolves
- * the concrete compute internally. Both the CDK `Compute` construct and the inert
- * mock/browser compute stubs satisfy this empty marker structurally, so a BB's
- * options type can reference it without importing CDK — the same cross-entry-safe
- * pattern the SDK-identifier and value markers use.
- *
- * The brand keeps it from collapsing to `unknown`/`{}` (which would accept any
- * value); it is never read at runtime.
+ * The discriminated options union a customer passes to `new Compute(scope, id, …)`.
+ * Each `type` carries only its own options, so an attribute that doesn't apply
+ * to the chosen type is a compile error.
+ */
+export type ComputeOptions =
+	| ({ type: 'serverless' } & ServerlessComputeOptions)
+	| ({ type: 'container' } & ContainerComputeOptions);
+
+/**
+ * The public-facing handle for a compute a customer hands to a handler-bearing
+ * block (e.g. `new AsyncJob(scope, id, { compute })`). Opaque: a Building Block
+ * only passes it back to the framework, which resolves the concrete compute
+ * internally. The CDK compute construct and the inert mock/browser stubs satisfy
+ * this empty marker structurally, so a BB's options type can reference it
+ * without importing CDK.
  */
 export interface ComputeHandle {
 	/** @internal Nominal brand — never populated; present only so the type is distinct. */
 	readonly __blocksCompute?: never;
 }
 
-/** AWS Lambda's maximum function timeout (15 minutes), in seconds. */
-export const LAMBDA_MAX_TIMEOUT_SECONDS = 900;
-
-/** AWS Lambda's maximum function memory, in MB. */
-export const LAMBDA_MAX_MEMORY_MB = 10_240;
-
 /**
- * Select the backing compute kind from capability attributes. A workload runs on
- * Lambda unless it declares something Lambda cannot provide — a wall-clock
- * budget beyond 15 minutes, more than 10 GB of memory, an explicit CPU request
- * (Lambda has no CPU knob), a long-lived process, or a custom image — any of
- * which places it on a container instead.
+ * Per-instance concurrency for a job on a container: `maxConcurrencyPerCPU`
+ * multiplied by the compute's vCPU count, rounded up, floored at one. A
+ * fractional-vCPU instance still runs at least one unit of work, and rounding up
+ * never drops below the requested ratio.
  *
- * The rule is deliberately conservative: absent any capability that Lambda
- * can't satisfy, the cheaper request/response Lambda wins, so a plain
- * `new Compute(scope, 'x')` stays Lambda and matches today's default.
+ * @param maxConcurrencyPerCPU - the job's requested concurrency per vCPU.
+ * @param vcpu - the compute's `size.vcpu`.
  */
-export function selectComputeKind(caps: ComputeCapabilities): ComputeKind {
-	if (caps.longLived === true) return 'container';
-	if (caps.image !== undefined) return 'container';
-	if (caps.cpu !== undefined) return 'container';
-	if (caps.timeoutSeconds !== undefined && caps.timeoutSeconds > LAMBDA_MAX_TIMEOUT_SECONDS) return 'container';
-	if (caps.memory !== undefined && caps.memory > LAMBDA_MAX_MEMORY_MB) return 'container';
-	return 'lambda';
+export function resolvePerInstanceConcurrency(maxConcurrencyPerCPU: number, vcpu: number): number {
+	return Math.max(1, Math.ceil(maxConcurrencyPerCPU * vcpu));
 }

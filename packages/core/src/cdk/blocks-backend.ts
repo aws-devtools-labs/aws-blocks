@@ -347,6 +347,11 @@ export class BlocksBackend extends Construct {
 		// state is settled — so the dashboard is order-independent.
 		finalizeDashboards(backend);
 
+		// Per-compute finalize hook: wiring that needs the fully-imported backend
+		// (e.g. a container's queue-depth autoscaling, which must know every
+		// AsyncJob queue assigned to it).
+		for (const compute of getComputes(backend)) compute.finalize();
+
 		// Finalize VPC. Derived resource: use the customer's if provided, else
 		// lazily create one only if a Building Block requires it.
 		//

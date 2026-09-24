@@ -176,6 +176,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		// state is settled — so the dashboard is order-independent.
 		finalizeDashboards(stack);
 
+		// Per-compute finalize hook: wiring that needs the fully-imported backend
+		// (e.g. a container's queue-depth autoscaling, which must know every
+		// AsyncJob queue assigned to it).
+		for (const compute of getComputes(stack)) compute.finalize();
+
 		// Finalize VPC. A VPC is a derived resource: use the customer's if they
 		// brought one, else lazily create one only if a Building Block genuinely
 		// requires it (requiresVpc). Most apps need neither — Lambda reaches AWS

@@ -72,8 +72,35 @@ export interface AsyncJobOptions<T> {
 	 * the per-handler wall-clock limit comes from the compute's `timeoutSeconds`.
 	 * In local dev, compute assignment is transparent — the handler runs in-process
 	 * regardless.
+	/**
+	 * The compute this job's handler runs on. Pass a `Compute` block to place the
+	 * handler on a different runtime than the app default — e.g. a long-running or
+	 * high-memory job that a container (Fargate) can serve but a serverless compute
+	 * cannot.
+	 *
+	 * When omitted, the job runs on the app's default (serverless) compute, exactly
+	 * as today. Assigning a container-backed `Compute` moves delivery from a native
+	 * SQS event source to an owner-matched poller the container self-starts. In
+	 * local dev, compute assignment is transparent — the handler runs in-process.
 	 */
 	compute?: ComputeHandle;
+
+	/**
+	 * Wall-clock limit for one delivery, in seconds. A property of the work, not
+	 * the compute. On a container it is enforced by the runtime (the job's worker
+	 * is terminated at the deadline); on a serverless compute it is bounded by the
+	 * function timeout. Must fit under the compute's ceiling where one exists.
+	 */
+	timeoutSeconds?: number;
+
+	/**
+	 * How many deliveries of this job run at once per instance, expressed **per
+	 * vCPU**. Blocks multiplies by the compute's vCPU count for the per-instance
+	 * concurrency: `max(1, ceil(maxConcurrencyPerCPU × vcpu))`. Higher for IO-bound
+	 * work that mostly awaits; 1 (or omit) for CPU-bound work. Container-only —
+	 * a serverless compute has no per-instance cap, so it is ignored there.
+	 */
+	maxConcurrencyPerCPU?: number;
 }
 
 /**

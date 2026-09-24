@@ -80,7 +80,16 @@ export type {
 } from '@aws-blocks/bb-async-job';
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
 export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
-export type { ComputeCapabilities, ComputeHandle } from '@aws-blocks/core';
+export type {
+	ComputeHandle,
+	ComputeOptions,
+	ComputeType,
+	ContainerComputeOptions,
+	ContainerScaling,
+	ContainerSize,
+	ScalingSignal,
+	ServerlessComputeOptions,
+} from '@aws-blocks/core';
 // Building Blocks (CDK versions)
 export {
 	AuthBasic,

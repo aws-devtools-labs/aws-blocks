@@ -26,8 +26,7 @@
 
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ComputeCapabilities } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ContainerScaling, ScalingSignal, ScopeParent } from '@aws-blocks/core';
 import { getConfigLocation } from '@aws-blocks/core/cdk';
 import {
 	Compute,
@@ -38,10 +37,12 @@ import {
 	registerVpcRequirements,
 } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { buildContainerHealthWidgets, buildContainerLoggingWidgets, buildContainerTracingWidgets } from './observability.js';
@@ -58,12 +59,18 @@ export type { ContainerComputeProps } from './types.js';
  */
 const CONTAINER_COMPUTE_BRAND: unique symbol = Symbol.for('blocks:ContainerCompute');
 
-/** Default Fargate task sizing when the workload didn't request cpu/memory. */
-const DEFAULT_CPU = 512;
+/** Fargate CPU units per vCPU. */
+const CPU_UNITS_PER_VCPU = 1024;
+/** Default Fargate task sizing when the workload didn't set `size`. */
+const DEFAULT_VCPU = 0.5;
 const DEFAULT_MEMORY_MB = 1024;
 
 /** Container port the runtime's health server listens on (worker mode still exposes it). */
 const CONTAINER_PORT = 8080;
+
+/** SQS queue URLs an AsyncJob assigned to a container registers here so the compute's
+ * queue-depth autoscaling can sum them. Keyed per compute via a Symbol on the instance. */
+const OWNED_QUEUES: unique symbol = Symbol.for('blocks:ContainerOwnedQueues');
 
 export class ContainerCompute extends Compute {
 	/**
@@ -74,8 +81,8 @@ export class ContainerCompute extends Compute {
 
 	/** Container compute is always container-kind (drives AsyncJob delivery branching). */
 	override readonly kind = 'container' as const;
-	/** The capabilities this container was resolved from (poller reads timeoutSeconds). */
-	override readonly capabilities: ComputeCapabilities;
+	/** This container's vCPU count (from `size`), read by AsyncJob for per-CPU concurrency math. */
+	override readonly vcpu: number;
 
 	/** The Fargate service running the backend process. */
 	readonly service?: ecs.FargateService;
@@ -84,12 +91,16 @@ export class ContainerCompute extends Compute {
 	/** This container's CloudWatch log group (awslogs driver ships stdout/stderr here). */
 	readonly logGroup: LogGroup;
 
+	/** The scaling config, retained so finalize can wire queue-depth once queues are known. */
+	private readonly scalingConfig?: ContainerScaling;
 	/** Its own container so setEnv can add env vars after construction. */
 	private readonly container?: ecs.ContainerDefinition;
 
 	constructor(scope: ScopeParent, id: string, options?: ContainerComputeProps) {
 		super(id, { parent: scope });
-		this.capabilities = options?.capabilities ?? {};
+		const size = options?.size;
+		this.vcpu = size?.vcpu ?? DEFAULT_VCPU;
+		this.scalingConfig = options?.scaling;
 
 		// A Fargate service needs a VPC. Declare the requirement centrally (so a
 		// census of the app still shows a VPC is needed) and then materialize the
@@ -101,10 +112,6 @@ export class ContainerCompute extends Compute {
 			requiresVpc: true,
 			requiresEgress: true,
 		});
-		// Derive/reuse the one shared VPC and initialize context on the owning STACK
-		// (not `this`), so create()'s finalize sees it via isVpcInitialized(stack)
-		// and doesn't create a second one. getVpcContext walks up the tree, so this
-		// container (and every sibling) still resolves it.
 		const stack = cdk.Stack.of(this);
 		const vpc = getOrCreateVpc(stack);
 		if (!isVpcInitialized(stack)) {
@@ -117,7 +124,7 @@ export class ContainerCompute extends Compute {
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
 
-		const assetPath = this.buildImageAsset();
+		const assetPath = this.buildImageAsset(options?.image);
 		if (!assetPath || !vpcContext) {
 			// No backend module discoverable (isolated unit test without a
 			// BlocksStack) — skip provisioning rather than fail synth, mirroring how
@@ -129,61 +136,38 @@ export class ContainerCompute extends Compute {
 		// Run AS the shared Blocks execution role (task role) so every BB grant
 		// reaches the container. Append the ecs-tasks trust principal to the shared
 		// role's assume policy — added here (not in core) so the role only trusts
-		// ECS when a container compute exists. Done once per stack: several
-		// container computes would otherwise pile up identical trust statements and
-		// overflow the inline-policy limit.
+		// ECS when a container compute exists. Done once per stack.
 		const taskRole = this.executionRole;
 		this.appendEcsTrustOnce(taskRole);
 
-		const cpu = this.capabilities.cpu ?? DEFAULT_CPU;
-		const memoryLimitMiB = this.capabilities.memory ?? DEFAULT_MEMORY_MB;
+		const cpu = Math.round(this.vcpu * CPU_UNITS_PER_VCPU);
+		const memoryLimitMiB = size?.memory ?? DEFAULT_MEMORY_MB;
 
 		this.taskDefinition = new ecs.FargateTaskDefinition(this, 'TaskDef', {
 			cpu,
 			memoryLimitMiB,
-			// Run on ARM64 (Graviton) — cheaper at equal performance and, critically,
-			// matches the architecture of the image Blocks builds from the local
-			// Docker daemon (arm64 on Apple Silicon). A mismatch surfaces as
-			// "exec format error" when the task starts. Blocks defaults Lambda to
-			// arm64 too, so the whole app is Graviton by default.
+			// ARM64 (Graviton): cheaper at equal performance and matches the arm64
+			// image Blocks builds. Blocks defaults Lambda to arm64 too.
 			runtimePlatform: {
 				cpuArchitecture: ecs.CpuArchitecture.ARM64,
 				operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
 			},
-			// The task role is the shared Blocks role (application permissions). The
-			// separate executionRole (image pull + log write) is created by CDK.
 			taskRole: taskRole as Role,
 		});
 
 		const { bucketName: configBucketName, key: configKey } = getConfigLocation(this);
 
 		this.container = this.taskDefinition.addContainer('Backend', {
-			image: this.capabilities.image
-				? ecs.ContainerImage.fromRegistry(this.capabilities.image)
-				: ecs.ContainerImage.fromAsset(assetPath, {
-						// Build for arm64 regardless of the build host's architecture, so
-						// the image always matches the ARM64 task platform above (an amd64
-						// image on an arm64 task — or vice versa — fails at task start with
-						// "exec format error"). Requires buildx/QEMU on an x86 host, which
-						// the Docker CLI provides by default.
-						platform: Platform.LINUX_ARM64,
-					}),
+			image: options?.image
+				? ecs.ContainerImage.fromRegistry(options.image)
+				: ecs.ContainerImage.fromAsset(assetPath, { platform: Platform.LINUX_ARM64 }),
 			logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'blocks', logGroup: this.logGroup }),
 			environment: {
 				NODE_ENV: 'production',
-				// The namespace the container rebuilds fullId (and every derived
-				// resource name) from — the owning stack/backend's canonical root id,
-				// the SAME value the Lambda handler/compute use.
 				BLOCKS_STACK_NAME: this.backendStackName,
-				// Config location so runContainer's loadConfigToProcessEnv() loads the
-				// full app config (IAM to read it is inherited via the shared role).
 				BLOCKS_CONFIG_BUCKET: configBucketName,
 				BLOCKS_CONFIG_KEY: configKey,
-				// Identifies this compute so an event block's poller only drains the
-				// queues whose BLOCKS_HANDLER_OWNER matches (the owner-match seam).
 				BLOCKS_COMPUTE_ID: this.fullId,
-				// Worker mode: start owned pollers, no inbound RPC serving (routing to
-				// containers is a separate front-door concern).
 				BLOCKS_SERVICE_MODE: 'worker',
 			},
 			portMappings: [{ containerPort: CONTAINER_PORT }],
@@ -192,17 +176,78 @@ export class ContainerCompute extends Compute {
 		this.service = new ecs.FargateService(this, 'Service', {
 			cluster: this.getOrCreateCluster(vpc),
 			taskDefinition: this.taskDefinition,
-			desiredCount: 1,
+			desiredCount: this.scalingConfig?.minInstances ?? 1,
 			vpcSubnets: vpcContext.computeSubnets,
 			securityGroups: [vpcContext.computeSecurityGroup],
-			// A worker drains a queue; brief overlap on redeploy is harmless and
-			// avoids a gap where nothing polls.
 			minHealthyPercent: 100,
 			maxHealthyPercent: 200,
-			// Fail (and roll back) a deploy quickly when tasks can't start, instead
-			// of CloudFormation waiting up to ~3 hours for the service to stabilize.
 			circuitBreaker: { rollback: true },
 		});
+	}
+
+	/**
+	 * Register an SQS queue this compute drains, so queue-depth autoscaling can sum
+	 * across every queue on the compute. Called by an AsyncJob assigned here.
+	 * @internal
+	 */
+	registerOwnedQueue(queue: sqs.IQueue): void {
+		const holder = this as unknown as { [OWNED_QUEUES]?: sqs.IQueue[] };
+		if (!holder[OWNED_QUEUES]) holder[OWNED_QUEUES] = [];
+		holder[OWNED_QUEUES].push(queue);
+	}
+
+	/**
+	 * Wire Application Auto Scaling on the service from {@link scalingConfig}.
+	 * Overrides the base finalize hook so queue-depth scaling can see every
+	 * AsyncJob queue registered via {@link registerOwnedQueue} during the backend
+	 * import. No-op when scaling is absent or bounded to a single instance.
+	 */
+	override finalize(): void {
+		const cfg = this.scalingConfig;
+		if (!this.service || !cfg || cfg.maxInstances <= 1) return;
+
+		const scalable = this.service.autoScaleTaskCount({
+			minCapacity: cfg.minInstances,
+			maxCapacity: cfg.maxInstances,
+		});
+
+		// Resolve the strategy: explicit signals, or an inferred default. A compute
+		// that drains queues defaults to queue-depth; otherwise CPU.
+		const ownedQueues =
+			(this as unknown as { [OWNED_QUEUES]?: sqs.IQueue[] })[OWNED_QUEUES] ?? [];
+		let signals: ScalingSignal[];
+		if (cfg.strategy) {
+			signals = Array.isArray(cfg.strategy) ? cfg.strategy : [cfg.strategy];
+		} else if (ownedQueues.length > 0) {
+			signals = [{ on: 'queue-depth', backlogPerInstance: 100 }];
+		} else {
+			signals = [{ on: 'cpu', targetPercent: 65 }];
+		}
+
+		for (const signal of signals) {
+			if (signal.on === 'cpu') {
+				scalable.scaleOnCpuUtilization(`CpuScaling`, { targetUtilizationPercent: signal.targetPercent });
+			} else if (signal.on === 'memory') {
+				scalable.scaleOnMemoryUtilization(`MemoryScaling`, { targetUtilizationPercent: signal.targetPercent });
+			} else {
+				// queue-depth: sum visible messages across every owned queue, tracked
+				// per instance. Metric math because the target divides by task count.
+				if (ownedQueues.length === 0) continue;
+				const using: Record<string, cloudwatch.IMetric> = {};
+				ownedQueues.forEach((q, i) => {
+					using[`m${i}`] = q.metricApproximateNumberOfMessagesVisible();
+				});
+				const backlog = new cloudwatch.MathExpression({
+					expression: Object.keys(using).join(' + '),
+					usingMetrics: using,
+					label: 'BacklogVisible',
+				});
+				scalable.scaleToTrackCustomMetric(`QueueDepthScaling`, {
+					metric: backlog,
+					targetValue: signal.backlogPerInstance,
+				});
+			}
+		}
 	}
 
 	/**
@@ -295,11 +340,11 @@ export class ContainerCompute extends Compute {
 	 * Returns undefined when the backend module path can't be discovered (isolated
 	 * unit tests) — the caller then skips provisioning.
 	 */
-	private buildImageAsset(): string | undefined {
-		if (this.capabilities.image) {
+	private buildImageAsset(image?: string): string | undefined {
+		if (image) {
 			// A custom image is used verbatim (fromRegistry); no asset build needed.
 			// Return a sentinel non-undefined so provisioning proceeds.
-			return this.capabilities.image;
+			return image;
 		}
 		const stack = (globalThis as any).CURRENT_BLOCKS_STACK as { backendModulePath?: string } | undefined;
 		const backendModulePath = stack?.backendModulePath;
