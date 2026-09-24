@@ -49,9 +49,26 @@ Blocks supports three compute types:
 
 Each type has its own options. Options that don't apply to a type are absent from its interface, so an unsupported attribute is a compile error rather than a runtime surprise.
 
+A container's CPU and memory are not independent: each vCPU size permits only a fixed set of memory values. `ComputeSize` encodes that as a discriminated union, so an invalid pair (`0.25` vCPU with 16GB) is unrepresentable — the IDE narrows `memory` to the values legal for the chosen `vcpu`.
+
 ```ts
-/** Valid vCPU sizes: a fixed set the platform accepts, not an open number. */
-type Vcpu = 0.25 | 0.5 | 1 | 2 | 4 | 8 | 16;
+/** Valid vCPU + memory (MB) combinations. Each vCPU permits only its listed memory values. */
+type ComputeSize =
+  | { vcpu: 0.25; memory: 512 | 1024 | 2048 }
+  | { vcpu: 0.5; memory: 1024 | 2048 | 3072 | 4096 }
+  | { vcpu: 1; memory: 2048 | 3072 | 4096 | 5120 | 6144 | 7168 | 8192 }
+  | { vcpu: 2; memory: 4096 | 5120 | /* 1GB steps */ 15360 | 16384 }
+  | { vcpu: 4; memory: 8192 | 9216 | /* 1GB steps */ 29696 | 30720 }
+  | { vcpu: 8; memory: 16384 | 20480 | /* 4GB steps */ 57344 | 61440 }
+  | { vcpu: 16; memory: 32768 | 40960 | /* 8GB steps */ 114688 | 122880 };
+
+/** Named presets, each a member of ComputeSize. */
+const ContainerSize = {
+  small:  { vcpu: 0.5, memory: 1024 },
+  medium: { vcpu: 1,   memory: 2048 },
+  large:  { vcpu: 2,   memory: 4096 },
+  xlarge: { vcpu: 4,   memory: 8192 },
+} as const satisfies Record<string, ComputeSize>;
 
 interface ServerlessComputeOptions {
   /** Memory (MB). CPU scales with memory on a serverless compute. */
@@ -59,18 +76,18 @@ interface ServerlessComputeOptions {
 }
 
 interface ContainerComputeOptions {
-  /** Memory (MB). */
-  memory?: number;
-  /** vCPUs. Paired with memory into a valid task size. */
-  vcpu?: Vcpu;
-  /** Max concurrent units of work per instance; the per-task cost lever. */
-  maxConcurrency?: number;
+  /** CPU + memory as a valid combination, or a `ContainerSize` preset. */
+  size?: ComputeSize;
+  /** Task-count bounds; defaults to a single task. See the scaling note below. */
+  scaling?: { min: number; max: number };
   /** Custom container image (ECR URI or build context). */
   image?: string;
 }
 ```
 
-`vcpu` and `memory` are coupled: each vCPU size permits only a range of memory values, so an invalid pair (`0.25` vCPU with 16GB) is a synth error naming the valid range. A single `size` enum of named CPU+memory combos is an alternative that makes invalid pairs unrepresentable, trading granularity for guaranteed validity.
+(The `2`/`4`/`8`/`16` vCPU members are elided above for readability; each lists every legal memory value — 1GB steps up to 4 vCPU, 4GB steps at 8, 8GB steps at 16.)
+
+`scaling` bounds the task count for horizontal redundancy. It defaults to `{ min: 1, max: 1 }` — a single task — and today only `{ 1, 1 }` is honored; `min`/`max` > 1 is reserved for when the autoscaling policy lands. When it does, the scaling *trigger* (queue depth for a job worker, CPU for a request-serving compute) is inferred by Blocks from the workload rather than configured here; an explicit target metric is a possible later addition. `scaling` is distinct from a job's `maxConcurrency`: `scaling` moves the number of tasks, `maxConcurrency` caps in-flight work within each. `serverless` has neither knob — the platform scales it.
 
 There is no timeout on a compute. Time limits are a property of work, not of compute (Appendix A), so they live on the workload — see below.
 
@@ -78,7 +95,7 @@ There is no timeout on a compute. Time limits are a property of work, not of com
 
 ### How `AsyncJob` consumes a `Compute`
 
-A workload takes a `compute` and its own `timeoutSeconds`. This is additive to the existing `AsyncJobOptions`.
+A workload takes a `compute` plus two properties of the work itself — `timeoutSeconds` and `maxConcurrency` — additive to the existing `AsyncJobOptions`.
 
 ```ts
 interface AsyncJobOptions<T> {
@@ -96,6 +113,16 @@ interface AsyncJobOptions<T> {
    * larger value is a synth error.
    */
   timeoutSeconds?: number;
+
+  /**
+   * Max in-flight deliveries of THIS job at once. A consumer-side cap, not an
+   * SQS setting — SQS itself does not limit how many messages are checked out.
+   * Enforced by the consumer: the container poller (per task) on a container, or
+   * the SQS event source mapping (account-global, min 2) on serverless. With
+   * multiple container tasks (scaling.max > 1), the effective cap is
+   * maxConcurrency x task count, since each task's poller enforces it locally.
+   */
+  maxConcurrency?: number;
 }
 ```
 
@@ -130,7 +157,7 @@ In this option, we present a single `Compute` block with a required `type` field
 ```ts
 import { Compute } from '@aws-blocks/blocks';
 
-const reports = new Compute(scope, 'reports', { type: 'container', memory: 2048, vcpu: 1 });
+const reports = new Compute(scope, 'reports', { type: 'container', size: { vcpu: 1, memory: 2048 } });
 const api     = new Compute(scope, 'api',     { type: 'serverless', memory: 512 });
 
 new AsyncJob(scope, 'reports', { compute: reports, timeoutSeconds: 60 * 30, handler });
@@ -152,7 +179,7 @@ type ComputeOptions =
 ```ts
 import { Compute } from '@aws-blocks/blocks';
 
-const reports = Compute.container(scope, 'reports', { memory: 2048, vcpu: 1 });
+const reports = Compute.container(scope, 'reports', { size: ContainerSize.medium });
 const api     = Compute.serverless(scope, 'api', { memory: 512 });
 ```
 
@@ -163,7 +190,7 @@ Each method takes that type's options directly (`Compute.container` takes `Conta
 ```ts
 import { ServerlessCompute, ContainerCompute } from '@aws-blocks/blocks';
 
-const reports = new ContainerCompute(scope, 'reports', { memory: 2048, vcpu: 1 });
+const reports = new ContainerCompute(scope, 'reports', { size: { vcpu: 1, memory: 2048 } });
 const api     = new ServerlessCompute(scope, 'api', { memory: 512 });
 ```
 
@@ -171,7 +198,7 @@ Each class is named by the compute type (`ContainerCompute`, `ServerlessCompute`
 
 ### Customizing and extending
 
-A customer who wants finer control sets more of the same options (`memory`, `vcpu`, `maxConcurrency`, `image`) and can drop into raw CDK for anything the options don't cover (goal 2). This is the same customization surface every block exposes, filled in further.
+A customer who wants finer control sets more of the same options (`size`, `scaling`, `image`) and can drop into raw CDK for anything the options don't cover (goal 2). This is the same customization surface every block exposes, filled in further.
 
 ### On `Scope`
 
