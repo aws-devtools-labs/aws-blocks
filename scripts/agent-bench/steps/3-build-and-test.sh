@@ -208,7 +208,7 @@ else
   # Neither the banner NOR the config.json readiness probe confirmed within the window. Record the
   # signal + a brief diagnostic (pid liveness + log tail) onto result.json, then proceed with
   # APP_BASE_URL empty.
-  echo "::warning::dev server never became ready within the readiness window (90 attempts: no banner and no config.json on :3000/:3001)"
+  echo "::warning::dev server never became ready within the readiness window (all 90 loop iterations exhausted: no banner and no config.json on :3000/:3001)"
   # Distinct dead-server / backend-crash signal so downstream can tell this apart from an agent that
   # built a genuinely broken app (mirrors how build_succeeded/dev_server_started are emitted above).
   echo "dev_server_status=dead" >> "$GITHUB_OUTPUT"
