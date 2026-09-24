@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { execSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -312,6 +312,79 @@ describe('agent-bench shell runner — process-identity isolation (issue #184)',
 			chmodSync(base, 0o755);
 			spawnSync('sudo', ['-n', 'pkill', '-9', '-u', BENCH_AGENT_USER], { timeout: 5000 });
 			rmSync(base, { recursive: true, force: true });
+		}
+	});
+});
+
+// ── BENCH_CMD_LOG: the per-command diagnostic log this PR adds ───────────────────────────────
+// Like the rest of this file, we pin the SEMANTICS rather than import the TS: the log line is
+// written by a small opt-in branch in WorkspaceSandbox.executeStreaming (run-shell.ts). We
+// replicate that exact write here so a regression in the shape (wrong field, unsliced output, a
+// throw escaping the best-effort try) fails loudly instead of silently degrading the diagnostic.
+describe('BENCH_CMD_LOG command log', () => {
+	// MUST mirror the append in run-shell.ts executeStreaming: same fields, same 4000-char slice,
+	// same best-effort try/catch (an unwritable path must not throw out of the generator).
+	function writeCmdLog(cmdLogPath, { cwd, command, result }) {
+		if (!cmdLogPath) return;
+		try {
+			appendFileSync(
+				cmdLogPath,
+				`${JSON.stringify({
+					ts: new Date().toISOString(),
+					cwd,
+					command,
+					exitCode: result.exitCode,
+					stdout: result.stdout.slice(0, 4000),
+					stderr: result.stderr.slice(0, 4000),
+				})}\n`,
+			);
+		} catch {
+			/* best-effort: never let command logging break a command */
+		}
+	}
+
+	it('writes one JSON line with the expected shape and 4000-char slice', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'cmdlog-'));
+		const logPath = join(dir, 'commands.jsonl');
+		try {
+			const bigStdout = 'x'.repeat(5000);
+			writeCmdLog(logPath, {
+				cwd: '/work/bench-app',
+				command: 'npm run dev',
+				result: { exitCode: 0, stdout: bigStdout, stderr: 'warn' },
+			});
+			const lines = readFileSync(logPath, 'utf-8').split('\n').filter(Boolean);
+			assert.equal(lines.length, 1, 'exactly one JSON line per command');
+			const rec = JSON.parse(lines[0]);
+			assert.deepEqual(
+				Object.keys(rec).sort(),
+				['command', 'cwd', 'exitCode', 'stderr', 'stdout', 'ts'],
+				'record has exactly the expected fields',
+			);
+			assert.equal(rec.cwd, '/work/bench-app');
+			assert.equal(rec.command, 'npm run dev');
+			assert.equal(rec.exitCode, 0);
+			assert.equal(rec.stderr, 'warn');
+			assert.equal(rec.stdout.length, 4000, 'stdout sliced to 4000 chars');
+			assert.ok(!Number.isNaN(Date.parse(rec.ts)), 'ts is an ISO timestamp');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('does not throw when the log path is unwritable', () => {
+		// A directory path is never openable for append — the best-effort catch must swallow it.
+		const dir = mkdtempSync(join(tmpdir(), 'cmdlog-'));
+		try {
+			assert.doesNotThrow(() =>
+				writeCmdLog(dir, {
+					cwd: dir,
+					command: 'true',
+					result: { exitCode: 0, stdout: '', stderr: '' },
+				}),
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });

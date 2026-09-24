@@ -14,5 +14,7 @@ dependencies:
   web_socket_channel: ^3.0.0
 
 dev_dependencies:
+  build_runner: ^2.4.15
+  build_version: ^2.1.1
   lints: ^6.0.0
   test: ^1.25.0
