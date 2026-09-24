@@ -124,7 +124,7 @@ class WebSocketSession {
     private let lock = NSLock()
     private let session: URLSession
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = BlocksRuntimeSession.shared) {
         self.session = session
     }
 
@@ -187,7 +187,11 @@ class WebSocketSession {
         let dispatcher = DispatchingListener()
         dispatcher.add(listener)
 
-        let wsTask = session.webSocketTask(with: url)
+        // Set the user-agent explicitly on the handshake request: URLSession does not reliably
+        // apply the session's httpAdditionalHeaders to the WebSocket upgrade.
+        var request = URLRequest(url: url)
+        request.setValue(blocksUserAgentToken, forHTTPHeaderField: "User-Agent")
+        let wsTask = session.webSocketTask(with: request)
         let entry = ConnectionEntry(task: wsTask, dispatcher: dispatcher)
         connections[connectionKey] = entry
         lock.unlock()
