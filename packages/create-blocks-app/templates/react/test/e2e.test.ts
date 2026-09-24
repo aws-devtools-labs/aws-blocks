@@ -41,7 +41,7 @@ const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json
 
 test.before(async () => {
   // Use existing dev server if running, otherwise start one
-  if (!await isServerRunning()) {
+  if (!await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
