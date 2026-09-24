@@ -4,7 +4,7 @@
 
 import { cp, mkdir, readFile, writeFile, rename, access, readdir } from 'node:fs/promises';
 import { join, dirname, basename, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
@@ -82,14 +82,14 @@ async function confirm(message: string): Promise<boolean> {
 // writes (e.g. README.md, .gitignore) and directory entries that can hold user
 // content, so a real user file blocks scaffolding rather than being overwritten.
 // Matched by exact name; *.iml is matched by the pattern below.
-const SAFE_TO_SCAFFOLD_ENTRIES = new Set([
+export const SAFE_TO_SCAFFOLD_ENTRIES = new Set([
   '.claude', '.cursor', '.DS_Store', '.git', '.gitattributes',
   '.gitlab-ci.yml', '.hg', '.hgcheck', '.hgignore', '.idea',
   '.npmignore', '.travis.yml', '.vscode', '.zed', 'LICENSE',
   'Thumbs.db', 'mkdocs.yml', 'npm-debug.log', 'yarn-debug.log',
   'yarn-error.log', 'yarnrc.yml', 'INSTRUCTIONS.md',
 ]);
-const SAFE_TO_SCAFFOLD_PATTERN = /\.iml$/; // IntelliJ IDEA project files
+export const SAFE_TO_SCAFFOLD_PATTERN = /\.iml$/; // IntelliJ IDEA project files
 
 /** Returns the entries in `dir` that would block a fresh scaffold (i.e. not in the allowlist). Empty array => safe to scaffold. */
 async function conflictingEntries(dir: string): Promise<string[]> {
@@ -823,4 +823,9 @@ async function create() {
   }, { template: templateName, templateVersion: templatePkgVersion });
 }
 
-create().catch(console.error);
+// Run the CLI only when this module is the entry point. Guarding the auto-run
+// lets tests import the exported allowlist constants without triggering a
+// scaffold. When invoked as the CLI, argv[1] is this module's path.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  create().catch(console.error);
+}

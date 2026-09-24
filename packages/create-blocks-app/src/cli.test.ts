@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import assert from 'node:assert';
+import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
@@ -521,5 +522,50 @@ describe('create-blocks-app auto-detection', () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
+  });
+});
+
+describe('create-blocks-app scaffold allowlist safety', () => {
+  it('no template writes a file whose name is in the scaffold allowlist (never-overwrite invariant)', () => {
+    // A fresh scaffold copies a template dir into the target (overwriting on
+    // collision), renames `gitignore` -> `.gitignore`, and overlays AGENTS.md.
+    // The safe-to-scaffold allowlist must stay DISJOINT from that written-set,
+    // or a user's pre-existing same-named file would be silently overwritten.
+    // Locate the source templates dir relative to the compiled test at dist/.
+    const candidates = [
+      join(__dirname, '../templates'),
+      join(__dirname, '../../templates'),
+    ];
+    const templatesDir = candidates.find((dir) => existsSync(dir));
+    assert.ok(
+      templatesDir,
+      `could not locate templates/ dir (looked in: ${candidates.join(', ')})`,
+    );
+
+    // Build the set of top-level names a fresh scaffold writes at the target:
+    // each template's top-level entries (gitignore -> .gitignore), plus the
+    // AGENTS.md shared-resource overlay.
+    const written = new Map<string, string>(); // written name -> source (template or overlay)
+    written.set('AGENTS.md', 'shared resource overlay (resources/AGENTS.md)');
+    for (const entry of readdirSync(templatesDir!, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      for (const name of readdirSync(join(templatesDir!, entry.name))) {
+        const writtenName = name === 'gitignore' ? '.gitignore' : name;
+        if (!written.has(writtenName)) written.set(writtenName, `template "${entry.name}"`);
+      }
+    }
+
+    // Collect ALL collisions so the failure lists every offender, not just the first.
+    const collisions: string[] = [];
+    for (const [name, source] of written) {
+      if (SAFE_TO_SCAFFOLD_ENTRIES.has(name) || SAFE_TO_SCAFFOLD_PATTERN.test(name)) {
+        collisions.push(`${source} writes "${name}" which is in the scaffold allowlist — a user's same-named file would be overwritten`);
+      }
+    }
+
+    assert.ok(
+      collisions.length === 0,
+      `scaffold allowlist collides with template-written files:\n  ${collisions.join('\n  ')}`,
+    );
   });
 });
