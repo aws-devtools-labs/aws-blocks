@@ -38,11 +38,12 @@ The design has three parts: the **compute types** a customer chooses from, the *
 
 Blocks supports three compute types:
 
-| Type | Model | Backed by (today) |
-| --- | --- | --- |
-| `ephemeral` | Pay-as-you-go, per-request, short-lived | Lambda |
-| `container` | Long-running / long-lived process | Fargate |
-| `dedicated` | Reserved capacity | EC2 / EKS (later) |
+| Type | Model | Alternative Tags | Backed by | Status |
+| --- | --- | --- | --- | --- |
+| `serverless` | Pay-as-you-go, per-request, short-lived | `ephemeral`, `on-demand`, `function` | Lambda | today |
+| `container` | Long-running / long-lived process | `long-running`, `service`, `worker` | Fargate | today |
+| `vm` | An instance you manage | `virtual-machine`, `instance`, `dedicated` | EC2 | future |
+| `kubernetes` | Container orchestration on a cluster | `cluster`, `k8s`, `orchestrated` | EKS | future |
 
 ### Compute options
 
@@ -52,8 +53,8 @@ Each type has its own options. Options that don't apply to a type are absent fro
 /** Valid vCPU sizes: a fixed set the platform accepts, not an open number. */
 type Vcpu = 0.25 | 0.5 | 1 | 2 | 4 | 8 | 16;
 
-interface EphemeralComputeOptions {
-  /** Memory (MB). CPU scales with memory on an ephemeral compute. */
+interface ServerlessComputeOptions {
+  /** Memory (MB). CPU scales with memory on a serverless compute. */
   memory?: number;
 }
 
@@ -73,7 +74,7 @@ interface ContainerComputeOptions {
 
 There is no timeout on a compute. Time limits are a property of work, not of compute (Appendix A), so they live on the workload — see below.
 
-> `image` on ephemeral: Lambda supports container images, but they must implement the Lambda Runtime API and are not the same artifact as a Fargate image. A custom ephemeral image is an advanced case deferred for now; Blocks builds the ephemeral bundle.
+> `image` on serverless: Lambda supports container images, but they must implement the Lambda Runtime API and are not the same artifact as a Fargate image. A custom serverless image is an advanced case deferred for now; Blocks builds the serverless bundle.
 
 ### How `AsyncJob` consumes a `Compute`
 
@@ -84,13 +85,13 @@ interface AsyncJobOptions<T> {
   handler: (payload: T, ctx: AsyncJobContext) => Promise<void>;
   // ...existing options (schema, maxRetries, batchSize, trackStatus)...
 
-  /** Where this job runs. Omit to use the app default (ephemeral). */
+  /** Where this job runs. Omit to use the app default (serverless). */
   compute?: Compute;
 
   /**
    * Wall-clock limit for one delivery, in seconds. A property of the work, not
    * the compute. Enforced by the runtime (on a container, by terminating the
-   * worker); on an ephemeral compute it is bounded by the platform ceiling. A
+   * worker); on a serverless compute it is bounded by the platform ceiling. A
    * per-job value may only tighten the compute's ceiling, never raise it; a
    * larger value is a synth error.
    */
@@ -130,7 +131,7 @@ In this option, we present a single `Compute` block with a required `type` field
 import { Compute } from '@aws-blocks/blocks';
 
 const reports = new Compute(scope, 'reports', { type: 'container', memory: 2048, vcpu: 1 });
-const api     = new Compute(scope, 'api',     { type: 'ephemeral', memory: 512 });
+const api     = new Compute(scope, 'api',     { type: 'serverless', memory: 512 });
 
 new AsyncJob(scope, 'reports', { compute: reports, timeoutSeconds: 60 * 30, handler });
 ```
@@ -138,12 +139,12 @@ new AsyncJob(scope, 'reports', { compute: reports, timeoutSeconds: 60 * 30, hand
 The `options` parameter is a discriminated union on `type`, so each type offers only its own options and an unsupported attribute is a compile error:
 
 ```ts
-type ComputeType = 'ephemeral' | 'container' | 'dedicated';
+type ComputeType = 'serverless' | 'container' | 'vm' | 'kubernetes';
 
 type ComputeOptions =
-  | ({ type: 'ephemeral' } & EphemeralComputeOptions)
+  | ({ type: 'serverless' } & ServerlessComputeOptions)
   | ({ type: 'container' } & ContainerComputeOptions);
-  // dedicated added when it lands
+  // vm and kubernetes added when they land
 ```
 
 ### Option 2 &mdash; type as a factory method
@@ -152,21 +153,21 @@ type ComputeOptions =
 import { Compute } from '@aws-blocks/blocks';
 
 const reports = Compute.container(scope, 'reports', { memory: 2048, vcpu: 1 });
-const api     = Compute.ephemeral(scope, 'api', { memory: 512 });
+const api     = Compute.serverless(scope, 'api', { memory: 512 });
 ```
 
-Each method takes that type's options directly (`Compute.container` takes `ContainerComputeOptions`, `Compute.ephemeral` takes `EphemeralComputeOptions`), so the type is fixed by the method and the discriminant disappears. Autocomplete lists the types and the choice can't be misspelled. The cost is departing from the `new X(scope, id, options)` shape other blocks use, and one method per type to document.
+Each method takes that type's options directly (`Compute.container` takes `ContainerComputeOptions`, `Compute.serverless` takes `ServerlessComputeOptions`), so the type is fixed by the method and the discriminant disappears. Autocomplete lists the types and the choice can't be misspelled. The cost is departing from the `new X(scope, id, options)` shape other blocks use, and one method per type to document.
 
 ### Option 3 &mdash; distinct blocks per type
 
 ```ts
-import { EphemeralCompute, ContainerCompute } from '@aws-blocks/blocks';
+import { ServerlessCompute, ContainerCompute } from '@aws-blocks/blocks';
 
 const reports = new ContainerCompute(scope, 'reports', { memory: 2048, vcpu: 1 });
-const api     = new EphemeralCompute(scope, 'api', { memory: 512 });
+const api     = new ServerlessCompute(scope, 'api', { memory: 512 });
 ```
 
-Each class is named by the compute type (`ContainerCompute`, `EphemeralCompute`) and takes that type's options (`ContainerComputeOptions`, `EphemeralComputeOptions`). It multiplies the block surface to one class per type, and "which types exist" is a matter of which classes are importable rather than one `type` union. Service-named variants (`EcsCompute`, `LambdaCompute`) are discarded for naming the service — see Appendix B.
+Each class is named by the compute type (`ContainerCompute`, `ServerlessCompute`) and takes that type's options (`ContainerComputeOptions`, `ServerlessComputeOptions`). It multiplies the block surface to one class per type, and "which types exist" is a matter of which classes are importable rather than one `type` union. Service-named variants (`EcsCompute`, `LambdaCompute`) are discarded for naming the service — see Appendix B.
 
 ### Customizing and extending
 
