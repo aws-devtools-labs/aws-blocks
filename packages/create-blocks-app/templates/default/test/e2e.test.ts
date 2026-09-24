@@ -31,11 +31,8 @@ let authApi: typeof AuthApiType;
 const serverPort = 3000;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
-// The auth/todo tests below exercise the sample API the template ships with.
-// Each is skipped by default (`{ skip: '…' }`) so that removing or renaming the
-// sample API does not leave a freshly-scaffolded app with failing tests before
-// any real code is written. Once you add your own API methods, drop the `skip`
-// on the blocks you want, or copy one and assert against your own methods.
+// Sample API tests are skipped so generated apps keep passing after the sample API is changed or removed.
+// When adding your own methods, copy a test, remove its `skip` option, and update its assertions.
 
 // ─── Setup (don't touch) ─────────────────────────────────────────────────────
 
