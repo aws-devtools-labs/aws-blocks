@@ -45,6 +45,14 @@ Blocks supports three compute types:
 | `vm` | An instance you manage | `virtual-machine`, `instance`, `dedicated` | EC2 | future |
 | `kubernetes` | Container orchestration on a cluster | `cluster`, `k8s`, `orchestrated` | EKS | future |
 
+> **Open — type names.** These names are placeholders. We need terms for the
+> two shipping types that read as a consistent set with the future ones and don't
+> mix axes: `serverless` names a billing model, `container` names a packaging
+> model, `vm` names a machine, `kubernetes` names a technology. Find a naming
+> axis (lifecycle? isolation level?) that fits all four, and settle better terms
+> for `serverless` and `container` in particular. The alternative-tags column
+> holds candidates. (Terminology research is a to-do.)
+
 ### Compute options
 
 Each type has its own options. Options that don't apply to a type are absent from its interface, so an unsupported attribute is a static compile-time error rather than a deploy time error.
@@ -152,7 +160,7 @@ Two jobs share one compute and set their own deadlines. Each may be stricter tha
 
 Each option below produces a `Compute` object that can be injected into "job"-type blocks like `AsyncJob`. The differences hinge on how customers navigate imports and instantiate the `Compute`.
 
-### Option 1 &mdash; `new Compute` with `type: ComputeType` (RECOMMENDED)
+### Option 1 &mdash; `new Compute` with `type: ComputeType` (SELECTED)
 
 In this option, we present a single `Compute` block with a required `type` field. This fits the `new X(scope, id, options)` shape that other Building Block use, so it composes uniformly and gets a `fullId`, tree position, and registry entry.
 
@@ -210,7 +218,7 @@ As usual, a customer who wants finer control sets more of the same options (`siz
 
 We need to decide how a a compute and job combination accounts for concurrency. The tension is that `container`, `ec2`, and `kubernetes` options will all have the concept of threads or processes that we could leverage. And, `concurrency` isn't strictly a function of how many threads or processes are assigned to a job or handler. Further complicating the story, time limits aren't strictly enforcible outside of `serverless` unless we restrict each thread to a concurrency of **one**. (You can "ask" a running job to stop, but unless it's bound 1-to-1 with a thread or process, you cannot forcefully terminate it without collateral damage.)
 
-This is the least fleshed out decision we have to make. Everything below this point (up to the Appendixes) is AI written, since I (Jon) am still personally wrestling with the tension between allowing strict time limits and broad thread x concurrency control. **Ideas are welcome!**
+This is now decided: **Option 4** (below). The option write-ups below were AI-drafted.
 
 ### Option 1 — on the compute
 
@@ -258,9 +266,32 @@ new AsyncJob(scope, 'reports', { execution: reports, handler });
 
 A third construct (`ExecutionStrategy` / `ExecutionPolicy`) maps a job to a compute and carries the execution knobs, constructible only against compute types that support them. Per-job (no carte blanche) and reusable across jobs as a named profile. Costs a third object to wire per workload and a less obvious "where does this setting live" story; earns its keep only if execution profiles are shared across many jobs.
 
+### Option 4 — on the job, (v)CPU concurrency multiplier (SELECTED)
+
+```ts
+const worker = new Compute(scope, 'worker', {
+  type: 'container',
+  size: { vcpu: 2, memory: 2048 },
+});
+
+new AsyncJob(scope, 'reports', {
+  compute: containerWorker,   // TS infers a container compute
+  maxConcurrencyPerCPU: 4,    // allowed. 4 x 2 vCPU = 8 concurrent per instance
+  handler,
+});
+
+new AsyncJob(scope, 'emails', {
+  compute: serverlessDefault, // TS infers serverless
+  maxConcurrencyPerCPU: 4,    // COMPILE ERROR — serverless has no per-instance cap
+  handler,
+});
+```
+
+Like Option 2, concurrency is per-job and compute-conditional (the knob only exists when the compute is one that has vCPUs to multiply against, so serverless rejects it at compile time). The difference is the unit: instead of an absolute per-instance count, the job states concurrency **per vCPU**, and Blocks multiplies by the compute's `size.vcpu` to get the per-instance figure. This ties a job's parallelism to the compute it lands on, so the same job scales its concurrency with the instance size rather than being pinned to an absolute number that a customer must re-tune when they resize the box.
+
 ### Recommendation
 
-Option 2. It puts concurrency where it belongs (per-job), prevents the default compute from exposing a knob it ignores (compile error, not silent no-op), and keeps a single object per workload. Option 1 is simplest but reintroduces carte blanche across co-located jobs. Option 3 is worth it only if a reusable, named execution profile is a real requirement; otherwise a spreadable options object gives the same reuse without a new construct.
+**Option 4 (selected.)** It keeps concurrency where it belongs — per-job and compute-conditional, so the default (serverless) compute can't be handed a knob it ignores (compile error, not a silent no-op) — while expressing the amount as a multiplier of the compute's vCPUs rather than an absolute count. Effective per-instance concurrency is `maxConcurrencyPerCPU × size.vcpu`, so resizing the compute scales a job's parallelism with it instead of stranding a hand-tuned absolute. Option 2 was the runner-up (same placement, absolute count); Option 1 reintroduces carte blanche across co-located jobs; Option 3's mapper is only worth its extra construct if reusable named profiles become a real requirement.
 
 ---
 
