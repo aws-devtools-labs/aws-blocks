@@ -86,19 +86,23 @@ type ContainerScaling = {
   /** Maximum running instances. Default 1 (no scaling). */
   maxInstances: number;
   /**
-   * What drives scaling between the bounds. Omit and Blocks picks by workload:
-   * queue depth for a job worker, CPU for a request-serving compute.
+   * One or more signals that drive scaling. With several, scale-out satisfies
+   * whichever signal demands the most instances; scale-in happens only when all
+   * agree it is safe. Omit and Blocks picks one by workload: queue depth for a
+   * job worker, CPU for a request-serving compute. At most one signal per metric.
    */
-  strategy?:
-    | { on: 'cpu'; targetPercent: number }
-    | { on: 'memory'; targetPercent: number }
-    | { on: 'queue-depth'; backlogPerInstance: number };
+  strategy?: ScalingSignal | ScalingSignal[];
 };
+
+type ScalingSignal =
+  | { on: 'cpu'; targetPercent: number }
+  | { on: 'memory'; targetPercent: number }
+  | { on: 'queue-depth'; backlogPerInstance: number };
 ```
 
-`scaling` bounds the instance count for horizontal redundancy and names what drives it. It defaults to a single instance (`minInstances: 1, maxInstances: 1`); today only a single instance is honored, and `maxInstances` > 1 is reserved for when the autoscaling policy lands. Fargate supports it via Application Auto Scaling (an `AWS::ApplicationAutoScaling::ScalableTarget` for the bounds plus a `ScalingPolicy` for the trigger); the bounds map to `minCapacity`/`maxCapacity`.
+`scaling` bounds the instance count for horizontal redundancy and names what drives it. It defaults to a single instance (`minInstances: 1, maxInstances: 1`); today only a single instance is honored, and `maxInstances` > 1 is reserved for when the autoscaling policy lands. Fargate supports it via Application Auto Scaling (an `AWS::ApplicationAutoScaling::ScalableTarget` for the bounds plus a `ScalingPolicy` per signal); the bounds map to `minCapacity`/`maxCapacity`.
 
-The `strategy` is optional — omit it and Blocks infers one by workload (queue depth for a job worker, CPU for a request-serving compute). `cpu`/`memory` target-track the standard ECS utilization metrics. `queue-depth` is the right signal for a job worker: Blocks sums `ApproximateNumberOfMessagesVisible` (messages waiting, not yet picked up) across **every queue this compute drains** — known at synth from the AsyncJobs assigned to it — divides by running instances, and target-tracks `backlogPerInstance`. Because instances are shared across all jobs on the compute (one instance drains every queue), queue-depth scaling is necessarily **aggregate**, not per-job. For per-job scaling isolation, give that job its own compute.
+`strategy` is optional — omit it and Blocks infers one by workload (queue depth for a job worker, CPU for a request-serving compute). It accepts a single signal or an array. Each signal is its own target-tracking policy on the same scalable target: `cpu`/`memory` track the standard ECS utilization metrics; `queue-depth` is the right signal for a job worker — Blocks sums `ApproximateNumberOfMessagesVisible` (messages waiting, not yet picked up) across **every queue this compute drains** (known at synth from the AsyncJobs assigned to it), divides by running instances, and target-tracks `backlogPerInstance`. With multiple signals, scale-out follows whichever demands the most instances and scale-in requires all to agree; mixing signals that move in opposite directions (e.g. low CPU while backlog is high) can cause flapping, so combine them deliberately. At most one signal per metric — a duplicate (two `cpu`) is a synth error. Because instances are shared across all jobs on the compute (one instance drains every queue), queue-depth scaling is necessarily **aggregate**, not per-job; for per-job scaling isolation, give that job its own compute.
 
 `scaling` is distinct from a job's `maxConcurrencyPerInstance`: `scaling` moves the number of instances, `maxConcurrencyPerInstance` caps in-flight work within each; total drain rate is roughly `instances × maxConcurrencyPerInstance` summed across the compute's jobs. `serverless` has neither knob — the platform scales it.
 
