@@ -277,7 +277,7 @@ console.log('[Comprehensive Test App] Loaded — all Building Blocks wired up');
 // Agent Chat
 // ============================================================================
 
-import { createChat, realtimeTransport, type JSONValue } from '@aws-blocks/bb-agent/client';
+import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
 
 const chatMessages = document.getElementById('chat-messages')!;
 const chatInput = document.getElementById('chat-input') as HTMLInputElement;
@@ -287,21 +287,6 @@ const chatConvos = document.getElementById('chat-convos')!;
 const conversations: { conversationId: string; name: string }[] = [];
 let activeChat: ReturnType<typeof createChat> | null = null;
 let activeConvoId: string | null = null;
-
-// Map the Agent BB's message metadata (a fixed-key MessageMetadata) into the
-// Record<string, JSONValue> shape createChat's getConversation expects. Copy the
-// known fields so no `as` cast is needed — each is already a JSON value.
-function toJSONMetadata(metadata: Awaited<ReturnType<typeof api.agentGetConversation>>['messages'][number]['metadata']): Record<string, JSONValue> {
-	const out: Record<string, JSONValue> = {};
-	if (!metadata) return out;
-	if (metadata.toolName !== undefined) out.toolName = metadata.toolName;
-	if (metadata.toolInput !== undefined) out.toolInput = metadata.toolInput;
-	if (metadata.toolOutput !== undefined) out.toolOutput = metadata.toolOutput;
-	if (metadata.latencyMs !== undefined) out.latencyMs = metadata.latencyMs;
-	if (metadata.error !== undefined) out.error = metadata.error;
-	if (metadata.usage !== undefined) out.usage = { ...metadata.usage };
-	return out;
-}
 
 function renderConvoList() {
 	chatConvos.innerHTML = conversations.map(c => {
@@ -347,12 +332,7 @@ function createChatForConvo(conversationId: string) {
 		}),
 		api: {
 			createConversation: async () => ({ conversationId }),
-			getConversation: async (id) => {
-				const { messages } = await api.agentGetConversation(id);
-				// The Agent BB's Message.metadata is JSON-serializable; map it into the
-				// JSONValue record createChat renders (app owns this RPC-shape adaptation).
-				return { messages: messages.map(m => ({ ...m, metadata: toJSONMetadata(m.metadata) })) };
-			},
+			getConversation: async (id) => await api.agentGetConversation(id),
 			getPendingInterrupts: async (id) => await api.agentGetPendingInterrupts(id),
 		},
 		onMessagesChange: (msgs) => {

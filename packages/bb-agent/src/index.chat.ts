@@ -58,10 +58,12 @@ export type ChatMessage =
 export interface ChatConversationApi {
 	/** Create a new conversation and return its id. Called lazily on the first turn of a fresh chat. */
 	createConversation(): Promise<{ conversationId: string }>;
-	/** Load a conversation's message history for rendering. */
+	/** Load a conversation's message history for rendering. `metadata` is `unknown`:
+	 * pass your backend's message metadata straight through — no per-call mapping or
+	 * adapter. createChat narrows it internally when rendering an approval message. */
 	getConversation(
 		id: string,
-	): Promise<{ messages: { role: string; content: string; metadata?: Record<string, JSONValue> }[] }>;
+	): Promise<{ messages: { role: string; content: string; metadata?: unknown }[] }>;
 	/** Check whether a conversation has unanswered interrupts (e.g. the user left mid-approval). */
 	getPendingInterrupts?(
 		conversationId: string,
@@ -147,6 +149,19 @@ function toJSONValue(value: unknown): JSONValue {
 	} catch {
 		return String(value);
 	}
+}
+
+/**
+ * Narrow an `unknown` message metadata value (customers pass their backend shape
+ * straight through) into a JSON record for rendering. A plain object is round-tripped
+ * to a clean {@link JSONValue} record via {@link toJSONValue}; a non-object (null,
+ * string, array, undefined) yields `undefined`. This is the one narrow createChat
+ * does so the customer never writes a per-call adapter.
+ */
+function asJSONRecord(value: unknown): Record<string, JSONValue> | undefined {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+	const json = toJSONValue(value);
+	return typeof json === 'object' && json !== null && !Array.isArray(json) ? json : undefined;
 }
 
 /**
@@ -403,14 +418,19 @@ export function createChat(options: CreateChatOptions): ChatController {
 			conversationId = id;
 			const { messages: history } = await api.getConversation(id);
 			messages = history.flatMap<ChatMessage>((m) => {
+				// metadata arrives as `unknown` (customers pass their backend shape
+				// straight through — no adapter). Narrow it HERE, once, so the customer
+				// never writes this: a plain object becomes the JSON record, anything
+				// else is dropped.
+				const record = asJSONRecord(m.metadata);
 				if (m.role === 'user' || m.role === 'assistant') {
-					return [{ id: nextId(), role: m.role, content: m.content, metadata: m.metadata }];
+					return [{ id: nextId(), role: m.role, content: m.content, metadata: record }];
 				}
 				if (m.role === 'approval') {
-					// Project the stored JSON metadata into the typed ApprovalMetadata
-					// shape (no cast): read the known keys, keep the JSON-safe types.
+					// Project the narrowed record into the typed ApprovalMetadata shape:
+					// read the known keys, keep the JSON-safe types.
 					const meta: ApprovalMetadata = {};
-					const src = m.metadata ?? {};
+					const src = record ?? {};
 					if (typeof src.approved === 'boolean') meta.approved = src.approved;
 					if (typeof src.trust === 'boolean') meta.trust = src.trust;
 					if (typeof src.toolName === 'string') meta.toolName = src.toolName;
