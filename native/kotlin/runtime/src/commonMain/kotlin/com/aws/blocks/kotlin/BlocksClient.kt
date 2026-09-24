@@ -30,7 +30,7 @@ class BlocksClient(
          * Call this to ensure a fully logged-out state across app restarts.
          */
         fun clearCookies() {
-            PersistentCookiesStorage().clear()
+            sharedCookiesStorage.clear()
         }
     }
 

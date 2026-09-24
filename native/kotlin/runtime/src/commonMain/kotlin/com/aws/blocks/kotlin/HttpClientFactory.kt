@@ -11,7 +11,7 @@ import io.ktor.serialization.kotlinx.json.json
 internal fun defaultHttpClient(): HttpClient = HttpClient {
     install(WebSockets)
     install(HttpCookies) {
-        storage = PersistentCookiesStorage()
+        storage = sharedCookiesStorage
     }
     install(ContentNegotiation) {
         json()
