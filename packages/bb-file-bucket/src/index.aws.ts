@@ -12,7 +12,7 @@ import {
 	CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, blocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type {
@@ -98,12 +98,12 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 				metadata: result.Metadata ?? {},
 				size: result.ContentLength ?? bytes.length,
 			};
-		} catch (e: any) {
+		} catch (e: unknown) {
 			// A missing object OR a missing version both mean "not found" — return
 			// null per get()'s documented contract and to match the mock, which
 			// returns null for an unknown `versionId`. Without NoSuchVersion here, an
 			// unknown versionId threw on AWS while the mock returned null (parity break).
-			if (e.name === 'NoSuchKey' || e.name === 'NoSuchVersion') return null;
+			if (e instanceof Error && (e.name === 'NoSuchKey' || e.name === 'NoSuchVersion')) return null;
 			throw e;
 		}
 	}
@@ -216,16 +216,16 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 				Key: path,
 				CopySource: `${getSdkIdentifiers(this).bucketName}/${encodedPath}?versionId=${versionId}`,
 			}));
-		} catch (e: any) {
+		} catch (e: unknown) {
 			// An unknown version (or a missing key) surfaces as a violated
-			// precondition. Match the mock: throw a clean, `NoSuchVersion`-named error
-			// (matchable via `isBlocksError(e, 'NoSuchVersion')`) rather than the raw
-			// S3 error, whose enumerable `$metadata`/ARNs would leak to the client if
-			// serialized (see Core rule 5). The mock throws the same name + message.
-			if (e?.name === 'NoSuchVersion' || e?.name === 'NoSuchKey') {
-				const err = new Error(`Version "${versionId}" does not exist for "${path}"`);
-				err.name = 'NoSuchVersion';
-				throw err;
+			// precondition. Match the mock exactly: throw via the same core
+			// `blocksError('NoSuchVersion', …)` helper it uses — identical `.name`
+			// (matchable via `isBlocksError(e, 'NoSuchVersion')`) AND identical,
+			// name-prefixed `.message` — rather than the raw S3 error, whose
+			// enumerable `$metadata`/ARNs would leak to the client if serialized
+			// (see Core rule 5).
+			if (e instanceof Error && (e.name === 'NoSuchVersion' || e.name === 'NoSuchKey')) {
+				throw blocksError('NoSuchVersion', `Version "${versionId}" does not exist for "${path}"`);
 			}
 			throw e;
 		}
