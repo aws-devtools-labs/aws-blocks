@@ -15,12 +15,11 @@ import {
   type SkewProtectionConfig,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
-import { AllowedMethods, CachePolicy, OriginRequestPolicy, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
-import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { registerConfig } from './cdk/config-registry.js';
 import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
+import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint, registerHostingDistribution } from './cdk/api-front-door.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
 	assertMarkersExistAtSynth,
@@ -112,14 +111,21 @@ export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
 }
 
 /**
- * Structural interface for the Blocks backend stack.
+ * Everything Hosting needs to front a Blocks backend's API.
  *
- * Accepts any object that exposes an `apiUrl` — typically a {@link BlocksStack}
- * instance but kept structural so Hosting doesn't depend on the concrete class.
+ * A `BlocksStack` or `BlocksBackend` satisfies this structurally, so
+ * `api: blocksStack` is all an app writes. Kept structural — and made entirely of
+ * plain data — so it also works when the backend lives in another stack: only the
+ * endpoint string crosses the boundary, never construct references.
  */
-export interface BlocksStackApi {
-  /** Fully-qualified API Gateway URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks`). */
-  readonly apiUrl: string;
+export interface BlocksApiRouting {
+  /**
+   * The default compute's origin base, e.g.
+   * `https://{id}.execute-api.{region}.amazonaws.com/{stage}` — no
+   * `/aws-blocks/api` suffix, no trailing slash. The origin every API behavior on
+   * this distribution forwards to.
+   */
+  readonly defaultEndpoint: string;
 }
 
 /**
@@ -184,15 +190,23 @@ export interface HostingProps {
 
   // ── Blocks backend integration ────────────────────────────────────
   /**
-   * The Blocks backend stack (or any object with `apiUrl`).
+   * The Blocks backend to front — pass the `BlocksStack` or `BlocksBackend`.
    *
-   * When provided, Hosting creates CloudFront behaviors that proxy API
-   * requests through the same domain as the frontend — enabling relative
-   * URL access (`/aws-blocks/...`) without CORS.
+   * Hosting then adds a CloudFront behavior for every route the backend
+   * registered, each pointing at the compute that serves it, so API requests go
+   * through the same domain as the frontend — relative `/aws-blocks/...` access,
+   * no CORS. Because the API is on this distribution, the backend does not
+   * provision a second one of its own.
+   *
+   * That last part holds when Hosting is in the **same stack** as its backend
+   * (`new Hosting(blocksStack, …)`, the usual shape). Front a backend in another
+   * stack and it still provisions its own managed distribution, because the two
+   * cannot see each other's — pass `apiFrontDoor: 'none'` on the backend to make
+   * this distribution the only front door.
    *
    * Omit when deploying a static-only site with no backend.
    */
-  api?: BlocksStackApi;
+  api?: BlocksApiRouting;
 
   /**
    * Additional backend configuration to include in config.json.
@@ -530,7 +544,7 @@ export class Hosting extends Construct {
     // ── 2. Optionally run the build ──────────────────────────────
     if (props.buildCommand) {
       console.log(`🏗️  Building frontend (${framework}): ${props.buildCommand}`);
-      const apiUrl = props.api?.apiUrl;
+      const apiUrl = props.api && apiRpcUrl(props.api);
       // Strip CDK's --conditions=cdk from NODE_OPTIONS to prevent it
       // from breaking frontend builds (e.g., Next.js webpack module resolution).
       const nodeOptions = (process.env.NODE_OPTIONS || '')
@@ -574,8 +588,8 @@ export class Hosting extends Construct {
     //    with BLOCKS_API_URL in the env. OpenNext will re-run it but Next.js
     //    caches aggressively so it's fast. We still set BLOCKS_API_URL in the
     //    process env so OpenNext's build also has access to it.
-    if (props.api?.apiUrl) {
-      process.env.BLOCKS_API_URL = props.api.apiUrl;
+    if (props.api) {
+      process.env.BLOCKS_API_URL = apiRpcUrl(props.api);
     }
     const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
     const manifest: DeployManifest = adapter(root);
@@ -732,7 +746,7 @@ export class Hosting extends Construct {
 
     // ── 7. Add CloudFront behaviors for API proxy ────────────────
     if (props.api) {
-      this.addApiBehaviors(hosting, props.api.apiUrl);
+      this.addApiBehaviors(hosting, props.api);
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -748,7 +762,10 @@ export class Hosting extends Construct {
     for (const [, fn] of hosting.computeFunctions) {
       if (!canAddEnv(fn)) continue; // Lambda@Edge: no env var support
       if (props.api) {
-        fn.addEnvironment('BLOCKS_API_URL', props.api.apiUrl);
+        // The backend's own origin, not this distribution: an SSR function that is
+        // an origin of the distribution it calls through is a CloudFormation
+        // dependency cycle. Server-side rendering talks to the gateway directly.
+        fn.addEnvironment('BLOCKS_API_URL', apiRpcUrl(props.api));
       }
       if (props.backendConfig) {
         fn.addEnvironment('BLOCKS_CONFIG', JSON.stringify(props.backendConfig));
@@ -870,62 +887,80 @@ export class Hosting extends Construct {
   }
 
   /**
-   * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
+   * Route API traffic through this distribution.
+   *
+   * Every API path resolves to the default compute today, so all behaviors point
+   * at one origin: the reserved RPC and auth subtrees are fixed behaviors, and any
+   * app RawRoutes outside those prefixes each get their own from the route registry.
+   *
+   * Claiming the front-door role is part of the same step: with the API on this
+   * distribution, the backend must not provision a managed one of its own.
    */
-  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string): void {
-    const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
-    const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
-    const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
-    const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
+  private addApiBehaviors(hosting: HostingConstruct, api: BlocksApiRouting): void {
+    // Claimed before the behaviors are added so the backend's front-door aspect —
+    // which runs later, at synth — sees the claim and stands down. `distributionUrl`
+    // is custom-domain-aware, so clients are pointed at the domain the app is
+    // actually served from.
+    //
+    // Keyed on this construct's stack. For the usual `new Hosting(blocksStack, …)`
+    // that is the backend's stack, which is what the aspect reads.
+    //
+    // A Hosting in a *different* stack than its backend cannot suppress that
+    // backend's managed front door — the claim lands on this stack, and the aspect
+    // only reads its own. The app ends up paying for two distributions, with
+    // `ApiUrl` pointing at the managed one rather than this one. Pass
+    // `apiFrontDoor: 'none'` on the backend to make this distribution the only
+    // front door.
+    registerHostingDistribution(cdk.Stack.of(this), hosting.distributionUrl);
 
-    const apiGatewayOrigin = new HttpOrigin(hostname, {
-      originPath: `/${stage}`,
-    });
+    const apiOrigin = httpOriginFromEndpoint(api.defaultEndpoint);
 
-    const behaviorDefaults = {
-      allowedMethods: AllowedMethods.ALLOW_ALL,
-      cachePolicy: CachePolicy.CACHING_DISABLED,
-      originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-    };
+    // The reserved RPC subtree: `/aws-blocks/api` and everything under it.
+    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiOrigin, API_BEHAVIOR_OPTIONS);
+    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiOrigin, API_BEHAVIOR_OPTIONS);
 
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    // The auth BB's reserved subtree. The auth flow (callback, sign-in, exchange,
+    // authorize-params, the stub IdP) is mounted only at runtime; a single subtree
+    // wildcard proxies the whole flow regardless of providers or instance count and
+    // never drifts as routes are added. Added directly (not via the RawRoute loop
+    // below) so it's emitted exactly once even with multiple AuthOIDC instances.
+    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiOrigin, API_BEHAVIOR_OPTIONS);
 
-    // Proxy the auth BB's reserved subtree as a single behavior. The auth flow
-    // (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
-    // only at runtime; declaring the subtree wildcard here — rather than per
-    // route at synth — proxies the whole flow regardless of providers or
-    // instance count, and never drifts as routes are added. Added directly (not
-    // via the route loop below) so it's emitted exactly once even with multiple
-    // AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
-
+    // App RawRoutes outside the reserved prefixes each get a behavior. A path
+    // parameter can only be expressed to CloudFront as a prefix wildcard, which
+    // matches more than the route does — including frontend paths under the same
+    // prefix — so warn, since the frontend is on this same distribution.
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
     for (const route of getRegisteredRoutes()) {
       if (route.path.startsWith(`${BLOCKS_RPC_PREFIX}/`)) continue;
       if (route.path === BLOCKS_AUTH_PREFIX || route.path.startsWith(`${BLOCKS_AUTH_PREFIX}/`)) continue;
 
-      let behaviorPattern: string;
       const paramIndex = route.path.indexOf('/{');
-      if (paramIndex !== -1) {
-        behaviorPattern = route.path.substring(0, paramIndex) + '/*';
-      } else {
-        behaviorPattern = route.path;
-      }
+      const behaviorPattern = paramIndex === -1 ? route.path : `${route.path.substring(0, paramIndex)}/*`;
 
       if (addedPatterns.has(behaviorPattern)) continue;
 
       if (behaviorPattern.endsWith('/*')) {
         console.warn(
           `[Hosting] ⚠️  RawRoute '${route.path}' creates CloudFront behavior '${behaviorPattern}' ` +
-            `which may shadow SSR/frontend routes under the same prefix. ` +
+            'which may shadow SSR/frontend routes under the same prefix. ' +
             `Consider placing this route under ${BLOCKS_RPC_PREFIX}/ to avoid conflicts.`,
         );
       }
 
       addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
+      hosting.distribution.addBehavior(behaviorPattern, apiOrigin, API_BEHAVIOR_OPTIONS);
     }
   }
+}
+
+/**
+ * The client-facing RPC URL for a backend: its default compute's origin plus the
+ * RPC path.
+ *
+ * Composed at the point of use rather than stored, so there is one representation
+ * of an origin (`defaultEndpoint`) and the prefix is never doubled up.
+ */
+function apiRpcUrl(api: BlocksApiRouting): string {
+  return `${api.defaultEndpoint}${BLOCKS_RPC_PREFIX}`;
 }
