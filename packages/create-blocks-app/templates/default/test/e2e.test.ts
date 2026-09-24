@@ -31,14 +31,11 @@ let authApi: typeof AuthApiType;
 const serverPort = 3000;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
-// The tests below exercise the sample todo/auth API the template ships with.
-// They are skipped by default so that removing or renaming the sample API does
-// not leave a freshly-scaffolded app with failing tests before any real code
-// is written. Set this to `true` (or delete the wrapper) once you are testing
-// your own API, and use `sampleApiTest` in place of `test` for those blocks.
-const RUN_SAMPLE_API_TESTS = false;
-const sampleApiTest: typeof test = ((name: string, fn: any) =>
-  test(name, { skip: RUN_SAMPLE_API_TESTS ? false : 'sample API — set RUN_SAMPLE_API_TESTS or replace with your own tests' }, fn)) as typeof test;
+// The auth/todo tests below exercise the sample API the template ships with.
+// Each is skipped by default (`{ skip: '…' }`) so that removing or renaming the
+// sample API does not leave a freshly-scaffolded app with failing tests before
+// any real code is written. Once you add your own API methods, drop the `skip`
+// on the blocks you want, or copy one and assert against your own methods.
 
 // ─── Setup (don't touch) ─────────────────────────────────────────────────────
 
@@ -87,12 +84,12 @@ test('app: server serves its Blocks config', async () => {
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
-sampleApiTest('auth: starts signed out', async () => {
+test('auth: starts signed out', { skip: 'sample API — replace with tests for your own methods' }, async () => {
   const state = await authApi.getAuthState();
   assert.strictEqual(state.state, 'signedOut');
 });
 
-sampleApiTest('auth: sign up creates account and signs in', async () => {
+test('auth: sign up creates account and signs in', { skip: 'sample API — replace with tests for your own methods' }, async () => {
   const state = await authApi.setAuthState({
     action: 'signUp',
     username: 'testuser@example.com',
@@ -102,7 +99,7 @@ sampleApiTest('auth: sign up creates account and signs in', async () => {
   assert.strictEqual(state.user?.username, 'testuser@example.com');
 });
 
-sampleApiTest('auth: unauthenticated access is rejected', async () => {
+test('auth: unauthenticated access is rejected', { skip: 'sample API — replace with tests for your own methods' }, async () => {
   // Sign out first
   await authApi.setAuthState({ action: 'signOut' });
 
@@ -121,7 +118,7 @@ sampleApiTest('auth: unauthenticated access is rejected', async () => {
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
-sampleApiTest('todos: create with priority', async () => {
+test('todos: create with priority', { skip: 'sample API — replace with tests for your own methods' }, async () => {
   const todo = await api.createTodo('Buy milk', 1);
   assert.strictEqual(todo.title, 'Buy milk');
   assert.strictEqual(todo.priority, 1);
@@ -130,13 +127,13 @@ sampleApiTest('todos: create with priority', async () => {
   assert.ok(todo.todoId);
 });
 
-sampleApiTest('todos: list (only own)', async () => {
+test('todos: list (only own)', { skip: 'sample API — replace with tests for your own methods' }, async () => {
   const list = await api.listTodos();
   assert.ok(list.length >= 1);
   assert.ok(list.every(t => t.userId === 'testuser@example.com'));
 });
 
-sampleApiTest('todos: list sorted by priority (secondary index)', async () => {
+test('todos: list sorted by priority (secondary index)', { skip: 'sample API — replace with tests for your own methods' }, async () => {
   // Create todos with different priorities
   await api.createTodo('Low priority task', 3);
   await api.createTodo('High priority task', 1);
@@ -150,7 +147,7 @@ sampleApiTest('todos: list sorted by priority (secondary index)', async () => {
   }
 });
 
-sampleApiTest('todos: list sorted by title (secondary index)', async () => {
+test('todos: list sorted by title (secondary index)', { skip: 'sample API — replace with tests for your own methods' }, async () => {
   const sorted = await api.listTodos('title');
   assert.ok(sorted.length >= 2);
   const titles = sorted.map(t => t.title);
@@ -159,7 +156,7 @@ sampleApiTest('todos: list sorted by title (secondary index)', async () => {
   }
 });
 
-sampleApiTest('todos: toggle completion', async () => {
+test('todos: toggle completion', { skip: 'sample API — replace with tests for your own methods' }, async () => {
   const [todo] = await api.listTodos();
   await api.toggleTodo(todo.todoId);
 
@@ -168,7 +165,7 @@ sampleApiTest('todos: toggle completion', async () => {
   assert.strictEqual(updated?.version, todo.version + 1);
 });
 
-sampleApiTest('todos: delete', async () => {
+test('todos: delete', { skip: 'sample API — replace with tests for your own methods' }, async () => {
   const before = await api.listTodos();
   const target = before[0];
   await api.deleteTodo(target.todoId);
@@ -179,7 +176,7 @@ sampleApiTest('todos: delete', async () => {
 
 // ─── Conditional writes (optimistic locking) ──────────────────────────────────
 
-sampleApiTest('todos: concurrent toggle → conflict → retry succeeds', async () => {
+test('todos: concurrent toggle → conflict → retry succeeds', { skip: 'sample API — replace with tests for your own methods' }, async () => {
   // Create a fresh todo
   const todo = await api.createTodo('Conflict test');
 
