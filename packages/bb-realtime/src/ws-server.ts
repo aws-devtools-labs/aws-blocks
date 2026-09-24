@@ -28,9 +28,16 @@ export function attach(httpServer: Server) {
 	if (wss) return; // Already attached — multiple BBs may register the same dev attachment
 	wss = new WebSocketServer({ noServer: true });
 
+	// Server-level WS errors must be logged, never left to crash the dev process.
+	wss.on('error', (err) => { console.error('[Realtime WS] Server error:', err); });
+
 	// Only handle /realtime upgrades — ignore all others so HMR (Next.js, Vite)
 	// WebSocket upgrades pass through to the frontend proxy unharmed.
 	httpServer.on('upgrade', (req, socket, head) => {
+		// A client resetting the connection during the upgrade window (ECONNRESET)
+		// emits 'error' on the raw socket. Without this listener Node's default
+		// unhandled-error behaviour tears down the whole dev server process.
+		socket.on('error', () => socket.destroy());
 		const pathname = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`).pathname;
 		if (pathname !== '/realtime') return;
 		wss!.handleUpgrade(req, socket, head, (ws) => wss!.emit('connection', ws, req));
@@ -59,7 +66,7 @@ export function attach(httpServer: Server) {
 				} else if (msg.action === 'unsubscribe' && msg.channel) {
 					subscription.channels.delete(msg.channel);
 				} else if (msg.action === 'publish' && msg.channel && msg.payload !== undefined) {
-					const outMsg = JSON.stringify({ type: 'message', channel: msg.channel, payload: msg.payload });
+					const outMsg = JSON.stringify({ type: 'message', channel: msg.channel, data: msg.payload });
 					for (const [otherWs, otherSub] of clients) {
 						if (otherWs !== ws && otherSub.channels.has(msg.channel) && otherWs.readyState === WebSocket.OPEN) {
 							otherWs.send(outMsg);
@@ -75,8 +82,8 @@ export function attach(httpServer: Server) {
 		ws.on('error', () => { clients.delete(ws); });
 	});
 
-	localRealtimeBus.on('broadcast', ({ channel, payload }) => {
-		const message = JSON.stringify({ type: 'message', channel, payload });
+	localRealtimeBus.on('broadcast', ({ channel, data }) => {
+		const message = JSON.stringify({ type: 'message', channel, data });
 		for (const [ws, sub] of clients) {
 			if (sub.channels.has(channel) && ws.readyState === WebSocket.OPEN) {
 				ws.send(message);

@@ -227,6 +227,7 @@ function isRealtimeDescriptor(data: unknown): data is AwsRealtimeDescriptor {
 	return typeof data === 'object' && data !== null
 		&& (data as any).__blocks === 'realtime/channel'
 		&& typeof (data as any).wsUrl === 'string'
+		&& typeof (data as any).connectToken === 'string'
 		&& typeof (data as any).token === 'string';
 }
 

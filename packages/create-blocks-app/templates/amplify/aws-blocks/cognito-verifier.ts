@@ -8,8 +8,7 @@
  * No session store, no sign-in flow, no cookies — pure stateless verification.
  */
 
-import { ApiError } from '@aws-blocks/core';
-import type { BlocksContext } from '@aws-blocks/core';
+import { ApiError, type BlocksContext } from '@aws-blocks/blocks';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 
 type CognitoVerifierInstance = ReturnType<typeof CognitoJwtVerifier.create>;

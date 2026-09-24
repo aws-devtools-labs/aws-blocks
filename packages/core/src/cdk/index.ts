@@ -1,120 +1,467 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import * as cdk from 'aws-cdk-lib';
-import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
 import { __PIPELINE_STAGE_SCOPE__ } from '@aws-blocks/pipeline';
+import * as cdk from 'aws-cdk-lib';
+import { Construct } from 'constructs';
 import {
-  type BlocksStackProps,
-  type BlocksStack as BaseBlocksStack,
-  type ScopeParent,
-  type ScopeOptions,
-  computeScopeFullId,
+	type BlocksStack as BaseBlocksStack,
+	type BlocksStackProps,
+	computeScopeFullId,
+	type ScopeOptions,
+	type ScopeParent,
 } from '../common/index.js';
-import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blocks-backend.js';
-import { addBlocksStackMetadata } from './stack-metadata.js';
+import { assertCdkConditionActive, BlocksBackend, setupBlocksInfra } from './blocks-backend.js';
+import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
+import type { Compute } from './compute/compute.js';
+import { getComputes } from './compute/compute-registry.js';
+import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry } from './config-registry.js';
+import { finalizeDashboards } from './dashboard-registry.js';
+import { addBlocksStackMetadata } from './stack-metadata.js';
+import { finalizeTracing } from './tracer-registry.js';
+import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
+import { registerVpcRequirements } from './vpc-requirements-registry.js';
+import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
-export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
-export { DEFAULT_NODE_RUNTIME } from './node-version.js';
-export { SandboxDisableDeletionProtection } from './mixins.js';
-export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
-export { synthGuard } from './synth-guard.js';
+export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from '../errors.js';
 export type { ScopeOptions } from '../index.js';
-export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
+export { ensureApiGatewayAccount } from './apigateway-account.js';
+export {
+	BlocksBackend,
+	type BlocksBackendProps,
+	type CoreBlocksBackendProps,
+	SHARED_HANDLER_TIMEOUT_SECONDS,
+} from './blocks-backend.js';
+export {
+	type BlocksDefaults,
+	BlocksPresets,
+	type BlocksThrottling,
+} from './blocks-defaults.js';
+export { blocksNodejsBundling } from './bundling.js';
+export { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
+export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
+export { SandboxDisableDeletionProtection } from './mixins.js';
+export { DEFAULT_NODE_RUNTIME } from './node-version.js';
+export { synthGuard } from './synth-guard.js';
+export { finalizeTracing, registerTracer } from './tracer-registry.js';
+export { getVpcContext } from './vpc.js';
+export type { BlocksVpcOptions, SubnetRole, VpcContext, VpcRequirements } from './vpc-types.js';
+
+/**
+ * Core's `create()` props: the public {@link BlocksStackProps} plus the required
+ * `defaultComputeFactory`. The umbrella (`@aws-blocks/blocks`) supplies the
+ * factory (which builds a `LambdaCompute`) by spreading it onto the customer's
+ * props; customers use {@link BlocksStackProps} and never set the factory.
+ *
+ * Kept separate (rather than a `create()` argument) so the factory travels with
+ * the props object and core stays free of any concrete compute class.
+ *
+ * @internal
+ */
+export interface CoreBlocksStackProps extends BlocksStackProps {
+	/** Builds the stack's default compute. Injected by `@aws-blocks/blocks`. */
+	defaultComputeFactory: DefaultComputeFactory;
+}
 
 export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
-  public readonly id: string;
-  public readonly apiUrl: string;
-  public readonly gateway: cdk.aws_apigateway.RestApi;
-  public readonly handler: cdk.aws_lambda_nodejs.NodejsFunction;
-  public readonly backendHandlerPath: string;
+	public readonly id: string;
+	public readonly backendHandlerPath: string;
+	/**
+	 * Path to the app's backend module (`props.backendCDKPath`). Exposed so Building Blocks that
+	 * co-bundle the backend at synth (e.g. the Agent BB's AgentCore Runtime) can discover it via
+	 * `globalThis.CURRENT_BLOCKS_STACK.backendModulePath`.
+	 */
+	public readonly backendModulePath: string;
+	/** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
+	public readonly executionRole: cdk.aws_iam.IRole;
+	/** Infrastructure defaults for Building Blocks created under this stack. */
+	public readonly defaults: BlocksDefaults;
+	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
+	_defaultCompute?: Compute;
 
-  private constructor(scope: Construct, id: string, props: BlocksStackProps) {
-    super(scope, id, props);
-    this.id = id;
-    this.backendHandlerPath = props.backendHandlerPath;
+	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
+	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
+		return this.requireDefaultCompute().fn;
+	}
+	/** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
+	get gateway(): cdk.aws_apigateway.RestApi {
+		return this.requireDefaultCompute().apiGateway;
+	}
+	/** The default compute's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+	get apiUrl(): string {
+		return this.requireDefaultCompute().apiUrl;
+	}
+	/** The default compute's handler CloudWatch log group. Its retention comes from
+	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
+	 * `bb-logger` CDK construct is a no-op and no longer touches it. */
+	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
+		return this.requireDefaultCompute().logGroup;
+	}
 
-    // Set globalThis so Building Blocks attach directly to this stack
-    (globalThis as any).CURRENT_BLOCKS_STACK = this;
+	private requireDefaultCompute(): LambdaShapedCompute {
+		if (!this._defaultCompute) {
+			throw new Error(
+				'Blocks stack not fully initialized — access .handler/.gateway/.apiUrl after BlocksStack.create() resolves.',
+			);
+		}
+		return this._defaultCompute as LambdaShapedCompute;
+	}
 
-    const infra = setupBlocksInfra(this, props, id);
-    this.handler = infra.handler;
-    this.gateway = infra.gateway;
-    this.apiUrl = infra.apiUrl;
-  }
+	private _vpcOptions?: BlocksVpcOptions;
 
-  static async create(scope: Construct, id: string, props: BlocksStackProps) {
-    assertCdkConditionActive();
+	private constructor(scope: Construct, id: string, props: BlocksStackProps) {
+		super(scope, id, props);
+		this.id = id;
+		this.backendHandlerPath = props.backendHandlerPath;
+		this.backendModulePath = props.backendCDKPath;
+		this.defaults = props.defaults;
+		this._vpcOptions = props.defaults.vpc;
 
-    // Detect ambient pipeline stage scope set by Pipeline appFile imports
-    const pipelineScope = (globalThis as any)[__PIPELINE_STAGE_SCOPE__];
-    const actualScope = pipelineScope || scope;
+		// Set globalThis so Building Blocks attach directly to this stack
+		(globalThis as any).CURRENT_BLOCKS_STACK = this;
 
-    const stack = new BlocksStack(actualScope, id, props);
-    // file:// URL (not a raw path) so the cache-busting query works on Windows,
-    // where an absolute path like `D:\...` is rejected as URL scheme `d:`.
-    const backendUrl = pathToFileURL(props.backendCDKPath);
-    backendUrl.searchParams.set('stack', id);
-    const mod = await import(backendUrl.href);
-    if (typeof mod.default === 'function') {
-      try {
-        await mod.default(stack);
-      } catch (error) {
-        throw new Error(`Error executing default export function for stack "${id}": ${error instanceof Error ? error.message : error}`, { cause: error });
-      }
-    }
-    // Finalize BB config → S3 (after all BBs have registered their config)
-    finalizeConfigRegistry(stack, stack.handler);
+		// Initialize VPC context before the default compute is created and before
+		// BBs are constructed, so both can discover it: the default compute
+		// (LambdaCompute) reads it via getVpcContext(this) to place its function in
+		// the VPC, and BBs (e.g. bb-data) read it to co-locate their resources.
+		if (this._vpcOptions) {
+			initializeVpc(this, this._vpcOptions);
+		}
 
-    new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
+		const infra = setupBlocksInfra(this, props, id);
+		this.executionRole = infra.executionRole;
+	}
 
-    addBlocksStackMetadata(stack);
+	static async create(scope: Construct, id: string, props: CoreBlocksStackProps) {
+		assertCdkConditionActive();
 
-    return stack;
-  }
+		// Detect ambient pipeline stage scope set by Pipeline appFile imports
+		const pipelineScope = (globalThis as any)[__PIPELINE_STAGE_SCOPE__];
+		const actualScope = pipelineScope || scope;
+
+		const stack = new BlocksStack(actualScope, id, props);
+		// Create the default compute before importing the backend: it OWNS the
+		// Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
+		// a block reading `this.compute` in its constructor (during that import)
+		// must resolve to it. The factory is supplied by the umbrella
+		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
+		// imports the concrete compute class.
+		stack._defaultCompute = props.defaultComputeFactory(stack);
+		// file:// URL (not a raw path) so the cache-busting query works on Windows,
+		// where an absolute path like `D:\...` is rejected as URL scheme `d:`.
+		const backendUrl = pathToFileURL(props.backendCDKPath);
+		backendUrl.searchParams.set('stack', id);
+		const mod = await import(backendUrl.href);
+		if (typeof mod.default === 'function') {
+			try {
+				await mod.default(stack);
+			} catch (error) {
+				throw new Error(
+					`Error executing default export function for stack "${id}": ${error instanceof Error ? error.message : error}`,
+					{ cause: error },
+				);
+			}
+		}
+		// Finalize BB config → S3 (after all BBs have registered their config)
+		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
+
+		// Tracing is presence-gated: if the app contains a Tracer, enable X-Ray on
+		// every compute. Runs before the dashboard finalize so tracingEnabled is
+		// set when the dashboard reads it.
+		finalizeTracing(stack, stack.executionRole);
+
+		// Build any deferred Dashboards now that every compute's observability
+		// state is settled — so the dashboard is order-independent.
+		finalizeDashboards(stack);
+
+		// Finalize VPC. A VPC is a derived resource: use the customer's if they
+		// brought one, else lazily create one only if a Building Block genuinely
+		// requires it (requiresVpc). Most apps need neither — Lambda reaches AWS
+		// services from the managed network without a VPC.
+		if (stack._vpcOptions) {
+			finalizeVpc(stack, stack._vpcOptions);
+		} else if (anyRequirementNeedsVpc(stack)) {
+			const derived = getOrCreateVpc(stack);
+			const options = { network: derived };
+			initializeVpc(stack, options);
+			finalizeVpc(stack, options);
+			cdk.Annotations.of(stack).addInfoV2(
+				'blocks:vpc:derived',
+				'A Building Block required a VPC and none was provided, so Blocks created one ' +
+					'(with a NAT gateway, which has an ongoing cost). Pass `defaults.vpc: { network }` to ' +
+					'BlocksStack.create to bring your own. See packages/blocks/VPC.md.',
+			);
+		}
+
+		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
+
+		addBlocksStackMetadata(stack);
+
+		return stack;
+	}
 }
 
 export class Scope extends Construct {
-  public readonly id: string;
-  public readonly parent: ScopeParent;
+	public readonly id: string;
+	public readonly parent: ScopeParent;
 
-  readonly bbName?: string;
-  readonly bbVersion?: string;
+	readonly bbName?: string;
+	readonly bbVersion?: string;
 
-  constructor(id: string, options?: ScopeOptions) {
-    const parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK;
-    super(parent, id);
-    this.id = id;
-    this.parent = parent;
-  }
+	/**
+	 * The owning stack/backend (the root of the Blocks construct tree), resolved
+	 * once at construction: the nearest BlocksStack/BlocksBackend up the construct
+	 * tree, or the ambient `globalThis.CURRENT_BLOCKS_STACK` fallback. All
+	 * root-derived accessors below read from this instead of each repeating the
+	 * tree walk.
+	 */
+	private readonly root: BlocksStack | BlocksBackend;
 
-  get handler() {
-    // Walk up the construct tree to find the owning BlocksStack/BlocksBackend
-    let current: Construct = this;
-    while (current.node.scope) {
-        current = current.node.scope as Construct;
-        if (current instanceof BlocksStack || current instanceof BlocksBackend) {
-            return current.handler;
-        }
-    }
-    // Fallback to globalThis for backward compatibility
-    return ((globalThis as any).CURRENT_BLOCKS_STACK as { handler: cdk.aws_lambda_nodejs.NodejsFunction }).handler;
-  }
+	/**
+	 * Compute assigned at this node. Applies to this block and is inherited by
+	 * descendants (a nearer assignment wins). Covers both a handler assigned to a
+	 * specific compute and a scope-level default for its subtree. Internal until
+	 * the customer-facing surface exists.
+	 * @internal
+	 */
+	_compute?: Compute;
 
-  get fullId(): string {
-    return computeScopeFullId(this);
-  }
+	constructor(id: string, options?: ScopeOptions) {
+		const parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK;
+		super(parent, id);
+		this.id = id;
+		this.parent = parent;
+		this.root = this.resolveRoot();
+	}
 
-  protected buildUserAgentChain(): [string, string][] {
-    return [];
-  }
+	/**
+	 * Walk up the construct tree to the nearest owning BlocksStack/BlocksBackend;
+	 * fall back to the ambient `globalThis.CURRENT_BLOCKS_STACK`. Called once from
+	 * the constructor; the result is cached in {@link root}.
+	 */
+	private resolveRoot(): BlocksStack | BlocksBackend {
+		let current: Construct = this;
+		while (current.node.scope) {
+			current = current.node.scope as Construct;
+			if (current instanceof BlocksStack || current instanceof BlocksBackend) {
+				return current;
+			}
+		}
+		// Fallback to the ambient stack. In production this is always a real
+		// BlocksStack/BlocksBackend; the cast also admits the test doubles that set
+		// globalThis.CURRENT_BLOCKS_STACK to a stub exposing the same surface.
+		return (globalThis as any).CURRENT_BLOCKS_STACK as BlocksStack | BlocksBackend;
+	}
 
-  // Plugin registration — no-ops in CDK context (plugins are only used at dev/build time)
-  registerClientMiddleware(_packageSpecifier: string): void {}
-  registerDevAttachment(_packageSpecifier: string): void {}
-  registerLambdaEventHandler(_eventSource: string, _identifier: string, _handler: (record: any) => Promise<void>): void {}
-  get clientMiddleware(): readonly string[] { return []; }
-  get devAttachments(): readonly string[] { return []; }
+	get handler() {
+		return this.root.handler;
+	}
+
+	/**
+	 * The shared IAM role assumed by all Blocks compute. Building Blocks grant
+	 * their permissions to this role; CDK's `grant*()` / `addToPrincipalPolicy()`
+	 * route those grants to the role's default (inline) policy.
+	 */
+	get executionRole(): cdk.aws_iam.IRole {
+		return this.root.executionRole;
+	}
+
+	/**
+	 * The compute this block runs on: the nearest `_compute` assigned on this
+	 * block or an ancestor scope, else the owning stack/backend's default compute.
+	 *
+	 * For any app that doesn't assign a compute, this always resolves to the
+	 * default — so reads are a no-op refactor. `_compute` is internal
+	 * (test/framework) until the customer-facing surface exists; there is no
+	 * public option to set it yet.
+	 */
+	get compute(): Compute {
+		for (let current: ScopeParent | undefined = this; current; current = (current as Scope).parent) {
+			const assigned = (current as Scope)._compute;
+			if (assigned) return assigned;
+		}
+		const defaultCompute = this.root._defaultCompute;
+		if (!defaultCompute) {
+			throw new Error(
+				'Default compute not initialized — BlocksStack/BlocksBackend.create() must run before resolving `compute`.',
+			);
+		}
+		return defaultCompute;
+	}
+
+	/**
+	 * The stack's default compute, **ignoring** any per-scope `_compute`
+	 * assignment (unlike {@link compute}, which resolves the nearest assigned
+	 * one). Use when a resource is a stack-level singleton that must bind to one
+	 * deterministic compute regardless of the block's resolved compute — e.g.
+	 * Realtime's shared WebSocket route integration, where one WebSocket API
+	 * integrates to a single target and connection bookkeeping is compute-agnostic.
+	 *
+	 * @internal Not a customer surface; for framework/BB singleton infra only.
+	 */
+	get defaultCompute(): Compute {
+		const defaultCompute = this.root._defaultCompute;
+		if (!defaultCompute) {
+			throw new Error(
+				'Default compute not initialized — BlocksStack/BlocksBackend.create() must run before resolving `defaultCompute`.',
+			);
+		}
+		return defaultCompute;
+	}
+
+	/**
+	 * The backend entry file the owning BlocksStack/BlocksBackend runs — the
+	 * single handler entry shared across the whole app.
+	 */
+	get backendHandlerPath(): string {
+		return this.root.backendHandlerPath;
+	}
+
+	/**
+	 * The owning stack/backend's token-free root identity. This is the value the
+	 * runtime receives as `BLOCKS_STACK_NAME` and rebuilds `fullId` from, so
+	 * physical resource names (DynamoDB tables, env-var keys, IAM ARNs) derived
+	 * from `fullId` match byte-for-byte between synth and runtime — otherwise the
+	 * runtime looks up names that were never created. `BlocksBackend` exposes this
+	 * as `fullId` ({@link BlocksBackend.fullId}); `BlocksStack` as `id`.
+	 */
+	get backendStackName(): string {
+		const name = this.root instanceof BlocksBackend ? this.root.fullId : this.root.id;
+		if (!name) {
+			throw new Error('Owning Blocks stack/backend has no id to derive BLOCKS_STACK_NAME');
+		}
+		return name;
+	}
+
+	/**
+	 * The shared handler Lambda's CloudWatch log group (the default compute's).
+	 * Resolves the same way as {@link handler} — via the owning
+	 * BlocksStack/BlocksBackend. Its retention comes from the compute's
+	 * `logRetention` (falling back to `defaults.logRetention`); the `bb-logger`
+	 * CDK construct is a no-op and no longer reconfigures it.
+	 */
+	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
+		return this.root.handlerLogGroup;
+	}
+
+	get fullId(): string {
+		return computeScopeFullId(this);
+	}
+
+	/**
+	 * The stack-wide infrastructure {@link BlocksDefaults} registered by
+	 * `BlocksStack.create` / `BlocksBackend.create`. Read these in a Building
+	 * Block's CDK constructor to resolve a durability value, letting a per-block
+	 * option override:
+	 *
+	 * ```ts
+	 * const removalPolicy = options?.removalPolicy ?? this.defaults.removalPolicy;
+	 * ```
+	 */
+	get defaults(): BlocksDefaults {
+		// Resolve the same way as handler/executionRole: walk up to the owning
+		// BlocksStack/BlocksBackend and read its defaults, so several backends in
+		// one stack each keep their own posture. Falls back to the ambient stack,
+		// then to the production preset when none was registered.
+		let current: Construct = this;
+		while (current.node.scope) {
+			current = current.node.scope as Construct;
+			if (current instanceof BlocksStack || current instanceof BlocksBackend) {
+				return current.defaults;
+			}
+		}
+		const ambient = ((globalThis as any).CURRENT_BLOCKS_STACK as { defaults?: BlocksDefaults } | undefined)
+			?.defaults;
+		if (ambient) return ambient;
+		// No owning BlocksStack/BlocksBackend in the tree and none ambient — this is
+		// usually a deliberate test stub, but could be a real misconfiguration (a
+		// block built outside any Blocks backend). Fall back to the safe production
+		// posture, and log so it's debuggable if it fires unexpectedly.
+		console.warn(
+			`[Blocks] Scope "${this.id}" resolved infrastructure defaults with no owning ` +
+				'BlocksStack/BlocksBackend in scope; falling back to BlocksPresets.production.',
+		);
+		return BlocksPresets.production;
+	}
+
+	protected buildUserAgentChain(): [string, string][] {
+		return [];
+	}
+
+	// Plugin registration — no-ops in CDK context (plugins are only used at dev/build time)
+	registerClientMiddleware(_packageSpecifier: string): void {}
+	registerDevAttachment(_packageSpecifier: string): void {}
+	registerLambdaEventHandler(
+		_eventSource: string,
+		_identifier: string,
+		_handler: (record: any) => Promise<void>,
+	): void {}
+	get clientMiddleware(): readonly string[] {
+		return [];
+	}
+	get devAttachments(): readonly string[] {
+		return [];
+	}
+}
+
+/**
+ * A VPC-requirements provider: either the requirements directly, or a callback
+ * that returns them. Use the callback form when the value depends on `fullId`
+ * or other post-construction state — it is evaluated by the base constructor
+ * *after* `super()` runs, so `this` is fully available.
+ */
+export type VpcRequirementsProvider = VpcRequirements | (() => VpcRequirements);
+
+/**
+ * Constructor options for a {@link BuildingBlockScope} — the {@link ScopeOptions}
+ * every Scope takes, plus the block's VPC requirements. `vpc` is **required** so
+ * a BB author can't silently omit it; pass `{}` when the block needs nothing
+ * VPC-specific.
+ */
+export interface BuildingBlockScopeOptions extends ScopeOptions {
+	/**
+	 * What this block needs from the VPC — endpoints, runtime egress, whether it
+	 * requires a VPC at all. A value, or a callback (evaluated after `super()`,
+	 * so it may read `this.fullId`). See {@link VpcRequirements}.
+	 */
+	vpc: VpcRequirementsProvider;
+}
+
+/**
+ * Base class for Building Block CDK constructs.
+ *
+ * BBs extend this instead of `Scope` directly and **must** declare their VPC
+ * requirements as a constructor argument — the base registers them centrally
+ * (see `vpc-requirements-registry.ts`) so `finalizeVpc` can pull, deduplicate,
+ * and provision endpoints, and so the lazy VPC can answer "does anything here
+ * need a VPC?". Passing the requirements is required by the constructor
+ * signature, so a BB author cannot silently forget to declare them — the same
+ * forcing the previous `abstract getVpcRequirements()` gave, but without a
+ * standing method on every subclass.
+ *
+ * Declare `{}` when the BB needs nothing VPC-specific.
+ *
+ * @example
+ * ```ts
+ * export class KVStore extends BuildingBlockScope {
+ *   constructor(scope: ScopeParent, id: string) {
+ *     super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
+ *     // …
+ *   }
+ * }
+ * ```
+ */
+export class BuildingBlockScope extends Scope {
+	constructor(id: string, options: BuildingBlockScopeOptions) {
+		const { vpc, ...scopeOptions } = options;
+		super(id, scopeOptions);
+		// Resolve the provider (callback form is evaluated here, after super(), so
+		// values that depend on this.fullId are available) and self-register on the
+		// owning stack. Register even when empty so the registry is a faithful
+		// census of every BB — the lazy VPC and finalizeVpc both rely on that.
+		const requirements = typeof vpc === 'function' ? vpc() : vpc;
+		registerVpcRequirements(this, requirements);
+	}
 }

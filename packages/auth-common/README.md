@@ -115,6 +115,25 @@ document.body.appendChild(
 );
 ```
 
+### Fallback for unauthenticated users
+
+Pass an optional third argument to display alternative content when the user is NOT signed in:
+
+```typescript
+const loginPrompt = document.createElement('p');
+loginPrompt.textContent = 'Please sign in to continue.';
+
+document.body.appendChild(
+  AuthenticatedContent(authApi, (user) => {
+    const el = document.createElement('div');
+    el.textContent = `Welcome, ${user.username}`;
+    return el;
+  }, loginPrompt)
+);
+```
+
+When no fallback is provided the container renders nothing while signed out (backward-compatible).
+
 ## Auth State Change Subscription
 
 Subscribe to auth state changes from any source (same window + other tabs):
@@ -149,6 +168,20 @@ broadcastAuthChange({ userId: 'alice', username: 'alice' });
 // After sign-out
 broadcastAuthChange(null);
 ```
+
+```typescript
+function broadcastAuthChange(user: AuthUser | null): void
+```
+
+Pass the signed-in `AuthUser`, or `null` for a sign-out. It fires a `BroadcastChannel` message for other tabs plus a window event for the current tab, which is what every `onAuthChange` subscriber listens to. It is browser-only: it touches `window`, so don't call it during SSR.
+
+Application code normally installs the umbrella package rather than `auth-common`, and there the import is **`@aws-blocks/blocks/ui`**:
+
+```typescript
+import { broadcastAuthChange, onAuthChange, Authenticator } from '@aws-blocks/blocks/ui';
+```
+
+The root `@aws-blocks/blocks` entry point does not export it, because the UI exports live behind the `/ui` subpath so backend bundles don't pull in React. `@aws-blocks/auth-common/ui` and `@aws-blocks/blocks/ui` are the same function; use the umbrella path unless you depend on `auth-common` directly.
 
 The `Authenticator` component does this automatically. You only need `broadcastAuthChange` if you're building custom UI. For a full walkthrough of custom UI, including the `setAuthState` loop and the `AuthActionInput` contract, see [Customizing Auth UI](./CUSTOMIZING-AUTH-UI.md).
 

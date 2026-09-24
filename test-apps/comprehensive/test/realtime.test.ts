@@ -98,6 +98,65 @@ export function realtimeTests(getApi: () => typeof apiType) {
 			});
 		});
 
+		describe('Token Scope Isolation', () => {
+			test('connect token cannot be reused as a channel subscription token', async () => {
+				const api = getApi();
+
+				// Get raw descriptors to extract tokens and channel paths
+				// realtimeGetRawDescriptor strips __blocks so middleware won't hydrate them
+				const publicDescriptor = await api.realtimeGetRawDescriptor('public-room') as unknown as { connectToken: string; wsUrl: string; token: string; channel: string };
+				const privateDescriptor = await api.realtimeGetRawDescriptor('private-room') as unknown as { channel: string; token: string };
+
+				const { connectToken, wsUrl } = publicDescriptor;
+				const { channel: privateChannel } = privateDescriptor;
+
+				assert.ok(connectToken, 'Descriptor should include a connectToken');
+				assert.ok(wsUrl, 'Descriptor should include a wsUrl');
+				assert.ok(privateChannel, 'Private descriptor should include a channel path');
+
+				// Open a raw WebSocket using the connect token for connection auth
+				const ws = new WebSocket(`${wsUrl}?token=${encodeURIComponent(connectToken)}`);
+
+				const reply = await new Promise<{ type: string; channel?: string; message?: string }>((resolve, reject) => {
+					const timer = globalThis.setTimeout(() => {
+						ws.close();
+						reject(new Error('No reply from server within 5s'));
+					}, 5000);
+
+					ws.onopen = () => {
+						// Attempt to subscribe using the connect token AS the channel token.
+						// This should be rejected — connect tokens are scoped to the instance
+						// prefix ($connect) and must not authorize channel subscriptions.
+						ws.send(JSON.stringify({
+							action: 'subscribe',
+							channel: privateChannel,
+							token: connectToken,
+						}));
+					};
+
+					ws.onmessage = (event) => {
+						clearTimeout(timer);
+						resolve(JSON.parse(event.data as string));
+					};
+
+					ws.onerror = () => {
+						clearTimeout(timer);
+						reject(new Error('WebSocket error'));
+					};
+				});
+
+				ws.close();
+
+				// The server must reject the subscription — a connect token is NOT a valid channel token
+				assert.strictEqual(reply.type, 'error', 'Server should reject subscribe with a connect token used as channel token');
+				assert.strictEqual(reply.channel, privateChannel, 'Error should reference the requested channel');
+				assert.ok(
+					reply.message && reply.message.includes('Unauthorized'),
+					`Expected an Unauthorized error message, got: ${reply.message}`,
+				);
+			});
+		});
+
 		describe('Schema Validation', () => {
 			test('publish with wrong shape is rejected', async () => {
 				const api = getApi();

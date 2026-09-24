@@ -31,14 +31,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
 
@@ -46,7 +51,7 @@ jobs:
         run: npm run build
 
       - name: Publish to local registry
-        run: npm run publish:dry-run
+        run: npm run publish:local
 
       - name: Start local registry
         run: |

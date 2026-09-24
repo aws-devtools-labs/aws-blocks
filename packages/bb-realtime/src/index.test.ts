@@ -3,6 +3,7 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
+import { createHmac } from 'node:crypto';
 import { Realtime, RealtimeErrors } from './index.js';
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';
 import { mintChannelToken, validateChannelToken } from './utils.js';
@@ -510,6 +511,20 @@ describe('Realtime', () => {
 		const tampered = Buffer.from(JSON.stringify({ channel: '/ns/admin/secret', exp: 9999999999 })).toString('base64url');
 		const result = validateChannelToken(`${tampered}.${sig}`, 'secret123');
 		assert.strictEqual(result, null);
+	});
+
+	it('validateChannelToken rejects token with missing channel field when requestedChannel is provided', () => {
+		// Craft a validly-signed token that has no channel field
+		const payload = { exp: Math.floor(Date.now() / 1000) + 3600 };
+		const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+		const sig = createHmac('sha256', 'secret123').update(JSON.stringify(payload)).digest('base64url');
+		const token = `${payloadB64}.${sig}`;
+		// Without requestedChannel, it should pass (connection use)
+		const connResult = validateChannelToken(token, 'secret123');
+		assert.ok(connResult, 'token without channel should validate for connection');
+		// With requestedChannel, it must fail — tokens must declare what they authorize
+		const subResult = validateChannelToken(token, 'secret123', '/ns/chat/room-1');
+		assert.strictEqual(subResult, null, 'token without channel field must NOT authorize channel subscriptions');
 	});
 
 	// ── Channel Handle Token ─────────────────────────────────────────────

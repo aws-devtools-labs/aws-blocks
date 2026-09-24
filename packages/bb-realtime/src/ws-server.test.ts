@@ -13,7 +13,8 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { createServer, type Server } from 'node:http';
-import { AddressInfo } from 'node:net';
+import { connect as netConnect, type AddressInfo } from 'node:net';
+import { PassThrough } from 'node:stream';
 import { WebSocket } from 'ws';
 import { attach, closeWebSocketServer, localRealtimeBus } from './ws-server.js';
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';
@@ -98,20 +99,105 @@ describe('WebSocket server: subscribe authorization', () => {
 
 		// Give the intruder's rejected subscribe time to settle, then broadcast.
 		await new Promise((r) => setTimeout(r, 50));
-		const authedGotMessage = new Promise<any>((resolve) => {
+		const authedGotMessage = new Promise<{ type: string; channel: string; data: { sender: string; text: string } }>((resolve) => {
 			authed.on('message', (data) => {
 				const msg = JSON.parse(data.toString());
-				if (msg.type === 'message') resolve(msg.payload);
+				if (msg.type === 'message') resolve(msg);
 			});
 		});
-		localRealtimeBus.emit('broadcast', { channel: CHANNEL, payload: { sender: 'alice', text: 'Top secret' } });
+		localRealtimeBus.emit('broadcast', { channel: CHANNEL, data: { sender: 'alice', text: 'Top secret' } });
 
-		const payload = await authedGotMessage;
-		assert.strictEqual(payload.text, 'Top secret', 'authorized client should receive the broadcast');
+		const message = await authedGotMessage;
+		assert.deepStrictEqual(message.data, { sender: 'alice', text: 'Top secret' });
+		assert.strictEqual('payload' in message, false, 'local messages must use the AWS runtime data key');
 		assert.strictEqual(intruderGotMessage, false, 'unauthorized client must not receive the broadcast');
 
 		authed.close();
 		intruder.close();
+	});
+
+	it('uses the data key when forwarding a client publish', async () => {
+		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+		const { ws: subscriber } = await subscribe({ channel: CHANNEL, token });
+
+		const received = new Promise<{ type: string; channel: string; data: { text: string } }>((resolve) => {
+			subscriber.on('message', (data) => {
+				const message = JSON.parse(data.toString());
+				if (message.type === 'message') resolve(message);
+			});
+		});
+
+		const publisher = new WebSocket(`ws://localhost:${port}/realtime`);
+		await new Promise<void>((resolve, reject) => {
+			publisher.on('open', resolve);
+			publisher.on('error', reject);
+		});
+		publisher.send(JSON.stringify({ action: 'publish', channel: CHANNEL, payload: { text: 'from client' } }));
+
+		const message = await received;
+		assert.deepStrictEqual(message.data, { text: 'from client' });
+		assert.strictEqual('payload' in message, false, 'local messages must use the AWS runtime data key');
+
+		publisher.close();
+		subscriber.close();
+	});
+});
+
+describe('WebSocket server: raw-socket errors during upgrade (issue #1108 regression)', () => {
+	it('survives a connection reset in the middle of a /realtime upgrade', async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (err: unknown) => unhandled.push(err);
+		process.on('uncaughtException', onUnhandled);
+
+		try {
+			for (let i = 0; i < 20; i++) {
+				const socket = netConnect({ host: '127.0.0.1', port });
+				await new Promise<void>((resolve, reject) => {
+					socket.once('connect', resolve);
+					socket.once('error', reject);
+				});
+				socket.on('error', () => {}); // client side of the reset — not under test
+
+				// Partial upgrade request: headers arrive, the handshake never completes.
+				socket.write(
+					'GET /realtime HTTP/1.1\r\n' +
+						`Host: localhost:${port}\r\n` +
+						'Upgrade: websocket\r\n' +
+						'Connection: Upgrade\r\n' +
+						'Sec-WebSocket-Version: 13\r\n' +
+						'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
+				);
+
+				// Abort with RST (setNoDelay + destroy after linger 0) during the upgrade window.
+				socket.resetAndDestroy();
+				await new Promise((r) => setTimeout(r, 10));
+			}
+
+			// The event loop must still be alive and the server still serving.
+			const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+			const { ws, reply } = await subscribe({ channel: CHANNEL, token });
+			assert.strictEqual(reply.type, 'subscribe_success');
+			ws.close();
+
+			assert.deepStrictEqual(unhandled, [], 'raw-socket errors during upgrade must not go unhandled');
+		} finally {
+			process.off('uncaughtException', onUnhandled);
+		}
+	});
+
+	it('attaches a socket error listener before routing, and error triggers destroy', async () => {
+		const probe = new PassThrough();
+
+		// Drive the server's own upgrade listeners with a non-/realtime path so the
+		// handler returns immediately after attaching its error listener.
+		const req = { url: '/not-realtime', headers: { host: `localhost:${port}` } };
+		for (const listener of httpServer.listeners('upgrade')) {
+			(listener as (r: unknown, s: unknown, h: unknown) => void)(req, probe, Buffer.alloc(0));
+		}
+
+		assert.ok(probe.listenerCount('error') > 0, 'upgrade handler must attach a socket error listener');
+		assert.doesNotThrow(() => probe.emit('error', new Error('ECONNRESET')));
+		assert.strictEqual(probe.destroyed, true, 'socket error must destroy the socket');
 	});
 });
 
@@ -140,7 +226,7 @@ describe('Mock middleware: token replay on reconnect (regression)', () => {
 		// Wait for the middleware to reconnect and resubscribe (backoff starts ~1s).
 		await new Promise((r) => setTimeout(r, 1500));
 
-		localRealtimeBus.emit('broadcast', { channel: CHANNEL, payload: { text: 'after reconnect' } });
+		localRealtimeBus.emit('broadcast', { channel: CHANNEL, data: { text: 'after reconnect' } });
 
 		// Allow the broadcast to round-trip to the reconnected client.
 		await new Promise((r) => setTimeout(r, 200));

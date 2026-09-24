@@ -11,7 +11,9 @@ void main() {
       final mockClient = MockClient((req) async {
         sentBody = jsonDecode(req.body) as Map<String, dynamic>;
         return http.Response(
-            jsonEncode({'jsonrpc': '2.0', 'result': 'ok', 'id': 1}), 200);
+          jsonEncode({'jsonrpc': '2.0', 'result': 'ok', 'id': 1}),
+          200,
+        );
       });
       final client = BlocksClient(baseUrl: 'http://test', client: mockClient);
       await client.call('hello.greet', {'name': 'world'});
@@ -22,29 +24,41 @@ void main() {
     });
 
     test('throws BlocksRpcException on error response', () async {
-      final mockClient = MockClient((_) async => http.Response(
+      final mockClient = MockClient(
+        (_) async => http.Response(
           jsonEncode({
             'jsonrpc': '2.0',
             'error': {'code': -32600, 'message': 'Invalid'},
-            'id': 1
+            'id': 1,
           }),
-          200));
+          200,
+        ),
+      );
       final client = BlocksClient(baseUrl: 'http://test', client: mockClient);
       expect(
         () => client.call('bad', {}),
-        throwsA(isA<BlocksRpcException>()
-            .having((e) => e.code, 'code', -32600)
-            .having((e) => e.message, 'message', 'Invalid')),
+        throwsA(
+          isA<BlocksRpcException>()
+              .having((e) => e.code, 'code', -32600)
+              .having((e) => e.message, 'message', 'Invalid'),
+        ),
       );
     });
 
     test('stores cookies via SessionStore', () async {
       final store = InMemorySessionStore();
-      final mockClient = MockClient((_) async => http.Response(
-          jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}), 200,
-          headers: {'set-cookie': 'session=abc123; Path=/; HttpOnly'}));
+      final mockClient = MockClient(
+        (_) async => http.Response(
+          jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+          200,
+          headers: {'set-cookie': 'session=abc123; Path=/; HttpOnly'},
+        ),
+      );
       final client = BlocksClient(
-          baseUrl: 'http://test', client: mockClient, sessionStore: store);
+        baseUrl: 'http://test',
+        client: mockClient,
+        sessionStore: store,
+      );
       await client.call('test', {});
       expect(store.cookies['session'], 'abc123');
     });
@@ -56,10 +70,15 @@ void main() {
       final mockClient = MockClient((req) async {
         sentHeaders = req.headers;
         return http.Response(
-            jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}), 200);
+          jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+          200,
+        );
       });
       final client = BlocksClient(
-          baseUrl: 'http://test', client: mockClient, sessionStore: store);
+        baseUrl: 'http://test',
+        client: mockClient,
+        sessionStore: store,
+      );
       await client.call('test', {});
       expect(sentHeaders!['cookie'], 'token=xyz');
     });

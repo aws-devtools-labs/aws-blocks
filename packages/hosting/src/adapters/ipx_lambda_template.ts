@@ -30,7 +30,7 @@
  *   work. Upstream tracks broader format support in
  *   https://github.com/unjs/ipx/issues/261.
  */
-export const IPX_LAMBDA_HANDLER_SOURCE = `import { createIPX, createIPXWebServer } from 'ipx';
+export const IPX_LAMBDA_HANDLER_SOURCE = `import { createIPX, createIPXWebServer, ipxHttpStorage } from 'ipx';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { Buffer } from 'node:buffer';
 
@@ -193,8 +193,34 @@ const s3IpxStorage = {
   },
 };
 
+// Remote (http/https) sources need IPX's HTTP storage — without it IPX
+// routes a remote id to the S3 \`storage\` above, which has no such key, so
+// every allowlisted remote image 404s with IPX_RESOURCE_NOT_FOUND (issue #2).
+// Configure \`httpStorage\` scoped to the SAME allowlist the handler enforces
+// (hostnames from IMAGE_ALLOWED_HOSTNAMES + IMAGE_REMOTE_PATTERNS). IPX picks
+// \`httpStorage\` for \`http(s)://\` ids and \`storage\` (S3) for local keys.
+// \`isRemoteSourceAllowed\` still gates every request BEFORE IPX runs, so the
+// domains list here is defense-in-depth, not the sole guard. Omit httpStorage
+// entirely when no remote host is allowlisted (default-deny: local only).
+//
+// LIMITATION: a remotePattern that constrains ONLY by pathname/protocol (no
+// hostname) contributes no entry here (its hostname is undefined and dropped
+// by .filter(Boolean)), so httpStorage isn't scoped to allow it and such an
+// image can 404 even though isRemoteSourceAllowed would permit it. This is a
+// deliberate trade-off: broadening httpStorage to all hosts on a hostname-less
+// pattern would defeat the scoping. Author remotePatterns with an explicit
+// hostname for httpStorage to cover them (the handler's SSRF check still gates
+// every request regardless).
+const httpDomains = [
+  ...allowedHostnames,
+  ...parsedRemotePatterns.map((p) => p.hostname),
+].filter(Boolean);
+
 const ipx = createIPX({
   storage: s3IpxStorage,
+  ...(httpDomains.length > 0
+    ? { httpStorage: ipxHttpStorage({ domains: httpDomains }) }
+    : {}),
 });
 
 const ipxServer = createIPXWebServer(ipx);
@@ -214,21 +240,67 @@ const ipxStripPattern = new RegExp(
 );
 
 /**
- * Convert a Lambda Function URL event into a standard fetch Request.
+ * Rebuild a query string from API Gateway REST (v1) query params. Prefers
+ * multiValue (preserves repeats).
  *
- * Strips the configured base URL prefix because IPX's web server
- * expects paths in the shape /<modifiers>/<sourcePath> (without the
- * prefix).
+ * Why re-encode: API Gateway REST v1 delivers query values ALREADY
+ * URL-DECODED in the (multiValue)queryStringParameters object (there is no
+ * rawQueryString on a v1 event -- that field is v2-only). Re-applying
+ * encodeURIComponent to each key/value rebuilds a valid, correctly-escaped
+ * query string from those decoded values, so a remote source carrying
+ * reserved chars (?, &, =, :// ) round-trips intact. This is NOT
+ * double-encoding: we encode once, against values APIGW handed us decoded.
+ */
+const v1QueryString = (event) => {
+  const mv = event.multiValueQueryStringParameters;
+  if (mv && Object.keys(mv).length > 0) {
+    const parts = [];
+    for (const k of Object.keys(mv)) {
+      for (const v of mv[k]) {
+        parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+      }
+    }
+    return parts.length ? '?' + parts.join('&') : '';
+  }
+  const sv = event.queryStringParameters;
+  if (sv && Object.keys(sv).length > 0) {
+    return (
+      '?' +
+      Object.keys(sv)
+        .map((k) => encodeURIComponent(k) + '=' + encodeURIComponent(sv[k]))
+        .join('&')
+    );
+  }
+  return '';
+};
+
+/**
+ * Convert a Lambda event into a standard fetch Request. Accepts BOTH:
+ *   - API Gateway REST (v1): \`event.path\`, \`event.httpMethod\`,
+ *     \`event.(multiValue)?queryStringParameters\` — used when the IPX
+ *     Lambda is fronted by the SHARED SSR API Gateway (issue #2 fix, so
+ *     a remote source's unencoded \`://\` in the path survives OAC/SigV4).
+ *   - Lambda Function URL (v2): \`event.rawPath\`, \`event.rawQueryString\`,
+ *     \`event.requestContext.http.method\` — the standalone fallback origin.
+ *
+ * Strips the configured base URL prefix because IPX's web server expects
+ * paths in the shape /<modifiers>/<sourcePath> (without the prefix).
  */
 const eventToRequest = (event) => {
-  const rawPath = event.rawPath || '/';
+  const isV1 = typeof event.rawPath !== 'string' && typeof event.path === 'string';
+  const rawPath = (isV1 ? event.path : event.rawPath) || '/';
   const stripped = rawPath.replace(ipxStripPattern, '') || '/';
-  const query = event.rawQueryString ? \`?\${event.rawQueryString}\` : '';
+  const query = isV1
+    ? v1QueryString(event)
+    : event.rawQueryString
+      ? \`?\${event.rawQueryString}\`
+      : '';
   // The IPX server doesn't actually use the host part — it pulls path
   // and query from the URL. Use a placeholder.
   const url = new URL(stripped + query, 'http://image-opt.local');
 
-  const method = event.requestContext?.http?.method || 'GET';
+  const method =
+    (isV1 ? event.httpMethod : event.requestContext?.http?.method) || 'GET';
   const headers = new Headers();
   for (const [k, v] of Object.entries(event.headers || {})) {
     if (typeof v === 'string') headers.set(k, v);

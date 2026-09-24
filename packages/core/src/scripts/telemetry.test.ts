@@ -26,6 +26,8 @@ const NO_CI_ENV: Record<string, string> = {
   TF_BUILD: '',
   BITBUCKET_BUILD_NUMBER: '',
   BUILDKITE: '',
+  RENDER: '',
+  TASKCLUSTER_ROOT_URL: '',
   AWS_BLOCKS_DISABLE_TELEMETRY: '',
 };
 

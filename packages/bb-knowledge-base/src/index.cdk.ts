@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import { Scope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KnowledgeBaseOptions, ChunkingConfig } from './types.js';
 import * as path from 'node:path';
@@ -186,22 +187,23 @@ function generateMetadataSidecars(sourceDir: string): string | undefined {
  * @param id - Unique identifier within the scope.
  * @param options - Knowledge base configuration (source, chunking, embedding dimensions, description).
  */
-export class KnowledgeBase extends Scope {
+export class KnowledgeBase extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: KnowledgeBaseOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
 
 		const dimensions = options.embeddingDimensions ?? 1024;
 
 		// ── 1. S3 Data Bucket ──────────────────────────────────────────────
 
-		// In sandbox mode, default to DESTROY + autoDeleteObjects so a teardown
-		// can fully clean up without manual bucket emptying. An explicit
-		// `removalPolicy` from the customer always takes precedence. Computed
-		// up-front because it also drives the S3 Vectors resources' deletion
-		// policy (section 2) — keeping the data bucket and the vector store in
-		// sync on teardown.
-		const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
-		const destroy = options.removalPolicy === 'destroy' || (isSandbox && options.removalPolicy === undefined);
+		// Removal: an explicit `removalPolicy` from the customer always takes
+		// precedence; otherwise follow the stack-wide `defaults` (sandbox →
+		// DESTROY + autoDeleteObjects so a teardown fully cleans up without
+		// manual bucket emptying; production → RETAIN). Computed up-front because
+		// it also drives the S3 Vectors resources' deletion policy (section 2) —
+		// keeping the data bucket and the vector store in sync on teardown.
+		const destroy =
+			options.removalPolicy === 'destroy' ||
+			(options.removalPolicy === undefined && this.defaults.removalPolicy === cdk.RemovalPolicy.DESTROY);
 
 		let dataBucket: s3.IBucket;
 		let inclusionPrefixes: string[] | undefined;
@@ -431,6 +433,10 @@ export class KnowledgeBase extends Scope {
 				},
 				physicalResourceId: cr.PhysicalResourceId.of(stableIngestId),
 			},
+			// Stable BedrockAgent API bundled in the Lambda runtime's SDK v3 — skip the
+			// npm-install at invoke time (avoids ~15-30s cold start). The shared provider
+			// only drops back off 512MB once every AwsCustomResource in the stack opts out.
+			installLatestAwsSdk: false,
 			policy: cr.AwsCustomResourcePolicy.fromStatements([
 				new iam.PolicyStatement({
 					actions: ['bedrock:StartIngestionJob'],
@@ -466,7 +472,7 @@ export class KnowledgeBase extends Scope {
 			arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
 		});
 
-		this.handler.addToRolePolicy(new iam.PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: ['bedrock:Retrieve'],
 			resources: [knowledgeBaseArn],
 		}));
@@ -474,7 +480,7 @@ export class KnowledgeBase extends Scope {
 		// Ingestion-job status for isSynced()/waitUntilSynced(). These actions are
 		// authorized at the knowledge-base resource level (the data source and
 		// ingestion jobs are sub-resources of the KB ARN).
-		this.handler.addToRolePolicy(new iam.PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: ['bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs'],
 			resources: [knowledgeBaseArn],
 		}));

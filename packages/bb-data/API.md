@@ -94,9 +94,11 @@ export interface DatabaseOptions {
     maxCapacity?: number;
     migrationsPath?: string;
     minCapacity?: number;
+    postgresVersion?: string;
     removalPolicy?: 'destroy' | 'retain' | 'snapshot';
     rlsPolicy?: 'enforce';
     schema?: TableSchema;
+    subnets?: SubnetSelection;
 }
 
 // @public
@@ -197,6 +199,15 @@ export class RLSEnabledDatabase extends DatabaseBase {
 export { sql }
 
 export { SqlQuery }
+
+// @public
+export interface SubnetSelection {
+    availabilityZones?: string[];
+    onePerAz?: boolean;
+    subnetGroupName?: string;
+    subnetIds?: string[];
+    subnetType?: 'isolated' | 'private-with-egress' | 'public';
+}
 
 // @public
 export interface TableMetaEntry {

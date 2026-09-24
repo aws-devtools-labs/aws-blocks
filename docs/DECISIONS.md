@@ -619,3 +619,79 @@ write-back/staging machinery.
 - Code: `packages/core/src/scripts/stack-id.ts` (`getStackName`),
   `packages/core/src/db-naming.ts`, `packages/core/src/scripts/ensure-secrets.ts`,
   `packages/bb-data/src/db-pull/generate.ts`.
+
+## D-015: `DistributedTable` reads default to `readValidation: 'coerce'` (not `'off'`)
+
+**Date**: 2026-08-03
+**Authors:** osama-rizk
+
+### Context
+
+`DistributedTable.get`/`getBatch`/`query`/`scan` returned the raw stored value without reconciling it against the current schema (issue #1007). After a schema change, a row written under the old schema no longer conforms to the declared type `T`: a newly added field is absent from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a required-with-no-default field makes the `put()` half of the documented read-modify-write cycle throw `ValidationFailed`, stranding the row.
+
+The fix adds `readValidation?: 'off' | 'coerce' | 'strict'`. The central choice is which value is the **default**: the lossless `'off'` (raw passthrough, opt into coercion) or `'coerce'` (reconcile on read, opt out for raw). This decision records that choice; the per-BB mechanics live in `packages/bb-distributed-table/DESIGN.md` (D-DT-10).
+
+### Decision
+
+Reads default to **`'coerce'`**:
+
+- **`'coerce'`** (default) — return the schema's coerced output (defaults filled, types narrowed for transform-bearing schemas). On a value that cannot be coerced, return the **raw** value and log a `warn` — **never throws**.
+- **`'strict'`** — throw `ValidationFailed` on any non-conforming item (opt-in reject).
+- **`'off'`** — return the raw stored value with no validation (matches the prior behavior).
+
+### Rationale
+
+- **The bug is the default read violating `T`.** A fix only reachable via an opt-in flag would leave the reported default broken for anyone who doesn't discover the flag; the default itself must return schema-conformant data.
+- **Precedent from comparable typed data layers.** Schema-on-read peers reconcile on read and don't throw: Mongoose fills defaults/casts on hydrate; ElectroDB returns schema-shaped items via getters; Rails ActiveRecord type-casts on load; Postgres materializes `ADD COLUMN … DEFAULT` at read time (coerce-on-read in all but name). None default to raw passthrough once a schema is declared. (SQL ORMs like Prisma/Drizzle *do* pass raw through — but only because the engine enforces schema on write, a guarantee DynamoDB lacks, so their behavior is not transferable.)
+- **Non-throwing keeps the read contract.** A read that threw on a bad row would make legacy/corrupt rows unreadable (you couldn't fetch them to migrate) and violate the project rule that reads return data or `null` and throw only for violated preconditions. Every surveyed library that ships a strict read (DynamoDB-Toolbox `format()`, `zod-firebase`) also ships an escape hatch — so `'strict'` is offered, not defaulted.
+
+### Alternatives Considered
+
+- **`'off'` as the default (coercion opt-in).** Lossless and fully backward-compatible, but ships the original bug as the default and only helps users who find the flag. Rejected as the default; retained as the explicit opt-out.
+- **`'strict'` as the default.** Rejected: turns one bad row into a whole-`scan`/`getBatch` outage, blocks migration reads, and breaks the reads-don't-throw contract.
+- **A `validateOnRead: boolean` instead of the three-mode enum.** Cannot express three distinct behaviors (raw / coerce / throw); the enum is required to offer both a strict-reject mode and a raw escape hatch.
+
+### `'coerce'` is lossless — it preserves unknown stored keys
+
+Most validators discard unrecognized keys when they produce their output (Zod `.strip()` by default), so returning the bare validator output on read would drop attributes a stored row carries beyond the current schema — older-schema fields, or columns another writer owns — and a read-modify-write would then persist that loss as silent data deletion. `'coerce'` therefore **deep-merges the coerced value over the raw stored item**: schema output wins per key, while undeclared keys, including nested ones, are preserved. Arrays are replaced wholesale (the coerced array wins). This closes #1007 (reads conform to `T`) *and* preserves data — the two are not in tension. It is implemented with `defu` (`createDefu`) rather than a hand-rolled merge, because treating arrays as leaves requires custom config in every merge library regardless, and defu is maintained, prototype-safe, zero-dependency, and ESM. The one residual: a schema whose *transform* intentionally removes a key has it resurrected by the merge, so transform-heavy schemas should use `'strict'` or `'off'`. Coercion is also best-effort/validator-dependent for *type* transforms: check-only Standard Schema validators (some Valibot/ArkType schemas) don't fill defaults.
+
+### References
+
+- Issue #1007; PR #283 (this change), review threads from @soberm and @sarayev.
+- Per-BB mechanics: `packages/bb-distributed-table/DESIGN.md` D-DT-10.
+- Code: `packages/bb-distributed-table/src/{types.ts, errors.ts, index.aws.ts, index.mock.ts}`.
+
+## D-016: Off-region CloudFront alarm is always-on, with warn-and-skip when the account is unresolved
+
+**Date**: 2026-09-14
+**Authors:** sarayev
+
+### Context
+`AWS/CloudFront` metrics publish only in us-east-1, and a CloudWatch alarm can only evaluate a metric in its own region (rejected by aws-cdk-lib at synth). So Hosting's `CloudFront5xxRate` alarm cannot live in an off-region stack. Off-region it is placed in a synthesized us-east-1 support stack (`<stackName>-CfMonitoring-<addr>`) that owns its own KMS-encrypted SNS topic. Building that cross-region support stack requires a **concrete account at synth time**: CDK's cross-region export writer/reader machinery bakes real ARNs into the template, and a token account (`Aws.ACCOUNT_ID` / `Ref: AWS::AccountId`, the value an environment-agnostic stack carries) is rejected. See issue #481.
+
+Two edge cases have no valid us-east-1 stack we can synthesize:
+1. **Region resolved, account unresolved**: a legitimate single-synth, multi-account pipeline shape (deploy one template to many accounts).
+2. **Region unresolved** (fully env-agnostic): we can't decide at synth whether the deploy target is us-east-1, so we can't know whether a local alarm is even wrong.
+
+### Decision
+Off-region CloudFront alarm placement is **always on; there is no opt-out prop** (the removed `monitoring.cloudFrontAlarm: 'skip' | 'usEast1Stack'`). The notification surface is `monitoring.subscriptions` (endpoint subscriptions applied to every alarm topic) plus `hosting.monitoring.alarms` (raw alarms for custom handling).
+
+For the two edge cases above we **warn and skip only the CloudFront alarm** rather than throw:
+- **Unresolved account** (region resolved, off-region): skip the CloudFront alarm, emit a loud synth warning, and keep every other alarm. Do NOT hard-throw.
+- **Unresolved region** (env-agnostic): create the alarm locally (best effort) but emit a synth warning that it will never fire if the app deploys outside us-east-1.
+
+### Rationale
+- **"No opt-out" is the right default** because #481 was a *silent* dead alarm, and a knob to turn it off invites exactly the silent gap we are fixing.
+- **But a hard throw is too blunt for the unresolved-account case.** The earlier revision threw `MonitoringEnvRequiredError`, whose only escape was `monitoring.enabled: false`, which also drops the working regional SSR/image/DLQ alarms. That punishes a valid pipeline shape (ambient account) by taking down unrelated, correct monitoring.
+- **A loud synth warning is not the #481 failure mode.** #481 was invisible: the alarm read healthy and never fired. A warning in build output is the opposite: the operator is told plainly what is missing and how to get it (`env: { account, region }`). So warn-and-skip preserves the "no silent gap" principle without the collateral damage.
+- We cannot fill the account ourselves: `Stack.of(this).account` returns the same unresolved token, and forwarding it just moves the CDK cross-region synth error one line down.
+
+### Alternatives Considered
+- **Hard-throw `MonitoringEnvRequiredError` (previous revision):** rejected. Takes down all monitoring for a valid pipeline shape; see Rationale.
+- **Keep a `cloudFrontAlarm: 'skip'` opt-out prop (original design):** rejected. A general opt-out re-opens the silent-gap risk #481 is about; the warn-and-skip is narrow (only the genuinely-impossible cases), not a user knob.
+- **Support resource-target (Lambda/SQS) subscriptions in `subscriptions`:** deferred. A Lambda/SQS target in the app-region stack applied to the us-east-1 topic is an unresolvable cross-region reference. `subscriptions` is scoped to endpoint types (`EmailSubscription`/`UrlSubscription`); resource targets use `hosting.monitoring.alarms` / `alarmTopics` instead. Widening later (e.g. via a forwarder) is non-breaking.
+
+### References
+- Issue #481; PR #488
+- AWS CDK `Environment` docs: cross-stack references "require concrete region information and will cause this stack to emit synthesis errors."
+- `packages/hosting/src/constructs/hosting_construct.ts` (monitoring wiring), `us_east_1_monitoring_stack.ts`

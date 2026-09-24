@@ -1,23 +1,24 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import * as cdk from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as rds from 'aws-cdk-lib/aws-rds';
-import * as iam from 'aws-cdk-lib/aws-iam';
-import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
-import * as cr from 'aws-cdk-lib/custom-resources';
-import type { Construct } from 'constructs';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { VpcContext } from '@aws-blocks/core/cdk';
+import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
+import * as rds from 'aws-cdk-lib/aws-rds';
+import * as cr from 'aws-cdk-lib/custom-resources';
+import type { Construct } from 'constructs';
 import {
+  DEFAULT_MAX_CAPACITY,
+  DEFAULT_MIN_CAPACITY,
   ENV_NAME_SANITIZE_PATTERN,
   ENV_VAR_PREFIX,
-  DEFAULT_POSTGRES_PORT,
-  DEFAULT_MIN_CAPACITY,
-  DEFAULT_MAX_CAPACITY,
   VPC_MAX_AZS,
 } from './constants.js';
 
@@ -35,6 +36,35 @@ export interface AuroraInfraConfig {
   migrationsPath?: string;
   /** CloudFormation removal policy for the Aurora cluster. @default RETAIN */
   removalPolicy?: cdk.RemovalPolicy;
+  /**
+   * Whether to enable RDS deletion protection. Resolved independently of
+   * `removalPolicy` so the stack-wide `defaults.deletionProtection` is honored.
+   * @default derived from removalPolicy (protected unless DESTROY)
+   */
+  deletionProtection?: boolean;
+  /** Aurora PostgreSQL engine version, e.g. `'16.13'`. @default '16.13' */
+  postgresVersion?: string;
+  /**
+  /**
+   * VPC context from the parent scope. When provided, Aurora is placed in the
+   * shared VPC's isolated subnets instead of creating its own VPC.
+   * @internal
+   */
+  vpcContext?: VpcContext;
+  /**
+   * Explicit subnet placement for the Aurora cluster, resolved from the
+   * customer's `Database({ subnets })` option by the CDK layer. When provided,
+   * it overrides the default isolated-preferred placement. Only meaningful with
+   * a shared `vpcContext`.
+   * @internal
+   */
+  clusterSubnets?: ec2.SubnetSelection;
+  /**
+   * CloudWatch retention for the migration Lambda's log group. Populated from
+   * the stack-wide `defaults.logRetention`; when omitted the log group uses the
+   * CDK `LogGroup` default retention.
+   */
+  logRetention?: cdk.aws_logs.RetentionDays;
 }
 
 /**
@@ -80,50 +110,96 @@ export interface AuroraInfraOutputs {
  * Object.entries(infra.envVars).forEach(([k, v]) => handler.addEnvironment(k, v));
  * infra.grantDataApi(handler);
  */
-export function materialize(
-  scope: Construct,
-  name: string,
-  options: AuroraInfraConfig,
-): AuroraInfraOutputs {
+export function materialize(scope: Construct, name: string, options: AuroraInfraConfig): AuroraInfraOutputs {
   const { minCapacity = DEFAULT_MIN_CAPACITY, maxCapacity = DEFAULT_MAX_CAPACITY, databaseName } = options;
   const envName = name.replace(ENV_NAME_SANITIZE_PATTERN, '_');
 
-  // VPC with isolated subnets only — no NAT gateways needed for Data API path
-  const vpc = new ec2.Vpc(scope, `${name}Vpc`, {
-    maxAzs: VPC_MAX_AZS,
-    natGateways: 0,
-    subnetConfiguration: [
-      { name: 'isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-    ],
-  });
+  // Determine VPC (shared or standalone)
+  const vpc =
+    options.vpcContext?.vpc ??
+    new ec2.Vpc(scope, `${name}Vpc`, {
+      maxAzs: VPC_MAX_AZS,
+      natGateways: 0,
+      subnetConfiguration: [{ name: 'isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED }],
+    });
 
-  // Security group allowing inbound PostgreSQL from within the VPC
+  // Pick where the cluster lands.
+  //
+  // Standalone: we build the VPC above with a dedicated isolated tier, so pin to it.
+  //
+  // Shared (bring-your-own) VPC: the isolated tier is not guaranteed. The VPC in
+  // every docs example (`new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 })`)
+  // has only public + private-with-egress subnets, so hard-requiring PRIVATE_ISOLATED
+  // makes the documented setup fail synth with "no isolated subnet groups in this VPC".
+  // Aurora is reached over the RDS Data API (HTTPS via the interface endpoint), never a
+  // raw socket, so the placement tier doesn't affect reachability — it only has to be a
+  // tier the VPC actually has. Prefer isolated when present (keeps the DB off any NAT
+  // path), otherwise fall back to private-with-egress.
+  let clusterSubnets: ec2.SubnetSelection;
+  if (options.clusterSubnets) {
+    // Customer explicitly chose placement via Database({ subnets }); honor it.
+    clusterSubnets = options.clusterSubnets;
+  } else if (options.vpcContext) {
+    // Prefer the isolated tier when the VPC has one (keeps the DB off any NAT
+    // path); otherwise fall back to private-with-egress. selectSubnets throws an
+    // instructive, BB-named error if neither exists. `name` is the BB's fullId
+    // here (Database calls materialize(this, this.fullId, …)).
+    clusterSubnets = options.vpcContext.selectSubnets({ fullId: name }, 'isolated', {
+      fallback: 'private-with-egress',
+    });
+  } else {
+    clusterSubnets = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
+  }
+
+  // Security group for the cluster. No ingress rule: the cluster runs with
+  // `enableDataApi: true` and is reached exclusively over the RDS Data API
+  // (HTTPS via the Secrets Manager + RDS Data interface endpoints), never a raw
+  // Postgres socket. A 5432 ingress rule would imply a direct DB connection path
+  // that nothing in Blocks uses. Egress stays closed for the same reason.
   const securityGroup = new ec2.SecurityGroup(scope, `${name}Sg`, {
     vpc,
     description: `Security group for ${name} Aurora cluster`,
     allowAllOutbound: false,
   });
-  securityGroup.addIngressRule(
-    ec2.Peer.ipv4(vpc.vpcCidrBlock),
-    ec2.Port.tcp(DEFAULT_POSTGRES_PORT),
-    'Allow PostgreSQL from VPC',
-  );
 
   // Aurora Serverless v2 cluster with Data API enabled
   const removalPolicy = options.removalPolicy ?? cdk.RemovalPolicy.RETAIN;
+
+  // Aurora PostgreSQL engine version. Kept configurable because AWS periodically
+  // retires older minor versions — 16.4 was retired in us-east-1, after which
+  // CreateDBCluster failed with "Cannot find version 16.4 for aurora-postgresql".
+  // Default to the latest available 16.x (16.13) for the longest deprecation
+  // runway; callers can override via `postgresVersion` when AWS retires it too.
+  // Validate the override up front so a malformed value fails fast at synth
+  // time with a clear message, instead of as an opaque CreateDBCluster error.
+  let engineVersion: rds.AuroraPostgresEngineVersion;
+  if (options.postgresVersion === undefined) {
+    engineVersion = rds.AuroraPostgresEngineVersion.VER_16_13;
+  } else {
+    if (!/^\d+\.\d+$/.test(options.postgresVersion)) {
+      throw new Error(
+        `Invalid postgresVersion "${options.postgresVersion}"; expected "MAJOR.MINOR" like "16.13".`,
+      );
+    }
+    const majorVersion = options.postgresVersion.split('.')[0];
+    engineVersion = rds.AuroraPostgresEngineVersion.of(options.postgresVersion, majorVersion);
+  }
+
   const cluster = new rds.DatabaseCluster(scope, `${name}Cluster`, {
     engine: rds.DatabaseClusterEngine.auroraPostgres({
-      version: rds.AuroraPostgresEngineVersion.VER_16_4,
+      version: engineVersion,
     }),
     serverlessV2MinCapacity: minCapacity,
     serverlessV2MaxCapacity: maxCapacity,
     writer: rds.ClusterInstance.serverlessV2(`${name}Writer`),
     vpc,
-    vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+    vpcSubnets: clusterSubnets,
     securityGroups: [securityGroup],
     defaultDatabaseName: databaseName,
     enableDataApi: true,
-    deletionProtection: removalPolicy !== cdk.RemovalPolicy.DESTROY,
+    // Read independently from defaults (falling back to the removalPolicy-derived
+    // value for direct materialize() callers that don't pass it).
+    deletionProtection: options.deletionProtection ?? removalPolicy !== cdk.RemovalPolicy.DESTROY,
     removalPolicy,
   });
 
@@ -131,7 +207,7 @@ export function materialize(
   if (!secret) {
     throw new Error(
       `Aurora cluster '${name}' did not generate a Secrets Manager secret. ` +
-      `Ensure defaultDatabaseName is set.`
+        `Ensure defaultDatabaseName is set.`,
     );
   }
 
@@ -173,22 +249,26 @@ export function materialize(
       handler: 'handler',
       runtime: DEFAULT_NODE_RUNTIME,
       timeout: cdk.Duration.minutes(5),
+      logGroup: new LogGroup(scope, `${name}MigrationLogs`, {
+        retention: options.logRetention,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
       environment: {
         CLUSTER_ARN: cluster.clusterArn,
         SECRET_ARN: secret.secretArn,
         DATABASE_NAME: databaseName,
         MIGRATIONS_DIR: '/var/task/migrations',
       },
-      bundling: {
+      bundling: blocksNodejsBundling({
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
-          afterBundling: (inputDir: string, outputDir: string) => [
+          afterBundling: (_inputDir: string, outputDir: string) => [
             `cp -r ${options.migrationsPath} ${outputDir}/migrations`,
           ],
         },
         externalModules: ['@aws-sdk/*'],
-      },
+      }),
     });
     grantDataApi(migrationFn);
 
@@ -207,21 +287,30 @@ export function materialize(
     // Use node.defaultChild to get the underlying CfnResource, then
     // CfnResource.addDependency for a proper CFN-level DependsOn.
     const cfnMigrationCR = migrationCR.node.defaultChild as cdk.CfnResource;
-    const cfnWriter = cluster.node.findAll().find(
-      c => (c as any).cfnResourceType === 'AWS::RDS::DBInstance'
-    ) as cdk.CfnResource | undefined;
+    const cfnWriter = cluster.node.findAll().find((c) => (c as any).cfnResourceType === 'AWS::RDS::DBInstance') as
+      | cdk.CfnResource
+      | undefined;
     if (cfnMigrationCR && cfnWriter) {
       cfnMigrationCR.addDependency(cfnWriter);
     }
   }
 
-  return { cluster, clusterArn: cluster.clusterArn, secretArn: secret.secretArn, databaseName, envVars, grantDataApi };
+  return {
+    cluster,
+    clusterArn: cluster.clusterArn,
+    secretArn: secret.secretArn,
+    databaseName,
+    envVars,
+    grantDataApi,
+  };
 }
 
 /** Hash all .sql files in a directory to detect changes. */
 const hashMigrationsDir = (dir: string): string => {
   const hash = createHash('sha256');
-  const files = readdirSync(dir).filter(f => f.endsWith('.sql')).sort();
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
   for (const file of files) {
     hash.update(file);
     hash.update(readFileSync(join(dir, file), 'utf-8'));

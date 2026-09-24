@@ -131,12 +131,13 @@ export function redactForLogging(value: unknown, seen: WeakSet<object> = new Wea
 
 /**
  * Convenience for log call sites: redact `value` and serialize it to a JSON
- * string. Returns a safe placeholder instead of throwing if serialization
- * fails (e.g. a BigInt slips through), so logging can never crash a request.
+ * string. Returns `'undefined'` when JSON serialization produces no output,
+ * or a safe placeholder if serialization throws (e.g. a BigInt slips through),
+ * so logging can never crash a request.
  */
 export function redactToJson(value: unknown): string {
   try {
-    return JSON.stringify(redactForLogging(value));
+    return JSON.stringify(redactForLogging(value)) ?? 'undefined';
   } catch {
     return '[unserializable]';
   }

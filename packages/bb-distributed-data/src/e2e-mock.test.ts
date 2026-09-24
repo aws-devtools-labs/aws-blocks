@@ -207,6 +207,21 @@ describe('DsqlMockEngine — CREATE INDEX ASYNC parity', () => {
     );
   });
 
+  it('rejects CREATE INDEX ASYNC with a DESC sort order on a key', async () => {
+    await assert.rejects(
+      () => engine.withDdl(() => db.execute(sql`CREATE INDEX ASYNC idx_users_email_desc ON users (email DESC)`)),
+      /sort order/i,
+    );
+  });
+
+  it('rejects ALTER TABLE DROP COLUMN', async () => {
+    await engine.withDdl(() => db.execute(sql`CREATE TABLE legacy (id TEXT PRIMARY KEY, obsolete TEXT)`));
+    await assert.rejects(
+      () => engine.withDdl(() => db.execute(sql`ALTER TABLE legacy DROP COLUMN obsolete`)),
+      /DROP COLUMN/i,
+    );
+  });
+
   it('does not strip ASYNC outside of CREATE INDEX (column named "async")', async () => {
     await engine.withDdl(() => db.execute(sql`CREATE TABLE jobs (id TEXT PRIMARY KEY, async BOOLEAN)`));
     await db.execute(sql`INSERT INTO jobs (id, async) VALUES (${'j1'}, ${true})`);

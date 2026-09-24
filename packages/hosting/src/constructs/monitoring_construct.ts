@@ -1,5 +1,5 @@
 import { Construct } from 'constructs';
-import { Duration } from 'aws-cdk-lib';
+import { Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import {
   Alarm,
   ComparisonOperator,
@@ -8,10 +8,12 @@ import {
   TreatMissingData,
 } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
-import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
-import { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
-import { Queue } from 'aws-cdk-lib/aws-sqs';
-import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
+import type { Distribution } from 'aws-cdk-lib/aws-cloudfront';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import { type IKey, Key } from 'aws-cdk-lib/aws-kms';
+import type { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import type { Queue } from 'aws-cdk-lib/aws-sqs';
+import { type ITopic, type ITopicSubscription, Topic } from 'aws-cdk-lib/aws-sns';
 
 /**
  * Default CloudWatch alarm wiring (P3.1 + P3.2).
@@ -30,20 +32,27 @@ import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
  *   - SSR Lambda throttles > 0 over 5 min
  *   - SQS DLQ depth >= 1 (any poison message)
  *
- * Alarms are off by default (`enabled: false`) so the construct stays
- * cheap-by-default. When the user opts in we either create an SNS
- * topic and surface its ARN (so the user can subscribe), or attach
- * the user-supplied topic. Cost: pennies/month at idle, scales with
- * alarm-state changes (not requests).
+ * Monitoring defaults to on at the `HostingConstruct` surface
+ * (`monitoring.enabled` is `@default true`). When enabled, the construct
+ * always creates its own SNS topic and surfaces its ARN so the operator
+ * can subscribe; there is no bring-your-own-topic path. Cost: pennies/month
+ * at idle, scales with alarm-state changes (not requests), plus ~$1/month
+ * for the alarm topic's KMS key.
+ *
+ * The auto-created topic is always encrypted with a dedicated
+ * customer-managed KMS key. An AWS-managed key (`alias/aws/sns`)
+ * cannot be used: its policy is not editable and does not grant
+ * CloudWatch, so every alarm action fails with `KMSAccessDenied` and
+ * notifications are dropped silently. See `createAlarmTopicKey`.
  */
 export type MonitoringConstructProps = {
   enabled: boolean;
   /**
-   * BYO SNS topic for alarm actions. When omitted and `enabled: true`,
-   * a topic is created and surfaced via `topic` for the caller to
-   * subscribe to.
+   * Subscriptions to attach to the auto-created alarm topic. The parent
+   * passes the same list to the us-east-1 support stack so a single
+   * entry reaches both topics. Applied via `topic.addSubscription`.
    */
-  snsTopic?: ITopic;
+  subscriptions?: ITopicSubscription[];
   /** CloudFront distribution to alarm on 5xx errors. */
   distribution?: Distribution;
   /** Primary SSR Lambda — error rate + throttle alarms. */
@@ -60,6 +69,67 @@ export type MonitoringConstructProps = {
    * @default 1 (alarm when >=1% of invocations error)
    */
   ssrErrorRatePercent?: number;
+  /**
+   * When `true` (default) the CloudFront 5xx alarm is created in THIS
+   * (regional) construct. `AWS/CloudFront` metrics only publish in
+   * us-east-1 and a CloudWatch alarm can only evaluate a metric in its
+   * own region, so for an off-region hosting stack the parent sets this
+   * to `false` and instead places the alarm in a dedicated us-east-1
+   * support stack (issue #481). When `false` and a `distribution` is
+   * supplied, the CF alarm is skipped here and `cloudFrontAlarmDeferred`
+   * is set to `true`. The regional alarms (SSR/image/DLQ) are unaffected.
+   * @default true
+   */
+  createCloudFrontAlarmLocally?: boolean;
+};
+
+/**
+ * Create the customer-managed key that encrypts the alarm topic.
+ *
+ * CloudWatch calls KMS **directly** (not via SNS) when it publishes an
+ * alarm notification to an encrypted topic, so the key policy needs an
+ * explicit grant for the `cloudwatch.amazonaws.com` service principal.
+ * Without it the alarm action fails with `KMSAccessDenied` and the
+ * notification is dropped — the alarm still flips to ALARM in the
+ * console, so the failure is invisible until someone notices the page
+ * that never arrived. Account-root/IAM delegation (the only statement
+ * on the default `Key` policy, and the only one some policy injectors
+ * add) does NOT cover service principals.
+ *
+ * `resources: ['*']` is scoped to *this* key — a resource policy can
+ * only speak for the resource it is attached to, and this key is
+ * single-purpose (the alarm topic is its only user). The
+ * `aws:SourceAccount` guard blocks the cross-account confused-deputy
+ * case; it is `IfExists` because that key is only populated on direct
+ * service-principal calls, and a hard `StringEquals` would
+ * reintroduce the exact silent-deny this grant exists to prevent.
+ */
+export const createAlarmTopicKey = (scope: Construct): Key => {
+  const key = new Key(scope, 'AlarmTopicKey', {
+    description:
+      'Encrypts CloudWatch alarm notifications published to the hosting alarm topic.',
+    enableKeyRotation: true,
+    // The key protects in-flight notifications only — nothing durable
+    // is lost with the stack, so don't leave a billable orphan behind.
+    removalPolicy: RemovalPolicy.DESTROY,
+  });
+
+  key.addToResourcePolicy(
+    new iam.PolicyStatement({
+      sid: 'AllowCloudWatchAlarmsToPublishToEncryptedTopic',
+      effect: iam.Effect.ALLOW,
+      principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
+      actions: ['kms:Decrypt', 'kms:GenerateDataKey*'],
+      resources: ['*'],
+      conditions: {
+        StringEqualsIfExists: {
+          'aws:SourceAccount': Stack.of(scope).account,
+        },
+      },
+    }),
+  );
+
+  return key;
 };
 
 /**
@@ -69,8 +139,21 @@ export type MonitoringConstructProps = {
 export class MonitoringConstruct extends Construct {
   /** SNS topic alarm actions are sent to. Undefined when monitoring is disabled. */
   readonly topic?: ITopic;
+  /**
+   * KMS key encrypting the auto-created alarm topic. Undefined when
+   * monitoring is disabled. Exposed so callers can grant additional
+   * publishers on the key.
+   */
+  readonly encryptionKey?: IKey;
   /** All CloudWatch alarms created by this construct. */
   readonly alarms: Alarm[] = [];
+  /**
+   * True when a `distribution` was supplied but the CloudFront 5xx
+   * alarm was NOT created here because `createCloudFrontAlarmLocally`
+   * was `false` (off-region). The parent must place the alarm in a
+   * us-east-1 support stack. See issue #481.
+   */
+  readonly cloudFrontAlarmDeferred: boolean = false;
 
   /**
    * Wire the default alarm set to the user-supplied or auto-created
@@ -83,10 +166,16 @@ export class MonitoringConstruct extends Construct {
       return;
     }
 
-    this.topic = props.snsTopic ?? new Topic(this, 'AlarmTopic');
+    this.encryptionKey = createAlarmTopicKey(this);
+    this.topic = new Topic(this, 'AlarmTopic', {
+      masterKey: this.encryptionKey,
+    });
+    for (const sub of props.subscriptions ?? []) {
+      this.topic.addSubscription(sub);
+    }
     const action = new SnsAction(this.topic);
 
-    if (props.distribution) {
+    if (props.distribution && (props.createCloudFrontAlarmLocally ?? true)) {
       const cf5xx = new Alarm(this, 'CloudFront5xxRate', {
         metric: new Metric({
           namespace: 'AWS/CloudFront',
@@ -109,6 +198,11 @@ export class MonitoringConstruct extends Construct {
       });
       cf5xx.addAlarmAction(action);
       this.alarms.push(cf5xx);
+    } else if (props.distribution) {
+      // Off-region: the CloudFront metric only exists in us-east-1 and an
+      // alarm can't watch a metric cross-region, so defer the alarm to a
+      // us-east-1 support stack owned by the parent. See issue #481.
+      this.cloudFrontAlarmDeferred = true;
     }
 
     if (props.ssrFunction) {
