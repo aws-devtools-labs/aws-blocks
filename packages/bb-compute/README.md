@@ -1,7 +1,7 @@
 # @aws-blocks/bb-compute
 
-The `Compute` Building Block — the single surface for choosing where a workload
-runs. State the compute `type` and its options; Blocks maps the type to the AWS
+The `Compute` Building Block is the single surface for choosing where a workload runs.
+State the compute `type` and its options; Blocks maps the type to the AWS
 service that backs it. The service name never appears in your code.
 
 ```ts

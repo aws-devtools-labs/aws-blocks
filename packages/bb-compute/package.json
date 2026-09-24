@@ -1,6 +1,13 @@
 {
   "name": "@aws-blocks/bb-compute",
   "version": "0.1.0",
+  "keywords": [
+    "aws-blocks",
+    "compute",
+    "serverless",
+    "container",
+    "fargate"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
