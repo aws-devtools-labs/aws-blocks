@@ -53,9 +53,9 @@ A container's CPU and memory are not independent: each vCPU size permits only a 
 
 ```ts
 /**
- * Valid Fargate vCPU + memory (MB) combinations. Each vCPU permits only its
- * listed memory values, so an invalid pair is unrepresentable. This matrix is
- * container-specific; `vm` and `kubernetes` will bring their own size types.
+ * Valid container vCPU + memory (MB) combinations. Each vCPU permits only its
+ * listed memory values. Invalid pairs fail at build time. This matrix is
+ * container-specific; `vm` and `kubernetes` will have their own combinations.
  */
 type ContainerSize =
   | { vcpu: 0.25; memory: 512 | 1024 | 2048 }
@@ -81,9 +81,7 @@ interface ContainerComputeOptions {
 }
 ```
 
-(The `2`/`4`/`8`/`16` vCPU members are elided above for readability; each lists every legal memory value — 1GB steps up to 4 vCPU, 4GB steps at 8, 8GB steps at 16.)
-
-`scaling` bounds the task count for horizontal redundancy. It defaults to `{ min: 1, max: 1 }` — a single task — and today only `{ 1, 1 }` is honored; `min`/`max` > 1 is reserved for when the autoscaling policy lands. When it does, the scaling *trigger* (queue depth for a job worker, CPU for a request-serving compute) is inferred by Blocks from the workload rather than configured here; an explicit target metric is a possible later addition. `scaling` is distinct from a job's `maxConcurrency`: `scaling` moves the number of tasks, `maxConcurrency` caps in-flight work within each. `serverless` has neither knob — the platform scales it.
+`scaling` bounds the task count for horizontal redundancy. It defaults to `{ min: 1, max: 1 }` — a single task — and today only `{ 1, 1 }` is honored; `min`/`max` > 1 is reserved for when the autoscaling policy lands. Fargate supports it via Application Auto Scaling (an `AWS::ApplicationAutoScaling::ScalableTarget` for the bounds plus a `ScalingPolicy` for the trigger); the bounds map to `minCapacity`/`maxCapacity`, and Blocks emits an inferred target-tracking policy (queue depth per instance for a job worker, CPU for a request-serving compute) rather than requiring the customer to configure the metric. An explicit target is a possible later addition. `scaling` is distinct from a job's `maxConcurrencyPerInstance`: `scaling` moves the number of instances, `maxConcurrencyPerInstance` caps in-flight work within each. `serverless` has neither knob — the platform scales it.
 
 There is no timeout on a compute. Time limits are a property of work, not of compute (Appendix A), so they live on the workload — see below.
 
@@ -91,7 +89,7 @@ There is no timeout on a compute. Time limits are a property of work, not of com
 
 ### How `AsyncJob` consumes a `Compute`
 
-A workload takes a `compute` plus two properties of the work itself — `timeoutSeconds` and `maxConcurrency` — additive to the existing `AsyncJobOptions`.
+A workload takes a `compute` and a universal `timeoutSeconds`, additive to the existing `AsyncJobOptions`. Where per-instance **concurrency** is declared is a separate decision (see Concurrency Options); it is omitted here because it is compute-conditional, not universal.
 
 ```ts
 interface AsyncJobOptions<T> {
@@ -102,23 +100,14 @@ interface AsyncJobOptions<T> {
   compute?: Compute;
 
   /**
-   * Wall-clock limit for one delivery, in seconds. A property of the work, not
-   * the compute. Enforced by the runtime (on a container, by terminating the
-   * worker); on a serverless compute it is bounded by the platform ceiling. A
-   * per-job value may only tighten the compute's ceiling, never raise it; a
-   * larger value is a synth error.
+   * Wall-clock limit for one delivery, in seconds. Universal — enforced on every
+   * compute type (container: the worker is terminated; serverless: the platform
+   * function timeout). A per-job value may only tighten the compute's ceiling,
+   * never raise it; a larger value is a synth error.
    */
   timeoutSeconds?: number;
 
-  /**
-   * Max in-flight deliveries of THIS job at once. A consumer-side cap, not an
-   * SQS setting — SQS itself does not limit how many messages are checked out.
-   * Enforced by the consumer: the container poller (per task) on a container, or
-   * the SQS event source mapping (account-global, min 2) on serverless. With
-   * multiple container tasks (scaling.max > 1), the effective cap is
-   * maxConcurrency x task count, since each task's poller enforces it locally.
-   */
-  maxConcurrency?: number;
+  // maxConcurrencyPerInstance — placement is the "Concurrency Options" decision below.
 }
 ```
 
@@ -199,6 +188,66 @@ A customer who wants finer control sets more of the same options (`size`, `scali
 ### On `Scope`
 
 The produced compute extends `Scope`, so workloads and finalize steps get a `fullId`, tree position, and registry entry. The concrete computes already extend `Scope` in the container-jobs branch. A zero-config provider (PR #573's `ComputeProvider.provide()`) can return a `Scope`-backed compute typed as an opaque handle, so producing the core `Compute` and being a `Scope` are compatible. The `AsyncJob` `compute` + `timeoutSeconds` surface is identical across all options.
+
+---
+
+## Concurrency Options
+
+This is a second, separable decision: where a job's **per-instance concurrency** (`maxConcurrencyPerInstance` — how many deliveries of a job run at once on one compute instance) is declared.
+
+`timeoutSeconds` is not part of this decision. It is universal — enforced on every compute type (container: the worker is terminated; serverless: the platform function timeout) — so it lives on `AsyncJob` regardless. Concurrency is different: it is **compute-conditional**. It is a real, enforced knob on a container (the poller's per-instance cap) but has no per-instance meaning on serverless, where each invocation handles one message and the platform scales instances. So the open question is where to put a knob that only some compute types honor, without letting the default (serverless) compute expose a setting it ignores.
+
+Task-count `scaling` (`{ min, max }`) is a separate axis and stays on the compute in all three options — it describes how many instances run, which is a property of the machine, not the work. Total throughput for a job worker is `instances × maxConcurrencyPerInstance`.
+
+### Option 1 — on the compute
+
+```ts
+const worker = new Compute(scope, 'worker', {
+  type: 'container',
+  size: { vcpu: 1, memory: 2048 },
+  maxConcurrencyPerInstance: 4,
+});
+
+new AsyncJob(scope, 'reports', { compute: worker, handler });
+```
+
+Concurrency is a property of the compute. Simple to type (it only exists on `ContainerComputeOptions`, so serverless never sees it). But it forces every job sharing that compute to accept the same concurrency — the carte-blanche problem (Appendix A): job A and job B on one container can't have different parallelism, and tuning one changes the ceiling for the other.
+
+### Option 2 — on the job, conditioned by the compute's type
+
+```ts
+new AsyncJob(scope, 'reports', {
+  compute: containerWorker,       // TS infers a container compute
+  maxConcurrencyPerInstance: 4,   // allowed
+  handler,
+});
+
+new AsyncJob(scope, 'emails', {
+  compute: serverlessDefault,     // TS infers serverless
+  maxConcurrencyPerInstance: 4,   // COMPILE ERROR — serverless has no per-instance cap
+  handler,
+});
+```
+
+Concurrency is per-job (each job sets its own), and `AsyncJobOptions` is generic over the injected compute's type so the knob only appears when the compute enforces it. The default compute cannot be given a setting it ignores — it is a compile error, not a silently-dropped property. Keeps the one-object ergonomics; costs a conditional/generic type on `AsyncJobOptions`.
+
+### Option 3 — a mapper object that joins jobs to compute
+
+```ts
+const compute = new Compute(scope, 'worker', { type: 'container', size: { vcpu: 1, memory: 2048 } });
+
+// The mapper carries per-job execution policy and is only constructible against
+// compute types that honor it.
+const reports = new ExecutionStrategy(compute, { maxConcurrencyPerInstance: 4, timeoutSeconds: 600 });
+
+new AsyncJob(scope, 'reports', { execution: reports, handler });
+```
+
+A third construct (`ExecutionStrategy` / `ExecutionPolicy`) maps a job to a compute and carries the execution knobs, constructible only against compute types that support them. Per-job (no carte blanche) and reusable across jobs as a named profile. Costs a third object to wire per workload and a less obvious "where does this setting live" story; earns its keep only if execution profiles are shared across many jobs.
+
+### Recommendation
+
+Option 2. It puts concurrency where it belongs (per-job), prevents the default compute from exposing a knob it ignores (compile error, not silent no-op), and keeps a single object per workload. Option 1 is simplest but reintroduces carte blanche across co-located jobs. Option 3 is worth it only if a reusable, named execution profile is a real requirement; otherwise a spreadable options object gives the same reuse without a new construct.
 
 ---
 
