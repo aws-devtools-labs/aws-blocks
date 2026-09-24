@@ -29,6 +29,9 @@ const CLIENT_USER_AGENT_PATTERN =
  * `client/<lang>/<version>` token to append. Malformed input is dropped,
  * not thrown.
  *
+ * The language segment must be 1-16 lowercase alphanumerics with a leading
+ * letter; longer or otherwise malformed values are dropped.
+ *
  * @param raw - Raw header value; may be `null` (as `Headers.get()` returns) or omitted.
  * @returns The `client/<lang>/<version>` token, or `undefined` if missing or malformed.
  * @internal Used by the Lambda handler; not public API.
@@ -84,8 +87,10 @@ export function installClientUserAgent(client: {
         const token = getClientUserAgentToken();
         if (token && hasHeaders(args.request)) {
           const headers = args.request.headers;
-          const key = 'user-agent' in headers ? 'user-agent' : 'x-amz-user-agent';
-          if (headers[key]) headers[key] = `${headers[key]} ${token}`;
+          // SDK v3 (node) sets both UA headers; append to each that is present.
+          for (const key of ['user-agent', 'x-amz-user-agent']) {
+            if (headers[key]) headers[key] = `${headers[key]} ${token}`;
+          }
         }
         return next(args);
       },

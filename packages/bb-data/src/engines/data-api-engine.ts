@@ -154,6 +154,7 @@ export class DataApiEngine implements DatabaseEngine {
     this.client = config.client ?? new RDSDataClient({
       ...(config.customUserAgent ? { customUserAgent: config.customUserAgent } : {}),
     });
+    // Instrument only a client we created; an injected one is the caller's job.
     if (!config.client) installClientUserAgent(this.client);
   }
 
