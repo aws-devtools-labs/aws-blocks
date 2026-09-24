@@ -7,7 +7,7 @@ import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { FileBucketOptions, CorsRule, LifecycleRule, ExternalBucketRef } from './types.js';
+import type { FileBucketOptions, CorsRule, ExternalBucketRef } from './types.js';
 import { validateBucketName } from './bucket-name.js';
 import { DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS, validateFileBucketOptions } from './validation.js';
 

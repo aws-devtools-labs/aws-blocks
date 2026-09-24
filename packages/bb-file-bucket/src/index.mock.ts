@@ -17,7 +17,7 @@ import { validateBucketName } from './bucket-name.js';
 import { validateFileBucketOptions } from './validation.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, ExternalBucketRef, CorsRule,
+	FileContent, FileInfo, ExternalBucketRef,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
 } from './types.js';
@@ -108,7 +108,9 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.registerDevAttachment('@aws-blocks/bb-file-bucket/file-server');
 		registerSdkIdentifiers(this.fullId, { bucketName: `mock-${this.fullId}` });
 		// Register in global registry so the file-server can delegate PUT to bucket.put()
-		const registry = ((globalThis as any).__BLOCKS_FILE_BUCKET_REGISTRY__ ??= new Map());
+		const g = globalThis as any;
+		g.__BLOCKS_FILE_BUCKET_REGISTRY__ ??= new Map();
+		const registry = g.__BLOCKS_FILE_BUCKET_REGISTRY__;
 		registry.set(this.fullId, this);
 	}
 
