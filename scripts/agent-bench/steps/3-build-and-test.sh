@@ -84,13 +84,14 @@ fi
 # The verifier OWNS the server. Step 2 may have left a `tsx watch` supervisor alive, so first reap
 # that tree and free the front-door ports (3000/3001 only, never :3100). Under shell isolation the
 # agent's procs are benchagent-owned, so reap/free/probe go through sudo (unprivileged fallback).
-# Discovery uses TWO independent readiness paths over a 90-attempt window (either confirms): Path A
-# parses the port from the framework banner `AWS Blocks local server running on http://localhost:<port>`
-# and HTTP-probes it; Path B (deterministic) probes the candidate ports directly for the app's readiness
-# artifact `/.blocks-sandbox/config.json`, which the app serves only once it is genuinely listening —
-# independent of the banner text and grep/parse timing (a redundant, drift-proof path, not a faster
-# one; both go live at the same onListening). If neither confirms, APP_BASE_URL stays empty and we
-# proceed (the cell fails honestly rather than hanging). See the inline block at the launch site for detail.
+# Discovery uses TWO independent paths over a 90-iteration window (either confirms), sharing ONE
+# readiness bar — the app root `/` answers non-5xx (`< 500`). They differ only in how the port is found:
+# Path A parses it from the framework banner `AWS Blocks local server running on http://localhost:<port>`;
+# Path B probes the candidate ports for `/.blocks-sandbox/config.json` (served by our front door the
+# moment it binds), which finds the port independent of banner text/parse timing — its drift-proof win.
+# config.json is a discovery signal only (it answers before the proxied app on :3100 is up), so Path B
+# still confirms readiness with the same root `/` probe. If neither confirms, APP_BASE_URL stays empty
+# and we proceed (the cell fails honestly rather than hanging). See the inline block at the launch site.
 
 # Reap any dev server the agent left running. The framework records each in
 # .blocks-sandbox/dev-server.<port>.pid as {pid, ppid, port}; `ppid` is the `tsx watch` supervisor
@@ -152,53 +153,55 @@ trap cleanup_dev_server EXIT
 # Dev-server stability: readiness is detected two INDEPENDENT ways, so a slow or
 # mismatched startup banner no longer false-negatives `dev_server_started` (which hard-caps
 # selector_contract + functional_completeness in scoring.mjs — a flaky miss was punishing apps that
-# were actually up). Path A: parse the port from the startup banner, then HTTP-probe it. Path B (the
-# deterministic gate): probe the candidate ports directly for the app's real readiness artifact
-# `/.blocks-sandbox/config.json`, which the app serves only once it is genuinely listening. Path B does
-# not depend on the banner TEXT or on grep/parse timing — that is its win (it survives a banner-string
-# change or a slow/garbled log write). It does NOT beat the banner in wall-clock time: in
-# packages/core/src/scripts/dev-server.ts the config.json HTTP route only answers after
-# server.listen(port, onListening) fires, and that same onListening logs the banner as its first line,
-# so both paths become live at the same instant. Path B is a redundant, drift-proof readiness path, not
-# a faster one. Either path confirming marks the server ready.
+# were actually up). Both paths use the SAME readiness bar — the app root `/` answers non-5xx (`< 500`)
+# — and differ only in how they find the port. Path A: parse the port from the startup banner. Path B:
+# probe the candidate ports for `/.blocks-sandbox/config.json`, which OUR front door serves the moment
+# it binds; a hit identifies our port WITHOUT depending on the banner text or grep/parse timing (its
+# win — it survives a banner-string change or a slow/garbled log write). config.json is a PORT-DISCOVERY
+# signal, not a readiness one: it answers 200 before spawnFrontend() brings up the proxied app on :3100
+# (dev-server.ts:1024-1034), so both paths still confirm on the root `/` probe before accepting a port.
 # No NODE_OPTIONS heap cap: an OOM fix needs a repro (none yet), and guessing one could mask it.
 nohup npm run dev > "${CELL_TMP}/dev.log" 2>&1 &
 echo "$!" > "${CELL_TMP}/dev.pid"
 
-# Candidate ports for the readiness probe: $DEV_PORTS, defined once above with the reap/free-port loop.
-
 APP_BASE_URL=""
-# Up to 90 attempts, one per ~1s idle plus the curl time. NOT a hard 90s wall-clock bound: each
-# attempt issues up to 3 `curl -m 5` probes (Path A + one per DEV_PORT), and a port that ACCEPTS then
-# hangs — the loaded scenario this targets — can stretch an attempt toward ~15s, so worst-case wall
-# clock exceeds 90s. The attempt cap, not a timer, is what bounds the loop.
+# Up to 90 iterations, one per ~1s idle plus the curl time. NOT a hard 90s wall-clock bound: each
+# iteration issues up to 5 `curl -m 5` probes (Path A root + per DEV_PORT: config.json then, on a hit,
+# the root), and a port that ACCEPTS then hangs — the loaded scenario this targets — can stretch an
+# iteration well past a few seconds, so worst-case wall clock exceeds 90s. The iteration cap, not a
+# timer, is what bounds the loop.
 for i in $(seq 1 90); do
-  # Path A — banner-derived port (exact port, when the banner shows up). Accepts any non-5xx (`< 500`):
-  # this probes the app ROOT, where a 2xx/3xx/4xx all mean "the server is up and answering" (a 404 root
-  # is still a live server). Path B below is stricter (`< 400`) because it probes a SPECIFIC artifact
-  # that must exist — do not unify the two thresholds.
+  # Path A — banner-derived port (exact port, when the banner shows up). Readiness = the app ROOT `/`
+  # answers non-5xx (`< 500`): `/` proxies to the frontend on :3100, so a `< 500` means the proxied app
+  # is actually up (a 502 = front door bound but frontend still booting). Path B below reuses this exact
+  # root check as its readiness bar, so the two paths agree on "ready" — they differ only in how the
+  # port is found (banner grep vs config.json probe).
   port=$(grep -oE 'AWS Blocks local server running on http://localhost:[0-9]+' "${CELL_TMP}/dev.log" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)
   if [ -n "${port:-}" ]; then
     code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${port}") || code=000
     if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
       APP_BASE_URL="http://localhost:${port}"
-      echo "[discover] dev server ready on :${port} (HTTP $code) after ${i}s (banner)"
+      echo "[discover] dev server ready on :${port} (HTTP $code) after ${i} iteration(s) (banner)"
       break
     fi
   fi
-  # Path B — deterministic readiness: OUR dev server serves /.blocks-sandbox/config.json (a reserved
-  # front-door route, dev-server.ts) with a 200 the moment it accepts connections — the route is
-  # registered synchronously and gated on no "ready" flag. So we require 2xx/3xx (`< 400`): a 404 means
-  # whatever answered on this port is NOT our app (a different/stale server, or a framework dev server
-  # that proxies and can't serve this reserved path), so we must not attach to it.
-  # (Aware: if the reap above failed and a stale copy of OUR app still served config.json on a DEV_PORT,
-  # this — like Path A — could attach to it; the thorough reap + fuser-kill loop makes that unlikely, not a regression.)
+  # Path B — drift-proof port DISCOVERY, then the SAME readiness bar as Path A. config.json is served
+  # by OUR front door synchronously (dev-server.ts), so it identifies the right port without depending
+  # on the banner text or grep/parse timing (its real win). But it answers 200 the instant the front
+  # door binds — BEFORE spawnFrontend() brings up the proxied app on :3100 (dev-server.ts:1024-1034),
+  # during which `/` still 502s. So config.json alone is a LAXER "ready" than Path A and would let
+  # dev_server_started=true fire while the app isn't serving. Fix: on a config.json hit (`< 400` =
+  # our app is on this port), confirm readiness with Path A's own root probe (`/` returns `< 500`)
+  # before accepting. Banner-text drift stays covered; the gate is never weaker than Path A.
   for p in $DEV_PORTS; do
     ccode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}/.blocks-sandbox/config.json") || ccode=000
     if [ "$ccode" != "000" ] && [ "$ccode" -lt 400 ]; then
-      APP_BASE_URL="http://localhost:${p}"
-      echo "[discover] dev server ready on :${p} (config.json HTTP $ccode) after ${i}s (readiness probe)"
-      break 2
+      rcode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}") || rcode=000
+      if [ "$rcode" != "000" ] && [ "$rcode" -lt 500 ]; then
+        APP_BASE_URL="http://localhost:${p}"
+        echo "[discover] dev server ready on :${p} (config.json $ccode + root $rcode) after ${i} iteration(s) (readiness probe)"
+        break 2
+      fi
     fi
   done
   sleep 1
