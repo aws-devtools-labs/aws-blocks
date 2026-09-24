@@ -74,14 +74,33 @@ interface ServerlessComputeOptions {
 interface ContainerComputeOptions {
   /** A valid vCPU + memory combination. */
   size?: ContainerSize;
-  /** Task-count bounds; defaults to a single task. See the scaling note below. */
-  scaling?: { min: number; max: number };
+  /** Instance-count bounds and scaling strategy. See the scaling note below. */
+  scaling?: ContainerScaling;
   /** Custom container image (ECR URI or build context). */
   image?: string;
 }
+
+type ContainerScaling = {
+  /** Minimum running instances. Default 1. */
+  minInstances: number;
+  /** Maximum running instances. Default 1 (no scaling). */
+  maxInstances: number;
+  /**
+   * What drives scaling between the bounds. Omit and Blocks picks by workload:
+   * queue depth for a job worker, CPU for a request-serving compute.
+   */
+  strategy?:
+    | { on: 'cpu'; targetPercent: number }
+    | { on: 'memory'; targetPercent: number }
+    | { on: 'queue-depth'; backlogPerInstance: number };
+};
 ```
 
-`scaling` bounds the task count for horizontal redundancy. It defaults to `{ min: 1, max: 1 }` — a single task — and today only `{ 1, 1 }` is honored; `min`/`max` > 1 is reserved for when the autoscaling policy lands. Fargate supports it via Application Auto Scaling (an `AWS::ApplicationAutoScaling::ScalableTarget` for the bounds plus a `ScalingPolicy` for the trigger); the bounds map to `minCapacity`/`maxCapacity`, and Blocks emits an inferred target-tracking policy (queue depth per instance for a job worker, CPU for a request-serving compute) rather than requiring the customer to configure the metric. An explicit target is a possible later addition. `scaling` is distinct from a job's `maxConcurrencyPerInstance`: `scaling` moves the number of instances, `maxConcurrencyPerInstance` caps in-flight work within each. `serverless` has neither knob — the platform scales it.
+`scaling` bounds the instance count for horizontal redundancy and names what drives it. It defaults to a single instance (`minInstances: 1, maxInstances: 1`); today only a single instance is honored, and `maxInstances` > 1 is reserved for when the autoscaling policy lands. Fargate supports it via Application Auto Scaling (an `AWS::ApplicationAutoScaling::ScalableTarget` for the bounds plus a `ScalingPolicy` for the trigger); the bounds map to `minCapacity`/`maxCapacity`.
+
+The `strategy` is optional — omit it and Blocks infers one by workload (queue depth for a job worker, CPU for a request-serving compute). `cpu`/`memory` target-track the standard ECS utilization metrics. `queue-depth` is the right signal for a job worker: Blocks sums `ApproximateNumberOfMessagesVisible` (messages waiting, not yet picked up) across **every queue this compute drains** — known at synth from the AsyncJobs assigned to it — divides by running instances, and target-tracks `backlogPerInstance`. Because instances are shared across all jobs on the compute (one instance drains every queue), queue-depth scaling is necessarily **aggregate**, not per-job. For per-job scaling isolation, give that job its own compute.
+
+`scaling` is distinct from a job's `maxConcurrencyPerInstance`: `scaling` moves the number of instances, `maxConcurrencyPerInstance` caps in-flight work within each; total drain rate is roughly `instances × maxConcurrencyPerInstance` summed across the compute's jobs. `serverless` has neither knob — the platform scales it.
 
 There is no timeout on a compute. Time limits are a property of work, not of compute (Appendix A), so they live on the workload — see below.
 
@@ -197,7 +216,7 @@ This is a second, separable decision: where a job's **per-instance concurrency**
 
 `timeoutSeconds` is not part of this decision. It is universal — enforced on every compute type (container: the worker is terminated; serverless: the platform function timeout) — so it lives on `AsyncJob` regardless. Concurrency is different: it is **compute-conditional**. It is a real, enforced knob on a container (the poller's per-instance cap) but has no per-instance meaning on serverless, where each invocation handles one message and the platform scales instances. So the open question is where to put a knob that only some compute types honor, without letting the default (serverless) compute expose a setting it ignores.
 
-Task-count `scaling` (`{ min, max }`) is a separate axis and stays on the compute in all three options — it describes how many instances run, which is a property of the machine, not the work. Total throughput for a job worker is `instances × maxConcurrencyPerInstance`.
+Instance-count `scaling` (`{ minInstances, maxInstances, strategy? }`) is a separate axis and stays on the compute in all three options — it describes how many instances run, which is a property of the machine, not the work. Total throughput for a job worker is `instances × maxConcurrencyPerInstance`.
 
 ### Option 1 — on the compute
 
