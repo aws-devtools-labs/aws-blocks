@@ -479,6 +479,54 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 		);
 	});
 
+	// Resource-leak guard: when every channel is rejected as stale, the reconnect socket
+	// is left OPEN with zero subscriptions and a re-armed keep-alive that would ping forever.
+	// The middleware must tear that idle connection down rather than leak it.
+	it('all-stale reconnect tears down the now-idle socket (no leaked, pinging, subscriber-less connection)', () => {
+		const client = hydrateClient();
+		client.subscribe({ onMessage: () => {}, onDisconnect: () => {} });
+
+		const s0 = FakeWebSocket.instances[0];
+		s0.emitOpen();
+		s0.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		s0.emitServerClose(1006);
+		mock.timers.tick(60_000);
+
+		const s1 = FakeWebSocket.instances[1];
+		assert.ok(s1, 'middleware should reconnect');
+		s1.emitOpen();
+		const sentBeforeReject = s1.sent.length;
+		// The only channel's replayed token is stale — the whole set drains with 0 subscriptions.
+		s1.emitMessage({ type: 'error', channel: CHANNEL, message: 'token expired' });
+
+		// The idle socket must be torn down: closed, and no further keep-alive pings.
+		assert.strictEqual(s1.readyState, FakeWebSocket.CLOSED, 'the subscriber-less socket must be closed');
+		mock.timers.tick(20 * 60 * 1000); // well past the ~9-min keep-alive interval
+		assert.strictEqual(
+			s1.sent.length,
+			sentBeforeReject,
+			'no keep-alive ping should be sent after teardown of the subscriber-less connection',
+		);
+		// No new socket is spun up (nothing left to reconnect for).
+		assert.strictEqual(FakeWebSocket.instances.length, 2, 'teardown must not schedule another reconnect');
+	});
+
+	// Connection-level error frame (no channel) must not be silently swallowed.
+	it('a channel-less error frame surfaces onDisconnect(error)', () => {
+		const client = hydrateClient();
+		const reasons: string[] = [];
+		client.subscribe({ onMessage: () => {}, onDisconnect: (r) => { reasons.push(r); } });
+
+		const s0 = FakeWebSocket.instances[0];
+		s0.emitOpen();
+		s0.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// A connection-scoped error with no `channel` — must reach the app, not be dropped.
+		s0.emitMessage({ type: 'error', message: 'connection unauthorized' });
+		assert.ok(reasons.includes('error'), 'a channel-less error frame must surface onDisconnect(\'error\')');
+	});
+
 	// (c'') Per-channel routing: the FAILED channel must NOT receive onReconnect.
 	// This is the precise stuck-stream class the PR prevents — a channel whose own
 	// resubscribe was rejected should get onDisconnect('error') only, NOT a false

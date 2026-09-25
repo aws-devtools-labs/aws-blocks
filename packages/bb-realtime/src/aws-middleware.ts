@@ -180,6 +180,27 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 			// re-confirmed; a channel whose resubscribe was rejected fired onDisconnect('error')
 			// instead and correctly receives NO onReconnect.
 			conn.reconnectAttempts = 0;
+			// Resource-leak guard: if EVERY channel's resubscribe was rejected (all tokens
+			// stale), the socket is now OPEN with subscriptions.size === 0. Teardown otherwise
+			// only happens on a close event or in scheduleReconnect — and the keep-alive
+			// re-armed on open keeps pinging, PREVENTING the idle close that would trigger it.
+			// So an app that does not re-subscribe after onDisconnect('error') would leak a
+			// zero-subscriber connection pinging forever. Mirror scheduleReconnect's
+			// channel-less guard: clear timers, close the socket, and drop the pool entry so a
+			// later subscribe() rebuilds fresh.
+			if (conn.subscriptions.size === 0) {
+				if (conn.keepAliveTimer) { clearInterval(conn.keepAliveTimer); conn.keepAliveTimer = null; }
+				if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
+				conn.intentionalClose = true; // deliberate teardown of a now-subscriber-less connection
+				conn.connected = false;
+				if (conn.ws) {
+					conn.ws.onmessage = null;
+					conn.ws.onerror = null;
+					conn.ws.onclose = null;
+					try { conn.ws.close(); } catch {}
+				}
+				connections.delete(conn.wsUrl);
+			}
 		}
 	};
 
@@ -240,20 +261,29 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 				// and it must not suppress the disconnect notification for a later
 				// real drop on this same socket.
 				notifyChannelDisconnect(msg.channel, 'error');
-				// Drain the failed channel from the resubscribe set (settle as NOT
-				// succeeded, so this channel gets NO onReconnect) so the channels that
-				// DID succeed can still settle instead of wedging.
-				settleResubscribe(msg.channel, false);
-				// Remove all per-channel state for the now-dead channel.
+				// Remove all per-channel state for the now-dead channel FIRST, so that
+				// settleResubscribe's drain sees the accurate subscription count and can
+				// tear down the connection if this was the last channel.
 				conn.subscriptions.delete(msg.channel);
 				conn.channelTokens.delete(msg.channel);
 				conn.disconnectHandlers.delete(msg.channel);
 				conn.reconnectHandlers.delete(msg.channel);
+				// Drain the failed channel from the resubscribe set (settle as NOT
+				// succeeded, so this channel gets NO onReconnect) so the channels that
+				// DID succeed can still settle instead of wedging.
+				settleResubscribe(msg.channel, false);
 			} else if (msg.type === 'message' && msg.channel) {
 				const handlers = conn.subscriptions.get(msg.channel);
 				if (handlers) {
 					handlers.forEach(h => { try { h(msg.data); } catch {} });
 				}
+			} else if (msg.type === 'error' && !msg.channel) {
+				// Connection-level error frame (no channel) — e.g. a connection-scoped
+				// auth failure. The current server only emits channel-scoped error frames
+				// (index.aws.ts always sets `channel`), but a channel-less error must not be
+				// swallowed: surface it via the per-socket notifyDisconnect so every channel's
+				// owner learns the connection failed. Deduped per socket like any other drop.
+				notifyDisconnect('error');
 			}
 		} catch {}
 	};
