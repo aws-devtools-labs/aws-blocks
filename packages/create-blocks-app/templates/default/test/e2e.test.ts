@@ -41,7 +41,13 @@ async function runSampleApiTest(t: TestContext, body: () => Promise<void>): Prom
   try {
     await body();
   } catch (err) {
-    if (err instanceof ApiError && err.message.startsWith('Method not found')) {
+    // A removed method throws a "Method not found" ApiError; a removed whole
+    // namespace makes the client undefined, so the call throws a TypeError.
+    // Either way the sample API is gone, so skip rather than fail.
+    const removed =
+      (err instanceof ApiError && err.message.startsWith('Method not found')) ||
+      (err instanceof TypeError && /undefined/.test(err.message));
+    if (removed) {
       t.skip('sample API removed — replace with tests for your own methods');
       return;
     }
