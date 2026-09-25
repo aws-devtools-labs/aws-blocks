@@ -42,6 +42,19 @@ export interface CookieSecurityInput {
 	 * plain-HTTP localhost).
 	 */
 	isLocalhost: boolean;
+	/**
+	 * Whether the DEPLOYED public front door serves over plain HTTP (not HTTPS) —
+	 * e.g. an S3-website endpoint or an ALB with no TLS listener. Like localhost,
+	 * such an origin cannot carry a `Secure` cookie, so on the same-origin `Lax`
+	 * default we drop `Secure` (a browser silently discards a `Secure` cookie set
+	 * over HTTP, which would break the session). A `SameSite=None` (cross-domain)
+	 * cookie still requires `Secure` and therefore genuinely cannot work over such
+	 * a door — an honest limitation of a TLS-less front door, not something this
+	 * flag can paper over. Derived from the front door's own scheme
+	 * (`BLOCKS_PUBLIC_ORIGIN`), never from a forgeable request header. Defaults to
+	 * `false` (assume HTTPS) when unset.
+	 */
+	plainHttpOrigin?: boolean;
 }
 
 /**
@@ -70,22 +83,28 @@ export interface CookieSecurityAttributes {
  * @returns The `sameSite` / `secure` / `partitioned` values to apply.
  */
 export function resolveCookieSecurity(input: CookieSecurityInput): CookieSecurityAttributes {
+	// Plain-HTTP transport — localhost OR a deployed HTTP-only front door — cannot
+	// carry a `Secure` cookie.
+	const plainHttp = input.isLocalhost || input.plainHttpOrigin === true;
 	if (input.crossDomain) {
-		// `SameSite=None` is only honored with `Secure` (all browsers).
-		// `Partitioned` (CHIPS) additionally requires `Secure` over HTTPS, so
-		// it is dropped on plain-HTTP localhost.
+		// `SameSite=None` is only honored with `Secure` (all browsers), so it stays
+		// `Secure` even over plain HTTP — meaning a cross-domain cookie genuinely
+		// cannot work behind a TLS-less door (an honest limitation, not a bug).
+		// `Partitioned` (CHIPS) additionally requires `Secure` over HTTPS, so it is
+		// dropped on any plain-HTTP transport.
 		return {
 			sameSite: 'None',
 			secure: true,
-			partitioned: !input.isLocalhost,
+			partitioned: !plainHttp,
 		};
 	}
-	// Same-origin default (incl. the local dev proxy). `Lax` does not require
-	// `Secure`, so we omit it on plain-HTTP localhost and keep it in prod for
-	// defense-in-depth. `Partitioned` is unnecessary for a same-site cookie.
+	// Same-origin default (incl. the local dev proxy and a same-origin HTTP door
+	// like an ALB with no TLS listener). `Lax` does not require `Secure`, so we
+	// omit it over plain HTTP and keep it on HTTPS for defense-in-depth.
+	// `Partitioned` is unnecessary for a same-site cookie.
 	return {
 		sameSite: 'Lax',
-		secure: !input.isLocalhost,
+		secure: !plainHttp,
 		partitioned: false,
 	};
 }
@@ -131,4 +150,21 @@ export function buildCookieSecurityAttrs(input: CookieSecurityInput): string {
 export function isLoopbackRequest(ctx: BlocksContext): boolean {
 	const origin = ctx.request.headers.get('origin') ?? ctx.request.headers.get('host') ?? '';
 	return /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\/?$/.test(origin);
+}
+
+/**
+ * Whether the DEPLOYED public front door serves over plain HTTP, decided from
+ * its OWN scheme rather than a request header. Blocks Hosting registers the
+ * public origin as `BLOCKS_PUBLIC_ORIGIN` (the front door's URL: `https://…` for
+ * CloudFront / a TLS ALB / a custom domain, `http://…` for an S3-website
+ * endpoint or a TLS-less ALB). A `Secure` cookie set over such an HTTP door is
+ * silently dropped by the browser, so BBs feed this into
+ * {@link CookieSecurityInput.plainHttpOrigin} to omit `Secure` on the
+ * same-origin `Lax` cookie. Config-derived and trustworthy — unlike sniffing
+ * `X-Forwarded-Proto`, which a client can forge. Returns `false` (assume HTTPS)
+ * when the origin is unset or not parseable, so HTTPS deploys keep `Secure`.
+ */
+export function isInsecurePublicOrigin(): boolean {
+	const origin = process.env.BLOCKS_PUBLIC_ORIGIN;
+	return typeof origin === 'string' && origin.startsWith('http://');
 }

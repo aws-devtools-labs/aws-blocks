@@ -1,0 +1,86 @@
+- generic [ref=e3]:
+  - navigation [ref=e4]:
+    - link "Home" [ref=e5] [cursor=pointer]:
+      - /url: /
+    - text: ·
+    - link "About" [ref=e6] [cursor=pointer]:
+      - /url: /about
+    - text: ·
+    - link "Routing" [ref=e7] [cursor=pointer]:
+      - /url: /routing
+    - text: ·
+    - link "Posts+API" [ref=e8] [cursor=pointer]:
+      - /url: /posts
+    - text: ·
+    - link "Auth" [ref=e9] [cursor=pointer]:
+      - /url: /auth
+    - text: ·
+    - link "Data" [ref=e10] [cursor=pointer]:
+      - /url: /data
+    - text: ·
+    - link "Storage" [ref=e11] [cursor=pointer]:
+      - /url: /storage
+    - text: ·
+    - link "Deep link" [ref=e12] [cursor=pointer]:
+      - /url: /dashboard/settings/profile
+    - text: ·
+    - link "In-app 404" [ref=e13] [cursor=pointer]:
+      - /url: /this-route-does-not-exist-xyz
+  - generic [ref=e14]:
+    - strong [ref=e15]: "Framework:"
+    - code [ref=e16]: React + Vite
+    - text: ·
+    - strong [ref=e17]: "Variant:"
+    - code [ref=e18]: single-page app (client-side routing)
+    - text: ·
+    - strong [ref=e19]: "Render mode:"
+    - code [ref=e20]: CSR (one index.html, hydrated client-side)
+    - strong [ref=e21]: "Built:"
+    - code [ref=e22]: Sep 14, 2026, 10:27:56 AM UTC
+    - text: ·
+    - strong [ref=e23]: "Rendered:"
+    - code [ref=e24]: Sep 14, 2026, 10:31:31 AM UTC
+    - text: ·
+    - emphasis [ref=e25]: "SPA: build-time frozen per deploy; render-time is the browser clock"
+  - main [ref=e26]:
+    - heading "Auth (AuthBasic)" [level=1] [ref=e27]
+    - paragraph [ref=e28]:
+      - text: Username/password auth via the
+      - code [ref=e29]: auth
+      - text: state machine. The session is an HttpOnly cookie; every RPC call sends
+      - code [ref=e30]: "credentials: 'include'"
+      - text: so protected methods (
+      - code [ref=e31]: api.myNotePut
+      - text: ","
+      - code [ref=e32]: api.filePut
+      - text: ) see it.
+    - generic [ref=e33]:
+      - textbox "username" [ref=e34]
+      - textbox "password" [ref=e35]
+      - button "Sign up" [ref=e36]
+      - button "Sign in" [ref=e37]
+      - button "Sign out" [ref=e38]
+      - button "Refresh state" [ref=e39]
+    - generic [ref=e40]: (not run)
+    - generic [ref=e41]:
+      - generic [ref=e42]:
+        - heading "🔬 Auth BB — AuthBasic session lifecycle" [level=2] [ref=e43]
+        - code [ref=e44]: auth / session-cookie
+        - generic [ref=e45]: 0 pass · 0 fail
+      - paragraph [ref=e46]:
+        - strong [ref=e47]: "Validates:"
+        - text: Sign up auto-signs-in (session cookie set), whoami + protected KV note accept the session, and sign-out makes the protected call 401 — the full auth lifecycle over the front door.
+      - button "▶ Run validation" [ref=e48] [cursor=pointer]
+      - list [ref=e49]:
+        - listitem [ref=e50]:
+          - generic [ref=e51]: ○
+          - generic [ref=e52]: sign up → auto sign-in sets a session (state=signedIn)
+        - listitem [ref=e53]:
+          - generic [ref=e54]: ○
+          - generic [ref=e55]: whoami reflects the session cookie
+        - listitem [ref=e56]:
+          - generic [ref=e57]: ○
+          - generic [ref=e58]: protected api.myNotePut/Get accepts the session
+        - listitem [ref=e59]:
+          - generic [ref=e60]: ○
+          - generic [ref=e61]: sign out → protected api.myNoteGet is rejected (401)

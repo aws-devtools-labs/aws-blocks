@@ -1888,4 +1888,205 @@ describe('Hosting', () => {
       );
     });
   });
+
+  describe("frontDoor: 'none' (served directly from S3 website — no front door)", () => {
+    it('static SPA → an S3 website bucket and NO CloudFront distribution', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'NoneStaticStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: 'none' });
+
+      const t = Template.fromStack(stack);
+      // No front door: no CloudFront, no ALB — the bucket is served directly.
+      t.resourceCountIs('AWS::CloudFront::Distribution', 0);
+      t.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 0);
+      // A public S3 website bucket (index + error documents for SPA fallback).
+      t.hasResourceProperties('AWS::S3::Bucket', {
+        WebsiteConfiguration: { IndexDocument: 'index.html', ErrorDocument: 'index.html' },
+      });
+    });
+
+    it('SSR app → hard-fails at synth (no front door can run a server)', () => {
+      createNextjsBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'NoneSsrStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      // 'none' serves static files only; an SSR app demands RunServerRender, which
+      // the negotiator rejects — never a silently broken deploy.
+      assert.throws(
+        () =>
+          new Hosting(stack, 'Hosting', {
+            root: tmpDir,
+            customAdapter: createNextjsFixtureAdapter(tmpDir),
+            api: MOCK_API,
+            frontDoor: 'none',
+          }),
+        /RunServerRender|static|front door/i,
+      );
+    });
+  });
+
+  describe("frontDoor: { kind: 'apiGateway' } (API Gateway owns routing — no CloudFront)", () => {
+    it('static SPA → a REGIONAL HTTP API v2 (default flavor — rootless $default stage), NO CloudFront, NO ALB', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ApiGwStaticStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'apiGateway' } });
+
+      const t = Template.fromStack(stack);
+      t.resourceCountIs('AWS::CloudFront::Distribution', 0);
+      t.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 0);
+      // Default flavor is HTTP API v2 (rootless — a bare REST stage path would break
+      // a SPA's root-absolute asset URLs); no REST API.
+      t.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+      t.resourceCountIs('AWS::ApiGateway::RestApi', 0);
+      // Same-origin backend proxy (`/aws-blocks/*`) via a native HTTP proxy integration.
+      t.hasResourceProperties('AWS::ApiGatewayV2::Integration', { IntegrationType: 'HTTP_PROXY' });
+      // Private asset bucket read by the asset-proxy Lambda (no public website bucket).
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: { Variables: { ASSET_KEY_PREFIX: Match.stringLikeRegexp('^builds/') } },
+      });
+    });
+
+    it("api: 'rest' selects a REST API (for use behind a custom domain / CloudFront)", () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ApiGwRestStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'apiGateway', api: 'rest' } });
+
+      const t = Template.fromStack(stack);
+      t.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+      t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
+      t.resourceCountIs('AWS::CloudFront::Distribution', 0);
+    });
+
+    it("api: 'rest' + a custom domain wires a regional cert + DomainName + Route 53 (root base-path mapping)", () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ApiGwDomainStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      // REST at a custom domain: the base-path mapping puts the app at the domain
+      // root (no `/prod`). hostedZoneId avoids HostedZone.fromLookup() (needs context).
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        frontDoor: { kind: 'apiGateway', api: 'rest' },
+        domain: { domainName: 'app.example.com', hostedZoneId: 'Z1234567890ABC' },
+      });
+
+      const t = Template.fromStack(stack);
+      t.hasResourceProperties('AWS::ApiGateway::DomainName', {
+        DomainName: 'app.example.com',
+        EndpointConfiguration: { Types: ['REGIONAL'] },
+      });
+      t.resourceCountIs('AWS::ApiGateway::BasePathMapping', 1);
+      t.resourceCountIs('AWS::CertificateManager::Certificate', 1);
+      t.resourceCountIs('AWS::Route53::RecordSet', 2);
+      t.resourceCountIs('AWS::CloudFront::Distribution', 0);
+    });
+  });
+
+  describe("frontDoor: { kind: 'alb' } (regional ALB — no CloudFront)", () => {
+    it('static SPA → an ALB + listener + Lambda target groups (asset-proxy + API-forwarder), NO CloudFront', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'AlbStaticStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } });
+
+      const t = Template.fromStack(stack);
+      t.resourceCountIs('AWS::CloudFront::Distribution', 0);
+      t.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
+      t.resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 1);
+      // The ALB routes to Lambda targets (asset-proxy → S3, API-forwarder → backend).
+      t.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', { TargetType: 'lambda' });
+      // Private assets bucket read by the asset-proxy (no public website bucket).
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: { Variables: { ASSET_KEY_PREFIX: Match.stringLikeRegexp('^builds/') } },
+      });
+    });
+  });
+
+  describe('composed CF → ALB front door', () => {
+    it('stacks a CloudFront edge OVER a FULL ALB router (both exist), not one instead of the other', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'CfOverAlbStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+      });
+
+      const t = Template.fromStack(stack);
+      // The edge is a real (thin) CloudFront distribution (TLS, cache, WAF).
+      t.resourceCountIs('AWS::CloudFront::Distribution', 1);
+      // The router is a real regional ALB — the composition, not a swap.
+      t.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
+      // Design B: the ALB routes to EVERYTHING via Lambda targets — the asset-proxy
+      // (→ S3) and the API-forwarder (→ backend) for a SPA (no SSR/image compute).
+      t.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', { TargetType: 'lambda' });
+    });
+
+    it("CloudFront's single default origin IS the ALB (http-only), with no per-path API behaviors (ALB routes everything)", () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'CfOverAlbOriginStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+      });
+
+      const t = Template.fromStack(stack);
+      // Design B: ONE origin — the ALB, reached HTTP-only on the internal edge→ALB
+      // hop — and a single default behavior forwarding everything to it. There are
+      // NO additional per-path (API) cache behaviors: the ALB does all the routing.
+      t.hasResourceProperties('AWS::CloudFront::Distribution', {
+        DistributionConfig: Match.objectLike({
+          DefaultCacheBehavior: Match.objectLike({ ViewerProtocolPolicy: 'redirect-to-https' }),
+          CacheBehaviors: Match.absent(),
+          Origins: Match.arrayWith([
+            Match.objectLike({ CustomOriginConfig: Match.objectLike({ OriginProtocolPolicy: 'http-only' }) }),
+          ]),
+        }),
+      });
+    });
+
+    it('the thin edge stamps security headers (HSTS / frame / content-type) — parity with the default CloudFront door', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'CfOverAlbSecHeadersStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
+
+      const t = Template.fromStack(stack);
+      // A ResponseHeadersPolicy with the security headers, attached to the edge's
+      // default behavior — the ALB can't inject these, so CloudFront owns them.
+      t.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+        ResponseHeadersPolicyConfig: Match.objectLike({
+          SecurityHeadersConfig: Match.objectLike({
+            StrictTransportSecurity: Match.objectLike({ Override: true }),
+          }),
+        }),
+      });
+    });
+
+    it('the default CloudFront door still fronts API Gateway directly (no ALB)', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'DefaultNoAlbStack', { env: { account: '111111111111', region: 'us-east-1' } });
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const t = Template.fromStack(stack);
+      t.resourceCountIs('AWS::CloudFront::Distribution', 1);
+      t.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 0);
+    });
+  });
 });
