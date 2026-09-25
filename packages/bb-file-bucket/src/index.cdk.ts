@@ -7,8 +7,9 @@ import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { FileBucketOptions, CorsRule, LifecycleRule, ExternalBucketRef } from './types.js';
+import type { FileBucketOptions, CorsRule, ExternalBucketRef } from './types.js';
 import { validateBucketName } from './bucket-name.js';
+import { DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS, validateFileBucketOptions } from './validation.js';
 
 export { FileBucketErrors } from './errors.js';
 export type { FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions, FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef } from './types.js';
@@ -20,12 +21,6 @@ const httpMethodMap: Record<string, s3.HttpMethods> = {
 	DELETE: s3.HttpMethods.DELETE,
 	HEAD: s3.HttpMethods.HEAD,
 };
-
-/** Default number of days after which noncurrent object versions expire. */
-const DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS = 90;
-
-/** HTTP methods that mutate bucket state; unsafe to expose to wildcard origins. */
-const MUTATING_CORS_METHODS: ReadonlyArray<CorsRule['allowedMethods'][number]> = ['PUT', 'POST', 'DELETE'];
 
 export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends BuildingBlockScope {
 	private bucket: s3.IBucket;
@@ -73,37 +68,10 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		// error, so surface it before the option-level guards below.
 		validateBucketName(this.fullId);
 
-		// Reject unsafe CORS at synth: a wildcard origin ('*') combined with a
-		// mutating method (PUT/POST/DELETE) lets any site issue state-changing
-		// cross-origin requests. Fail loud here rather than deploying it.
-		for (const rule of options?.corsRules ?? []) {
-			if (rule.allowedOrigins.includes('*')) {
-				const mutating = rule.allowedMethods.filter(m => MUTATING_CORS_METHODS.includes(m));
-				if (mutating.length > 0) {
-					throw new Error(
-						`FileBucket "${this.fullId}": CORS rule with wildcard origin '*' must not allow mutating method(s) ${mutating.join(', ')}. ` +
-						`Specify explicit allowedOrigins (e.g. 'https://app.example.com') for ${mutating.join(', ')} instead of '*'.`,
-					);
-				}
-			}
-		}
-
-		// Reject a non-positive or non-integer noncurrent-version expiration at
-		// synth whenever the option is provided. A zero, negative, or fractional
-		// value would produce a degenerate lifecycle expiration
-		// (Duration.days(0) / negative) that only surfaces at deploy. The FORMAT
-		// is validated regardless of `versioned` so a malformed value is caught
-		// even when versioning is off; the rule itself is only APPLIED when
-		// versioning is on (see the main-bucket lifecycle rules below).
-		if (options?.noncurrentVersionExpirationDays !== undefined) {
-			const days = options.noncurrentVersionExpirationDays;
-			if (!Number.isInteger(days) || days <= 0) {
-				throw new Error(
-					`FileBucket "${this.fullId}": noncurrentVersionExpirationDays must be a positive integer (got ${days}). ` +
-					`Omit it to use the default of ${DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS} days.`,
-				);
-			}
-		}
+		// Reject unsafe CORS and malformed noncurrent-version expiration at synth,
+		// before `cdk deploy`. Shared with the local mock via validation.ts so both
+		// paths reject exactly the same option combinations (mock↔CDK parity).
+		validateFileBucketOptions(this.fullId, options);
 
 		// Versioning stays on by default (secure default): a posture-driven
 		// `versioned` default would require a new `BlocksDefaults` field in
