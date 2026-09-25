@@ -19,7 +19,7 @@ export { generateClientCode, writeClientCode } from './generate-client.js';
 export { generateSpec, writeSpec } from './generate-spec.js';
 export { destroySandbox, type SandboxOptions, startSandbox } from './sandbox.js';
 export { listSecrets, removeSecret, runSecretCli, setSecret } from './secret.js';
-export { getSandboxId, getStackId, getStackName } from './stack-id.js';
+export { getSandboxId, getStackId, getStackName } from '../stack-id.js';
 export { type TelemetryOptions, telemetry } from './telemetry.js';
 export { runTypegenCli } from './typegen.js';
 export { type SpecValidationError, validateSpec } from './validate-spec.js';

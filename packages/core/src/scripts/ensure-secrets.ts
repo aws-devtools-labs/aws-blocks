@@ -17,7 +17,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dbConnectionParameterName } from '../db-naming.js';
-import { getStackName } from './stack-id.js';
+import { getStackName } from '../stack-id.js';
 
 const CONNECTION_STRING_PATTERN = /_(DB_URL|CONNECTION_STRING)$/;
 

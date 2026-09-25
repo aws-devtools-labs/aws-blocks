@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { extractDbRef, dbConnectionParameterName } from './db-naming.js';
-import { getStackName } from './scripts/stack-id.js';
+import { getStackName } from './stack-id.js';
 
 describe('extractDbRef', () => {
   test('pooler form (postgres.{ref}@) yields ref', () => {

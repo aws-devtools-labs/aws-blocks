@@ -39,3 +39,4 @@ export {
 	unlockRouteRegistry,
 } from './raw-route.js';
 export { RawRoute } from './raw-route.mock.js';
+export { getSandboxId, getStackId, getStackName } from './stack-id.js';

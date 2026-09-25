@@ -27,7 +27,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { findConnectionString } from './ensure-secrets.js';
 import { extractDbRef, dbConnectionParameterName } from '../db-naming.js';
-import { getStackName } from './stack-id.js';
+import { getStackName } from '../stack-id.js';
 import { runSync } from './run-command.js';
 
 const DEFAULT_MIGRATIONS_DIR = './migrations';

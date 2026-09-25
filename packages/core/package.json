@@ -63,6 +63,10 @@
     "./db-naming": {
       "types": "./dist/db-naming.d.ts",
       "default": "./dist/db-naming.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "default": "./dist/runtime.js"
     }
   },
   "scripts": {
