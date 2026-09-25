@@ -64,7 +64,15 @@ export interface ChatConversationApi {
 	getConversation(
 		id: string,
 	): Promise<{ messages: { role: string; content: string; metadata?: unknown }[] }>;
-	/** Check whether a conversation has unanswered interrupts (e.g. the user left mid-approval). */
+	/**
+	 * Check whether a conversation has unanswered interrupts (e.g. the user left
+	 * mid-approval). This mirrors the backend RPC, so each interrupt carries `id` —
+	 * the same field `agentGetPendingInterrupts` returns, so your adapter is a
+	 * straight passthrough with no mapping. createChat maps `id` to `interruptId`
+	 * internally before it reaches `onInterrupt`, so everything YOU read (`onInterrupt`)
+	 * and write (`InterruptResponse`) is uniformly `interruptId` — the `id` here never
+	 * surfaces to your consumer code.
+	 */
 	getPendingInterrupts?(
 		conversationId: string,
 	): Promise<{ interrupts: { id: string; name: string; reason?: unknown }[] }>;
