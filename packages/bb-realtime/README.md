@@ -47,7 +47,7 @@ The `Realtime` instance exposes three methods, all keyed by namespace name (type
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `subscribe(handler)` | `RealtimeSubscription` | Listen for messages (simple form). |
-| `subscribe({ onMessage, onDisconnect? })` | `RealtimeSubscription` | Listen for messages with disconnect handling. |
+| `subscribe({ onMessage, onDisconnect?, onReconnect? })` | `RealtimeSubscription` | Listen for messages with disconnect + reconnect handling. |
 | `toJSON()` | `RealtimeChannelDescriptor` | Transferable serialization (called automatically by JSON.stringify). |
 
 Channel handles do **not** have a `publish()` method. Publishing always goes through `rt.publish()` (server-side) so that authorization logic stays in your code.
@@ -156,22 +156,47 @@ try {
 
 A failed subscribe does **not** kill other subscriptions on the same connection.
 
-### Handling Disconnects
+### Handling Disconnects & Reconnects
 
-API Gateway has a 2-hour max connection duration. Use the options form of `subscribe()` to handle unexpected disconnects:
+API Gateway caps a WebSocket at a 2-hour max connection duration and a 10-minute idle
+timeout, so a long-lived subscription **will** be dropped and re-established over its
+lifetime. The client transport handles this for you: on an unexpected drop it
+**transparently reconnects with exponential backoff and resubscribes every active channel**
+(replaying its stored token), so you do not need to re-subscribe manually. A ~9-minute
+keep-alive ping avoids the idle timeout.
+
+Use the options form of `subscribe()` to observe the lifecycle:
 
 ```typescript
 const sub = channel.subscribe({
   onMessage: (msg) => { console.log(msg); },
   onDisconnect: (reason) => {
     // reason: 'client' | 'timeout' | 'error' | 'unknown'
-    if (reason === 'client') return; // we called unsubscribe()
-    // Re-fetch channel (new tokens), re-subscribe, backfill missed messages
+    // Fires on EVERY drop (not just the first). Filter out 'client' (your own unsubscribe()).
+    if (reason === 'client') return;
+  },
+  onReconnect: () => {
+    // Fires once after the transport has reconnected AND the server has re-confirmed
+    // the resubscribe (after the corresponding onDisconnect). Backfill any messages
+    // missed during the gap here — WebSocket pub/sub is not durable, so re-read your
+    // authoritative store (e.g. the conversation/record) rather than trusting the channel.
   },
 });
 ```
 
-`onDisconnect` fires for all disconnects, including user-initiated `unsubscribe()` (with reason `'client'`).
+`onDisconnect` fires for all disconnects, including user-initiated `unsubscribe()` (reason
+`'client'`), and on every subsequent drop of the same logical subscription.
+
+If a resubscribe is ultimately rejected (a stored token that has passed its ~1h/~2h TTL, or a
+revoked channel) or retries are exhausted, the transport surfaces it as `onDisconnect('error')`
+— that is the fallback point to re-fetch the channel and re-subscribe manually.
+
+> **Transparent reconnect spans the connect token's ~2h life.** The reconnect replays the
+> *stored* connect token (~2h TTL, matching API Gateway's 2h max connection). Past 2h the
+> `$connect` handshake is rejected and reconnect gives up with a terminal `onDisconnect('error')`,
+> so drops are recovered transparently only within that ~2h window. This is a known limitation:
+> a subscription that must outlive 2h should treat the terminal `onDisconnect('error')` as the
+> cue to re-fetch a fresh channel handle (new tokens) and re-subscribe.
 
 ## Schema Validation
 
