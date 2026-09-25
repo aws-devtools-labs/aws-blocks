@@ -1355,28 +1355,28 @@ describe('checkModelHealth', () => {
 			if (callCount === 1) throw new Error('not an inference profile');
 			return { modelDetails: { modelId: 'anthropic.claude-3-haiku' } };
 		} };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, mockClient), true);
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, undefined, mockClient), true);
 	});
 
 	test('bedrock model not found returns false', async () => {
 		const mockClient = { send: async () => { throw new Error('not found'); } };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'bad.model' }, log, mockClient), false);
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'bad.model' }, log, undefined, mockClient), false);
 	});
 
 	test('bedrock credential error returns false', async () => {
 		const err = new Error('no creds'); err.name = 'CredentialsProviderError';
 		const mockClient = { send: async () => { throw err; } };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, mockClient), false);
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, undefined, mockClient), false);
 	});
 
 	test('bedrock inference profile found returns true', async () => {
 		const mockClient = { send: async () => ({ inferenceProfileName: 'US Claude Sonnet' }) };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'us.anthropic.claude-sonnet-4' }, log, mockClient), true);
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'us.anthropic.claude-sonnet-4' }, log, undefined, mockClient), true);
 	});
 
 	test('bedrock global inference profile found returns true', async () => {
 		const mockClient = { send: async () => ({ inferenceProfileName: 'Global Claude Opus' }) };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'global.anthropic.claude-opus-4-8-v1' }, log, mockClient), true);
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'global.anthropic.claude-opus-4-8-v1' }, log, undefined, mockClient), true);
 	});
 
 	test('openai-api with unreachable endpoint returns false', async () => {

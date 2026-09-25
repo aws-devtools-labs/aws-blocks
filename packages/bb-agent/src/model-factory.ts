@@ -26,7 +26,7 @@ export interface BedrockHealthClient {
 	send(command: any): Promise<any>;
 }
 
-export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _testClient?: BedrockHealthClient): Promise<boolean> {
+export async function checkModelHealth(config: ModelConfig, log: ChildLogger, customUserAgent?: [string, string][], _testClient?: BedrockHealthClient): Promise<boolean> {
 	if (!config || config.provider === 'canned') {
 		log.info('Using canned provider (local mock, no real model)');
 		return true;
@@ -37,7 +37,7 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _t
 	}
 	log.info(`Checking model health: ${config.provider}${config.modelId ? ` (${config.modelId})` : ''}`);
 	if (config.provider === 'bedrock') {
-		const client: BedrockHealthClient = _testClient ?? new (await import('@aws-sdk/client-bedrock')).BedrockClient({});
+		const client: BedrockHealthClient = _testClient ?? new (await import('@aws-sdk/client-bedrock')).BedrockClient({ customUserAgent });
 
 		// Try GetInferenceProfile first (covers cross-region and global profiles).
 		try {
