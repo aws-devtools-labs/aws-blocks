@@ -1730,6 +1730,49 @@ describe('useChat', () => {
 		assert.match(errors[0], /504/, 'the first (send-rejection) error is the one surfaced');
 		chat.destroy();
 	});
+
+	test('a send-rejected-but-server-started turn is NOT auto-adopted by reconnect, but recovers on a later loadConversation', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		// The turn started server-side (the 504 was on the response, not the dispatch), so the
+		// persisted conversation ends with the assistant's final answer.
+		const persisted = {
+			messages: [
+				{ role: 'user', content: 'hello' },
+				{ role: 'assistant', content: 'the server-side final answer' },
+			],
+		};
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => { throw new Error('504 Gateway Timeout'); },
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => persisted,
+			},
+			subscribe,
+			onError: () => {},
+		});
+
+		await chat.sendMessage('hello');
+		// Send failed → handleSendFailure nulled the turn identity and cleared loading.
+		assert.strictEqual(chat.isLoading(), false, 'loading cleared after the send rejection');
+
+		// A reconnect fires. Because the turn identity was nulled, the re-sync guard does NOT
+		// adopt the persisted assistant text into a live bubble — recovery is NOT automatic here.
+		cap.reconnect!();
+		await flush();
+		assert.ok(
+			!chat.getMessages().some((m) => m.role === 'assistant' && m.content === 'the server-side final answer'),
+			'reconnect must NOT auto-adopt the started turn (send was treated as failed)',
+		);
+
+		// Opening the conversation again recovers the persisted result (the documented path).
+		await chat.loadConversation('conv-1');
+		assert.ok(
+			chat.getMessages().some((m) => m.role === 'assistant' && m.content === 'the server-side final answer'),
+			'loadConversation recovers the persisted server-side final answer',
+		);
+		chat.destroy();
+	});
 });
 
 describe('checkModelHealth', () => {

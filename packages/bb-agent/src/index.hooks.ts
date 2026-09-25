@@ -467,8 +467,12 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			} catch (err) {
 				// Send rejected (e.g. 504). Reset loading, drop the empty assistant
 				// placeholder, and surface onError. NOTE: a 504 may still have started the
-				// turn server-side (see handleSendFailure) — if so, recovery of that started
-				// turn flows through the reconnect -> getConversation re-sync path, not here.
+				// turn server-side. Because handleSendFailure nulls assistantId and clears
+				// loading, the reconnect re-sync guard (stillSameInFlightTurn) will NOT
+				// auto-adopt that started turn's persisted text into the live bubble — the
+				// send is treated as failed. The started turn's result is still persisted and
+				// is recovered the next time the app opens the conversation (loadConversation),
+				// not automatically on the in-flight reconnect.
 				handleSendFailure(err);
 			}
 		},

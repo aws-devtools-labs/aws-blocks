@@ -143,7 +143,10 @@ the hook treats the **persisted conversation as the source of truth** and recove
   when no channel comes back.
 - **Send-path failsafe.** `sendMessage`/`respondToInterrupt` wrap the RPC in try/catch → `handleSendFailure`,
   which resets `loading`, drops the empty assistant placeholder, and reports the error once. A 504 may
-  still have started the turn server-side; that started turn is recovered via the reconnect → `getConversation`
-  re-sync path, not the send path.
+  still have started the turn server-side. The send is treated as failed: `handleSendFailure` nulls the
+  turn identity (`assistantId`) and clears `loading`, so the reconnect re-sync guard (`stillSameInFlightTurn`)
+  will NOT auto-adopt that started turn's persisted text into the in-flight bubble. The started turn's
+  result is still persisted and is recovered the next time the app opens the conversation
+  (`loadConversation`) — not automatically on the reconnect that follows the failed send.
 - **onInterrupt may re-fire on reconnect** for a still-pending interrupt (both `loadConversation` and
   `handleReconnect` surface pending interrupts). Handlers should key/dedupe by interrupt id.
