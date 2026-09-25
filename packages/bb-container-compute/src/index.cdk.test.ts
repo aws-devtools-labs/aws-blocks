@@ -88,4 +88,42 @@ describe('ContainerCompute — Fargate in the shared VPC', () => {
 			},
 		});
 	});
+
+	test('honors an app-provided VPC instead of deriving its own', async () => {
+		const app = new cdk.App();
+		const ec2 = await import('aws-cdk-lib/aws-ec2');
+		// A held stack to host the imported-VPC reference (fromVpcAttributes needs a
+		// scope but produces attribute-based subnets, so there's no cross-stack CFN
+		// Ref — this mirrors an app importing a shared/persistent VPC by attributes).
+		const refStack = new cdk.Stack(app, 'RefStack', { env: { account: '123456789012', region: 'us-east-1' } });
+		const providedVpc = ec2.Vpc.fromVpcAttributes(refStack, 'ProvidedVpc', {
+			vpcId: 'vpc-0123456789abcdef0',
+			availabilityZones: ['us-east-1a', 'us-east-1b'],
+			privateSubnetIds: ['subnet-0aaa', 'subnet-0bbb'],
+			privateSubnetRouteTableIds: ['rtb-0aaa', 'rtb-0bbb'],
+			publicSubnetIds: ['subnet-0ccc', 'subnet-0ddd'],
+			publicSubnetRouteTableIds: ['rtb-0ccc', 'rtb-0ddd'],
+		});
+
+		const stack = await BlocksStack.create(app, 'ContainerByoVpcStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: { ...BlocksPresets.production, vpc: { network: providedVpc } },
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			size: { vcpu: 0.5, memory: 1024 },
+		});
+		// Note: VPC selection happens in the constructor, so we don't call
+		// finalize() here — its endpoint wiring needs route-table IDs that an
+		// attribute-imported test VPC doesn't carry (a real fromLookup VPC does).
+
+		const template = Template.fromStack(stack as unknown as cdk.Stack);
+		// The provided VPC is imported (not owned by this stack), so this stack must
+		// NOT create its own BlocksVpc — proving the compute reused the injected one.
+		template.resourceCountIs('AWS::EC2::VPC', 0);
+		// The Fargate service is still provisioned (into the provided VPC).
+		template.resourceCountIs('AWS::ECS::Service', 1);
+	});
 });

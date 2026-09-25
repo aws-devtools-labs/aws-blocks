@@ -36,3 +36,7 @@ deadline). `maxConcurrencyPerCPU` sets in-flight deliveries per vCPU — the
 per-instance count is `max(1, ceil(maxConcurrencyPerCPU × vcpu))`. Both are
 properties of the work and live on the job; `size`/`scaling` live on the compute.
 In local dev, compute assignment is transparent.
+
+A container compute reuses an app-provided VPC (`defaults.vpc.network`) when one
+is present, and only derives the shared Blocks VPC when none was provided — so
+bring-your-own-VPC covers the Fargate tasks too.

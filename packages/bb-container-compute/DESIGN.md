@@ -18,8 +18,10 @@ self-starts the SQS pollers for the event handlers assigned to it.
   esbuild (a `main.js` parent + a `worker.js` per-job worker), or a customer
   `image` (ECR URI) used verbatim.
 - **VPC.** Fargate is VPC-resident, so the compute hooks into the framework's
-  central lazy VPC: it derives/reuses the one shared app VPC in its constructor
-  and places tasks in the `private-with-egress` tier.
+  VPC context: in its constructor it reuses an app-provided VPC
+  (`defaults.vpc.network`) when one is present, and only derives the shared lazy
+  Blocks VPC when none was provided. Tasks are placed in the
+  `private-with-egress` tier.
 
 ## Autoscaling
 

@@ -113,7 +113,13 @@ export class ContainerCompute extends Compute {
 			requiresEgress: true,
 		});
 		const stack = cdk.Stack.of(this);
-		const vpc = getOrCreateVpc(stack);
+		// Honor an app-provided VPC. If the app passed `defaults.vpc.network`, the
+		// backend initialized the context before this import ran, so it's already
+		// discoverable here — reuse it (bring-your-own VPC must cover compute too,
+		// mirroring how bb-data co-locates on a shared VPC when one exists). Only
+		// derive the shared lazy VPC when nothing was provided.
+		const existingContext = getVpcContext(this);
+		const vpc = existingContext?.vpc ?? getOrCreateVpc(stack);
 		if (!isVpcInitialized(stack)) {
 			initializeVpc(stack, { network: vpc });
 		}

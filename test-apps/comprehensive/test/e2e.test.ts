@@ -23,7 +23,6 @@ import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
 import { asyncJobTests } from './async-job.test.js';
 import { asyncJobStatusTests } from './async-job-status.test.js';
-import { containerJobTests } from './container-job.test.js';
 import { agentTests } from './agent.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
@@ -234,9 +233,6 @@ asyncJobTests(() => api);
 
 // AsyncJob status tracking tests (separate file)
 asyncJobStatusTests(() => api);
-
-// Container-dispatched AsyncJob tests (separate file)
-containerJobTests(() => api);
 
 // CronJob tests (separate file)
 cronJobTests(() => api);

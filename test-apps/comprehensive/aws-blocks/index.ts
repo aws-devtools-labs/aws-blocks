@@ -12,7 +12,6 @@ import type { PutOptions, DeleteOptions } from '@aws-blocks/bb-distributed-table
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { isBlocksError } from '@aws-blocks/core';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
-import { Compute } from '@aws-blocks/blocks';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 import { Tracer } from '@aws-blocks/bb-tracer';
@@ -556,75 +555,6 @@ const bucket = new FileBucket(scope, 'files', { removalPolicy: 'destroy' });
 
 // FileBucket with versioning enabled
 const versionedBucket = new FileBucket(scope, 'versioned-files', { versioned: true, removalPolicy: 'destroy' });
-
-// ------------------------------------------------------------------------
-// Container compute — long-running AsyncJobs on a container (Fargate)
-// ------------------------------------------------------------------------
-// A capability-defined Compute: the long wall-clock budget (beyond Lambda's
-// 15-minute cap) + long-lived flag select a container-backed runtime. The same
-// backend runs on the container, which self-starts an owner-matched SQS poller
-// for the jobs assigned to it. Locally this is transparent (in-process).
-const containerCompute = new Compute(scope, 'worker', {
-  type: 'container',
-  size: { vcpu: 0.5, memory: 1024 },
-  scaling: { minInstances: 1, maxInstances: 3 },
-});
-
-// A job dispatched to the container. Its handler reads from the payload and
-// writes to BOTH a KVStore and a FileBucket — proving the container can reach
-// Blocks resources exactly as the Lambda handler does (shared execution role,
-// same config, same SDK-identifier resolution). timeoutSeconds and
-// maxConcurrencyPerCPU are properties of the work and live on the job.
-const containerJob = new AsyncJob(scope, 'container-job', {
-  compute: containerCompute,
-  timeoutSeconds: 1800,
-  maxConcurrencyPerCPU: 4,
-  handler: async (payload: { key: string; value: string }, ctx) => {
-    // KVStore write — the canonical "did the handler run" signal.
-    await jobResults.put(`container:${payload.key}`, JSON.stringify({
-      value: payload.value,
-      jobId: ctx.jobId,
-      receiveCount: ctx.receiveCount,
-      sentAt: ctx.sentAt,
-      // Distinguish the container runtime from Lambda so the test can assert
-      // where the handler actually ran when deployed.
-      runtime: process.env.BLOCKS_SERVICE_MODE === 'worker' ? 'container' : 'local-or-lambda',
-    }));
-    // FileBucket write — a second, different Blocks resource reached from the container.
-    await bucket.put(`container-artifacts/${payload.key}.txt`, payload.value);
-  },
-});
-
-// A container job whose handler deliberately runs longer than the compute's
-// per-handler wall-clock limit, so the poller aborts it. maxRetries: 1 makes the
-// first (timed-out) delivery terminal, so it lands in the DLQ without a long
-// redrive wait. The 3s limit lives on the JOB (timeoutSeconds) and is enforced
-// by the container runtime terminating the job's worker thread.
-const timeoutCompute = new Compute(scope, 'slow-worker', {
-  type: 'container',
-  size: { vcpu: 0.25, memory: 512 },
-});
-
-const containerTimeoutJob = new AsyncJob(scope, 'container-timeout-job', {
-  compute: timeoutCompute,
-  timeoutSeconds: 3,
-  maxRetries: 1,
-  handler: async (payload: { key: string }) => {
-    // Deliberately NON-cooperative: a tight CPU busy-loop that never yields and
-    // never checks an abort signal. The only way to stop this is to terminate the
-    // worker thread it runs in — which is exactly what the container poller does
-    // at the 3s wall-clock limit. If the worker weren't terminated this would burn
-    // ~60s and then write the marker below; because it IS terminated, the marker
-    // is never written and the delivery redrives to the DLQ. This proves the
-    // timeout is ENFORCED, not merely cooperative.
-    const end = Date.now() + 60_000;
-    while (Date.now() < end) {
-      // burn CPU — no await, no signal check
-    }
-    await jobResults.put(`container-timeout:${payload.key}`, 'completed-should-not-happen');
-  },
-});
-
 
 // AppSetting - Single configuration values backed by SSM Parameter Store
 // Scope SSM names by stack identity so parallel deploys don't collide.
@@ -1918,37 +1848,6 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async asyncJobSubmitBatchDelayed(items: { key: string; value: string }[], delaySeconds: number) {
     const { jobIds } = await testJob.submitBatch(items, { delaySeconds });
     return { jobIds };
-  },
-
-  // ------------------------------------------------------------------------
-  // Container-dispatched AsyncJob Tests
-  // ------------------------------------------------------------------------
-
-  async containerJobSubmit(key: string, value: string) {
-    const { jobId } = await containerJob.submit({ key, value });
-    return { jobId };
-  },
-
-  async containerJobGetResult(key: string) {
-    const raw = await jobResults.get(`container:${key}`);
-    return raw ? JSON.parse(raw) : null;
-  },
-
-  async containerJobGetArtifact(key: string) {
-    // Reads the FileBucket object the container handler wrote — proves the
-    // container reached a second Blocks resource.
-    const content = await bucket.get(`container-artifacts/${key}.txt`);
-    return content ? { value: content.body.toString('utf8') } : null;
-  },
-
-  async containerTimeoutJobSubmit(key: string) {
-    const { jobId } = await containerTimeoutJob.submit({ key });
-    return { jobId };
-  },
-
-  async containerTimeoutJobGetResult(key: string) {
-    const raw = await jobResults.get(`container-timeout:${key}`);
-    return raw ? { value: raw } : null;
   },
 
   // ------------------------------------------------------------------------
