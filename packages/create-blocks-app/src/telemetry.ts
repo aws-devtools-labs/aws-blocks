@@ -30,69 +30,33 @@ const blocksVersion: string = JSON.parse(
 
 // Keep the CI detection below behaviorally identical to packages/core/src/telemetry/environment.ts.
 
-type CiEnvSpec = string | Record<string, unknown>;
+// Loaded with require() rather than `import` so a test can drop it from require.cache
+// and re-import this module to re-run ci-info's import-time detection.
+const ciInfo: { isCI: boolean } = createRequire(import.meta.url)('ci-info');
 
-interface CiVendor {
-  name: string;
-  env: CiEnvSpec | CiEnvSpec[];
-}
-
-const CI_VENDORS: readonly CiVendor[] = createRequire(import.meta.url)('ci-info/vendors.json');
-
-// Vendor-neutral variables ci-info checks in addition to its vendor table.
-const CI_GENERIC_ENV_VARS = [
-  'BUILD_ID',
-  'BUILD_NUMBER',
-  'CI',
-  'CI_APP_ID',
-  'CI_BUILD_ID',
-  'CI_BUILD_NUMBER',
-  'CI_NAME',
-  'CONTINUOUS_INTEGRATION',
-  'RUN_ID',
-];
-
-// Signals from the previous hand-written list that ci-info does not match on their own.
-const CI_LEGACY_ENV_VARS = ['CODEBUILD_BUILD_ID', 'JENKINS_URL', 'BITBUCKET_BUILD_NUMBER', 'TASKCLUSTER_ROOT_URL'];
+// Previously checked variables that ci-info does not match on their own.
+const EXTRA_CI_ENV_VARS = ['CODEBUILD_BUILD_ID', 'JENKINS_URL', 'BITBUCKET_BUILD_NUMBER', 'TASKCLUSTER_ROOT_URL'];
 
 // npm appends `ci/<vendor>` to its user agent when it detects CI.
 const NPM_USER_AGENT_CI_TOKEN = /(?:^|\s)ci\//;
 
-function matchesCiEnvSpec(spec: CiEnvSpec, env: NodeJS.ProcessEnv): boolean {
-  if (typeof spec === 'string') return !!env[spec];
-  if (typeof spec.env === 'string' && typeof spec.includes === 'string') {
-    return !!env[spec.env]?.includes(spec.includes);
-  }
-  if (Array.isArray(spec.any)) return spec.any.some((key) => typeof key === 'string' && !!env[key]);
-  return Object.entries(spec).every(([key, value]) => env[key] === value);
-}
-
-function matchesCiVendor(vendor: CiVendor, env: NodeJS.ProcessEnv): boolean {
-  const specs = Array.isArray(vendor.env) ? vendor.env : [vendor.env];
-  return specs.every((spec) => matchesCiEnvSpec(spec, env));
-}
-
 /**
- * Detect whether the given environment belongs to a CI/CD run.
+ * Detect whether the current process is running inside a CI/CD environment.
  *
- * Evaluated on every call against `env` (defaults to `process.env`). Applies the
- * same rules as the `ci-info` package (the detection npm uses for its user agent)
- * using its vendor table, `ci-info/vendors.json`; `ci-info`'s own `isCI` export is
- * a constant computed once at import time, so it is not used directly. Also true
- * when `npm_config_user_agent` carries npm's `ci/<vendor>` token, or when one of
- * the variables checked by the previous implementation is set. `CI=false`
- * disables detection entirely, matching `ci-info`.
+ * True when the `ci-info` package (the detection npm uses for its user agent)
+ * reports CI, when `npm_config_user_agent` carries npm's `ci/<vendor>` token, or
+ * when one of a few variables checked by the previous implementation is set.
+ * `ci-info` evaluates the environment once at import time; the extra checks read
+ * `process.env` on every call and, like `ci-info`, are skipped when `CI=false`.
  *
- * @param env - Environment to inspect. Defaults to `process.env`.
  * @returns `true` when a CI environment is detected.
  */
-export function isCI(env: NodeJS.ProcessEnv = process.env): boolean {
+export function isCI(): boolean {
+  if (ciInfo.isCI) return true;
+  const env = process.env;
   if (env.CI === 'false') return false;
   return (
-    CI_GENERIC_ENV_VARS.some((key) => !!env[key]) ||
-    CI_VENDORS.some((vendor) => matchesCiVendor(vendor, env)) ||
-    CI_LEGACY_ENV_VARS.some((key) => !!env[key]) ||
-    NPM_USER_AGENT_CI_TOKEN.test(env.npm_config_user_agent ?? '')
+    EXTRA_CI_ENV_VARS.some((key) => !!env[key]) || NPM_USER_AGENT_CI_TOKEN.test(env.npm_config_user_agent ?? '')
   );
 }
 

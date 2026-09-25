@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 import { isTelemetryEnabled } from './consent.js';
-import { isCI, detectOS, detectNodeVersion, detectPackageManager, detectAgent, collectEnvironment } from './environment.js';
+import { detectOS, detectNodeVersion, detectPackageManager, detectAgent, collectEnvironment } from './environment.js';
 import { trackCommand, classifyError } from './trackCommand.js';
 import { buildAndSendEvent, buildEvent, sendEvent, getTelemetryFilePath } from './client.js';
 import { getInstallationId, getProjectId, generateEventId } from './identifiers.js';
@@ -122,6 +122,22 @@ describe('telemetry/environment', () => {
   });
 
   describe('isCI', () => {
+    const requireCjs = createRequire(import.meta.url);
+    let loadCount = 0;
+
+    // ci-info computes isCI when first required: set the env, drop ci-info from
+    // require.cache, and import a fresh copy of the module under test.
+    async function loadIsCIWith(env: NodeJS.ProcessEnv): Promise<() => boolean> {
+      process.env = { ...env };
+      delete requireCjs.cache[requireCjs.resolve('ci-info')];
+      const mod: typeof import('./environment.js') = await import(`./environment.js?ci-case=${loadCount++}`);
+      return mod.isCI;
+    }
+
+    afterEach(() => {
+      delete requireCjs.cache[requireCjs.resolve('ci-info')];
+    });
+
     const ciCases: Array<[string, NodeJS.ProcessEnv]> = [
       ['CI=true', { CI: 'true' }],
       ['CONTINUOUS_INTEGRATION', { CONTINUOUS_INTEGRATION: 'true' }],
@@ -142,12 +158,6 @@ describe('telemetry/environment', () => {
       ['npm user agent with ci/ token', { npm_config_user_agent: 'npm/10.9.2 node/v22.12.0 linux x64 workspaces/false ci/github-actions' }],
     ];
 
-    for (const [label, env] of ciCases) {
-      it(`returns true for ${label}`, () => {
-        assert.strictEqual(isCI(env), true);
-      });
-    }
-
     const nonCiCases: Array<[string, NodeJS.ProcessEnv]> = [
       ['a clean env', {}],
       ['unrelated variables', { HOME: '/home/user', PATH: '/usr/bin', TERM: 'xterm' }],
@@ -155,75 +165,46 @@ describe('telemetry/environment', () => {
       ['Heroku-like NODE outside the Heroku path', { NODE: '/usr/local/bin/node' }],
       ['empty-string CI', { CI: '' }],
       ['npm user agent without ci/ token', { npm_config_user_agent: 'npm/10.9.2 node/v22.12.0 linux x64 workspaces/false' }],
-      ['pnpm user agent', { npm_config_user_agent: 'pnpm/9.15.0 npm/? node/v22.12.0 linux x64' }],
-      ['yarn user agent', { npm_config_user_agent: 'yarn/4.5.3 npm/? node/v22.12.0 linux x64' }],
-      ['bun user agent', { npm_config_user_agent: 'bun/1.1.38 npm/? node/v22.12.0 linux x64' }],
+      ['pnpm user agent', { npm_config_user_agent: 'pnpm/10.33.0 npm/? node/v22.22.1 linux x64' }],
+      ['yarn user agent', { npm_config_user_agent: 'yarn/4.18.1 npm/? node/v22.22.1 linux x64' }],
+      ['bun user agent', { npm_config_user_agent: 'bun/1.4.2 npm/? node/v26.3.0 linux x64' }],
       ['ci/ inside another user-agent token', { npm_config_user_agent: 'npm/10.9.2 node/v22.12.0 linux x64 workspaces/false foo-ci/1' }],
-      ['CI=false overriding vendor variables', { CI: 'false', GITHUB_ACTIONS: 'true', CODEBUILD_BUILD_ID: 'b' }],
+      ['CI=false overriding vendor variables', { CI: 'false', GITHUB_ACTIONS: 'true' }],
+      ['CI=false overriding the extra variables', { CI: 'false', CODEBUILD_BUILD_ID: 'b', TASKCLUSTER_ROOT_URL: 'https://tc.example.com' }],
       ['CI=false overriding the npm ci/ token', { CI: 'false', npm_config_user_agent: 'npm/10.9.2 ci/github-actions' }],
     ];
 
-    for (const [label, env] of nonCiCases) {
-      it(`returns false for ${label}`, () => {
-        assert.strictEqual(isCI(env), false);
+    for (const [label, env] of ciCases) {
+      it(`returns true for ${label}`, async () => {
+        const isCI = await loadIsCIWith(env);
+        assert.strictEqual(isCI(), true);
       });
     }
 
-    it('re-reads process.env on every call when no env is passed', () => {
+    for (const [label, env] of nonCiCases) {
+      it(`returns false for ${label}`, async () => {
+        const isCI = await loadIsCIWith(env);
+        assert.strictEqual(isCI(), false);
+      });
+    }
+
+    it('keeps the import-time ci-info result after the env changes', async () => {
+      const isCI = await loadIsCIWith({ GITHUB_ACTIONS: 'true' });
       process.env = {};
+      assert.strictEqual(isCI(), true);
+    });
+
+    it('re-reads process.env for the extra checks on every call', async () => {
+      const isCI = await loadIsCIWith({});
       assert.strictEqual(isCI(), false);
-      process.env.TASK_ID = 'abc123';
-      process.env.RUN_ID = '0';
+      process.env.TASKCLUSTER_ROOT_URL = 'https://tc.example.com';
+      assert.strictEqual(isCI(), true);
+      process.env = { npm_config_user_agent: 'npm/10.9.2 node/v22.12.0 linux x64 workspaces/false ci/gitlab-ci' };
       assert.strictEqual(isCI(), true);
       process.env = {};
       assert.strictEqual(isCI(), false);
     });
 
-    describe('parity with ci-info', () => {
-      const requireCjs = createRequire(import.meta.url);
-      const vendors: Array<{ name: string; env: unknown }> = requireCjs('ci-info/vendors.json');
-
-      function freshCiInfoIsCI(env: NodeJS.ProcessEnv): boolean {
-        const saved = process.env;
-        const resolved = requireCjs.resolve('ci-info');
-        delete requireCjs.cache[resolved];
-        process.env = { ...env };
-        try {
-          return requireCjs('ci-info').isCI;
-        } finally {
-          process.env = saved;
-          delete requireCjs.cache[resolved];
-        }
-      }
-
-      function envSatisfying(spec: unknown): NodeJS.ProcessEnv {
-        if (typeof spec === 'string') return { [spec]: 'true' };
-        const obj = spec as Record<string, unknown>;
-        if (typeof obj.env === 'string' && typeof obj.includes === 'string') return { [obj.env]: obj.includes };
-        if (Array.isArray(obj.any)) return { [obj.any[0] as string]: 'true' };
-        return { ...(obj as Record<string, string>) };
-      }
-
-      it('loads a non-empty vendor table', () => {
-        assert.ok(vendors.length > 20, `expected ci-info vendors, got ${vendors.length}`);
-      });
-
-      it('agrees with ci-info for every vendor it knows', () => {
-        for (const vendor of vendors) {
-          const specs = Array.isArray(vendor.env) ? vendor.env : [vendor.env];
-          const env = Object.assign({}, ...specs.map(envSatisfying)) as NodeJS.ProcessEnv;
-          assert.strictEqual(freshCiInfoIsCI(env), true, `ci-info should detect ${vendor.name}`);
-          assert.strictEqual(isCI(env), true, `isCI should detect ${vendor.name} (${JSON.stringify(env)})`);
-        }
-      });
-
-      it('agrees with ci-info for a clean env and for CI=false', () => {
-        assert.strictEqual(freshCiInfoIsCI({}), false);
-        assert.strictEqual(isCI({}), false);
-        assert.strictEqual(freshCiInfoIsCI({ CI: 'false', GITHUB_ACTIONS: 'true' }), false);
-        assert.strictEqual(isCI({ CI: 'false', GITHUB_ACTIONS: 'true' }), false);
-      });
-    });
   });
 
   it('detectOS returns a valid platform', () => {
