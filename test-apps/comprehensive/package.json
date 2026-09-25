@@ -10,17 +10,17 @@
     "aws-blocks"
   ],
   "scripts": {
-    "dev:server": "tsx aws-blocks/scripts/server.ts",
-    "dev": "tsx aws-blocks/scripts/server.ts",
+    "dev": "blocks dev",
+    "sandbox": "blocks sandbox",
+    "destroy": "blocks destroy",
     "test": "echo 'E2e tests run via root test:e2e:local and test:e2e:sandbox'",
-    "destroy": "tsx aws-blocks/scripts/destroy.ts",
     "test:local": "BLOCKS_TEST_ENV=local tsx -C browser test/e2e.test.ts",
     "test:sandbox": "BLOCKS_TEST_ENV=sandbox tsx -C browser test/e2e.test.ts",
     "test:production": "BLOCKS_TEST_ENV=production tsx -C browser test/e2e.test.ts",
     "test:e2e:local": "npm run test:local",
     "test:e2e:sandbox": "npm run test:sandbox",
     "test:e2e:production": "npm run test:production",
-    "vendorize": "node ../../packages/blocks/dist/vendorize.js"
+    "vendorize": "blocks vendorize"
   },
   "dependencies": {
     "@aws-blocks/auth-common": "*",
@@ -44,6 +44,7 @@
     "@aws-blocks/bb-realtime": "*",
     "@aws-blocks/bb-tracer": "*",
     "@aws-blocks/blocks": "*",
+    "@aws-blocks/cli": "*",
     "@aws-blocks/core": "*",
     "zod": "^4.3.0"
   },
