@@ -1659,6 +1659,44 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
+	test('a re-sync failure on reconnect reports onError once and does NOT arm the failsafe (loading persists until a later chunk/unmount)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The reconnect re-sync read fails outright.
+				getConversation: async () => { throw new Error('DynamoDB read failed'); },
+			},
+			subscribe,
+			onError: (e) => { errors.push(e); },
+		});
+
+		await chat.sendMessage('hello');
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// Reconnect → getConversation throws.
+		cap.reconnect!();
+		await flush();
+
+		// The re-sync failure is surfaced via onError (once).
+		assert.strictEqual(errors.length, 1, 're-sync failure reports onError exactly once');
+		// Deliberate trade-off: the throw does NOT arm the failsafe, so loading persists —
+		// the channel is resubscribed and a later terminal chunk can still resolve the turn.
+		assert.strictEqual(chat.isLoading(), true, 'a re-sync throw does not clear loading on its own');
+		t.mock.timers.tick(700_000); // past the whole failsafe window
+		assert.strictEqual(chat.isLoading(), true, 'no failsafe was armed by the re-sync throw, so loading is unchanged');
+
+		// A later terminal chunk still resolves the turn (the intended recovery path).
+		cap.handler!({ type: 'done', text: 'recovered via a later live chunk' });
+		assert.strictEqual(chat.isLoading(), false, 'a subsequent terminal chunk clears loading');
+		assert.strictEqual(errors.length, 1, 'still exactly one onError for the turn');
+		chat.destroy();
+	});
+
 	test('a send rejection then a later error chunk reports onError exactly once', async () => {
 		const errors: string[] = [];
 		const { cap, subscribe } = subscribeCapture();

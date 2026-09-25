@@ -329,9 +329,13 @@ function createChatForConvo(conversationId: string) {
 			},
 			getPendingInterrupts: async (id) => await api.agentGetPendingInterrupts(id),
 		},
-		subscribe: async (channelId, handler) => {
-			const result: any = await api.agentGetChannel(channelId);
-			return result.channel.subscribe(handler);
+		subscribe: async (channelId, sub) => {
+			const { channel } = await api.agentGetChannel(channelId);
+			// `sub` is a ChatSubscribeOptions object (useChat always passes the object form).
+			// Forward it VERBATIM so the transport's object branch wires onReconnect/onDisconnect;
+			// narrow the union to the object overload without a cast (a callable-with-props would
+			// drop reconnect handling).
+			return typeof sub === 'function' ? channel.subscribe(sub) : channel.subscribe(sub);
 		},
 		onMessagesChange: (msgs) => {
 			chatMessages.innerHTML = msgs.map(m => {

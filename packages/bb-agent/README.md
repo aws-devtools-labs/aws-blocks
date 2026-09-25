@@ -841,9 +841,12 @@ export function Chat() {
         createConversation: () => api.createConversation(),
         getConversation: (id) => api.getConversation(id),
       },
-      subscribe: async (channelId, handler) => {
+      subscribe: async (channelId, sub) => {
         const channel = await api.getChannel(channelId);
-        return channel.subscribe(handler);
+        // `sub` is a ChatSubscribeOptions object (onMessage/onReconnect/onDisconnect).
+        // Forward it VERBATIM — channel.subscribe branches on `typeof arg === 'function'`
+        // first, so wrapping it in a callable-with-props would silently drop reconnect handling.
+        return channel.subscribe(sub);
       },
       // Bridge the mutable instance into React state — these fire on every change.
       onMessagesChange: setMessages,
