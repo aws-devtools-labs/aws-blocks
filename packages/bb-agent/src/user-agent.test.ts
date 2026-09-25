@@ -11,15 +11,7 @@ import { CORE_VERSION } from '@aws-blocks/core/version';
 import { Agent } from './agent.aws.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
-/**
- * Integration tests that instantiate the REAL deployed Agent class and verify both
- * Bedrock SDK clients it creates carry the Blocks user-agent chain:
- *   - BedrockAgentCoreClient (dispatchTurn → InvokeAgentRuntime)
- *   - BedrockClient (model health check before each turn)
- *
- * The SDK clients are pointed at a local HTTP server via AWS_ENDPOINT_URL so the
- * outgoing `x-amz-user-agent` header can be asserted end-to-end.
- */
+/** Verifies both Bedrock SDK clients carry the buildUserAgentChain() user agent. */
 
 class ParentAuthBB extends Scope {
 	constructor(parent: ScopeParent, id: string) {
