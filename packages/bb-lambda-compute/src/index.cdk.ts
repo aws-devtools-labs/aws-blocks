@@ -100,8 +100,8 @@ export class LambdaCompute extends Compute {
 			handler: 'handler',
 			role: this.executionRole,
 			logGroup: this.logGroup,
-			memorySize: 2048,
-			timeout: cdk.Duration.seconds(60 * 15),
+			memorySize: options?.memory ?? 2048,
+			timeout: cdk.Duration.seconds(options?.maxTimeoutSeconds ?? 60 * 15),
 			environment: {
 				NODE_ENV: 'production',
 				BLOCKS_STACK_NAME: this.backendStackName,

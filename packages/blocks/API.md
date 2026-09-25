@@ -57,9 +57,17 @@ import { CodeDeliveryDetails } from '@aws-blocks/bb-auth-cognito';
 import { CodeDeliveryFn } from '@aws-blocks/bb-auth-cognito';
 import { cognitoFederated } from '@aws-blocks/bb-auth-oidc';
 import { CognitoUser } from '@aws-blocks/bb-auth-cognito';
+import { Compute } from '@aws-blocks/bb-compute';
+import { ComputeHandle } from '@aws-blocks/core';
+import { ComputeOptions } from '@aws-blocks/core';
+import { ComputeProps } from '@aws-blocks/bb-compute';
+import { ComputeType } from '@aws-blocks/core';
 import { ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
 import { ConditionalWriteOptions } from '@aws-blocks/bb-kv-store';
 import { ConfirmSignInOptions } from '@aws-blocks/bb-auth-cognito';
+import { ContainerComputeOptions } from '@aws-blocks/core';
+import { ContainerScaling } from '@aws-blocks/core';
+import { ContainerSize } from '@aws-blocks/core';
 import { CorsRule } from '@aws-blocks/bb-file-bucket';
 import { CronJob } from '@aws-blocks/bb-cron-job';
 import { CronJobErrors } from '@aws-blocks/bb-cron-job';
@@ -149,9 +157,11 @@ import { relayOrigin } from '@aws-blocks/bb-auth-oidc';
 import { ResetPasswordResult } from '@aws-blocks/bb-auth-cognito';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
+import { ScalingSignal } from '@aws-blocks/core';
 import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
+import { ServerlessComputeOptions } from '@aws-blocks/core';
 import { SetPasswordOptions } from '@aws-blocks/bb-auth-cognito';
 import { SignInNextStep } from '@aws-blocks/bb-auth-cognito';
 import { SignInOptions } from '@aws-blocks/bb-auth-cognito';
@@ -288,11 +298,27 @@ export { cognitoFederated }
 
 export { CognitoUser }
 
+export { Compute }
+
+export { ComputeHandle }
+
+export { ComputeOptions }
+
+export { ComputeProps }
+
+export { ComputeType }
+
 export { ConditionalDeleteOptions }
 
 export { ConditionalWriteOptions }
 
 export { ConfirmSignInOptions }
+
+export { ContainerComputeOptions }
+
+export { ContainerScaling }
+
+export { ContainerSize }
 
 export { CorsRule }
 
@@ -560,11 +586,15 @@ export { RetrieveOptions }
 
 export { RetrieveResult }
 
+export { ScalingSignal }
+
 export { Segment }
 
 export { SendBatchResult }
 
 export { SendResult }
+
+export { ServerlessComputeOptions }
 
 export { SetPasswordOptions }
 

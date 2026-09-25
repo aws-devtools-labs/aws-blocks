@@ -96,6 +96,29 @@ export type {
  */
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
 /**
+ * **Capability-defined compute: Lambda or container, selected for you.**
+ *
+ * Describe what a workload needs — timeout, memory, cpu, whether it's
+ * long-lived, or a custom image — and Blocks picks the backing service: a
+ * short request/response workload runs on Lambda; a long-running, long-lived,
+ * or high-memory one runs on a container (Fargate). Hand the result to a
+ * handler-bearing block via its `compute` option (e.g. `AsyncJob`).
+ *
+ * Package: `@aws-blocks/bb-compute`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
+export type {
+	ComputeHandle,
+	ComputeOptions,
+	ComputeType,
+	ContainerComputeOptions,
+	ContainerScaling,
+	ContainerSize,
+	ScalingSignal,
+	ServerlessComputeOptions,
+} from '@aws-blocks/core';
+/**
  * **Username/password authentication with JWT sessions.**
  *
  * Use when you need simple credential-based auth for prototypes, internal

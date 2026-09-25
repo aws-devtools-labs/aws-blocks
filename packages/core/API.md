@@ -69,12 +69,81 @@ export interface BuildingBlockMeta {
 // @public
 export function clearRouteRegistry(): void;
 
+// @public
+export interface ComputeHandle {
+    // @internal
+    readonly __blocksCompute?: never;
+}
+
+// @public
+export type ComputeOptions = ({
+    type: 'serverless';
+} & ServerlessComputeOptions) | ({
+    type: 'container';
+} & ContainerComputeOptions);
+
+// @public
+export type ComputeType = 'serverless' | 'container';
+
 export { config }
 
 export { ConfigValue }
 
 // @public
+export interface ContainerComputeOptions {
+    image?: string;
+    scaling?: ContainerScaling;
+    size?: ContainerSize;
+}
+
+// @public
+export interface ContainerPollerHandle {
+    drain?(): Promise<void>;
+    stop(): Promise<void> | void;
+}
+
+// @public
+export type ContainerPollerStarter = () => ContainerPollerHandle;
+
+// @public
+export interface ContainerScaling {
+    // (undocumented)
+    maxInstances: number;
+    // (undocumented)
+    minInstances: number;
+    // (undocumented)
+    strategy?: ScalingSignal | ScalingSignal[];
+}
+
+// @public
+export type ContainerSize = {
+    vcpu: 0.25;
+    memory: 512 | 1024 | 2048;
+} | {
+    vcpu: 0.5;
+    memory: 1024 | 2048 | 3072 | 4096;
+} | {
+    vcpu: 1;
+    memory: 2048 | 3072 | 4096 | 5120 | 6144 | 7168 | 8192;
+} | {
+    vcpu: 2;
+    memory: 4096 | 5120 | 6144 | 7168 | 8192 | 9216 | 10240 | 11264 | 12288 | 13312 | 14336 | 15360 | 16384;
+} | {
+    vcpu: 4;
+    memory: 8192 | 9216 | 10240 | 11264 | 12288 | 13312 | 14336 | 15360 | 16384 | 17408 | 18432 | 19456 | 20480 | 21504 | 22528 | 23552 | 24576 | 25600 | 26624 | 27648 | 28672 | 29696 | 30720;
+} | {
+    vcpu: 8;
+    memory: 16384 | 20480 | 24576 | 28672 | 32768 | 36864 | 40960 | 45056 | 49152 | 53248 | 57344 | 61440;
+} | {
+    vcpu: 16;
+    memory: 32768 | 40960 | 49152 | 57344 | 65536 | 73728 | 81920 | 90112 | 98304 | 106496 | 114688 | 122880;
+};
+
+// @public
 export const DEFAULT_API_ERROR_NAME = "ApiError";
+
+// @public
+export function dispatchJobToWorker(req: JobWorkerRequest, timeoutMs?: number): Promise<JobDispatchResult>;
 
 // Warning: (ae-forgotten-export) The symbol "ResourceEntry" needs to be exported by the entry point index.d.ts
 //
@@ -86,6 +155,9 @@ export function getConfig(key: string): Promise<string>;
 
 // @public
 export function getConfigSync(key: string): string;
+
+// @public
+export function getContainerComputeId(): string | undefined;
 
 // @public
 export function getRegisteredRoutes(): readonly RegisteredRoute[];
@@ -112,9 +184,48 @@ export function isBlocksError<N extends string>(e: unknown, name: N): e is Error
 
 export { isConfig }
 
+// @public
+export function isContainerRuntime(): boolean;
+
+// @public
+export function isJobWorker(): boolean;
+
 export { isManagedValue }
 
 export { isSecret }
+
+// @public
+export type JobDispatchResult = {
+    ok: true;
+} | {
+    ok: false;
+    error: string;
+    timedOut: boolean;
+};
+
+// @public
+export type JobWorkerReply = {
+    ok: true;
+} | {
+    ok: false;
+    error: string;
+};
+
+// @public
+export interface JobWorkerRequest {
+    jobFullId: string;
+    record: {
+        messageId: string;
+        body: string;
+        attributes: {
+            ApproximateReceiveCount: string;
+            SentTimestamp: string;
+        };
+    };
+}
+
+// @public
+export const LAMBDA_MAX_TIMEOUT_SECONDS = 900;
 
 // @public
 export function loadConfigToProcessEnv(): Promise<void>;
@@ -153,6 +264,9 @@ export interface RawRouteOptions {
     path?: string;
 }
 
+// @public
+export function registerContainerPoller(starter: ContainerPollerStarter): void;
+
 // @public (undocumented)
 export interface RegisteredRoute {
     // (undocumented)
@@ -176,7 +290,33 @@ export function registerSdkIdentifiers(fullId: string, identifiers: ResourceEntr
 export function _resetConfigCache(): void;
 
 // @public
+export function _resetContainerPollers(): void;
+
+// @public
 export function _resetSdkRegistry(): void;
+
+// @public
+export function resolvePerInstanceConcurrency(maxConcurrencyPerCPU: number, vcpu: number): number;
+
+// @public
+export function runContainer(): Promise<void>;
+
+// @public
+export function runJobWorker(resolveJob: (fullId: string) => {
+    _processRecord(record: JobWorkerRequest['record']): Promise<void>;
+} | undefined): Promise<void>;
+
+// @public
+export type ScalingSignal = {
+    on: 'cpu';
+    targetPercent: number;
+} | {
+    on: 'memory';
+    targetPercent: number;
+} | {
+    on: 'queue-depth';
+    backlogPerInstance: number;
+};
 
 // @public (undocumented)
 export class Scope {
@@ -223,6 +363,12 @@ export type ScopeParent = Scope | {
 export { secret }
 
 export { SecretValue }
+
+// @public
+export interface ServerlessComputeOptions {
+    maxTimeoutSeconds?: number;
+    memory?: number;
+}
 
 // @public
 export function unlockRouteRegistry(): void;

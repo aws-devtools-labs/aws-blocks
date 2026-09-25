@@ -18,6 +18,18 @@ export {
 	type ValueKind,
 } from '@aws-blocks/hosting';
 export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
+export {
+	type ComputeHandle,
+	type ComputeOptions,
+	type ComputeType,
+	type ContainerComputeOptions,
+	type ContainerScaling,
+	type ContainerSize,
+	LAMBDA_MAX_TIMEOUT_SECONDS,
+	resolvePerInstanceConcurrency,
+	type ScalingSignal,
+	type ServerlessComputeOptions,
+} from './common/compute-capabilities.js';
 export type { BlocksVpcOptions, ScopeOptions, SubnetRole, VpcContext, VpcRequirements } from './cdk/index.js';
 export {
 	BlocksBackend,
@@ -54,6 +66,21 @@ export {
 	registerSdkIdentifiers,
 } from './common/sdk-registry.js';
 export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+export {
+	type ContainerPollerHandle,
+	type ContainerPollerStarter,
+	type JobDispatchResult,
+	type JobWorkerReply,
+	type JobWorkerRequest,
+	_resetContainerPollers,
+	dispatchJobToWorker,
+	getContainerComputeId,
+	isContainerRuntime,
+	isJobWorker,
+	registerContainerPoller,
+	runContainer,
+	runJobWorker,
+} from './container-runtime.js';
 export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
 export {
 	type BlocksStackApi,

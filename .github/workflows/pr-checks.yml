@@ -338,6 +338,65 @@ jobs:
       - name: E2E VPC Smoke
         run: npm run test:e2e:sandbox:vpc
 
+  e2e-compute-smoke:
+    name: E2E Compute Smoke
+    needs: [build-and-test-local, detect-changes]
+    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: publish
+    # Serialize this suite across PRs: it provisions private-DNS interface
+    # endpoints into the shared persistent test VPC, and AWS permits only one per
+    # service per VPC — two concurrent runs of THIS job would collide. Queue
+    # rather than cancel so an in-flight deploy/destroy isn't interrupted.
+    #
+    # NOTE: this uses a group distinct from the VPC smoke job (blocks-test-vpc).
+    # GitHub job-level concurrency *cancels* (doesn't queue) a second job that
+    # shares a group within the same run, so the two suites can't share a group.
+    # vpc-smoke is a no-op stub today, so they don't actually collide on the
+    # shared VPC's endpoints yet; unifying their serialization once vpc-smoke is
+    # real is tracked as part of the deferred VPC hardening.
+    concurrency:
+      group: blocks-test-compute
+      cancel-in-progress: false
+    env:
+      BLOCKS_STACK_SUFFIX: compute-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Ensure persistent test VPC
+        run: cd test-infra && npx cdk deploy --require-approval never --outputs-file outputs.json
+
+      - name: Export VPC ID
+        run: |
+          VPC_ID=$(cat test-infra/outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksTestVpc']['VpcId'])")
+          echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
+
+      - name: E2E Compute Smoke
+        run: npm run test:e2e:sandbox:compute
+
   e2e-production:
     name: E2E Production
     needs: [build-and-test-local, detect-changes]
@@ -574,7 +633,7 @@ jobs:
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [blocks-integrity, build-and-test-local, e2e-templates, e2e-sandbox, e2e-sandbox-vpc, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
+    needs: [blocks-integrity, build-and-test-local, e2e-templates, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -594,6 +653,7 @@ jobs:
           if [[ "${{ needs.e2e-templates.result }}" != "success" && "${{ needs.e2e-templates.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-sandbox.result }}" != "success" && "${{ needs.e2e-sandbox.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-sandbox-vpc.result }}" != "success" && "${{ needs.e2e-sandbox-vpc.result }}" != "skipped" ]] ||
+             [[ "${{ needs.e2e-compute-smoke.result }}" != "success" && "${{ needs.e2e-compute-smoke.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-production.result }}" != "success" && "${{ needs.e2e-production.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-supabase.result }}" != "success" && "${{ needs.e2e-supabase.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-hosting.result }}" != "success" && "${{ needs.e2e-hosting.result }}" != "skipped" ]] ||
