@@ -142,7 +142,7 @@ describe('telemetry/environment', () => {
 
     const moduleUrl = new URL('./environment.js', import.meta.url).href;
     const { cases }: { cases: IsCICase[] } = JSON.parse(
-      readFileSync(new URL('../../src/telemetry/is-ci-cases.json', import.meta.url), 'utf-8'),
+      readFileSync(new URL('../../src/telemetry/is-ci-cases.test.json', import.meta.url), 'utf-8'),
     );
 
     function runIsCICase(testCase: IsCICase): boolean[] {
