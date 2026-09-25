@@ -14,6 +14,8 @@ CLI tool for scaffolding AWS Blocks projects.
 npx @aws-blocks/create-blocks-app my-app
 ```
 
+A target directory that contains only benign metadata (VCS/editor/OS files) or an `INSTRUCTIONS.md` is still treated as a fresh project; any other pre-existing file blocks scaffolding so nothing is overwritten.
+
 ### Start from Template
 
 ```bash
