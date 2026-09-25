@@ -5,6 +5,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { Scope } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
+import { createChat } from './index.chat.js';
+import type { ChatTransport, ChunkStream } from './transport.js';
+import type { AgentStreamChunk } from './types.js';
 import { CannedProvider } from './providers/canned.js';
 import { checkModelHealth } from './model-factory.js';
 import { z } from 'zod';
@@ -1594,5 +1597,292 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 	test('deployed Agent constructs on the aws-runtime path', () => {
 		const agent = new DeployedAgent(new Scope('test-s3-agent'), 'r', { systemPrompt: 'test', model: { deployed: { provider: 'canned' } } });
 		assert.ok(agent);
+	});
+});
+
+// ── createChat (client API) ─────────────────────────────────────────────────
+
+describe('createChat', () => {
+	// A fake transport that replays a scripted chunk sequence — exercises the
+	// client state machine without any Realtime/network dependency.
+	function fakeTransport(script: AgentStreamChunk[]): ChatTransport {
+		return {
+			subscribe(): ChunkStream {
+				let idx = 0;
+				return {
+					established: Promise.resolve(),
+					unsubscribe() {},
+					async *[Symbol.asyncIterator]() {
+						while (idx < script.length) yield script[idx++];
+					},
+				};
+			},
+			async run(turn) {
+				return { channelId: turn.channelId };
+			},
+		};
+	}
+
+	test('sendMessage streams text into the assistant message and clears loading on done', async () => {
+		const loadingStates: boolean[] = [];
+		const chat = createChat({
+			transport: fakeTransport([
+				{ type: 'text-delta', text: 'Hel' },
+				{ type: 'text-delta', text: 'lo' },
+				{ type: 'done' },
+			]),
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onLoadingChange: l => loadingStates.push(l),
+		});
+
+		await chat.sendMessage('hi');
+		// Let the background consumer drain the fake stream.
+		await new Promise(r => setTimeout(r, 10));
+
+		const msgs = chat.getMessages();
+		assert.strictEqual(msgs[0].role, 'user');
+		assert.strictEqual(msgs[0].content, 'hi');
+		assert.strictEqual(msgs[1].role, 'assistant');
+		assert.strictEqual(msgs[1].content, 'Hello', 'text-delta chunks should accumulate into the assistant message');
+		assert.strictEqual(chat.isLoading(), false, 'done should clear loading');
+		assert.deepStrictEqual(loadingStates, [true, false]);
+		assert.strictEqual(chat.getConversationId(), 'conv-1', 'first turn lazily creates the conversation');
+	});
+
+	test('interrupt fires onInterrupt and resume via sendMessage continues the turn', async () => {
+		const interruptsSeen: Array<{ interruptId: string }[]> = [];
+		let call = 0;
+		const chat = createChat({
+			// First turn interrupts; the resume turn completes.
+			transport: {
+				subscribe(): ChunkStream {
+					const script: AgentStreamChunk[] = call++ === 0
+						? [{ type: 'interrupt', interrupts: [{ id: 'i1', name: 'approve:x' }] }]
+						: [{ type: 'text-delta', text: 'done!' }, { type: 'done' }];
+					let idx = 0;
+					return {
+						established: Promise.resolve(),
+						unsubscribe() {},
+						async *[Symbol.asyncIterator]() {
+							while (idx < script.length) yield script[idx++];
+						},
+					};
+				},
+				async run(turn) {
+					return { channelId: turn.channelId };
+				},
+			},
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-2' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onInterrupt: ints => interruptsSeen.push(ints),
+		});
+
+		await chat.sendMessage('do risky thing');
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(interruptsSeen.length, 1, 'interrupt chunk should fire onInterrupt');
+		assert.strictEqual(interruptsSeen[0][0].interruptId, 'i1');
+		assert.strictEqual(chat.isLoading(), false, 'interrupt clears loading while awaiting the decision');
+
+		await chat.sendMessage({ interruptResponses: [{ interruptId: 'i1', approved: true }] });
+		await new Promise(r => setTimeout(r, 10));
+		const msgs = chat.getMessages();
+		assert.ok(msgs.some(m => m.role === 'approval' && m.content === 'Approved'), 'approval decision recorded');
+		assert.ok(msgs.some(m => m.role === 'assistant' && m.content === 'done!'), 'resume streams the completion');
+		assert.strictEqual(chat.isLoading(), false);
+	});
+
+	test('a failing attach/run clears loading, fires onError, and drops the empty placeholder', async () => {
+		for (const mode of ['run', 'established'] as const) {
+			const errors: string[] = [];
+			const chat = createChat({
+				transport: {
+					subscribe(): ChunkStream {
+						return {
+							// `established` rejects in that mode; otherwise resolves and `run` rejects.
+							established: mode === 'established' ? Promise.reject(new Error('attach failed')) : Promise.resolve(),
+							unsubscribe() {},
+							async *[Symbol.asyncIterator]() {},
+						};
+					},
+					async run() {
+						if (mode === 'run') throw new Error('run rejected');
+						return { channelId: 'c' };
+					},
+				},
+				api: {
+					createConversation: async () => ({ conversationId: 'conv-e' }),
+					getConversation: async () => ({ messages: [] }),
+				},
+				onError: e => errors.push(e),
+			});
+
+			await chat.sendMessage('hi');
+			await new Promise(r => setTimeout(r, 10));
+
+			assert.strictEqual(chat.isLoading(), false, `${mode} failure must clear loading (no wedge)`);
+			assert.strictEqual(errors.length, 1, `${mode} failure must fire onError once`);
+			// A second send must NOT be silently dropped by the `if (loading) return` guard.
+			assert.ok(!chat.getMessages().some(m => m.role === 'assistant' && !m.content), `${mode} failure must not leave an empty assistant bubble`);
+		}
+	});
+
+	test('newConversation() mid-turn clears loading so the next sendMessage is not dropped', async () => {
+		let runCalls = 0;
+		// A stream that stays open (never emits a terminal chunk) until unsubscribed,
+		// so the first turn is genuinely in flight when newConversation() closes it.
+		const chat = createChat({
+			transport: {
+				subscribe(): ChunkStream {
+					let done = false;
+					let wake: (() => void) | null = null;
+					return {
+						established: Promise.resolve(),
+						unsubscribe() { done = true; wake?.(); },
+						async *[Symbol.asyncIterator]() {
+							while (!done) await new Promise<void>(r => { wake = r; });
+						},
+					};
+				},
+				async run(turn) { runCalls++; return { channelId: turn.channelId }; },
+			},
+			api: {
+				createConversation: async () => ({ conversationId: `conv-${runCalls}` }),
+				getConversation: async () => ({ messages: [] }),
+			},
+		});
+
+		await chat.sendMessage('first');           // turn is now in flight (no terminal chunk)
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(chat.isLoading(), true, 'turn is in flight');
+
+		chat.newConversation();                     // closes the stream WITHOUT a terminal chunk
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(chat.isLoading(), false, 'newConversation must clear loading');
+
+		await chat.sendMessage('second');           // must NOT be dropped by the loading guard
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(runCalls, 2, 'the second send after newConversation must reach the transport');
+
+		// Tear down the still-open second turn so no async iterator is left parked
+		// when the test ends (node --test fails a test that leaves pending async work).
+		chat.destroy();
+		await new Promise(r => setTimeout(r, 10));
+	});
+});
+
+describe('createChat loadConversation + metadata narrowing', () => {
+	// loadConversation never touches the transport, so a no-op stub suffices.
+	const noopTransport = {
+		subscribe: () => ({
+			[Symbol.asyncIterator]() { return { next: async () => ({ done: true, value: undefined as any }) }; },
+			established: Promise.resolve(),
+			unsubscribe() {},
+		}),
+		run: async () => ({ channelId: 'ch-1' }),
+	} as any;
+
+	test('narrows an approval message: known keys projected, unknown key dropped', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				// Customer passes raw backend metadata straight through (unknown).
+				getConversation: async () => ({
+					messages: [
+						{ role: 'approval', content: 'Approved', metadata: { approved: true, toolName: 'kv.put', trust: false, extra: 'ignored' } },
+					],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		const appr = rendered.find((m) => m.role === 'approval');
+		assert.ok(appr, 'approval message should be present');
+		assert.deepStrictEqual(appr.metadata, { approved: true, trust: false, toolName: 'kv.put' }, 'known ApprovalMetadata keys projected, unknown key dropped');
+	});
+
+	test('drops non-object metadata to undefined instead of crashing', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'assistant', content: 'hi', metadata: 'not-an-object' },
+						{ role: 'user', content: 'yo', metadata: null },
+					],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		const asst = rendered.find((m) => m.role === 'assistant');
+		const usr = rendered.find((m) => m.role === 'user');
+		assert.strictEqual(asst.metadata, undefined, 'string metadata narrows to undefined');
+		assert.strictEqual(usr.metadata, undefined, 'null metadata narrows to undefined');
+	});
+
+	test('passes a plain-object user/assistant metadata through as a JSON record', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({
+					messages: [{ role: 'assistant', content: 'hi', metadata: { latencyMs: 42, note: 'ok' } }],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		const asst = rendered.find((m) => m.role === 'assistant');
+		assert.deepStrictEqual(asst.metadata, { latencyMs: 42, note: 'ok' }, 'plain-object metadata passes through unchanged');
+	});
+
+	test('filters out non-renderable roles (e.g. tool-result)', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hi' },
+						{ role: 'tool-result', content: '{"ok":true}' },
+						{ role: 'assistant', content: 'done' },
+					],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		assert.deepStrictEqual(rendered.map((m) => m.role), ['user', 'assistant'], 'only user/assistant/approval roles are rendered');
+	});
+
+	test('maps pending interrupts id -> interruptId for onInterrupt', async () => {
+		const seen: { interruptId: string; name: string }[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({ messages: [] }),
+				getPendingInterrupts: async () => ({ interrupts: [{ id: 'int-9', name: 'approve:delete' }] }),
+			},
+			onInterrupt: (interrupts) => { for (const i of interrupts) seen.push({ interruptId: i.interruptId, name: i.name }); },
+		});
+
+		await chat.loadConversation('c1');
+		assert.deepStrictEqual(seen, [{ interruptId: 'int-9', name: 'approve:delete' }], 'backend id surfaces to the consumer as interruptId');
 	});
 });
