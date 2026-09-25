@@ -56,7 +56,8 @@ import {
 } from '../secret-resolve.js';
 import type { HostingResources } from '../types.js';
 import { CdnConstruct } from './cdn_construct.js';
-import type { LayerHandle } from './layer.js';
+import { renderCustomDoor } from './custom_door.js';
+import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
 import { renderGraph } from './render-graph.js';
 import { buildCapabilityPlan } from '../plan/capability-plan.js';
 import { composeGraph } from '../plan/compose.js';
@@ -438,6 +439,28 @@ export type HostingConstructProps = {
          * gateway. Set by the Blocks integration layer from the `api` prop;
          * enables cookie auth with no CORS. API Gateway proxies an external
          * HTTPS URL natively — no forwarder Lambda (unlike the ALB door).
+         */
+        backendApiUrl?: string;
+        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
+        degrade?: import('../plan/types.js').CapabilityId[];
+      }
+    | {
+        /** BYO — a customer-authored front door. */
+        kind: 'custom';
+        /**
+         * Your front-door adapter (see {@link FrontDoorLayerAdapter}). At synth
+         * the framework negotiates the deploy's capability plan against its
+         * `supports()` — a DEMANDED capability the door can't serve fails at
+         * synth (safe by construction) — then calls `renderLayer` to build the
+         * door. You provision the door itself; Hosting still provisions the app
+         * (S3 assets, compute, backend) and hands them over via the render
+         * context + `plan.backend`.
+         */
+        adapter: FrontDoorLayerAdapter;
+        /**
+         * Backend API URL to proxy same-origin (`/aws-blocks/*`). Set by the
+         * Blocks integration layer from the `api` prop; surfaces as a
+         * `plan.backend` origin the adapter routes to.
          */
         backendApiUrl?: string;
         /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
@@ -1628,10 +1651,20 @@ export class HostingConstruct extends Construct {
             : undefined,
           degrade: fd.degrade,
         });
+      } else if (fd?.kind === 'custom') {
+        // BYO custom door: negotiate (framework-enforced → an unmet demand fails
+        // at synth, never a silent runtime break), then let the customer's
+        // adapter render its own door. It reads the same ctx the built-in doors
+        // get; backend routing lives in `plan.backend.origins`.
+        handle = renderCustomDoor(this, plan, fd.adapter, { ...common, degrade: fd.degrade }, fd.degrade);
+        // If the door exposes a regional origin (e.g. an ALB it built), surface
+        // its DNS so a composed edge could point at it — same as the ALB door.
+        this.loadBalancerDnsName = handle.originHandle?.domainName;
       } else {
         throw new HostingError('UnsupportedFrontDoorError', {
           message: `Unknown front door '${JSON.stringify(props.frontDoor)}'.`,
-          resolution: "Use 'cloudfront' (default), 'none' (S3 website), { kind: 'alb' }, or { kind: 'apiGateway' }.",
+          resolution:
+            "Use 'cloudfront' (default), 'none' (S3 website), { kind: 'alb' }, { kind: 'apiGateway' }, or { kind: 'custom', adapter }.",
         });
       }
       this.distributionUrl = handle.url ?? '';
