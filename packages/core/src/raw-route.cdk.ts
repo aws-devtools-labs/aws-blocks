@@ -49,7 +49,7 @@ export class RawRoute extends Scope {
   public readonly path: string;
 
   constructor(scope: ScopeParent, id: string, options: RawRouteOptions) {
-    super(id, { parent: scope });
+    super(id, { parent: scope, frameworkScope: true });
     this.path = resolveRoutePath(scope, id, options);
     registerRoute({ ...options, path: this.path });
   }
