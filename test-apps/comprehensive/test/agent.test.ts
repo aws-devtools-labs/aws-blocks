@@ -451,5 +451,82 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.ok(JSON.stringify(output).includes('denied'), 'tool-result should contain denial message');
       });
     });
+
+    describe('useChat mid-turn reconnect (Option A e2e)', () => {
+      // Exercises the FULL useChat -> real hydrated channel wiring end-to-end (the unit
+      // tests mock the transport). Sends a message, forces a mid-turn socket drop, and
+      // asserts the spinner clears and the final assistant text is recovered — mirroring
+      // the transport-level reconnect test in realtime.test.ts, but through the hook path
+      // so a wiring regression (options object degrading to a bare handler) would be caught.
+      // Per-test timeout for the real-AWS reconnect round-trip (backoff + $connect + resubscribe).
+      test('useChat recovers a mid-turn reconnect: loading clears and final text is restored', { timeout: 120_000 }, async () => {
+        const { useChat } = await import('@aws-blocks/bb-agent/client');
+        const api = getApi();
+        const { conversationId } = await api.agentCreateConversationId();
+
+        // Capture the live subscription so the test can force a transport drop.
+        let sub: import('@aws-blocks/bb-realtime').RealtimeSubscription | undefined;
+        let loading: boolean = false;
+        let lastError: string | undefined;
+        let messages: Array<{ role: string; content: string }> = [];
+
+        const chat = useChat({
+          api: {
+            sendMessage: async (convId, message, channelId) => { await api.agentStream(message, convId, channelId); },
+            createConversation: async () => ({ conversationId }),
+            getConversation: async (id) => await api.agentGetConversation(id),
+            getPendingInterrupts: async (id) => await api.agentGetPendingInterrupts(id),
+          },
+          subscribe: async (channelId, s) => {
+            const { channel } = await api.agentGetChannel(channelId);
+            // Forward VERBATIM; the hydrated client's subscribe is overloaded, so narrow the
+            // union to a concrete branch. Capture the handle to force a mid-turn drop.
+            sub = typeof s === 'function' ? channel.subscribe(s) : channel.subscribe(s);
+            return sub;
+          },
+          onLoadingChange: (l) => { loading = l; },
+          onMessagesChange: (m) => { messages = m.map((x) => ({ role: x.role, content: x.content })); },
+          onError: (e) => { lastError = e; },
+        });
+
+        try {
+          await chat.loadConversation(conversationId);
+          await chat.sendMessage('Say hello');
+
+          // Wait until a chunk has begun the turn (loading true) so the drop is mid-turn.
+          const startDeadline = Date.now() + 30_000;
+          while (!chat.isLoading()) {
+            if (Date.now() > startDeadline) throw new Error('turn did not start (loading never became true) within 30s');
+            await new Promise((r) => setTimeout(r, 100));
+          }
+
+          // Force a mid-turn transport drop; the transport transparently reconnects and
+          // resubscribes, and useChat re-syncs the final assistant text from getConversation.
+          sub?.connection?.close();
+
+          // The spinner MUST clear (via a live done chunk on the resubscribed channel, or the
+          // reconnect re-sync from the DB) — this is the stuck-spinner failure the PR fixes.
+          const clearDeadline = Date.now() + 90_000;
+          while (chat.isLoading()) {
+            if (Date.now() > clearDeadline) throw new Error('loading did not clear within 90s after the mid-turn drop');
+            await new Promise((r) => setTimeout(r, 250));
+          }
+          assert.strictEqual(chat.isLoading(), false, 'loading cleared after the mid-turn reconnect');
+
+          // The final assistant text is present and non-empty (recovered live or from the DB).
+          const assistant = messages.find((m) => m.role === 'assistant');
+          assert.ok(assistant, 'an assistant message should exist after the turn');
+          assert.ok(assistant!.content.length > 0, 'final assistant text is recovered, not left empty');
+          // The persisted conversation agrees (source of truth).
+          const { messages: persisted } = await api.agentGetConversation(conversationId);
+          assert.ok(
+            persisted.some((m: any) => m.role === 'assistant' && m.content.length > 0),
+            'the recovered assistant text is backed by the persisted conversation',
+          );
+        } finally {
+          chat.destroy();
+        }
+      });
+    });
   });
 }

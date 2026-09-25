@@ -724,9 +724,12 @@ const chat = useChat({
     getConversation: (id) => api.getConversation(id),
     resume: (chId, responses, convId) => api.resume(chId, responses, convId),
   },
-  subscribe: async (channelId, handler) => {
+  // Forward the subscribe argument (`sub`) VERBATIM to the channel — it is an
+  // options object carrying onMessage/onReconnect/onDisconnect. Passing only a
+  // bare handler would drop the reconnect callbacks the transport needs.
+  subscribe: async (channelId, sub) => {
     const channel = await api.getChannel(channelId);
-    return channel.subscribe(handler);
+    return channel.subscribe(sub);
   },
   onMessagesChange: (msgs) => renderMessages(msgs),
   onLoadingChange: (loading) => updateSpinner(loading),
@@ -789,9 +792,12 @@ const chat = useChat({
     createConversation: () => api.createConversation(userId),
     getConversation: (id) => api.getConversation(id),
   },
-  subscribe: async (channelId, handler) => {
+  // Forward the subscribe argument (`sub`) VERBATIM to the channel — it is an
+  // options object carrying onMessage/onReconnect/onDisconnect. Passing only a
+  // bare handler would drop the reconnect callbacks the transport needs.
+  subscribe: async (channelId, sub) => {
     const channel = await api.getChannel(channelId);
-    return channel.subscribe(handler);
+    return channel.subscribe(sub);
   },
   onMessagesChange: (msgs) => renderMessages(msgs),
   onLoadingChange: (loading) => updateSpinner(loading),
@@ -835,9 +841,12 @@ export function Chat() {
         createConversation: () => api.createConversation(),
         getConversation: (id) => api.getConversation(id),
       },
-      subscribe: async (channelId, handler) => {
+      subscribe: async (channelId, sub) => {
         const channel = await api.getChannel(channelId);
-        return channel.subscribe(handler);
+        // `sub` is a ChatSubscribeOptions object (onMessage/onReconnect/onDisconnect).
+        // Forward it VERBATIM — channel.subscribe branches on `typeof arg === 'function'`
+        // first, so wrapping it in a callable-with-props would silently drop reconnect handling.
+        return channel.subscribe(sub);
       },
       // Bridge the mutable instance into React state — these fire on every change.
       onMessagesChange: setMessages,
