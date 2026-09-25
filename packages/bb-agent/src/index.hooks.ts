@@ -30,6 +30,20 @@ export interface ChatMessage {
 export type ChatChunkHandler = (chunk: AgentStreamChunk) => void;
 
 /**
+ * Minimal structural mirror of bb-realtime's `RealtimeChannelDescriptor` — the wire
+ * format an app's `subscribe` adapter hands to `channel.subscribe(...)` to hydrate a
+ * live channel. Mirrored here rather than imported, matching how {@link ChatSubscribeOptions}
+ * mirrors bb-realtime's `SubscribeOptions` structurally, so the client hooks take no hard
+ * type dependency on bb-realtime. Its fields match the descriptor exactly, so a `refresh`
+ * typed against it stays assignable to bb-realtime's `SubscribeOptions.refresh`.
+ */
+export interface ChatChannelDescriptor {
+	__blocks: 'realtime/channel';
+	channel: string;
+	[key: string]: unknown;
+}
+
+/**
  * Options form accepted by {@link UseChatOptions.subscribe}.
  *
  * Mirrors bb-realtime's `SubscribeOptions` shape so an app's `subscribe` adapter can
@@ -52,6 +66,15 @@ export interface ChatSubscribeOptions {
 	 * resubscribed. useChat uses this to re-sync from the DB (see {@link UseChatOptions.subscribe}).
 	 */
 	onReconnect?: () => void;
+	/**
+	 * Called before each reconnect to obtain a freshly-minted channel descriptor (new
+	 * connect + channel token) so the subscription can outlive the token TTLs (channel
+	 * ~1h / connect ~2h). Mirrors bb-realtime's `SubscribeOptions.refresh`. useChat
+	 * forwards {@link UseChatOptions.refresh} here verbatim; the transport calls it on
+	 * reconnect only (never on the initial subscribe) and simply does not use it when
+	 * undefined.
+	 */
+	refresh?: () => Promise<ChatChannelDescriptor>;
 }
 
 /** Options for creating a chat instance. */
@@ -75,6 +98,20 @@ export interface UseChatOptions {
 	 * - established: Promise that resolves when the WS subscription is confirmed
 	 */
 	subscribe: (channelId: string, handlerOrOptions: ChatChunkHandler | ChatSubscribeOptions) => Promise<{ unsubscribe(): void; established: Promise<void> }>;
+	/**
+	 * Optional consumer-supplied callback to re-mint a fresh channel descriptor when the
+	 * Realtime transport reconnects. useChat only holds the channelId (== conversationId)
+	 * plus your `subscribe` adapter; the channel descriptor is minted INSIDE that adapter
+	 * (via `api.agentGetChannel`), which useChat cannot reach — so it cannot self-mint.
+	 * Provide this and useChat forwards it to the subscription (as `refresh`) so long turns
+	 * survive the channel (~1h) / connect (~2h) token TTLs: a reconnect mints fresh tokens
+	 * instead of replaying expired ones. This MUST resolve to the RAW channel descriptor
+	 * (the wire object with `__blocks`/token fields), NOT a hydrated channel client — so
+	 * point it at a raw-descriptor server method, e.g.
+	 * `async () => ({ ...(await api.agentGetRawDescriptor(conversationId)), __blocks: 'realtime/channel' })`.
+	 * When omitted, a reconnect replays the original tokens (fine for short turns).
+	 */
+	refresh?: () => Promise<ChatChannelDescriptor>;
 	/** Called whenever the message list changes. */
 	onMessagesChange?: (messages: ChatMessage[]) => void;
 	/** Called whenever loading state changes. */
@@ -138,10 +175,15 @@ const RECONNECT_FAILSAFE_MS = 660_000;
  *   },
  *   subscribe: async (channelId, sub) => {
  *     const result = await api.agentGetChannel(channelId);
- *     // `sub` is a ChatSubscribeOptions object (onMessage/onReconnect/onDisconnect);
- *     // channel.subscribe accepts it directly and wires reconnect handling for us.
+ *     // `sub` is a ChatSubscribeOptions object (onMessage/onReconnect/onDisconnect/refresh);
+ *     // channel.subscribe accepts it directly and wires reconnect handling — including
+ *     // calling sub.refresh to re-mint fresh tokens before each reconnect — for us.
  *     return result.channel.subscribe(sub);
  *   },
+ *   // Re-mint a fresh channel descriptor on reconnect so long turns outlive the channel
+ *   // (~1h) / connect (~2h) token TTLs. useChat forwards this to the subscription as sub.refresh.
+ *   // Must resolve to the RAW descriptor (wire object with token fields), not a hydrated channel.
+ *   refresh: async () => ({ ...(await api.agentGetRawDescriptor(conversationId)), __blocks: 'realtime/channel' }),
  *   onMessagesChange: (msgs) => renderMessages(msgs),
  *   onLoadingChange: (loading) => updateSpinner(loading),
  * });
@@ -402,9 +444,9 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		// Pass a plain options object (NOT a callable-with-props). Both bb-realtime
 		// middlewares resolve subscribe with `typeof handlerOrOptions === 'function'`
 		// FIRST — a function is treated as a bare handler and its onMessage/onReconnect/
-		// onDisconnect properties are never read. A hybrid callable would therefore
-		// silently drop onReconnect, making the reconnect re-sync + failsafe dead on the
-		// real transport. The options object hits the transport's object branch.
+		// onDisconnect/refresh properties are never read. A hybrid callable would therefore
+		// silently drop them, making the reconnect re-sync + failsafe + token refresh dead
+		// on the real transport. The options object hits the transport's object branch.
 		const subscribeArg: ChatSubscribeOptions = {
 			onMessage: handleChunk,
 			onReconnect: () => { void handleReconnect(); },
@@ -419,6 +461,9 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			onDisconnect: (reason) => {
 				if (reason === 'error' && loading) { armFailsafe(); }
 			},
+			// Forward the consumer-supplied re-mint callback (if any). When undefined the
+			// transport simply replays the original tokens on reconnect (back-compat).
+			refresh: options.refresh,
 		};
 
 		const sub = await options.subscribe(channelId, subscribeArg);
