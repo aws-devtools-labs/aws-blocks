@@ -64,14 +64,17 @@ jobs:
             working-directory: native/dart/packages/blocks_runtime
             tool: dart
             runtime-override: false
+            web-tests: true
           - package-name: blocks_codegen
             working-directory: native/dart/packages/blocks_codegen
             tool: dart
             runtime-override: true
+            web-tests: false
           - package-name: blocks_runtime_flutter
             working-directory: native/dart/packages/blocks_runtime_flutter
             tool: flutter
             runtime-override: true
+            web-tests: false
     steps:
       - uses: actions/checkout@v7
         with:
@@ -133,6 +136,15 @@ jobs:
       - name: Run tests
         working-directory: ${{ matrix.working-directory }}
         run: ${{ matrix.tool }} test
+
+      # Blocking. blocks_runtime resolves `dart:io` vs web through conditional
+      # imports, so its web variants only execute on a browser platform — a
+      # seam wired to the io variant by mistake passes every VM test. Chrome
+      # ships on the runner and `-p chrome` needs no extra dependency.
+      - name: Run web tests
+        if: matrix.web-tests && matrix.sdk == 'stable'
+        working-directory: ${{ matrix.working-directory }}
+        run: dart test -p chrome
 
       # Report-only: prints the pub.dev package score and uploads the report.
       - name: Package score
