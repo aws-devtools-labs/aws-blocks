@@ -45,9 +45,13 @@ async function rpc(method: string, ...args: unknown[]): Promise<unknown> {
 }
 
 const RESULT_POLL_INTERVAL_MS = 250;
-// Deployed runs pay for SQS long-poll, the container's poll cadence, and — on a
-// cold service — Fargate task startup + image pull, so the budget is generous.
-const RESULT_POLL_BUDGET_MS = 120_000;
+// Deployed runs pay for SQS long-poll, the container's poll cadence, and — most
+// significantly — a COLD Fargate start: Express Mode reports the stack "deployed"
+// before the ECS task is actually RUNNING, so the task still has to be scheduled,
+// pull the ARM64 image, boot, and start its SQS poller before the first job is
+// picked up. That can take a few minutes on a cold service, so the budget is
+// deliberately generous (the CI job's own 60-min timeout is the real backstop).
+const RESULT_POLL_BUDGET_MS = 300_000;
 
 async function pollForResult<T>(fetchOne: () => Promise<T | null>): Promise<T | null> {
   const deadline = Date.now() + RESULT_POLL_BUDGET_MS;
@@ -139,9 +143,14 @@ test('Compute Smoke Tests', async (t) => {
     // The handler busy-loops ~60s but the job's limit is 3s. If the timeout were
     // merely cooperative, this non-cooperative loop would run to completion and
     // write the "completed" marker. Because the worker thread is hard-terminated
-    // at 3s, the marker is never written. Wait past the limit (and a couple redrive
-    // cycles) and assert it never completed.
-    await sleep(30_000);
+    // at 3s, the marker is never written.
+    //
+    // Wait long enough that the slow-worker container has cold-started and had a
+    // chance to pick up and (fail to) process the job — otherwise "no marker"
+    // could reflect a not-yet-started worker rather than an enforced termination.
+    // The success test above already warmed the shared ECS cluster + image cache,
+    // so the slow-worker starts faster than a truly cold pull.
+    await sleep(90_000);
     const result = await rpc('containerTimeoutJobGetResult', key);
     // The API returns `null` when the "completed" marker was never written; over
     // raw JSON-RPC a null result field surfaces as `undefined` (JSON has no
