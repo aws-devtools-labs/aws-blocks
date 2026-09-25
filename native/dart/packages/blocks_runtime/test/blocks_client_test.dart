@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:blocks_runtime/blocks_runtime.dart';
+import 'package:blocks_runtime/src/user_agent.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -21,6 +22,20 @@ void main() {
       expect(sentBody!['method'], 'hello.greet');
       expect(sentBody!['params'], {'name': 'world'});
       expect(sentBody!['id'], isA<int>());
+    });
+
+    test('sends x-blocks-user-agent header', () async {
+      Map<String, String>? sentHeaders;
+      final mockClient = MockClient((req) async {
+        sentHeaders = req.headers;
+        return http.Response(
+          jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+          200,
+        );
+      });
+      final client = BlocksClient(baseUrl: 'http://test', client: mockClient);
+      await client.call('test', {});
+      expect(sentHeaders!['x-blocks-user-agent'], blocksUserAgentToken);
     });
 
     test('throws BlocksRpcException on error response', () async {
