@@ -335,6 +335,9 @@ function createChatForConvo(conversationId: string) {
 			// Forward it VERBATIM so the transport's object branch wires onReconnect/onDisconnect;
 			// narrow the union to the object overload without a cast (a callable-with-props would
 			// drop reconnect handling).
+			// The hydrated client's subscribe is OVERLOADED (handler | options), so a union arg
+			// matches neither overload — narrow to the concrete branch. Both call the object
+			// overload for the options form (useChat always passes the object), forwarding verbatim.
 			return typeof sub === 'function' ? channel.subscribe(sub) : channel.subscribe(sub);
 		},
 		onMessagesChange: (msgs) => {

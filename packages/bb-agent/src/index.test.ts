@@ -1491,8 +1491,10 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
-	test('reconnect re-checks pending interrupts', async () => {
+	test('reconnect re-checks pending interrupts', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
 		let interruptsReceived: Array<{ id: string; name: string; reason?: unknown }> | undefined;
+		let errorReceived: string | undefined;
 		const { cap, subscribe } = subscribeCapture();
 
 		const chat = useChat({
@@ -1505,6 +1507,7 @@ describe('useChat', () => {
 			},
 			subscribe,
 			onInterrupt: (ints) => { interruptsReceived = ints; },
+			onError: (e) => { errorReceived = e; },
 		});
 
 		await chat.sendMessage('hello');
@@ -1514,6 +1517,13 @@ describe('useChat', () => {
 		assert.ok(interruptsReceived, 'pending interrupt should surface after reconnect');
 		assert.strictEqual(interruptsReceived!.length, 1);
 		assert.strictEqual(interruptsReceived![0].name, 'approve:refund');
+		// A recovered interrupt PAUSES the turn: loading must clear (the user is at the
+		// approval prompt) and the reconnect failsafe must NOT be left ticking, so it can't
+		// fire 'Timed out' ~11min later while the user is legitimately deciding.
+		assert.strictEqual(chat.isLoading(), false, 'a recovered pending interrupt clears loading (turn paused)');
+		t.mock.timers.tick(700_000); // past the whole failsafe window
+		assert.strictEqual(chat.isLoading(), false, 'no failsafe fires while paused at a recovered interrupt');
+		assert.strictEqual(errorReceived, undefined, 'no spurious Timed-out error fires at the approval prompt');
 		chat.destroy();
 	});
 

@@ -479,7 +479,8 @@ export function agentTests(getApi: () => typeof apiType) {
           },
           subscribe: async (channelId, s) => {
             const { channel } = await api.agentGetChannel(channelId);
-            // Forward VERBATIM (object branch); capture the handle to force a drop.
+            // Forward VERBATIM; the hydrated client's subscribe is overloaded, so narrow the
+            // union to a concrete branch. Capture the handle to force a mid-turn drop.
             sub = typeof s === 'function' ? channel.subscribe(s) : channel.subscribe(s);
             return sub;
           },

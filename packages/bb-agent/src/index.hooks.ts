@@ -312,7 +312,17 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			if (options.api.getPendingInterrupts) {
 				const { interrupts } = await options.api.getPendingInterrupts(conversationId);
 				if (destroyed) return;
-				if (interrupts.length) options.onInterrupt?.(interrupts);
+				if (interrupts.length) {
+					// The turn is PAUSED at an approval prompt — treat it exactly like a live
+					// `interrupt` chunk: clear the failsafe armed just above and drop loading,
+					// so the ~11-min 'Timed out' failsafe cannot fire while the user is legitimately
+					// deciding (no chunks arrive while paused, so nothing would re-arm it).
+					assistantId = null;
+					clearFailsafe();
+					loading = false;
+					options.onLoadingChange?.(loading);
+					options.onInterrupt?.(interrupts);
+				}
 			}
 		} catch (err) {
 			if (destroyed) return;
@@ -466,6 +476,11 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		async respondToInterrupt(responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>) {
 			if (loading) return;
 			if (!conversationId) throw new Error('No active conversation');
+			// Guard BEFORE mutating any state: if resume is unconfigured, throw before we set
+			// loading or create a placeholder, so an unconfigured call can't leave the spinner
+			// stuck or orphan an empty assistant bubble (the failure mode this method's rejection
+			// path already handles).
+			if (!options.api.resume) throw new Error('respondToInterrupt requires api.resume to be configured');
 			// Add approval messages to chat immediately
 			for (const r of responses) {
 				messages = [...messages, { id: nextId(), role: 'approval' as const, content: r.approved ? 'Approved' : 'Denied', metadata: { approved: r.approved, trust: r.trust, toolName: r.toolName, input: r.input } }];
@@ -484,7 +499,6 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			errorReported = false; // fresh turn — allow one onError report
 			loading = true;
 			options.onLoadingChange?.(loading);
-			if (!options.api.resume) throw new Error('respondToInterrupt requires api.resume to be configured');
 			try {
 				await options.api.resume(conversationId, responses, conversationId);
 			} catch (err) {
