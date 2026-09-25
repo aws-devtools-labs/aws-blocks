@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import { ApiError } from 'aws-blocks';
+import { ApiError } from '@aws-blocks/blocks/client';
 import type { api as apiType } from 'aws-blocks';
 
 installCookieJar();
