@@ -1,14 +1,13 @@
 import { createRequire } from 'node:module';
 import { platform } from 'node:os';
 
-// Loaded with require() rather than `import` so a test can drop it from require.cache
-// and re-import this module to re-run ci-info's import-time detection.
+// Use require() so tests can clear ci-info from require.cache and rerun its import-time detection.
 const ciInfo: { isCI: boolean } = createRequire(import.meta.url)('ci-info');
 
-// Previously checked variables that ci-info does not match on their own.
+// Checked by the previous implementation; ci-info does not match these alone.
 const EXTRA_CI_ENV_VARS = ['CODEBUILD_BUILD_ID', 'JENKINS_URL', 'BITBUCKET_BUILD_NUMBER', 'TASKCLUSTER_ROOT_URL'];
 
-// npm appends `ci/<vendor>` to its user agent when it detects CI.
+// npm adds `ci/<vendor>` to its user agent when it detects CI.
 const NPM_USER_AGENT_CI_TOKEN = /(?:^|\s)ci\//;
 
 /**
@@ -25,17 +24,7 @@ export function detectNodeVersion(): string {
   return process.versions.node;
 }
 
-/**
- * Detect whether the current process is running inside a CI/CD environment.
- *
- * True when the `ci-info` package (the detection npm uses for its user agent)
- * reports CI, when `npm_config_user_agent` carries npm's `ci/<vendor>` token, or
- * when one of a few variables checked by the previous implementation is set.
- * `ci-info` evaluates the environment once at import time; the extra checks read
- * `process.env` on every call and, like `ci-info`, are skipped when `CI=false`.
- *
- * @returns `true` when a CI environment is detected.
- */
+/** Detect CI via ci-info (fixed at import) plus per-call extra checks; `CI=false` disables all. */
 export function isCI(): boolean {
   if (ciInfo.isCI) return true;
   const env = process.env;

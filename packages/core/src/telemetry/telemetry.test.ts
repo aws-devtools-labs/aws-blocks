@@ -125,8 +125,7 @@ describe('telemetry/environment', () => {
     const requireCjs = createRequire(import.meta.url);
     let loadCount = 0;
 
-    // ci-info computes isCI when first required: set the env, drop ci-info from
-    // require.cache, and import a fresh copy of the module under test.
+    // Reload ci-info after setting the environment because isCI is computed on first require.
     async function loadIsCIWith(env: NodeJS.ProcessEnv): Promise<() => boolean> {
       process.env = { ...env };
       delete requireCjs.cache[requireCjs.resolve('ci-info')];
