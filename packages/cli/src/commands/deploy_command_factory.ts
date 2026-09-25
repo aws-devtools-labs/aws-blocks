@@ -4,6 +4,7 @@
 import type { CommandModule } from 'yargs';
 import { deploy } from '../lib/deploy.js';
 import { requireBlocksApp } from '../paths.js';
+import { verbose } from '../logger.js';
 
 /** `blocks deploy` — deploy the production stack via CDK. */
 export function createDeployCommand(): CommandModule {
@@ -13,6 +14,8 @@ export function createDeployCommand(): CommandModule {
 		builder: (yargs) => yargs,
 		handler: async () => {
 			const { cdkAppPath, projectRoot } = requireBlocksApp();
+			verbose(`project root: ${projectRoot}`);
+			verbose(`cdk app: ${cdkAppPath}`);
 			await deploy({ cdkAppPath, projectRoot });
 		},
 	};

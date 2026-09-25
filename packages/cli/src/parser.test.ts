@@ -51,6 +51,7 @@ const ALL_COMMANDS = [
 	'generate-client',
 	'vendorize',
 	'telemetry',
+	'help',
 ];
 
 describe('blocks parser', () => {
@@ -102,5 +103,22 @@ describe('blocks parser', () => {
 		} finally {
 			process.chdir(prevCwd);
 		}
+	});
+
+	it('exposes the global --verbose, --debug and --quiet flags in help', () => {
+		const { output } = capture(['--help']);
+		assert.ok(output.includes('--verbose'), `help should list --verbose\n${output}`);
+		assert.ok(output.includes('--debug'), `help should list --debug\n${output}`);
+		assert.ok(output.includes('--quiet'), `help should list --quiet\n${output}`);
+	});
+
+	it('registers an explicit `help` command', () => {
+		const { output } = capture(['--help']);
+		assert.ok(output.includes('help'), `help output should list the help command\n${output}`);
+	});
+
+	it('prints an epilogue with the docs link', () => {
+		const { output } = capture(['--help']);
+		assert.ok(output.includes('github.com/aws-devtools-labs/aws-blocks'), `help should show the docs link\n${output}`);
 	});
 });

@@ -4,6 +4,7 @@
 import type { CommandModule } from 'yargs';
 import { startSandbox } from '../lib/sandbox.js';
 import { requireBlocksApp } from '../paths.js';
+import { verbose } from '../logger.js';
 
 interface SandboxArgs {
 	'deploy-only'?: boolean;
@@ -32,6 +33,7 @@ export function createSandboxCommand(): CommandModule<object, SandboxArgs> {
 				}),
 		handler: async (args) => {
 			const { cdkAppPath } = requireBlocksApp();
+			verbose(`cdk app: ${cdkAppPath}`);
 			await startSandbox({
 				backendPath: cdkAppPath,
 				deployOnly: args['deploy-only'],

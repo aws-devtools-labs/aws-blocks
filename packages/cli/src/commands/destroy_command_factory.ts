@@ -4,6 +4,7 @@
 import type { CommandModule } from 'yargs';
 import { destroy } from '../lib/destroy.js';
 import { requireBlocksApp } from '../paths.js';
+import { verbose } from '../logger.js';
 
 /** `blocks destroy` — tear down the production stack via CDK. */
 export function createDestroyCommand(): CommandModule {
@@ -13,6 +14,8 @@ export function createDestroyCommand(): CommandModule {
 		builder: (yargs) => yargs,
 		handler: async () => {
 			const { cdkAppPath, projectRoot } = requireBlocksApp();
+			verbose(`project root: ${projectRoot}`);
+			verbose(`cdk app: ${cdkAppPath}`);
 			await destroy({ cdkAppPath, projectRoot });
 		},
 	};

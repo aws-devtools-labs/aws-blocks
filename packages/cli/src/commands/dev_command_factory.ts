@@ -4,6 +4,7 @@
 import type { CommandModule } from 'yargs';
 import { startDevServer } from '../lib/dev-server.js';
 import { resolveAppPaths } from '../paths.js';
+import { verbose } from '../logger.js';
 
 interface DevArgs {
 	port?: number;
@@ -35,6 +36,7 @@ export function createDevCommand(): CommandModule<object, DevArgs> {
 				}),
 		handler: async (args) => {
 			const { backendPath } = resolveAppPaths();
+			verbose(`backend: ${backendPath}`);
 			await startDevServer({
 				backendPath,
 				port: args.port,
