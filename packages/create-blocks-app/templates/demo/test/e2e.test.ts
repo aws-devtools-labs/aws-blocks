@@ -1,9 +1,8 @@
-import { test, type TestContext } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import { ApiError } from '@aws-blocks/blocks/client';
 import type { api as apiType, hello as helloType } from 'aws-blocks';
 
 installCookieJar();
@@ -56,41 +55,19 @@ test('app: server serves its Blocks config', async () => {
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
 
-// Run a test against the sample API the template ships with, so a freshly
-// scaffolded app is validated end to end. The generated client is a Proxy, so
-// every method looks callable — a method you have removed only shows up at call
-// time as a JSON-RPC "method not found" error. In that case the sample API was
-// replaced, so skip; anything else is a real failure and is rethrown.
-async function runSampleApiTest(t: TestContext, body: () => Promise<void>): Promise<void> {
-  try {
-    await body();
-  } catch (err) {
-    // A removed method throws a "Method not found" ApiError; a removed whole
-    // namespace makes the client undefined, so the call throws a TypeError.
-    // Either way the sample API is gone, so skip rather than fail.
-    const removed =
-      (err instanceof ApiError && err.message.startsWith('Method not found')) ||
-      (err instanceof TypeError && /undefined/.test(err.message));
-    if (removed) {
-      t.skip('sample API removed — replace with tests for your own methods');
-      return;
-    }
-    throw err;
-  }
-}
-
-// Run against the sample API so a scaffolded app is validated end to end.
-// Each self-skips once you remove the method it exercises; copy a block for your own.
-test('greet returns message and timestamp', (t) => runSampleApiTest(t, async () => {
+// Run against the sample API the template ships with, so a freshly scaffolded
+// app is validated end to end. When you replace the sample API, update or
+// delete these tests to exercise your own methods instead.
+test('greet returns message and timestamp', async () => {
   const result = await hello.greet('World');
   assert.strictEqual(result.message, 'Hello, World!');
   assert.ok(typeof result.timestamp === 'number');
-}));
+});
 
-test('KV Store - set and get', (t) => runSampleApiTest(t, async () => {
+test('KV Store - set and get', async () => {
   const setResult = await api.setValue('test-key', 'test-value');
   assert.strictEqual(setResult.success, true);
 
   const value = await api.getValue('test-key');
   assert.strictEqual(value, 'test-value');
-}));
+});
