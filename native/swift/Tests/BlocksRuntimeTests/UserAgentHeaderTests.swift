@@ -17,6 +17,17 @@ final class UserAgentHeaderTests: XCTestCase {
         func onClosed(_ webSocket: URLSessionWebSocketTask, code: Int, reason: String) {}
     }
 
+    /// True if the head has a header whose name equals `name` (case-insensitive) and value
+    /// equals `value`; the exact-name match stops `x-blocks-user-agent` satisfying `User-Agent`.
+    private func wireHasHeader(_ head: String, name: String, value: String) -> Bool {
+        head.split(separator: "\r\n").contains { line in
+            let parts = line.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2 else { return false }
+            return parts[0].trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(name) == .orderedSame
+                && parts[1].trimmingCharacters(in: .whitespaces) == value
+        }
+    }
+
     func testRPCSessionSendsCustomUserAgentHeader() {
         let client = BlocksClient(url: "http://localhost")
         let headers = client.session.configuration.httpAdditionalHeaders
@@ -29,48 +40,69 @@ final class UserAgentHeaderTests: XCTestCase {
     }
 
     func testFileUploadRequestCarriesUserAgentHeader() async throws {
-        let config = URLSessionConfiguration.ephemeral
-        config.httpAdditionalHeaders = BlocksRuntimeSession.shared.configuration.httpAdditionalHeaders
-        config.protocolClasses = [MockURLProtocol.self]
-        let session = URLSession(configuration: config)
+        // No session argument: exercises the `?? BlocksRuntimeSession.shared` default path.
+        let listener = try LoopbackListener()
+        defer { listener.close() }
 
-        var captured: String?
-        MockURLProtocol.handler = { request in
-            captured = request.value(forHTTPHeaderField: "User-Agent")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (response, Data())
-        }
+        let handle = FileUploadHandle(url: "http://127.0.0.1:\(listener.port)/put")
+        _ = try? await handle.upload(data: Data("x".utf8))
 
-        let handle = FileUploadHandle(url: "https://s3.example.com/put", session: session)
-        try await handle.upload(data: Data("x".utf8))
-        XCTAssertEqual(captured, blocksUserAgentToken)
+        let head = listener.waitForRequestHead()
+        XCTAssertTrue(
+            wireHasHeader(head, name: "User-Agent", value: blocksUserAgentToken),
+            "upload default session must send the user-agent on the wire; got: \(head)"
+        )
     }
 
     func testFileDownloadRequestCarriesUserAgentHeader() async throws {
-        let config = URLSessionConfiguration.ephemeral
-        config.httpAdditionalHeaders = BlocksRuntimeSession.shared.configuration.httpAdditionalHeaders
-        config.protocolClasses = [MockURLProtocol.self]
-        let session = URLSession(configuration: config)
+        // No session argument: exercises the `?? BlocksRuntimeSession.shared` default path.
+        let listener = try LoopbackListener()
+        defer { listener.close() }
 
-        var captured: String?
-        MockURLProtocol.handler = { request in
-            captured = request.value(forHTTPHeaderField: "User-Agent")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (response, Data("x".utf8))
-        }
+        let handle = FileDownloadHandle(url: "http://127.0.0.1:\(listener.port)/get")
+        _ = try? await handle.download()
 
-        let handle = FileDownloadHandle(url: "https://s3.example.com/get", session: session)
-        _ = try await handle.download()
-        XCTAssertEqual(captured, blocksUserAgentToken)
+        let head = listener.waitForRequestHead()
+        XCTAssertTrue(
+            wireHasHeader(head, name: "User-Agent", value: blocksUserAgentToken),
+            "download default session must send the user-agent on the wire; got: \(head)"
+        )
     }
 
     func testWebSocketUpgradeSendsUserAgentHeader() throws {
+        let listener = try LoopbackListener()
+        defer { listener.close() }
+
         let session = WebSocketSession()
         let delegate = NoopWebSocketDelegate()
-        let connection = try session.acquire(wsUrl: "wss://127.0.0.1:1/ws", token: "tok", listener: delegate)
-        defer { session.release(wsUrl: "wss://127.0.0.1:1/ws", token: "tok", listener: delegate) }
+        let wsUrl = "ws://127.0.0.1:\(listener.port)/ws"
+        _ = try session.acquire(wsUrl: wsUrl, token: "tok", listener: delegate)
+        defer { session.release(wsUrl: wsUrl, token: "tok", listener: delegate) }
 
-        let sent = connection.task.originalRequest?.value(forHTTPHeaderField: "User-Agent")
-        XCTAssertEqual(sent, blocksUserAgentToken)
+        let head = listener.waitForRequestHead()
+        XCTAssertTrue(
+            wireHasHeader(head, name: "User-Agent", value: blocksUserAgentToken),
+            "WebSocket upgrade must send the user-agent on the wire; got: \(head)"
+        )
+    }
+
+    func testWebSocketUpgradeSetsUserAgentWhenSessionConfigLacksIt() throws {
+        let listener = try LoopbackListener()
+        defer { listener.close() }
+
+        // A caller-supplied session whose configuration carries no user-agent: the token
+        // reaches the wire only via the explicit setValue on the handshake request.
+        let bareSession = URLSession(configuration: .ephemeral)
+        let session = WebSocketSession(session: bareSession)
+        let delegate = NoopWebSocketDelegate()
+        let wsUrl = "ws://127.0.0.1:\(listener.port)/ws"
+        _ = try session.acquire(wsUrl: wsUrl, token: "tok", listener: delegate)
+        defer { session.release(wsUrl: wsUrl, token: "tok", listener: delegate) }
+
+        let head = listener.waitForRequestHead()
+        XCTAssertTrue(
+            wireHasHeader(head, name: "User-Agent", value: blocksUserAgentToken),
+            "explicit handshake user-agent must be sent even when the session config lacks it; got: \(head)"
+        )
     }
 }
