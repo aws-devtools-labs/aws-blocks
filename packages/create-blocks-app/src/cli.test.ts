@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
 import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
 
@@ -567,5 +567,43 @@ describe('create-blocks-app scaffold allowlist safety', () => {
       collisions.length === 0,
       `scaffold allowlist collides with template-written files:\n  ${collisions.join('\n  ')}`,
     );
+  });
+});
+
+describe('create-blocks-app bin-symlink invocation', () => {
+  it('runs the scaffold when invoked through a bin symlink (argv[1] is a symlink to the module)', (t) => {
+    // When installed, the CLI is invoked through its npm bin symlink
+    // (node_modules/.bin/create-blocks-app -> dist/index.js), so argv[1] is the
+    // symlink path while import.meta.url is the real file. The run() helper
+    // above calls dist/index.js directly and would NOT catch a guard that
+    // compares argv[1] verbatim; this test reproduces the symlink path.
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-binsymlink-'));
+    const linkPath = join(tmpDir, 'create-blocks-app-link');
+    const targetDir = join(tmpDir, 'my-app');
+    try {
+      try {
+        symlinkSync(CLI_PATH, linkPath);
+      } catch (err: any) {
+        // Some CI environments disallow symlink creation (e.g. EPERM); skip
+        // gracefully rather than hard-failing on unsupported platforms.
+        t.skip(`symlink creation unsupported: ${err?.code ?? err}`);
+        return;
+      }
+      let exitCode = 0;
+      try {
+        execFileSync('node', [linkPath, targetDir, '-y', '--skip-install'], {
+          encoding: 'utf-8',
+          timeout: 30000,
+        });
+      } catch (err: any) {
+        exitCode = err.status ?? 1;
+      }
+      assert.strictEqual(exitCode, 0);
+      // The guard let create() run through the symlink, so the scaffold happened.
+      assert.ok(existsSync(join(targetDir, 'aws-blocks')), 'expected aws-blocks/ to be scaffolded via the bin symlink');
+      assert.ok(existsSync(join(targetDir, 'package.json')), 'expected package.json to be created via the bin symlink');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
   });
 });

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { cp, mkdir, readFile, writeFile, rename, access, readdir } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync } from 'node:child_process';
@@ -823,9 +824,19 @@ async function create() {
   }, { template: templateName, templateVersion: templatePkgVersion });
 }
 
-// Run the CLI only when this module is the entry point. Guarding the auto-run
-// lets tests import the exported allowlist constants without triggering a
-// scaffold. When invoked as the CLI, argv[1] is this module's path.
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  create().catch(console.error);
+// Run the CLI only when this module is the entry point. Resolve argv[1]
+// through its real path first so an npm bin symlink (node_modules/.bin/…)
+// still matches this module's real file location. Guarding the auto-run
+// lets tests import the exported allowlist constants without scaffolding.
+const entryArg = process.argv[1];
+if (entryArg) {
+  let entryUrl: string | undefined;
+  try {
+    entryUrl = pathToFileURL(realpathSync(entryArg)).href;
+  } catch {
+    entryUrl = pathToFileURL(entryArg).href;
+  }
+  if (import.meta.url === entryUrl) {
+    create().catch(console.error);
+  }
 }
