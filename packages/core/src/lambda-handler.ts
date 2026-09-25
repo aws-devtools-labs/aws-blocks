@@ -16,6 +16,7 @@ import {
   methodNotFoundResponse,
 } from './rpc.js';
 import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
+import { CLIENT_USER_AGENT_HEADER, validateClientUserAgentToken } from './server/client-user-agent.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -30,6 +31,14 @@ export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
  */
 export const requestCookies = new AsyncLocalStorage<string>();
 (globalThis as any).__BLOCKS_REQUEST_COOKIES_STORE__ = requestCookies;
+
+/**
+ * Per-request store for the validated native-client token. Also registered on
+ * `globalThis.__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__` so the middleware can
+ * read it without importing `node:async_hooks`.
+ */
+export const requestClientUserAgent = new AsyncLocalStorage<string | undefined>();
+(globalThis as any).__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__ = requestClientUserAgent;
 
 /**
  * Event source mapping identifiers used by AWS when pushing records to Lambda.
@@ -507,7 +516,7 @@ function createHandler(backend: any) {
         headers: {
           ...corsHeaders,
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Access-Control-Allow-Headers': `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
           'Access-Control-Max-Age': CORS_MAX_AGE,
         },
         body: '',
@@ -521,7 +530,14 @@ function createHandler(backend: any) {
     // APIs server-side gets forwarded cookies.
     const inboundCookies = event.headers?.cookie || event.headers?.Cookie || '';
 
-    return requestCookies.run(inboundCookies, async () => {
+    // Validate the attacker-controlled header before storing, so malformed
+    // input never reaches the AWS user agent.
+    const clientUserAgent = validateClientUserAgentToken(
+      event.headers?.[CLIENT_USER_AGENT_HEADER] || event.headers?.['X-Blocks-User-Agent'],
+    );
+
+    return requestCookies.run(inboundCookies, () =>
+      requestClientUserAgent.run(clientUserAgent, async () => {
     // RawRoute dispatch — check path-based routes before falling through to RPC
     const requestPath = getRequestPath(event);
     if (requestPath !== BLOCKS_RPC_PREFIX) {
@@ -623,7 +639,7 @@ function createHandler(backend: any) {
         body: errorResponseFromCatch(error, rpcId),
       };
     }
-    });
+    }));
   };
 }
 

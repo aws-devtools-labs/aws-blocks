@@ -12,7 +12,7 @@ import {
 	CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type {
@@ -72,6 +72,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.s3 = new S3Client({
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(this.s3);
 	}
 
 	async put(path: string, body: Buffer | string, options?: PutOptions): Promise<void> {

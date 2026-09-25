@@ -6,7 +6,7 @@ import {
 	GetParameterCommand,
 	PutParameterCommand,
 } from '@aws-sdk/client-ssm';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { AppSettingErrors } from './errors.js';
@@ -97,6 +97,7 @@ export class AppSetting<T = string> extends Scope {
 		this.client = new SSMClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(this.client);
 		registerSdkIdentifiers(this.fullId, { parameterName });
 	}
 

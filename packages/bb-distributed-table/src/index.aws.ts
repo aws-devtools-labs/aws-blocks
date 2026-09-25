@@ -12,7 +12,7 @@ import {
 	BatchGetCommand,
 	BatchWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -103,6 +103,7 @@ export class DistributedTable<
 		const client = new DynamoDBClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(client);
 		this.docClient = DynamoDBDocumentClient.from(client);
 		registerSdkIdentifiers(this.fullId, { tableName });
 	}

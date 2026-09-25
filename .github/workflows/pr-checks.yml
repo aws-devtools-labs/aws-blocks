@@ -176,6 +176,9 @@ jobs:
       - name: Check aws-blocks exports consistency
         run: npm run check:exports-consistency
 
+      - name: Check client user-agent middleware consistency
+        run: npm run check:client-user-agent
+
       - name: Check API backward compatibility
         run: npm run check:api
 
