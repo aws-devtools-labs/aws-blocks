@@ -29,6 +29,7 @@
     "packages/bb-metrics",
     "packages/bb-lambda-compute",
     "packages/blocks",
+    "packages/cli",
     "packages/create-blocks-app",
     "packages/create-block",
     "test-apps/comprehensive",
