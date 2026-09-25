@@ -11,6 +11,8 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '@aws-blocks/core/runtime';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs } from './deploy-stream.js';
+import { filteredSink } from './stream-filter.js';
+import { getLogLevel } from '../logger.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -75,6 +77,8 @@ export async function deploy(options: DeployOptions) {
         {
           label: 'cdk deploy',
           cwd: options.projectRoot,
+          stdout: filteredSink(process.stdout, getLogLevel()),
+          stderr: filteredSink(process.stderr, getLogLevel()),
           env: {
             ...process.env,
             NODE_OPTIONS: '--conditions=cdk',
