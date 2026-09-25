@@ -25,6 +25,7 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
 // Re-export public types
+import { FileBucketErrors } from './errors.js';
 export { FileBucketErrors } from './errors.js';
 export type {
 	FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions,
@@ -86,10 +87,11 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	async get(path: string, options?: GetOptionsFor<O>): Promise<FileContent | null> {
+		const versionId = (options as { versionId?: string } | undefined)?.versionId;
 		try {
 			const result = await this.s3.send(new GetObjectCommand({
 				Bucket: getSdkIdentifiers(this).bucketName, Key: path,
-				...(options ? { VersionId: (options as any).versionId } : {}),
+				...(versionId !== undefined ? { VersionId: versionId } : {}),
 			}));
 			const bytes = await result.Body!.transformToByteArray();
 			return {
@@ -99,20 +101,47 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 				size: result.ContentLength ?? bytes.length,
 			};
 		} catch (e: unknown) {
-			// A missing object OR a missing version both mean "not found" — return
-			// null per get()'s documented contract and to match the mock, which
-			// returns null for an unknown `versionId`. Without NoSuchVersion here, an
-			// unknown versionId threw on AWS while the mock returned null (parity break).
-			if (e instanceof Error && (e.name === 'NoSuchKey' || e.name === 'NoSuchVersion')) return null;
+			if (e instanceof Error) {
+				// A missing object is "not found" — return null per get()'s
+				// documented contract, matching the mock.
+				if (e.name === 'NoSuchKey') return null;
+				// An unknown `versionId` is also "not found" (the mock returns null
+				// for it), but S3 does NOT signal it as NoSuchVersion: an id S3
+				// cannot resolve is rejected up front with `InvalidArgument`
+				// ("Invalid version id specified", 400) — verified against real S3 —
+				// while a well-formed id that no longer exists surfaces as
+				// `NoSuchVersion`. Fold both to null, but only when the caller
+				// actually supplied a versionId, so an InvalidArgument raised by
+				// anything else still propagates.
+				if (versionId !== undefined && (e.name === 'InvalidArgument' || e.name === 'NoSuchVersion')) return null;
+			}
 			throw e;
 		}
 	}
 
 	async delete(path: string, options?: DeleteOptionsFor<O>): Promise<void> {
-		await this.s3.send(new DeleteObjectCommand({
-			Bucket: getSdkIdentifiers(this).bucketName, Key: path,
-			...(options ? { VersionId: (options as any).versionId } : {}),
-		}));
+		const versionId = (options as { versionId?: string } | undefined)?.versionId;
+		try {
+			await this.s3.send(new DeleteObjectCommand({
+				Bucket: getSdkIdentifiers(this).bucketName, Key: path,
+				...(versionId !== undefined ? { VersionId: versionId } : {}),
+			}));
+		} catch (e: unknown) {
+			// The mock deletes a specific version with `try { unlink } catch {}` — a
+			// silent no-op for an unknown version. Match that: S3 rejects an
+			// unresolvable versionId with `InvalidArgument` (or `NoSuchVersion` for a
+			// well-formed id that no longer exists), and DeleteObject is already a
+			// no-op for a missing key. Only swallow when a versionId was supplied, so
+			// an InvalidArgument from anything else still surfaces.
+			if (
+				versionId !== undefined &&
+				e instanceof Error &&
+				(e.name === 'InvalidArgument' || e.name === 'NoSuchVersion')
+			) {
+				return;
+			}
+			throw e;
+		}
 	}
 
 	async deleteBatch(paths: string[]): Promise<void> {
@@ -214,18 +243,30 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			await this.s3.send(new CopyObjectCommand({
 				Bucket: getSdkIdentifiers(this).bucketName,
 				Key: path,
-				CopySource: `${getSdkIdentifiers(this).bucketName}/${encodedPath}?versionId=${versionId}`,
+				// Encode the caller-supplied versionId too: it lands in a hand-built
+				// `x-amz-copy-source` header, so a value with `&`, `#`, `?` or a space
+				// would corrupt the header (and could append query params) rather than
+				// being rejected as an unknown version.
+				CopySource: `${getSdkIdentifiers(this).bucketName}/${encodedPath}?versionId=${encodeURIComponent(versionId)}`,
 			}));
 		} catch (e: unknown) {
-			// An unknown version (or a missing key) surfaces as a violated
-			// precondition. Match the mock exactly: throw via the same core
-			// `blocksError('NoSuchVersion', …)` helper it uses — identical `.name`
-			// (matchable via `isBlocksError(e, 'NoSuchVersion')`) AND identical,
-			// name-prefixed `.message` — rather than the raw S3 error, whose
-			// enumerable `$metadata`/ARNs would leak to the client if serialized
-			// (see Core rule 5).
-			if (e instanceof Error && (e.name === 'NoSuchVersion' || e.name === 'NoSuchKey')) {
-				throw blocksError('NoSuchVersion', `Version "${versionId}" does not exist for "${path}"`);
+			// An unknown version (or a missing key) is a violated precondition.
+			// Match the mock exactly: throw via core's `blocksError('NoSuchVersion',
+			// …)` — the same producer the mock uses — so both `.name` (matchable via
+			// `isBlocksError(e, 'NoSuchVersion')`) AND the name-prefixed `.message`
+			// agree across runtimes, instead of the raw S3 error whose enumerable
+			// `$metadata`/ARNs would leak to the client if serialized (Core rule 5).
+			// S3 spells an unresolvable version id as `InvalidRequest` on CopyObject
+			// (verified against real S3), `InvalidArgument` for a malformed id, or
+			// `NoSuchVersion` for a well-formed id that no longer exists.
+			if (
+				e instanceof Error &&
+				(e.name === 'NoSuchVersion' ||
+					e.name === 'NoSuchKey' ||
+					e.name === 'InvalidRequest' ||
+					e.name === 'InvalidArgument')
+			) {
+				throw blocksError(FileBucketErrors.VersionNotFound, `Version "${versionId}" does not exist for "${path}"`);
 			}
 			throw e;
 		}
