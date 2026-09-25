@@ -817,7 +817,9 @@ export class Hosting extends Construct {
         : typeof props.frontDoor === 'object' &&
             props.api &&
             'kind' in props.frontDoor &&
-            (props.frontDoor.kind === 'alb' || props.frontDoor.kind === 'apiGateway')
+            (props.frontDoor.kind === 'alb' ||
+              props.frontDoor.kind === 'apiGateway' ||
+              props.frontDoor.kind === 'custom')
           ? { ...props.frontDoor, backendApiUrl: props.api.apiUrl }
           : (props.frontDoor as HostingConstructProps['frontDoor']),
     };
