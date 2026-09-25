@@ -61,6 +61,18 @@ const MODEL_ACCEPTS_TEMPERATURE = !/opus/i.test(MODEL_ID);
 // Runaway-loop backstop (one turn = one model call + its tool calls); the real bound is the 35-min
 // wall-clock timeout, which prior runs used only ~20% of, so 120 leaves ample headroom.
 const MAX_TURNS = 120;
+// Explicit per-response OUTPUT ceiling. Previously we set no maxTokens, so the Strands SDK's
+// BedrockModel left `maxTokens` OUT of the Converse request entirely (its constructor defaults only
+// modelId, not maxTokens — the MODEL_DEFAULTS.maxTokens constant is a HARNESS default, unused by the
+// bare SDK model we construct here). With the field omitted, Bedrock applied its own low server-side
+// default per response, which a single large output turn (e.g. one big file write) could exceed →
+// a NON-RETRYABLE MaxTokensError that killed the cell (observed on cognito-profile from ~Sep 24).
+// Pinning an explicit cap removes that dependency on Bedrock's omitted-field default. 48_000 sits
+// above the largest output any cleanly-passing cell has ever produced (max observed: kb-chat-agent
+// 39_097 tokens ACROSS 90 turns; highest single-turn average ~950), so it CANNOT truncate a
+// currently-passing turn — a per-response ceiling only ever lets a formerly cap-hitting turn finish,
+// never changes a turn that already completed below it. Well under opus-4-8's 128K max output.
+const MAX_OUTPUT_TOKENS = 48_000;
 // Floor for the vended bash timeout (s): the tool defaults to 120s (kills npm install/build) and has
 // no timeout knob, so WorkspaceSandbox raises any provided timeout to at least this. 10 min is ample.
 const BASH_MIN_TIMEOUT_SEC = 600;
@@ -106,6 +118,9 @@ function makeBuilderAgent(): Agent {
 		model: new BedrockModel({
 			modelId: MODEL_ID,
 			region: process.env.AWS_REGION ?? 'us-east-1',
+			// Pin the per-response output cap (see MAX_OUTPUT_TOKENS) so it does not depend on Bedrock's
+			// omitted-field server default, which a large-output turn can exceed → non-retryable MaxTokensError.
+			maxTokens: MAX_OUTPUT_TOKENS,
 			...(MODEL_ACCEPTS_TEMPERATURE ? { temperature: 0 } : {}),
 			// AWS-SDK-layer adaptive retry — the lower half of the two-layer throttle defense (the
 			// app-level loop around invoke() is the upper half); often absorbs a TPM throttle inside invoke.
