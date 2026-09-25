@@ -110,7 +110,11 @@ export type NegotiateOptions = {
  */
 export const negotiate = (
   plan: CapabilityPlan,
-  adapter: FrontDoorAdapter,
+  // Only the capability declaration is needed — `service` (diagnostics) +
+  // `supports`. Accepting the `Pick` (not the full {@link FrontDoorAdapter})
+  // lets a `render`- OR `renderLayer`-shaped adapter (incl. a BYO custom door)
+  // be negotiated without also implementing the render method.
+  adapter: Pick<FrontDoorAdapter, 'service' | 'supports'>,
   options: NegotiateOptions = {},
 ): NegotiationResult => {
   const required = new Set<CapabilityId>(options.required ?? requiredCapabilities(plan));
