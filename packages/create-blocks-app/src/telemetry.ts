@@ -34,17 +34,12 @@ const blocksVersion: string = JSON.parse(
 // Checked by the previous implementation; ci-info does not match these alone.
 const EXTRA_CI_ENV_VARS = ['CODEBUILD_BUILD_ID', 'JENKINS_URL', 'BITBUCKET_BUILD_NUMBER', 'TASKCLUSTER_ROOT_URL'];
 
-// npm adds `ci/<vendor>` in CI; catches children whose env drops the vendor vars but keeps the user agent.
-const NPM_USER_AGENT_CI_TOKEN = /(?:^|\s)ci\//;
-
 /** ci-info result (fixed at import) OR per-call extra checks; `CI=false` at startup disables both. */
 export function isCI(): boolean {
   if (ciInfoIsCI) return true;
   const env = process.env;
   if (env.CI === 'false') return false;
-  return (
-    EXTRA_CI_ENV_VARS.some((key) => !!env[key]) || NPM_USER_AGENT_CI_TOKEN.test(env.npm_config_user_agent ?? '')
-  );
+  return EXTRA_CI_ENV_VARS.some((key) => !!env[key]);
 }
 
 function isTelemetryEnabled(): boolean {

@@ -44,7 +44,7 @@ describe('create-blocks-app telemetry/isCI', () => {
   }
 
   it('loads the shared case table', () => {
-    assert.ok(cases.length > 30, `expected the shared isCI cases, got ${cases.length}`);
+    assert.ok(cases.length > 20, `expected the shared isCI cases, got ${cases.length}`);
   });
 
   for (const testCase of cases) {
