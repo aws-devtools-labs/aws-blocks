@@ -207,6 +207,7 @@ Channel path:             my-app-collab/chat/room-123
 | Single-process only | No cross-process pub/sub | Local dev is single-process |
 | No message ordering guarantees | In-process delivery is synchronous (ordered); AWS may deliver out of order | Ordering is inherently non-deterministic |
 | ~~No size/length enforcement locally~~ | ~~Silent failures in AWS~~ | **Fixed** — channel path (1024B) and publish size (32KB) are now enforced in both environments |
+| Mock fires `onReconnect` connection-wide once resubscribe frames are sent; AWS fires it per-channel only after that channel's resubscribe is server-CONFIRMED | A multi-channel local test can observe `onReconnect` for a channel the real server would have rejected with `onDisconnect('error')` — so multi-channel reconnect-rejection behavior differs between local dev and deployed | Sandbox-test multi-channel reconnect flows; treat `onReconnect` as "resubscribe attempted", not "channel guaranteed live", and backfill from the durable store |
 
 ## Serialization
 
