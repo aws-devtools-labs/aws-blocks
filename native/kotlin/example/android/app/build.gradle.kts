@@ -42,7 +42,7 @@ awsBlocks {
     apiSpec = rootProject.file("../typescript/aws-blocks/blocks.spec.json")
     packageName = "blocks.testapp"
     oidc {
-        redirectUrl = "blocks.testapp://oidcRedirect"
+        relayTo = "blocks.testapp://oidcRedirect"
     }
 }
 

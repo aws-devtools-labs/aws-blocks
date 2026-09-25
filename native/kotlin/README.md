@@ -52,10 +52,19 @@ awsBlocks {
         prod("https://api.example.com")
         custom("staging", "https://staging.example.com")
     }
+
+    // Only needed to use the OIDC client on Android or iOS, where the relay scheme is
+    // registered with the operating system. Must match an entry in the backend's
+    // allowedRelayOrigins. JVM binds a loopback address per sign-in and ignores this.
+    oidc {
+        relayTo = "com.yourcompany.yourapp://auth/callback"
+    }
 }
 ```
 
 Servers defined in the `servers` block override entries from the spec file that share the same name. New names are added alongside the spec's servers.
+
+On iOS, declare the same `relayTo` scheme in the app's `Info.plist` under `CFBundleURLTypes` — the Gradle plugin cannot reach an Xcode project. Android needs nothing further; the plugin injects the scheme into the merged manifest.
 
 ## Using the Generated Code
 
@@ -102,7 +111,7 @@ See the [`example/android`](example/android) directory for a complete Android ap
 | General/RPC | ✅ | ✅ | ✅ |
 | Realtime    | ✅ | ✅ | ✅ |
 | File Bucket | ✅ | ✅ | ✅ |
-| OIDC        | ✅ | ❌ | ❌ |
+| OIDC        | ✅ | ✅ | ✅ |
 
 ## Requirements
 
