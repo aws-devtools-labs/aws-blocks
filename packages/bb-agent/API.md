@@ -58,6 +58,7 @@ export const AgentErrors: {
     readonly BrowserNotSupported: "BrowserNotSupportedException";
     readonly StreamFailed: "StreamFailedException";
     readonly InterruptRequired: "InterruptRequiredException";
+    readonly InvalidUsage: "InvalidUsageException";
 };
 
 // @public (undocumented)
