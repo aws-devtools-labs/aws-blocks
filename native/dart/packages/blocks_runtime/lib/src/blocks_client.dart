@@ -6,6 +6,7 @@ import 'auth_provider.dart';
 import 'blocks_rpc_exception.dart';
 import 'session_store.dart';
 import 'token_store.dart';
+import 'user_agent.dart';
 
 /// JSON-RPC 2.0 HTTP client for Blocks backends.
 class BlocksClient {
@@ -54,7 +55,11 @@ class BlocksClient {
       'id': id,
     });
 
-    final headers = <String, String>{'Content-Type': 'application/json'};
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      // The Blocks server reads x-blocks-user-agent.
+      'x-blocks-user-agent': blocksUserAgentToken,
+    };
 
     // Bearer token takes priority
     if (authProvider != null) {
