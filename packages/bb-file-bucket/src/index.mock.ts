@@ -14,9 +14,10 @@ import {
 } from './paths.js';
 import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 import { validateBucketName } from './bucket-name.js';
+import { validateFileBucketOptions } from './validation.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, ExternalBucketRef, CorsRule,
+	FileContent, FileInfo, ExternalBucketRef,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
 } from './types.js';
@@ -39,17 +40,6 @@ export { FileBucketErrors } from './errors.js';
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const MAX_KEY_BYTES = 1024; // S3 key limit
-
-// Mirrors of the CDK synth-time-guard constants (index.cdk.ts). Duplicated here
-// rather than imported — the CDK entry (index.cdk.ts) pulls in aws-cdk-lib and
-// must never be imported into the mock runtime. Kept byte-identical to the CDK
-// definitions so the two guards below reject exactly what `cdk synth` rejects.
-
-/** Default number of days after which noncurrent object versions expire. */
-const DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS = 90;
-
-/** HTTP methods that mutate bucket state; unsafe to expose to wildcard origins. */
-const MUTATING_CORS_METHODS: ReadonlyArray<CorsRule['allowedMethods'][number]> = ['PUT', 'POST', 'DELETE'];
 
 function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
@@ -105,42 +95,12 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		// deployed bucket name), not the `mock-` prefixed local name, to keep
 		// parity with the CDK path.
 		if (!options?.bucket) validateBucketName(this.fullId);
-		// Mirror the CDK's two synth-time guards (index.cdk.ts) VERBATIM so a
-		// local/unit run rejects exactly what `cdk synth` would. Gated on
-		// `!options?.bucket` alongside validateBucketName: the CDK's
-		// external-bucket branch returns before these checks, so a wrapped
-		// bucket bypasses them here too. Plain `throw new Error(...)` (no
-		// `name`, no blocksError factory) to match the CDK path exactly — using
-		// blocksError() would set an `error.name` the CDK guards don't, breaking
-		// mock↔cdk parity.
-		if (!options?.bucket) {
-			// Reject unsafe CORS: a wildcard origin ('*') combined with a mutating
-			// method (PUT/POST/DELETE) lets any site issue state-changing
-			// cross-origin requests.
-			for (const rule of options?.corsRules ?? []) {
-				if (rule.allowedOrigins.includes('*')) {
-					const mutating = rule.allowedMethods.filter(m => MUTATING_CORS_METHODS.includes(m));
-					if (mutating.length > 0) {
-						throw new Error(
-							`FileBucket "${this.fullId}": CORS rule with wildcard origin '*' must not allow mutating method(s) ${mutating.join(', ')}. ` +
-							`Specify explicit allowedOrigins (e.g. 'https://app.example.com') for ${mutating.join(', ')} instead of '*'.`,
-						);
-					}
-				}
-			}
-			// Reject a non-positive or non-integer noncurrent-version expiration.
-			// The FORMAT is validated regardless of `versioned` (matching CDK) so
-			// a malformed value is caught even when versioning is off.
-			if (options?.noncurrentVersionExpirationDays !== undefined) {
-				const days = options.noncurrentVersionExpirationDays;
-				if (!Number.isInteger(days) || days <= 0) {
-					throw new Error(
-						`FileBucket "${this.fullId}": noncurrentVersionExpirationDays must be a positive integer (got ${days}). ` +
-						`Omit it to use the default of ${DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS} days.`,
-					);
-				}
-			}
-		}
+		// Run the CDK's synth-time option guards locally too, via the shared
+		// validation.ts, so a local/unit run rejects exactly what `cdk synth`
+		// would. Gated on `!options?.bucket` alongside validateBucketName: the
+		// CDK's external-bucket branch returns before these checks, so a wrapped
+		// bucket bypasses them here too.
+		if (!options?.bucket) validateFileBucketOptions(this.fullId, options);
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.dataDir = getMockDataDir(this);
 		this.versioned = options?.versioned ?? true;
@@ -148,7 +108,9 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.registerDevAttachment('@aws-blocks/bb-file-bucket/file-server');
 		registerSdkIdentifiers(this.fullId, { bucketName: `mock-${this.fullId}` });
 		// Register in global registry so the file-server can delegate PUT to bucket.put()
-		const registry = ((globalThis as any).__BLOCKS_FILE_BUCKET_REGISTRY__ ??= new Map());
+		const g = globalThis as any;
+		g.__BLOCKS_FILE_BUCKET_REGISTRY__ ??= new Map();
+		const registry = g.__BLOCKS_FILE_BUCKET_REGISTRY__;
 		registry.set(this.fullId, this);
 	}
 
