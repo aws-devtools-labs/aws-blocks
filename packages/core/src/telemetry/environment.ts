@@ -1,13 +1,11 @@
-import { createRequire } from 'node:module';
 import { platform } from 'node:os';
 
-// Use require() so tests can clear ci-info from require.cache and rerun its import-time detection.
-const ciInfo: { isCI: boolean } = createRequire(import.meta.url)('ci-info');
+import { isCI as ciInfoIsCI } from 'ci-info';
 
 // Checked by the previous implementation; ci-info does not match these alone.
 const EXTRA_CI_ENV_VARS = ['CODEBUILD_BUILD_ID', 'JENKINS_URL', 'BITBUCKET_BUILD_NUMBER', 'TASKCLUSTER_ROOT_URL'];
 
-// npm adds `ci/<vendor>` to its user agent when it detects CI.
+// npm adds `ci/<vendor>` in CI; catches children whose env drops the vendor vars but keeps the user agent.
 const NPM_USER_AGENT_CI_TOKEN = /(?:^|\s)ci\//;
 
 /**
@@ -24,9 +22,9 @@ export function detectNodeVersion(): string {
   return process.versions.node;
 }
 
-/** Detect CI via ci-info (fixed at import) plus per-call extra checks; `CI=false` disables all. */
+/** ci-info result (fixed at import) OR per-call extra checks; `CI=false` at startup disables both. */
 export function isCI(): boolean {
-  if (ciInfo.isCI) return true;
+  if (ciInfoIsCI) return true;
   const env = process.env;
   if (env.CI === 'false') return false;
   return (

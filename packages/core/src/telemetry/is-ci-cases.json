@@ -1,0 +1,85 @@
+{
+  "cases": [
+    { "name": "CI=true", "env": { "CI": "true" }, "expected": true },
+    { "name": "CONTINUOUS_INTEGRATION", "env": { "CONTINUOUS_INTEGRATION": "true" }, "expected": true },
+    { "name": "GitHub Actions", "env": { "GITHUB_ACTIONS": "true" }, "expected": true },
+    { "name": "CodeBuild (CODEBUILD_BUILD_ID)", "env": { "CODEBUILD_BUILD_ID": "build-123" }, "expected": true },
+    {
+      "name": "CodeBuild (CODEBUILD_BUILD_ARN)",
+      "env": { "CODEBUILD_BUILD_ARN": "arn:aws:codebuild:us-east-1:000000000000:build/p:1" },
+      "expected": true
+    },
+    { "name": "GitLab CI", "env": { "GITLAB_CI": "true" }, "expected": true },
+    {
+      "name": "Jenkins (JENKINS_URL + BUILD_ID)",
+      "env": { "JENKINS_URL": "https://jenkins.example.com", "BUILD_ID": "42" },
+      "expected": true
+    },
+    { "name": "Jenkins (JENKINS_URL only)", "env": { "JENKINS_URL": "https://jenkins.example.com" }, "expected": true },
+    { "name": "Taskcluster (TASK_ID + RUN_ID)", "env": { "TASK_ID": "abc123", "RUN_ID": "0" }, "expected": true },
+    { "name": "Taskcluster (TASKCLUSTER_ROOT_URL)", "env": { "TASKCLUSTER_ROOT_URL": "https://tc.example.com" }, "expected": true },
+    { "name": "RUN_ID alone (ci-info generic check)", "env": { "RUN_ID": "0" }, "expected": true },
+    { "name": "BUILD_ID alone (ci-info generic check)", "env": { "BUILD_ID": "1" }, "expected": true },
+    { "name": "Render", "env": { "RENDER": "true" }, "expected": true },
+    { "name": "Netlify", "env": { "NETLIFY": "true" }, "expected": true },
+    { "name": "Vercel (VERCEL)", "env": { "VERCEL": "1" }, "expected": true },
+    { "name": "Vercel (NOW_BUILDER)", "env": { "NOW_BUILDER": "1" }, "expected": true },
+    { "name": "Bitbucket Pipelines (BITBUCKET_BUILD_NUMBER)", "env": { "BITBUCKET_BUILD_NUMBER": "7" }, "expected": true },
+    { "name": "Heroku (NODE path)", "env": { "NODE": "/app/.heroku/node/bin/node" }, "expected": true },
+    {
+      "name": "npm user agent with ci/ token",
+      "env": { "npm_config_user_agent": "npm/10.9.2 node/v22.12.0 linux x64 workspaces/false ci/github-actions" },
+      "expected": true
+    },
+
+    { "name": "a clean env", "env": {}, "expected": false },
+    { "name": "unrelated variables", "env": { "HOME": "/home/user", "PATH": "/usr/bin", "TERM": "xterm" }, "expected": false },
+    { "name": "TASK_ID without RUN_ID", "env": { "TASK_ID": "abc123" }, "expected": false },
+    { "name": "Heroku-like NODE outside the Heroku path", "env": { "NODE": "/usr/local/bin/node" }, "expected": false },
+    { "name": "empty-string CI", "env": { "CI": "" }, "expected": false },
+    {
+      "name": "npm user agent without ci/ token",
+      "env": { "npm_config_user_agent": "npm/10.9.2 node/v22.12.0 linux x64 workspaces/false" },
+      "expected": false
+    },
+    { "name": "pnpm user agent", "env": { "npm_config_user_agent": "pnpm/10.33.0 npm/? node/v22.22.1 linux x64" }, "expected": false },
+    { "name": "yarn user agent", "env": { "npm_config_user_agent": "yarn/4.18.1 npm/? node/v22.22.1 linux x64" }, "expected": false },
+    { "name": "bun user agent", "env": { "npm_config_user_agent": "bun/1.4.2 npm/? node/v26.3.0 linux x64" }, "expected": false },
+    {
+      "name": "ci/ inside another user-agent token",
+      "env": { "npm_config_user_agent": "npm/10.9.2 node/v22.12.0 linux x64 workspaces/false foo-ci/1" },
+      "expected": false
+    },
+    { "name": "CI=false overriding vendor variables", "env": { "CI": "false", "GITHUB_ACTIONS": "true" }, "expected": false },
+    {
+      "name": "CI=false overriding the extra variables",
+      "env": { "CI": "false", "CODEBUILD_BUILD_ID": "b", "TASKCLUSTER_ROOT_URL": "https://tc.example.com" },
+      "expected": false
+    },
+    {
+      "name": "CI=false overriding the npm ci/ token",
+      "env": { "CI": "false", "npm_config_user_agent": "npm/10.9.2 ci/github-actions" },
+      "expected": false
+    },
+
+    {
+      "name": "the import-time ci-info result after the env is cleared",
+      "env": { "GITHUB_ACTIONS": "true" },
+      "expected": true,
+      "steps": [{ "env": {}, "expected": true }]
+    },
+    {
+      "name": "extra checks re-reading process.env on every call",
+      "env": {},
+      "expected": false,
+      "steps": [
+        { "env": { "TASKCLUSTER_ROOT_URL": "https://tc.example.com" }, "expected": true },
+        {
+          "env": { "npm_config_user_agent": "npm/10.9.2 node/v22.12.0 linux x64 workspaces/false ci/gitlab-ci" },
+          "expected": true
+        },
+        { "env": {}, "expected": false }
+      ]
+    }
+  ]
+}

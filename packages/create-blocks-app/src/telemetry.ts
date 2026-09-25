@@ -10,12 +10,13 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, openSync, writeSync, closeSync, constants } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { join, dirname } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { debuglog } from 'node:util';
+
+import { isCI as ciInfoIsCI } from 'ci-info';
 
 const debug = debuglog('blocks-telemetry');
 
@@ -30,18 +31,15 @@ const blocksVersion: string = JSON.parse(
 
 // Keep behaviorally identical to packages/core/src/telemetry/environment.ts.
 
-// Use require() so tests can clear ci-info from require.cache and rerun its import-time detection.
-const ciInfo: { isCI: boolean } = createRequire(import.meta.url)('ci-info');
-
 // Checked by the previous implementation; ci-info does not match these alone.
 const EXTRA_CI_ENV_VARS = ['CODEBUILD_BUILD_ID', 'JENKINS_URL', 'BITBUCKET_BUILD_NUMBER', 'TASKCLUSTER_ROOT_URL'];
 
-// npm adds `ci/<vendor>` to its user agent when it detects CI.
+// npm adds `ci/<vendor>` in CI; catches children whose env drops the vendor vars but keeps the user agent.
 const NPM_USER_AGENT_CI_TOKEN = /(?:^|\s)ci\//;
 
-/** Detect CI via ci-info (fixed at import) plus per-call extra checks; `CI=false` disables all. */
+/** ci-info result (fixed at import) OR per-call extra checks; `CI=false` at startup disables both. */
 export function isCI(): boolean {
-  if (ciInfo.isCI) return true;
+  if (ciInfoIsCI) return true;
   const env = process.env;
   if (env.CI === 'false') return false;
   return (

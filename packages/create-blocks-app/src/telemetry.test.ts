@@ -4,95 +4,55 @@ import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer, type Server } from 'node:http';
-import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 
 import { getTelemetryFilePath, trackCommand } from './telemetry.js';
 
 describe('create-blocks-app telemetry/isCI', () => {
-  const originalEnv = { ...process.env };
-  const requireCjs = createRequire(import.meta.url);
-  let loadCount = 0;
-
-  // Reload ci-info after setting the environment because isCI is computed on first require.
-  async function loadIsCIWith(env: NodeJS.ProcessEnv): Promise<() => boolean> {
-    process.env = { ...env };
-    delete requireCjs.cache[requireCjs.resolve('ci-info')];
-    const mod: typeof import('./telemetry.js') = await import(`./telemetry.js?ci-case=${loadCount++}`);
-    return mod.isCI;
+  interface IsCICase {
+    name: string;
+    env: Record<string, string>;
+    expected: boolean;
+    steps?: Array<{ env: Record<string, string>; expected: boolean }>;
   }
 
-  afterEach(() => {
-    process.env = { ...originalEnv };
-    delete requireCjs.cache[requireCjs.resolve('ci-info')];
+  // ci-info computes isCI at import, so each case imports the module in a fresh process with exactly its env.
+  const IS_CI_CHILD = `
+  const [moduleUrl, stepEnvs] = process.argv.slice(1);
+  const { isCI } = await import(moduleUrl);
+  const results = [isCI()];
+  for (const env of JSON.parse(stepEnvs)) {
+    process.env = env;
+    results.push(isCI());
+  }
+  process.stdout.write(JSON.stringify(results));
+  `;
+
+  const moduleUrl = new URL('./telemetry.js', import.meta.url).href;
+  const { cases }: { cases: IsCICase[] } = JSON.parse(
+    readFileSync(new URL('../../core/src/telemetry/is-ci-cases.json', import.meta.url), 'utf-8'),
+  );
+
+  function runIsCICase(testCase: IsCICase): boolean[] {
+    const stepEnvs = JSON.stringify((testCase.steps ?? []).map((step) => step.env));
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', IS_CI_CHILD, moduleUrl, stepEnvs], {
+      env: testCase.env,
+      encoding: 'utf-8',
+    });
+    assert.strictEqual(child.status, 0, child.stderr);
+    return JSON.parse(child.stdout);
+  }
+
+  it('loads the shared case table', () => {
+    assert.ok(cases.length > 30, `expected the shared isCI cases, got ${cases.length}`);
   });
 
-  const ciCases: Array<[string, NodeJS.ProcessEnv]> = [
-    ['CI=true', { CI: 'true' }],
-    ['CONTINUOUS_INTEGRATION', { CONTINUOUS_INTEGRATION: 'true' }],
-    ['GitHub Actions', { GITHUB_ACTIONS: 'true' }],
-    ['CodeBuild (CODEBUILD_BUILD_ID)', { CODEBUILD_BUILD_ID: 'build-123' }],
-    ['CodeBuild (CODEBUILD_BUILD_ARN)', { CODEBUILD_BUILD_ARN: 'arn:aws:codebuild:us-east-1:000000000000:build/p:1' }],
-    ['GitLab CI', { GITLAB_CI: 'true' }],
-    ['Jenkins (JENKINS_URL + BUILD_ID)', { JENKINS_URL: 'https://jenkins.example.com', BUILD_ID: '42' }],
-    ['Jenkins (JENKINS_URL only)', { JENKINS_URL: 'https://jenkins.example.com' }],
-    ['Taskcluster (TASK_ID + RUN_ID)', { TASK_ID: 'abc123', RUN_ID: '0' }],
-    ['Taskcluster (TASKCLUSTER_ROOT_URL)', { TASKCLUSTER_ROOT_URL: 'https://tc.example.com' }],
-    ['Render', { RENDER: 'true' }],
-    ['Netlify', { NETLIFY: 'true' }],
-    ['Vercel (VERCEL)', { VERCEL: '1' }],
-    ['Vercel (NOW_BUILDER)', { NOW_BUILDER: '1' }],
-    ['Bitbucket Pipelines (BITBUCKET_BUILD_NUMBER)', { BITBUCKET_BUILD_NUMBER: '7' }],
-    ['Heroku (NODE path)', { NODE: '/app/.heroku/node/bin/node' }],
-    ['npm user agent with ci/ token', { npm_config_user_agent: 'npm/10.9.2 node/v22.12.0 linux x64 workspaces/false ci/github-actions' }],
-  ];
-
-  const nonCiCases: Array<[string, NodeJS.ProcessEnv]> = [
-    ['a clean env', {}],
-    ['unrelated variables', { HOME: '/home/user', PATH: '/usr/bin', TERM: 'xterm' }],
-    ['TASK_ID without RUN_ID', { TASK_ID: 'abc123' }],
-    ['Heroku-like NODE outside the Heroku path', { NODE: '/usr/local/bin/node' }],
-    ['empty-string CI', { CI: '' }],
-    ['npm user agent without ci/ token', { npm_config_user_agent: 'npm/10.9.2 node/v22.12.0 linux x64 workspaces/false' }],
-    ['pnpm user agent', { npm_config_user_agent: 'pnpm/10.33.0 npm/? node/v22.22.1 linux x64' }],
-    ['yarn user agent', { npm_config_user_agent: 'yarn/4.18.1 npm/? node/v22.22.1 linux x64' }],
-    ['bun user agent', { npm_config_user_agent: 'bun/1.4.2 npm/? node/v26.3.0 linux x64' }],
-    ['ci/ inside another user-agent token', { npm_config_user_agent: 'npm/10.9.2 node/v22.12.0 linux x64 workspaces/false foo-ci/1' }],
-    ['CI=false overriding vendor variables', { CI: 'false', GITHUB_ACTIONS: 'true' }],
-    ['CI=false overriding the extra variables', { CI: 'false', CODEBUILD_BUILD_ID: 'b', TASKCLUSTER_ROOT_URL: 'https://tc.example.com' }],
-    ['CI=false overriding the npm ci/ token', { CI: 'false', npm_config_user_agent: 'npm/10.9.2 ci/github-actions' }],
-  ];
-
-  for (const [label, env] of ciCases) {
-    it(`returns true for ${label}`, async () => {
-      const isCI = await loadIsCIWith(env);
-      assert.strictEqual(isCI(), true);
+  for (const testCase of cases) {
+    const expected = [testCase.expected, ...(testCase.steps ?? []).map((step) => step.expected)];
+    it(`${testCase.name} → ${expected.join(' → ')}`, () => {
+      assert.deepStrictEqual(runIsCICase(testCase), expected);
     });
   }
-
-  for (const [label, env] of nonCiCases) {
-    it(`returns false for ${label}`, async () => {
-      const isCI = await loadIsCIWith(env);
-      assert.strictEqual(isCI(), false);
-    });
-  }
-
-  it('keeps the import-time ci-info result after the env changes', async () => {
-    const isCI = await loadIsCIWith({ GITHUB_ACTIONS: 'true' });
-    process.env = {};
-    assert.strictEqual(isCI(), true);
-  });
-
-  it('re-reads process.env for the extra checks on every call', async () => {
-    const isCI = await loadIsCIWith({});
-    assert.strictEqual(isCI(), false);
-    process.env.TASKCLUSTER_ROOT_URL = 'https://tc.example.com';
-    assert.strictEqual(isCI(), true);
-    process.env = { npm_config_user_agent: 'npm/10.9.2 node/v22.12.0 linux x64 workspaces/false ci/gitlab-ci' };
-    assert.strictEqual(isCI(), true);
-    process.env = {};
-    assert.strictEqual(isCI(), false);
-  });
-
 });
 
 describe('create-blocks-app telemetry/getTelemetryFilePath', () => {
