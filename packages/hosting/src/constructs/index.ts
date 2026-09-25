@@ -94,3 +94,12 @@ export { S3WebsiteConstruct, type S3WebsiteConstructProps } from './s3_website_c
 // attach HSTS / X-Frame-Options / X-Content-Type-Options on the thin CloudFront
 // edge of the composed CF → ALB door (parity with the default CloudFront door).
 export { createSecurityHeadersPolicy, type SecurityHeadersProps } from './security_headers.js';
+// ── BYO custom-front-door building blocks ─────────────────────────────────────
+// So a customer-authored `FrontDoorLayerAdapter` composes the door's hard parts
+// (private-asset access, same-origin API base, route ordering) instead of
+// reimplementing them. See the "BYO / Custom Front Door" design doc.
+export { assertAdapterConformance, type AdapterConformanceOptions } from './conformance.js';
+export { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
+export { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
+export { backendBaseUrl } from './apigw_routes.js';
+export { coalesceRoutes, routeSpecificity } from '../plan/route-table.js';
