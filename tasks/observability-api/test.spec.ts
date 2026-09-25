@@ -2,14 +2,14 @@ import { test, expect, type Page } from '@playwright/test';
 
 // Backend template: dev server listens on :3001 (the bench harness sets
 // BLOCKS_URL accordingly; the default mirrors that).
-const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3001';
+const BASE = process.env.BLOCKS_URL || 'http://localhost:3001';
 const T = 8_000;
 
 // Run-stable unique suffix so echoed payloads can't collide with anything a
 // retry (or another test) wrote. Mirrors the harness's RUN_ID seed.
 const RUN = process.env.RUN_ID || String(Date.now());
-let seq = 0;
-const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
+let uniqSeq = 0;
+const uniq = (base: string) => `${base}-${RUN}-${++uniqSeq}-${Date.now()}`;
 
 // Per-test no-error gate: ONLY uncaught page errors.
 function watchErrors(page: Page, sink: string[] = []): string[] {

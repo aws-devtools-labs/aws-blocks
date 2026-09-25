@@ -109,6 +109,14 @@ jobs:
       BENCH_CELL_INDEX: ${{ strategy.job-index }}
       BENCH_STAGGER_STEP_SEC: '7'
       BENCH_STAGGER_WAVE_SIZE: '5' # keep in sync with strategy.max-parallel above
+      # One shared browser cache dir so the agent phase (step 2, whose shell inherits
+      # this job env) and the verifier (step 3) resolve chromium from the same path. Under the
+      # workspace to stay on the checkout's volume.
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw-browsers
+      # Single source of truth for the per-command log path: 2-agent-run.ts honours a pre-set
+      # BENCH_CMD_LOG (else derives it beside TRACE), and the trace-upload step references the same
+      # env — so the writer and the uploader can't drift if the path ever changes.
+      BENCH_CMD_LOG: /tmp/commands.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -222,6 +230,40 @@ jobs:
         env:
           BLOCKS_TELEMETRY_CANARY_ID: ${{ secrets.BLOCKS_TELEMETRY_CANARY_ID }}
 
+      # Provision the browser once, before the agent phase — step 2 used to run with
+      # no chromium, so the agent wasted turns hunting for one. `--with-deps` pulls the OS libs;
+      # version-pinned to the verifier's PW_VERSION (1.60.0). Then wrap the system chromium so every
+      # launch (the agent's ad-hoc CDP sessions included) starts cleanly instead of aborting on
+      # crashpad. Best-effort (continue-on-error): a blip must not red the cell — step 3's guarded
+      # fallback covers the install, and an unwrapped chromium still runs, just less reliably.
+      - name: Provision Playwright chromium (before agent phase)
+        id: pwprovision
+        continue-on-error: true
+        if: steps.init.outcome == 'success'
+        run: |
+          npx playwright@1.60.0 install --with-deps chromium
+          # sudo env_reset strips job-level env, so pass PLAYWRIGHT_BROWSERS_PATH through explicitly —
+          # the shim wraps the Playwright-installed chromium under it, which is the binary reliably
+          # present on a stock runner (npx install above runs unprivileged and writes it there).
+          # The wrapper is root-owned by design (the shim also wraps system-PATH binaries that need
+          # root).
+          sudo PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" bash scripts/agent-bench/steps/install-chromium-shim.sh
+          # The agent phase (step 2) runs as a DIFFERENT unprivileged user (benchagent) than the user
+          # that populated $PLAYWRIGHT_BROWSERS_PATH above, so the browser cache dir is not owned by the
+          # agent. If the agent then runs `npx playwright install` (it does, defensively), it fails to
+          # take the install lock (`.pw-browsers/__dirlock`) with EACCES and falls back to hunting for a
+          # chromium binary — the exact churn this pre-provision exists to remove. Make the cache dir
+          # writable by whatever user the agent phase runs as so that fallback is a true no-op. It is a
+          # throwaway per-cell browser cache under the workspace, so loosening its perms is harmless.
+          # NOTE: this recursion deliberately also makes the root-owned shim wrapper (and its moved-aside
+          # <file>.real) agent-writable — the shim comment calls those "root-owned by design", and after
+          # this line they are not tamper-proof by the agent. Accepted in this isolation model: the
+          # wrapper is only ever launched as the unprivileged benchagent (never with elevated privilege),
+          # and the whole cache is a throwaway dir on an ephemeral single-cell runner, so there is no
+          # escalation path. The recursion (not a lock-file-scoped chmod) is intentional so a future
+          # Playwright layout change can't reintroduce the EACCES this fixes.
+          chmod -R a+rwX "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || sudo chmod -R a+rwX "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || true
+
       # SECURITY: this step runs an LLM agent (shell tool), so a prompt-injected task could reach any
       # AWS API in the CURRENT session's scope — which the OIDC step's inline session policy has
       # narrowed to Bedrock-only (the *session*, not the role), so s3:PutObject is NOT reachable here.
@@ -303,12 +345,17 @@ jobs:
       - name: 4b. Analyze cell (best-effort)
         if: always()
         continue-on-error: true
-        timeout-minutes: 6
+        timeout-minutes: 20
         run: node scripts/agent-bench/steps/analyze-cell.mjs
         env:
           RESULT_PATH: /tmp/result.json
           TRACE: /tmp/trace.json
           METRICS: /tmp/metrics.json
+          # Deep-failure evidence, staged to stable /tmp paths by step "3. Build and test". Missing files
+          # degrade to null in analyze-cell.mjs (the deep pass simply has less to work with).
+          PW_RESULTS: /tmp/pw-results.json
+          DEV_LOG: /tmp/dev.log
+          BUILD_LOG: /tmp/build.log
           # BENCH_JUDGE_MODEL and AWS_REGION are inherited from the job-level env.
 
       - name: 5. Upload result
@@ -355,6 +402,7 @@ jobs:
           path: |
             /tmp/trace.json
             /tmp/metrics.json
+            ${{ env.BENCH_CMD_LOG }}
           retention-days: 90
           overwrite: true
           if-no-files-found: ignore

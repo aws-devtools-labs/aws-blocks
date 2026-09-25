@@ -15,6 +15,30 @@ permissions:
   contents: read
 
 jobs:
+  version-constant:
+    name: Version constant is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Check Swift version constant matches package.json
+        run: native/swift/scripts/generate-version.sh --check
+
+      - name: Test the Swift scripts
+        run: |
+          for test in native/swift/scripts/*.test.sh; do
+            echo "== $test =="
+            bash "$test"
+          done
+
   build-and-test-macos:
     name: Build & Test (macOS)
     runs-on: macos-15
