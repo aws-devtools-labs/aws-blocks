@@ -115,13 +115,22 @@ test('auth: unauthenticated access is rejected', (t) => runSampleApiTest(t, asyn
   // Sign out first
   await authApi.setAuthState({ action: 'signOut' });
 
-  await assert.rejects(
-    () => api.listTodos(),
-    // A removed `listTodos` rejects with "Method not found"; let that propagate
-    // so the test self-skips (via runSampleApiTest) instead of passing here.
-    (err: any) =>
-      !(err instanceof ApiError && err.message.startsWith('Method not found')) &&
-      (err.message.includes('Authentication') || err.message.includes('Session') || err.message.includes('401')),
+  // Probe listTodos directly rather than through assert.rejects: a failed
+  // validation function makes assert.rejects throw a fresh AssertionError, which
+  // would hide the ApiError from runSampleApiTest. Capturing the raw error keeps
+  // a removed `listTodos` ("Method not found") visible so the test self-skips.
+  let err: unknown;
+  try {
+    await api.listTodos();
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err, 'expected listTodos to reject when unauthenticated');
+  if (err instanceof ApiError && err.message.startsWith('Method not found')) throw err;
+  const msg = (err as Error).message;
+  assert.ok(
+    msg.includes('Authentication') || msg.includes('Session') || msg.includes('401'),
+    `unexpected rejection: ${msg}`,
   );
 
   // Sign back in for remaining tests
