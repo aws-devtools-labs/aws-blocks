@@ -345,13 +345,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: publish
-    # Serialize against the VPC smoke job (same group): both provision private-DNS
-    # interface endpoints into the shared persistent test VPC, and AWS permits only
-    # one per service per VPC. Sharing the group prevents two runs (across PRs, or
-    # this job vs vpc-smoke) from colliding on the endpoints. Queue rather than
-    # cancel so an in-flight deploy/destroy isn't interrupted.
+    # Serialize this suite across PRs: it provisions private-DNS interface
+    # endpoints into the shared persistent test VPC, and AWS permits only one per
+    # service per VPC — two concurrent runs of THIS job would collide. Queue
+    # rather than cancel so an in-flight deploy/destroy isn't interrupted.
+    #
+    # NOTE: this uses a group distinct from the VPC smoke job (blocks-test-vpc).
+    # GitHub job-level concurrency *cancels* (doesn't queue) a second job that
+    # shares a group within the same run, so the two suites can't share a group.
+    # vpc-smoke is a no-op stub today, so they don't actually collide on the
+    # shared VPC's endpoints yet; unifying their serialization once vpc-smoke is
+    # real is tracked as part of the deferred VPC hardening.
     concurrency:
-      group: blocks-test-vpc
+      group: blocks-test-compute
       cancel-in-progress: false
     env:
       BLOCKS_STACK_SUFFIX: compute-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}

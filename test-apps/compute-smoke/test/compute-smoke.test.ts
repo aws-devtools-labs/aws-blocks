@@ -143,10 +143,13 @@ test('Compute Smoke Tests', async (t) => {
     // cycles) and assert it never completed.
     await sleep(30_000);
     const result = await rpc('containerTimeoutJobGetResult', key);
-    assert.strictEqual(
-      result,
-      null,
-      'a non-cooperative handler exceeding the wall-clock limit must be terminated, not allowed to complete',
+    // The API returns `null` when the "completed" marker was never written; over
+    // raw JSON-RPC a null result field surfaces as `undefined` (JSON has no
+    // `undefined`). Either means the same thing here: the handler did NOT
+    // complete, so the worker was terminated at the wall-clock limit as required.
+    assert.ok(
+      result == null,
+      `a non-cooperative handler exceeding the wall-clock limit must be terminated, not allowed to complete (got ${JSON.stringify(result)})`,
     );
   });
 });
