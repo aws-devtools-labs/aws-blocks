@@ -3,7 +3,11 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
+
+// FileBucketErrors.VersionNotFound — matched by name across the RPC wire.
+const VersionNotFound = 'NoSuchVersion';
 
 export function fileBucketTests(getApi: () => typeof apiType) {
   describe('FileBucket BB', () => {
@@ -213,13 +217,28 @@ export function fileBucketTests(getApi: () => typeof apiType) {
     // and S3, so it runs everywhere.
 
     describe('error paths', () => {
-      test('restoreVersion on an unknown versionId rejects', async () => {
+      test('restoreVersion on an unknown versionId rejects with NoSuchVersion', async () => {
         const api = getApi();
         await api.vFilePut('err/restore-bad.txt', 'only version');
+        // Assert the *name*, not just that it rejects: S3 raises InvalidRequest
+        // for an unresolvable versionId on CopyObject (never NoSuchVersion), so a
+        // guard that only matched NoSuchVersion would leak the raw error here. The
+        // BB must map it to a clean, matchable NoSuchVersion in both runtimes.
         await assert.rejects(
           () => api.vFileRestoreVersion('err/restore-bad.txt', 'v9999-does-not-exist'),
-          'restoring a non-existent version must reject',
+          (e: unknown) => isBlocksError(e, VersionNotFound),
         );
+      });
+
+      test('get on an unknown versionId returns null (matches the mock; no throw)', async () => {
+        const api = getApi();
+        await api.vFilePut('err/get-bad.txt', 'only version');
+        // S3 raises InvalidArgument ("Invalid version id specified") for an
+        // unresolvable versionId on GetObject — the BB must fold that to null to
+        // match the mock, rather than throwing. No cross-runtime coverage existed
+        // for the get() half before.
+        const result = await api.vFileGet('err/get-bad.txt', 'v9999-does-not-exist');
+        assert.strictEqual(result, null);
       });
     });
 
