@@ -45,6 +45,7 @@ Object.assign(globalThis, {
 	HTMLInputElement: window.HTMLInputElement,
 	HTMLButtonElement: window.HTMLButtonElement,
 	CustomEvent: window.CustomEvent,
+	KeyboardEvent: window.KeyboardEvent,
 	BroadcastChannel: BroadcastChannelShim,
 	Event: window.Event,
 });
@@ -143,6 +144,29 @@ describe('Authenticator', () => {
 
 		assert.strictEqual(api.calls.length, 1);
 		assert.strictEqual(api.calls[0].action, 'signIn');
+		assert.strictEqual(api.calls[0].fields.username, 'alice');
+		assert.strictEqual(api.calls[0].fields.password, 'secret');
+	});
+
+	test('Enter submits from a non-last field (not just the last visible input)', async () => {
+		const out = signedOutState();
+		const api = mockApi(out);
+		const el = Authenticator(api);
+		await flush();
+		api.nextState = signedInState();
+
+		const signInBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Sign In');
+		const actionDiv = signInBtn!.parentElement!;
+		const inputs = actionDiv.querySelectorAll('input') as NodeListOf<HTMLInputElement>;
+		inputs[0].value = 'alice';
+		inputs[1].value = 'secret';
+
+		// Press Enter in the FIRST visible field (username) — previously ignored,
+		// since the handler only bound the last visible input (password).
+		inputs[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+		await flush();
+
+		assert.strictEqual(api.calls.length, 1, 'Enter in the first field should submit');
 		assert.strictEqual(api.calls[0].fields.username, 'alice');
 		assert.strictEqual(api.calls[0].fields.password, 'secret');
 	});
