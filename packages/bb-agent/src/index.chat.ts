@@ -67,7 +67,7 @@ export interface ChatConversationApi {
 	/** Check whether a conversation has unanswered interrupts (e.g. the user left mid-approval). */
 	getPendingInterrupts?(
 		conversationId: string,
-	): Promise<{ interrupts: Array<{ id: string; name: string; reason?: unknown }> }>;
+	): Promise<{ interrupts: { id: string; name: string; reason?: unknown }[] }>;
 }
 
 /** Options for {@link createChat}. */
@@ -91,7 +91,7 @@ export interface CreateChatOptions {
 	onError?: (error: string, cause?: unknown) => void;
 	/** Called when the agent pauses for human approval. Continue with `sendMessage({ interruptResponses })`.
 	 *  Each interrupt's `interruptId` is the same field you pass back in `InterruptResponse` — no remap. */
-	onInterrupt?: (interrupts: Array<{ interruptId: string; name: string; reason?: unknown }>) => void;
+	onInterrupt?: (interrupts: { interruptId: string; name: string; reason?: unknown }[]) => void;
 }
 
 /** A message to start a turn, or the interrupt responses that resume a paused one. */

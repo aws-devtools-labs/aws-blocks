@@ -1774,3 +1774,115 @@ describe('createChat', () => {
 		await new Promise(r => setTimeout(r, 10));
 	});
 });
+
+describe('createChat loadConversation + metadata narrowing', () => {
+	// loadConversation never touches the transport, so a no-op stub suffices.
+	const noopTransport = {
+		subscribe: () => ({
+			[Symbol.asyncIterator]() { return { next: async () => ({ done: true, value: undefined as any }) }; },
+			established: Promise.resolve(),
+			unsubscribe() {},
+		}),
+		run: async () => ({ channelId: 'ch-1' }),
+	} as any;
+
+	test('narrows an approval message: known keys projected, unknown key dropped', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				// Customer passes raw backend metadata straight through (unknown).
+				getConversation: async () => ({
+					messages: [
+						{ role: 'approval', content: 'Approved', metadata: { approved: true, toolName: 'kv.put', trust: false, extra: 'ignored' } },
+					],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		const appr = rendered.find((m) => m.role === 'approval');
+		assert.ok(appr, 'approval message should be present');
+		assert.deepStrictEqual(appr.metadata, { approved: true, trust: false, toolName: 'kv.put' }, 'known ApprovalMetadata keys projected, unknown key dropped');
+	});
+
+	test('drops non-object metadata to undefined instead of crashing', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'assistant', content: 'hi', metadata: 'not-an-object' },
+						{ role: 'user', content: 'yo', metadata: null },
+					],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		const asst = rendered.find((m) => m.role === 'assistant');
+		const usr = rendered.find((m) => m.role === 'user');
+		assert.strictEqual(asst.metadata, undefined, 'string metadata narrows to undefined');
+		assert.strictEqual(usr.metadata, undefined, 'null metadata narrows to undefined');
+	});
+
+	test('passes a plain-object user/assistant metadata through as a JSON record', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({
+					messages: [{ role: 'assistant', content: 'hi', metadata: { latencyMs: 42, note: 'ok' } }],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		const asst = rendered.find((m) => m.role === 'assistant');
+		assert.deepStrictEqual(asst.metadata, { latencyMs: 42, note: 'ok' }, 'plain-object metadata passes through unchanged');
+	});
+
+	test('filters out non-renderable roles (e.g. tool-result)', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hi' },
+						{ role: 'tool-result', content: '{"ok":true}' },
+						{ role: 'assistant', content: 'done' },
+					],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		assert.deepStrictEqual(rendered.map((m) => m.role), ['user', 'assistant'], 'only user/assistant/approval roles are rendered');
+	});
+
+	test('maps pending interrupts id -> interruptId for onInterrupt', async () => {
+		const seen: { interruptId: string; name: string }[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({ messages: [] }),
+				getPendingInterrupts: async () => ({ interrupts: [{ id: 'int-9', name: 'approve:delete' }] }),
+			},
+			onInterrupt: (interrupts) => { for (const i of interrupts) seen.push({ interruptId: i.interruptId, name: i.name }); },
+		});
+
+		await chat.loadConversation('c1');
+		assert.deepStrictEqual(seen, [{ interruptId: 'int-9', name: 'approve:delete' }], 'backend id surfaces to the consumer as interruptId');
+	});
+});
