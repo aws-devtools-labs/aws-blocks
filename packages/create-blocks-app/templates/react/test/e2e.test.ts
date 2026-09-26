@@ -28,11 +28,14 @@ let server: ChildProcess | null = null;
 let api: typeof ApiType;
 let authApi: typeof AuthApiType;
 
+const serverPort = 3000;
+const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
+
 // ─── Setup (don't touch) ─────────────────────────────────────────────────────
 
 test.before(async () => {
   // Use existing dev server if running, otherwise start one
-  if (!await isServerRunning()) {
+  if (!await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -47,22 +50,30 @@ test.before(async () => {
   api = mod.api;
   authApi = mod.authApi;
 
-  // Wait for server readiness
+  // Wait for the Blocks server to be ready without depending on the sample API.
   for (let i = 0; i < 30; i++) {
     try {
-      await authApi.getAuthState();
-      return;
+      const response = await fetch(readinessUrl);
+      if (response.ok) return;
     } catch {
-      await setTimeout(1000);
+      // The server is not listening yet.
     }
+    await setTimeout(1000);
   }
-  throw new Error('Dev server did not become ready within 30s');
+  throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
 test.after(() => {
   if (server?.pid) {
     try { process.kill(-server.pid, 'SIGTERM'); } catch {}
   }
+});
+
+// ─── App readiness (independent of the sample API) ────────────────────────────
+
+test('app: server serves its Blocks config', async () => {
+  const response = await fetch(readinessUrl);
+  assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
