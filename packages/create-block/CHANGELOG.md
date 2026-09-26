@@ -1,5 +1,13 @@
 # @aws-blocks/create-block
 
+## 0.2.1
+
+### Patch Changes
+
+- d4b32f2: Add `README.md` and `DESIGN.md` to `@aws-blocks/create-block` and ship them in the published package (`files`), matching the first-party package convention.
+  
+  Tidy two `extract-ts-types` test nits (test/comment only, no runtime change): replace a redundant re-assert with a direct check of the documented lingering-bare-key behavior, and link the array/tuple & nested-destructuring boundary to its tracking issue (#552).
+
 ## 0.2.0
 
 ### Minor Changes

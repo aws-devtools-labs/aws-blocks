@@ -1,5 +1,15 @@
 # @aws-blocks/bb-knowledge-base
 
+## 0.2.5
+
+### Patch Changes
+
+- Updated dependencies [5501cb6]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [465a002]
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-logger@0.2.1
+
 ## 0.2.4
 
 ### Patch Changes
