@@ -61,7 +61,7 @@
     "@aws-blocks/core": "^0.5.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.0.0",
     "@aws-sdk/client-ssm": "^3.0.0",
-    "jose": "^6.2.3",
+    "jose": "^6.2.12",
     "openid-client": "^6.8.4"
   },
   "devDependencies": {
