@@ -31,7 +31,8 @@ function getEndpoint(): string {
  * // Capture telemetry to file (also sends HTTP when enabled):
  * // npx tsx aws-blocks/scripts/server.ts --telemetry-file=/tmp/events.json
  *
- * // Capture WITHOUT sending (disable HTTP, file still writes):
+ * // The flag has no effect when telemetry is disabled — opt-out suppresses
+ * // every sink, including the file sink:
  * // AWS_BLOCKS_DISABLE_TELEMETRY=1 npx tsx aws-blocks/scripts/server.ts --telemetry-file=/tmp/events.json
  */
 export function getTelemetryFilePath(): string | undefined {
@@ -136,17 +137,17 @@ export function buildEvent(opts: BuildAndSendEventOptions): BlocksTelemetryEvent
  * Build a complete telemetry event and send it to the collection endpoint.
  *
  * This is the single entry point for all telemetry emission. It handles:
- * 1. Early exit — if telemetry is disabled AND no `--telemetry-file` is set,
- *    returns immediately with no side effects (no IDs persisted, no notice)
+ * 1. Early exit — if telemetry is disabled, returns immediately with no side
+ *    effects whatsoever: no event built, no identifiers persisted to disk, no
+ *    first-run notice, no file written, no HTTP request. `--telemetry-file`
+ *    does NOT override opt-out.
  * 2. Full payload construction (identifiers, environment, product info)
- * 3. File sink — writes to the file specified by `--telemetry-file` (if set),
- *    regardless of opt-out status (inspired by CDK CLI's --telemetry-file)
+ * 3. File sink — writes to the file specified by `--telemetry-file` (if set)
  * 4. Privacy filtering — custom BB names are NEVER sent, only counted
- * 5. HTTP sink — fire-and-forget POST (only when telemetry is enabled)
+ * 5. HTTP sink — fire-and-forget POST
  *
- * The file sink fires unconditionally when `--telemetry-file` is set.
- * The HTTP sink only fires when telemetry is enabled. Callers never need to
- * import consent, identifier, or environment utilities directly.
+ * Callers never need to import consent, identifier, or environment utilities
+ * directly.
  *
  * @param opts - Event metadata (command, state, duration, optional error/product/counters)
  *
@@ -162,14 +163,14 @@ export function buildEvent(opts: BuildAndSendEventOptions): BlocksTelemetryEvent
  */
 export function buildAndSendEvent(opts: BuildAndSendEventOptions): void {
   try {
-    const filePath = getTelemetryFilePath();
-    const enabled = isTelemetryEnabled();
-    if (!filePath && !enabled) return;
+    // Opt-out short-circuits BEFORE buildEvent(), which would otherwise persist
+    // the installation/project IDs to disk and print the first-run notice.
+    if (!isTelemetryEnabled()) return;
 
     const event = buildEvent(opts);
 
-    if (filePath) writeToTelemetryFile(event);
-    if (enabled) sendEvent(event);
+    if (getTelemetryFilePath()) writeToTelemetryFile(event);
+    sendEvent(event);
   } catch {
     // Telemetry must never throw or affect the user's command
   }
