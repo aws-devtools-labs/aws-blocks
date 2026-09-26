@@ -1,5 +1,40 @@
 # @aws-blocks/bb-agent
 
+## 0.5.0
+
+### Minor Changes
+
+- 8da1d1f: feat(bb-agent): compute-agnostic client streaming API — `createChat` + `realtimeTransport`
+  
+  Adds a redesigned client streaming surface that hides the runtime behind a single
+  transport seam, so the same frontend code works across runtimes:
+  
+  - `createChat({ transport, api })` — the client API. The common case is one call
+    (`chat.sendMessage('Hello')`); subscribe and run are fused so the
+    subscribe-before-send race can't surface. The flexible primitives `run()`
+    (produce) and `subscribe()` (consume) are exposed for fan-out, observer-only
+    attach, and decoupled produce/consume.
+  - `realtimeTransport(...)` — the Lambda + Realtime implementation of the
+    `ChatTransport` seam. Configure it once; call sites never name the runtime. A
+    future runtime supplies a different transport; nothing else on the client changes.
+  
+  Additive and non-breaking. The `stream()` / `getChannel()` / `resume()` server
+  methods are unchanged (the new transport is built on them). Only the `useChat`
+  client hook is now marked `@deprecated`, superseded by `createChat`.
+
+### Patch Changes
+
+- Updated dependencies [5501cb6]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [fa0406b]
+- Updated dependencies [f1d2cd5]
+- Updated dependencies [465a002]
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-file-bucket@0.2.2
+  - @aws-blocks/bb-realtime@0.3.0
+  - @aws-blocks/bb-distributed-table@0.2.1
+  - @aws-blocks/bb-logger@0.2.1
+
 ## 0.4.1
 
 ### Patch Changes

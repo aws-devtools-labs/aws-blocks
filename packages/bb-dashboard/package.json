@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-dashboard",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "keywords": [
     "aws-blocks",
     "cloudwatch",
@@ -41,10 +41,10 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.5.0"
+    "@aws-blocks/core": "^0.6.0"
   },
   "devDependencies": {
-    "@aws-blocks/bb-lambda-compute": "^0.5.0",
+    "@aws-blocks/bb-lambda-compute": "^0.5.1",
     "@types/node": "^20.0.0",
     "typescript": "^5.3.0"
   },
