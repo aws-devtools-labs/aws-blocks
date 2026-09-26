@@ -4,8 +4,56 @@ import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer, type Server } from 'node:http';
+import { spawnSync } from 'node:child_process';
 
 import { getTelemetryFilePath, trackCommand } from './telemetry.js';
+
+describe('create-blocks-app telemetry/isCI', () => {
+  interface IsCICase {
+    name: string;
+    env: Record<string, string>;
+    expected: boolean;
+    steps?: Array<{ env: Record<string, string>; expected: boolean }>;
+  }
+
+  // ci-info computes isCI at import, so each case imports the module in a fresh process with exactly its env.
+  const IS_CI_CHILD = `
+  const [moduleUrl, stepEnvs] = process.argv.slice(1);
+  const { isCI } = await import(moduleUrl);
+  const results = [isCI()];
+  for (const env of JSON.parse(stepEnvs)) {
+    process.env = env;
+    results.push(isCI());
+  }
+  process.stdout.write(JSON.stringify(results));
+  `;
+
+  const moduleUrl = new URL('./telemetry.js', import.meta.url).href;
+  const { cases }: { cases: IsCICase[] } = JSON.parse(
+    readFileSync(new URL('../../core/src/telemetry/is-ci-cases.test.json', import.meta.url), 'utf-8'),
+  );
+
+  function runIsCICase(testCase: IsCICase): boolean[] {
+    const stepEnvs = JSON.stringify((testCase.steps ?? []).map((step) => step.env));
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', IS_CI_CHILD, moduleUrl, stepEnvs], {
+      env: testCase.env,
+      encoding: 'utf-8',
+    });
+    assert.strictEqual(child.status, 0, child.stderr);
+    return JSON.parse(child.stdout);
+  }
+
+  it('loads the shared case table', () => {
+    assert.ok(cases.length > 20, `expected the shared isCI cases, got ${cases.length}`);
+  });
+
+  for (const testCase of cases) {
+    const expected = [testCase.expected, ...(testCase.steps ?? []).map((step) => step.expected)];
+    it(`${testCase.name} → ${expected.join(' → ')}`, () => {
+      assert.deepStrictEqual(runIsCICase(testCase), expected);
+    });
+  }
+});
 
 describe('create-blocks-app telemetry/getTelemetryFilePath', () => {
   const originalArgv = [...process.argv];

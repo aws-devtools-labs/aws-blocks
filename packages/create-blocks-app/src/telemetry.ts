@@ -16,6 +16,8 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { debuglog } from 'node:util';
 
+import { isCI as ciInfoIsCI } from 'ci-info';
+
 const debug = debuglog('blocks-telemetry');
 
 const DEFAULT_ENDPOINT = 'https://blocks-telemetry.us-east-1.api.aws/metrics';
@@ -27,22 +29,17 @@ const blocksVersion: string = JSON.parse(
 
 // ─── Consent ─────────────────────────────────────────────────────────────────
 
-function isCI(): boolean {
-  return !!(
-    process.env.CI ||
-    process.env.CONTINUOUS_INTEGRATION ||
-    process.env.BUILD_NUMBER ||
-    process.env.CODEBUILD_BUILD_ID ||
-    process.env.GITHUB_ACTIONS ||
-    process.env.GITLAB_CI ||
-    process.env.CIRCLECI ||
-    process.env.JENKINS_URL ||
-    process.env.TF_BUILD ||
-    process.env.BITBUCKET_BUILD_NUMBER ||
-    process.env.BUILDKITE ||
-    process.env.RENDER ||
-    process.env.TASKCLUSTER_ROOT_URL
-  );
+// Keep behaviorally identical to packages/core/src/telemetry/environment.ts.
+
+// Checked by the previous implementation; ci-info does not match these alone.
+const EXTRA_CI_ENV_VARS = ['CODEBUILD_BUILD_ID', 'JENKINS_URL', 'BITBUCKET_BUILD_NUMBER', 'TASKCLUSTER_ROOT_URL'];
+
+/** ci-info result (fixed at import) OR per-call extra checks; `CI=false` at startup disables both. */
+export function isCI(): boolean {
+  if (ciInfoIsCI) return true;
+  const env = process.env;
+  if (env.CI === 'false') return false;
+  return EXTRA_CI_ENV_VARS.some((key) => !!env[key]);
 }
 
 function isTelemetryEnabled(): boolean {

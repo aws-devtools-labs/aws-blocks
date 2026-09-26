@@ -7,7 +7,7 @@ import { tmpdir, homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { isTelemetryEnabled } from './consent.js';
-import { isCI, detectOS, detectNodeVersion, detectPackageManager, detectAgent, collectEnvironment } from './environment.js';
+import { detectOS, detectNodeVersion, detectPackageManager, detectAgent, collectEnvironment } from './environment.js';
 import { trackCommand, classifyError } from './trackCommand.js';
 import { buildAndSendEvent, buildEvent, sendEvent, getTelemetryFilePath } from './client.js';
 import { getInstallationId, getProjectId, generateEventId } from './identifiers.js';
@@ -121,50 +121,50 @@ describe('telemetry/environment', () => {
   });
 
   describe('isCI', () => {
-    beforeEach(() => {
-      delete process.env.CI;
-      delete process.env.CONTINUOUS_INTEGRATION;
-      delete process.env.BUILD_NUMBER;
-      delete process.env.CODEBUILD_BUILD_ID;
-      delete process.env.GITHUB_ACTIONS;
-      delete process.env.GITLAB_CI;
-      delete process.env.CIRCLECI;
-      delete process.env.JENKINS_URL;
-      delete process.env.TF_BUILD;
-      delete process.env.BITBUCKET_BUILD_NUMBER;
-      delete process.env.BUILDKITE;
-      delete process.env.RENDER;
-      delete process.env.TASKCLUSTER_ROOT_URL;
+    interface IsCICase {
+      name: string;
+      env: Record<string, string>;
+      expected: boolean;
+      steps?: Array<{ env: Record<string, string>; expected: boolean }>;
+    }
+
+    // ci-info computes isCI at import, so each case imports the module in a fresh process with exactly its env.
+    const IS_CI_CHILD = `
+    const [moduleUrl, stepEnvs] = process.argv.slice(1);
+    const { isCI } = await import(moduleUrl);
+    const results = [isCI()];
+    for (const env of JSON.parse(stepEnvs)) {
+      process.env = env;
+      results.push(isCI());
+    }
+    process.stdout.write(JSON.stringify(results));
+    `;
+
+    const moduleUrl = new URL('./environment.js', import.meta.url).href;
+    const { cases }: { cases: IsCICase[] } = JSON.parse(
+      readFileSync(new URL('../../src/telemetry/is-ci-cases.test.json', import.meta.url), 'utf-8'),
+    );
+
+    function runIsCICase(testCase: IsCICase): boolean[] {
+      const stepEnvs = JSON.stringify((testCase.steps ?? []).map((step) => step.env));
+      const child = spawnSync(process.execPath, ['--input-type=module', '-e', IS_CI_CHILD, moduleUrl, stepEnvs], {
+        env: testCase.env,
+        encoding: 'utf-8',
+      });
+      assert.strictEqual(child.status, 0, child.stderr);
+      return JSON.parse(child.stdout);
+    }
+
+    it('loads the shared case table', () => {
+      assert.ok(cases.length > 20, `expected the shared isCI cases, got ${cases.length}`);
     });
 
-    it('returns false when no CI env vars set', () => {
-      assert.strictEqual(isCI(), false);
-    });
-
-    it('returns true when CI=true', () => {
-      process.env.CI = 'true';
-      assert.strictEqual(isCI(), true);
-    });
-
-    it('returns true when GITHUB_ACTIONS is set', () => {
-      process.env.GITHUB_ACTIONS = 'true';
-      assert.strictEqual(isCI(), true);
-    });
-
-    it('returns true when CODEBUILD_BUILD_ID is set', () => {
-      process.env.CODEBUILD_BUILD_ID = 'build-123';
-      assert.strictEqual(isCI(), true);
-    });
-
-    it('returns true when RENDER is set', () => {
-      process.env.RENDER = 'true';
-      assert.strictEqual(isCI(), true);
-    });
-
-    it('returns true when TASKCLUSTER_ROOT_URL is set', () => {
-      process.env.TASKCLUSTER_ROOT_URL = 'https://tc.example.com';
-      assert.strictEqual(isCI(), true);
-    });
+    for (const testCase of cases) {
+      const expected = [testCase.expected, ...(testCase.steps ?? []).map((step) => step.expected)];
+      it(`${testCase.name} → ${expected.join(' → ')}`, () => {
+        assert.deepStrictEqual(runIsCICase(testCase), expected);
+      });
+    }
   });
 
   it('detectOS returns a valid platform', () => {
