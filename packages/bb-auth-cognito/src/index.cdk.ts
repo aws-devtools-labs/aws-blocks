@@ -325,6 +325,13 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		// Client-facing actions — work on the signed-in user via their access token.
 		role.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: [
+				// `requireRole` reads live group membership via
+				// AdminListGroupsForUser so admin-driven group changes take
+				// effect (and revocations apply) without a re-login. It is a
+				// client-facing guard available on every pool, so this action is
+				// granted unconditionally — independent of the opt-in `admin`
+				// surface. (The admin slices also list it; IAM dedups.)
+				'cognito-idp:AdminListGroupsForUser',
 				'cognito-idp:SignUp',
 				'cognito-idp:ConfirmSignUp',
 				'cognito-idp:ResendConfirmationCode',

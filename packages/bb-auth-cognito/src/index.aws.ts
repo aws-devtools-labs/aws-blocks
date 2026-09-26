@@ -1602,12 +1602,72 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		return { tokens: sessionToTokens(record), userSub: safeStringClaim(decodeJwtPayload(record.idToken), 'sub') || undefined };
 	}
 
+	/**
+	 * Request-scoped memo for {@link liveGroupsForUser}. Keyed by the per-request
+	 * `BlocksContext` (a fresh object per request, so entries are GC'd when the
+	 * request ends — the shared Lambda singleton never accumulates them), then by
+	 * username. Dedupes repeated `requireRole` calls within a single request to
+	 * one `AdminListGroupsForUser`, bounding the extra Cognito load — Cognito's
+	 * admin-API quota is low and shared, so multiplying it by every guarded route
+	 * in a request would amplify throttling into cascading auth failures. The
+	 * cached value is the in-flight Promise, so concurrent calls share one round
+	 * trip too. Scope is deliberately one request: a membership change is still
+	 * observed on the next request.
+	 */
+	private readonly liveGroupsMemo = new WeakMap<BlocksContext, Map<string, Promise<string[]>>>();
+
 	async requireRole(context: BlocksContext, role: GroupOf<O>): Promise<CognitoUser<O>> {
 		const user = await this.requireAuth(context);
-		if (!user.groups.includes(role)) {
+		// Read membership live via `AdminListGroupsForUser` rather than trusting
+		// the session token's `cognito:groups` claim — the same reasoning as
+		// `fetchUserAttributes`. An admin who runs `addUserToGroup` /
+		// `removeUserFromGroup` against an already-signed-in user would otherwise
+		// not take effect (grant) or not revoke (removal) until that user's token
+		// next refreshed or they re-logged in. Costs one extra Cognito call per
+		// guarded request (deduped per request — see `liveGroupsMemo`); the
+		// returned user's `groups` reflects the live read.
+		const liveGroups = await this.liveGroupsForUser(user.username, context);
+		if (!liveGroups.includes(role)) {
 			throw new ApiError(`Not in group '${role}'`, 403, { name: AuthCognitoErrors.NotAuthorized });
 		}
-		return user;
+		return { ...user, groups: liveGroups as GroupOf<O>[] };
+	}
+
+	/**
+	 * Fetch a user's current group memberships directly from Cognito
+	 * (`AdminListGroupsForUser`, paginated), memoized per request. Used by
+	 * `requireRole` so authorization decisions reflect live membership, not the
+	 * stale `cognito:groups` token claim. Granted unconditionally to the
+	 * execution role (see `grantCognitoPermissions` in `index.cdk.ts`).
+	 */
+	private liveGroupsForUser(username: string, context: BlocksContext): Promise<string[]> {
+		let perRequest = this.liveGroupsMemo.get(context);
+		if (!perRequest) {
+			perRequest = new Map();
+			this.liveGroupsMemo.set(context, perRequest);
+		}
+		const cached = perRequest.get(username);
+		if (cached) return cached;
+		const pending = this.fetchGroupsFromCognito(username);
+		perRequest.set(username, pending);
+		return pending;
+	}
+
+	private async fetchGroupsFromCognito(username: string): Promise<string[]> {
+		const out: string[] = [];
+		let nextToken: string | undefined;
+		try {
+			do {
+				const resp = await this.client.send(new AdminListGroupsForUserCommand({
+					UserPoolId: this.adminUserPoolId(), Username: username, NextToken: nextToken,
+				}));
+				for (const g of resp.Groups ?? []) if (g.GroupName) out.push(g.GroupName);
+				nextToken = resp.NextToken;
+			} while (nextToken);
+		} catch (e) {
+			throw asApiError(e);
+		}
+		return out;
 	}
 
 	/**

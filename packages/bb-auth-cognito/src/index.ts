@@ -324,7 +324,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			userSub: user.userSub,
 			enabled: !user.disabled,
 			attributes: { ...user.attributes },
-			groups: Object.keys(this.state.groups).filter((g) => this.state.groups[g].includes(username)),
+			groups: Object.keys(this.state.groups).filter((g) => (this.state.groups[g] ?? []).includes(username)),
 		});
 		// Apply a scan filter in memory, mirroring Cognito's ListUsers Filter.
 		const matchesFilter = (user: AdminUser, filter?: AdminUserFilter): boolean => {
@@ -356,7 +356,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			listGroupsForUser: async (username) => {
 				this.assertAdminAction('groups');
 				requireUser(username);
-				return Object.keys(this.state.groups).filter((g) => this.state.groups[g].includes(username));
+				return Object.keys(this.state.groups).filter((g) => (this.state.groups[g] ?? []).includes(username));
 			},
 			listUsersInGroup: async (group) => {
 				this.assertAdminAction('groups');
@@ -1285,10 +1285,20 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 
 	async requireRole(context: BlocksContext, role: GroupOf<O>): Promise<CognitoUser<O>> {
 		const user = await this.requireAuth(context);
-		if (!user.groups.includes(role)) {
+		// Read membership live from the source of truth rather than the session
+		// token's `cognito:groups` claim — the same reasoning as
+		// `fetchUserAttributes`. An admin who runs `addUserToGroup` /
+		// `removeUserFromGroup` against an already-signed-in user would otherwise
+		// not take effect (grant) or not revoke (removal) until that user's token
+		// next refreshed or they re-logged in. The returned user's `groups`
+		// reflects the live read so callers never see a stale list. The mock
+		// derives from `this.state.groups`; the AWS runtime calls
+		// `AdminListGroupsForUser`.
+		const liveGroups = Object.keys(this.state.groups).filter((g) => (this.state.groups[g] ?? []).includes(user.username));
+		if (!liveGroups.includes(role)) {
 			throw new ApiError(`Not in group '${role}'`, 403, { name: AuthCognitoErrors.NotAuthorized });
 		}
-		return user;
+		return { ...user, groups: liveGroups as GroupOf<O>[] };
 	}
 
 	/**
