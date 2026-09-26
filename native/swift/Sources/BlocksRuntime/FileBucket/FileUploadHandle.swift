@@ -25,10 +25,10 @@ public class FileUploadHandle {
     private let contentType: String?
     private let session: URLSession
 
-    public init(url: String, contentType: String? = nil, session: URLSession = .shared) {
+    public init(url: String, contentType: String? = nil, session: URLSession? = nil) {
         self.url = url
         self.contentType = contentType
-        self.session = session
+        self.session = session ?? BlocksRuntimeSession.shared
     }
 
     /// Hydrates a FileUploadHandle from a JSON descriptor.
