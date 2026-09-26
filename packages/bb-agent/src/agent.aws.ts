@@ -65,7 +65,9 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 				`AgentCore Runtime ARN not found (config key ${runtimeArnKey}). Ensure the app build produced the AgentCore asset and the stack deployed the Runtime.`,
 			);
 		}
-		this._agentCore ??= new BedrockAgentCoreClient({});
+		this._agentCore ??= new BedrockAgentCoreClient({
+			customUserAgent: this.buildUserAgentChain(),
+		});
 		const body = {
 			prompt: payload.message,
 			channelId: payload.channelId,
