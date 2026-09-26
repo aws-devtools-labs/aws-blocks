@@ -210,25 +210,27 @@ export interface TrackCommandOptions {
  * Measures wall-clock duration, classifies errors, and sends a single telemetry
  * event after the command completes (success or failure).
  *
- * If telemetry is disabled AND no `--telemetry-file` is set, the wrapped
- * function runs without any telemetry overhead or side effects (no IDs
- * persisted, no first-run notice).
+ * If telemetry is disabled, the wrapped function runs without any telemetry
+ * overhead or side effects: no event built, no IDs persisted to disk, no
+ * first-run notice, no file written, no HTTP request. `--telemetry-file` does
+ * NOT override opt-out.
  *
- * The file sink writes regardless of opt-out status (inspired by CDK CLI's --telemetry-file).
- * The HTTP sink is fire-and-forget with a 500ms timeout and respects consent —
- * it will never delay the command.
+ * When telemetry is enabled, the file sink writes to `--telemetry-file` (if set)
+ * and the HTTP sink is fire-and-forget with a 500ms timeout — it will never
+ * delay the command.
  */
 export async function trackCommand(
   commandName: string,
   fn: () => Promise<void>,
   options?: TrackCommandOptions,
 ): Promise<void> {
-  const filePath = getTelemetryFilePath();
-  const enabled = isTelemetryEnabled();
-
-  if (!filePath && !enabled) {
+  // Opt-out short-circuits before any event is built — getInstallationId()
+  // would otherwise persist the installation ID and print the first-run notice.
+  if (!isTelemetryEnabled()) {
     return fn();
   }
+
+  const filePath = getTelemetryFilePath();
 
   const startTime = Date.now();
   let state: 'SUCCESS' | 'FAIL' = 'SUCCESS';
@@ -265,6 +267,6 @@ export async function trackCommand(
     };
 
     if (filePath) writeToTelemetryFile(event);
-    if (enabled) sendEvent(event);
+    sendEvent(event);
   }
 }

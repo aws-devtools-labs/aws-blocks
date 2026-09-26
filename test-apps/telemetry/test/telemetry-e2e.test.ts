@@ -810,9 +810,9 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: '1' }, timeoutMs: 12_000,
       });
 
-      // --telemetry-file still writes even when HTTP is disabled (D-010 contract)
-      assert.ok(await waitForFile(telemetryFile, 2_000), '--telemetry-file should write even when telemetry is disabled');
-      // but HTTP send should NOT happen
+      // Opt-out suppresses every sink, including the --telemetry-file sink
+      assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
+      // and HTTP send should NOT happen
       assertNotDelivered(result.stderr);
     });
 

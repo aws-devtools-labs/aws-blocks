@@ -1,12 +1,20 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer, type Server } from 'node:http';
 import { spawnSync } from 'node:child_process';
 
 import { getTelemetryFilePath, trackCommand } from './telemetry.js';
+
+// Env vars that ci-info treats as "running in CI" — CI implies opt-out, so tests
+// that need telemetry ENABLED must clear every one of them.
+const CI_ENV_VARS = [
+  'CI', 'CONTINUOUS_INTEGRATION', 'BUILD_NUMBER', 'CODEBUILD_BUILD_ID', 'GITHUB_ACTIONS',
+  'GITLAB_CI', 'CIRCLECI', 'JENKINS_URL', 'TF_BUILD', 'BITBUCKET_BUILD_NUMBER', 'BUILDKITE',
+  'RENDER', 'TASKCLUSTER_ROOT_URL',
+];
 
 describe('create-blocks-app telemetry/isCI', () => {
   interface IsCICase {
@@ -202,17 +210,14 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('writes file even when telemetry is disabled (matches CDK behavior)', async () => {
+  it('does NOT write file when telemetry is disabled', async () => {
     const filePath = join(tmpdir(), `cba-telemetry-disabled-${Date.now()}`, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
     process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
 
     await trackCommand('create', async () => {});
 
-    assert.ok(existsSync(filePath), 'File should be written even when telemetry is disabled');
-    const events = JSON.parse(readFileSync(filePath, 'utf-8'));
-    assert.strictEqual(events.length, 1);
-    assert.strictEqual(events[0].event.command, 'create');
+    assert.ok(!existsSync(filePath), 'File must not be written when telemetry is disabled');
 
     rmSync(dirname(filePath), { recursive: true, force: true });
   });
@@ -269,5 +274,80 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
 
     server.close();
     rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
+describe('create-blocks-app telemetry/opt-out overrides --telemetry-file', () => {
+  const moduleUrl = new URL('./telemetry.js', import.meta.url).href;
+
+  interface ChildRun {
+    status: number | null;
+    stderr: string;
+    wroteTelemetryFile: boolean;
+    wroteInstallationId: boolean;
+  }
+
+  // getInstallationId() persists the installation ID under $HOME and prints the
+  // first-run notice, so each case runs in a child process with a throwaway HOME.
+  function runTrackCommandInChild(telemetryDisabled: boolean): ChildRun {
+    const tmp = mkdtempSync(join(tmpdir(), 'cba-optout-'));
+    const home = join(tmp, 'home');
+    mkdirSync(home, { recursive: true });
+    const telemetryFile = join(tmp, 'events.json');
+
+    const script = `
+      const { trackCommand } = await import(${JSON.stringify(moduleUrl)});
+      await trackCommand('create', async () => {});
+    `;
+
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
+    };
+    if (telemetryDisabled) {
+      env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+    } else {
+      delete env.AWS_BLOCKS_DISABLE_TELEMETRY;
+      for (const name of CI_ENV_VARS) delete env[name];
+    }
+
+    const result = spawnSync(
+      process.execPath,
+      ['--input-type=module', '-e', script, '--', `--telemetry-file=${telemetryFile}`],
+      { encoding: 'utf-8', cwd: tmp, env },
+    );
+
+    const run: ChildRun = {
+      status: result.status,
+      stderr: result.stderr,
+      wroteTelemetryFile: existsSync(telemetryFile),
+      wroteInstallationId: existsSync(join(home, '.blocks', 'telemetry', 'installation-id')),
+    };
+
+    rmSync(tmp, { recursive: true, force: true });
+    return run;
+  }
+
+  it('persists no installation ID and prints no notice when telemetry is disabled', () => {
+    const run = runTrackCommandInChild(true);
+
+    assert.strictEqual(run.status, 0, run.stderr);
+    assert.strictEqual(run.wroteTelemetryFile, false, 'no telemetry file when opted out');
+    assert.strictEqual(run.wroteInstallationId, false, 'no installation ID file when opted out');
+    assert.strictEqual(run.stderr, '', 'no first-run notice when opted out');
+  });
+
+  it('persists the installation ID and prints the notice when telemetry is enabled', () => {
+    const run = runTrackCommandInChild(false);
+
+    assert.strictEqual(run.status, 0, run.stderr);
+    assert.strictEqual(run.wroteTelemetryFile, true, 'telemetry file written when enabled');
+    assert.strictEqual(run.wroteInstallationId, true, 'installation ID persisted when enabled');
+    assert.ok(
+      run.stderr.includes('AWS Blocks collects anonymous usage data to improve the product.'),
+      `expected first-run notice on stderr, got: ${run.stderr}`,
+    );
   });
 });
