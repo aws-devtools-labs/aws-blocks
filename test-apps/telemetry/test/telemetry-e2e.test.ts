@@ -810,9 +810,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: '1' }, timeoutMs: 12_000,
       });
 
-      // --telemetry-file still writes even when HTTP is disabled (D-010 contract)
-      assert.ok(await waitForFile(telemetryFile, 2_000), '--telemetry-file should write even when telemetry is disabled');
-      // but HTTP send should NOT happen
+      assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
       assertNotDelivered(result.stderr);
     });
 
@@ -1064,18 +1062,16 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       assert.ok(body.event, 'file should contain a valid event');
     });
 
-    test('--telemetry-file writes even when HTTP telemetry is disabled', async () => {
+    test('--telemetry-file does not write when telemetry is disabled', async () => {
       tmpHome = createTmpDir('file-disabled-http');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
         telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: '1' }, timeoutMs: 12_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 3_000), '--telemetry-file should write even when HTTP disabled');
-      const body = readTelemetryFile(telemetryFile);
-      assert.ok(body.event, 'file should contain a valid event even when HTTP disabled');
+      assert.ok(!(await waitForFile(telemetryFile, 3_000)), '--telemetry-file must not write when telemetry is disabled');
     });
 
     test('projectId persists across runs from same project', async () => {
