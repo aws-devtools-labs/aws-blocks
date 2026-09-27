@@ -695,3 +695,26 @@ For the two edge cases above we **warn and skip only the CloudFront alarm** rath
 - Issue #481; PR #488
 - AWS CDK `Environment` docs: cross-stack references "require concrete region information and will cause this stack to emit synthesis errors."
 - `packages/hosting/src/constructs/hosting_construct.ts` (monitoring wiring), `us_east_1_monitoring_stack.ts`
+
+## D-017: `--telemetry-file` is gated by consent (supersedes D-010)
+
+**Date**: 2026-09-27
+**Authors:** jonasgre
+**Supersedes**: D-010 — that entry's body is left untouched; a maintainer should add a `**Status**: Superseded by D-017` line to it.
+
+### Context
+D-010 let the `--telemetry-file` sink fire regardless of consent. Building the event is itself a side effect: it creates `~/.blocks/telemetry/installation-id` (printing the first-run notice to stderr) and persists a project ID into `<project>/.blocks/config.json`. An opted-out user who passed the flag therefore still got identifier files on disk and the notice printed.
+
+### Decision
+Consent is checked first, before any event is built. When telemetry is disabled there is no event, no identifiers persisted, no first-run notice, no file, and no HTTP request — `--telemetry-file` does not override opt-out. This adopts D-010's rejected alternative 2, "File gated by consent (same as HTTP)". D-010's remaining points stand: with telemetry enabled the flag is additive to the HTTP send, skips pre-existing files, and writes one event per invocation. To inspect events without reaching the production endpoint, point `BLOCKS_TELEMETRY_ENDPOINT` at a local sink rather than disabling telemetry.
+
+### Rationale
+Opting out must mean nothing is captured and nothing is written. A debugging flag must not re-enable data capture — nor disk writes and a consent notice — for a user who has opted out.
+
+### Alternatives Considered
+- **Keep D-010 (file writes while opted out):** rejected; it persisted identifiers and printed the notice for a user who had opted out.
+- **Gate only the file write, still build the event:** rejected; the ID files and the first-run notice are the privacy-relevant side effects, and they happen while building.
+
+### References
+- `packages/core/src/telemetry/client.ts` (`buildAndSendEvent`), `packages/core/src/telemetry/identifiers.ts`
+- `packages/create-blocks-app/src/telemetry.ts` (`trackCommand`)
