@@ -1,0 +1,22 @@
+{
+	"name": "bb-test-mt-cloudfront-proof",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "POC: one CloudFront distribution fronting 3 tenants (multi-tenant front-door proof)",
+	"scripts": {
+		"synth": "cdk synth --app 'npx tsx app.cdk.ts'",
+		"deploy": "cdk deploy --app 'npx tsx app.cdk.ts' --require-approval never",
+		"destroy": "cdk destroy --app 'npx tsx app.cdk.ts' --force"
+	},
+	"dependencies": {
+		"@aws-blocks/hosting": "*"
+	},
+	"devDependencies": {
+		"@types/node": "^20.0.0",
+		"aws-cdk-lib": "2.257.0",
+		"constructs": "^10.6.0",
+		"tsx": "^4.7.0",
+		"typescript": "^5.3.0"
+	}
+}
