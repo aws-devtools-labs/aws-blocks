@@ -97,7 +97,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`All ${checked} Building Block client site(s) install the user-agent middleware. ✓`);
+  console.log(`All ${checked} customUserAgent site(s) install the user-agent middleware.`);
 }
 
 main();

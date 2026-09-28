@@ -186,10 +186,15 @@ describe('KVStore forwards the native client user-agent on outgoing requests', (
 	// Drive one GetItem, capture the built user-agent at the request handler,
 	// then abort before the network. Region and dummy creds let auth resolve.
 	async function capturedUserAgentFor(id: string, token: string | undefined): Promise<string | undefined> {
-		const prevEnv = { ...process.env };
+		const prevEnv: Record<string, string | undefined> = {
+			AWS_REGION: process.env.AWS_REGION,
+			AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
+			AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
+		};
 		process.env.AWS_REGION = 'us-east-1';
 		process.env.AWS_ACCESS_KEY_ID = 'AKIDTEST';
 		process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+		const prevStore = (globalThis as any)[STORE_KEY];
 		const als = new AsyncLocalStorage<string | undefined>();
 		(globalThis as any)[STORE_KEY] = als;
 		let captured: string | undefined;
@@ -209,8 +214,15 @@ describe('KVStore forwards the native client user-agent on outgoing requests', (
 				}
 			});
 		} finally {
-			delete (globalThis as any)[STORE_KEY];
-			process.env = prevEnv;
+			if (prevStore === undefined) {
+				delete (globalThis as any)[STORE_KEY];
+			} else {
+				(globalThis as any)[STORE_KEY] = prevStore;
+			}
+			for (const [key, value] of Object.entries(prevEnv)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
 		}
 		return captured;
 	}

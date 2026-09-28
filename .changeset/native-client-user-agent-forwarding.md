@@ -19,6 +19,7 @@ Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the R
 request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
 dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
 and exports `installClientUserAgent`, an SDK middleware that appends the validated
-token to the outgoing user agent. Every Building Block that configures an SDK client
-installs it, so native attribution rides the SDK user-agent chain AWS service
-telemetry already counts. Inert until a client sends the header.
+token to the outgoing user agent. The 11 participating Building Blocks install it,
+so native attribution rides the SDK user-agent chain AWS service telemetry already
+counts. The Kotlin runtime already sends the header, so Kotlin
+callers are attributed as soon as this ships; Swift and Dart follow.

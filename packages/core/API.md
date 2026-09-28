@@ -10,6 +10,7 @@ import { isConfig } from '@aws-blocks/hosting';
 import { isManagedValue } from '@aws-blocks/hosting';
 import { isSecret } from '@aws-blocks/hosting';
 import { ManagedValue } from '@aws-blocks/hosting';
+import type { MiddlewareStack } from '@smithy/types';
 import { secret } from '@aws-blocks/hosting';
 import { SecretValue } from '@aws-blocks/hosting';
 import { ValueKind } from '@aws-blocks/hosting';
@@ -106,10 +107,8 @@ export function hasAuthError<T extends {
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS';
 
 // @public
-export function installClientUserAgent(client: {
-    middlewareStack: {
-        add: (middleware: any, options: any) => void;
-    };
+export function installClientUserAgent<Input extends object, Output extends object>(client: {
+    middlewareStack: Pick<MiddlewareStack<Input, Output>, 'add' | 'addRelativeTo' | 'identify'>;
 }): void;
 
 // @public

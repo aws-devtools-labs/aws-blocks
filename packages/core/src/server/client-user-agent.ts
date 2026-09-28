@@ -6,6 +6,9 @@
  * SDK user agent.
  */
 
+import { HttpRequest } from '@smithy/protocol-http';
+import type { BuildMiddleware, MiddlewareStack } from '@smithy/types';
+
 /**
  * Header name carrying the native-client token on the RPC hop. A custom header,
  * not `User-Agent`, because browsers forbid scripts from setting `User-Agent`.
@@ -14,33 +17,47 @@
  */
 export const CLIENT_USER_AGENT_HEADER = 'x-blocks-user-agent';
 
-/** Defensive cap on header length (characters), applied before parsing. */
-const MAX_CLIENT_USER_AGENT_LENGTH = 128;
+const MIDDLEWARE_NAME = 'blocksClientUserAgent';
+
+/** Bounds what the grammar runs against; the emitted token has its own cap. */
+const MAX_CLIENT_USER_AGENT_BYTES = 128;
+
+/** Upper bound on the emitted token, keeping the AWS user agent bounded. */
+const MAX_CLIENT_USER_AGENT_TOKEN_LENGTH = 48;
 
 /**
- * Full-string grammar for the `aws-blocks-<lang>/<version>` token; the fixed
- * shape blocks injection.
+ * Token format: `aws-blocks-<lang>/<version>`. The language is 1-16 lowercase
+ * alphanumeric characters starting with a letter; version is numeric X.Y.Z with
+ * an optional prerelease. The fixed shape blocks injection.
+ *
+ * Build metadata is accepted but left out of the capture, so pub's `0.1.4+1` is
+ * attributed as `0.1.4` rather than dropped or split into a series per build.
  */
 const CLIENT_USER_AGENT_PATTERN =
-  /^aws-blocks-([a-z][a-z0-9]{0,15})\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$/;
+  /^aws-blocks-([a-z][a-z0-9]{0,15})\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 /**
  * Validates the inbound `x-blocks-user-agent` header and returns the
  * `client/<lang>/<version>` token to append. Malformed input is dropped,
  * not thrown.
  *
- * The language segment must be 1-16 lowercase alphanumerics with a leading
- * letter; longer or otherwise malformed values are dropped.
+ * A token over 128 bytes, or an emitted token over 48 characters, is dropped,
+ * so unbounded input cannot reach the AWS user agent.
  *
  * @param raw - Raw header value; may be `null` (as `Headers.get()` returns) or omitted.
  * @returns The `client/<lang>/<version>` token, or `undefined` if missing or malformed.
  * @internal Used by the Lambda handler; not public API.
  */
 export function validateClientUserAgentToken(raw?: string | null): string | undefined {
-  if (typeof raw !== 'string') return undefined;
-  if (raw.length === 0 || raw.length > MAX_CLIENT_USER_AGENT_LENGTH) return undefined;
-  const match = CLIENT_USER_AGENT_PATTERN.exec(raw);
-  return match ? `client/${match[1]}/${match[2]}` : undefined;
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  // Space-separated by design, so appended metadata is ignored, not fatal. The
+  // cap applies to the token, so metadata length cannot drop a valid one.
+  const first = raw.slice(0, MAX_CLIENT_USER_AGENT_BYTES + 1).split(' ')[0];
+  if (Buffer.byteLength(first, 'utf8') > MAX_CLIENT_USER_AGENT_BYTES) return undefined;
+  const match = CLIENT_USER_AGENT_PATTERN.exec(first);
+  if (!match) return undefined;
+  const token = `client/${match[1]}/${match[2]}`;
+  return token.length <= MAX_CLIENT_USER_AGENT_TOKEN_LENGTH ? token : undefined;
 }
 
 declare global {
@@ -50,8 +67,9 @@ declare global {
 }
 
 /**
- * Reads the validated per-request token from the `globalThis` store (not
- * `node:async_hooks`, to stay browser- and mock-safe), or `undefined` if unset.
+ * Reads the validated per-request token from the `globalThis` store, or
+ * `undefined` if unset. Reading it there avoids importing the Lambda handler
+ * that creates it.
  *
  * @internal Used by `installClientUserAgent` and tests.
  */
@@ -61,31 +79,19 @@ export function getClientUserAgentToken(): string | undefined {
   return store.getStore();
 }
 
-function hasHeaders(request: unknown): request is { headers: Record<string, string> } {
-  return (
-    request !== null &&
-    typeof request === 'object' &&
-    'headers' in request &&
-    typeof (request as any).headers === 'object' &&
-    (request as any).headers !== null
-  );
-}
-
 /**
- * Installs the per-request client-user-agent middleware on an AWS SDK v3 client.
+ * Installs the per-request client-user-agent middleware on an SDK v3 client.
  *
- * @param client - An AWS SDK v3 client (anything with a `middlewareStack`).
+ * @param client - An AWS SDK v3 client.
  */
-export function installClientUserAgent(client: {
-  // `add` takes `any`: the SDK v3 `MiddlewareStack.add` is overloaded, so no
-  // single structural type fits every client.
-  middlewareStack: { add: (middleware: any, options: any) => void };
+export function installClientUserAgent<Input extends object, Output extends object>(client: {
+  middlewareStack: Pick<MiddlewareStack<Input, Output>, 'add' | 'addRelativeTo' | 'identify'>;
 }): void {
-  client.middlewareStack.add(
-    (next: (args: { request?: unknown }) => Promise<unknown>) =>
-      async (args: { request?: unknown }): Promise<unknown> => {
+  const middleware: BuildMiddleware<Input, Output> =
+    (next) =>
+      async (args) => {
         const token = getClientUserAgentToken();
-        if (token && hasHeaders(args.request)) {
+        if (token && HttpRequest.isInstance(args.request)) {
           const headers = args.request.headers;
           // SDK v3 (node) sets both UA headers; append to each that is present.
           for (const key of ['user-agent', 'x-amz-user-agent']) {
@@ -93,7 +99,27 @@ export function installClientUserAgent(client: {
           }
         }
         return next(args);
-      },
-    { step: 'build', priority: 'low', name: 'blocksClientUserAgent' },
-  );
+      };
+
+  // Anchor after the SDK's own user-agent middleware so the header it builds is
+  // only appended to; both sit at `build`, so step and priority alone tie.
+  const anchor = 'getUserAgentMiddleware';
+  if (client.middlewareStack.identify().some((entry) => entry.split(' - ')[0] === anchor)) {
+    client.middlewareStack.addRelativeTo(middleware, {
+      name: MIDDLEWARE_NAME,
+      relation: 'after',
+      toMiddleware: anchor,
+      override: true,
+    });
+    return;
+  }
+
+  // The anchor is resolved on every send, so registering relative to a name the
+  // stack does not have would fail each request rather than this call.
+  client.middlewareStack.add(middleware, {
+    name: MIDDLEWARE_NAME,
+    step: 'build',
+    priority: 'low',
+    override: true,
+  });
 }
