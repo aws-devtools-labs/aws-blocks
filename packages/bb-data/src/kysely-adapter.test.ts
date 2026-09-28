@@ -12,7 +12,15 @@ import { rmSync } from 'node:fs';
 
 const TEST_DIR = '.bb-data-kysely-' + process.pid;
 
-afterEach(() => {
+// Track engines so teardown releases the WASM instance — PGlite 0.3+ does not
+// force-exit on close, so an unclosed engine holds the event loop open and
+// `node --test` never exits.
+const engines: PGliteEngine[] = [];
+
+afterEach(async () => {
+  for (const engine of engines.splice(0)) {
+    await engine.destroy().catch(() => {});
+  }
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
 
@@ -22,6 +30,7 @@ interface TestSchema {
 
 function setup() {
   const engine = new PGliteEngine(TEST_DIR);
+  engines.push(engine);
   const db = new RLSEnabledDatabase(engine);
   const kysely = createKyselyAdapter<TestSchema>(db);
   return { db, kysely };

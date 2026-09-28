@@ -16,7 +16,7 @@
  * inline — no separate Lambdas needed.
  */
 
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { EventEmitter } from 'events';
@@ -124,6 +124,7 @@ function getApigw(endpoint?: string, customUserAgent?: [string, string][]): ApiG
 			endpoint: ep,
 			...(customUserAgent ? { customUserAgent } : {}),
 		});
+		installClientUserAgent(client);
 		apigwClients.set(ep, client);
 	}
 	return client;
