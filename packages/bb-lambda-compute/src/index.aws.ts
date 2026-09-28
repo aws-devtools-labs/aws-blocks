@@ -16,12 +16,13 @@ import type { ScopeParent } from '@aws-blocks/core';
  */
 import { Scope } from '@aws-blocks/core';
 import type { LambdaComputeProps } from './types.js';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 export type { LambdaComputeProps } from './types.js';
 
 export class LambdaCompute extends Scope {
 	constructor(scope: ScopeParent, id: string, _options?: LambdaComputeProps) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 	}
 
 	setEnv(_key: string, _value: string): void {}
