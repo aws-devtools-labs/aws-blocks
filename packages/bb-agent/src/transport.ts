@@ -21,6 +21,21 @@ import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk, InterruptResponse } from './types.js';
 
 /**
+ * Structural mirror of bb-realtime's `RealtimeChannelDescriptor` — the wire format an
+ * app's `subscribe` adapter hands to `channel.subscribe(...)` to hydrate a live channel.
+ * Mirrored here rather than imported (bb-realtime does not export the type from its
+ * package entry), matching how the client hooks mirror it as `ChatChannelDescriptor`, so
+ * the transport takes no hard type dependency on bb-realtime. Its fields match the
+ * descriptor exactly, so a `refresh` typed against it stays assignable to bb-realtime's
+ * `SubscribeOptions.refresh` when the adapter forwards it to `channel.subscribe(...)`.
+ */
+export interface RealtimeChannelDescriptor {
+	__blocks: 'realtime/channel';
+	channel: string;
+	[key: string]: unknown;
+}
+
+/**
  * A request to run one turn on the backend.
  *
  * Either `message` (a new turn) or `interruptResponses` (resume a paused turn)
@@ -74,6 +89,14 @@ export interface ChatTransport {
 			onReconnect?: () => void;
 			/** Called when the channel's connection is lost ('error' for a drop/reject, 'client' on our own unsubscribe). */
 			onDisconnect?: (reason: DisconnectReason) => void;
+			/**
+			 * Called before EACH reconnect to re-mint a fresh channel descriptor (new connect +
+			 * channel token) so the subscription outlives the token TTLs (channel ~1h / connect
+			 * ~2h). A pure pass-through: the transport forwards it into the Realtime channel's
+			 * subscribe options and the channel invokes it — the transport holds no refresh state.
+			 * Omit it and a reconnect replays the original tokens (fine for short turns).
+			 */
+			refresh?: () => Promise<RealtimeChannelDescriptor>;
 		},
 	): ChunkStream;
 	/**
@@ -140,9 +163,10 @@ const TERMINAL_TYPES: ReadonlySet<AgentStreamChunk['type']> = new Set(['done', '
  *   subscribe: async (channelId, handlerOrOptions) => {
  *     const { channel } = await api.agentGetChannel(channelId);
  *     // channel.subscribe is overloaded (bare handler | { onMessage, onReconnect,
- *     // onDisconnect } options object). Branch on the shape so the options form reaches
- *     // the channel intact — reconnect re-sync only wires up when it does, so DON'T
- *     // unwrap it to a bare handler.
+ *     // onDisconnect, refresh } options object). Branch on the shape so the options form
+ *     // reaches the channel intact — reconnect re-sync only wires up when it does, and the
+ *     // channel calls the forwarded `refresh` to re-mint tokens so long turns outlive the
+ *     // channel (~1h) / connect (~2h) TTLs — so DON'T unwrap it to a bare handler.
  *     // NOTE: both arms pass the SAME value (`handlerOrOptions`) — the branch is NOT a
  *     // transform, it exists ONLY to pick a distinct overload. The union arg matches
  *     // NEITHER overload, so a single direct `channel.subscribe(handlerOrOptions)` does
@@ -170,6 +194,7 @@ export function realtimeTransport(io: {
 					onMessage: (chunk: AgentStreamChunk) => void;
 					onDisconnect?: (reason: DisconnectReason) => void;
 					onReconnect?: () => void;
+					refresh?: () => Promise<RealtimeChannelDescriptor>;
 			  },
 	) => Promise<{ unsubscribe(): void; established: Promise<void> }>;
 	/** Start a new turn — submits the backend job that publishes chunks to `channelId`. */
@@ -186,6 +211,7 @@ export function realtimeTransport(io: {
 				observer?: boolean;
 				onReconnect?: () => void;
 				onDisconnect?: (reason: DisconnectReason) => void;
+				refresh?: () => Promise<RealtimeChannelDescriptor>;
 			},
 		): ChunkStream {
 			const q = new ChunkQueue();
@@ -200,14 +226,21 @@ export function realtimeTransport(io: {
 				if (TERMINAL_TYPES.has(chunk.type)) q.close();
 			};
 
-			// When the caller wants reconnect/disconnect signals, forward a PLAIN options
-			// object (NOT a callable-with-props): the hydrated bb-realtime channel resolves
-			// `typeof handlerOrOptions === 'function'` FIRST, so a hybrid callable would be
-			// treated as a bare handler and its onReconnect/onDisconnect silently dropped.
+			// When the caller wants reconnect/disconnect signals, or supplies a `refresh` to
+			// re-mint tokens on reconnect, forward a PLAIN options object (NOT a callable-with-
+			// props): the hydrated bb-realtime channel resolves `typeof handlerOrOptions ===
+			// 'function'` FIRST, so a hybrid callable would be treated as a bare handler and its
+			// onReconnect/onDisconnect/refresh silently dropped. `refresh` is a pure pass-through
+			// — the channel invokes it before each reconnect; the transport keeps no state.
 			// With no such opts, pass the bare handler so the simple path is unchanged.
 			const subscribeArg =
-				opts?.onReconnect || opts?.onDisconnect
-					? { onMessage, onReconnect: opts?.onReconnect, onDisconnect: opts?.onDisconnect }
+				opts?.onReconnect || opts?.onDisconnect || opts?.refresh
+					? {
+							onMessage,
+							onReconnect: opts?.onReconnect,
+							onDisconnect: opts?.onDisconnect,
+							refresh: opts?.refresh,
+						}
 					: onMessage;
 
 			// Attach immediately so chunks published after this point are captured;
