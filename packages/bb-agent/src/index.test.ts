@@ -7,6 +7,7 @@ import { Scope } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
 import { createChat } from './index.chat.js';
 import type { ChatTransport, ChunkStream } from './transport.js';
+import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk } from './types.js';
 import { CannedProvider } from './providers/canned.js';
 import { checkModelHealth } from './model-factory.js';
@@ -1214,7 +1215,7 @@ function subscribeCapture() {
 	const cap: {
 		handler?: (chunk: AgentStreamChunk) => void;
 		reconnect?: () => void;
-		disconnect?: (reason: string) => void;
+		disconnect?: (reason: DisconnectReason) => void;
 	} = {};
 	const subscribe: UseChatOptions['subscribe'] = async (_channelId, handlerOrOptions) => {
 		if (hasSubscribeOptions(handlerOrOptions)) {
@@ -1601,6 +1602,39 @@ describe('useChat', () => {
 		t.mock.timers.tick(660_001);
 		assert.strictEqual(chat.isLoading(), false, 'terminal-error failsafe clears the stuck spinner');
 		assert.ok(errorReceived, 'terminal-error failsafe surfaces an error');
+		chat.destroy();
+	});
+
+	test('terminal onDisconnect(timeout) while loading ALSO arms the failsafe (any non-client reason, no onReconnect)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			subscribe,
+			onError: (e) => { errorReceived = e; },
+		});
+
+		await chat.sendMessage('hello');
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// A genuinely terminal 'timeout' drop (like 'error', it fires NO onReconnect) must arm the
+		// failsafe just the same — the predicate keys off ANY non-'client' reason, so a future
+		// 'timeout'/'unknown' give-up can't hang the spinner.
+		assert.ok(cap.disconnect, 'useChat must forward onDisconnect to the transport');
+		cap.disconnect!('timeout');
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'still loading — failsafe is armed, not immediate');
+
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'terminal-timeout failsafe clears the stuck spinner');
+		assert.ok(errorReceived, 'terminal-timeout failsafe surfaces an error');
 		chat.destroy();
 	});
 
@@ -2078,14 +2112,14 @@ describe('createChat', () => {
 	function reconnectCapture(runError?: string): {
 		cap: {
 			reconnect?: () => void;
-			disconnect?: (reason: string) => void;
+			disconnect?: (reason: DisconnectReason) => void;
 			chunk: (c: AgentStreamChunk) => void;
 		};
 		transport: ChatTransport;
 	} {
 		const cap: {
 			reconnect?: () => void;
-			disconnect?: (reason: string) => void;
+			disconnect?: (reason: DisconnectReason) => void;
 			chunk: (c: AgentStreamChunk) => void;
 		} = { chunk() {} };
 
@@ -2610,6 +2644,42 @@ describe('createChat', () => {
 		t.mock.timers.tick(660_001);
 		assert.strictEqual(chat.isLoading(), false, 'terminal-error failsafe clears the stuck spinner');
 		assert.ok(errorReceived, 'terminal-error failsafe surfaces an error');
+		chat.destroy();
+		await flush();
+	});
+
+	test('terminal onDisconnect(timeout) while loading ALSO arms the failsafe (any non-client reason, no onReconnect)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			onError: (e) => {
+				errorReceived = e;
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// A genuinely terminal 'timeout' drop (like 'error', it fires NO onReconnect) must arm the
+		// failsafe just the same — the predicate keys off ANY non-'client' reason, so a future
+		// 'timeout'/'unknown' give-up can't hang the spinner.
+		assert.ok(cap.disconnect, 'createChat must forward onDisconnect to the transport');
+		cap.disconnect!('timeout');
+
+		// The failsafe is armed, not immediate.
+		assert.strictEqual(chat.isLoading(), true, 'still loading — failsafe is armed, not immediate');
+
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'terminal-timeout failsafe clears the stuck spinner');
+		assert.ok(errorReceived, 'terminal-timeout failsafe surfaces an error');
 		chat.destroy();
 		await flush();
 	});

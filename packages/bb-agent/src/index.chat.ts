@@ -142,6 +142,10 @@ function nextId(): string {
 	return `msg-${++messageCounter}-${Date.now()}`;
 }
 
+// Reconnect-recovery state machine. This is the canonical copy (createChat); it is
+// mirrored in index.hooks.ts's deprecated useChat. Keep the two in sync — a fix here
+// likely applies there. Deliberately not extracted to a shared module: useChat is on a
+// deprecation path (superseded by createChat per #338).
 /**
  * Last-resort window (ms) of COMPLETE SILENCE after a reconnect. The failsafe is a
  * backstop, NOT the primary recovery (which is the done chunk / DB re-sync). It is
@@ -511,7 +515,15 @@ export function createChat(options: CreateChatOptions): ChatController {
 			// unaffected) and otherwise clears loading + surfaces onError, so the spinner can
 			// never hang. 'client' (our own unsubscribe) is ignored.
 			onDisconnect: (reason) => {
-				if (reason === 'error' && loading) armFailsafe();
+				// Arm on ANY non-'client' reason while loading, not just 'error': 'client' is our
+				// own unsubscribe (newConversation/destroy) so we never arm on it, but any other
+				// terminal reason ('error'/'timeout'/'unknown') can leave an in-flight turn with no
+				// live channel and no onReconnect. This is self-correcting — a turn that actually
+				// reconnects re-arms on its next chunk and clears on the terminal chunk / onReconnect
+				// re-sync, so a spurious arm on a reason later followed by onReconnect does no harm,
+				// while a genuinely terminal 'timeout'/'unknown' drop (which fires no onReconnect) can
+				// no longer leave the spinner stuck.
+				if (reason !== 'client' && loading) armFailsafe();
 			},
 		});
 		activeStream = stream;

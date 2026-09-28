@@ -17,6 +17,7 @@
  * observer-only attach, and decoupled produce/consume.
  */
 
+import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk, InterruptResponse } from './types.js';
 
 /**
@@ -72,7 +73,7 @@ export interface ChatTransport {
 			/** Called after the transport transparently reconnects and this channel's resubscribe is re-confirmed. */
 			onReconnect?: () => void;
 			/** Called when the channel's connection is lost ('error' for a drop/reject, 'client' on our own unsubscribe). */
-			onDisconnect?: (reason: string) => void;
+			onDisconnect?: (reason: DisconnectReason) => void;
 		},
 	): ChunkStream;
 	/**
@@ -163,7 +164,7 @@ export function realtimeTransport(io: {
 			| ((chunk: AgentStreamChunk) => void)
 			| {
 					onMessage: (chunk: AgentStreamChunk) => void;
-					onDisconnect?: (reason: string) => void;
+					onDisconnect?: (reason: DisconnectReason) => void;
 					onReconnect?: () => void;
 			  },
 	) => Promise<{ unsubscribe(): void; established: Promise<void> }>;
@@ -180,7 +181,7 @@ export function realtimeTransport(io: {
 			opts?: {
 				observer?: boolean;
 				onReconnect?: () => void;
-				onDisconnect?: (reason: string) => void;
+				onDisconnect?: (reason: DisconnectReason) => void;
 			},
 		): ChunkStream {
 			const q = new ChunkQueue();

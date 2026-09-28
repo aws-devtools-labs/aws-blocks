@@ -14,6 +14,7 @@
  * 4. User sends message — chunks arrive via the already-open subscription
  */
 
+import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk } from './types.js';
 
 export type { AgentStreamChunk } from './types.js';
@@ -63,7 +64,7 @@ export interface ChatSubscribeOptions {
 	 * `unsubscribe()`). Optional — useChat does not require it, but forwards it so an
 	 * adapter can surface drops.
 	 */
-	onDisconnect?: (reason: string) => void;
+	onDisconnect?: (reason: DisconnectReason) => void;
 	/**
 	 * Called after the transport transparently reconnects and this channel has been
 	 * resubscribed. useChat uses this to re-sync from the DB (see {@link UseChatOptions.subscribe}).
@@ -127,6 +128,10 @@ function nextId(): string {
 	return `msg-${++messageCounter}-${Date.now()}`;
 }
 
+// Reconnect-recovery state machine. useChat is deprecated (superseded by createChat per
+// #338) and FROZEN; this state machine is duplicated in index.chat.ts (createChat, the
+// canonical surface). Keep the two in sync — a fix here likely applies there. Not extracted
+// to a shared module deliberately: useChat is on a deprecation path.
 /**
  * Last-resort window (ms) of COMPLETE SILENCE after a reconnect. The failsafe is a
  * backstop, NOT the primary recovery (which is the done chunk / DB re-sync). It is
@@ -441,7 +446,15 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			// and otherwise clears loading + surfaces onError, so the spinner can never hang.
 			// 'client' (our own unsubscribe) is ignored.
 			onDisconnect: (reason) => {
-				if (reason === 'error' && loading) { armFailsafe(); }
+				// Arm on ANY non-'client' reason while loading, not just 'error': 'client' is our
+				// own unsubscribe (newConversation/destroy) so we never arm on it, but any other
+				// terminal reason ('error'/'timeout'/'unknown') can leave an in-flight turn with no
+				// live channel and no onReconnect. This is self-correcting — a turn that actually
+				// reconnects re-arms on its next chunk and clears on the terminal chunk / onReconnect
+				// re-sync, so a spurious arm on a reason later followed by onReconnect does no harm,
+				// while a genuinely terminal 'timeout'/'unknown' drop (which fires no onReconnect) can
+				// no longer leave the spinner stuck.
+				if (reason !== 'client' && loading) { armFailsafe(); }
 			},
 		};
 

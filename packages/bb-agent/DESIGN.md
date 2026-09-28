@@ -182,7 +182,12 @@ options object to the overloaded `channel.subscribe`; `useChat` wires it through
   reconnect AND on a terminal `onDisconnect('error')` while loading — the give-up / all-stale-token
   paths (past the transport's ~2h connect-token ceiling) surface `onDisconnect('error')` but NOT
   `onReconnect`, so wiring the failsafe to that reason too is what guarantees the spinner clears even
-  when no channel comes back.
+  when no channel comes back. The failsafe intentionally arms on **any non-`'client'`** `onDisconnect`
+  reason, not just `'error'`: `'client'` is our own unsubscribe (`newConversation`/`destroy`) and is
+  excluded, but a future terminal `'timeout'`/`'unknown'` drop that fires no `onReconnect` still can't
+  hang the spinner. A spurious arm on a reason that is actually followed by `onReconnect` is harmless —
+  it self-corrects, since the recovered turn re-arms on its next chunk and clears on the terminal chunk /
+  re-sync.
 - **Send-path failsafe.** `sendMessage`/`respondToInterrupt` wrap the RPC in try/catch → `handleSendFailure`,
   which resets `loading`, drops the empty assistant placeholder, and reports the error once. A 504 may
   still have started the turn server-side. The send is treated as failed: `handleSendFailure` nulls the
