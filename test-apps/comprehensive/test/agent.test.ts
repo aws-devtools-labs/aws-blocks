@@ -14,9 +14,13 @@ import { codePoller } from './poll-for-code.js';
  */
 function cannedTransport(api: typeof apiType) {
   return realtimeTransport({
-    subscribe: async (channelId, handler) => {
+    subscribe: async (channelId, handlerOrOptions) => {
       const { channel } = await api.cannedGetChannel(channelId);
-      return channel.subscribe(handler);
+      // channel.subscribe is overloaded (bare handler | options object). Branch on the
+      // shape so each arm narrows to one overload and the options form reaches the channel.
+      return typeof handlerOrOptions === 'function'
+        ? channel.subscribe(handlerOrOptions)
+        : channel.subscribe(handlerOrOptions);
     },
     sendMessage: async (channelId, message, conversationId) => {
       await api.cannedStream(message, conversationId ?? undefined, channelId);
