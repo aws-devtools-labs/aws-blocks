@@ -56,7 +56,7 @@ export {
 export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
 export {
-	type BlocksStackApi,
+	type BlocksApiRouting,
 	type ComputeConfig,
 	type FrameworkType,
 	Hosting,

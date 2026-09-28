@@ -11,8 +11,8 @@ import { _setSynthExistsChecker } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { BLOCKS_RPC_PREFIX } from './constants.js';
-import { type BlocksStackApi, Hosting } from './hosting.js';
+import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+import { type BlocksApiRouting, Hosting } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
 
 // ================================================================
@@ -22,9 +22,24 @@ import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } 
 // produces the expected CloudFormation resources for SPA and SSR.
 // ================================================================
 
-const MOCK_API: BlocksStackApi = {
-  apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks',
-};
+const MOCK_ENDPOINT = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod';
+
+/**
+ * The `api` prop a backend hands Hosting: just the default compute's origin base.
+ *
+ * Hosting adds the reserved RPC and auth behaviors unconditionally and discovers
+ * app RawRoutes through the process-wide `getRegisteredRoutes()` registry, so the
+ * only thing that crosses the boundary is the endpoint string.
+ */
+const MOCK_API: BlocksApiRouting = { defaultEndpoint: MOCK_ENDPOINT };
+
+/**
+ * The same `api` prop, named for the tests that register RawRoutes first and then
+ * assert Hosting picks them up from the registry.
+ */
+function apiWithRegisteredRoutes(): BlocksApiRouting {
+  return { defaultEndpoint: MOCK_ENDPOINT };
+}
 
 /** Helper: create a minimal SPA build output (dist/ with index.html). */
 function createSpaBuildOutput(root: string): void {
@@ -339,7 +354,7 @@ describe('Hosting', () => {
       template.hasResourceProperties('AWS::Lambda::Function', {
         Environment: Match.objectLike({
           Variables: Match.objectLike({
-            BLOCKS_API_URL: MOCK_API.apiUrl,
+            BLOCKS_API_URL: `${MOCK_ENDPOINT}${BLOCKS_RPC_PREFIX}`,
           }),
         }),
       });
@@ -721,7 +736,7 @@ describe('Hosting', () => {
 
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
-        api: MOCK_API,
+        api: apiWithRegisteredRoutes(),
       });
 
       const template = Template.fromStack(stack);
@@ -765,7 +780,7 @@ describe('Hosting', () => {
 
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
-        api: MOCK_API,
+        api: apiWithRegisteredRoutes(),
       });
 
       const template = Template.fromStack(stack);
@@ -780,17 +795,13 @@ describe('Hosting', () => {
       );
     });
 
-    it('proxies the reserved /aws-blocks/auth subtree with a single behavior', () => {
+    it('proxies the reserved /aws-blocks/auth subtree unconditionally', () => {
       createSpaBuildOutput(tmpDir);
 
-      // A route under the auth subtree (as the auth runtime would mount) must
-      // NOT get its own behavior — the subtree wildcard covers it.
-      registerRoute({
-        method: 'GET',
-        path: '/aws-blocks/auth/callback',
-        handler: async () => {},
-      });
-
+      // The auth BB's routes (callback, sign-in, exchange, the stub IdP) are mounted
+      // only at runtime, so they don't exist to register at synth. Hosting instead
+      // adds one `${BLOCKS_AUTH_PREFIX}/*` behavior unconditionally, which proxies
+      // the whole flow regardless of providers or AuthOIDC instance count.
       const app = new App();
       const stack = new Stack(app, 'AuthBehaviorStack');
 
@@ -805,11 +816,7 @@ describe('Hosting', () => {
       const cacheBehaviors = distConfig.CacheBehaviors ?? [];
       const patterns = cacheBehaviors.map((b: any) => b.PathPattern);
 
-      assert.ok(patterns.includes('/aws-blocks/auth/*'), 'Should have /aws-blocks/auth/* behavior');
-      assert.ok(
-        !patterns.includes('/aws-blocks/auth/callback'),
-        'A route under the auth subtree should be covered by the wildcard, not get its own behavior',
-      );
+      assert.ok(patterns.includes(`${BLOCKS_AUTH_PREFIX}/*`), `Should have ${BLOCKS_AUTH_PREFIX}/* behavior`);
     });
 
     it('deduplicates CloudFront behaviors for same path prefix', () => {
@@ -831,7 +838,7 @@ describe('Hosting', () => {
 
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
-        api: MOCK_API,
+        api: apiWithRegisteredRoutes(),
       });
 
       const template = Template.fromStack(stack);
@@ -862,7 +869,7 @@ describe('Hosting', () => {
 
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
-        api: MOCK_API,
+        api: apiWithRegisteredRoutes(),
       });
 
       const template = Template.fromStack(stack);
@@ -893,7 +900,7 @@ describe('Hosting', () => {
 
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
-        api: MOCK_API,
+        api: apiWithRegisteredRoutes(),
       });
 
       const template = Template.fromStack(stack);

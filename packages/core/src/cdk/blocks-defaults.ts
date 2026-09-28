@@ -101,6 +101,25 @@ export interface BlocksDefaults {
 	accessLogging: boolean;
 
 	/**
+	 * Provision a managed CloudFront distribution in front of the app's API.
+	 *
+	 * A browser client should reach the API on one stable domain (auth cookies are
+	 * origin-bound), independent of the gateway hostname. The managed front door is
+	 * a single CloudFront distribution with one catch-all behavior forwarding to the
+	 * default compute's origin — every API path resolves to that one compute today,
+	 * so there is no per-path fan-out yet.
+	 *
+	 * **On in production, off in sandbox.** A sandbox reaches API Gateway directly:
+	 * a distribution would add CloudFront propagation delay to every deploy/test
+	 * cycle for no benefit in a disposable stack.
+	 *
+	 * Suppressed automatically when a `Hosting` distribution already fronts the
+	 * API — the API belongs on that one distribution, on the same domain as the
+	 * frontend, rather than behind a second.
+	 */
+	provisionApiFrontDoor: boolean;
+
+	/**
 	 * Place the app's compute and VPC-resident resources in a VPC. Pass a
 	 * standard CDK VPC — Blocks handles Lambda placement, endpoint provisioning
 	 * (based on which Building Blocks are in scope), and security-group wiring.
@@ -130,6 +149,9 @@ export const BlocksPresets = {
 		logRetention: RetentionDays.ONE_WEEK,
 		throttling: { rateLimit: 200, burstLimit: 400 },
 		accessLogging: false,
+		// Reach API Gateway directly: CloudFront propagation would slow every
+		// deploy/test cycle without helping a disposable stack.
+		provisionApiFrontDoor: false,
 	},
 	/**
 	 * Durable, protected posture for permanent deployments. A higher throttle
@@ -149,5 +171,6 @@ export const BlocksPresets = {
 		// per stack once you've confirmed a single Blocks stack owns it in the
 		// region — see the `accessLogging` field doc.
 		accessLogging: false,
+		provisionApiFrontDoor: true,
 	},
 } satisfies Record<string, BlocksDefaults>;
