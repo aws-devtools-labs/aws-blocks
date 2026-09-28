@@ -1188,7 +1188,7 @@ describe('model-factory', () => {
 // ── useChat ──────────────────────────────────────────────────────────────────
 
 import { useChat } from './index.hooks.js';
-import type { AgentStreamChunk, ChatMessage, UseChatOptions, ChatChunkHandler, ChatSubscribeOptions } from './index.hooks.js';
+import type { ChatMessage, UseChatOptions, ChatChunkHandler, ChatSubscribeOptions } from './index.hooks.js';
 
 /** Flush pending microtasks so an async onReconnect handler settles before assertions. */
 function flush(): Promise<void> {
