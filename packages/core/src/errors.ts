@@ -105,6 +105,35 @@ export function isWireSafeError(e: unknown): e is Error {
 }
 
 /**
+ * Stamp the non-enumerable {@link BLOCKS_ERROR_BRAND} onto an already-built named
+ * `Error` and return it, so its `name` crosses the RPC wire (D-003) instead of
+ * being collapsed to a nameless 500.
+ *
+ * This is the single source of truth for the brand. Every Building Block that
+ * throws a named error — whether through its own local `blocksError()` helper
+ * (whose message format differs per package) or by building an `Error` inline —
+ * routes it through this one helper so the "intentional BB error" signal never
+ * diverges per package. It has no runtime dependencies, so it is safe in every
+ * bundle (mock, aws-runtime, CDK synth), and `Symbol.for()` keeps the brand
+ * valid across separately-bundled packages.
+ *
+ * Only stamp an error whose `name` is a BB error constant. Do NOT brand a raw
+ * driver/SDK exception (`PostgresError`, `DynamoDBServiceException`) — the brand
+ * is exactly the signal that keeps those class names from leaking.
+ *
+ * @example
+ * ```typescript
+ * const err = new Error(`${EmailErrors.InvalidInput}: bad address`);
+ * err.name = EmailErrors.InvalidInput;
+ * throw brandBlocksError(err);
+ * ```
+ */
+export function brandBlocksError<T extends Error>(err: T): T {
+	Object.defineProperty(err, BLOCKS_ERROR_BRAND, { value: true, enumerable: false });
+	return err;
+}
+
+/**
  * Build a named `Error` whose `name` is a BB error constant, so it is matchable
  * with {@link isBlocksError} on both server and client. The name is also
  * prefixed into the message for readable logs.
@@ -114,9 +143,10 @@ export function isWireSafeError(e: unknown): e is Error {
  * no runtime dependencies, so it is safe to use in every bundle — mock,
  * aws-runtime, and CDK synth.
  *
- * The error also carries the non-enumerable {@link BLOCKS_ERROR_BRAND}, the
- * signal the RPC serializer reads to forward this `name` over the wire while
- * still collapsing raw driver/SDK exceptions to a nameless 500.
+ * The error also carries the non-enumerable {@link BLOCKS_ERROR_BRAND} (via
+ * {@link brandBlocksError}), the signal the RPC serializer reads to forward this
+ * `name` over the wire while still collapsing raw driver/SDK exceptions to a
+ * nameless 500.
  *
  * @example
  * ```typescript
@@ -126,8 +156,7 @@ export function isWireSafeError(e: unknown): e is Error {
 export function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
-	Object.defineProperty(err, BLOCKS_ERROR_BRAND, { value: true, enumerable: false });
-	return err;
+	return brandBlocksError(err);
 }
 
 /**

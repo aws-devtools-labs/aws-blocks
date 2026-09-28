@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { decodeRpcResponse, errorResponseFromCatch, parseRpcRequest, RpcErrorCode, MAX_RPC_BODY_BYTES } from './rpc.js';
-import { ApiError, isBlocksError, blocksError } from './errors.js';
+import { ApiError, isBlocksError, blocksError, brandBlocksError } from './errors.js';
 
 describe('-32600 Invalid Request error shape', () => {
   it('returns proper JSON-RPC 2.0 envelope with error code', () => {
@@ -116,6 +116,27 @@ describe('errorResponseFromCatch does not leak backend internals', () => {
     assert.throws(
       () => decodeRpcResponse(parsed),
       (e: unknown) => isBlocksError(e, 'ValidationFailedException'),
+    );
+  });
+
+  it('forwards the BB name when a Building Block brands its OWN error via brandBlocksError() (D-003)', () => {
+    // Most Building Blocks define a local blocksError() with a package-specific
+    // message format, then stamp the wire-safe brand through core's
+    // brandBlocksError(). This simulates that path: a fresh named Error built by a
+    // BB (here with an UNPREFIXED message, like bb-app-setting / bb-auth-oidc) and
+    // branded. Its BB name must cross the wire so isBlocksError() keeps matching.
+    const bbErr = new Error('Invalid email address: not-an-email');
+    bbErr.name = 'InvalidInputException';
+    const parsed = JSON.parse(errorResponseFromCatch(brandBlocksError(bbErr), 9));
+    assert.strictEqual(parsed.error.code, 500);
+    assert.strictEqual(parsed.error.message, 'Internal error');
+    assert.strictEqual(parsed.error.data.name, 'InvalidInputException');
+    // The raw message must not leak.
+    assert.ok(!JSON.stringify(parsed).includes('not-an-email'));
+    // Round-trips: the client reconstructs an error isBlocksError() matches.
+    assert.throws(
+      () => decodeRpcResponse(parsed),
+      (e: unknown) => isBlocksError(e, 'InvalidInputException'),
     );
   });
 

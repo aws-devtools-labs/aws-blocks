@@ -40,6 +40,7 @@ import {
 
 import { createRemoteJWKSet, decodeJwt, jwtVerify } from 'jose';
 
+import { brandBlocksError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import type {
 	AuthEngine,
@@ -877,7 +878,7 @@ function describeError(err: unknown): string {
 function blocksError(name: string, message: string): Error {
 	const err = new Error(message);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }
 
 function invalidState(msg: string): Error {

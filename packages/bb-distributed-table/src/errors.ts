@@ -3,7 +3,7 @@
 
 import { createDefu } from 'defu';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError, brandBlocksError } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { ReadValidationMode } from './types.js';
 
@@ -98,7 +98,7 @@ export const DistributedTableErrors = {
 export function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }
 
 /**
