@@ -4,7 +4,7 @@
 import { SQSClient, SendMessageCommand, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import { ReceiveMessageCommand, DeleteMessageCommand, ChangeMessageVisibilityCommand } from '@aws-sdk/client-sqs';
 import type { SendMessageBatchCommandOutput } from '@aws-sdk/client-sqs';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
 import { getConfigSync, getContainerComputeId, isContainerRuntime, registerContainerPoller } from '@aws-blocks/core';
 import { dispatchJobToWorker, isJobWorker } from '@aws-blocks/core';
 import { EventSourceMapping, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
@@ -94,6 +94,7 @@ export class AsyncJob<T = unknown> extends Scope {
 		this._sqsClient = new SQSClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(this._sqsClient);
 
 		const envKey = `BLOCKS_QUEUE_URL_${sanitizeConfigKey(this.fullId)}`;
 		const queueUrl = process.env[envKey] ?? '';

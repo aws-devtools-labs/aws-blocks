@@ -152,6 +152,32 @@ test.after(async (t) => {
     console.log(`✅ ${ENV} stack destroyed`);
   }
 
+  // Close the realtime client middleware's pooled WebSocket(s) so the event
+  // loop drains and node:test can exit 0 on its own. The realtime client
+  // middleware keeps a module-level connection pool (a shared WS per endpoint,
+  // plus keep-alive/reconnect timers) that nothing else tears down: killing the
+  // server above stops the *server*, but the *client* pool in this test process
+  // stays open and holds the event loop alive, tripping the 15s backstop below
+  // even when every test passed.
+  //
+  // Which module owns that pool is environment-dependent. Under `tsx -C browser`
+  // `import 'aws-blocks'` resolves (via the package's `browser` export) to the
+  // generated client.js, which side-effect-imports the realtime client
+  // middleware — bb-realtime/mock-middleware locally, bb-realtime/aws-middleware
+  // on sandbox/production. We reset BOTH, best-effort: a dynamic import of the
+  // already-loaded module returns the SAME cached instance whose pool holds the
+  // live sockets, and the other module's reset is a harmless no-op over an empty
+  // pool. Doing this as a dynamic (not top-level) import keeps the inactive
+  // module out of the response-hydration chain during the tests themselves.
+  for (const spec of ['@aws-blocks/bb-realtime/mock-middleware', '@aws-blocks/bb-realtime/aws-middleware']) {
+    try {
+      const mw = await import(spec);
+      (mw as { __resetConnectionsForTest?: () => void }).__resetConnectionsForTest?.();
+    } catch {
+      // Best-effort teardown: never let a missing/renamed helper throw here.
+    }
+  }
+
   // Backstop: if open handles prevent node:test from exiting, force-exit
   // after a grace period. This timer is unref'd so it does NOT keep the
   // event loop alive — if all handles close, node:test exits naturally
