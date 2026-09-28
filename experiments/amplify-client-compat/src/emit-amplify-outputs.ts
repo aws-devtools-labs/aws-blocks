@@ -249,6 +249,17 @@ export function emitAmplifyOutputs(facts: BlocksCognitoFacts, opts: EmitOptions 
 	auth.unauthenticated_identities_enabled = false;
 	// identity_pool_id intentionally omitted — see one-way-door decision in doc.
 
+	// The Blocks app client enables USER_PASSWORD_AUTH (+ USER_AUTH when
+	// chosen) but never SRP, and amplify_outputs.json has no field for the
+	// auth flow. Amplify's signIn() defaults to USER_SRP_AUTH, so a stock call
+	// is rejected by the pool (test/real-amplify-signin-flow.test.ts).
+	gaps.push({
+		category: 'auth',
+		detail:
+			"Blocks app client disables SRP; Amplify signIn() defaults to USER_SRP_AUTH. Call signIn with " +
+			"options.authFlowType: 'USER_PASSWORD_AUTH' (not expressible in amplify_outputs.json), or enable SRP in AuthCognito.",
+	});
+
 	const outputs: AmplifyOutputs = {
 		$schema: 'https://amplify.aws/2024-02/outputs-schema.json',
 		version: '1',

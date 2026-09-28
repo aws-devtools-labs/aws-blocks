@@ -45,6 +45,12 @@ export async function doConfirm(email: string, code: string) {
 
 /** Standard Amplify sign-in — unchanged from a stock Amplify app. */
 export async function doSignIn(email: string, password: string) {
-	const { isSignedIn, nextStep } = await signIn({ username: email, password });
+	// Blocks' app client disables SRP (Amplify's default flow), so pick the
+	// flow it enables. This is the one line a stock Amplify app must change.
+	const { isSignedIn, nextStep } = await signIn({
+		username: email,
+		password,
+		options: { authFlowType: 'USER_PASSWORD_AUTH' },
+	});
 	return { isSignedIn, step: nextStep.signInStep };
 }
