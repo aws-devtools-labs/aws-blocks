@@ -18,23 +18,24 @@ against a Blocks-provisioned User Pool, with no Amplify backend definition.
 - `src/emit-amplify-outputs.ts` — **core**: `emitAmplifyOutputs(facts, opts)` maps the values `AuthCognito` exposes at synth → a schema-valid auth section, and returns `gaps[]` for anything the Amplify schema can express but Blocks does not model (e.g. Email MFA, AppSync data, Identity-Pool storage). `validateAmplifyOutputs(o)` checks required-field invariants.
 - `src/cdk-shim.ts` — how a real Blocks CDK app reads `auth.userPool` / `auth.userPoolClient` (both `public readonly`) and writes the file.
 - `src/amplify-client.ts` — `configureFromBlocks(outputs)` + `doSignUp`/`doSignIn`; the standard Amplify client half, unchanged from a stock app.
-- `src/aws-amplify-shim.d.ts` — local stand-in for `aws-amplify@6`'s surface so the prototype type-checks without installing the dep. Delete when promoted into a real test-app.
+- `test/real-amplify-parse.test.ts` — runs the real `aws-amplify@6` `isAmplifyOutputs` / `parseAmplifyOutputs` (what `Amplify.configure()` executes) on the emitted file. Types and runtime both resolve against the real `aws-amplify` package (symlink `node_modules` from the main checkout).
 - `test/emit-amplify-outputs.test.ts` — `node:test` unit tests (8).
 - `test/client-types.types-test.ts` — typecheck-only proof that the emitted object binds to `Amplify.configure`/`signUp`/`signIn`.
 
 ## Verify (no AWS, no deploy)
 
-Uses the main checkout's toolchain (worktree has no `node_modules`):
+Uses the main checkout's `node_modules` (it includes `aws-amplify@6.17.0`), symlinked into the worktree root:
 
 ```bash
-BIN=/home/rhamouda/workspace/aws-blocks/node_modules
-# Typecheck (includes the client-types type-level test):
-"$BIN/.bin/tsc" --noEmit --typeRoots "$BIN/@types" -p tsconfig.json
-# Unit tests:
-node --import "$BIN/tsx/dist/loader.mjs" --test test/emit-amplify-outputs.test.ts
+cd <worktree-root>
+ln -sfn /home/rhamouda/workspace/aws-blocks/node_modules node_modules
+# Typecheck against the real aws-amplify types (includes the strict AmplifyOutputs assignment):
+./node_modules/.bin/tsc --noEmit -p experiments/amplify-client-compat/tsconfig.json
+# Unit tests, including the real parseAmplifyOutputs run:
+node --import ./node_modules/tsx/dist/loader.mjs --test experiments/amplify-client-compat/test/*.test.ts
 ```
 
-Both pass. See `../../amplify-blocks-experiment.md` (in the workspace) for the
+Both pass (tsc exit 0; 10/10 tests). See `../../amplify-blocks-experiment.md` (in the workspace) for the
 findings, feature-gap table, and one-way-door decisions.
 
 ## NOT done

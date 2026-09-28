@@ -26,7 +26,14 @@ test('emits a schema-valid auth section from the three required Cognito facts', 
 test('maps signInWith → username_attributes and password policy to snake_case', () => {
 	const { outputs } = emitAmplifyOutputs(BASE);
 	assert.deepEqual(outputs.auth?.username_attributes, ['username', 'email']);
-	assert.deepEqual(outputs.auth?.password_policy, { min_length: 8, require_numbers: true });
+	// Unspecified fields fall back to Cognito defaults (aws-amplify@6 requires all five).
+	assert.deepEqual(outputs.auth?.password_policy, {
+		min_length: 8,
+		require_numbers: true,
+		require_lowercase: true,
+		require_uppercase: true,
+		require_symbols: true,
+	});
 });
 
 test('User-Pool-only design: no identity_pool_id, unauthenticated identities disabled', () => {

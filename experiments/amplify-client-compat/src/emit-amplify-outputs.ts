@@ -131,15 +131,17 @@ export function emitAmplifyOutputs(facts: BlocksCognitoFacts, opts: EmitOptions 
 		auth.username_attributes = facts.signInWith.map((s) => SIGNIN_MAP[s]);
 	}
 
-	// password_policy — snake_case remap.
+	// password_policy — snake_case remap. aws-amplify@6's AmplifyOutputs type
+	// requires all five fields, so unspecified ones fall back to Cognito's
+	// default policy (min 8, all character classes required).
 	if (facts.passwordPolicy) {
 		const p = facts.passwordPolicy;
 		auth.password_policy = {
-			...(p.minLength !== undefined ? { min_length: p.minLength } : {}),
-			...(p.requireNumbers !== undefined ? { require_numbers: p.requireNumbers } : {}),
-			...(p.requireLowercase !== undefined ? { require_lowercase: p.requireLowercase } : {}),
-			...(p.requireUppercase !== undefined ? { require_uppercase: p.requireUppercase } : {}),
-			...(p.requireSymbols !== undefined ? { require_symbols: p.requireSymbols } : {}),
+			min_length: p.minLength ?? 8,
+			require_numbers: p.requireNumbers ?? true,
+			require_lowercase: p.requireLowercase ?? true,
+			require_uppercase: p.requireUppercase ?? true,
+			require_symbols: p.requireSymbols ?? true,
 		};
 	}
 

@@ -29,11 +29,11 @@ export type MfaConfiguration = 'NONE' | 'OPTIONAL' | 'REQUIRED';
 export type AmplifyMfaMethod = 'SMS' | 'TOTP';
 
 export interface AmplifyAuthPasswordPolicy {
-	min_length?: number;
-	require_numbers?: boolean;
-	require_lowercase?: boolean;
-	require_uppercase?: boolean;
-	require_symbols?: boolean;
+	min_length: number;
+	require_numbers: boolean;
+	require_lowercase: boolean;
+	require_uppercase: boolean;
+	require_symbols: boolean;
 }
 
 export interface AmplifyAuthOutput {
@@ -77,8 +77,10 @@ export interface AmplifyOutputs {
 	/** Free-form; where a Blocks JSON-RPC API URL naturally lives. */
 	custom?: Record<string, unknown>;
 	// Sections the Blocks backend cannot currently satisfy (see gap table).
-	data?: Record<string, unknown>;
-	geo?: Record<string, unknown>;
-	analytics?: Record<string, unknown>;
-	notifications?: Record<string, unknown>;
+	// Typed `never` so the emitter cannot produce them by accident; a loose
+	// Record here is NOT assignable to aws-amplify@6's real AmplifyOutputs.
+	data?: never;
+	geo?: never;
+	analytics?: never;
+	notifications?: never;
 }

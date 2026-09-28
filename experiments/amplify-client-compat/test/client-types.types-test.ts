@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Type-level test: the object `emitAmplifyOutputs` returns is accepted by the
- * Amplify client entry points with no cast. Compiling this file under `tsc
- * --noEmit` IS the assertion — there is no runtime aws-amplify here (it binds
- * to the local shim), so this file is typecheck-only and not run under
- * node:test.
+ * Type-level test against the REAL aws-amplify@6 types: the object
+ * `emitAmplifyOutputs` returns is assignable to `AmplifyOutputs` (strict) and
+ * accepted by the client entry points with no cast. Compiling this file under
+ * `tsc --noEmit` IS the assertion; it is typecheck-only and not run under
+ * node:test. The runtime counterpart is `real-amplify-parse.test.ts`.
  */
 
+import type { AmplifyOutputs } from '@aws-amplify/core/internals/utils';
 import { emitAmplifyOutputs } from '../src/emit-amplify-outputs.js';
 import { configureFromBlocks, doSignIn, doSignUp } from '../src/amplify-client.js';
 
@@ -19,6 +20,12 @@ const { outputs } = emitAmplifyOutputs({
 	signInWith: ['email'],
 	mfa: 'off',
 });
+
+// Strict check against the REAL aws-amplify@6 outputs type. Amplify.configure()
+// itself takes the loose `AmplifyOutputsUnknown`, so it alone proves little;
+// this assignment fails to compile if the emitted shape drifts from the schema.
+const strict: AmplifyOutputs = outputs;
+void strict;
 
 // The emitted outputs object is accepted by Amplify.configure(...) unchanged.
 configureFromBlocks(outputs);

@@ -10,9 +10,7 @@
  * `Amplify.configure()` consumes, and that `signUp`/`signIn` compile against a
  * Blocks-provisioned pool with NO Amplify backend definition anywhere.
  *
- * Imports resolve against the local `aws-amplify-shim.d.ts` in this experiment;
- * in a real app they resolve against the installed `aws-amplify` package
- * unchanged (the shim mirrors v6's exported names/shapes).
+ * Imports resolve against the real installed `aws-amplify@6` package.
  */
 
 import { Amplify } from 'aws-amplify';
