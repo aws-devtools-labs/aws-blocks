@@ -176,6 +176,14 @@ jobs:
       - name: Check aws-blocks exports consistency
         run: npm run check:exports-consistency
 
+      # The guard decides whether unattributed traffic can ship, so it is unit-tested
+      # first. A regression shows up here instead of as a wrong verdict below.
+      - name: Test the client user-agent guard
+        run: node --test scripts/check-client-user-agent-consistency.test.mjs
+
+      - name: Check client user-agent middleware consistency
+        run: npm run check:client-user-agent
+
       - name: Check API backward compatibility
         run: npm run check:api
 
