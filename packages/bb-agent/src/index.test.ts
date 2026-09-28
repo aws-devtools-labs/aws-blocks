@@ -1342,6 +1342,46 @@ describe('useChat', () => {
 		chunkHandler!({ type: 'interrupt', interrupts: [{ id: 'int-1', name: 'approve:delete' }] });
 		assert.ok(!lastMessages.some(m => m.role === 'assistant' && m.content === ''), 'empty placeholder should be removed');
 	});
+
+	// #614: `/client` (index.hooks) must re-export the discriminated-union ChatMessage,
+	// not a flat shadow that widened `metadata` back to `Record<string, any>` and lost
+	// the `role === 'approval'` narrowing added in #338.
+	test('loadConversation projects approval rows into the typed ApprovalMetadata union (no cast)', async () => {
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'c' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hi' },
+						{ role: 'approval', content: 'Approved', metadata: { approved: true, toolName: 'deleteThing', trust: false } },
+					],
+				}),
+			},
+			subscribe: async () => ({ unsubscribe() {}, established: Promise.resolve() }),
+		});
+
+		await chat.loadConversation('c');
+		const approval = chat.getMessages().find(m => m.role === 'approval');
+		assert.ok(approval, 'approval row should be projected');
+
+		if (approval.role === 'approval') {
+			// Narrowing on `role === 'approval'` types `metadata` as ApprovalMetadata, so
+			// these known fields read with no cast and the correct types.
+			const approved: boolean | undefined = approval.metadata?.approved;
+			const toolName: string | undefined = approval.metadata?.toolName;
+			assert.strictEqual(approved, true);
+			assert.strictEqual(toolName, 'deleteThing');
+
+			// Compile-time regression guard for #614: ApprovalMetadata has NO index
+			// signature, so reading an arbitrary key must be a type error. If `/client`
+			// re-exposed the flat `Record<string, any>` shadow, this access would be
+			// allowed and the @ts-expect-error would have nothing to suppress → build fails.
+			// @ts-expect-error — ApprovalMetadata is a closed shape, not an index type.
+			const _noIndexSignature = approval.metadata?.someArbitraryKeyThatDoesNotExist;
+			void _noIndexSignature;
+		}
+	});
 });
 
 describe('checkModelHealth', () => {

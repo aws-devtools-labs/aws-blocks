@@ -35,13 +35,13 @@ export type {
 	TurnRequest,
 } from './index.chat.js';
 
-/** A message in the conversation (for UI rendering). */
-export interface ChatMessage {
-	id: string;
-	role: 'user' | 'assistant' | 'approval';
-	content: string;
-	metadata?: Record<string, any>;
-}
+// The conversation message type is the discriminated-union `ChatMessage` (added
+// in #338) — narrowing on `role === 'approval'` types `metadata` as
+// `ApprovalMetadata` with no cast. `/client` re-exports it (and `ApprovalMetadata`)
+// from index.chat.js rather than defining a flat shadow that widened `metadata`
+// back to `any` and lost the narrowing (#614).
+import type { ChatMessage, ApprovalMetadata } from './index.chat.js';
+export type { ChatMessage, ApprovalMetadata } from './index.chat.js';
 
 /** Options for creating a chat instance. */
 export interface UseChatOptions {
@@ -222,9 +222,16 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		async respondToInterrupt(responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>) {
 			if (loading) return;
 			if (!conversationId) throw new Error('No active conversation');
-			// Add approval messages to chat immediately
+			// Add approval messages to chat immediately. Build the decision as typed
+			// `ApprovalMetadata` (per-role handling, matching createChat) so the union
+			// member is satisfied — include only the fields that are set.
 			for (const r of responses) {
-				messages = [...messages, { id: nextId(), role: 'approval' as const, content: r.approved ? 'Approved' : 'Denied', metadata: { approved: r.approved, trust: r.trust, toolName: r.toolName, input: r.input } }];
+				const metadata: ApprovalMetadata = {};
+				if (r.approved !== undefined) metadata.approved = r.approved;
+				if (r.trust !== undefined) metadata.trust = r.trust;
+				if (r.toolName !== undefined) metadata.toolName = r.toolName;
+				if (r.input !== undefined) metadata.input = r.input;
+				messages = [...messages, { id: nextId(), role: 'approval' as const, content: r.approved ? 'Approved' : 'Denied', metadata }];
 			}
 			// Reuse existing empty assistant placeholder or create one
 			const existingEmpty = messages.find(m => m.role === 'assistant' && !m.content);
@@ -256,14 +263,27 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			// 2. THEN load history from DB
 			// TODO: buffer chunks received between subscribe and history load, then deduplicate/merge
 			const { messages: history } = await options.api.getConversation(id);
-			messages = history
-				.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'approval')
-				.map(m => ({
-					id: nextId(),
-					role: m.role as 'user' | 'assistant' | 'approval',
-					content: m.content,
-					metadata: m.metadata,
-				}));
+			// Project each history row into the discriminated union per role (same
+			// handling as createChat.loadConversation) — a single object literal with a
+			// runtime-valued `role` can't satisfy the union, and an `approval` row must
+			// carry `ApprovalMetadata`, not free-form metadata.
+			messages = history.flatMap<ChatMessage>(m => {
+				if (m.role === 'user' || m.role === 'assistant') {
+					return [{ id: nextId(), role: m.role, content: m.content, metadata: m.metadata }];
+				}
+				if (m.role === 'approval') {
+					const meta: ApprovalMetadata = {};
+					const md = m.metadata;
+					if (md) {
+						if (typeof md.approved === 'boolean') meta.approved = md.approved;
+						if (typeof md.trust === 'boolean') meta.trust = md.trust;
+						if (typeof md.toolName === 'string') meta.toolName = md.toolName;
+						if (md.input !== undefined) meta.input = md.input;
+					}
+					return [{ id: nextId(), role: 'approval', content: m.content, metadata: meta }];
+				}
+				return [];
+			});
 			options.onMessagesChange?.(messages);
 
 			// Check for pending interrupts (e.g., user left mid-approval)
