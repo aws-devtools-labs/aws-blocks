@@ -8,6 +8,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { isBlocksError } from '@aws-blocks/core';
 import { KnowledgeBase, KnowledgeBaseErrors } from './index.mock.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -111,6 +112,18 @@ test('maxResults is clamped to [1, 100]', async () => {
 
 	const resultsNeg = await kb.retrieve('password', { maxResults: -5 });
 	assert.ok(resultsNeg.length >= 1, 'negative maxResults should clamp to 1');
+});
+
+test('rejects a fractional or non-finite maxResults with ValidationError (parity with AWS)', async () => {
+	const kb = new KnowledgeBase({ id: 'test' }, 'kb', { source: 'test-knowledge-tmp' });
+
+	for (const bad of [1.5, Number.NaN]) {
+		await assert.rejects(
+			() => kb.retrieve('password', { maxResults: bad }),
+			(e: unknown) => isBlocksError(e, KnowledgeBaseErrors.ValidationError),
+			`maxResults=${bad} should reject with ValidationError`,
+		);
+	}
 });
 
 // ── Empty results ──────────────────────────────────────────────────────────

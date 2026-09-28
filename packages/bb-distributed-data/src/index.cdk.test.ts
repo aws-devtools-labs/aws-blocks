@@ -14,7 +14,7 @@ import { Template, Match } from 'aws-cdk-lib/assertions';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ScopeParent } from '@aws-blocks/core';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { DEFAULT_NODE_RUNTIME, BlocksPresets } from '@aws-blocks/core/cdk';
 import { DistributedDatabase } from './index.cdk.js';
 
 const MIGRATIONS_DIR = '.bb-data/__test_cdk_migrations__';
@@ -22,12 +22,17 @@ const MIGRATIONS_DIR = '.bb-data/__test_cdk_migrations__';
 function synth(build: (stack: cdk.Stack) => void): Template {
   const app = new cdk.App();
   const stack = new cdk.Stack(app, 'TestStack');
+  const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+    assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+  });
   const handler = new lambda.Function(stack, 'Handler', {
     runtime: DEFAULT_NODE_RUNTIME,
     handler: 'index.handler',
     code: lambda.Code.fromInline('exports.handler = async () => {};'),
+    role: executionRole,
   });
   (stack as any).handler = handler;
+  (stack as any).executionRole = executionRole;
   (globalThis as any).CURRENT_BLOCKS_STACK = stack;
   try {
     build(stack);
@@ -60,25 +65,55 @@ test('CDK: cluster has DeletionProtectionEnabled=true by default', () => {
   });
 });
 
-test('CDK: removalPolicy=destroy disables deletion protection', () => {
-  const template = synth((stack) => {
-    new DistributedDatabase(scope(stack), 'mydsql', { removalPolicy: 'destroy' });
+test('CDK: per-block removalPolicy is independent of deletion protection', () => {
+  // Deletion protection is read from `defaults` independently of removalPolicy
+  // (consistent across all adopting blocks). Here: sandbox defaults (protection
+  // off) with a per-block `removalPolicy: 'retain'` override → the cluster is
+  // RETAINed on stack delete but not deletion-protected.
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'IndepStack');
+  const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+    assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
   });
-  template.hasResource('AWS::DSQL::Cluster', {
-    Properties: { DeletionProtectionEnabled: false },
-    DeletionPolicy: 'Delete',
-  });
-});
-
-test('CDK: sandboxMode=true disables deletion protection', () => {
-  const app = new cdk.App({ context: { sandboxMode: 'true' } });
-  const stack = new cdk.Stack(app, 'SandboxStack');
   const handler = new lambda.Function(stack, 'Handler', {
     runtime: DEFAULT_NODE_RUNTIME,
     handler: 'index.handler',
     code: lambda.Code.fromInline('exports.handler = async () => {};'),
+    role: executionRole,
   });
   (stack as any).handler = handler;
+  (stack as any).defaults = BlocksPresets.sandbox;
+  (stack as any).executionRole = executionRole;
+  (globalThis as any).CURRENT_BLOCKS_STACK = stack;
+  try {
+    new DistributedDatabase(scope(stack), 'mydsql', { removalPolicy: 'retain' });
+    const template = Template.fromStack(stack);
+    template.hasResource('AWS::DSQL::Cluster', {
+      Properties: { DeletionProtectionEnabled: false },
+      DeletionPolicy: 'Retain',
+    });
+  } finally {
+    delete (globalThis as any).CURRENT_BLOCKS_STACK;
+  }
+});
+
+test('CDK: sandbox defaults disable deletion protection', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'SandboxStack');
+  const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+    assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+  });
+  const handler = new lambda.Function(stack, 'Handler', {
+    runtime: DEFAULT_NODE_RUNTIME,
+    handler: 'index.handler',
+    code: lambda.Code.fromInline('exports.handler = async () => {};'),
+    role: executionRole,
+  });
+  (stack as any).handler = handler;
+  // The cluster's removal/protection follows the stack-wide defaults (resolved
+  // via the globalThis fallback here), not the sandboxMode context.
+  (stack as any).defaults = BlocksPresets.sandbox;
+  (stack as any).executionRole = executionRole;
   (globalThis as any).CURRENT_BLOCKS_STACK = stack;
   try {
     new DistributedDatabase(scope(stack), 'mydsql');
@@ -110,19 +145,39 @@ test('CDK: handler gets dsql:DbConnect policy (least privilege)', () => {
   });
 });
 
-// --- Environment variables ---
+// --- Runtime config (endpoint + region) ---
 
-test('CDK: handler gets ENDPOINT and REGION env vars', () => {
-  const template = synth((stack) => {
-    new DistributedDatabase(scope(stack), 'mydsql');
+test('CDK: registers ENDPOINT and REGION via the config registry (not handler env vars)', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack');
+  const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+    assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
   });
-  const fns = template.findResources('AWS::Lambda::Function');
-  const handlerFn = Object.entries(fns).find(([id]) => id.startsWith('Handler'));
-  assert.ok(handlerFn, 'Handler Lambda should exist');
-  const env = (handlerFn![1] as any).Properties?.Environment?.Variables ?? {};
-  const envKeys = Object.keys(env);
-  assert.ok(envKeys.some(k => k.includes('ENDPOINT')), `Expected ENDPOINT env var, got: ${envKeys}`);
-  assert.ok(envKeys.some(k => k.includes('REGION')), `Expected REGION env var, got: ${envKeys}`);
+  const handler = new lambda.Function(stack, 'Handler', {
+    runtime: DEFAULT_NODE_RUNTIME,
+    handler: 'index.handler',
+    code: lambda.Code.fromInline('exports.handler = async () => {};'),
+    role: executionRole,
+  });
+  (stack as any).handler = handler;
+  (stack as any).executionRole = executionRole;
+  (globalThis as any).CURRENT_BLOCKS_STACK = stack;
+  try {
+    new DistributedDatabase(scope(stack), 'mydsql');
+
+    // Endpoint + region now flow through the config registry (loaded into
+    // process.env at cold start) like every other block — not a direct env var
+    // on the handler.
+    const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
+      | { entries: Map<string, unknown> }
+      | undefined;
+    assert.ok(registry, 'config registry exists on the stack');
+    const keys = [...registry.entries.keys()];
+    assert.ok(keys.some(k => k.includes('ENDPOINT')), `Expected an ENDPOINT config key, got: ${keys}`);
+    assert.ok(keys.some(k => k.includes('REGION')), `Expected a REGION config key, got: ${keys}`);
+  } finally {
+    delete (globalThis as any).CURRENT_BLOCKS_STACK;
+  }
 });
 
 // --- CfnOutput ---
@@ -155,6 +210,33 @@ test('CDK: migration/provisioning resources always created', () => {
   assert.ok(hasDsqlGrant, 'Migration Lambda should have dsql:DbConnectAdmin');
 });
 
+test('CDK: DSQL migration Lambda log group adopts defaults.logRetention', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'DsqlMigrationRetentionStack');
+  const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+    assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+  });
+  const handler = new lambda.Function(stack, 'Handler', {
+    runtime: DEFAULT_NODE_RUNTIME,
+    handler: 'index.handler',
+    code: lambda.Code.fromInline('exports.handler = async () => {};'),
+    role: executionRole,
+  });
+  (stack as any).handler = handler;
+  (stack as any).executionRole = executionRole;
+  (stack as any).defaults = BlocksPresets.sandbox;
+  (globalThis as any).CURRENT_BLOCKS_STACK = stack;
+  try {
+    new DistributedDatabase(scope(stack), 'mydsql');
+    const template = Template.fromStack(stack);
+    // The always-created migration Lambda now owns an explicit log group whose
+    // retention follows the stack-wide default (sandbox → one week).
+    template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+  } finally {
+    delete (globalThis as any).CURRENT_BLOCKS_STACK;
+  }
+});
+
 test('CDK: migration resources created when migrationsPath is provided', () => {
   rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
   mkdirSync(MIGRATIONS_DIR, { recursive: true });
@@ -182,6 +264,39 @@ test('CDK: migration resources created when migrationsPath is provided', () => {
     const env = (migrationFn![1] as any).Properties?.Environment?.Variables ?? {};
     assert.ok(env.APP_ROLE_ARN, 'Migration Lambda should have APP_ROLE_ARN env var');
     assert.ok(env.DB_ROLE_NAME, 'Migration Lambda should have DB_ROLE_NAME env var');
+  } finally {
+    rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
+  }
+});
+
+test('CDK: migration CustomResource tracks the app role ARN', () => {
+  rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
+  mkdirSync(MIGRATIONS_DIR, { recursive: true });
+  writeFileSync(join(MIGRATIONS_DIR, '001_create.sql'), 'CREATE TABLE t (id TEXT PRIMARY KEY)');
+
+  try {
+    const template = synth((stack) => {
+      new DistributedDatabase(scope(stack), 'mydsql', { migrationsPath: MIGRATIONS_DIR });
+    });
+    const customResources = template.findResources('AWS::CloudFormation::CustomResource');
+    const cr = Object.values(customResources)[0] as any;
+
+    // CloudFormation only re-invokes a CustomResource when its PROPERTIES change. The app
+    // role ARN must therefore be a property, not just a Lambda env var — otherwise replacing
+    // the app's IAM role leaves the DSQL `AWS IAM GRANT` pointing at the old, deleted ARN and
+    // every query fails with 28000 (invalid_authorization_specification).
+    assert.ok(cr.Properties?.appRoleArn, 'CustomResource should have appRoleArn property');
+
+    // It must be the same reference the migration Lambda receives, so the two can never drift.
+    const fns = template.findResources('AWS::Lambda::Function');
+    const migrationFnEntry = Object.entries(fns).find(([id]) => id.includes('MigrationFn'));
+    assert.ok(migrationFnEntry, 'Migration Lambda should exist');
+    const env = (migrationFnEntry[1] as any).Properties?.Environment?.Variables ?? {};
+    assert.deepStrictEqual(
+      cr.Properties.appRoleArn,
+      env.APP_ROLE_ARN,
+      'CustomResource appRoleArn should match the migration Lambda APP_ROLE_ARN env var'
+    );
   } finally {
     rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
   }

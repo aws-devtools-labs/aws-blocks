@@ -30,11 +30,13 @@ import semver from 'semver';
 import { VERIFIED_OPENNEXT_RANGE } from './nextjs.js';
 import { VERIFIED_NITRO_RANGE } from './nitro.js';
 import { VERIFIED_ASTRO_RANGE } from './astro.js';
+import { VERIFIED_SVELTEKIT_RANGE } from './sveltekit.js';
 
 const adapters = [
   { name: 'next/opennext', range: VERIFIED_OPENNEXT_RANGE },
   { name: 'nitro', range: VERIFIED_NITRO_RANGE },
   { name: 'astro', range: VERIFIED_ASTRO_RANGE },
+  { name: 'sveltekit', range: VERIFIED_SVELTEKIT_RANGE },
 ];
 
 void describe('adapter version pins (X.1)', () => {

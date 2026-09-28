@@ -5,11 +5,12 @@ import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { LogLevel, LoggingOptions, ChildLogger } from './types.js';
 import { shouldLog, buildEntry } from './serializer.js';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 // ── Public types ────────────────────────────────────────────────────────────
 
 export { LoggingErrors } from './errors.js';
-export type { LogLevel, LoggingOptions, LogEntry, ChildLogger, RetentionDays } from './types.js';
+export type { LogLevel, LoggingOptions, LogEntry, ChildLogger } from './types.js';
 
 // ── Logger (AWS runtime) ──────────────────────────────────────────────────────────
 
@@ -32,7 +33,8 @@ export type { LogLevel, LoggingOptions, LogEntry, ChildLogger, RetentionDays } f
  *
  * **Scaling:** No throughput limits from the BB itself. CloudWatch Logs
  * ingestion scales with Lambda concurrency. Cost is per GB ingested +
- * per GB stored. Use log level filtering and `retention` to control costs.
+ * per GB stored. Use log level filtering to control costs; retention is a
+ * compute-level setting (`logRetention`), not a Logger option.
  *
  * **⚠️ G4 Exception:** All logging methods (`debug`, `info`, `warn`, `error`)
  * are **synchronous**, not async. Logging writes to stdout/stderr which Lambda
@@ -45,11 +47,9 @@ export class Logger extends Scope implements ChildLogger {
 	private loggerName: string;
 
 	constructor(scope: ScopeParent, id: string, options?: LoggingOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.loggerName = id;
-		this.level = options?.level
-			?? (process.env.LOG_LEVEL as LogLevel | undefined)
-			?? 'info';
+		this.level = options?.level ?? 'info';
 		this.defaultContext = options?.defaultContext ?? {};
 		const logGroupName = `/aws/lambda/${process.env.AWS_LAMBDA_FUNCTION_NAME ?? this.fullId}`;
 		registerSdkIdentifiers(this.fullId, { logGroupName });

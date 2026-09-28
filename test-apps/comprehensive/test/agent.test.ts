@@ -4,6 +4,32 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
+import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
+import type { AgentStreamChunk } from '@aws-blocks/bb-agent/client';
+import { codePoller } from './poll-for-code.js';
+
+/**
+ * Build the Realtime transport wired to the canned agent's RPCs — the copy-paste
+ * boilerplate an app writes once per runtime. This is what `createChat` streams over.
+ */
+function cannedTransport(api: typeof apiType) {
+  return realtimeTransport({
+    subscribe: async (channelId, handler) => {
+      const { channel } = await api.cannedGetChannel(channelId);
+      return channel.subscribe(handler);
+    },
+    sendMessage: async (channelId, message, conversationId) => {
+      await api.cannedStream(message, conversationId ?? undefined, channelId);
+    },
+    resume: async (channelId, responses, conversationId) => {
+      await api.cannedResume(
+        channelId,
+        responses.map(r => ({ interruptId: r.interruptId, approved: r.approved ?? false })),
+        conversationId ?? undefined,
+      );
+    },
+  });
+}
 
 /** Poll getConversation until expected message count is reached or timeout. */
 async function waitForMessages(api: typeof apiType, conversationId: string, expectedCount: number, timeoutMs = 60000, useCanned = false): Promise<any[]> {
@@ -15,6 +41,17 @@ async function waitForMessages(api: typeof apiType, conversationId: string, expe
   }
   const { messages } = useCanned ? await api.cannedGetConversation(conversationId) : await api.agentGetConversation(conversationId);
   return messages;
+}
+
+/**
+ * Sign up a user and confirm it with the verification code delivered for that
+ * username. The agent per-user isolation test needs two distinct signed-in
+ * users, so the code has to be matched to the right one.
+ */
+async function signUpAndConfirm(api: typeof apiType, username: string, password: string): Promise<void> {
+  await api.authSignUp(username, password);
+  const delivered = await codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username);
+  await api.authConfirmSignUp(username, delivered.code);
 }
 
 export function agentTests(getApi: () => typeof apiType) {
@@ -237,9 +274,7 @@ export function agentTests(getApi: () => typeof apiType) {
 
         // Sign up and sign in as user A
         const userA = `agent-test-a-${Date.now()}`;
-        await api.authSignUp(userA, 'password123');
-        const codeA = await api.authGetLastCode();
-        await api.authConfirmSignUp(userA, codeA!.code);
+        await signUpAndConfirm(api, userA, 'password123');
         await api.authSignIn(userA, 'password123');
 
         // Create a conversation as user A
@@ -251,9 +286,7 @@ export function agentTests(getApi: () => typeof apiType) {
         // Sign out, sign up and sign in as user B
         await api.authSignOut();
         const userB = `agent-test-b-${Date.now()}`;
-        await api.authSignUp(userB, 'password123');
-        const codeB = await api.authGetLastCode();
-        await api.authConfirmSignUp(userB, codeB!.code);
+        await signUpAndConfirm(api, userB, 'password123');
         await api.authSignIn(userB, 'password123');
 
         // User B should NOT see user A's conversation
@@ -441,6 +474,84 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.ok(toolResult, 'should have tool-result message');
         const output = toolResult.metadata.toolOutput;
         assert.ok(JSON.stringify(output).includes('denied'), 'tool-result should contain denial message');
+      });
+    });
+
+    describe('createChat (compute-agnostic client API)', () => {
+      test('sendMessage streams a reply into the assistant message', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        const chunks: AgentStreamChunk[] = [];
+        const chat = createChat({
+          transport: cannedTransport(api),
+          api: {
+            createConversation: async () => ({ conversationId }),
+            getConversation: async (id) => await api.cannedGetConversation(id),
+            getPendingInterrupts: (id) => api.cannedGetPendingInterrupts(id),
+          },
+          onChunk: (chunk) => chunks.push(chunk),
+        });
+
+        const done = new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('No done chunk within 25s')), 25_000);
+          const check = setInterval(() => {
+            if (chunks.some(c => c.type === 'done')) { clearTimeout(timer); clearInterval(check); resolve(); }
+          }, 200);
+        });
+
+        await chat.sendMessage('Say hello');
+        await done;
+
+        assert.ok(chunks.some(c => c.type === 'text-delta'), 'should receive text-delta chunks');
+        assert.ok(chunks.some(c => c.type === 'done'), 'should receive a done chunk');
+        const assistant = chat.getMessages().find(m => m.role === 'assistant');
+        assert.ok(assistant && assistant.content.length > 0, 'assistant message should accumulate streamed text');
+        assert.strictEqual(chat.isLoading(), false, 'loading clears on done');
+        chat.destroy();
+      });
+
+      test('interrupt surfaces via onInterrupt and sendMessage({ interruptResponses }) resumes', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        const chunks: AgentStreamChunk[] = [];
+        let interrupts: Array<{ interruptId: string; name: string; reason?: unknown }> = [];
+        const chat = createChat({
+          transport: cannedTransport(api),
+          api: {
+            createConversation: async () => ({ conversationId }),
+            getConversation: async (id) => await api.cannedGetConversation(id),
+            getPendingInterrupts: (id) => api.cannedGetPendingInterrupts(id),
+          },
+          onChunk: (chunk) => chunks.push(chunk),
+          onInterrupt: (ints) => { interrupts = ints; },
+        });
+
+        const interrupted = new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('No interrupt within 15s')), 15_000);
+          const check = setInterval(() => {
+            if (interrupts.length) { clearTimeout(timer); clearInterval(check); resolve(); }
+          }, 200);
+        });
+
+        await chat.sendMessage('use deleteRecords');
+        await interrupted;
+        assert.ok(interrupts[0].name.includes('deleteRecords'), 'interrupt should reference the tool');
+
+        const completed = new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('No done chunk after resume within 15s')), 15_000);
+          const check = setInterval(() => {
+            if (chunks.some(c => c.type === 'done')) { clearTimeout(timer); clearInterval(check); resolve(); }
+          }, 200);
+        });
+
+        await chat.sendMessage({ interruptResponses: interrupts.map(i => ({ interruptId: i.interruptId, approved: true })) });
+        await completed;
+
+        assert.ok(chunks.some(c => c.type === 'done'), 'resume should complete the turn');
+        assert.ok(chat.getMessages().some(m => m.role === 'approval'), 'approval decision recorded in the chat');
+        chat.destroy();
       });
     });
   });

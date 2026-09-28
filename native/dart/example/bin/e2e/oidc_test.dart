@@ -69,7 +69,9 @@ class HttpRelayLauncher implements BrowserLauncher {
       if (resp.statusCode >= 300 && resp.statusCode < 400) {
         final loc = resp.headers['location'];
         if (loc == null || loc.isEmpty) {
-          throw StateError('Redirect (${resp.statusCode}) without Location at $current');
+          throw StateError(
+            'Redirect (${resp.statusCode}) without Location at $current',
+          );
         }
         final next = current.resolve(loc);
         if (next.scheme == callbackScheme) {
@@ -85,7 +87,9 @@ class HttpRelayLauncher implements BrowserLauncher {
         'HTTP ${resp.statusCode} at $current\nbody: ${resp.body}',
       );
     }
-    throw StateError('Too many redirects without reaching "$callbackScheme://"');
+    throw StateError(
+      'Too many redirects without reaching "$callbackScheme://"',
+    );
   }
 }
 
@@ -107,7 +111,8 @@ String _deriveOidcBase(String blocksUrl) {
 
 void main() async {
   final rpcUrl =
-      (Platform.environment['BLOCKS_URL'] ?? 'http://localhost:3001/aws-blocks').trim();
+      (Platform.environment['BLOCKS_URL'] ?? 'http://localhost:3001/aws-blocks')
+          .trim();
   final oidcBase = _deriveOidcBase(rpcUrl);
 
   print('=== OIDC relay validation (headless) — native-bindings ===');
@@ -158,12 +163,19 @@ void main() async {
       body: jsonEncode({'csrf': csrf, 'relayTo': _relayTo}),
     );
     final ok200 = resp.statusCode == 200;
-    final body = ok200 ? jsonDecode(resp.body) as Map<String, dynamic> : <String, dynamic>{};
+    final body = ok200
+        ? jsonDecode(resp.body) as Map<String, dynamic>
+        : <String, dynamic>{};
     final stateEnvelope = body['state'] as String?;
-    final payload = stateEnvelope != null ? StatePayload.decodeEnvelope(stateEnvelope) : null;
-    final roundTrips = payload != null && payload.csrf == csrf && payload.relay == _relayTo;
-    check(ok200 && roundTrips,
-        'authorize-params signed state decodes + round-trips csrf/relay (http=${resp.statusCode})');
+    final payload = stateEnvelope != null
+        ? StatePayload.decodeEnvelope(stateEnvelope)
+        : null;
+    final roundTrips =
+        payload != null && payload.csrf == csrf && payload.relay == _relayTo;
+    check(
+      ok200 && roundTrips,
+      'authorize-params signed state decodes + round-trips csrf/relay (http=${resp.statusCode})',
+    );
   } catch (e) {
     check(false, 'authorize-params signed state envelope decodes — threw: $e');
   }
@@ -173,10 +185,17 @@ void main() async {
   group('OIDC: signInRelay completes + session cookie captured');
   OidcUser? user;
   try {
-    user = await oidc.signInRelay(_provider, launcher: launcher, relayTo: _relayTo);
-    final cookieCaptured = session.cookies.isNotEmpty && session.cookieHeader != null;
-    check(user.userId.isNotEmpty && cookieCaptured,
-        'signInRelay returned user ${user.userId} and set the session cookie');
+    user = await oidc.signInRelay(
+      _provider,
+      launcher: launcher,
+      relayTo: _relayTo,
+    );
+    final cookieCaptured =
+        session.cookies.isNotEmpty && session.cookieHeader != null;
+    check(
+      user.userId.isNotEmpty && cookieCaptured,
+      'signInRelay returned user ${user.userId} and set the session cookie',
+    );
   } catch (e) {
     check(false, 'signInRelay completes + cookie captured — threw: $e');
     stderr.writeln('  launcher trace:\n    ${launcher.trace.join('\n    ')}');
@@ -193,8 +212,10 @@ void main() async {
   try {
     final blocks = Blocks(baseUrl: rpcUrl, sessionStore: session);
     final me = await blocks.api.oidcRequireAuth();
-    check(me.userId.isNotEmpty,
-        'api.oidcRequireAuth succeeds (userId=${me.userId}, provider=${me.provider})');
+    check(
+      me.userId.isNotEmpty,
+      'api.oidcRequireAuth succeeds (userId=${me.userId}, provider=${me.provider})',
+    );
   } catch (e) {
     check(false, 'authenticated RPC via replayed cookie — threw: $e');
   }
@@ -207,18 +228,27 @@ void main() async {
     await rehydrated.load();
     final blocks2 = Blocks(baseUrl: rpcUrl, sessionStore: rehydrated);
     final me2 = await blocks2.api.oidcRequireAuth();
-    final hydratedFromBytes = persistedBytes != null && rehydrated.cookies.isNotEmpty;
-    check(hydratedFromBytes && me2.userId.isNotEmpty,
-        'fresh PersistentSessionStore re-hydrated from TokenStore still authenticates '
-        '(userId=${me2.userId})');
+    final hydratedFromBytes =
+        persistedBytes != null && rehydrated.cookies.isNotEmpty;
+    check(
+      hydratedFromBytes && me2.userId.isNotEmpty,
+      'fresh PersistentSessionStore re-hydrated from TokenStore still authenticates '
+      '(userId=${me2.userId})',
+    );
   } catch (e) {
-    check(false, 'persistence across a fresh PersistentSessionStore — threw: $e');
+    check(
+      false,
+      'persistence across a fresh PersistentSessionStore — threw: $e',
+    );
   }
 
   // A5 — sign out clears the session.
   group('OIDC: sign out');
   try {
-    final out = await Blocks(baseUrl: rpcUrl, sessionStore: session).api.oidcSignOut();
+    final out = await Blocks(
+      baseUrl: rpcUrl,
+      sessionStore: session,
+    ).api.oidcSignOut();
     check(out.success, 'oidcSignOut returns success');
   } catch (e) {
     check(false, 'oidcSignOut — threw: $e');

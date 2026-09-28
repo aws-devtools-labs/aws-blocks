@@ -8,7 +8,8 @@ int _failed = 0;
 /// The endpoint the suite targets — `BLOCKS_URL` if set, otherwise the local
 /// native-bindings dev server (`npm run dev:server`).
 String blocksUrl() =>
-    Platform.environment['BLOCKS_URL'] ?? 'http://localhost:3001/aws-blocks/api';
+    Platform.environment['BLOCKS_URL'] ??
+    'http://localhost:3001/aws-blocks/api';
 
 /// True when the suite is pointed at the local dev server (vs. a deployed
 /// sandbox/production backend). Reuses the same `BLOCKS_URL` mechanism the
@@ -22,7 +23,10 @@ String blocksUrl() =>
 /// those legs cleanly rather than failing.
 bool isLocalEndpoint() {
   final host = Uri.parse(blocksUrl()).host;
-  return host == 'localhost' || host == '127.0.0.1' || host == '0.0.0.0' || host == '::1';
+  return host == 'localhost' ||
+      host == '127.0.0.1' ||
+      host == '0.0.0.0' ||
+      host == '::1';
 }
 
 /// Creates a Blocks client pointing at test-apps/native-bindings.
@@ -63,7 +67,9 @@ Future<T?> expectError<T>(Future<T> Function() fn, {String? label}) async {
     return null;
   } on BlocksRpcException catch (e) {
     _passed++;
-    print('  ✓ ${label ?? "expected error"} — got BlocksRpcException(${e.code}): ${e.message}');
+    print(
+      '  ✓ ${label ?? "expected error"} — got BlocksRpcException(${e.code}): ${e.message}',
+    );
     return null;
   } catch (e) {
     _passed++;

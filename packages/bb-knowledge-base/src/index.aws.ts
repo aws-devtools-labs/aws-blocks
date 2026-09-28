@@ -22,7 +22,8 @@ import type {
 	MetadataFilter,
 	WaitUntilSyncedOptions,
 } from './types.js';
-import { KnowledgeBaseErrors } from './errors.js';
+import { blocksError, KnowledgeBaseErrors } from './errors.js';
+import { normalizeMaxResults } from './normalize.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -49,12 +50,6 @@ function envKey(fullId: string, suffix: string): string {
 }
 
 // ── Error helpers ──────────────────────────────────────────────────────────
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
 
 /**
  * Resolve after `ms` milliseconds. Used to space out the sync polls in
@@ -284,7 +279,7 @@ export class KnowledgeBase extends Scope {
 	 * @param query - Natural language search query. Must be non-empty.
 	 * @param {RetrieveOptions} options - Optional retrieval parameters (maxResults, filter).
 	 * @returns Chunks ranked by relevance score (highest first). Empty array if no matches.
-	 * @throws {KnowledgeBaseValidationError} If query is empty or whitespace-only.
+	 * @throws {KnowledgeBaseValidationError} If query is empty or whitespace-only, or `maxResults` is a non-integer.
 	 * @throws {KnowledgeBaseNotReadyException} If the KB has not been created/deployed.
 	 * @throws {InvalidFilterException} If the filter keys are invalid for the Bedrock query.
 	 * @throws {RetrievalFailedException} For other Bedrock retrieval errors (network, service).
@@ -302,8 +297,8 @@ export class KnowledgeBase extends Scope {
 			throw blocksError(KnowledgeBaseErrors.ValidationError, 'Query must be a non-empty string.');
 		}
 
-		// Bedrock API limits numberOfResults to 1–100. Well within Lambda's 6 MB response payload.
-		const maxResults = Math.min(Math.max(options?.maxResults ?? 10, 1), 100);
+		// 1–100 results stays well within Lambda's 6 MB response payload.
+		const maxResults = normalizeMaxResults(options?.maxResults);
 		const filter = buildFilter(options?.filter);
 		const knowledgeBaseId = this.ensureKbId();
 

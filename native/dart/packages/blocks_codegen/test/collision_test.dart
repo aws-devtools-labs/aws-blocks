@@ -13,10 +13,13 @@ RpcModel _irreducible({bool reversed = false}) {
     name: 'api.foo',
     params: [
       RpcParam(
-          name: 'barInput',
-          isRequired: true,
-          schema: const InlineObjectRef(
-              properties: {'a': PrimitiveRef('String')}, required: {'a'})),
+        name: 'barInput',
+        isRequired: true,
+        schema: const InlineObjectRef(
+          properties: {'a': PrimitiveRef('String')},
+          required: {'a'},
+        ),
+      ),
     ],
     result: const PrimitiveRef('void'),
   );
@@ -24,10 +27,13 @@ RpcModel _irreducible({bool reversed = false}) {
     name: 'api.fooBar',
     params: [
       RpcParam(
-          name: 'input',
-          isRequired: true,
-          schema: const InlineObjectRef(
-              properties: {'b': PrimitiveRef('int')}, required: {'b'})),
+        name: 'input',
+        isRequired: true,
+        schema: const InlineObjectRef(
+          properties: {'b': PrimitiveRef('int')},
+          required: {'b'},
+        ),
+      ),
     ],
     result: const PrimitiveRef('void'),
   );
@@ -54,11 +60,15 @@ RpcModel _nestedVsFlat() {
         result: const InlineObjectRef(
           properties: {
             'addressContact': InlineObjectRef(
-                properties: {'x': PrimitiveRef('String')}, required: {'x'}),
+              properties: {'x': PrimitiveRef('String')},
+              required: {'x'},
+            ),
             'address': InlineObjectRef(
               properties: {
                 'contact': InlineObjectRef(
-                    properties: {'y': PrimitiveRef('int')}, required: {'y'}),
+                  properties: {'y': PrimitiveRef('int')},
+                  required: {'y'},
+                ),
               },
               required: {'contact'},
             ),
@@ -73,88 +83,110 @@ RpcModel _nestedVsFlat() {
 void main() {
   group('param qualification', () {
     test(
-        'inline param object types are qualified by namespace + method + param',
-        () {
-      final model = CodegenModelBuilder().build(RpcModel(
-        title: 't',
-        version: '1',
-        schemas: {},
-        methods: [
-          RpcMethod(
-              name: 'users.create',
-              params: [
-                RpcParam(
+      'inline param object types are qualified by namespace + method + param',
+      () {
+        final model = CodegenModelBuilder().build(
+          RpcModel(
+            title: 't',
+            version: '1',
+            schemas: {},
+            methods: [
+              RpcMethod(
+                name: 'users.create',
+                params: [
+                  RpcParam(
                     name: 'input',
                     isRequired: true,
                     schema: const InlineObjectRef(
-                        properties: {'name': PrimitiveRef('String')},
-                        required: {'name'})),
-              ],
-              result: const PrimitiveRef('void')),
-          RpcMethod(
-              name: 'posts.create',
-              params: [
-                RpcParam(
+                      properties: {'name': PrimitiveRef('String')},
+                      required: {'name'},
+                    ),
+                  ),
+                ],
+                result: const PrimitiveRef('void'),
+              ),
+              RpcMethod(
+                name: 'posts.create',
+                params: [
+                  RpcParam(
                     name: 'input',
                     isRequired: true,
                     schema: const InlineObjectRef(
-                        properties: {'title': PrimitiveRef('String')},
-                        required: {'title'})),
-              ],
-              result: const PrimitiveRef('void')),
-        ],
-      ));
-      expect(model.types.containsKey('UsersCreateInput'), isTrue);
-      expect(model.types.containsKey('PostsCreateInput'), isTrue);
-      // No bare/unqualified name and no collision -> no warnings.
-      expect(model.types.containsKey('Input'), isFalse);
-      expect(model.warnings, isEmpty);
-    });
+                      properties: {'title': PrimitiveRef('String')},
+                      required: {'title'},
+                    ),
+                  ),
+                ],
+                result: const PrimitiveRef('void'),
+              ),
+            ],
+          ),
+        );
+        expect(model.types.containsKey('UsersCreateInput'), isTrue);
+        expect(model.types.containsKey('PostsCreateInput'), isTrue);
+        // No bare/unqualified name and no collision -> no warnings.
+        expect(model.types.containsKey('Input'), isFalse);
+        expect(model.warnings, isEmpty);
+      },
+    );
 
     test(
-        'structurally identical param shapes still dedup to one qualified type',
-        () {
-      final model = CodegenModelBuilder().build(RpcModel(
-        title: 't',
-        version: '1',
-        schemas: {},
-        methods: [
-          RpcMethod(
-              name: 'api.alpha',
-              params: [
-                RpcParam(
+      'structurally identical param shapes still dedup to one qualified type',
+      () {
+        final model = CodegenModelBuilder().build(
+          RpcModel(
+            title: 't',
+            version: '1',
+            schemas: {},
+            methods: [
+              RpcMethod(
+                name: 'api.alpha',
+                params: [
+                  RpcParam(
                     name: 'config',
                     isRequired: true,
                     schema: const InlineObjectRef(
-                        properties: {'a': PrimitiveRef('String')},
-                        required: {'a'})),
-              ],
-              result: const PrimitiveRef('void')),
-          RpcMethod(
-              name: 'api.beta',
-              params: [
-                RpcParam(
+                      properties: {'a': PrimitiveRef('String')},
+                      required: {'a'},
+                    ),
+                  ),
+                ],
+                result: const PrimitiveRef('void'),
+              ),
+              RpcMethod(
+                name: 'api.beta',
+                params: [
+                  RpcParam(
                     name: 'config',
                     isRequired: true,
                     schema: const InlineObjectRef(
-                        properties: {'a': PrimitiveRef('String')},
-                        required: {'a'})),
-              ],
-              result: const PrimitiveRef('void')),
-        ],
-      ));
-      // First creates the qualified type; the identical second dedups to it.
-      expect(
+                      properties: {'a': PrimitiveRef('String')},
+                      required: {'a'},
+                    ),
+                  ),
+                ],
+                result: const PrimitiveRef('void'),
+              ),
+            ],
+          ),
+        );
+        // First creates the qualified type; the identical second dedups to it.
+        expect(
           model.types.values
               .whereType<RecordType>()
               .where((r) => r.name == 'ApiAlphaConfig')
               .length,
-          1);
-      final ops = model.namespaces.expand((n) => n.operations).toList();
-      expect((ops[0].params[0].type as RecordType).name, 'ApiAlphaConfig');
-      expect((ops[1].params[0].type as SchemaReference).name, 'ApiAlphaConfig');
-      expect(model.warnings, isEmpty);
-    });
+          1,
+        );
+        final ops = model.namespaces.expand((n) => n.operations).toList();
+        expect((ops[0].params[0].type as RecordType).name, 'ApiAlphaConfig');
+        expect(
+          (ops[1].params[0].type as SchemaReference).name,
+          'ApiAlphaConfig',
+        );
+        expect(model.warnings, isEmpty);
+      },
+    );
   });
 
   group('default: auto-disambiguate + warn', () {
@@ -168,21 +200,26 @@ void main() {
         for (final op in model.namespaces.expand((n) => n.operations))
           op.fullName: op,
       };
-      expect((byMethod['api.foo']!.params[0].type as RecordType).name,
-          'ApiFooBarInput');
-      expect((byMethod['api.fooBar']!.params[0].type as RecordType).name,
-          'ApiFooBarInput2');
+      expect(
+        (byMethod['api.foo']!.params[0].type as RecordType).name,
+        'ApiFooBarInput',
+      );
+      expect(
+        (byMethod['api.fooBar']!.params[0].type as RecordType).name,
+        'ApiFooBarInput2',
+      );
       // Loud, actionable warning naming both sources + chosen names.
       expect(model.warnings, hasLength(1));
       expect(
-          model.warnings.single,
-          allOf(
-            contains('`ApiFooBarInput`'),
-            contains('api.foo (param "barInput")'),
-            contains('api.fooBar (param "input")'),
-            contains('ApiFooBarInput2'),
-            contains('--fail-on-collision'),
-          ));
+        model.warnings.single,
+        allOf(
+          contains('`ApiFooBarInput`'),
+          contains('api.foo (param "barInput")'),
+          contains('api.fooBar (param "input")'),
+          contains('ApiFooBarInput2'),
+          contains('--fail-on-collision'),
+        ),
+      );
     });
 
     test('nested-vs-flat result collision is suffixed and warned', () {
@@ -191,65 +228,80 @@ void main() {
       expect(model.types.containsKey('GetResultAddressContact2'), isTrue);
       expect(model.warnings, hasLength(1));
       expect(
-          model.warnings.single,
-          allOf(
-            contains('api.get (result: addressContact)'),
-            contains('api.get (result: address.contact)'),
-          ));
+        model.warnings.single,
+        allOf(
+          contains('api.get (result: addressContact)'),
+          contains('api.get (result: address.contact)'),
+        ),
+      );
     });
 
     test('warns once per conflicting group', () {
-      final model = CodegenModelBuilder().build(RpcModel(
-        title: 't',
-        version: '1',
-        schemas: {},
-        methods: [
-          RpcMethod(
+      final model = CodegenModelBuilder().build(
+        RpcModel(
+          title: 't',
+          version: '1',
+          schemas: {},
+          methods: [
+            RpcMethod(
               name: 'api.foo',
               params: [
                 RpcParam(
-                    name: 'barInput',
-                    isRequired: true,
-                    schema: const InlineObjectRef(
-                        properties: {'a': PrimitiveRef('String')},
-                        required: {'a'})),
+                  name: 'barInput',
+                  isRequired: true,
+                  schema: const InlineObjectRef(
+                    properties: {'a': PrimitiveRef('String')},
+                    required: {'a'},
+                  ),
+                ),
               ],
-              result: const PrimitiveRef('void')),
-          RpcMethod(
+              result: const PrimitiveRef('void'),
+            ),
+            RpcMethod(
               name: 'api.fooBar',
               params: [
                 RpcParam(
-                    name: 'input',
-                    isRequired: true,
-                    schema: const InlineObjectRef(
-                        properties: {'b': PrimitiveRef('int')},
-                        required: {'b'})),
+                  name: 'input',
+                  isRequired: true,
+                  schema: const InlineObjectRef(
+                    properties: {'b': PrimitiveRef('int')},
+                    required: {'b'},
+                  ),
+                ),
               ],
-              result: const PrimitiveRef('void')),
-          RpcMethod(
+              result: const PrimitiveRef('void'),
+            ),
+            RpcMethod(
               name: 'api.bar',
               params: [
                 RpcParam(
-                    name: 'bazInput',
-                    isRequired: true,
-                    schema: const InlineObjectRef(
-                        properties: {'c': PrimitiveRef('String')},
-                        required: {'c'})),
+                  name: 'bazInput',
+                  isRequired: true,
+                  schema: const InlineObjectRef(
+                    properties: {'c': PrimitiveRef('String')},
+                    required: {'c'},
+                  ),
+                ),
               ],
-              result: const PrimitiveRef('void')),
-          RpcMethod(
+              result: const PrimitiveRef('void'),
+            ),
+            RpcMethod(
               name: 'api.barBaz',
               params: [
                 RpcParam(
-                    name: 'input',
-                    isRequired: true,
-                    schema: const InlineObjectRef(
-                        properties: {'d': PrimitiveRef('bool')},
-                        required: {'d'})),
+                  name: 'input',
+                  isRequired: true,
+                  schema: const InlineObjectRef(
+                    properties: {'d': PrimitiveRef('bool')},
+                    required: {'d'},
+                  ),
+                ),
               ],
-              result: const PrimitiveRef('void')),
-        ],
-      ));
+              result: const PrimitiveRef('void'),
+            ),
+          ],
+        ),
+      );
       expect(model.warnings, hasLength(2));
     });
 
@@ -270,10 +322,12 @@ void main() {
     });
 
     test('same spec builds byte-identical output across runs', () {
-      final out1 = const DartCodeGenerator()
-          .generate(CodegenModelBuilder().build(_irreducible()));
-      final out2 = const DartCodeGenerator()
-          .generate(CodegenModelBuilder().build(_irreducible()));
+      final out1 = const DartCodeGenerator().generate(
+        CodegenModelBuilder().build(_irreducible()),
+      );
+      final out2 = const DartCodeGenerator().generate(
+        CodegenModelBuilder().build(_irreducible()),
+      );
       expect(out1, out2);
       expect(out1, contains('class ApiFooBarInput {'));
       expect(out1, contains('class ApiFooBarInput2 {'));
@@ -284,7 +338,8 @@ void main() {
     test('throws on an irreducible collision, listing both sources', () {
       expect(
         () => CodegenModelBuilder(failOnCollision: true).build(_irreducible()),
-        throwsA(isA<NamingConflictException>().having(
+        throwsA(
+          isA<NamingConflictException>().having(
             (e) => e.message,
             'message',
             allOf(
@@ -292,42 +347,52 @@ void main() {
               contains('api.foo (param "barInput")'),
               contains('api.fooBar (param "input")'),
               contains('disambiguate'),
-            ))),
+            ),
+          ),
+        ),
       );
     });
 
     test('does not throw when there is no collision', () {
       // Distinct qualified names -> no conflict even in strict mode.
       expect(
-        () => CodegenModelBuilder(failOnCollision: true).build(RpcModel(
-          title: 't',
-          version: '1',
-          schemas: {},
-          methods: [
-            RpcMethod(
+        () => CodegenModelBuilder(failOnCollision: true).build(
+          RpcModel(
+            title: 't',
+            version: '1',
+            schemas: {},
+            methods: [
+              RpcMethod(
                 name: 'users.create',
                 params: [
                   RpcParam(
-                      name: 'input',
-                      isRequired: true,
-                      schema: const InlineObjectRef(
-                          properties: {'name': PrimitiveRef('String')},
-                          required: {'name'})),
+                    name: 'input',
+                    isRequired: true,
+                    schema: const InlineObjectRef(
+                      properties: {'name': PrimitiveRef('String')},
+                      required: {'name'},
+                    ),
+                  ),
                 ],
-                result: const PrimitiveRef('void')),
-            RpcMethod(
+                result: const PrimitiveRef('void'),
+              ),
+              RpcMethod(
                 name: 'posts.create',
                 params: [
                   RpcParam(
-                      name: 'input',
-                      isRequired: true,
-                      schema: const InlineObjectRef(
-                          properties: {'title': PrimitiveRef('String')},
-                          required: {'title'})),
+                    name: 'input',
+                    isRequired: true,
+                    schema: const InlineObjectRef(
+                      properties: {'title': PrimitiveRef('String')},
+                      required: {'title'},
+                    ),
+                  ),
                 ],
-                result: const PrimitiveRef('void')),
-          ],
-        )),
+                result: const PrimitiveRef('void'),
+              ),
+            ],
+          ),
+        ),
         returnsNormally,
       );
     });

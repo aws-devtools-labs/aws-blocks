@@ -22,9 +22,15 @@ void main() async {
   group('Todos: sign in');
   final username = 'todouser_$suffix';
   final password = 'pass1234';
-  final signUp = await blocks.api.basicSignUp(username: username, password: password);
+  final signUp = await blocks.api.basicSignUp(
+    username: username,
+    password: password,
+  );
   check(signUp.success, 'basicSignUp success');
-  final user = await blocks.api.basicSignIn(username: username, password: password);
+  final user = await blocks.api.basicSignIn(
+    username: username,
+    password: password,
+  );
   check(user.username == username, 'basicSignIn as $username');
 
   group('Todos: create');
@@ -46,20 +52,29 @@ void main() async {
   check(all.length >= 3, 'listTodos returns at least 3 (got: ${all.length})');
 
   group('Todos: list sorted by priority');
-  final byPriority = await blocks.api.listTodos(sortBy: ApiListTodosSortBy.priority);
+  final byPriority = await blocks.api.listTodos(
+    sortBy: ApiListTodosSortBy.priority,
+  );
   final priorities = byPriority.map((t) => t.priority).toList();
   final sorted = [...priorities]..sort();
-  check(priorities.toString() == sorted.toString(),
-      'priorities are ascending (got: $priorities)');
+  check(
+    priorities.toString() == sorted.toString(),
+    'priorities are ascending (got: $priorities)',
+  );
 
   group('Todos: list sorted by createdAt');
-  final byCreated = await blocks.api.listTodos(sortBy: ApiListTodosSortBy.createdAt);
+  final byCreated = await blocks.api.listTodos(
+    sortBy: ApiListTodosSortBy.createdAt,
+  );
   check(byCreated.length >= 3, 'createdAt sort returns all todos');
 
   group('Todos: update');
   final upd = await blocks.api.updateTodo(
     todoId: t1.todoId,
-    updates: const ApiUpdateTodoUpdates(completed: true, title: 'first todo (done)'),
+    updates: const ApiUpdateTodoUpdates(
+      completed: true,
+      title: 'first todo (done)',
+    ),
   );
   check(upd.success, 'updateTodo returns success');
   final afterUpdate = await blocks.api.getTodo(todoId: t1.todoId);

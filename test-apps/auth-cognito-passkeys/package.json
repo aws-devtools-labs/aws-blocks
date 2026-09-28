@@ -6,7 +6,9 @@
   "private": true,
   "type": "module",
   "description": "Manual test app for AuthCognito passkey (WebAuthn) sign-in + management.",
-  "workspaces": ["aws-blocks"],
+  "workspaces": [
+    "aws-blocks"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "dev:server": "tsx watch aws-blocks/scripts/server.ts",
@@ -15,7 +17,7 @@
     "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "build": "tsc && vite build",
-    "test": "echo 'No tests (manual passkey demo, exercised via npm run dev / sandbox)'"
+    "test": "npm run typecheck"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",

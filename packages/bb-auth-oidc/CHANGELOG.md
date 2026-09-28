@@ -1,5 +1,225 @@
 # @aws-blocks/bb-auth-oidc
 
+## 0.2.0
+
+### Minor Changes
+
+- 7b86b8e: fix(auth-oidc): make `cognitoFederated()` deployable by registering the IdP via a deploy-time custom resource
+  
+  `@aws-blocks/bb-app-setting` now also exports `SECRETS_BULK_CONSTRUCT_ID` — the
+  construct id of the shared per-stack secret-init custom resource — so sibling
+  blocks can order a resource after the SecureString values are written without
+  hard-coding the string. `bb-auth-oidc`'s IdP-registration custom resource uses
+  it to take an explicit dependency on that resource (compile-time coupling, so a
+  rename can't silently break the ordering guarantee).
+  
+  `cognitoFederated()` previously produced a CloudFormation template that always
+  failed to deploy (#447). It registered the federated identity provider with a
+  native `AWS::Cognito::UserPoolIdentityProvider` resource, writing the IdP
+  `client_id` / `client_secret` into `ProviderDetails` as
+  `{{resolve:ssm-secure:...}}` dynamic references. CloudFormation only permits
+  `ssm-secure` references on a small allowlist of properties that excludes
+  `ProviderDetails`, so `cdk synth` succeeded but every deploy failed at
+  change-set creation — before any resource was created — leaving the stack in
+  `REVIEW_IN_PROGRESS` with `SSM Secure reference is not supported in [...ProviderDetails...]`.
+  
+  The IdP is now registered by a **deploy-time custom resource**: a small
+  Lambda-backed provider reads and decrypts the IdP credential SecureString
+  parameters via the SDK at deploy time and calls Cognito's
+  `CreateIdentityProvider` / `UpdateIdentityProvider` / `DeleteIdentityProvider`.
+  Only the parameter *names* cross into the CloudFormation template — the secret
+  values never appear in it. The handler's role is least-privilege: scoped to
+  `cognito-idp:{Create,Update,Delete}IdentityProvider` on the pool ARN,
+  `ssm:GetParameter` on the specific parameter ARNs, and `kms:Decrypt` conditioned
+  on `kms:ViaService = ssm.<region>`.
+  
+  A `secret: true` `AppSetting` is an SSM SecureString at `/<fullId>` (not an AWS
+  Secrets Manager entry — the `blocks secret` CLI does not apply). Set its value by
+  writing the SecureString directly (`aws ssm put-parameter … --type SecureString
+  --overwrite`) or via the `AppSetting` runtime `put()`. Because the credentials
+  are read at deploy time and are not stack properties, the custom resource
+  re-reads SSM on every `cdk deploy`, so a credential set or rotation takes effect
+  on the next deploy. A synth-time check rejects two providers configured with the
+  same `identityProvider`.
+  
+  Verified end-to-end against a real account: `cdk deploy` succeeds (no change-set
+  rejection) and the identity provider is created on the User Pool, including the
+  path where a real `AppSetting(secret: true)` provisions the SecureString during
+  the same deploy.
+  
+  This is a `minor` bump for `@aws-blocks/bb-auth-oidc` (pre-1.0 minor = a behavior
+  change): the synthesized template for a `cognitoFederated()` provider no longer
+  contains a native `UserPoolIdentityProvider` resource — the IdP is now a custom
+  resource — so anyone asserting on that resource in a snapshot will see a diff.
+  The public API is unchanged.
+- bd67438: feat(auth-oidc): let `stubIdp()` declare test users inline
+  
+  `stubIdp()` gains an optional `users?: StubUser[]`. Previously the stub IdP's
+  identity directory could only be seeded from a `users.json` file in the mock
+  data dir (with a single default user otherwise), so declaring test users meant
+  committing/gitignoring a data file. Inline `users` are now the authoritative
+  directory for the login screen and the `users` handed to `onAuthorize`, taking
+  precedence over `users.json` and the built-in default. Omitting it is unchanged
+  (file → default fallback), so existing apps and the AWS runtime are unaffected.
+
+### Patch Changes
+
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
+- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
+  
+  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
+  
+  **Building Blocks declare VPC requirements via the constructor, not a method.**
+  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
+  requirements (a value, or a callback for values that depend on `fullId`) and
+  registers them in a central per-stack registry. This keeps the compile-time
+  forcing the previous `abstract getVpcRequirements()` provided — a block can't
+  silently omit its requirements — without a standing method on every subclass, and
+  gives the framework one place to read, deduplicate, and answer "does anything here
+  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
+  
+  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
+  function without a VPC declares `requiresVpc: true`; when one is needed and the
+  customer didn't bring their own, Blocks lazily creates a single shared VPC
+  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
+  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
+  bring-your-own override.
+  
+  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
+  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
+  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
+  compliance requirement to use specific subnets. Omit it to keep the default
+  (prefer isolated, fall back to `private-with-egress`).
+- Updated dependencies [7b86b8e]
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [81609a8]
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/bb-app-setting@0.3.0
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-kv-store@0.2.0
+  - @aws-blocks/auth-common@0.1.8
+  - @aws-blocks/bb-logger@0.2.0
+
+## 0.1.10
+
+### Patch Changes
+
+- Updated dependencies [df667c5]
+- Updated dependencies [df667c5]
+- Updated dependencies [64ddd74]
+- Updated dependencies [df667c5]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [4a830a6]
+- Updated dependencies [f2f186c]
+- Updated dependencies [46b7c89]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+  - @aws-blocks/bb-app-setting@0.2.1
+  - @aws-blocks/auth-common@0.1.7
+  - @aws-blocks/bb-kv-store@0.1.8
+
+## 0.1.9
+
+### Patch Changes
+
+- 309a236: refactor(bb): attach IAM grants to the shared execution role
+  
+  Data and auth blocks now grant permissions to the shared Blocks execution role
+  (`this.executionRole`) instead of the handler function directly. Grants land on
+  the same role the handler assumes, so the effective runtime permissions are
+  identical — this decouples IAM wiring from the concrete Lambda function ahead of
+  the multi-compute model.
+  
+  For `bb-distributed-data`, the DSQL endpoint and region now flow through the
+  config registry (loaded into `process.env` at cold start, like every other
+  block) rather than being set as direct handler environment variables, and the
+  migration Lambda maps the shared execution role's ARN.
+- 27346f3: Make AuthOIDC `requireAuth()` throw `ApiError(401, NotAuthenticatedException)` so the documented `handle401()` 401-redirect pattern works for a signed-out protected call.
+  
+  Previously `requireAuth()` threw a bare `Error` with no `status`. Over the JSON-RPC boundary `errorResponseFromCatch` serializes a non-`ApiError` as code `500`, so the client received an `ApiError` with `status === 500`. The README's `if (handle401(e, provider)) return;` helper only acts on `err instanceof ApiError && err.status === 401`, so it never matched and the app never redirected to sign-in — the error just surfaced. This aligns AuthOIDC with AuthCognito, whose `requireAuth()` already throws `ApiError(401, …)`. The error name is preserved, so existing `isBlocksError(e, AuthOIDCErrors.NotAuthenticated)` checks are unaffected.
+- 9bd5b3e: Reject stub IdP redirect_uris whose query carries a reserved OAuth/OIDC response param, or that carry a URI fragment, matching real-IdP behavior. Reserved-param matching is case-sensitive, so a distinctly-cased key such as `State` is passed through as a real IdP would.
+- Updated dependencies [1ff9d03]
+- Updated dependencies [5798492]
+- Updated dependencies [f00adb0]
+- Updated dependencies [f00adb0]
+- Updated dependencies [309a236]
+- Updated dependencies [08ab129]
+- Updated dependencies [9d4ccea]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [0ac3879]
+- Updated dependencies [e4dac4a]
+  - @aws-blocks/bb-app-setting@0.2.0
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/bb-kv-store@0.1.7
+  - @aws-blocks/auth-common@0.1.6
+  - @aws-blocks/bb-logger@0.1.5
+
+## 0.1.8
+
+### Patch Changes
+
+- Updated dependencies [7b4c62d]
+- Updated dependencies [5262062]
+- Updated dependencies [3614a09]
+- Updated dependencies [5262062]
+- Updated dependencies [5071079]
+- Updated dependencies [8966cfb]
+- Updated dependencies [b11a75b]
+  - @aws-blocks/core@0.2.0
+  - @aws-blocks/bb-kv-store@0.1.6
+  - @aws-blocks/auth-common@0.1.5
+  - @aws-blocks/bb-app-setting@0.1.4
+  - @aws-blocks/bb-logger@0.1.4
+
+## 0.1.7
+
+### Patch Changes
+
+- 58f77dd: Document four things people were reverse-engineering from compiled output.
+
+  - **Runtime config resolution.** The client config is served at the dotted path `/.blocks-sandbox/config.json`; `/config.json` is not a route, so a 404 there means nothing. `{"_placeholder":true}` in the frontend build output is the Hosting construct's synth-time stub (the real `apiUrl` is still an unresolved CloudFormation token), so it is expected pre-deploy rather than a broken config. Covers the resolution order, what each environment should actually return, and what a genuine failure looks like.
+  - **`RawRoute`.** Full section in the core README: constructor signature, a `GET` example that sets status, `Content-Type` and body, what you can read off `ctx.request` and write to `ctx.response`, path/parameter/wildcard syntax, and the registration rules (reserved paths, duplicate routes, register-during-load). Also added a "serve a raw HTTP endpoint" entry to the block catalog decision tree, which had no pointer to it.
+  - **Server-initiated OIDC sign-in.** New section in the `bb-auth-oidc` README for `GET /aws-blocks/auth/signin/<provider>`: the redirect chain through the IdP and the callback, the pending-auth and session cookies, the JSON error shape, a runnable `curl` walkthrough, when to use it instead of the client PKCE API, and a pointer to the integration tests that assert each response. One route is mounted per configured provider, so an undeclared provider name 404s instead of reporting `ProviderNotConfiguredException`, which comes from `getSignInUrl()`.
+  - **Error and RPC semantics.** `ApiError`'s constructor arguments (including `cause` staying server-side and `retriable`), how its `status` becomes the JSON-RPC error code and decodes back into an `ApiError` on the client, `hasAuthError`'s signature and when it applies instead of `isBlocksError`, how `params` is read as positional args vs a named object, that a top-level JSON array body (a batch) is rejected with `-32600`, and that `broadcastAuthChange` comes from `@aws-blocks/blocks/ui` rather than the package root.
+
+  Docs only, plus tests locking in the documented `ApiError`, `params` and batch-rejection behaviour, and the documented `404`s on the OIDC sign-in and sign-out routes.
+
+- Updated dependencies [75f5446]
+- Updated dependencies [2ed4177]
+- Updated dependencies [b48aaec]
+- Updated dependencies [ac0966a]
+- Updated dependencies [9de27dd]
+- Updated dependencies [8e96d87]
+- Updated dependencies [58f77dd]
+- Updated dependencies [b83aaba]
+- Updated dependencies [2d3dfdc]
+- Updated dependencies [3c56267]
+  - @aws-blocks/auth-common@0.1.4
+  - @aws-blocks/core@0.1.17
+  - @aws-blocks/bb-kv-store@0.1.5
+  - @aws-blocks/bb-logger@0.1.3
+
 ## 0.1.6
 
 ### Patch Changes

@@ -130,7 +130,7 @@ export const Realtime: {
 		validatePublishSize(fullChannel, data);
 		globalEmitter.emit(fullChannel, data);
 		if (getBroadcastBus()) {
-			getBroadcastBus()!.emit('broadcast', { channel: fullChannel, payload: data });
+			getBroadcastBus()!.emit('broadcast', { channel: fullChannel, data });
 		}
 	}
 

@@ -17,6 +17,23 @@
 import type { AgentStreamChunk } from './types.js';
 
 export type { AgentStreamChunk } from './types.js';
+/** Re-exported so customers can type conversation `metadata` (and other JSON payloads) on the client. */
+export type { JSONValue } from './types.js';
+
+// The compute-agnostic client API. Prefer these over useChat() — see createChat().
+export {
+	createChat,
+	realtimeTransport,
+} from './index.chat.js';
+export type {
+	CreateChatOptions,
+	ChatController,
+	ChatConversationApi,
+	SendInput,
+	ChatTransport,
+	ChunkStream,
+	TurnRequest,
+} from './index.chat.js';
 
 /** A message in the conversation (for UI rendering). */
 export interface ChatMessage {
@@ -29,10 +46,10 @@ export interface ChatMessage {
 /** Options for creating a chat instance. */
 export interface UseChatOptions {
 	api: {
-		sendMessage(conversationId: string, message: string, channelId: string): Promise<void>;
+		sendMessage(conversationId: string, message: string, channelId: string): Promise<unknown>;
 		createConversation(): Promise<{ conversationId: string }>;
 		getConversation(id: string): Promise<{ messages: { role: string; content: string; metadata?: Record<string, any> }[] }>;
-		resume?(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string): Promise<void>;
+		resume?(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string): Promise<unknown>;
 		getPendingInterrupts?(conversationId: string): Promise<{ interrupts: Array<{ id: string; name: string; reason?: any }> }>;
 	};
 	/**
@@ -78,6 +95,13 @@ function nextId(): string {
 
 /**
  * Create a chat instance for managing agent conversations.
+ *
+ * @deprecated Prefer {@link createChat}, which is compute-agnostic and takes a
+ * single `transport` instead of a hand-written `subscribe` callback. `useChat`
+ * couples call sites to the Realtime channel mechanism and requires the app to
+ * assemble the `api` adapter + `subscribe` bridge by hand. `createChat` fuses
+ * subscribe + run so the subscribe-before-send race can't surface. This remains
+ * for backward compatibility and is unchanged.
  *
  * @example
  * ```typescript

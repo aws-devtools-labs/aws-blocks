@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { readdir, readFile, unlink, writeFile, mkdir, stat, access } from "node:fs/promises";
+import { readdir, readFile, unlink, writeFile, mkdir, stat, access, mkdtemp } from "node:fs/promises";
+import { readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve, relative, } from "node:path";
 import { execSync } from "node:child_process";
 import { LocalPublisher } from "./publishers/local.ts";
@@ -97,18 +99,28 @@ function topoSort(packages: PackageInfo[]): PackageInfo[] {
 // ── Pack + hash ────────────────────────────────────────────────────
 
 async function packPackage(pkg: PackageInfo): Promise<PackResult> {
-	// npm pack outputs the tarball filename to stdout
-	const tarballName = execSync("npm pack --pack-destination .", {
+	// npm >= 10 forwards lifecycle-script (prepack) stdout into `npm pack`'s stdout,
+	// so the filename is discovered from the filesystem instead of stdout.
+	const packDir = await mkdtemp(join(tmpdir(), "aws-blocks-pack-"));
+
+	execSync(`npm pack --pack-destination ${JSON.stringify(packDir)}`, {
 		cwd: pkg.dirPath,
 		encoding: "utf-8",
-	}).trim();
+	});
 
-	const tarballPath = join(pkg.dirPath, tarballName);
+	const tarballs = readdirSync(packDir).filter((name) => name.endsWith(".tgz"));
+	if (tarballs.length !== 1) {
+		throw new Error(
+			`expected exactly one .tgz in ${packDir} for ${pkg.name}, found ${tarballs.length}: ${tarballs.join(", ")}`,
+		);
+	}
 
-	// Validate tarball path stays within the package directory
+	const tarballPath = join(packDir, tarballs[0]!);
+
+	// Validate tarball path stays within the pack destination directory
 	const resolvedTarball = resolve(tarballPath);
-	if (!resolvedTarball.startsWith(resolve(pkg.dirPath))) {
-		throw new Error(`Tarball path escapes package directory: ${resolvedTarball}`);
+	if (!resolvedTarball.startsWith(resolve(packDir))) {
+		throw new Error(`Tarball path escapes pack destination directory: ${resolvedTarball}`);
 	}
 
 	const tarballBuf = await readFile(tarballPath);

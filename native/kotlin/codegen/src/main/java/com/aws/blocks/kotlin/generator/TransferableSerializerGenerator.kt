@@ -1,7 +1,5 @@
 package com.aws.blocks.kotlin.generator
 
-import com.aws.blocks.kotlin.model.ResolvedType
-import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
@@ -9,14 +7,12 @@ import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.TypeSpec
 
-class TransferableSerializerGenerator(
-    private val packageName: String,
-) {
+class TransferableSerializerGenerator {
     data class TransferableEntry(
         val transferableName: String,
-        val typeArgs: List<ResolvedType>,
         val serializerName: String,
         val returnType: TypeName,
+        val typeArgument: TypeName? = null,
     )
 
     fun generateSerializerObject(entry: TransferableEntry): TypeSpec {
@@ -45,11 +41,10 @@ class TransferableSerializerGenerator(
 
         when (entry.transferableName) {
             "realtime/channel" -> {
-                if (entry.typeArgs.isNotEmpty()) {
-                    val typeArgClassName = resolveTypeArgClassName(entry.typeArgs.first())
+                if (entry.typeArgument != null) {
                     funBuilder.addStatement(
                         "return %T.fromJson(element) { %T.%M<%T>(it) }",
-                        ClassNames.realtimeChannel, ClassNames.blocksJson, MemberNames.decode, typeArgClassName
+                        ClassNames.realtimeChannel, ClassNames.blocksJson, MemberNames.decode, entry.typeArgument
                     )
                 } else {
                     funBuilder.addStatement(
@@ -87,13 +82,5 @@ class TransferableSerializerGenerator(
                 "Transferables are read-only"
             )
             .build()
-    }
-
-    private fun resolveTypeArgClassName(type: ResolvedType): ClassName {
-        return when (type) {
-            is ResolvedType.Record -> ClassName(packageName, type.name)
-            is ResolvedType.TypeReference -> ClassName(packageName, type.name)
-            else -> ClassNames.jsonElement
-        }
     }
 }

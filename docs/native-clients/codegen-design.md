@@ -15,6 +15,8 @@ Content-Type: application/json
 { "jsonrpc": "2.0", "method": "api.kvGet", "params": ["myKey"], "id": 1 }
 ```
 
+The wire error contract follows Blocks' core JSON-RPC implementation: reserved JSON-RPC errors use the standard negative codes (`-32700`, `-32600`, `-32601`, `-32602`, `-32603`), while application `ApiError`s use the positive HTTP status code as `error.code` and carry the structured name in `error.data.name` when available.
+
 The TypeScript web client gets type safety for free — `client.js` is generated alongside the server. Native clients (Swift, Kotlin, Dart) need their own codegen pipeline.
 
 ### Reference architecture: MCP

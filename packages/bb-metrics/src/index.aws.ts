@@ -13,6 +13,7 @@ import type {
 	MetricsEmitter,
 } from './types.js';
 import { MetricsErrors } from './errors.js';
+import { BB_NAME, BB_VERSION } from './version.js';
 import {
 	validateMetricName,
 	validateDimensions,
@@ -94,7 +95,7 @@ export class Metrics extends Scope implements MetricsEmitter {
 	protected log: ChildLogger;
 
 	constructor(scope: ScopeParent, id: string, options?: MetricsOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.namespace = options?.metrics?.namespace
 			?? options?.namespace

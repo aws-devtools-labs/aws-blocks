@@ -6,6 +6,7 @@ import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import type { IKeyValueStore } from 'aws-cdk-lib/aws-cloudfront';
+import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -29,9 +30,16 @@ export type KvKeysProps = {
   /** The CloudFront KeyValueStore to write into. */
   store: IKeyValueStore;
   /**
-   * Desired key→value map. The custom resource diffs this against what's in
-   * the store and applies the minimal set of put/delete operations (chunked to
-   * the 50-key / 3 MB UpdateKeys ceiling).
+   * The hosting bucket that holds `builds/<id>/...`. At the KVS cutover the
+   * handler tags the OUTGOING build's objects as superseded so the
+   * `DeleteOldBuilds` S3 lifecycle rule can expire them without ever touching
+   * the live build (#480). The handler is granted list + tag (never delete).
+   */
+  bucket: IBucket;
+  /**
+   * Desired key→value map. The custom resource diffs this against the
+   * previously deployed entries (empty on Create) and applies the minimal set
+   * of put/delete operations, chunked to the 50-key / 3 MB UpdateKeys ceiling.
    */
   entries: Record<string, string>;
 };
@@ -65,18 +73,39 @@ export class KvKeys extends Construct {
       timeout: Duration.minutes(5),
     });
 
-    // Data-plane KVS access: describe/list to diff, update to apply.
+    // Data-plane KVS access. The handler reads the store's current ETag
+    // (DescribeKeyValueStore) and writes the route-table diff in batches
+    // (UpdateKeys) — the only two actions it calls. Previous state is read from
+    // this custom resource's CloudFormation properties, not from the store, so
+    // no key-read (ListKeys/GetKey) or single-key write (PutKey/DeleteKey) is used.
     handler.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
           'cloudfront-keyvaluestore:DescribeKeyValueStore',
-          'cloudfront-keyvaluestore:ListKeys',
-          'cloudfront-keyvaluestore:GetKey',
-          'cloudfront-keyvaluestore:PutKey',
-          'cloudfront-keyvaluestore:DeleteKey',
           'cloudfront-keyvaluestore:UpdateKeys',
         ],
         resources: [props.store.keyValueStoreArn],
+      }),
+    );
+
+    // #480: supersede-tagging of the OUTGOING build at cutover, plus clearing
+    // the build-state tag on the INCOMING build. Least privilege: the handler
+    // may LIST and TAG/UNTAG objects under `builds/*` only — it is deliberately
+    // granted NO delete-object permission (`DeleteObjectTagging` removes tags,
+    // never objects). Actual expiry is done by the S3 `DeleteOldBuilds`
+    // lifecycle rule, so a bug in the handler can never delete the live build;
+    // worst case an old build lingers untagged.
+    handler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [props.bucket.bucketArn],
+        conditions: { StringLike: { 's3:prefix': ['builds/*'] } },
+      }),
+    );
+    handler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:PutObjectTagging', 's3:DeleteObjectTagging'],
+        resources: [`${props.bucket.bucketArn}/builds/*`],
       }),
     );
 
@@ -88,6 +117,7 @@ export class KvKeys extends Construct {
       serviceToken: provider.serviceToken,
       properties: {
         KvsArn: props.store.keyValueStoreArn,
+        BucketName: props.bucket.bucketName,
         // Stringify so CloudFormation sees a single property that changes
         // whenever any entry changes (triggers Update → diff → UpdateKeys).
         Entries: JSON.stringify(props.entries),

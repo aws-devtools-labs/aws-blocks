@@ -5,6 +5,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
+import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
 
 const NotAuthorized = 'NotAuthorizedException';
 const NotAuthenticated = 'NotAuthenticatedException';
@@ -28,9 +29,9 @@ function uniqueUser() {
  * verification code from `authCGetLastCode`.
  *
  * Only works in the local/mock runtime: the mock's `codeDelivery` hook
- * captures the verification code into `lastCognitoCode`, which the demo
- * exposes via `authCGetLastCode()`. Real Cognito emails the code out of
- * band and there is no backdoor for the test to read it, so against
+ * records the verification code against the username, which the demo
+ * exposes via `authCGetLastCode(username)`. Real Cognito emails the code out
+ * of band and there is no backdoor for the test to read it, so against
  * sandbox/production this helper returns `null` and every caller fails.
  *
  * When a dedicated admin Building Block lands, these tests can be
@@ -39,19 +40,28 @@ function uniqueUser() {
  * email round-trip required.
  */
 
+type CognitoCode = { username: string; code: string; purpose: string };
+
+/** Wait for a code delivered by the `authC` pool. See ./poll-for-code.ts. */
+const pollForCode = (api: typeof apiType, username: string, options?: PollForCodeOptions) =>
+	codePoller<CognitoCode>('authCGetLastCode', u => api.authCGetLastCode(u))(username, options);
+
+/** Wait for a code delivered by the MFA pool. See ./poll-for-code.ts. */
+const pollForMfaCode = (api: typeof apiType, username: string, options?: PollForCodeOptions) =>
+	codePoller<CognitoCode>('authCMfaGetLastCode', u => api.authCMfaGetLastCode(u))(username, options);
+
+/** Sign up and confirm a user. Returns the sign-up code that was consumed. */
 async function createConfirmedUser(
 	api: typeof apiType,
 	username: string,
 	password: string,
 	email: string,
 	department?: string,
-) {
+): Promise<string> {
 	await api.authCSignUp(username, password, email, department);
-	const last = await api.authCGetLastCode();
-	if (!last || last.username !== username) {
-		throw new Error(`No verification code captured for ${username} (got ${JSON.stringify(last)})`);
-	}
+	const last = await pollForCode(api, username);
 	await api.authCConfirmSignUp(username, last.code);
+	return last.code;
 }
 
 export function authCognitoTests(getApi: () => typeof apiType) {
@@ -284,12 +294,12 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				const api = getApi();
 				const username = uniqueUser();
 				await api.authCSignUp(username, 'Password1!', `${username}@example.com`);
-				const first = await api.authCGetLastCode();
+				const first = await pollForCode(api, username);
 				assert.ok(first, 'first code should exist');
 				assert.strictEqual(first!.username, username);
 
 				await api.authCResendSignUpCode(username);
-				const second = await api.authCGetLastCode();
+				const second = await pollForCode(api, username, { not: first.code });
 				assert.ok(second, 'second code should exist');
 				assert.strictEqual(second!.username, username);
 				assert.notStrictEqual(second!.code, first!.code, 'resend should produce a different code');
@@ -303,10 +313,12 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 			test('reset + confirm + signIn with new password', async () => {
 				const api = getApi();
 				const username = uniqueUser();
-				await createConfirmedUser(api, username, 'Password1!', `${username}@example.com`);
+				const signUpCode = await createConfirmedUser(api, username, 'Password1!', `${username}@example.com`);
 
 				await api.authCResetPassword(username);
-				const code = await api.authCGetLastCode();
+				// Reset issues a second code for the same user; wait for the one
+				// that is not the sign-up code already consumed.
+				const code = await pollForCode(api, username, { not: signUpCode });
 				assert.ok(code, 'reset code captured');
 				assert.strictEqual(code!.username, username);
 				// Purpose: mock captures this as 'reset' or 'forgotPassword' depending on impl.
@@ -474,8 +486,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 			async function signedInMfaUser(api: typeof apiType, opts?: { enrollTotp?: boolean }) {
 				const username = uniqueUser();
 				await api.authCMfaSignUp(username, 'Password1!', `${username}@example.com`);
-				const code = await api.authCMfaGetLastCode();
-				if (!code) throw new Error('no signup code');
+				const code = await pollForMfaCode(api, username);
 				await api.authCMfaConfirmSignUp(username, code.code);
 
 				// First sign-in skips the challenge (no factor enrolled yet).

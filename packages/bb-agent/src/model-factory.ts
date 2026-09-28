@@ -8,7 +8,7 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 // `./providers/canned` and `./providers/throwing` extend Strands' `Model`, so importing
 // them would evaluate `@strands-agents/sdk` at load time — hence they're also loaded
 // lazily inside createStrandsModel(). See issue #153.
-import type { ModelConfig } from './types.js';
+import type { CannedToolHints, ModelConfig } from './types.js';
 import { AgentErrors, blocksAgentError } from './errors.js';
 
 // TODO: validate model-specific inference config (e.g., some models don't support topP with temperature)
@@ -26,7 +26,7 @@ export interface BedrockHealthClient {
 	send(command: any): Promise<any>;
 }
 
-export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _testClient?: BedrockHealthClient): Promise<boolean> {
+export async function checkModelHealth(config: ModelConfig, log: ChildLogger, customUserAgent?: [string, string][], _testClient?: BedrockHealthClient): Promise<boolean> {
 	if (!config || config.provider === 'canned') {
 		log.info('Using canned provider (local mock, no real model)');
 		return true;
@@ -37,7 +37,7 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _t
 	}
 	log.info(`Checking model health: ${config.provider}${config.modelId ? ` (${config.modelId})` : ''}`);
 	if (config.provider === 'bedrock') {
-		const client: BedrockHealthClient = _testClient ?? new (await import('@aws-sdk/client-bedrock')).BedrockClient({});
+		const client: BedrockHealthClient = _testClient ?? new (await import('@aws-sdk/client-bedrock')).BedrockClient({ customUserAgent });
 
 		// Try GetInferenceProfile first (covers cross-region and global profiles).
 		try {
@@ -152,10 +152,10 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _t
  *
  * @see https://strandsagents.com/docs/user-guide/concepts/model-providers/
  */
-export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger): Promise<Model<BaseModelConfig>> {
+export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger, cannedHints?: Map<string, CannedToolHints>): Promise<Model<BaseModelConfig>> {
 	if (!config || config.provider === 'canned') {
 		const { CannedProvider } = await import('./providers/canned.js');
-		return new CannedProvider();
+		return new CannedProvider({ hints: cannedHints });
 	}
 
 	// Test-only provider — throws mid-stream to verify error handling

@@ -60,6 +60,42 @@ export const API_NAMESPACE_MARKER = Symbol.for('blocks:ApiNamespace');
 import type { ScopeParent } from './common/index.js';
 
 /**
+ * Structural view of a scope that resolves a compute carrying a recordable
+ * namespace list. Only the CDK `Scope` satisfies this at runtime (via its
+ * `compute` getter); in the mock/runtime bundles the property is absent.
+ */
+type ComputeResolvingScope = { compute?: { namespaces?: string[] } };
+
+/**
+ * Record this namespace on its resolved compute so request routing can later
+ * map a namespace to the compute that hosts it.
+ *
+ * CDK-synth concern only: in the CDK bundle `scope.compute` resolves to the
+ * namespace's compute (the stack default today), and we append the name to its
+ * `namespaces` list. In the mock/runtime bundles — or a scopeless test — the
+ * property is absent, so `scope.compute` is `undefined` and this is a silent
+ * no-op. The public `ApiNamespace` signature is unchanged; this is a purely
+ * internal side effect.
+ *
+ * No `try/catch`: `BlocksBackend.create()` initializes the default compute
+ * before it imports the backend module that constructs any `ApiNamespace`, so
+ * the `compute` getter always resolves at this call site. If it ever threw
+ * here it would signal a genuine lifecycle violation (an `ApiNamespace` built
+ * before `create()` resolved), which should surface rather than be swallowed.
+ */
+function recordNamespaceOnCompute(scope: ScopeParent | null | undefined, name: string): void {
+  // An API created without a Scope stays unrecorded and routes to the
+  // default compute.
+  if (!scope || typeof scope !== 'object') return;
+  const compute = (scope as ComputeResolvingScope).compute;
+  // Guard against duplicates so `namespaces` stays a set of names: a namespace
+  // could otherwise be recorded twice (e.g. a re-imported module during synth).
+  if (compute && Array.isArray(compute.namespaces) && !compute.namespaces.includes(name)) {
+    compute.namespaces.push(name);
+  }
+}
+
+/**
  * Define a type-safe API namespace that works seamlessly between frontend and backend.
  * 
  * ## Usage
@@ -157,6 +193,9 @@ export interface ApiNamespaceConstructor {
 export const ApiNamespace: ApiNamespaceConstructor = class ApiNamespace {
   constructor(scope: ScopeParent, name: string, handler: any) {
     handler[API_NAMESPACE_MARKER] = name;
+    // Record the namespace → compute association for per-compute routing.
+    // No-op outside CDK synth. Signature and returned handler are unchanged.
+    recordNamespaceOnCompute(scope, name);
     return handler;
   }
 } as any;

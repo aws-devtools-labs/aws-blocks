@@ -54,3 +54,4 @@ The Playwright test grades your work using these `data-testid` hooks on the serv
 - All Playwright assertions pass against the running dev server.
 - No errors in the browser console under normal use.
 - Your changes stay inside the workspace root. Don't modify anything under `node_modules/`.
+- **Source inspection (grader; behaviorally unverifiable at runtime):** confirm in the source that the app name is read from the **AppSetting block** (via the block's documented API), not returned from a hard-coded `"Observability Service"` constant. Because the expected value is fixed, a hard-coded string would satisfy every runtime assertion, so the real setting-read must be verified by reading the code.

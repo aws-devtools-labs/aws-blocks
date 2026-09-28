@@ -558,6 +558,38 @@ function stripBasePath(uri, bp) {
  *   - SPA fallback (`/index.html`) for extensionless non-`.well-known` paths.
  *   - basePath canonical 308 + strip on static; kept on compute.
  *   - static → `/builds/<buildId>/` prefix; compute keeps URI + x-forwarded-host.
+ *   - HTML documents resolve from the CURRENT build (never a pinned `__dpl`
+ *     cookie build) so HTML, the response-stamped cookie, and the HTML's
+ *     content-hashed assets always agree on one generation (issue #245).
+ *
+ * Issue #245 rationale (returning-visitor blank page): the viewer-RESPONSE
+ * function stamps `__dpl = meta.b` (the current build) on every HTML response.
+ * If the viewer-request function honored the cookie for HTML too, a returning
+ * visitor holding an old `__dpl` would be served the OLD build's HTML while
+ * their cookie advanced to the new build; the old HTML's content-hashed assets
+ * (which exist only under the old `builds/<id>/` prefix) would then rewrite to
+ * the new build prefix and 404 → a blank page. So HTML always resolves from
+ * `meta.b`, applied AFTER the SPA/directory-index fallback (which rewrites
+ * extensionless routes to `.../index.html`, so the `.html` suffix check covers
+ * the SPA shell too). Assets keep honoring the cookie so an already-loaded page
+ * stays consistent (old prefixes are retained via `prune: false`) until the
+ * next HTML navigation lands the visitor on the current build.
+ *
+ * Caveat: an in-session HTML *partial* fetch (HTMX, Turbo Frames, etc.) whose
+ * URI ends in `.html` also lands on the current build rather than the visitor's
+ * cookie build — a deliberate departure from the assets-honor-the-cookie rule,
+ * since these are treated as HTML documents. Acceptable for the targeted apps
+ * (a partial is fetched fresh, not a build-pinned content-hashed asset).
+ *
+ * The suffix test is `uri.slice(-5) === '.html'`, NOT
+ * `uri.lastIndexOf('.html') === uri.length - 5`: for a 4-char non-HTML URI like
+ * `/x.y` the latter compares `-1 === -1` (true) and would wrongly force that
+ * asset onto the current build, skipping its `__dpl` pin — the exact #245 bug,
+ * inverted. `slice(-5)` on a <5-char string returns the whole string, never `.html`.
+ *
+ * NOTE: this function source ships to CloudFront, which enforces a 10 KB code
+ * limit — keep in-function comments terse (the rationale lives here in the
+ * JSDoc, which does NOT ship).
  */
 export const generateKvsRouterRequestCode = (): string => `import cf from 'cloudfront';
 ${SHARED_CF_HELPERS}
@@ -713,6 +745,8 @@ async function handler(event) {
       if (seg2.indexOf('.') === -1) { uri = uri + '/index.html'; }
     }
   }
+  // HTML always resolves from the current build; assets honor __dpl (see #245 in JSDoc).
+  if (uri.slice(-5) === '.html') { buildId = meta.b; }
   request.uri = '/builds/' + buildId + uri;
   return request;
 }`;

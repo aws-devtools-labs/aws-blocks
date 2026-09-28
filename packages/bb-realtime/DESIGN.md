@@ -62,7 +62,7 @@ Both are HMAC-SHA256 signed with the same shared secret. The connect token's cha
 - Connection pool keyed by `wsUrl` (e.g., `ws://localhost:3001/realtime`)
 - Subscribe: `{ action: 'subscribe', channel, token }`
 - Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }`
-- Data: `{ type: 'message', channel, payload }`
+- Data: `{ type: 'message', channel, data }`
 
 ### AWS Middleware
 
@@ -90,6 +90,31 @@ All `Realtime` instances in a stack share infrastructure. The first constructor 
 | WebSocket Stage | WebSocketStage (`rt`, auto-deploy) | Deployment stage |
 
 All three WebSocket routes ($connect, $disconnect, $default) point at the existing Blocks handler Lambda — wired via `WebSocketLambdaIntegration` at CDK synth time, with the runtime handler registered through `registerLambdaEventHandler('blocks.websocket', ...)`. No separate Lambdas are created.
+
+#### Stage defaults (throttling + access logging)
+
+The WebSocket stage adopts the stack-wide `BlocksDefaults`:
+
+- **Throttling** — `defaults.throttling` is applied as the stage's default route
+  settings (`{ rateLimit, burstLimit }` — sandbox 200/400, production 1000/2000).
+  **On a WebSocket stage the throttle unit is messages per second across the
+  connection** (not HTTP requests): API Gateway meters `$default`-route messages,
+  not connects.
+- **Access logging** — when `defaults.accessLogging` is true (opt-in; off in
+  both presets), the stage writes structured JSON access logs to a dedicated
+  CloudWatch log group (retention = `defaults.logRetention`, removal policy =
+  `defaults.removalPolicy` — production RETAINs the audit trail on teardown,
+  sandbox DESTROYs). This requires the account-level API Gateway
+  CloudWatch Logs role, provisioned once per stack via
+  `ensureApiGatewayAccount()` (shared with the core REST API stage through a
+  `Symbol.for`-keyed lookup, so only one `AWS::ApiGateway::Account` is emitted).
+  The stage is given an explicit dependency on that account so a clean-account
+  first deploy applies the account setting before the stage is created.
+  Note: a production (RETAINed) access-log group is **orphaned** on stack
+  teardown and is the operator's to clean up. The group is intentionally left
+  unnamed (CDK-generated physical name) so a teardown-then-redeploy mints a fresh
+  name and can't collide — do not pin a stable `logGroupName` here, or a
+  RETAINed group from a prior delete would fail the next create.
 
 ### Per Instance
 
@@ -177,7 +202,6 @@ Channel path:             my-app-collab/chat/room-123
 
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
-| WS message uses `payload` field (mock) vs `data` (AWS) | Native mobile clients see different wire format | Abstracted by SDK middlewares; document for native implementors |
 | Mock skips connect-time token auth (`?token=` query param) | A client can still *open* a WS locally, but can no longer *subscribe* without a valid channel token (enforced at subscribe time) | Recommend sandbox testing for connect-time auth-sensitive flows |
 | No connection duration limit locally | Mock WS stays open indefinitely | Document the 2-hour AWS limit in README |
 | Single-process only | No cross-process pub/sub | Local dev is single-process |
@@ -200,36 +224,45 @@ Channel path:             my-app-collab/chat/room-123
 
 ### The Problem
 
-API Gateway WebSocket has a hard 2-hour max connection duration. When the connection drops — whether from the 2-hour limit, a network interruption, or a server-side error — the client needs to:
+API Gateway WebSocket has a hard 2-hour max connection duration plus a 10-minute idle timeout, so a long-lived subscription **will** be dropped and re-established over its lifetime. On a drop the transport must: know the connection was lost (and whether it was intentional), re-establish the socket, re-subscribe every channel, and let the application backfill anything missed during the gap.
 
-1. Know the connection was lost (and whether it was intentional)
-2. Re-establish the WebSocket connection
-3. Re-subscribe to channels (which requires fresh tokens)
-4. Backfill any messages missed during the gap
+### Approach — transparent auto-reconnect
 
-### Approach
+The client transport (aws-middleware.ts, mirrored by mock-middleware.ts) reconnects on its own; the application does NOT re-subscribe manually. On an unexpected close it:
 
-The `subscribe()` method accepts an options form with an `onDisconnect` callback:
+1. **Reconnects with exponential backoff** (`min(1000·2^(n-1), MAX_DELAY_MS)`), capped at `MAX_RECONNECT` attempts. The attempt counter is reset per-outage (only once a resubscribe settles), not per socket-open, so a flapping socket still exhausts the cap.
+2. **Resubscribes every stored channel** by replaying its stored channel token, and re-arms the ~9-minute keep-alive ping on the fresh socket.
+3. **Fires `onReconnect`** per-channel: each channel's `onReconnect` fires once THAT channel's resubscribe is re-confirmed by the server. A channel whose resubscribe is rejected gets `onDisconnect('error')` and NOT `onReconnect` (see below).
+
+**Intent-based terminal classification.** Whether a close is terminal is decided by *intent*, not the close code: the transport reconnects on ANY unexpected close (a legitimate mid-connection drop can arrive as a clean `1000`/`1005` just as easily as `1001`/`1006`), and treats a close as terminal only when the client initiated it (`intentionalClose`: unsubscribe of the last channel, `__resetConnectionsForTest`, or the give-up path) or nothing remains to reconnect for (`subscriptions.size === 0`). On give-up (retries exhausted) it tears the pool entry down — rejecting pending establishments and firing a terminal `onDisconnect('error')` — so a later `subscribe()` rebuilds a fresh connection rather than reusing a zombie.
 
 ```typescript
 channel.subscribe({
   onMessage: (msg) => { ... },
   onDisconnect: (reason) => {
-    // reason: 'timeout' | 'error' | 'unknown'
-    // Re-fetch channel handle (new tokens), re-subscribe, backfill
+    // reason: 'client' | 'timeout' | 'error' | 'unknown'
+    // Fires on EVERY drop (deduped once per socket). Filter out 'client'.
+  },
+  onReconnect: () => {
+    // Fires once after the transport reconnected AND ≥1 channel was re-confirmed.
+    // Backfill missed messages here from the durable store.
   },
 });
 ```
 
 **Disconnect reasons:**
 - `client` — the client called `unsubscribe()`
-- `timeout` — API Gateway closed the connection (2-hour limit or idle timeout, WebSocket close code 1001)
-- `error` — WebSocket error or abnormal closure (close code 1006)
-- `unknown` — connection closed with any other close code
+- `timeout` — API Gateway closed the connection (2-hour limit or idle timeout, close code 1001)
+- `error` — WebSocket error or abnormal closure (close code 1006), OR a resubscribe rejected because its replayed token was stale
+- `unknown` — connection closed with any other close code (incl. clean 1000/1005 drops the client did not initiate)
 
-`onDisconnect` fires for all disconnects including user-initiated ones, following the Socket.IO / Ably convention. Consumers filter by reason if they only care about unexpected drops.
+`onDisconnect` fires for all disconnects including user-initiated ones (Socket.IO / Ably convention), and on *every* subsequent drop of the same logical subscription — deduped to once per socket so an abnormal drop (onerror + onclose) does not double-report.
 
-**Backfill responsibility:** The Realtime BB does not provide message history. Backfill is the application's responsibility — typically by re-querying the data source. This is intentional: message history requires persistence and ordering guarantees that belong in the application layer, not the pub/sub transport.
+**Stale-token fallback.** A resubscribe replays the stored channel token (≈1h TTL). If a socket was down long enough that the token expired, the server rejects the resubscribe; the transport drains that channel and surfaces `onDisconnect('error')` to THAT channel's owners only (not to healthy siblings, and not a socket-wide fanout) rather than dropping it silently. Handlers are routed per-channel, so a rejected channel receives `onDisconnect('error')` and NOT `onReconnect` — its owner is not given a false-recovery signal for a channel that was just removed. `onReconnect` fires only for the channels that actually re-confirmed; if every channel is rejected, no `onReconnect` fires at all.
+
+**Reconnect only spans the connect token's ~2h life.** The reconnect rebuilds the socket URL from the *stored* connect token (≈2h TTL, matching API Gateway's 2h max connection duration). Once that token expires, the server rejects the `$connect` handshake (403) — the socket closes without ever firing `onopen`, so each reconnect attempt fails, the connection exhausts `MAX_RECONNECT`, and it tears down with a terminal `onDisconnect('error')`. **Transparent auto-reconnect therefore recovers drops only within the connect token's ~2h window.** Past that, this is a known limitation: a subscription that must outlive 2h (e.g. a multi-hour agent turn) should treat the terminal `onDisconnect('error')` as the cue to re-fetch a fresh channel handle (new connect + channel tokens) and re-subscribe; the ~2h connect-token boundary is otherwise a hard ceiling on transparent recovery.
+
+**Backfill responsibility:** The Realtime BB does not provide message history. Backfill is the application's responsibility — typically by re-querying the data source from `onReconnect`. This is intentional: message history requires persistence and ordering guarantees that belong in the application layer, not the pub/sub transport.
 
 ## Channel Name Limits
 

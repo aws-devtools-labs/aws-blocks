@@ -17,6 +17,7 @@ export class AppSetting<T = string> extends Scope {
     static fromExisting<T = string>(scope: ScopeParent, id: string, options: {
         name: string;
         secret?: boolean;
+        kmsKeyArn?: string;
     }): AppSetting<T>;
     get(): Promise<T>;
     // @internal
@@ -32,12 +33,16 @@ export const AppSettingErrors: {
 
 // @public
 export interface AppSettingOptions<T = string> {
+    kmsKeyArn?: string;
     logger?: ChildLogger;
     name?: string;
     schema?: StandardSchemaV1<T>;
     secret?: boolean;
     value?: T;
 }
+
+// @public
+export const SECRETS_BULK_CONSTRUCT_ID = "BlocksSecretsBulk";
 
 // (No @packageDocumentation comment for this package)
 

@@ -30,7 +30,9 @@ void main() async {
     print('# Running: $test');
     print('${'#' * 50}');
 
-    final result = await Process.run(dart, ['run', '$testDir/$test'],
+    final result = await Process.run(
+      dart,
+      ['run', '$testDir/$test'],
       environment: Platform.environment,
       workingDirectory: Directory.current.path,
     );

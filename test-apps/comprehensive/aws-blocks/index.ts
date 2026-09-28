@@ -33,6 +33,26 @@ function logCodeLocally(message: string): void {
   if (!isDeployedLambda) console.log(message);
 }
 
+// Shared by the record readers below. A record we cannot parse is worth no more
+// than a missing one: report it as absent so the caller's poller keeps waiting
+// and times out on its own message, rather than failing the test with a JSON
+// syntax error. An empty string is treated the same way.
+//
+// Absent is not silent though: a corrupt record means a bad write, which is a
+// real bug and not the race the pollers exist to absorb, so warn with the key
+// that failed. The value and the parser message are deliberately left out — the
+// message quotes the input it choked on, and these records hold verification
+// codes, which must never reach CloudWatch (see `logCodeLocally` above).
+function parseStoredRecord<T>(key: string, raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    console.warn(`[test-app] ignoring unparseable record at "${key}" (${raw.length} bytes) — treating it as absent`);
+    return null;
+  }
+}
+
 // ============================================================================
 // Building Block Instances
 // ============================================================================
@@ -51,14 +71,58 @@ const objStore = new KVStore<Profile>(scope, 'obj-store');
 const profileSchema = z.object({ name: z.string(), age: z.number(), tags: z.array(z.string()) });
 const validatedStore = new KVStore(scope, 'validated-store', { schema: profileSchema });
 
+// ── Delivered verification codes (e2e read-back) ────────────────────────────
+//
+// e2e tests read verification codes back through the `getLast*Code` methods
+// below. The codes must therefore live somewhere every request can see them.
+//
+// A module-level variable does not qualify: in a deployed environment each API
+// call may be served by a different Lambda instance, so the code written by
+// `codeDelivery` on one instance is invisible to the instance that later serves
+// `authGetLastCode` — it reads its own `null`, or worse, a leftover code from
+// some earlier user it happened to handle. Both show up as flaky auth e2e runs.
+//
+// Persist them in the shared KVStore instead, keyed by username. `username` is
+// required on both the write and the read: a reader can only ask for the code it
+// is actually waiting on, so there is no way to express "give me any code" and
+// pick up another user's by accident.
+//
+// One small record per test user, overwritten when that user gets a new code
+// (resend, password reset). They do pile up: the mock store persists to
+// .bb-data/ between local runs, and a suite run leaves ~30 behind. CI throws the
+// whole table away at teardown, so sweep with `authPurgeDeliveredCodes()` when
+// that is not true — local dev, or a sandbox kept via BLOCKS_SANDBOX_KEEP.
+
+type DeliveredCode = { username: string; code: string };
+type DeliveredCognitoCode = DeliveredCode & { purpose: string };
+
+const CODE_KEY_PREFIX = '__last-code';
+const codeKey = (channel: string, username: string) => `${CODE_KEY_PREFIX}:${channel}:${username}`;
+
+async function recordDeliveredCode(channel: string, value: DeliveredCode | DeliveredCognitoCode): Promise<void> {
+  await store.put(codeKey(channel, value.username), JSON.stringify(value));
+}
+
+async function readDeliveredCode<T extends DeliveredCode>(channel: string, username: string): Promise<T | null> {
+  const key = codeKey(channel, username);
+  return parseStoredRecord<T>(key, await store.get(key));
+}
+
+async function purgeDeliveredCodes(): Promise<number> {
+  const keys: string[] = [];
+  for await (const entry of store.scan()) {
+    if (entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) keys.push(entry.key);
+  }
+  for (const key of keys) await store.delete(key);
+  return keys.length;
+}
+
 // AuthBasic - Authentication
-// Store last delivered code so e2e tests can retrieve and use it.
-let lastDeliveredCode: { username: string; code: string } | null = null;
 const auth = new AuthBasic(scope, 'auth', {
   sessionDuration: 86400,
   passwordPolicy: { minLength: 6 },
   codeDelivery: async (username, code) => {
-    lastDeliveredCode = { username, code };
+    await recordDeliveredCode('auth', { username, code });
     // In a real app, connect this to email: await sendEmail(username, `Your code: ${code}`);
     logCodeLocally(`[AuthBasic] Verification code for "${username}": ${code}`);
   },
@@ -78,16 +142,18 @@ const authCrossDomain = new AuthBasic(scope, 'auth-cross-domain', {
 // Tests confirm users via the verification-code flow (see auth-cognito.test.ts).
 // `mfa: 'off'` keeps the general suite simple — MFA-specific tests use the
 // `authCMfa` pool below.
-let lastCognitoCode: { username: string; code: string; purpose: string } | null = null;
 const authC = new AuthCognito(scope, 'authC', {
   passwordPolicy: { minLength: 8, requireDigits: true },
   userAttributes: [{ name: 'department' }],
   groups: ['admins', 'readers'],
+  // Enable the opt-in admin surface (auth.admin) for the sandbox admin e2e
+  // suite. Grants the Admin*/List* IAM on this pool's handler role.
+  admin: {},
   mfa: 'off',
   mfaTypes: ['SMS', 'TOTP', 'EMAIL'],
   selfSignUp: true,
   codeDelivery: async (username, code, purpose) => {
-    lastCognitoCode = { username, code, purpose };
+    await recordDeliveredCode('authC', { username, code, purpose });
     logCodeLocally(`[AuthCognito] ${purpose} code for "${username}": ${code}`);
   },
 });
@@ -100,21 +166,50 @@ const authC = new AuthCognito(scope, 'authC', {
 // (Part 2). TOTP has no such external dependency and exercises the
 // full signIn → CONFIRM_SIGN_IN_WITH_TOTP_CODE → confirmSignIn
 // round-trip the Phase D + Phase E tests need.
-let lastCognitoMfaCode: { username: string; code: string; purpose: string } | null = null;
 const authCMfa = new AuthCognito(scope, 'authCMfa', {
   passwordPolicy: { minLength: 8, requireDigits: true },
   mfa: 'optional',
   mfaTypes: ['TOTP'],
   selfSignUp: true,
   codeDelivery: async (username, code, purpose) => {
-    lastCognitoMfaCode = { username, code, purpose };
+    await recordDeliveredCode('authCMfa', { username, code, purpose });
     logCodeLocally(`[AuthCognitoMfa] ${purpose} code for "${username}": ${code}`);
   },
 });
 
 // AuthOIDC - OIDC sign-in gate
 // Uses the stub IdP in mock runtime — no real IdP needed for local tests.
-let lastOidcSignInUser: { userId: string; email: string | null; provider: string } | null = null;
+//
+// ── Sign-in records (e2e read-back) ─────────────────────────────────────────
+//
+// `onSignIn` runs while the OIDC callback is being served; the e2e reads the
+// result back over a later, separate request. A module-level variable cannot
+// carry it: in a deployed environment those two requests may be served by
+// different Lambda instances, so the reader either sees its own `null` or the
+// record of whoever signed in last, on either instance. The second case is
+// worse than a failure because it can pass by accident.
+//
+// Persist to the shared KVStore keyed by `userId` and scoped per AuthOIDC
+// instance, and require `userId` on the read, so a test can only ask for the
+// sign-in it is actually waiting on.
+//
+// These keys are bounded, unlike the verification codes: the stub IdP returns a
+// fixed user per provider, so each sign-in overwrites its own record.
+
+const oidcProfiles = new KVStore(scope, 'oidc-profiles');
+
+type SignInRecord = { userId: string; email: string | null; provider: string };
+
+const signInKey = (instance: string, userId: string) => `signin:${instance}:${userId}`;
+
+async function recordSignIn(instance: string, user: SignInRecord): Promise<void> {
+  await oidcProfiles.put(signInKey(instance, user.userId), JSON.stringify(user));
+}
+
+async function readSignIn(instance: string, userId: string): Promise<SignInRecord | null> {
+  const key = signInKey(instance, userId);
+  return parseStoredRecord<SignInRecord>(key, await oidcProfiles.get(key));
+}
 
 const oidcProviders = [
   stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
@@ -124,16 +219,13 @@ const oidcProviders = [
 const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
   providers: oidcProviders,
   onSignIn: async (user) => {
-    lastOidcSignInUser = { userId: user.userId, email: user.email, provider: user.provider };
+    await recordSignIn('oidc-auth', { userId: user.userId, email: user.email, provider: user.provider });
   },
 });
 
 // AuthOIDC (second instance) — exercises the onSignIn hook with a profile
 // upsert pattern and bearer-token auth for native clients. Uses custom paths
 // to avoid colliding with the first instance.
-const oidcProfiles = new KVStore(scope, 'oidc-profiles');
-let lastExtrasSignInUser: { userId: string; email: string | null; provider: string } | null = null;
-
 const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
   providers: [
     stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] }),
@@ -145,7 +237,7 @@ const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
   // alongside the user, and /aws-blocks/auth/extras/refresh renews tokens.
   allowBearerAuth: true,
   onSignIn: async (user) => {
-    lastExtrasSignInUser = { userId: user.userId, email: user.email, provider: user.provider };
+    await recordSignIn('oidc-auth-extras', { userId: user.userId, email: user.email, provider: user.provider });
     // Upsert profile — the canonical post-sign-in pattern.
     await oidcProfiles.put(`profile:${user.userId}`, JSON.stringify({
       userId: user.userId,
@@ -183,20 +275,24 @@ const itemSchema = z.object({
 
 const table = new DistributedTable(scope, 'items', {
   schema: itemSchema,
-  key: { 
-    partitionKey: 'pk', 
-    sortKey: 'sk' 
+  key: {
+    partitionKey: 'pk',
+    sortKey: 'sk'
   },
   indexes: {
-    byTimestamp: { 
-      partitionKey: 'pk', 
+    byTimestamp: {
+      partitionKey: 'pk',
       sortKey: 'timestamp'
     },
     bySk: {
       partitionKey: 'pk',
       sortKey: 'sk'
     }
-  }
+  },
+  // No per-block `protection`: durability follows the stack-wide `defaults`,
+  // which this E2E app sets to `BlocksPresets.sandbox` (DESTROY + no deletion
+  // protection) so `cdk destroy` tears everything down cleanly. See
+  // aws-blocks/index.cdk.ts.
 });
 
 // DistributedTable with TTL
@@ -211,6 +307,28 @@ const ttlTable = new DistributedTable(scope, 'ttl-items', {
   schema: ttlSchema,
   key: { partitionKey: 'pk', sortKey: 'sk' },
   ttl: 'expiresAt',
+  // Durability follows the stack `defaults` (sandbox preset) — see 'items' above.
+});
+
+// Secure-defaults coverage on a REAL deploy (review comment #6): a table that
+// carries PITR (with a narrowed window) + SSE alongside a GSI, so the GSI
+// custom resource's UpdateTable and the table's durability configuration
+// provision together on AWS — not just in a synth template.
+//
+// Durability (removal policy + deletion protection) follows the stack `defaults`
+// (this E2E app's sandbox preset → DESTROY + unprotected), so the table tears
+// down cleanly — no orphaned `test-app-secure-items` blocking the next run.
+// Only PITR is overridden per-block, since that's the durability prop we're
+// exercising on the deploy path. (The 'locked'/deletion-protection case is
+// covered by the CDK synth tests — a deletion-protected table would by design
+// block `cdk destroy`, so it can't live in an auto-torn-down E2E stack.)
+const secureTable = new DistributedTable(scope, 'secure-items', {
+  schema: itemSchema,
+  key: { partitionKey: 'pk', sortKey: 'sk' },
+  indexes: {
+    byTimestamp: { partitionKey: 'pk', sortKey: 'timestamp' },
+  },
+  pointInTimeRecovery: { retentionDays: 7 },
 });
 
 // Realtime - Typed pub/sub channels (same as template-default cursor demo)
@@ -262,6 +380,27 @@ const validatedJob = new AsyncJob(scope, 'validated-job', {
       subject: payload.subject,
       jobId: ctx.jobId,
     }));
+  },
+});
+
+// AsyncJob with trackStatus - exercises the status table (DynamoDB when deployed).
+// The handler settles immediately on purpose: the transition history is what makes
+// the intermediate `processing` state observable, so there is no delay to widen it.
+const trackedJob = new AsyncJob(scope, 'tracked-job', {
+  trackStatus: true,
+  handler: async (payload: { key: string; value: string }) => {
+    await jobResults.put(`tracked:${payload.key}`, payload.value);
+  },
+});
+
+// Failure path for status tracking. maxRetries: 1 makes the first failure terminal
+// in both runtimes, so `failed` is recorded on the only delivery and the test does
+// not depend on redrive timing.
+const trackedFailingJob = new AsyncJob(scope, 'tracked-failing-job', {
+  trackStatus: true,
+  maxRetries: 1,
+  handler: async (payload: { reason: string }) => {
+    throw new Error(`tracked job failed on purpose: ${payload.reason}`);
   },
 });
 
@@ -835,7 +974,24 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async ttlTableGet(...args: Parameters<typeof ttlTable.get>) {
     return await ttlTable.get(...args);
   },
-  
+
+  // Secure-defaults table (PITR + GSI on a real deploy) — read/write proves
+  // the table is functional; the durability config is asserted AWS-side.
+  async secureTablePut(...args: Parameters<typeof secureTable.put>) {
+    await secureTable.put(...args);
+    return { success: true };
+  },
+
+  async secureTableGet(...args: Parameters<typeof secureTable.get>) {
+    return await secureTable.get(...args);
+  },
+
+  async secureTableQuery(...args: Parameters<typeof secureTable.query>) {
+    const results = [];
+    for await (const item of secureTable.query(...args)) results.push(item);
+    return results;
+  },
+
   // ------------------------------------------------------------------------
   // Auth Tests
   // ------------------------------------------------------------------------
@@ -883,8 +1039,29 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async authGetLastCode() {
-    return lastDeliveredCode;
+  /**
+   * Read back the verification code delivered to `username`, or `null` if none
+   * has been delivered yet.
+   *
+   * `username` is required. Delivery is asynchronous and the read travels over a
+   * separate request, so a caller has to poll — and polling for "any code at
+   * all" is satisfied instantly by whatever another user left behind. Scoping
+   * the read to a username makes that mistake unexpressible.
+   */
+  async authGetLastCode(username: string) {
+    return await readDeliveredCode<{ username: string; code: string }>('auth', username);
+  },
+
+  /**
+   * Delete every recorded verification code, across all auth channels. Returns
+   * how many records were removed.
+   *
+   * Codes are one small record per test user and CI destroys the table at
+   * teardown, so this is for the cases where it does not: sweeping .bb-data/ in
+   * local dev, or a sandbox kept alive with BLOCKS_SANDBOX_KEEP.
+   */
+  async authPurgeDeliveredCodes() {
+    return { deleted: await purgeDeliveredCodes() };
   },
 
   // Cookie-attribute convergence (D-007): sign up + sign in so the e2e can
@@ -952,8 +1129,71 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async authCRequireRole(role: string) {
-    const user = await authC.requireRole(context, role);
+    // Role arrives over the wire as a string; narrow to the pool's group union
+    // at the boundary (runtime validates membership regardless). `const O` made
+    // requireRole's param the literal union 'admins' | 'readers'.
+    const user = await authC.requireRole(context, role as Parameters<typeof authC.requireRole>[1]);
     return user;
+  },
+
+  // ── Admin surface (auth.admin) — exercised by sandbox-admin-e2e ────────────
+  // In a real app these would be gated by `requireRole`; the e2e harness drives
+  // them directly to verify the admin grant + behavior end-to-end.
+  async authCAdminCreateUser(username: string, temporaryPassword: string) {
+    const u = await authC.admin.createUser(username, { temporaryPassword });
+    return { username: u.username, enabled: u.enabled };
+  },
+  async authCAdminCreateUserWithDept(username: string, temporaryPassword: string, department: string) {
+    // Seeds a declared custom attribute so authCAdminGetUser can round-trip it.
+    const u = await authC.admin.createUser(username, {
+      temporaryPassword,
+      attributes: { department, email: `${username}@example.com` },
+    });
+    return { username: u.username, enabled: u.enabled };
+  },
+  async authCAdminGetUser(username: string) {
+    const u = await authC.admin.getUser(username);
+    if (!u) return null;
+    // Return the typed reads so the e2e can assert the attribute/group round-trip.
+    return {
+      username: u.username,
+      userSub: u.userSub,
+      enabled: u.enabled,
+      department: u.attributes['custom:department'] ?? null,
+      groups: u.groups ?? [],
+    };
+  },
+  async authCAdminScan(filter?: { attribute: string; match: 'startsWith' | 'equals'; value: string }) {
+    const usernames: string[] = [];
+    for await (const u of authC.admin.scan(filter)) usernames.push(u.username);
+    return usernames;
+  },
+  async authCAdminSetPassword(username: string, password: string) {
+    await authC.admin.setUserPassword(username, password, { permanent: true });
+    return { success: true };
+  },
+  async authCAdminAddToGroup(username: string, group: string) {
+    await authC.admin.addUserToGroup(username, group as Parameters<typeof authC.admin.addUserToGroup>[1]);
+    return { success: true };
+  },
+  async authCAdminListGroupsForUser(username: string) {
+    return await authC.admin.listGroupsForUser(username);
+  },
+  async authCAdminDisableUser(username: string) {
+    await authC.admin.disableUser(username);
+    return { success: true };
+  },
+  async authCAdminEnableUser(username: string) {
+    await authC.admin.enableUser(username);
+    return { success: true };
+  },
+  async authCAdminDeleteUser(username: string) {
+    await authC.admin.deleteUser(username);
+    return { success: true };
+  },
+  async authCAdminRevokeSessions(username: string) {
+    await authC.admin.revokeUserSessions(username);
+    return { success: true };
   },
 
   async authCFetchUserAttributes() {
@@ -983,8 +1223,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async authCGetLastCode() {
-    return lastCognitoCode;
+  /** Read back the code delivered to `username`. See `authGetLastCode`. */
+  async authCGetLastCode(username: string) {
+    return await readDeliveredCode<{ username: string; code: string; purpose: string }>('authC', username);
   },
 
   // Phase G — devices: list + remember + forget.
@@ -1071,8 +1312,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     await authCMfa.signOut(context);
     return { success: true };
   },
-  async authCMfaGetLastCode() {
-    return lastCognitoMfaCode;
+  /** Read back the code delivered to `username`. See `authGetLastCode`. */
+  async authCMfaGetLastCode(username: string) {
+    return await readDeliveredCode<{ username: string; code: string; purpose: string }>('authCMfa', username);
   },
   async authCMfaFetchMFAPreference() {
     return await authCMfa.fetchMFAPreference(context);
@@ -1082,7 +1324,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     totp?: 'ENABLED' | 'DISABLED' | 'PREFERRED' | 'NOT_PREFERRED';
     email?: 'ENABLED' | 'DISABLED' | 'PREFERRED' | 'NOT_PREFERRED';
   }) {
-    await authCMfa.updateMFAPreference(context, input);
+    // `const O` narrowed updateMFAPreference's input to the pool's mfaTypes
+    // (here ['TOTP']); the wire shape is wider, so narrow at the boundary.
+    await authCMfa.updateMFAPreference(context, input as Parameters<typeof authCMfa.updateMFAPreference>[1]);
     return { success: true };
   },
 
@@ -1125,8 +1369,17 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async oidcGetLastSignInUser() {
-    return lastOidcSignInUser;
+  /**
+   * Read back the sign-in record `onSignIn` wrote for `userId`, or `null` if
+   * that user has not signed in through this instance.
+   *
+   * `userId` is required. The hook fires on a different request than this read,
+   * so "whoever signed in last" is not a safe question to ask: the answer can
+   * be another user, or another AuthOIDC instance's user, and the test would
+   * pass on the wrong record.
+   */
+  async oidcGetLastSignInUser(userId: string) {
+    return await readSignIn('oidc-auth', userId);
   },
 
   async oidcGetProviders() {
@@ -1142,8 +1395,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { userId: user.userId, email: user.email, name: user.name, provider: user.provider, sub: user.sub, iss: user.iss };
   },
 
-  async oidcExtrasGetLastSignInUser() {
-    return lastExtrasSignInUser;
+  /** Read back the sign-in record for `userId`. See `oidcGetLastSignInUser`. */
+  async oidcExtrasGetLastSignInUser(userId: string) {
+    return await readSignIn('oidc-auth-extras', userId);
   },
 
   async oidcExtrasGetProfile(userId: string) {
@@ -1563,10 +1817,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async asyncJobSubmitBatchTooMany() {
-    const items = Array.from({ length: 11 }, (_, i) => ({ key: `k${i}`, value: `v${i}` }));
-    await testJob.submitBatch(items);
-    return { success: true };
+  async asyncJobSubmitLargeBatch() {
+    // More than one SQS SendMessageBatch worth of items: submitBatch must
+    // auto-chunk and return a jobId per item.
+    const items = Array.from({ length: 25 }, (_, i) => ({ key: `k${i}`, value: `v${i}` }));
+    const { jobIds } = await testJob.submitBatch(items);
+    return { jobIds };
   },
 
   async asyncJobSubmitDelayed(key: string, value: string, delaySeconds: number) {
@@ -1592,6 +1848,37 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async asyncJobSubmitBatchDelayed(items: { key: string; value: string }[], delaySeconds: number) {
     const { jobIds } = await testJob.submitBatch(items, { delaySeconds });
     return { jobIds };
+  },
+
+  // ------------------------------------------------------------------------
+  // AsyncJob status tracking (trackStatus) Tests
+  // ------------------------------------------------------------------------
+
+  async asyncJobStatusSubmit(key: string, value: string) {
+    const { jobId } = await trackedJob.submit({ key, value });
+    return { jobId };
+  },
+
+  async asyncJobStatusSubmitBatch(items: Array<{ key: string; value: string }>) {
+    const { jobIds } = await trackedJob.submitBatch(items);
+    return { jobIds };
+  },
+
+  async asyncJobStatusGet(jobId: string) {
+    return trackedJob.getStatus(jobId);
+  },
+
+  async asyncJobStatusWait(jobId: string, timeoutMs: number) {
+    return trackedJob.waitUntilComplete(jobId, { timeoutMs });
+  },
+
+  async asyncJobStatusSubmitFailing(reason: string) {
+    const { jobId } = await trackedFailingJob.submit({ reason });
+    return { jobId };
+  },
+
+  async asyncJobStatusWaitFailing(jobId: string, timeoutMs: number) {
+    return trackedFailingJob.waitUntilComplete(jobId, { timeoutMs });
   },
 
   // ------------------------------------------------------------------------

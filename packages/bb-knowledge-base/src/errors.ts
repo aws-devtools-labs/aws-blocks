@@ -33,3 +33,16 @@ export const KnowledgeBaseErrors = {
 	/** `waitUntilSynced()` exceeded its timeout before the knowledge base finished ingesting. */
 	Timeout: 'KnowledgeBaseTimeoutException',
 } as const;
+
+/** One of the `name` values in {@link KnowledgeBaseErrors}. */
+export type KnowledgeBaseErrorName = (typeof KnowledgeBaseErrors)[keyof typeof KnowledgeBaseErrors];
+
+/**
+ * Build a typed `Error` whose `name` is one of {@link KnowledgeBaseErrors}, so it
+ * crosses the RPC wire by `name` and is matchable with `isBlocksError()`.
+ */
+export function blocksError(name: KnowledgeBaseErrorName, message: string): Error {
+	const err = new Error(`${name}: ${message}`);
+	err.name = name;
+	return err;
+}

@@ -29,13 +29,59 @@ export interface DatabaseOptions {
    */
   rlsPolicy?: 'enforce';
   /**
-   * CloudFormation removal policy for the Aurora cluster.
-   * Use 'destroy' for dev/sandbox, 'retain' (default) for production to prevent data loss.
-   * @default 'retain'
+   * CloudFormation removal policy for the Aurora cluster. When omitted, the
+   * stack-wide `defaults` apply (`production` → RETAIN so data is preserved on
+   * `cdk destroy`; `sandbox` → DESTROY). Pass `'destroy'`/`'retain'`/`'snapshot'`
+   * to override for this one database. Deletion protection follows: on unless
+   * the cluster is being destroyed.
    */
   removalPolicy?: 'destroy' | 'retain' | 'snapshot';
+  /**
+   * Aurora PostgreSQL engine version, e.g. `'16.13'`.
+   *
+   * Configurable because AWS periodically retires older Aurora PostgreSQL minor
+   * versions: 16.4 was retired in us-east-1, after which `CreateDBCluster` began
+   * failing with `Cannot find version 16.4 for aurora-postgresql`. Surfacing this
+   * as an option means the next retirement is a config change, not a framework fix.
+   * @default '16.13'
+   */
+  postgresVersion?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
+  /**
+   * Where to place the Aurora cluster when the app runs in a VPC. Optional; by
+   * default Blocks prefers an **isolated** subnet tier (keeping the database off
+   * any NAT path) and falls back to `private-with-egress` if the VPC has no
+   * isolated tier. Aurora is reached over the RDS Data API (HTTPS via a VPC
+   * endpoint), so placement affects isolation posture, not reachability.
+   *
+   * A CDK-free mirror of `ec2.SubnetSelection` — the `Database` constructor
+   * resolves to a runtime entry point that must not import `aws-cdk-lib`, so
+   * subnets are referenced by **id** (a plain string, as CDK identifies them)
+   * and the tier by a string. The CDK layer resolves these against the VPC.
+   */
+  subnets?: SubnetSelection;
+}
+
+/**
+ * A CDK-free structural mirror of the inputs of `ec2.SubnetSelection`, safe to
+ * reference from the runtime-resolved `Database` constructor (no `aws-cdk-lib`
+ * import). The CDK layer maps `subnetType` (string) to `ec2.SubnetType`,
+ * rehydrates `subnetIds` via `Subnet.fromSubnetId`, and passes the AZ/group/
+ * onePerAz fields through unchanged. Set at most one of `subnetType`,
+ * `subnetGroupName`, or `subnetIds` (mirrors CDK's mutual exclusion).
+ */
+export interface SubnetSelection {
+  /** Select all subnets of the given tier. Proxy for `ec2.SubnetType`. */
+  subnetType?: 'isolated' | 'private-with-egress' | 'public';
+  /** Restrict the selection to these Availability Zones (filter). */
+  availabilityZones?: string[];
+  /** Return at most one subnet per AZ. */
+  onePerAz?: boolean;
+  /** Select a named subnet group (from the VPC's `subnetConfiguration`). */
+  subnetGroupName?: string;
+  /** Explicitly select individual subnets by id. Mirrors `ec2` `subnets: ISubnet[]`. */
+  subnetIds?: string[];
 }
 
 /**

@@ -10,11 +10,12 @@ import { createHmac } from 'node:crypto';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { RealtimeErrors } from './errors.js';
 
-export function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
+// Shared from core so every block uses one `blocksError` implementation (single
+// source of the name-as-contract rule). Imported for the runtime callers below
+// and re-exported for other modules; core's `errors.ts` is dependency-free, so
+// it's safe in the aws-runtime bundle.
+import { blocksError } from '@aws-blocks/core';
+export { blocksError };
 
 export async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): Promise<void> {
 	const result = schema['~standard'].validate(value);

@@ -10,11 +10,17 @@ void main() async {
   final password = 'pass1234';
 
   group('AuthBasic: sign up');
-  final r1 = await blocks.api.basicSignUp(username: username, password: password);
+  final r1 = await blocks.api.basicSignUp(
+    username: username,
+    password: password,
+  );
   check(r1.success, 'signUp returns success');
 
   group('AuthBasic: sign in');
-  final user = await blocks.api.basicSignIn(username: username, password: password);
+  final user = await blocks.api.basicSignIn(
+    username: username,
+    password: password,
+  );
   check(user.username == username, 'signIn returns correct username');
   check(user.userId.isNotEmpty, 'signIn returns userId');
 
