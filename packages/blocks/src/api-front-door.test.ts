@@ -79,17 +79,22 @@ function soleDistribution(template: Template): {
 }
 
 describe('managed API front door', () => {
-	test('production provisions one distribution with a single catch-all behavior to the default origin', async () => {
+	test('production provisions one distribution: all API behaviors on the single default origin (no fan-out yet)', async () => {
 		const { template } = await synth('FrontDoorProd', BlocksPresets.production);
 		const config = soleDistribution(template);
 
 		// Every API path resolves to the default compute today, so the managed front
-		// door is a single default behavior forwarding to one origin — no per-path
-		// CacheBehaviors. Per-path fan-out becomes load-bearing only once a namespace
-		// can be assigned to a distinct compute.
+		// door emits only the reserved RPC/auth catch-alls (namespaces fall through
+		// to them rather than getting a dedicated pair) — all on the one default
+		// origin. Fan-out becomes load-bearing only once a namespace is assigned a
+		// distinct compute, which is when a second origin and its per-namespace
+		// behaviors appear.
 		assert.ok(config.DefaultCacheBehavior, 'expected a default behavior');
-		assert.strictEqual(config.CacheBehaviors, undefined, 'expected no per-path behaviors');
-		assert.strictEqual(config.Origins.length, 1, 'expected a single origin (the default compute)');
+		assert.strictEqual(config.Origins.length, 1, 'expected a single origin (the default compute) — no fan-out');
+		const patterns = (config.CacheBehaviors ?? []).map((b) => b.PathPattern);
+		for (const expected of [BLOCKS_RPC_PREFIX, `${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]) {
+			assert.ok(patterns.includes(expected), `expected a behavior for ${expected}, got ${patterns.join(', ')}`);
+		}
 	});
 
 	test('production emits an ApiFrontDoorUrl output carrying the distribution domain', async () => {
@@ -187,10 +192,11 @@ describe('Hosting reuse', () => {
 		// No managed front door was built, so it published no URL of its own.
 		assert.deepStrictEqual(Object.keys(template.findOutputs('ApiFrontDoorUrl')), []);
 
-		// Hosting proxies the API on its own distribution: the reserved RPC and auth
-		// subtrees plus a behavior for each app RawRoute (here the built-in console
-		// routes and `/health`). The RPC namespace `reportsApi` needs no behavior of
-		// its own — it is covered by the `${BLOCKS_RPC_PREFIX}/*` wildcard.
+		// Hosting proxies the API on its own distribution: a behavior for each app
+		// RawRoute (here the built-in console routes and `/health`), plus the reserved
+		// RPC and auth subtrees added last. Every namespace resolves to the default
+		// compute today, so none gets a dedicated behavior — they fall through to the
+		// RPC catch-all, all on the one origin (no mode flag).
 		const config = soleDistribution(template);
 		const patterns = (config.CacheBehaviors ?? []).map((b) => b.PathPattern);
 		for (const expected of [
@@ -202,6 +208,16 @@ describe('Hosting reuse', () => {
 		]) {
 			assert.ok(patterns.includes(expected), `expected a behavior for ${expected}, got ${patterns.join(', ')}`);
 		}
+
+		// And no per-namespace behavior is emitted: every namespace is on the default
+		// compute, so it must fall through to the RPC catch-all rather than spend a
+		// dedicated behavior. The only `/aws-blocks/api`-prefixed patterns allowed are
+		// the two reserved RPC subtrees themselves.
+		const RESERVED_RPC = new Set([BLOCKS_RPC_PREFIX, `${BLOCKS_RPC_PREFIX}/*`]);
+		assert.ok(
+			!patterns.some((p) => p.startsWith(`${BLOCKS_RPC_PREFIX}/`) && !RESERVED_RPC.has(p)),
+			`no namespace-specific behavior may be emitted for a default-compute namespace, got: ${patterns.join(', ')}`,
+		);
 
 		// And the client is pointed at that distribution, not the gateway.
 		const apiUrl = JSON.stringify(template.findOutputs('ApiUrl').ApiUrl.Value);
@@ -231,8 +247,11 @@ describe('BlocksBackend', () => {
 
 		const config = soleDistribution(Template.fromStack(stack));
 		assert.ok(config.DefaultCacheBehavior, 'expected a default behavior');
-		assert.strictEqual(config.CacheBehaviors, undefined, 'expected no per-path behaviors');
-		assert.strictEqual(config.Origins.length, 1, 'expected a single origin (the default compute)');
+		assert.strictEqual(config.Origins.length, 1, 'expected a single origin (the default compute) — no fan-out');
+		const patterns = (config.CacheBehaviors ?? []).map((b) => b.PathPattern);
+		for (const expected of [BLOCKS_RPC_PREFIX, `${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]) {
+			assert.ok(patterns.includes(expected), `expected a behavior for ${expected}, got ${patterns.join(', ')}`);
+		}
 	});
 
 	test('two backends in one stack get independent front doors', async () => {

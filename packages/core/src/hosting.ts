@@ -19,8 +19,8 @@ import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { registerConfig } from './cdk/config-registry.js';
 import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
-import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint, registerHostingDistribution } from './cdk/api-front-door.js';
-import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+import { addRouteBehaviors, httpOriginFromEndpoint, registerHostingDistribution } from './cdk/api-front-door.js';
+import { BLOCKS_RPC_PREFIX } from './constants.js';
 import {
 	assertMarkersExistAtSynth,
   collectSynthMarkers,
@@ -889,12 +889,24 @@ export class Hosting extends Construct {
   /**
    * Route API traffic through this distribution.
    *
-   * Every API path resolves to the default compute today, so all behaviors point
-   * at one origin: the reserved RPC and auth subtrees are fixed behaviors, and any
-   * app RawRoutes outside those prefixes each get their own from the route registry.
+   * The distribution's default behavior serves the frontend, so every API path
+   * must be diverted off it. {@link addRouteBehaviors} builds those behaviors from
+   * the shared route registry: the reserved RPC and auth subtrees, plus each app
+   * RawRoute outside them. A namespace or route assigned to a non-default compute
+   * is fanned out to that compute's origin; everything else routes to the default
+   * compute. Both front-door paths (this one and the Blocks-owned distribution)
+   * route identically from the one table — the frontend fallback that makes this
+   * distribution's default behavior differ is the distribution's own concern, not
+   * `addRouteBehaviors`'s, so it needs no mode flag.
    *
    * Claiming the front-door role is part of the same step: with the API on this
    * distribution, the backend must not provision a managed one of its own.
+   *
+   * The registry is read here, at `Hosting` construction time — not deferred to a
+   * synth-time aspect like the Blocks-owned distribution. A `RawRoute` registered
+   * *after* `new Hosting(...)` therefore gets no behavior on this distribution.
+   * That is the usual ordering anyway (routes are declared with the backend, before
+   * Hosting), but it is a real constraint: declare routes before constructing Hosting.
    */
   private addApiBehaviors(hosting: HostingConstruct, api: BlocksApiRouting): void {
     // Claimed before the behaviors are added so the backend's front-door aspect —
@@ -913,44 +925,18 @@ export class Hosting extends Construct {
     // front door.
     registerHostingDistribution(cdk.Stack.of(this), hosting.distributionUrl);
 
+    // Seed the origin cache with the default endpoint → its origin so a path back
+    // on the default compute reuses one origin rather than minting a duplicate.
     const apiOrigin = httpOriginFromEndpoint(api.defaultEndpoint);
+    addRouteBehaviors(hosting.distribution, getRegisteredRoutes(), api.defaultEndpoint, new Map([[api.defaultEndpoint, apiOrigin]]));
 
-    // The reserved RPC subtree: `/aws-blocks/api` and everything under it.
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiOrigin, API_BEHAVIOR_OPTIONS);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiOrigin, API_BEHAVIOR_OPTIONS);
-
-    // The auth BB's reserved subtree. The auth flow (callback, sign-in, exchange,
-    // authorize-params, the stub IdP) is mounted only at runtime; a single subtree
-    // wildcard proxies the whole flow regardless of providers or instance count and
-    // never drifts as routes are added. Added directly (not via the RawRoute loop
-    // below) so it's emitted exactly once even with multiple AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiOrigin, API_BEHAVIOR_OPTIONS);
-
-    // App RawRoutes outside the reserved prefixes each get a behavior. A path
-    // parameter can only be expressed to CloudFront as a prefix wildcard, which
-    // matches more than the route does — including frontend paths under the same
-    // prefix — so warn, since the frontend is on this same distribution.
-    const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
-    for (const route of getRegisteredRoutes()) {
-      if (route.path.startsWith(`${BLOCKS_RPC_PREFIX}/`)) continue;
-      if (route.path === BLOCKS_AUTH_PREFIX || route.path.startsWith(`${BLOCKS_AUTH_PREFIX}/`)) continue;
-
-      const paramIndex = route.path.indexOf('/{');
-      const behaviorPattern = paramIndex === -1 ? route.path : `${route.path.substring(0, paramIndex)}/*`;
-
-      if (addedPatterns.has(behaviorPattern)) continue;
-
-      if (behaviorPattern.endsWith('/*')) {
-        console.warn(
-          `[Hosting] ⚠️  RawRoute '${route.path}' creates CloudFront behavior '${behaviorPattern}' ` +
-            'which may shadow SSR/frontend routes under the same prefix. ' +
-            `Consider placing this route under ${BLOCKS_RPC_PREFIX}/ to avoid conflicts.`,
-        );
-      }
-
-      addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiOrigin, API_BEHAVIOR_OPTIONS);
-    }
+    // A RawRoute with a path parameter becomes a prefix-wildcard behavior that
+    // matches more than the route does, and on this distribution can shadow
+    // SSR/frontend paths under the same prefix. There is no synth-time check for
+    // it: a frontend has no enumerable route table (it is served through the
+    // distribution's default behavior), so a collision cannot be proven and a
+    // wildcard RawRoute is often intentional. The consideration is documented on
+    // `RawRoute` instead — pick a prefix the frontend does not serve.
   }
 }
 

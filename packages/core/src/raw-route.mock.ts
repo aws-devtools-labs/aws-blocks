@@ -43,6 +43,20 @@ export { RawRouteErrors, type RawRouteOptions, type HttpMethod } from './raw-rou
  * - The Lambda handler and dev server check the registry before falling through to RPC dispatch.
  * - The CDK side only validates the route (duplicate detection). No additional AWS resources
  *   are created — the existing catch-all API Gateway proxy routes all paths to the Lambda.
+ *
+ * ## Frontend hosting: choose the prefix with care
+ *
+ * When the app also serves a frontend through `Hosting` on the same CloudFront
+ * distribution, a route with a path parameter (`/users/{id}`) is fronted by a
+ * prefix-wildcard CloudFront behavior (`/users/*`) that captures the **entire**
+ * `/users/` subtree and sends it to the API — not just the parameterized route.
+ * If the frontend also serves paths under that prefix (an SSR page, a static
+ * asset), those requests go to the API instead and break. This is not validated:
+ * a frontend has no enumerable route table (it is served through the
+ * distribution's default behavior), so a real collision cannot be detected, and a
+ * wildcard route is often intentional. Choose a top-level prefix the frontend does
+ * not serve (e.g. `/webhooks/{id}`), and prefer exact paths for routes that must
+ * not claim a whole subtree.
  */
 export class RawRoute extends Scope {
   /** The resolved path this route is registered at. */

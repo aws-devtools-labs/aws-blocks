@@ -12,8 +12,10 @@ import { buildSync } from 'esbuild';
 import {
   compilePath,
   registerRoute,
+  registerRoutingEntry,
   matchRoute,
   getRegisteredRoutes,
+  isDispatchRoute,
   clearRouteRegistry,
   lockRouteRegistry,
   unlockRouteRegistry,
@@ -176,6 +178,46 @@ describe('registerRoute', () => {
     registerRoute({ method: 'GET', path: '/items/', handler: noop });
     const routes = getRegisteredRoutes();
     assert.strictEqual(routes[0].path, '/items');
+  });
+});
+
+// ── registerRoutingEntry ─────────────────────────────────────────────────────
+
+describe('registerRoutingEntry', () => {
+  it('registers a handler-less, endpoint-carrying entry', () => {
+    registerRoutingEntry({ path: '/aws-blocks/api/notes', endpoint: 'https://x/prod', subtree: true });
+    const entry = getRegisteredRoutes().find((r) => r.path === '/aws-blocks/api/notes');
+    assert.ok(entry);
+    assert.strictEqual(entry.handler, undefined);
+    assert.strictEqual(isDispatchRoute(entry), false);
+    assert.strictEqual(entry.endpoint, 'https://x/prod');
+    assert.strictEqual(entry.subtree, true);
+    assert.strictEqual(entry.method, '*');
+  });
+
+  it('bypasses the reserved-namespace guard that registerRoute enforces', () => {
+    // A user handler at /aws-blocks/api/* is rejected, but a routing-only entry
+    // there is exactly the point — it shapes the front door, never dispatches.
+    assert.throws(() => registerRoute({ method: 'GET', path: '/aws-blocks/api/x', handler: noop }));
+    assert.doesNotThrow(() => registerRoutingEntry({ path: '/aws-blocks/api/x', endpoint: 'https://x/prod', subtree: true }));
+  });
+
+  it('is idempotent per path — a re-imported module registers once', () => {
+    registerRoutingEntry({ path: '/aws-blocks/api/dup', endpoint: 'https://x/prod', subtree: true });
+    registerRoutingEntry({ path: '/aws-blocks/api/dup', endpoint: 'https://x/prod', subtree: true });
+    assert.strictEqual(getRegisteredRoutes().filter((r) => r.path === '/aws-blocks/api/dup').length, 1);
+  });
+
+  it('matchRoute never dispatches a routing-only entry', () => {
+    registerRoutingEntry({ path: '/aws-blocks/api/notes', endpoint: 'https://x/prod', subtree: true });
+    assert.strictEqual(matchRoute('POST', '/aws-blocks/api/notes'), null);
+    assert.strictEqual(matchRoute('*', '/aws-blocks/api/notes'), null);
+  });
+
+  it('respects the registry lock', () => {
+    lockRouteRegistry();
+    assert.throws(() => registerRoutingEntry({ path: '/aws-blocks/api/locked', endpoint: 'https://x/prod' }));
+    unlockRouteRegistry();
   });
 });
 

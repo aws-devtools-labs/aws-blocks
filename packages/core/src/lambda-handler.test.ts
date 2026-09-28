@@ -264,6 +264,44 @@ describe('createLambdaHandler — RPC body handling', () => {
   });
 });
 
+// ── RPC path is advisory; dispatch is body-driven ───────────────────────────
+//
+// The wire protocol addresses a namespace by path (`/aws-blocks/api/{ns}`) purely
+// as a CloudFront routing hint; the server still dispatches on the namespace in the
+// JSON-RPC body. These pin that contract, and the prefix-boundary guard that keeps a
+// look-alike path (`/aws-blocks/apiXYZ`) out of RPC dispatch.
+
+describe('createLambdaHandler — RPC path is advisory, dispatch is body-driven', () => {
+  const backend = {
+    api: (_ctx: BlocksContext) => ({
+      async echo(msg: string) { return { msg }; },
+    }),
+  };
+
+  it('dispatches a bare /aws-blocks/api POST from the JSON-RPC body', async () => {
+    const result = await invoke(backend, makeEvent({ path: '/aws-blocks/api' }));
+    assert.strictEqual(result.statusCode, 200);
+    assert.strictEqual(JSON.parse(result.body).result.msg, 'hello');
+  });
+
+  it('dispatches on the body namespace even when the path segment names a different one', async () => {
+    // The path is a routing hint only: the front door may have routed by path, but the
+    // handler is authoritative on the body. A request whose path says `/other` but
+    // whose body method is `api.echo` still dispatches `api.echo`.
+    const result = await invoke(backend, makeEvent({ path: '/aws-blocks/api/other' }));
+    assert.strictEqual(result.statusCode, 200);
+    assert.strictEqual(JSON.parse(result.body).result.msg, 'hello');
+  });
+
+  it('404s a path that only shares the RPC prefix but is not the RPC subtree', async () => {
+    // `/aws-blocks/apiXYZ` starts with the prefix but is neither `/aws-blocks/api` nor a
+    // `/aws-blocks/api/*` subtree path, so `isRpcPath` is false and no RawRoute matches —
+    // it must 404 rather than fall through to RPC dispatch (the prefix-boundary guard).
+    const result = await invoke(backend, makeEvent({ path: '/aws-blocks/apiXYZ', body: null }));
+    assert.strictEqual(result.statusCode, 404);
+  });
+});
+
 // ── RawRoute body tests ─────────────────────────────────────────────────────
 
 describe('createLambdaHandler — named params (JSON-RPC 2.0 §4.2)', () => {

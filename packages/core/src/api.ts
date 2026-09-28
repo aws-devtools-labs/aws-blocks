@@ -58,24 +58,30 @@ type AsyncAPI<T extends Record<string, (...args: any[]) => any>> = {
 export const API_NAMESPACE_MARKER = Symbol.for('blocks:ApiNamespace');
 
 import type { ScopeParent } from './common/index.js';
+import { BLOCKS_RPC_PREFIX } from './constants.js';
+import { registerRoutingEntry } from './raw-route.js';
 
 /**
- * Structural view of a scope that resolves a compute carrying a recordable
- * namespace list. Only the CDK `Scope` satisfies this at runtime (via its
- * `compute` getter); in the mock/runtime bundles the property is absent.
+ * Structural view of a scope that resolves the compute serving this namespace.
+ * Only the CDK `Scope` satisfies this (via its `compute` getter); in the
+ * mock/runtime bundles the property is absent, so routing registration is a no-op.
  */
-type ComputeResolvingScope = { compute?: { namespaces?: string[] } };
+type ComputeResolvingScope = { compute?: { endpoint?: string } };
 
 /**
- * Record this namespace on its resolved compute so request routing can later
- * map a namespace to the compute that hosts it.
+ * Register a routing-only entry for this namespace so the front door can route
+ * `/aws-blocks/api/{name}` (and its subtree) to the compute that serves it.
  *
- * CDK-synth concern only: in the CDK bundle `scope.compute` resolves to the
- * namespace's compute (the stack default today), and we append the name to its
- * `namespaces` list. In the mock/runtime bundles — or a scopeless test — the
- * property is absent, so `scope.compute` is `undefined` and this is a silent
- * no-op. The public `ApiNamespace` signature is unchanged; this is a purely
- * internal side effect.
+ * Two things happen here. First, the name is validated for URL-path safety in
+ * **every** bundle (see below) — it becomes the `/aws-blocks/api/{name}` path
+ * segment the client posts to and the front door matches on, so a malformed name
+ * must fail at definition time, not silently at deploy. Second, the actual routing
+ * registration is a **CDK-synth concern only**: in the CDK bundle `scope.compute`
+ * resolves to the namespace's compute (the stack default today) and carries its
+ * `endpoint`; in the mock/runtime bundles — or a scopeless test — `compute` is
+ * absent, so there is nothing to route and the registration is a silent no-op.
+ * Dispatch reads the namespace from the RPC body, not the path; the entry only
+ * shapes CloudFront behaviors.
  *
  * No `try/catch`: `BlocksBackend.create()` initializes the default compute
  * before it imports the backend module that constructs any `ApiNamespace`, so
@@ -83,16 +89,30 @@ type ComputeResolvingScope = { compute?: { namespaces?: string[] } };
  * here it would signal a genuine lifecycle violation (an `ApiNamespace` built
  * before `create()` resolved), which should surface rather than be swallowed.
  */
-function recordNamespaceOnCompute(scope: ScopeParent | null | undefined, name: string): void {
-  // An API created without a Scope stays unrecorded and routes to the
-  // default compute.
+function registerNamespaceRoute(scope: ScopeParent | null | undefined, name: string): void {
+  // The name becomes a URL path segment: the client posts to
+  // `${BLOCKS_RPC_PREFIX}/${name}` and the front door matches a CloudFront behavior
+  // on that exact path. A path-unsafe character would make the client URL and the
+  // behavior pattern disagree (or be rejected by CloudFront), so fail fast at
+  // definition time rather than encoding it away and silently diverging the two.
+  // Names are JS identifiers in practice, so this only trips a genuinely malformed
+  // one.
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+    throw new Error(
+      `ApiNamespace name ${JSON.stringify(name)} is not URL-path-safe: use only letters, digits, '-' and '_' ` +
+        `(the name becomes the '${BLOCKS_RPC_PREFIX}/<name>' path segment).`,
+    );
+  }
+  // An API created without a Scope stays unregistered and routes to the default
+  // compute via the front door's catch-all behavior.
   if (!scope || typeof scope !== 'object') return;
   const compute = (scope as ComputeResolvingScope).compute;
-  // Guard against duplicates so `namespaces` stays a set of names: a namespace
-  // could otherwise be recorded twice (e.g. a re-imported module during synth).
-  if (compute && Array.isArray(compute.namespaces) && !compute.namespaces.includes(name)) {
-    compute.namespaces.push(name);
-  }
+  if (!compute) return;
+  registerRoutingEntry({
+    path: `${BLOCKS_RPC_PREFIX}/${name}`,
+    endpoint: compute.endpoint,
+    subtree: true,
+  });
 }
 
 /**
@@ -193,9 +213,9 @@ export interface ApiNamespaceConstructor {
 export const ApiNamespace: ApiNamespaceConstructor = class ApiNamespace {
   constructor(scope: ScopeParent, name: string, handler: any) {
     handler[API_NAMESPACE_MARKER] = name;
-    // Record the namespace → compute association for per-compute routing.
+    // Register the namespace's routing entry for per-compute front-door fan-out.
     // No-op outside CDK synth. Signature and returned handler are unchanged.
-    recordNamespaceOnCompute(scope, name);
+    registerNamespaceRoute(scope, name);
     return handler;
   }
 } as any;

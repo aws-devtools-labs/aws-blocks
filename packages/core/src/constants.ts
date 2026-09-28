@@ -19,6 +19,25 @@ export const BLOCKS_NAMESPACE = '/aws-blocks';
 export const BLOCKS_RPC_PREFIX = '/aws-blocks/api';
 
 /**
+ * Whether a request path targets the RPC endpoint.
+ *
+ * True for {@link BLOCKS_RPC_PREFIX} itself and for anything below it. The
+ * client addresses a namespace as `/aws-blocks/api/{namespace}` so a front door
+ * can route each namespace to the compute that hosts it, and `RawRoute`
+ * registration under this prefix is rejected — so the whole subtree is RPC.
+ * Dispatch still reads the namespace from the request body, not the path.
+ *
+ * Shared by the Lambda handler and the local dev server so both agree on what
+ * counts as RPC. When they disagree, a request works in one and 404s in the
+ * other, which is a confusing class of bug to chase down.
+ *
+ * @param pathname - The request path, without query string.
+ */
+export function isRpcPath(pathname: string): boolean {
+	return pathname === BLOCKS_RPC_PREFIX || pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`);
+}
+
+/**
  * Reserved subtree for the auth Building Block's HTTP routes.
  *
  * Like {@link BLOCKS_RPC_PREFIX}, this lives under the reserved `/aws-blocks`
@@ -29,6 +48,20 @@ export const BLOCKS_RPC_PREFIX = '/aws-blocks/api';
  * prefix; CloudFront forwards the subtree and the Lambda dispatches by path.
  */
 export const BLOCKS_AUTH_PREFIX = '/aws-blocks/auth';
+
+/**
+ * Whether a request path targets the auth subtree.
+ *
+ * True for {@link BLOCKS_AUTH_PREFIX} itself and for anything below it — the
+ * auth analogue of {@link isRpcPath}. The front door routes this whole subtree
+ * to the API with a single behavior, so callers matching against it must treat
+ * the prefix and its descendants identically.
+ *
+ * @param pathname - The request path, without query string.
+ */
+export function isAuthPath(pathname: string): boolean {
+	return pathname === BLOCKS_AUTH_PREFIX || pathname.startsWith(`${BLOCKS_AUTH_PREFIX}/`);
+}
 
 /**
  * Reserved path for the client runtime config (`config.json`).

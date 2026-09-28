@@ -102,8 +102,34 @@ export interface RegisteredRoute {
   pattern: RegExp;
   /** Extracted parameter names in capture-group order. */
   paramNames: string[];
-  handler: (context: BlocksContext) => Promise<void>;
+  /**
+   * The handler invoked when this route matches. Absent for **routing-only
+   * entries** ({@link registerRoutingEntry}), which exist purely to shape the
+   * front door's CloudFront behaviors and are never dispatched — {@link matchRoute}
+   * skips them.
+   */
+  handler?: (context: BlocksContext) => Promise<void>;
+  /**
+   * Origin base of the compute that serves this path (`compute.endpoint`), so the
+   * front door can route this path's CloudFront behavior to the right compute.
+   *
+   * Absent at runtime (no compute to resolve) and for paths on the default
+   * compute when no assignment was made — in which case the front door falls back
+   * to its default origin.
+   */
+  endpoint?: string;
+  /**
+   * When true, the front door routes both the exact path and its subtree
+   * (`path` and `path/*`). Set for prefix-owned paths such as an RPC namespace
+   * (`/aws-blocks/api/{ns}`), under which RawRoutes may hang.
+   */
+  subtree?: boolean;
 }
+
+/** A route that dispatches — a {@link RegisteredRoute} known to carry a handler. */
+export type DispatchRoute = RegisteredRoute & {
+  handler: (context: BlocksContext) => Promise<void>;
+};
 
 /**
  * Registry state shared by every copy of `@aws-blocks/core` in the process.
@@ -238,7 +264,7 @@ export function unlockRouteRegistry(): void {
  * @throws If the path is under the reserved namespace (`/aws-blocks` or `/aws-blocks/api/*`).
  * @throws {RawRouteErrors.DuplicateRoute} If the same method+path is registered twice.
  */
-export function registerRoute(options: RawRouteOptions & { path: string }): void {
+export function registerRoute(options: RawRouteOptions & { path: string; endpoint?: string }): void {
   const state = getState();
   if (state.locked) {
     throw new Error('Routes must be registered during initialization. Cannot register routes after handler creation.');
@@ -277,12 +303,69 @@ export function registerRoute(options: RawRouteOptions & { path: string }): void
     pattern,
     paramNames,
     handler: options.handler,
+    endpoint: options.endpoint,
+  });
+}
+
+/** Options for {@link registerRoutingEntry}. */
+export interface RoutingEntryOptions {
+  /** The path this entry routes (e.g. `/aws-blocks/api/{namespace}`). */
+  path: string;
+  /**
+   * Origin base of the compute that serves the path. Omitted when unresolved
+   * (runtime) — the front door then falls back to its default origin.
+   */
+  endpoint?: string;
+  /** Route the subtree (`path/*`) in addition to the exact path. */
+  subtree?: boolean;
+}
+
+/**
+ * Register a **routing-only** entry: an endpoint-carrying record with no handler,
+ * used solely to shape the front door's CloudFront behaviors. {@link matchRoute}
+ * skips it, so it never dispatches a request.
+ *
+ * Unlike {@link registerRoute}, this **bypasses the reserved-namespace guard** —
+ * an RPC namespace lives at `/aws-blocks/api/{ns}`, which `registerRoute` rejects
+ * for user handlers. Dispatch still reads the namespace from the RPC body; the
+ * path is only a routing hint.
+ *
+ * Idempotent per path: a second call for a path already registered as a routing
+ * entry is ignored (a module re-imported during synth records once).
+ *
+ * @throws If registration is locked (after handler creation).
+ */
+export function registerRoutingEntry(options: RoutingEntryOptions): void {
+  const state = getState();
+  if (state.locked) {
+    throw new Error('Routes must be registered during initialization. Cannot register routes after handler creation.');
+  }
+
+  const normalizedPath = options.path.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+
+  const existing = state.routes.find((r) => r.handler === undefined && r.path === normalizedPath);
+  if (existing) return;
+
+  const { pattern, paramNames } = compilePath(normalizedPath);
+
+  state.routes.push({
+    method: '*',
+    path: normalizedPath,
+    pattern,
+    paramNames,
+    endpoint: options.endpoint,
+    subtree: options.subtree,
   });
 }
 
 /** Return a read-only snapshot of all registered routes. */
 export function getRegisteredRoutes(): readonly RegisteredRoute[] {
   return getState().routes;
+}
+
+/** Whether a registered route carries a handler (i.e. dispatches, vs. a routing-only entry). */
+export function isDispatchRoute(route: RegisteredRoute): route is DispatchRoute {
+  return route.handler !== undefined;
 }
 
 /**
@@ -304,11 +387,15 @@ export function clearRouteRegistry(): void {
 export function matchRoute(
   method: string,
   path: string,
-): { route: RegisteredRoute; params: Record<string, string> } | null {
+): { route: DispatchRoute; params: Record<string, string> } | null {
   // Normalize incoming path: collapse double slashes
   path = path.replace(/\/+/g, '/');
 
   for (const route of getState().routes) {
+    // Routing-only entries (no handler) exist to shape front-door behaviors, not
+    // to dispatch — skip them so a namespace's routing entry never answers a
+    // request meant for a RawRoute.
+    if (!isDispatchRoute(route)) continue;
     if (route.method !== method) continue;
     const match = route.pattern.exec(path);
     if (match) {

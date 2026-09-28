@@ -633,6 +633,7 @@ describe('mountDashboardRoute', () => {
 				},
 			};
 
+			assert.ok(route.handler, 'dashboard route should carry a handler');
 			await route.handler(ctx);
 			assert.equal(ctx.response.status, 302);
 			assert.equal(responseHeaders.get('Location'), 'https://us-east-1.console.aws.amazon.com/cloudwatch/home#dashboards/dashboard/test');
@@ -673,6 +674,7 @@ describe('mountDashboardRoute', () => {
 				},
 			};
 
+			assert.ok(route.handler, 'dashboard route should carry a handler');
 			await route.handler(ctx);
 			assert.equal(ctx.response.status, 302);
 			assert.equal(responseHeaders.get('Location'), 'https://fallback.example.com/dashboard');
@@ -713,6 +715,7 @@ describe('mountDashboardRoute', () => {
 				},
 			};
 
+			assert.ok(route.handler, 'dashboard route should carry a handler');
 			await route.handler(ctx);
 			assert.equal(ctx.response.status, 503);
 			assert.equal(responseHeaders.get('Content-Type'), 'application/json');

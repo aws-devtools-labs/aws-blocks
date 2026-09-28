@@ -76,6 +76,11 @@ export { ConfigValue }
 // @public
 export const DEFAULT_API_ERROR_NAME = "ApiError";
 
+// @public
+export type DispatchRoute = RegisteredRoute & {
+    handler: (context: BlocksContext) => Promise<void>;
+};
+
 // Warning: (ae-forgotten-export) The symbol "ResourceEntry" needs to be exported by the entry point index.d.ts
 //
 // @public
@@ -112,7 +117,13 @@ export function isBlocksError<N extends string>(e: unknown, name: N): e is Error
 
 export { isConfig }
 
+// @public
+export function isDispatchRoute(route: RegisteredRoute): route is DispatchRoute;
+
 export { isManagedValue }
+
+// @public
+export function isRpcPath(pathname: string): boolean;
 
 export { isSecret }
 
@@ -126,7 +137,7 @@ export { ManagedValue }
 
 // @public
 export function matchRoute(method: string, path: string): {
-    route: RegisteredRoute;
+    route: DispatchRoute;
     params: Record<string, string>;
 } | null;
 
@@ -155,19 +166,24 @@ export interface RawRouteOptions {
 
 // @public (undocumented)
 export interface RegisteredRoute {
-    // (undocumented)
-    handler: (context: BlocksContext) => Promise<void>;
+    endpoint?: string;
+    handler?: (context: BlocksContext) => Promise<void>;
     // (undocumented)
     method: string;
     paramNames: string[];
     path: string;
     pattern: RegExp;
+    subtree?: boolean;
 }
 
 // @public
 export function registerRoute(options: RawRouteOptions & {
     path: string;
+    endpoint?: string;
 }): void;
+
+// @public
+export function registerRoutingEntry(options: RoutingEntryOptions): void;
 
 // @public
 export function registerSdkIdentifiers(fullId: string, identifiers: ResourceEntry): void;
@@ -177,6 +193,13 @@ export function _resetConfigCache(): void;
 
 // @public
 export function _resetSdkRegistry(): void;
+
+// @public
+export interface RoutingEntryOptions {
+    endpoint?: string;
+    path: string;
+    subtree?: boolean;
+}
 
 // @public (undocumented)
 export class Scope {
