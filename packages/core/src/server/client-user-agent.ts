@@ -82,7 +82,17 @@ export function getClientUserAgentToken(): string | undefined {
 /**
  * Installs the per-request client-user-agent middleware on an SDK v3 client.
  *
+ * Appends nothing when the request carries no validated token, so a client built
+ * outside a request scope is unaffected.
+ *
  * @param client - An AWS SDK v3 client.
+ *
+ * @example
+ * ```typescript
+ * // Inside a Building Block constructor, after building the client:
+ * const client = new DynamoDBClient({ customUserAgent: this.buildUserAgentChain() });
+ * installClientUserAgent(client);
+ * ```
  */
 export function installClientUserAgent<Input extends object, Output extends object>(client: {
   middlewareStack: Pick<MiddlewareStack<Input, Output>, 'add' | 'addRelativeTo' | 'identify'>;

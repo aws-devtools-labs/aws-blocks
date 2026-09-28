@@ -59,6 +59,11 @@ installClientUserAgent(client);
 const MISSING = `const client = new DynamoDBClient({ customUserAgent: this.buildUserAgentChain() });
 `;
 
+// Built through `new (await import(...)).XClient(`, which the bare constructor
+// pattern misses.
+const DYNAMIC_MISSING = `const c = new (await import('@aws-sdk/client-bedrock')).BedrockClient({ customUserAgent });
+`;
+
 describe("check-client-user-agent-consistency", () => {
 	it("passes when every customUserAgent site installs the middleware", () => {
 		withFixture({ "bb-kv-store/src/index.aws.ts": INSTALLED }, (dir) => {
@@ -81,6 +86,14 @@ describe("check-client-user-agent-consistency", () => {
 			const { code, output } = runGuard(dir);
 			assert.equal(code, 1);
 			assert.match(output, /found no Building Block client-construction sites/);
+		});
+	});
+
+	it("catches a dynamically imported client that omits the install call", () => {
+		withFixture({ "bb-agent/src/model-factory.ts": DYNAMIC_MISSING }, (dir) => {
+			const { code, output } = runGuard(dir);
+			assert.equal(code, 1);
+			assert.match(output, /1 customUserAgent site\(s\) but only 0/);
 		});
 	});
 

@@ -48,7 +48,9 @@ function countClientUserAgentSites(content: string): number {
     if (/\bcustomUserAgent\s*[:,}]/.test(line)) sites++;
   }
   if (sites === 0) return 0;
-  return /new\s+[A-Z]\w*Client\s*\(/.test(content) ? sites : 0;
+  // The second alternative catches `new (await import(...)).XClient(`, which the
+  // bare form misses.
+  return /new\s+(?:[A-Z]\w*Client|\(.*?\)\s*\.\s*[A-Z]\w*Client)\s*\(/.test(content) ? sites : 0;
 }
 
 function countInstalls(content: string): number {
