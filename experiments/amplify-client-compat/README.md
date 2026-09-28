@@ -20,6 +20,7 @@ against a Blocks-provisioned User Pool, with no Amplify backend definition.
 - `src/amplify-client.ts` — `configureFromBlocks(outputs)` + `doSignUp`/`doSignIn`; the standard Amplify client half, unchanged from a stock app.
 - `test/real-amplify-parse.test.ts` — runs the real `aws-amplify@6` `isAmplifyOutputs` / `parseAmplifyOutputs` (what `Amplify.configure()` executes) on the emitted file. Types and runtime both resolve against the real `aws-amplify` package (symlink `node_modules` from the main checkout).
 - `test/real-amplify-storage.test.ts` — runs the real `aws-amplify/storage` `getUrl` (local presign, no network) on the emitted storage section: `NoCredentials` as emitted; with a custom `credentialsProvider` it signs against the Blocks bucket and resolves the identity prefix.
+- `test/real-amplify-data.test.ts` — wire-contract probe: the real `generateClient()` against a local 127.0.0.1 stub GraphQL server, with `model_introspection` generated offline from `a.schema`. Pins the transport, auth header and operation names a Blocks backend would have to serve.
 - `test/emit-amplify-outputs.test.ts` — `node:test` unit tests (8).
 - `test/client-types.types-test.ts` — typecheck-only proof that the emitted object binds to `Amplify.configure`/`signUp`/`signIn`.
 
