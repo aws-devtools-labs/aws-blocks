@@ -653,6 +653,15 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.ok(denial, 'a decision message should be recorded on denial');
         assert.strictEqual(denial?.metadata?.approved, false, 'denial metadata.approved round-trips as false');
         assert.strictEqual(chat.isLoading(), false, 'loading clears after a denied turn completes');
+        // The tool must NOT have run: the persisted tool-result records the denial
+        // rather than a successful execution (mirrors the pre-existing denial test).
+        const { messages: persisted } = await api.cannedGetConversation(conversationId);
+        const toolResult = persisted.find((m) => m.role === 'tool-result');
+        assert.ok(toolResult, 'a tool-result message should be persisted');
+        assert.ok(
+          JSON.stringify(toolResult?.metadata?.toolOutput).includes('denied'),
+          'tool-result records the denial, proving the tool was not executed',
+        );
         chat.destroy();
       });
 
@@ -695,7 +704,7 @@ export function agentTests(getApi: () => typeof apiType) {
 
         assert.ok(changeCount > 0, 'onMessagesChange fires at least once');
         assert.ok(latest.some(m => m.role === 'user'), 'user message present in the rendered list');
-        assert.ok(latest.some(m => m.role === 'assistant' && m.content.length > 0), 'assistant message streams into the rendered list');
+        // (the assistant-with-content check is the waitUntil predicate above — not repeated here)
         chat.destroy();
       });
     });
