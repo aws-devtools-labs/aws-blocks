@@ -84,6 +84,27 @@ export function isBlocksError<N extends string>(e: unknown, name: N): e is Error
 }
 
 /**
+ * Marker set on errors produced by {@link blocksError}. It is the RPC
+ * serializer's *unambiguous intentional signal* that an error's `name` is a
+ * Building Block error constant safe to send over the wire — as opposed to a
+ * raw driver/SDK exception (`PostgresError`, `DynamoDBServiceException`) whose
+ * class name happens to be non-generic but must never leak. Inferring intent
+ * from `.name !== 'Error'` alone cannot tell the two apart; this brand can.
+ *
+ * Non-enumerable so it never appears in `JSON.stringify(error)` or log dumps.
+ */
+export const BLOCKS_ERROR_BRAND = Symbol.for('aws-blocks.wireSafeError');
+
+/**
+ * True when `e` is a Building Block error thrown via {@link blocksError} (or an
+ * {@link ApiError}, which is wire-safe by construction). The RPC serializer uses
+ * this to decide whether an error's `name` may cross the wire.
+ */
+export function isWireSafeError(e: unknown): e is Error {
+	return e instanceof ApiError || (e instanceof Error && (e as { [BLOCKS_ERROR_BRAND]?: true })[BLOCKS_ERROR_BRAND] === true);
+}
+
+/**
  * Build a named `Error` whose `name` is a BB error constant, so it is matchable
  * with {@link isBlocksError} on both server and client. The name is also
  * prefixed into the message for readable logs.
@@ -93,6 +114,10 @@ export function isBlocksError<N extends string>(e: unknown, name: N): e is Error
  * no runtime dependencies, so it is safe to use in every bundle — mock,
  * aws-runtime, and CDK synth.
  *
+ * The error also carries the non-enumerable {@link BLOCKS_ERROR_BRAND}, the
+ * signal the RPC serializer reads to forward this `name` over the wire while
+ * still collapsing raw driver/SDK exceptions to a nameless 500.
+ *
  * @example
  * ```typescript
  * throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'Key already exists');
@@ -101,6 +126,7 @@ export function isBlocksError<N extends string>(e: unknown, name: N): e is Error
 export function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
+	Object.defineProperty(err, BLOCKS_ERROR_BRAND, { value: true, enumerable: false });
 	return err;
 }
 

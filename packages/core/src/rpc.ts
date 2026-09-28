@@ -10,7 +10,15 @@
  * @see https://www.jsonrpc.org/specification
  */
 
-import { ApiError, DEFAULT_API_ERROR_NAME } from './errors.js';
+import { ApiError, DEFAULT_API_ERROR_NAME, isWireSafeError } from './errors.js';
+
+/**
+ * The `.name` a plain `new Error(...)` carries. A throw whose name is still this
+ * default is treated as an unhandled internal error (generic 500, no name);
+ * a Building Block error thrown via `blocksError()` overrides it with a BB
+ * constant, which is what lets its name cross the wire (D-003).
+ */
+const DEFAULT_ERROR_NAME = 'Error';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -197,12 +205,29 @@ export function successResponse(result: unknown, id: string | number | null): st
 /**
  * Encode an error as a JSON-RPC 2.0 response string.
  *
- * Only `ApiError` is a deliberate, wire-safe shape: its HTTP status becomes
- * the error code (positive integers never collide with the reserved -32xxx
- * range), and its BB-level `name`/`retriable` flags cross the wire. Every
- * other throw — driver/SDK exceptions (Postgres, DynamoDB, …) and unexpected
- * bugs — collapses to a generic 500 so raw exception class names and messages
- * never leak to the client. Callers log the full error server-side.
+ * Three cases, in order:
+ *
+ * 1. `ApiError` — a deliberate, wire-safe shape. Its HTTP status becomes the
+ *    error code (positive integers never collide with the reserved -32xxx
+ *    range), and its BB-level `name`/`retriable` flags cross the wire.
+ * 2. A wire-safe Building Block error — a plain `Error` thrown via
+ *    `blocksError()`, which stamps a non-enumerable brand identifying it as an
+ *    intentional BB error (e.g. `ValidationFailedException`). Per D-003 the
+ *    `name` crosses the wire so `isBlocksError()` keeps matching on the client,
+ *    but the raw `message` is dropped for a generic `"Internal error"`. The
+ *    brand — not a non-generic `.name` — is the signal, so a raw driver/SDK
+ *    exception whose class name happens to be non-generic (`PostgresError`) is
+ *    NOT treated as wire-safe.
+ * 3. Anything else — a driver/SDK exception, a bare `Error`, or a non-`Error`
+ *    throw — collapses to a nameless generic 500 so raw exception class names
+ *    and messages never leak.
+ *
+ * Callers log the full error server-side in every case.
+ *
+ * Scope: this governs the RPC wire path only. The RawRoute escape hatch
+ * (`handleRawRoute` in `lambda-handler.ts` / `dev-server.ts`) intentionally
+ * forwards `error.message`/`error.name` verbatim — a raw route owns its own
+ * response contract and is not shaped by the JSON-RPC serializer.
  */
 export function errorResponseFromCatch(error: unknown, id: string | number | null): string {
   if (error instanceof ApiError) {
@@ -210,6 +235,13 @@ export function errorResponseFromCatch(error: unknown, id: string | number | nul
     if (error.name && error.name !== DEFAULT_API_ERROR_NAME) data.name = error.name;
     if (error.retriable) data.retriable = true;
     return errorResponse(error.status, error.message, id, Object.keys(data).length > 0 ? data : undefined);
+  }
+  // A named Building Block error thrown via blocksError() carries the wire-safe
+  // brand: forward its BB `name` (D-003: isBlocksError matches on the client) but
+  // drop the raw message. The brand — not a non-generic `.name` — is the signal,
+  // so raw driver/SDK exceptions (PostgresError, …) still collapse to a nameless 500.
+  if (isWireSafeError(error) && error.name && error.name !== DEFAULT_ERROR_NAME) {
+    return errorResponse(500, 'Internal error', id, { name: error.name });
   }
   return errorResponse(500, 'Internal error', id);
 }

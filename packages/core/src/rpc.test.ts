@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { decodeRpcResponse, errorResponseFromCatch, parseRpcRequest, RpcErrorCode, MAX_RPC_BODY_BYTES } from './rpc.js';
-import { ApiError, isBlocksError } from './errors.js';
+import { ApiError, isBlocksError, blocksError } from './errors.js';
 
 describe('-32600 Invalid Request error shape', () => {
   it('returns proper JSON-RPC 2.0 envelope with error code', () => {
@@ -99,6 +99,40 @@ describe('errorResponseFromCatch does not leak backend internals', () => {
     assert.strictEqual(parsed.error.code, 500);
     assert.strictEqual(parsed.error.message, 'Internal error');
     assert.strictEqual(parsed.error.data, undefined);
+  });
+
+  it('forwards the BB name of a blocksError() throw but drops its raw message (D-003)', () => {
+    // A Building Block error (thrown via blocksError) is a plain named Error, not
+    // an ApiError. Its BB name must cross the wire so isBlocksError() keeps matching
+    // on the client, while the raw message (possibly carrying internals) is dropped.
+    const raw = blocksError('ValidationFailedException', 'value at /var/task fails schema: age must be a number');
+    const parsed = JSON.parse(errorResponseFromCatch(raw, 7));
+    assert.strictEqual(parsed.error.code, 500);
+    assert.strictEqual(parsed.error.message, 'Internal error');
+    assert.strictEqual(parsed.error.data.name, 'ValidationFailedException');
+    // The raw message must not leak.
+    assert.ok(!JSON.stringify(parsed).includes('/var/task'));
+    // Round-trips: the client reconstructs an error isBlocksError() matches.
+    assert.throws(
+      () => decodeRpcResponse(parsed),
+      (e: unknown) => isBlocksError(e, 'ValidationFailedException'),
+    );
+  });
+
+  it('does not forward the class name of a raw (unbranded) named Error', () => {
+    // A driver/SDK exception is a plain Error with a non-generic .name but no
+    // blocksError brand — its class name must NOT leak just because it is non-generic.
+    class DynamoDBServiceException extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = 'DynamoDBServiceException';
+      }
+    }
+    const parsed = JSON.parse(errorResponseFromCatch(new DynamoDBServiceException('secret table arn'), 8));
+    assert.strictEqual(parsed.error.code, 500);
+    assert.strictEqual(parsed.error.message, 'Internal error');
+    assert.strictEqual(parsed.error.data, undefined);
+    assert.ok(!JSON.stringify(parsed).includes('DynamoDBServiceException'));
   });
 
   it('collapses a non-Error throw (string) to a generic 500', () => {
