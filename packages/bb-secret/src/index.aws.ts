@@ -4,7 +4,7 @@
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
-import { getSdkIdentifiers, installClientUserAgent, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
+import { installClientUserAgent, Scope } from '@aws-blocks/core';
 import {
 	GetSecretValueCommand,
 	PutSecretValueCommand,
@@ -90,6 +90,8 @@ async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): P
 export class Secret<T = string> extends Scope {
 	readonly bbName = BB_NAME;
 	private schema?: StandardSchemaV1<T>;
+	private constructId: string;
+	private externalArn?: string;
 	private client: SecretsManagerClient;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
@@ -98,25 +100,34 @@ export class Secret<T = string> extends Scope {
 	constructor(scope: ScopeParent, id: string, options?: SecretOptions<T>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.schema = options?.schema;
+		this.constructId = id;
+		this.externalArn = options?.secret?.secretArn;
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
-
-		// The CDK layer registers config key `BLOCKS_SECRET_ARN_<ID>` with the
-		// created (or imported) secret ARN. When wrapping an existing secret via
-		// `fromExisting()`, use its ARN directly so the runtime and CDK layers
-		// resolve the same identity without relying on config.
-		const secretArn = options?.secret ? options.secret.secretArn : process.env[configKey(id)];
-		if (!secretArn) {
-			throw blocksError(
-				SecretErrors.NotSupported,
-				`Secret '${id}' is missing its secret ARN. The CDK layer must register it (config key ${configKey(id)}), or pass an existing secret via Secret.fromExisting().`,
-			);
-		}
-		registerSdkIdentifiers(this.fullId, { secretArn });
 
 		this.client = new SecretsManagerClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
 		installClientUserAgent(this.client);
+	}
+
+	/**
+	 * Resolve the underlying secret ARN. Deferred to call time (not the
+	 * constructor) so instantiating a Secret during CDK synth / client-spec
+	 * generation — where the Lambda config env is not present — never throws;
+	 * the ARN is only needed when a data method actually runs. When wrapping an
+	 * existing secret via `fromExisting()`, the ARN is known directly; otherwise
+	 * it comes from the config key the CDK layer registered
+	 * (`BLOCKS_SECRET_ARN_<ID>`).
+	 */
+	private resolveSecretArn(): string {
+		const secretArn = this.externalArn ?? process.env[configKey(this.constructId)];
+		if (!secretArn) {
+			throw blocksError(
+				SecretErrors.NotSupported,
+				`Secret '${this.constructId}' is missing its secret ARN. The CDK layer must register it (config key ${configKey(this.constructId)}), or pass an existing secret via Secret.fromExisting().`,
+			);
+		}
+		return secretArn;
 	}
 
 	/**
@@ -139,7 +150,7 @@ export class Secret<T = string> extends Scope {
 	 * ```
 	 */
 	async get(): Promise<T | null> {
-		const { secretArn } = getSdkIdentifiers(this);
+		const secretArn = this.resolveSecretArn();
 		let raw: string;
 		try {
 			const result = await this.client.send(new GetSecretValueCommand({ SecretId: secretArn }));
@@ -187,7 +198,7 @@ export class Secret<T = string> extends Scope {
 			serialized = value as unknown as string;
 		}
 
-		const { secretArn } = getSdkIdentifiers(this);
+		const secretArn = this.resolveSecretArn();
 		try {
 			await this.client.send(new PutSecretValueCommand({ SecretId: secretArn, SecretString: serialized }));
 		} catch (err: unknown) {
