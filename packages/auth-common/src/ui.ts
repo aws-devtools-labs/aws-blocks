@@ -855,11 +855,20 @@ function renderInternalAction(
 	btn.addEventListener('click', submit);
 	wrapper.appendChild(btn);
 
-	// Enter key submits when there are visible fields
+	// Enter submits from ANY visible field, not just the last — matching native
+	// `<form>` behavior. This wrapper isn't a `<form>`, so submit-on-Enter is
+	// wired explicitly; binding only the last input meant Enter did nothing in
+	// an earlier field (e.g. username in a username+password sign-in, or the
+	// code in a code+newPassword confirm-reset form).
 	const visibleInputs = Object.values(inputs).filter((i) => i.type !== 'hidden');
-	visibleInputs.at(-1)?.addEventListener('keydown', (e) => {
-		if (e.key === 'Enter') submit();
-	});
+	for (const vi of visibleInputs) {
+		vi.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				submit();
+			}
+		});
+	}
 
 	return wrapper;
 }
