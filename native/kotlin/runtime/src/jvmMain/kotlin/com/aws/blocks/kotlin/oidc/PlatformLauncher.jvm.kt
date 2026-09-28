@@ -66,11 +66,14 @@ internal class JvmLoopbackSession(
     private fun handle(exchange: HttpExchange) {
         val rawQuery = exchange.requestURI.rawQuery
         val params = queryParameterNames(rawQuery)
-        if ("code" in params || "error" in params) {
+        if ("state" in params && ("code" in params || "error" in params)) {
             redirect.complete("$relayTo?$rawQuery")
             respond(exchange, HTTP_OK, COMPLETE_PAGE)
         } else {
-            // Browsers also request things like /favicon.ico; only the real callback ends the wait.
+            // Browsers request things like /favicon.ico, and any local process can reach this
+            // port. Completing the wait is one-shot, so a request that cannot be the relay
+            // redirect must not end it and strand the real one: the relay always sends `state`
+            // alongside `code` or `error`, and the caller checks its value.
             respond(exchange, HTTP_NOT_FOUND, NOT_FOUND_PAGE)
         }
     }

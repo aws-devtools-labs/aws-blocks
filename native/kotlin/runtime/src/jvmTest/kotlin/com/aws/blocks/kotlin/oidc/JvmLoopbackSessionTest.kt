@@ -60,8 +60,22 @@ class JvmLoopbackSessionTest {
         val session = JvmLoopbackSession(BrowserOpener { }, 1.minutes)
         try {
             val redirect = async { session.awaitRedirect("https://idp.example.com/authorize") }
-            withContext(Dispatchers.IO) { get("${session.relayTo}?error=access_denied") }
+            withContext(Dispatchers.IO) { get("${session.relayTo}?error=access_denied&state=xyz") }
             redirect.await() shouldContain "error=access_denied"
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `awaitRedirect ignores a callback with no state`() = runBlocking<Unit> {
+        val session = JvmLoopbackSession(BrowserOpener { }, 1.minutes)
+        try {
+            val redirect = async { session.awaitRedirect("https://idp.example.com/authorize") }
+            // A stray local request must not end the wait and strand the real redirect.
+            withContext(Dispatchers.IO) { get("${session.relayTo}?code=junk") } shouldBe 404
+            withContext(Dispatchers.IO) { get("${session.relayTo}?code=abc123&state=xyz") } shouldBe 200
+            redirect.await() shouldBe "${session.relayTo}?code=abc123&state=xyz"
         } finally {
             session.close()
         }
@@ -73,7 +87,7 @@ class JvmLoopbackSessionTest {
         val session = JvmLoopbackSession(BrowserOpener { opened = it }, 1.minutes)
         try {
             val redirect = async { session.awaitRedirect("https://idp.example.com/authorize?x=1") }
-            withContext(Dispatchers.IO) { get("${session.relayTo}?code=abc") }
+            withContext(Dispatchers.IO) { get("${session.relayTo}?code=abc&state=xyz") }
             redirect.await()
             opened shouldBe "https://idp.example.com/authorize?x=1"
         } finally {
