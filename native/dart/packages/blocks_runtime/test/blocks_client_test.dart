@@ -1,8 +1,3 @@
-@TestOn('vm')
-// The RPC user-agent header is sent only on native; the web variant of the
-// dispatcher omits it, so these expectations are VM-only.
-library;
-
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';

@@ -2,7 +2,7 @@ import 'package:http/http.dart' as http;
 
 import 'user_agent.dart';
 
-/// Sets [blocksUserAgentToken] as the User-Agent so AWS service telemetry
+/// Defaults the User-Agent to [blocksUserAgentToken] so AWS service telemetry
 /// can attribute the request to this runtime.
 class UserAgentClient extends http.BaseClient {
   final http.Client _inner;
@@ -11,7 +11,7 @@ class UserAgentClient extends http.BaseClient {
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) {
-    request.headers['User-Agent'] = blocksUserAgentToken;
+    request.headers.putIfAbsent('User-Agent', () => blocksUserAgentToken);
     return _inner.send(request);
   }
 

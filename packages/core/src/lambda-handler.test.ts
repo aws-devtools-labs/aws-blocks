@@ -8,6 +8,8 @@ import type { LambdaContext } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry, getRegisteredRoutes } from './raw-route.js';
 import { decodeRpcResponse } from './rpc.js';
 import { _resetConfigCache, _setS3Fetcher } from './common/config.js';
+import { HttpRequest } from '@smithy/protocol-http';
+import { installClientUserAgent } from './server/client-user-agent.js';
 import type { BlocksContext } from './api.js';
 
 beforeEach(() => {
@@ -1363,4 +1365,66 @@ describe('handleEventSourceRecords — SQS partial batch responses', () => {
       delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
     }
   });
+});
+
+// ── Native client user-agent forwarding (end-to-end, through the real handler) ──
+
+describe('createLambdaHandler — native client user-agent forwarding', () => {
+  // API method: drives a Building-Block-style SDK client and returns the
+  // outgoing user-agent.
+  function uaProbeBackend() {
+    return {
+      api: (_ctx: BlocksContext) => ({
+        async probe() {
+          let mw: any;
+          const client = {
+            middlewareStack: {
+              identify: () => ['getUserAgentMiddleware - build'],
+              add: (m: any) => { mw = m; },
+              addRelativeTo: (m: any) => { mw = m; },
+            },
+          };
+          installClientUserAgent(client);
+          const request = new HttpRequest({
+            hostname: 'example.com',
+            headers: { 'user-agent': 'aws-sdk-js/3.700.0 aws-blocks/0.5.0' },
+          });
+          await mw(async (a: any) => ({ output: a }))({ request });
+          return request.headers['user-agent'];
+        },
+      }),
+    };
+  }
+
+  function probeEvent(clientUserAgent?: string) {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (clientUserAgent !== undefined) headers['x-blocks-user-agent'] = clientUserAgent;
+    return makeEvent({ headers, body: JSON.stringify({ jsonrpc: '2.0', method: 'api.probe', params: [], id: 1 }) });
+  }
+
+  it('appends a valid inbound token to the outgoing SDK user agent', async () => {
+    const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-swift/9.9.9'));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 client/swift/9.9.9');
+  });
+
+  it('drops a malformed inbound token without changing the outgoing user agent', async () => {
+    // Uppercase language: the validator rejects it, so nothing is appended.
+    const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-Swift/0.1.1'));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+  });
+
+  it('appends the token when the client also sends appended metadata', async () => {
+    const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-swift/9.9.9 os/android#14'));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 client/swift/9.9.9');
+  });
+
+  it('leaves the outgoing user agent unchanged when no token header is present', async () => {
+    const result = await invoke(uaProbeBackend(), probeEvent(undefined));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+  });
+
 });

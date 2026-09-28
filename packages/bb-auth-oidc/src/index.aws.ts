@@ -9,7 +9,7 @@
 
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 
-import { type ScopeParent, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { type ScopeParent, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
 import { resolveCookieSecurity } from '@aws-blocks/auth-common/cookies';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -82,6 +82,7 @@ export class AuthOIDC<
 				ssmClient = new SSMClient({
 					customUserAgent: this.buildUserAgentChain(),
 				});
+				installClientUserAgent(ssmClient);
 			}
 			return ssmClient;
 		};

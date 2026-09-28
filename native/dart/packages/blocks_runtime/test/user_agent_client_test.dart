@@ -19,5 +19,20 @@ void main() {
       expect(seen['GET'], blocksUserAgentToken);
       expect(seen['PUT'], blocksUserAgentToken);
     });
+
+    test('keeps a User-Agent the caller already set', () async {
+      String? seen;
+      final client = UserAgentClient(
+        MockClient((req) async {
+          seen = req.headers['user-agent'];
+          return http.Response('', 200);
+        }),
+      );
+      await client.get(
+        Uri.parse('https://s3.example/get'),
+        headers: {'User-Agent': 'caller/1.0'},
+      );
+      expect(seen, 'caller/1.0');
+    });
   });
 }
