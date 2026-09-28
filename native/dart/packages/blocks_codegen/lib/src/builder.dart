@@ -1,5 +1,14 @@
 import 'model.dart';
 
+/// Tags the generator maps to concrete runtime types; any other tag on a
+/// direct result falls back to `UnknownTransferable`. The switches gate on this set.
+const kKnownTransferableTags = {
+  'realtime/channel',
+  'file-bucket/download',
+  'file-bucket/upload',
+  'oidc/client',
+};
+
 /// A type after the builder has resolved `$ref`s, deduplicated structurally
 /// identical shapes, and assigned a Dart name to everything that needs one.
 sealed class ResolvedType {
@@ -250,6 +259,8 @@ class CodegenModelBuilder {
 
     // Pass 2: Resolve methods and group by namespace
     final namespaceMap = <String, List<Operation>>{};
+    // Formatted after Pass 3 so type-arg names reflect any collision rename.
+    final unboundResults = <(String, TransferableType)>[];
     for (final method in rpc.methods) {
       final parts = method.name.split('.');
       final ns = parts.length > 1
@@ -289,6 +300,13 @@ class CodegenModelBuilder {
         '${method.name}#result',
       );
 
+      // Bare transferable only: a nullable/list/record-wrapped one is a
+      // different ResolvedType and skipped, matching the generator's fallback.
+      if (resultType is TransferableType &&
+          !kKnownTransferableTags.contains(resultType.blocksType)) {
+        unboundResults.add((method.name, resultType));
+      }
+
       namespaceMap
           .putIfAbsent(ns, () => [])
           .add(
@@ -304,6 +322,10 @@ class CodegenModelBuilder {
     // Pass 3: detect (and resolve) display-name collisions among structurally
     // distinct types before generation.
     _resolveNamingCollisions();
+
+    for (final (operation, transferable) in unboundResults) {
+      _warnings.add(_formatUnboundTransferable(operation, transferable));
+    }
 
     final namespaces = namespaceMap.entries
         .map((e) => Namespace(name: e.key, operations: e.value))
@@ -681,6 +703,43 @@ class CodegenModelBuilder {
     SealedClassType(name: final n) => n,
     _ => '',
   };
+
+  /// Generated model name for a type argument, or '' if it produces no model
+  /// (e.g. a primitive). Includes [SchemaReference], unlike [_displayName].
+  String _transferableTypeArgModelName(ResolvedType type) => switch (type) {
+    RecordType(name: final n) => n,
+    EnumType(name: final n) => n,
+    SealedClassType(name: final n) => n,
+    SchemaReference(name: final n) => n,
+    _ => '',
+  };
+
+  /// Builds the `AWSBLOCKS-NATIVE-001` diagnostic: names the operation, tag,
+  /// platform, and generated type-arg models — never descriptor values.
+  String _formatUnboundTransferable(
+    String operation,
+    TransferableType transferable,
+  ) {
+    final models = transferable.typeArgs
+        .map(_transferableTypeArgModelName)
+        .where((n) => n.isNotEmpty)
+        .toList();
+    final String typeArgClause;
+    if (models.isEmpty) {
+      typeArgClause = 'no generated type-argument models';
+    } else if (models.length == 1) {
+      typeArgClause = 'type argument ${models.first}';
+    } else {
+      typeArgClause = 'type arguments ${models.join(', ')}';
+    }
+    // Keep the diagnostic on one line if a tag contains a newline or CR.
+    final safeTag = transferable.blocksType
+        .replaceAll('\n', r'\n')
+        .replaceAll('\r', r'\r');
+    return 'AWSBLOCKS-NATIVE-001: $operation returns unbound transferable '
+        "'$safeTag' on dart; generated UnknownTransferable "
+        'with $typeArgClause.';
+  }
 
   /// Structural identity of a named type. Two types with the same display name
   /// but different fingerprints are a genuine conflict; identical fingerprints

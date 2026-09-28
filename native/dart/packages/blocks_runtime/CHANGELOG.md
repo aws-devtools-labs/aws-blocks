@@ -1,3 +1,8 @@
+## Unreleased
+
+- Add `UnknownTransferable`, returned for a direct method result whose
+  transferable tag has no known runtime binding, instead of untyped `dynamic`.
+
 ## 0.1.3
 
 - Minor bug fixes and improvements

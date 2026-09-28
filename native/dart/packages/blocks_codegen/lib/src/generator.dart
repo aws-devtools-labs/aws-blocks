@@ -49,6 +49,18 @@ class DartCodeGenerator {
         "export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;",
       );
     }
+
+    // Re-export UnknownTransferable only when the fallback is actually emitted.
+    final hasUnknownTransferable =
+        model.types.values.any(_isUnboundTransferable) ||
+        model.namespaces.any(
+          (ns) => ns.operations.any((op) => _isUnboundTransferable(op.result)),
+        );
+    if (hasUnknownTransferable) {
+      buf.writeln(
+        "export 'package:blocks_runtime/blocks_runtime.dart' show UnknownTransferable;",
+      );
+    }
     buf.writeln();
 
     // Collect all types to emit
@@ -461,7 +473,12 @@ class DartCodeGenerator {
 
     for (final op in ns.operations) {
       buf.writeln();
-      final returnType = _dartTypeStr(op.result, allTypes);
+      final unboundResult = _isUnboundTransferable(op.result)
+          ? op.result as TransferableType
+          : null;
+      final returnType = unboundResult != null
+          ? 'UnknownTransferable'
+          : _dartTypeStr(op.result, allTypes);
       final isVoid = returnType == 'void';
       final asyncReturn = isVoid ? 'Future<void>' : 'Future<$returnType>';
       final methodName = _escapeIdentifier(op.name);
@@ -511,9 +528,11 @@ class DartCodeGenerator {
         buf.writeln(
           "    final result = await _client.call('${op.fullName}', $paramsArg);",
         );
-        buf.writeln(
-          '    return ${_deserializeExpr('result', op.result, allTypes)};',
-        );
+        final deserExpr = unboundResult != null
+            ? 'UnknownTransferable.fromJson(result, expectedTag: '
+                  '${_dartStringLiteral(unboundResult.blocksType)})'
+            : _deserializeExpr('result', op.result, allTypes);
+        buf.writeln('    return $deserExpr;');
       }
       buf.writeln('  }');
     }
@@ -710,6 +729,9 @@ class DartCodeGenerator {
     List<ResolvedType> typeArgs,
     Map<String, ResolvedType> allTypes,
   ) {
+    // Single registry of hydratable tags: a tag outside it never reaches a
+    // concrete arm, so the set and switch cannot disagree.
+    if (!kKnownTransferableTags.contains(blocksType)) return 'dynamic';
     return switch (blocksType) {
       'realtime/channel' =>
         'RealtimeChannel<${typeArgs.isNotEmpty ? _dartTypeStr(typeArgs[0], allTypes) : 'dynamic'}>',
@@ -1112,6 +1134,9 @@ class DartCodeGenerator {
     List<ResolvedType> typeArgs,
     Map<String, ResolvedType> allTypes,
   ) {
+    // Same registry gate as _transferableDartType: an unknown tag isn't
+    // hydrated to a concrete factory.
+    if (!kKnownTransferableTags.contains(blocksType)) return accessor;
     final cast = '$accessor as Map<String, dynamic>';
     return switch (blocksType) {
       'realtime/channel' => () {
@@ -1127,6 +1152,24 @@ class DartCodeGenerator {
         'OidcClient.fromJson($cast, baseUrl: _client.baseUrl, tokenStore: _client.tokenStore, sessionStore: _client.sessionStore)',
       _ => accessor,
     };
+  }
+
+  /// A bare transferable whose tag has no runtime binding (the fallback case).
+  /// A nested/nullable/list-wrapped one is out of scope and stays `dynamic`.
+  bool _isUnboundTransferable(ResolvedType type) =>
+      type is TransferableType &&
+      !kKnownTransferableTags.contains(type.blocksType);
+
+  /// Single-quoted Dart string literal for [value], escaping `\`, `$`, `'`,
+  /// `\n`, and `\r`.
+  String _dartStringLiteral(String value) {
+    final escaped = value
+        .replaceAll(r'\', r'\\')
+        .replaceAll(r'$', r'\$')
+        .replaceAll("'", r"\'")
+        .replaceAll('\n', r'\n')
+        .replaceAll('\r', r'\r');
+    return "'$escaped'";
   }
 
   String _tupleFromJson(

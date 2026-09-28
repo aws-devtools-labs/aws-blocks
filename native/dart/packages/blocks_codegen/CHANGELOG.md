@@ -1,3 +1,8 @@
+## Unreleased
+
+- Generate `UnknownTransferable` (with an `AWSBLOCKS-NATIVE-001` diagnostic) for
+  a direct result whose transferable tag has no known binding, instead of `dynamic`.
+
 ## 0.1.3
 
 - Minor bug fixes and improvements
