@@ -19,6 +19,7 @@ against a Blocks-provisioned User Pool, with no Amplify backend definition.
 - `src/cdk-shim.ts` — how a real Blocks CDK app reads `auth.userPool` / `auth.userPoolClient` (both `public readonly`) and writes the file.
 - `src/amplify-client.ts` — `configureFromBlocks(outputs)` + `doSignUp`/`doSignIn`; the standard Amplify client half, unchanged from a stock app.
 - `test/real-amplify-parse.test.ts` — runs the real `aws-amplify@6` `isAmplifyOutputs` / `parseAmplifyOutputs` (what `Amplify.configure()` executes) on the emitted file. Types and runtime both resolve against the real `aws-amplify` package (symlink `node_modules` from the main checkout).
+- `test/real-amplify-storage.test.ts` — runs the real `aws-amplify/storage` `getUrl` (local presign, no network) on the emitted storage section: `NoCredentials` as emitted; with a custom `credentialsProvider` it signs against the Blocks bucket and resolves the identity prefix.
 - `test/emit-amplify-outputs.test.ts` — `node:test` unit tests (8).
 - `test/client-types.types-test.ts` — typecheck-only proof that the emitted object binds to `Amplify.configure`/`signUp`/`signIn`.
 

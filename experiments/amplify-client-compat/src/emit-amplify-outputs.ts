@@ -67,12 +67,88 @@ export interface EmitOptions {
 	/** A Blocks JSON-RPC API URL to surface under `custom.blocks_api_url`. */
 	blocksApiUrl?: string;
 	/**
-	 * Storage: only expressible if a bucket is reachable with the Amplify
-	 * Storage client's model (Identity-Pool creds → direct S3). Blocks
-	 * FileBucket does NOT fit that model (see gaps); passing this emits the
-	 * section but ALSO records a gap.
+	 * Blocks `FileBucket`s to surface under `storage`. The first is the
+	 * default bucket. See `mapFileBuckets` for what does and does not carry
+	 * over; the structural mapping is lossless, the access model is not.
 	 */
-	storage?: AmplifyStorageOutput;
+	fileBuckets?: BlocksFileBucketFacts[];
+}
+
+/**
+ * What a Blocks `FileBucket` (bb-file-bucket) exposes that the Amplify
+ * Storage client needs.
+ *  - `bucketName`: the provisioned S3 bucket is named exactly the block's
+ *    `fullId` (index.cdk.ts: `bucketName: this.fullId`), so it is known at
+ *    synth even though the construct keeps its `s3.IBucket` private. For
+ *    `FileBucket.fromExisting(name)` it is that name.
+ *  - `corsOrigins`: the origins in the block's `corsRules` that allow PUT.
+ *    Amplify's browser client talks to S3 directly, so the app origin must be
+ *    there; an empty/absent list means the browser upload is CORS-blocked.
+ *  - `exposesEtag`: whether a CORS rule exposes the `ETag` header, which the
+ *    Amplify multipart uploader (files > 5 MB) must read.
+ */
+export interface BlocksFileBucketFacts {
+	/** Friendly name for `options.bucket` (default: the bucket name). */
+	name?: string;
+	bucketName: string;
+	region: string;
+	corsOrigins?: string[];
+	exposesEtag?: boolean;
+}
+
+/** Map FileBucket facts to the storage section, collecting gaps. */
+function mapFileBuckets(buckets: BlocksFileBucketFacts[], gaps: EmitGap[]): AmplifyStorageOutput {
+	const [first] = buckets;
+	if (!first) throw new Error('emitAmplifyOutputs: fileBuckets must be non-empty when provided');
+	const out: AmplifyStorageOutput = {
+		aws_region: first.region,
+		bucket_name: first.bucketName,
+	};
+	if (buckets.length > 1) {
+		const seen = new Set<string>();
+		out.buckets = buckets.map((b) => {
+			const name = b.name ?? b.bucketName;
+			// The real parser throws on duplicate friendly names; fail at emit time instead.
+			if (seen.has(name)) throw new Error(`emitAmplifyOutputs: duplicate storage bucket name "${name}"`);
+			seen.add(name);
+			// `paths` deliberately omitted: FileBucket has no per-principal
+			// path policy to advertise (see the credentials gap below).
+			return { name, bucket_name: b.bucketName, aws_region: b.region };
+		});
+	}
+
+	// The blocking gap: every Amplify Storage call (uploadData, downloadData,
+	// getUrl, list, remove, copy, getProperties) SigV4-signs S3 requests in the
+	// browser with AWS credentials from Auth.fetchAuthSession(). Blocks issues
+	// none: no Identity Pool, and FileBucket grants only the Lambda execution
+	// role. The file is structurally valid; the calls fail with NoCredentials.
+	gaps.push({
+		category: 'storage',
+		detail:
+			'Amplify Storage signs browser→S3 calls with AWS credentials from fetchAuthSession(). Blocks vends none ' +
+			'(no Identity Pool; FileBucket grants only the backend Lambda role), so every Storage API fails with ' +
+			'NoCredentials. Needs an Identity Pool, or a Blocks-vended credentialsProvider (see findings doc).',
+	});
+	gaps.push({
+		category: 'storage',
+		detail:
+			'No per-user path access (guest / authenticated / groups / entity_id). Amplify Gen 2 enforces these with ' +
+			'Identity-Pool IAM policies; FileBucket has no equivalent, so storage.paths is not emitted.',
+	});
+	for (const b of buckets) {
+		if (!b.corsOrigins?.length) {
+			gaps.push({
+				category: 'storage',
+				detail: `Bucket ${b.bucketName}: no CORS rule allows PUT from an app origin, so browser uploads are blocked. Add corsRules to the FileBucket.`,
+			});
+		} else if (!b.exposesEtag) {
+			gaps.push({
+				category: 'storage',
+				detail: `Bucket ${b.bucketName}: CORS does not expose ETag, so Amplify multipart uploads (> 5 MB) cannot complete.`,
+			});
+		}
+	}
+	return out;
 }
 
 /** A degraded-fidelity mapping the caller should be told about. */
@@ -194,15 +270,8 @@ export function emitAmplifyOutputs(facts: BlocksCognitoFacts, opts: EmitOptions 
 		});
 	}
 
-	if (opts.storage) {
-		outputs.storage = opts.storage;
-		gaps.push({
-			category: 'storage',
-			detail:
-				'Amplify Storage (uploadData/getUrl) authorizes browser→S3 calls with Identity-Pool credentials. ' +
-				'Blocks FileBucket grants only the backend Lambda role and vends presigned URLs through the API. ' +
-				'Emitting a storage.bucket_name does not make the Amplify Storage client work without an Identity Pool.',
-		});
+	if (opts.fileBuckets) {
+		outputs.storage = mapFileBuckets(opts.fileBuckets, gaps);
 	}
 
 	return { outputs, gaps };

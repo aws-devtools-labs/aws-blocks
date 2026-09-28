@@ -56,12 +56,30 @@ test('blocksApiUrl goes under custom and records the data (AppSync) gap', () => 
 	assert.equal(gaps.some((g) => g.category === 'data'), true);
 });
 
-test('storage emits the section but flags the Identity-Pool gap', () => {
+test('fileBuckets map to storage (default + buckets list) and flag the credential gap', () => {
 	const { outputs, gaps } = emitAmplifyOutputs(BASE, {
-		storage: { aws_region: 'us-west-2', bucket_name: 'my-bucket' },
+		fileBuckets: [
+			{ name: 'uploads', bucketName: 'app-uploads', region: 'us-west-2', corsOrigins: ['https://app.example.com'], exposesEtag: true },
+			{ name: 'avatars', bucketName: 'app-avatars', region: 'eu-west-1' },
+		],
 	});
-	assert.equal(outputs.storage?.bucket_name, 'my-bucket');
-	assert.equal(gaps.some((g) => g.category === 'storage'), true);
+	assert.equal(outputs.storage?.bucket_name, 'app-uploads');
+	assert.equal(outputs.storage?.aws_region, 'us-west-2');
+	assert.deepEqual(outputs.storage?.buckets?.map((b) => b.name), ['uploads', 'avatars']);
+	assert.equal(outputs.storage?.buckets?.some((b) => b.paths), false, 'no paths without an access model');
+	assert.equal(gaps.some((g) => g.category === 'storage' && g.detail.includes('NoCredentials')), true);
+	// Second bucket has no CORS rule -> its own gap; first is clean.
+	assert.equal(gaps.some((g) => g.detail.includes('app-avatars') && g.detail.includes('CORS')), true);
+	assert.equal(gaps.some((g) => g.detail.includes('app-uploads')), false);
+});
+
+test('a single fileBucket omits the buckets list; duplicate names are rejected', () => {
+	const { outputs } = emitAmplifyOutputs(BASE, { fileBuckets: [{ bucketName: 'b1', region: 'us-west-2' }] });
+	assert.equal(outputs.storage?.buckets, undefined);
+	assert.throws(
+		() => emitAmplifyOutputs(BASE, { fileBuckets: [{ name: 'x', bucketName: 'b1', region: 'r' }, { name: 'x', bucketName: 'b2', region: 'r' }] }),
+		/duplicate storage bucket name/,
+	);
 });
 
 test('throws when a required Cognito fact is missing', () => {

@@ -27,6 +27,13 @@ const { outputs } = emitAmplifyOutputs({
 const strict: AmplifyOutputs = outputs;
 void strict;
 
+// Same strict check with a multi-bucket storage section.
+const withStorage: AmplifyOutputs = emitAmplifyOutputs(
+	{ region: 'us-west-2', userPoolId: 'us-west-2_ABC123', userPoolClientId: 'c' },
+	{ fileBuckets: [{ name: 'a', bucketName: 'b-a', region: 'us-west-2' }, { name: 'b', bucketName: 'b-b', region: 'us-west-2' }] },
+).outputs;
+void withStorage;
+
 // The emitted outputs object is accepted by Amplify.configure(...) unchanged.
 configureFromBlocks(outputs);
 

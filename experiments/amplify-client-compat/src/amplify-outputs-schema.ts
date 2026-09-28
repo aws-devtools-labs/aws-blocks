@@ -63,9 +63,30 @@ export interface AmplifyAuthOutput {
 	mfa_methods?: AmplifyMfaMethod[];
 }
 
-export interface AmplifyStorageOutput {
-	aws_region: string;
+/**
+ * Per-path access rules, keyed by path prefix then by principal
+ * (`guest` | `authenticated` | `groups<Name>` | `entity<Source>`), valued by
+ * actions (`get` | `list` | `write` | `delete`). In aws-amplify@6 these are
+ * ADVISORY on the client: only `listPaths` / Storage Browser read them.
+ * Enforcement lives in the Identity-Pool role IAM policies ampx generates.
+ */
+export type AmplifyStoragePaths = Partial<Record<string, Record<string, string[] | undefined>>>;
+
+export interface AmplifyStorageBucket {
+	/** Friendly name the client passes as `options.bucket`. */
+	name: string;
 	bucket_name: string;
+	aws_region: string;
+	paths?: AmplifyStoragePaths;
+}
+
+export interface AmplifyStorageOutput {
+	/** Default bucket's region. */
+	aws_region: string;
+	/** Default bucket (used when a call does not name one). */
+	bucket_name: string;
+	/** All buckets, for multi-bucket apps. */
+	buckets?: AmplifyStorageBucket[];
 }
 
 /** Full document. `version` is the only globally-required field. */
