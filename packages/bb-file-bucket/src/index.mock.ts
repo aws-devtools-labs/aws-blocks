@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, blocksError, registerSdkIdentifiers } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from 'node:fs';
@@ -35,17 +35,12 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 
+import { FileBucketErrors } from './errors.js';
 export { FileBucketErrors } from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const MAX_KEY_BYTES = 1024; // S3 key limit
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
 
 interface SidecarMeta {
 	contentType: string;
@@ -468,7 +463,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	async restoreVersion(path: string, versionId: string): Promise<void> {
 		const vPath = versionContentPath(this.dataDir, path, versionId);
 		if (!existsSync(vPath)) {
-			throw blocksError('NoSuchVersion', `Version "${versionId}" does not exist for "${path}"`);
+			throw blocksError(FileBucketErrors.VersionNotFound, `Version "${versionId}" does not exist for "${path}"`);
 		}
 		const body = readFileSync(vPath);
 		const meta = this.readVersionMeta(path, versionId);
