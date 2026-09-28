@@ -150,18 +150,25 @@ Custom Strands model provider for local development. No network, no API keys, no
 - Token usage reports zeros (no real model call)
 
 
-## useChat Reconnect Recovery
+## Reconnect Recovery (createChat & useChat)
 
-`useChat` subscribes to the agent's Realtime chunks channel once per conversation and relies on
-the transport's transparent reconnect (bb-realtime). Because WebSocket pub/sub is not durable,
-the hook treats the **persisted conversation as the source of truth** and recovers around the gap:
+The same reconnect-recovery contract is implemented identically on both client surfaces:
+`createChat`/`realtimeTransport` (the **preferred** path) and the deprecated `useChat` hook
+(superseded per #338). Both subscribe to the agent's Realtime chunks channel once per conversation
+and rely on the transport's transparent reconnect (bb-realtime). `createChat` wires it through
+`realtimeTransport`, whose `subscribe` forwards a `{ onMessage, onReconnect?, onDisconnect? }`
+options object to the overloaded `channel.subscribe`; `useChat` wires it through the app's own
+`subscribe` adapter. Because WebSocket pub/sub is not durable, the client treats the
+**persisted conversation as the source of truth** and recovers around the gap:
 
-- **Subscribe adapter must forward verbatim.** `useChat` calls the consumer's `subscribe` with a
-  `ChatSubscribeOptions` *object* (`onMessage`/`onReconnect`/`onDisconnect`), and the
-  adapter must pass that argument straight to `channel.subscribe(...)`. Both middlewares branch on
+- **Subscribe adapter must forward verbatim.** The client calls the consumer's `subscribe` with a
+  `ChatSubscribeOptions` *object* (`onMessage`/`onReconnect`/`onDisconnect`), and that argument must
+  reach `channel.subscribe(...)` unchanged. With `createChat`, `realtimeTransport` does this forwarding
+  for you — it passes the options object straight to the overloaded `channel.subscribe`; with `useChat`
+  the app's own `subscribe` adapter must forward it. Both middlewares branch on
   `typeof arg === 'function'` first, so a callable-with-props hybrid would silently drop the extra
   callbacks and disable reconnect recovery.
-- **On reconnect (`handleReconnect`)** the hook re-reads `getConversation` (recovers a final
+- **On reconnect (`handleReconnect`)** the client re-reads `getConversation` (recovers a final
   assistant message if the turn completed during the gap) and `getPendingInterrupts` (recovers a
   missed interrupt). Two guards protect the eventually-consistent DynamoDB read: `stillSameInFlightTurn`
   (ignore a read that resolves after a live terminal chunk already resolved the turn) and
