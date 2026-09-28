@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { SESv2Client, SendEmailCommand, SendBulkEmailCommand } from '@aws-sdk/client-sesv2';
-import { Scope } from '@aws-blocks/core';
+import { Scope, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -87,6 +87,7 @@ export class EmailClient extends Scope {
 			maxAttempts: 3,
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(this.client);
 		this.fromAddress = options.fromAddress;
 		this.replyTo = options.replyTo;
 		this.configurationSet = options.configurationSet;

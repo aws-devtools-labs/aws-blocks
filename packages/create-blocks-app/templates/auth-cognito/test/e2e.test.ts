@@ -48,6 +48,16 @@ test.after(() => {
   }
 });
 
+// App-level readiness — independent of the sample API, so it keeps passing
+// after you replace `greet`/`setValue`/`getValue` with your own methods.
+test('app: server serves its Blocks config', async () => {
+  const response = await fetch(readinessUrl);
+  assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
+});
+
+// Run against the sample API the template ships with, so a freshly scaffolded
+// app is validated end to end. When you replace the sample API, update or
+// delete these tests to exercise your own methods instead.
 test('greet returns message and timestamp', async () => {
   const result = await hello.greet('World');
   assert.strictEqual(result.message, 'Hello, World!');
