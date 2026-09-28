@@ -439,10 +439,10 @@ if (hasAuthError(next, AuthCognitoErrors.NotAuthorized)) {
 
 Rule of thumb: **throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Never match on the human-facing `error` string.
 
-Both `getAuthState()` and `setAuthState()` return an [`AuthState`](../auth-common/README.md#authstate). `AuthCognito` doesn't re-export the type; import it from the `@aws-blocks/blocks` umbrella:
+Both `getAuthState()` and `setAuthState()` return an [`AuthState`](../auth-common/README.md#authstate). `AuthCognito` doesn't re-export the type; import it from `@aws-blocks/auth-common`, a direct dependency of this package:
 
 ```typescript
-import type { AuthState } from '@aws-blocks/blocks';
+import type { AuthState } from '@aws-blocks/auth-common';
 ```
 
 For the `setAuthState()` path, auth failures resolve to an error state instead
