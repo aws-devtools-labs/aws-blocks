@@ -11,13 +11,13 @@
  * These tests live here because they exercise the full engine stack
  * (PGliteEngine + sql tag together) to prove injection safety end-to-end.
  */
-import { test, after } from 'node:test';
+import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { sql } from '@aws-blocks/data-common';
 import { PGliteEngine } from './engines/pglite-engine.js';
 import { RLSEnabledDatabase } from './database.js';
 
-// Track every engine created so it can be released after the suite. PGlite 0.3+
+// Track every engine created so it can be released in teardown. PGlite 0.3+
 // no longer force-exits the process on an un-destroyed instance (0.2 did), so a
 // leaked WASM instance keeps the Node event loop open and `node --test` hangs
 // until the CI job times out. Destroying them here lets the runner exit cleanly.
@@ -29,8 +29,10 @@ function createDb(): RLSEnabledDatabase {
   return new RLSEnabledDatabase(engine);
 }
 
-after(async () => {
-  await Promise.all(engines.map((e) => e.destroy().catch(() => {})));
+afterEach(async () => {
+  for (const engine of engines.splice(0)) {
+    await engine.destroy().catch(() => {});
+  }
 });
 
 async function setupTable(db: RLSEnabledDatabase) {
