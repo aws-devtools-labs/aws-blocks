@@ -676,14 +676,10 @@ describe('extractMethodTypes — namespace returned by a factory, then destructu
 		}
 	});
 
-	it('array/nested destructuring falls through to the bare key (documented boundary)', () => {
-		// Only a top-level identifier and a shallow object binding pattern are
-		// attributed to a namespace. An array pattern (`const [ns] = factory()`)
-		// falls through to the bare-key path — the schema is still recovered (the
-		// AST walk found `new ApiNamespace(...)`), just under the bare method name,
-		// which generate-spec's #498 fallback resolves when there's no collision.
-		// Attributing array/tuple & nested destructuring (which would hit the #445
-		// class on a colliding method name) is tracked in #552.
+	it('attributes an array/tuple-destructured factory namespace to its binding name (#552)', () => {
+		// `const [ns] = factory()` is now attributed to `ns` (was a documented boundary
+		// that fell through to the bare key). The recursive binding-pattern walk resolves
+		// the tuple element's type via the checker.
 		const dir = createTempProject({
 			'tsconfig.json': JSON.stringify({
 				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
@@ -709,13 +705,89 @@ describe('extractMethodTypes — namespace returned by a factory, then destructu
 		});
 		try {
 			const types = extractMethodTypes(join(dir, 'index.ts'));
-			// Not attributed to the binding (array pattern), so no qualified key…
-			assert.ok(!types.has('tupleNs.ping'), 'array pattern is not attributed (documented boundary)');
-			// …but the schema is still present under the bare name (soft fallback).
-			const bare = types.get('ping');
-			assert.ok(bare, 'method schema is still recovered under the bare key');
-			assert.strictEqual((bare.params[0].schema as any)?.type, 'number');
-			assert.strictEqual((bare.returnType as any)?.type, 'string');
+			const qualified = types.get('tupleNs.ping');
+			assert.ok(qualified, 'array-destructured namespace should be keyed qualified (tupleNs.ping)');
+			assert.strictEqual((qualified.params[0].schema as any)?.type, 'number');
+			assert.strictEqual((qualified.returnType as any)?.type, 'string');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('attributes a nested-destructured factory namespace to its leaf binding name (#552)', () => {
+		// `const { group: { nestedNs } } = factory()` recurses to the leaf `nestedNs`.
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+				class Scope { constructor(id: string) {} }
+
+				class Factory {
+					constructor(private readonly scope: Scope) {}
+					build() {
+						return {
+							group: {
+								nestedNs: new ApiNamespace(this.scope, 'nestedNs', () => ({
+									async ping(count: number): Promise<string> { return 'p'; },
+								})),
+							},
+						};
+					}
+				}
+				const scope = new Scope('app');
+				const { group: { nestedNs } } = new Factory(scope).build();
+				export { nestedNs };
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			assert.ok(types.get('nestedNs.ping'), 'nested-destructured namespace should be keyed qualified (nestedNs.ping)');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('attributes BOTH namespaces of a colliding-method tuple, dropping neither (#552 → the #445 class)', () => {
+		// The motivating case: a factory returns a tuple of namespaces that share a
+		// method name. Before #552 both `create`s landed on the bare `create` key and
+		// the #445 cross-assignment could drop/mis-schema one. Now each is qualified.
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+				class Scope { constructor(id: string) {} }
+
+				class Factory {
+					constructor(private readonly scope: Scope) {}
+					build() {
+						return [
+							new ApiNamespace(this.scope, 'widgets', () => ({
+								async create(name: string): Promise<string> { return name; },
+							})),
+							new ApiNamespace(this.scope, 'gadgets', () => ({
+								async create(count: number): Promise<number> { return count; },
+							})),
+						] as const;
+					}
+				}
+				const scope = new Scope('app');
+				const [widgets, gadgets] = new Factory(scope).build();
+				export { widgets, gadgets };
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			const w = types.get('widgets.create');
+			const g = types.get('gadgets.create');
+			assert.ok(w, 'widgets.create should be keyed qualified');
+			assert.ok(g, 'gadgets.create should be keyed qualified');
+			// Each keeps its OWN param schema — the #445 cross-assignment can't happen.
+			assert.strictEqual((w.params[0].schema as any)?.type, 'string', 'widgets.create takes a string');
+			assert.strictEqual((g.params[0].schema as any)?.type, 'number', 'gadgets.create takes a number');
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
