@@ -48,9 +48,13 @@ function countClientUserAgentSites(content: string): number {
     if (/\bcustomUserAgent\s*[:,}]/.test(line)) sites++;
   }
   if (sites === 0) return 0;
-  // The second alternative catches `new (await import(...)).XClient(`, which the
-  // bare form misses.
-  return /new\s+(?:[A-Z]\w*Client|\(.*?\)\s*\.\s*[A-Z]\w*Client)\s*\(/.test(content) ? sites : 0;
+  // Also catches `new (await import(...)).XClient(` and `new ns.XClient(`. `[\s\S]`
+  // not `.`, so a paren group wrapped across lines still matches.
+  return /new\s+(?:[A-Z]\w*Client|\([\s\S]*?\)\s*\.\s*[A-Z]\w*Client|[A-Za-z_$][\w$]*\s*\.\s*[A-Z]\w*Client)\s*\(/.test(
+    content,
+  )
+    ? sites
+    : 0;
 }
 
 function countInstalls(content: string): number {

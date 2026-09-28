@@ -82,8 +82,7 @@ export function getClientUserAgentToken(): string | undefined {
 /**
  * Installs the per-request client-user-agent middleware on an SDK v3 client.
  *
- * Appends nothing when the request carries no validated token, so a client built
- * outside a request scope is unaffected.
+ * This is a no-op when the request carries no validated token.
  *
  * @param client - An AWS SDK v3 client.
  *

@@ -64,6 +64,17 @@ const MISSING = `const client = new DynamoDBClient({ customUserAgent: this.build
 const DYNAMIC_MISSING = `const c = new (await import('@aws-sdk/client-bedrock')).BedrockClient({ customUserAgent });
 `;
 
+// The same client with its paren group wrapped, as the formatter emits it once the
+// line grows. Guards the `[\s\S]` in the gate regex.
+const WRAPPED_MISSING = `const c = new (
+	await import('@aws-sdk/client-bedrock')
+).BedrockClient({ customUserAgent });
+`;
+
+// Namespace member form, e.g. after `import * as aws`.
+const NAMESPACE_MISSING = `const c = new aws.BedrockClient({ customUserAgent });
+`;
+
 describe("check-client-user-agent-consistency", () => {
 	it("passes when every customUserAgent site installs the middleware", () => {
 		withFixture({ "bb-kv-store/src/index.aws.ts": INSTALLED }, (dir) => {
@@ -89,13 +100,24 @@ describe("check-client-user-agent-consistency", () => {
 		});
 	});
 
-	it("catches a dynamically imported client that omits the install call", () => {
-		withFixture({ "bb-agent/src/model-factory.ts": DYNAMIC_MISSING }, (dir) => {
-			const { code, output } = runGuard(dir);
-			assert.equal(code, 1);
-			assert.match(output, /1 customUserAgent site\(s\) but only 0/);
+	// Each offender sits alongside a valid site, so the failure comes from the offender
+	// rather than the "found no sites" backstop, which also exits 1.
+	for (const [name, source] of [
+		["a dynamic import", DYNAMIC_MISSING],
+		["a wrapped paren group", WRAPPED_MISSING],
+		["a namespace member", NAMESPACE_MISSING],
+	]) {
+		it(`catches a client built via ${name} that omits the install call`, () => {
+			withFixture(
+				{ "bb-kv-store/src/index.aws.ts": INSTALLED, "bb-agent/src/model-factory.ts": source },
+				(dir) => {
+					const { code, output } = runGuard(dir);
+					assert.equal(code, 1);
+					assert.match(output, /1 customUserAgent site\(s\) but only 0/);
+				},
+			);
 		});
-	});
+	}
 
 	it("counts each customUserAgent site in a file with two clients", () => {
 		withFixture({ "bb-kv-store/src/index.aws.ts": INSTALLED + MISSING }, (dir) => {
