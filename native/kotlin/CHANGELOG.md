@@ -1,5 +1,23 @@
 # aws-blocks-kotlin
 
+## 0.3.0
+
+### Minor Changes
+
+- [#103](https://github.com/aws-devtools-labs/aws-blocks/pull/103) [`a8f486e`](https://github.com/aws-devtools-labs/aws-blocks/commit/a8f486e81d104eebe5cc5640cb32617f89f09720) Thanks [@mattcreaser](https://github.com/mattcreaser)! - Bump Kotlin version to 2.2.10
+
+- [#103](https://github.com/aws-devtools-labs/aws-blocks/pull/103) [`a8f486e`](https://github.com/aws-devtools-labs/aws-blocks/commit/a8f486e81d104eebe5cc5640cb32617f89f09720) Thanks [@mattcreaser](https://github.com/mattcreaser)! - Add ability to clear cookies
+
+### Patch Changes
+
+- [#103](https://github.com/aws-devtools-labs/aws-blocks/pull/103) [`a8f486e`](https://github.com/aws-devtools-labs/aws-blocks/commit/a8f486e81d104eebe5cc5640cb32617f89f09720) Thanks [@mattcreaser](https://github.com/mattcreaser)! - Fix handling of keychain in the iOS runtime
+
+- [#567](https://github.com/aws-devtools-labs/aws-blocks/pull/567) [`1f2ef9c`](https://github.com/aws-devtools-labs/aws-blocks/commit/1f2ef9c77a8548b95720aa2a17dbec39a5856192) Thanks [@VarshithaPamisetty](https://github.com/VarshithaPamisetty)! - Add a build-time version constant and user-agent token to the runtime
+
+- [#598](https://github.com/aws-devtools-labs/aws-blocks/pull/598) [`a3ef0cc`](https://github.com/aws-devtools-labs/aws-blocks/commit/a3ef0ccb8b95fca28cc08a034b6b47ffbfa87fe3) Thanks [@VarshithaPamisetty](https://github.com/VarshithaPamisetty)! - Send the aws-blocks-kotlin user-agent token on outbound runtime requests
+
+- [#551](https://github.com/aws-devtools-labs/aws-blocks/pull/551) [`028ce4f`](https://github.com/aws-devtools-labs/aws-blocks/commit/028ce4f8e411314e28606fbb62e0f27feeb85331) Thanks [@ikenyal](https://github.com/ikenyal)! - Generate serializers for transferable fields in operation-scoped nested types.
+
 ## 0.2.0
 
 ### Minor Changes
