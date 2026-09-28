@@ -2057,6 +2057,89 @@ describe('createChat', () => {
 		};
 	}
 
+	/**
+	 * A reconnect-capable fake transport for the createChat state machine. Unlike
+	 * {@link fakeTransport} (which replays a fixed script and IGNORES the subscribe opts),
+	 * this captures the `onReconnect`/`onDisconnect` callbacks that `startTurn` passes to
+	 * `subscribe(channelId, opts)` and lets a test drive chunks into the LIVE consumer —
+	 * the createChat analogue of useChat's `subscribeCapture`.
+	 *
+	 * The one adaptation: createChat consumes chunks via a background `for await` over the
+	 * returned {@link ChunkStream} (an AsyncIterable), NOT a direct callback. So instead of
+	 * a captured handler this exposes a small single-consumer push-queue — `cap.chunk(c)`
+	 * feeds the async iterator (buffering if the consumer has not parked yet), while
+	 * `cap.reconnect()` / `cap.disconnect(reason)` fire the captured transport callbacks.
+	 * The queue closes on a terminal chunk (done/error/interrupt) exactly like the real
+	 * Realtime transport, so the background `for await` ends on the turn's terminal chunk.
+	 *
+	 * Pass `runError` to make `transport.run` reject (a send-path failure), mirroring the
+	 * useChat tests that throw from `api.sendMessage`.
+	 */
+	function reconnectCapture(runError?: string): {
+		cap: {
+			reconnect?: () => void;
+			disconnect?: (reason: string) => void;
+			chunk: (c: AgentStreamChunk) => void;
+		};
+		transport: ChatTransport;
+	} {
+		const cap: {
+			reconnect?: () => void;
+			disconnect?: (reason: string) => void;
+			chunk: (c: AgentStreamChunk) => void;
+		} = { chunk() {} };
+
+		const transport: ChatTransport = {
+			subscribe(_channelId, opts) {
+				cap.reconnect = opts?.onReconnect;
+				cap.disconnect = opts?.onDisconnect;
+
+				const queue: AgentStreamChunk[] = [];
+				const waiters: ((r: IteratorResult<AgentStreamChunk>) => void)[] = [];
+				let closed = false;
+				const finish = () => {
+					if (closed) return;
+					closed = true;
+					for (const w of waiters.splice(0)) w({ value: undefined, done: true });
+				};
+
+				cap.chunk = (c: AgentStreamChunk) => {
+					if (closed) return;
+					const waiter = waiters.shift();
+					if (waiter) waiter({ value: c, done: false });
+					else queue.push(c);
+					// Mirror the real transport: a terminal chunk ends the stream.
+					if (c.type === 'done' || c.type === 'error' || c.type === 'interrupt') finish();
+				};
+
+				return {
+					established: Promise.resolve(),
+					unsubscribe() {
+						finish();
+					},
+					async *[Symbol.asyncIterator]() {
+						while (true) {
+							if (queue.length) {
+								yield queue.shift()!;
+								continue;
+							}
+							if (closed) return;
+							const next = await new Promise<IteratorResult<AgentStreamChunk>>((r) => waiters.push(r));
+							if (next.done) return;
+							yield next.value;
+						}
+					},
+				};
+			},
+			async run(turn) {
+				if (runError) throw new Error(runError);
+				return { channelId: turn.channelId };
+			},
+		};
+
+		return { cap, transport };
+	}
+
 	test('sendMessage streams text into the assistant message and clears loading on done', async () => {
 		const loadingStates: boolean[] = [];
 		const chat = createChat({
@@ -2206,6 +2289,372 @@ describe('createChat', () => {
 		// when the test ends (node --test fails a test that leaves pending async work).
 		chat.destroy();
 		await new Promise(r => setTimeout(r, 10));
+	});
+
+	// ── Mid-turn reconnect re-sync + bounded failsafe (ported from useChat) ──────
+	// These mirror the useChat reconnect spec (search 'reconnect re-syncs' above),
+	// adapted to createChat's ChunkStream/AsyncIterable model via reconnectCapture.
+
+	test('reconnect re-syncs final assistant text from getConversation when the done chunk was missed', async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn completed server-side: history ends with a non-empty assistant message.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: 'Hello! The final persisted answer.' },
+					],
+				}),
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		// Two deltas arrive, then the socket drops before `done`.
+		cap.chunk({ type: 'text-delta', text: 'Hel' });
+		cap.chunk({ type: 'text-delta', text: 'lo' });
+		await flush();
+		// Transport reconnects — createChat re-syncs from the DB.
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'loading cleared after re-sync of completed turn');
+		const assistant = chat.getMessages().find((m) => m.role === 'assistant');
+		assert.ok(assistant, 'assistant message should exist');
+		assert.strictEqual(
+			assistant!.content,
+			'Hello! The final persisted answer.',
+			'in-flight bubble replaced with persisted final text',
+		);
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect while turn still running keeps loading true (no premature clear)', async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn still running: history ends with the user message (no final assistant yet).
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'loading stays true while the turn is still running');
+
+		// The terminal chunk finally arrives on the resubscribed channel.
+		cap.chunk({ type: 'done', text: 'done at last' });
+		await flush();
+		assert.strictEqual(chat.isLoading(), false, 'a later done chunk clears loading');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect re-checks pending interrupts (recovered interrupt pauses the turn)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let interruptsReceived: Array<{ interruptId: string; name: string; reason?: unknown }> | undefined;
+		let errorReceived: string | undefined;
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+				// An interrupt was raised server-side while the socket was down.
+				getPendingInterrupts: async () => ({ interrupts: [{ id: 'int-9', name: 'approve:refund' }] }),
+			},
+			onInterrupt: (ints) => {
+				interruptsReceived = ints;
+			},
+			onError: (e) => {
+				errorReceived = e;
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.reconnect!();
+		await flush();
+
+		assert.ok(interruptsReceived, 'pending interrupt should surface after reconnect');
+		assert.strictEqual(interruptsReceived!.length, 1);
+		assert.strictEqual(interruptsReceived![0].name, 'approve:refund');
+		assert.strictEqual(interruptsReceived![0].interruptId, 'int-9', 'backend id surfaces as interruptId');
+		// A recovered interrupt PAUSES the turn: loading must clear (the user is at the
+		// approval prompt) and the reconnect failsafe must NOT be left ticking, so it can't
+		// fire 'Timed out' ~11min later while the user is legitimately deciding.
+		assert.strictEqual(chat.isLoading(), false, 'a recovered pending interrupt clears loading (turn paused)');
+		t.mock.timers.tick(700_000); // past the whole failsafe window
+		assert.strictEqual(chat.isLoading(), false, 'no failsafe fires while paused at a recovered interrupt');
+		assert.strictEqual(errorReceived, undefined, 'no spurious Timed-out error fires at the approval prompt');
+		chat.destroy();
+		await flush();
+	});
+
+	test('bounded failsafe: chunks re-arm it; it fires only after a fully silent window', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn still running on reconnect — arms the failsafe.
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			onError: (e) => {
+				errorReceived = e;
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.reconnect!();
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'still loading right after reconnect (turn running)');
+
+		// A long tool-call/thinking gap under the window must NOT trip the failsafe.
+		t.mock.timers.tick(120_000);
+		assert.strictEqual(chat.isLoading(), true, 'a long silent gap under the window must not fire');
+		assert.strictEqual(errorReceived, undefined, 'no premature timeout during a normal long gap');
+
+		// A text-delta proves the stream is alive and RE-ARMS the window from now.
+		cap.chunk({ type: 'text-delta', text: 'still working…' });
+		await flush();
+		// Advance almost a full window since that delta — still alive, still no fire.
+		t.mock.timers.tick(600_000);
+		assert.strictEqual(chat.isLoading(), true, 'the delta re-armed the window, so it has not elapsed');
+		assert.strictEqual(errorReceived, undefined);
+
+		// Now go fully silent past the whole window — the failsafe finally fires.
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'failsafe clears loading after a fully silent window');
+		assert.ok(errorReceived, 'failsafe surfaces an error');
+		assert.match(errorReceived!, /Timed out.*after reconnect/, 'the failsafe reports the reconnect-timeout message');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect does not clobber final text delivered by a live done that arrived before getConversation resolved', async () => {
+		const { cap, transport } = reconnectCapture();
+		// Gate getConversation so the reconnect re-sync resolves AFTER a live `done` chunk.
+		let resolveGet!: (v: { messages: { role: string; content: string }[] }) => void;
+		const getGate = new Promise<{ messages: { role: string; content: string }[] }>((r) => {
+			resolveGet = r;
+		});
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: () => getGate,
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		// Reconnect kicks off getConversation, which stays pending on the gate.
+		cap.reconnect!();
+		await flush();
+
+		// The live terminal `done` arrives on the resubscribed channel BEFORE the DB read resolves.
+		cap.chunk({ type: 'done', text: 'LIVE final answer' });
+		await flush();
+		assert.strictEqual(chat.isLoading(), false, 'the live done cleared loading');
+
+		// The late getConversation now resolves with a DIFFERENT (stale/eventually-consistent) view.
+		resolveGet({
+			messages: [
+				{ role: 'user', content: 'hello' },
+				{ role: 'assistant', content: 'STALE db answer' },
+			],
+		});
+		await flush();
+
+		const assistant = chat.getMessages().find((m) => m.role === 'assistant');
+		assert.strictEqual(
+			assistant!.content,
+			'LIVE final answer',
+			'the live done text is preserved; the late DB read is ignored',
+		);
+		assert.strictEqual(chat.isLoading(), false, 'loading stays cleared');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect ignores a stale/previous-turn getConversation snapshot', async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The turn is still running, but the DB read's last row is a PRIOR turn's
+				// assistant message that does NOT extend what we've streamed this turn.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'previous question' },
+						{ role: 'assistant', content: 'answer to a PRIOR turn' },
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: 'answer to a PRIOR turn' },
+					],
+				}),
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		// Live text for the CURRENT turn.
+		cap.chunk({ type: 'text-delta', text: 'live streaming answer' });
+		await flush();
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'a stale snapshot must not resolve the still-running turn');
+		const assistant = chat.getMessages().find((m) => m.role === 'assistant' && m.content !== '');
+		assert.strictEqual(
+			assistant!.content,
+			'live streaming answer',
+			'in-flight bubble is not overwritten by prior-turn text',
+		);
+		chat.destroy();
+		await flush();
+	});
+
+	test('a re-sync failure on reconnect reports onError once and does NOT arm the failsafe', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The reconnect re-sync read fails outright.
+				getConversation: async () => {
+					throw new Error('DynamoDB read failed');
+				},
+			},
+			onError: (e) => {
+				errors.push(e);
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// Reconnect → getConversation throws.
+		cap.reconnect!();
+		await flush();
+
+		// The re-sync failure is surfaced via onError (once).
+		assert.strictEqual(errors.length, 1, 're-sync failure reports onError exactly once');
+		// Deliberate trade-off: the throw does NOT arm the failsafe, so loading persists —
+		// the channel is resubscribed and a later terminal chunk can still resolve the turn.
+		assert.strictEqual(chat.isLoading(), true, 'a re-sync throw does not clear loading on its own');
+		t.mock.timers.tick(700_000); // past the whole failsafe window
+		assert.strictEqual(chat.isLoading(), true, 'no failsafe was armed by the re-sync throw, so loading is unchanged');
+
+		// A later terminal chunk still resolves the turn (the intended recovery path).
+		cap.chunk({ type: 'done', text: 'recovered via a later live chunk' });
+		await flush();
+		assert.strictEqual(chat.isLoading(), false, 'a subsequent terminal chunk clears loading');
+		assert.strictEqual(errors.length, 1, 'still exactly one onError for the turn');
+		chat.destroy();
+		await flush();
+	});
+
+	test('terminal onDisconnect(error) while loading arms the failsafe (all-stale/give-up path, no onReconnect)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			onError: (e) => {
+				errorReceived = e;
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// The transport gives up / every resubscribe is stale: it surfaces a terminal
+		// onDisconnect('error') and does NOT fire onReconnect. This must arm the failsafe
+		// so the spinner cannot hang forever with no other signal.
+		assert.ok(cap.disconnect, 'createChat must forward onDisconnect to the transport');
+		cap.disconnect!('error');
+
+		// The failsafe is armed, not immediate.
+		assert.strictEqual(chat.isLoading(), true, 'still loading — failsafe is armed, not immediate');
+
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'terminal-error failsafe clears the stuck spinner');
+		assert.ok(errorReceived, 'terminal-error failsafe surfaces an error');
+		chat.destroy();
+		await flush();
+	});
+
+	test('a send-rejected-but-server-started turn is NOT auto-adopted by reconnect, but recovers on a later loadConversation', async () => {
+		// The turn started server-side (the 504 was on the response, not the dispatch), so the
+		// persisted conversation ends with the assistant's final answer.
+		const { cap, transport } = reconnectCapture('504 Gateway Timeout');
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: 'the server-side final answer' },
+					],
+				}),
+			},
+			onError: () => {},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		// Send failed → handleSendFailure nulled the turn identity and cleared loading.
+		assert.strictEqual(chat.isLoading(), false, 'loading cleared after the send rejection');
+
+		// A reconnect fires. Because the turn identity was nulled, the re-sync guard does NOT
+		// adopt the persisted assistant text into a live bubble — recovery is NOT automatic here.
+		cap.reconnect!();
+		await flush();
+		assert.ok(
+			!chat.getMessages().some((m) => m.role === 'assistant' && m.content === 'the server-side final answer'),
+			'reconnect must NOT auto-adopt the started turn (send was treated as failed)',
+		);
+
+		// Opening the conversation again recovers the persisted result (the documented path).
+		await chat.loadConversation('conv-1');
+		assert.ok(
+			chat.getMessages().some((m) => m.role === 'assistant' && m.content === 'the server-side final answer'),
+			'loadConversation recovers the persisted server-side final answer',
+		);
+		chat.destroy();
+		await flush();
 	});
 });
 
