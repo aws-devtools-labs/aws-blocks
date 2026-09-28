@@ -63,10 +63,10 @@ auth.signIn('google', { redirectPath: '/auth-return' });
 
 `redirectPath` becomes the OAuth `redirect_uri`, so it must be a page your frontend serves **and** a redirect URI registered with the provider (the stub IdP accepts any HTTPS or localhost URL, so local/sandbox needs no registration).
 
-`createApi()` exposes the state-machine API — `getAuthState()` and `setAuthState()` both return an [`AuthState`](../auth-common/README.md#authstate). `AuthOIDC` doesn't re-export the type; import it from `@aws-blocks/auth-common`:
+`createApi()` exposes the state-machine API — `getAuthState()` and `setAuthState()` both return an [`AuthState`](../auth-common/README.md#authstate). `AuthOIDC` doesn't re-export the type; import it from the `@aws-blocks/blocks` umbrella:
 
 ```typescript
-import type { AuthState } from '@aws-blocks/auth-common';
+import type { AuthState } from '@aws-blocks/blocks';
 ```
 
 ### Re-rendering your UI on sign-in (React SPA)
