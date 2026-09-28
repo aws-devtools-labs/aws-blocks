@@ -177,7 +177,7 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | bb-logger | Structured logging with consistent JSON format, log levels, and contextual metadata. | — |
 | bb-metrics | Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Format). | — |
 | bb-realtime | Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB. | — |
-| bb-secret | A single application secret backed by AWS Secrets Manager. | secret, secrets-manager, credentials |
+| bb-secret | A single application secret backed by AWS Secrets Manager. | — |
 | bb-tracer | Distributed tracing backed by AWS X-Ray. | — |
 | core | Core primitives for building full-stack applications with the AWS Blocks. | — |
 | hosting | Low-level CDK L3 constructs for deploying web applications on AWS | — |

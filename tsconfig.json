@@ -11,6 +11,7 @@
     { "path": "packages/auth-common" },
     { "path": "packages/bb-auth-basic" },
     { "path": "packages/bb-app-setting" },
+    { "path": "packages/bb-secret" },
     { "path": "packages/bb-file-bucket" },
     { "path": "packages/bb-agent" },
     { "path": "packages/bb-knowledge-base" },
