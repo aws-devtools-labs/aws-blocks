@@ -3,6 +3,7 @@
 
 import { createHmac, randomBytes } from 'node:crypto';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import { validatePresignedUrlExpiry } from './presigned-url.js';
 
 // ── Token helpers ───────────────────────────────────────────────────────────
 
@@ -40,6 +41,7 @@ export function mintFileToken(
 	secret: string,
 	contentType?: string,
 ): string {
+	validatePresignedUrlExpiry(expiresIn);
 	const payload: FileTokenPayload = {
 		fullId,
 		path,
