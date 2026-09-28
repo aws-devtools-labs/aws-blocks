@@ -568,7 +568,7 @@ tools: (tool) => ({
 
 ## Headless Usage (No UI)
 
-The Agent BB works without a frontend — for scripts, background jobs, or server-to-server flows. Use `complete()` to wait for the full response. For UI-based flows, see [Client Hook — useChat](#client-hook--usechat).
+The Agent BB works without a frontend — for scripts, background jobs, or server-to-server flows. Use `complete()` to wait for the full response. For UI-based flows, see [Client API — createChat](#client-api--createchat-recommended).
 
 ### Without tool approval
 
@@ -710,7 +710,165 @@ tools: (tool) => ({
 ```
 
 
-## Client Hook — `useChat`
+## Client API — `createChat` (recommended)
+
+Import from `@aws-blocks/bb-agent/client`. `createChat` is the **compute-agnostic** client API: the runtime (Lambda + Realtime today, others later) is hidden behind a single **transport**, so your call sites never name it. The common case is one call — `chat.sendMessage('Hello')` — with no channel dance and no subscribe-before-send race (subscribe and run are fused).
+
+You configure the transport **once**. For the current Lambda + Realtime runtime, use `realtimeTransport` — copy-paste this wiring and only change your API method names:
+
+```typescript
+import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
+
+const transport = realtimeTransport({
+  // Subscribe to a Realtime channel — the hydrated channel handle comes from your getChannel RPC.
+  subscribe: async (channelId, handler) => {
+    const { channel } = await api.agentGetChannel(channelId);
+    return channel.subscribe(handler);
+  },
+  // Start a new turn (submits the backend job that publishes chunks).
+  sendMessage: (channelId, message, conversationId) =>
+    api.agentStream(message, conversationId ?? undefined, channelId),
+  // Resume a paused turn with the user's interrupt responses. `responses` is
+  // `InterruptResponse[]` (its `approved` is optional); type your `agentResume`
+  // param as `InterruptResponse[]` so this passes straight through — if your RPC
+  // narrows it to `approved: boolean`, map here: `responses.map(r => ({ ...r, approved: r.approved ?? false }))`.
+  resume: (channelId, responses, conversationId) =>
+    api.agentResume(channelId, responses, conversationId ?? undefined),
+});
+
+const chat = createChat({
+  transport,                                          // the one runtime-specific piece
+  api: {                                              // conversation CRUD — plain RPC, same across runtimes
+    createConversation:   () => api.agentCreateConversationId(),
+    getConversation:      (id) => api.agentGetConversation(id),
+    getPendingInterrupts: (id) => api.agentGetPendingInterrupts(id),
+  },
+  onMessagesChange: (msgs) => renderMessages(msgs),
+  onLoadingChange:  (loading) => updateSpinner(loading),
+  onInterrupt: async (interrupts) => {
+    const decisions = await showApprovalUI(interrupts);       // e.g. [{ interruptId, approved: true }]
+    await chat.sendMessage({ interruptResponses: decisions }); // same call resumes the turn
+  },
+});
+
+await chat.sendMessage('Hello!');
+```
+
+**Human-in-the-loop is the same `sendMessage`.** When a turn pauses, `onInterrupt` fires; continue the turn by calling `chat.sendMessage({ interruptResponses })` — there is no separate resume method.
+
+**Flexible primitives.** `sendMessage` is sugar over two primitives you can drop to for power cases: `chat.run(message)` produces a turn (returns `{ channelId }`, streams to subscribers) and `chat.subscribe({ channelId, observer })` attaches a consumer. Together they enable fan-out (several clients watching one channel), observer-only attach, and decoupled produce/consume. The easy default uses neither — it fuses them so the common case is correct by construction.
+
+**Note:** `createChat` is a factory, not a React hook — call it **once** (outside a component or in a ref). Message history only surfaces `user`, `assistant`, and `approval` messages; use `getConversation()` for the full history.
+
+### React: hold the instance once, drive `useState` from the callbacks
+
+`createChat` is a factory, so it must **not** run on every render — recreating it drops the transport subscription and conversation state each time. Hold the single instance (and the transport it wraps) in a `useRef`, created lazily so it survives re-renders, and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. This example keeps the `api` wiring minimal; thread a `userId` through `createConversation` / the transport's `sendMessage` the same way when your API needs it (or resolve the user server-side).
+
+```tsx
+'use client'; // Next.js only — createChat opens a browser WebSocket, so it must run in a Client Component. Plain React (Vite/CRA) can omit this.
+
+import { useRef, useState, useEffect } from 'react';
+import { createChat, realtimeTransport, type ChatMessage } from '@aws-blocks/bb-agent/client';
+import { api } from 'aws-blocks'; // your typed backend client
+
+export function Chat() {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [input, setInput] = useState('');
+  // Interrupts need a typed initializer — a bare useState([]) infers never[] and rejects the payload.
+  const [interrupts, setInterrupts] = useState<Array<{ interruptId: string; name: string; reason?: unknown }>>([]);
+
+  // Create the instance exactly once. The ref survives every re-render, so the
+  // transport subscription and conversation state are never torn down.
+  // Type the ref as `| undefined` and initialize with `undefined` — @types/react 19
+  // tightened the useRef overloads, so a bare useRef<T>() no longer compiles.
+  const chatRef = useRef<ReturnType<typeof createChat> | undefined>(undefined);
+  if (!chatRef.current) {
+    const transport = realtimeTransport({
+      subscribe: async (channelId, handler) => {
+        const { channel } = await api.agentGetChannel(channelId);
+        return channel.subscribe(handler);
+      },
+      sendMessage: (channelId, message, conversationId) =>
+        api.agentStream(message, conversationId ?? undefined, channelId),
+      resume: (channelId, responses, conversationId) =>
+        api.agentResume(channelId, responses, conversationId ?? undefined),
+    });
+    chatRef.current = createChat({
+      transport,
+      api: {
+        createConversation:   () => api.agentCreateConversationId(),
+        getConversation:      (id) => api.agentGetConversation(id),
+        getPendingInterrupts: (id) => api.agentGetPendingInterrupts(id),
+      },
+      // Bridge the mutable instance into React state — these fire on every change.
+      onMessagesChange: setMessages,
+      onLoadingChange: setIsLoading,
+      onInterrupt: setInterrupts,
+    });
+  }
+  const chat = chatRef.current!; // guaranteed set by the block above
+
+  // Tear down the WebSocket subscription when the component unmounts.
+  useEffect(() => () => chat.destroy(), [chat]);
+
+  async function handleSend(e: React.FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || isLoading) return;
+    setInput('');
+    await chat.sendMessage(text); // one call — subscribe + run are fused, no race
+  }
+
+  async function approve(interruptId: string, approved: boolean) {
+    setInterrupts([]);
+    await chat.sendMessage({ interruptResponses: [{ interruptId, approved }] }); // same call resumes
+  }
+
+  return (
+    <div>
+      <ul>
+        {messages.map((m) => (
+          <li key={m.id} data-role={m.role}>
+            {m.role === 'approval' ? (
+              // `ChatMessage` is a discriminated union on `role`: narrowing to
+              // 'approval' types `metadata` as `ApprovalMetadata`, so you read
+              // `m.metadata?.approved` / `.toolName` with no cast.
+              <strong>{m.metadata?.approved ? '✓' : '✗'} {m.metadata?.toolName}: {m.content}</strong>
+            ) : (
+              <><strong>{m.role}:</strong> {m.content}</>
+            )}
+          </li>
+        ))}
+      </ul>
+      {interrupts.map((i) => (
+        <div key={i.interruptId}>
+          Run {i.name}?
+          <button onClick={() => approve(i.interruptId, true)}>Approve</button>
+          <button onClick={() => approve(i.interruptId, false)}>Deny</button>
+        </div>
+      ))}
+      <form onSubmit={handleSend}>
+        <input value={input} onChange={(e) => setInput(e.target.value)} disabled={isLoading} />
+        <button type="submit" disabled={isLoading}>Send</button>
+      </form>
+    </div>
+  );
+}
+```
+
+Key points:
+
+- **One instance, held in a ref.** `useRef` + the lazy `if (!chatRef.current)` guard is the React idiom for "construct once." Unlike `useChat`, `createChat` is **not** `use`-prefixed, so `eslint-plugin-react-hooks` does not flag the guarded call — no `eslint-disable` is needed. What you must **not** do is call `createChat(...)` unguarded on every render: that recreates the instance (and its transport) each time and drops the subscription.
+- **Callbacks are your reactivity bridge.** `createChat` mutates its own message list in place; `onMessagesChange` / `onLoadingChange` hand you the new value so you can `setState` and trigger a render. Passing `setMessages` / `setIsLoading` directly is enough.
+- **Approvals reuse `sendMessage`.** `onInterrupt` populates state to render an approval UI; continue the turn with `chat.sendMessage({ interruptResponses })` — there is no separate resume method. Each interrupt carries `interruptId` (the same field you pass back in the response — no remap). Type the interrupts `useState` explicitly (`Array<{ interruptId: string; name: string; reason?: unknown }>`), because a bare `useState([])` infers `never[]` and rejects the payload.
+- **Clean up on unmount** with `chat.destroy()` in a `useEffect` cleanup, so the transport subscription is closed.
+
+**Next.js:** keep the `'use client'` directive at the top of the file — `createChat` opens a browser WebSocket and holds client state, so it must run in a Client Component, never a Server Component. No other changes are needed.
+
+## Client Hook — `useChat` (deprecated)
+
+> **Deprecated — prefer [`createChat`](#client-api--createchat-recommended).** `useChat` couples call sites to the Realtime channel mechanism (you hand-write a `subscribe` callback and an `api` adapter). `createChat` replaces the `subscribe` callback with a single `transport` and fuses subscribe + run. `useChat` remains for backward compatibility and is unchanged.
 
 Import from `@aws-blocks/bb-agent/client`. Manages conversation state, streaming subscriptions, and interrupt handling. Handles the subscribe-before-send ordering automatically.
 

@@ -1,5 +1,10 @@
 import { platform } from 'node:os';
 
+import { isCI as ciInfoIsCI } from 'ci-info';
+
+// Checked by the previous implementation; ci-info does not match these alone.
+const EXTRA_CI_ENV_VARS = ['CODEBUILD_BUILD_ID', 'JENKINS_URL', 'BITBUCKET_BUILD_NUMBER', 'TASKCLUSTER_ROOT_URL'];
+
 /**
  * Detect the OS platform.
  */
@@ -14,25 +19,12 @@ export function detectNodeVersion(): string {
   return process.versions.node;
 }
 
-/**
- * Detect whether the current process is running inside a CI/CD environment.
- */
+/** ci-info result (fixed at import) OR per-call extra checks; `CI=false` at startup disables both. */
 export function isCI(): boolean {
-  return !!(
-    process.env.CI ||
-    process.env.CONTINUOUS_INTEGRATION ||
-    process.env.BUILD_NUMBER ||
-    process.env.CODEBUILD_BUILD_ID ||
-    process.env.GITHUB_ACTIONS ||
-    process.env.GITLAB_CI ||
-    process.env.CIRCLECI ||
-    process.env.JENKINS_URL ||
-    process.env.TF_BUILD ||
-    process.env.BITBUCKET_BUILD_NUMBER ||
-    process.env.BUILDKITE ||
-    process.env.RENDER ||
-    process.env.TASKCLUSTER_ROOT_URL
-  );
+  if (ciInfoIsCI) return true;
+  const env = process.env;
+  if (env.CI === 'false') return false;
+  return EXTRA_CI_ENV_VARS.some((key) => !!env[key]);
 }
 
 /**
