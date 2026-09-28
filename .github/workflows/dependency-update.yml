@@ -8,14 +8,25 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # OIDC -> Bedrock for the agentic remediation step (mirrors agent-bench.yml).
+  # Only exercised when the post-bump build/e2e fails; harmless otherwise.
+  id-token: write
 
 jobs:
   update-deps:
     name: Bump Dependencies
     runs-on: ubuntu-latest
+    # `publish` env holds AWS_ROLE_ARN (the OIDC role the remediation agent
+    # assumes to reach Bedrock), matching agent-bench.yml / pr-checks.yml.
+    environment: publish
+    # Room for the (opt-in) agentic remediation loop on top of install/build/e2e.
+    timeout-minutes: 90
     env:
       NODE_OPTIONS: '--test-reporter=spec'
       HUSKY: '0'
+      AWS_REGION: us-east-1
+      # Bedrock geo inference-profile shared with agent-bench; overridable via repo var.
+      DEP_REMEDIATION_MODEL: us.anthropic.claude-opus-4-8
     steps:
       - uses: actions/checkout@v7
 
@@ -31,27 +42,140 @@ jobs:
 
       - run: npm install -g npm-check-updates
 
-      - name: Bump root + workspace packages
-        run: ncu -u --root --workspaces
+      # MINOR-ONLY: `--target minor` upgrades to the highest minor/patch WITHOUT
+      # crossing a major boundary (it never selects a version whose major is
+      # higher than what package.json declares). Majors are intentionally left
+      # out — they carry documented breaking changes that a weekly automated PR
+      # should not silently absorb, and they were the usual cause of this job's
+      # build/e2e checks going red. Majors are handled deliberately, out of band.
+      - name: Bump root + workspace packages (minor only)
+        run: ncu -u --target minor --root --workspaces
 
-      - name: Bump templates
+      - name: Bump templates (minor only)
         run: |
           for dir in packages/create-blocks-app/templates/*/; do
             echo "Updating $dir"
-            ncu -u --cwd "$dir"
+            ncu -u --target minor --cwd "$dir"
           done
 
+      # ── First verification pass (non-fatal) ───────────────────────────────
+      # A "minor" bump is supposed to be non-breaking, but semver is a promise
+      # publishers don't always keep — a minor can still break our build or a
+      # transitive bump can introduce a dependency conflict. Capture the outcome
+      # instead of failing the job, so the agentic remediation step below can
+      # attempt to absorb the breakage before we decide whether to open a PR.
       - name: Install and build
+        id: build
+        continue-on-error: true
         run: |
           npm install
           npm run build
 
       - name: Verify with local e2e
+        id: e2e
+        # Only meaningful if the build produced dist/; skip (leave 'skipped') on a
+        # build failure so `needs_remediation` keys off the build failure alone.
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: npm run test:e2e:local
+
+      # Did the minor bump break something a human would otherwise have to fix?
+      - name: Decide whether remediation is needed
+        id: gate
+        run: |
+          if [ "${{ steps.build.outcome }}" != "success" ] || [ "${{ steps.e2e.outcome }}" != "success" ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Dependency remediation::build='${{ steps.build.outcome }}' e2e='${{ steps.e2e.outcome }}' — invoking the remediation agent."
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Build + e2e passed on the raw minor bump; no remediation needed."
+          fi
+
+      # ── Agentic remediation (only when the minor bump broke the build/e2e) ──
+      # OIDC -> Bedrock, exactly like agent-bench.yml. A Strands agent with a
+      # workspace-rooted shell + file editor is handed the failing build/e2e
+      # output and asked to patch our source to absorb the breaking "minor"
+      # change (or resolve the dependency conflict). See scripts/dep-remediation.
+      - name: Configure AWS credentials (OIDC)
+        id: oidc
+        if: steps.gate.outputs.needed == 'true'
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
+          # LEAST PRIVILEGE: narrow the session to Bedrock model-invocation only,
+          # so the shell-capable agent step cannot reach any other AWS API even
+          # though the shared role may grant more. Mirrors the inline-session-policy
+          # rationale documented at length in agent-bench.yml. This is the SESSION
+          # half; the role's own identity policy must also grant these actions.
+          inline-session-policy: >-
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "BedrockInvokeOnly",
+                  "Effect": "Allow",
+                  "Action": [
+                    "bedrock:InvokeModelWithResponseStream",
+                    "bedrock:Converse"
+                  ],
+                  "Resource": [
+                    "arn:aws:bedrock:*:*:inference-profile/*",
+                    "arn:aws:bedrock:*:*:application-inference-profile/*",
+                    "arn:aws:bedrock:*::foundation-model/*"
+                  ]
+                }
+              ]
+            }
+
+      # SECURITY: this step runs an LLM agent with a shell tool over OUR checkout.
+      # The OIDC session above is Bedrock-only, and the job is only ever triggered
+      # by our own schedule / manual dispatch (no fork/PR input), so there is no
+      # untrusted prompt-injection vector and no reachable AWS API beyond Bedrock.
+      - name: Agentic remediation
+        id: remediate
+        if: steps.gate.outputs.needed == 'true' && steps.oidc.outcome == 'success'
+        timeout-minutes: 40
+        env:
+          WORKSPACE: ${{ github.workspace }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}
+          DEP_REMEDIATION_MODEL: ${{ vars.DEP_REMEDIATION_MODEL || env.DEP_REMEDIATION_MODEL }}
+        run: |
+          # dep-remediation is a root workspace, so its deps (@strands-agents/sdk,
+          # tsx) are normally installed by the "Install and build" step's root
+          # `npm install`. But a minor bump can break the root install itself (a
+          # dependency conflict is exactly one thing we want the agent to fix), in
+          # which case the SDK/tsx may be missing. Guarantee the agent's OWN deps
+          # in isolation (no workspace resolution, no root lockfile) so the agent
+          # can still run and repair the broken root tree.
+          if ! npx --no-install tsx --version >/dev/null 2>&1; then
+            echo "Root install incomplete — installing dep-remediation deps in isolation."
+            npm install --no-save --prefix scripts/dep-remediation \
+              @strands-agents/sdk@^1.8.0 tsx@^4.7.0
+          fi
+          npx tsx scripts/dep-remediation/remediate.ts
+
+      # ── Second verification pass (authoritative when remediation ran) ──────
+      # If remediation ran, re-run build + e2e and FAIL the job when they still
+      # don't pass — we never want to open a PR whose checks we already know are
+      # red. When no remediation was needed, this simply re-confirms the green
+      # first pass.
+      - name: Re-verify build
+        if: steps.gate.outputs.needed == 'true'
+        run: |
+          npm install
+          npm run build
+
+      - name: Re-verify local e2e
+        if: steps.gate.outputs.needed == 'true'
         run: npm run test:e2e:local
 
       - name: Create PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REMEDIATED: ${{ steps.gate.outputs.needed }}
         run: |
           BRANCH="chore/dependency-update-$(date +%Y-%m-%d)"
           git config user.name "github-actions[bot]"
@@ -64,11 +188,24 @@ jobs:
           fi
           git commit -m "chore: weekly dependency bump $(date +%Y-%m-%d)"
           git push -u origin "$BRANCH"
+          if [ "$REMEDIATED" = "true" ]; then
+            REMEDIATION_NOTE="
+
+          > ⚠️ **Agentic remediation ran.** The raw minor bump broke the build/e2e, so a
+          > Bedrock-backed agent patched the source to absorb the breaking \"minor\" change
+          > (or a dependency conflict). Build + e2e pass **after** those patches. Review the
+          > non-\`package*.json\` changes in this PR with extra care."
+          else
+            REMEDIATION_NOTE=""
+          fi
           gh pr create \
             --title "chore: weekly dependency bump $(date +%Y-%m-%d)" \
-            --body "Automated aggressive dependency bump via \`npm-check-updates\`.
+            --body "Automated **minor-only** dependency bump via \`npm-check-updates\` (\`--target minor\`).
 
-          **Scope:** root, all workspace packages, and templates.
+          **Scope:** root, all workspace packages, and templates. Major-version upgrades are
+          intentionally excluded (handled deliberately, out of band) so this PR's checks stay green.
 
-          Build and local e2e passed. Please review and merge." \
+          Build and local e2e passed.${REMEDIATION_NOTE}
+
+          Please review and merge." \
             --base main

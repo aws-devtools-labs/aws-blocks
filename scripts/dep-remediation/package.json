@@ -1,0 +1,17 @@
+{
+	"name": "@aws-blocks/dep-remediation",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Agentic remediation for the weekly minor-only dependency bump: when a 'minor' upgrade breaks build/e2e, a Bedrock + Strands agent patches the source to absorb it. Private workspace package — not published.",
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "tsc --noEmit && node --test steps/*.test.mjs"
+	},
+	"devDependencies": {
+		"@strands-agents/sdk": "^1.8.0",
+		"@types/node": "^20.0.0",
+		"tsx": "^4.7.0",
+		"typescript": "^5.3.0"
+	}
+}
