@@ -439,6 +439,12 @@ if (hasAuthError(next, AuthCognitoErrors.NotAuthorized)) {
 
 Rule of thumb: **throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Never match on the human-facing `error` string.
 
+Both `getAuthState()` and `setAuthState()` return an [`AuthState`](../auth-common/README.md#authstate). `AuthCognito` doesn't re-export the type — import it from `@aws-blocks/auth-common`:
+
+```typescript
+import type { AuthState } from '@aws-blocks/auth-common';
+```
+
 For the `setAuthState()` path, auth failures resolve to an error state instead
 of rejecting the promise. A non-retriable failure returns the normal signed-out
 state with the available sign-in actions plus `error` and, when available,
