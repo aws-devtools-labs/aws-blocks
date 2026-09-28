@@ -70,15 +70,16 @@ const res = await api.ping('world');   // { message: 'hi world' }
 
 ### Calling the API directly (troubleshooting only)
 
-If you do need to hit the API without the typed client (e.g. checking a deployed app without a browser): **every namespace shares one endpoint**, `POST <origin>/aws-blocks/api` (locally `http://localhost:3000/aws-blocks/api`). The namespace goes in the JSON-RPC `method` field, not the URL — there are no per-namespace paths, so `/aws-blocks/authApi` or `/aws-blocks/api/listTodos` return 404.
+If you do need to hit the API without the typed client (e.g. checking a deployed app without a browser): **every namespace shares one endpoint**, `POST <origin>/aws-blocks/api` (locally `http://localhost:3000/aws-blocks/api`). The namespace goes in the JSON-RPC `method` field, not the URL: there are no per-namespace paths like `/aws-blocks/authApi`, and anything after `/aws-blocks/api` in the path is ignored. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`), not the 2nd `ApiNamespace` argument.
 
 ```bash
 curl -X POST http://localhost:3000/aws-blocks/api \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"authApi.getAuthState","params":[],"id":1}'
+  -d '{"jsonrpc":"2.0","method":"api.<yourMethod>","params":[],"id":1}'
 ```
 
-- `method` is `"<namespace>.<method>"`; `params` is a positional array.
+- `method` is `"<exportName>.<method>"` — use a method your `aws-blocks/index.ts` actually defines. If the app exports `authApi = auth.createApi()`, auth calls are `"authApi.getAuthState"` etc. A wrong name returns `-32601 Method not found` listing the available namespaces.
+- `params` is a positional array.
 - Errors return HTTP `200` with an `{"error":{...}}` body — check the body, not the status.
 - Auth is an `HttpOnly` session cookie: save it on sign-in with `curl -c cookies.txt` and resend it with `-b cookies.txt`.
 - More examples: `TROUBLESHOOTING.md` in the docs folder (see the **AWS Blocks docs** bullet above).
