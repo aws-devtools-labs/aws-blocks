@@ -38,6 +38,9 @@ export const ApiNamespace: ApiNamespaceConstructor;
 export const BLOCKS_AUTH_PREFIX = "/aws-blocks/auth";
 
 // @public
+export const BLOCKS_ERROR_BRAND: unique symbol;
+
+// @public
 export const BLOCKS_RPC_PREFIX = "/aws-blocks/api";
 
 // @public (undocumented)
@@ -60,6 +63,9 @@ export type BlocksContext = {
 
 // @public
 export function blocksError(name: string, message: string): Error;
+
+// @public
+export function brandBlocksError<T extends Error>(err: T): T;
 
 // @public
 export interface BuildingBlockMeta {
@@ -121,6 +127,9 @@ export { isConfig }
 export { isManagedValue }
 
 export { isSecret }
+
+// @public
+export function isWireSafeError(e: unknown): e is Error;
 
 // @public
 export function loadConfigToProcessEnv(): Promise<void>;

@@ -105,7 +105,7 @@ export function isWireSafeError(e: unknown): e is Error {
 }
 
 /**
- * Stamp the non-enumerable {@link BLOCKS_ERROR_BRAND} onto an already-built named
+ * Stamp the non-enumerable `BLOCKS_ERROR_BRAND` onto an already-built named
  * `Error` and return it, so its `name` crosses the RPC wire (D-003) instead of
  * being collapsed to a nameless 500.
  *
@@ -143,7 +143,7 @@ export function brandBlocksError<T extends Error>(err: T): T {
  * no runtime dependencies, so it is safe to use in every bundle — mock,
  * aws-runtime, and CDK synth.
  *
- * The error also carries the non-enumerable {@link BLOCKS_ERROR_BRAND} (via
+ * The error also carries the non-enumerable `BLOCKS_ERROR_BRAND` (via
  * {@link brandBlocksError}), the signal the RPC serializer reads to forward this
  * `name` over the wire while still collapsing raw driver/SDK exceptions to a
  * nameless 500.
