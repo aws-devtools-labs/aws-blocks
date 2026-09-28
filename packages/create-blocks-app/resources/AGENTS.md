@@ -21,7 +21,7 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
   const todos = await api.listTodos();          // typed, awaited call
   ```
 
-  At runtime that import resolves to an auto-generated **client proxy** (`aws-blocks/client.js`), not the server module — the types come from your backend, the transport is injected. **The JSON-RPC transport is invisible: never build request payloads by hand or `fetch()` the API directly** (only for one-off connectivity troubleshooting). Just import the namespace and call the method.
+  At runtime that import resolves to an auto-generated **client proxy** (`aws-blocks/client.js`), not the server module — the types come from your backend, the transport is injected. **The JSON-RPC transport is invisible: never build request payloads by hand or `fetch()` the API directly** (only for one-off connectivity troubleshooting — see **Calling the API directly** below). Just import the namespace and call the method.
 - **Pitfall:** do not `import ... from '../aws-blocks/index.ts'` in a script/test to call the API — that gives you the *server* definition object, which behaves differently from the client. Import from `'aws-blocks'` (the package name) so you get the client, exactly as `src/` does.
 
 ### Methods are namespaced
@@ -67,6 +67,21 @@ const res = await api.ping('world');   // { message: 'hi world' }
 2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
 3. For faster iteration: run `npm run dev &` in the background, then run `npm run test:e2e` repeatedly (reuses the running server)
 4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
+
+### Calling the API directly (troubleshooting only)
+
+If you do need to hit the API without the typed client (e.g. checking a deployed app without a browser): **every namespace shares one endpoint**, `POST <origin>/aws-blocks/api` (locally `http://localhost:3000/aws-blocks/api`). The namespace goes in the JSON-RPC `method` field, not the URL — there are no per-namespace paths, so `/aws-blocks/authApi` or `/aws-blocks/api/listTodos` return 404.
+
+```bash
+curl -X POST http://localhost:3000/aws-blocks/api \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"authApi.getAuthState","params":[],"id":1}'
+```
+
+- `method` is `"<namespace>.<method>"`; `params` is a positional array.
+- Errors return HTTP `200` with an `{"error":{...}}` body — check the body, not the status.
+- Auth is an `HttpOnly` session cookie: save it on sign-in with `curl -c cookies.txt` and resend it with `-b cookies.txt`.
+- More examples: `TROUBLESHOOTING.md` in the docs folder (see the **AWS Blocks docs** bullet above).
 
 ## Rules
 
