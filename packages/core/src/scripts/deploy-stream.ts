@@ -290,6 +290,21 @@ export function extractHostingUrlFromLine(line: string): string | null {
   return m ? m[1].replace(/[.,);]+$/, '') : null;
 }
 
+/**
+ * The single machine-readable completion line a caller (a coding agent, a CI
+ * step, a script) greps for "deploy done + where it lives", instead of parsing
+ * CloudFormation output or polling the stack. Pure + exported so it is unit
+ * tested and shared by both `deploy()` and `sandbox()`; each prints exactly this
+ * string on its success path. `api=` is always present; `url=` (the public
+ * frontend) only when the app deployed hosting — a sandbox deploy serves the
+ * frontend locally, so it omits `url=`.
+ */
+export function formatDeploySignal(apiUrl: string, hostingUrl?: string): string {
+  return hostingUrl
+    ? `BLOCKS_DEPLOYED url=${hostingUrl} api=${apiUrl}`
+    : `BLOCKS_DEPLOYED api=${apiUrl}`;
+}
+
 export interface CdkDeployArgsOptions {
   /** Project root passed to synth as `--context projectRoot=…`. */
   projectRoot: string;

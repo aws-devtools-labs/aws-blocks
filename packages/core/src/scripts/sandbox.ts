@@ -12,6 +12,7 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { formatDeploySignal } from './deploy-stream.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
@@ -205,6 +206,13 @@ export async function startSandbox(options: SandboxOptions) {
 
   console.log("\n✅ Sandbox deployed!");
   console.log(`📡 API URL: ${apiUrl}`);
+
+  // Same machine-readable completion line as `npm run deploy`, so a caller can
+  // grep one stable line after a sandbox deploy instead of parsing streamed
+  // output. Sandbox serves the frontend locally (no CloudFront), so there is no
+  // hosting URL — the signal is backend-only (`BLOCKS_DEPLOYED api=…`). Printed
+  // before the deploy-only return below so both paths emit it.
+  console.log(`\n${formatDeploySignal(apiUrl)}`);
 
   buildAndSendEvent({
     command: 'sandbox',
