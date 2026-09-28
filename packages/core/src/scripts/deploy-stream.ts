@@ -196,6 +196,100 @@ export function formatElapsed(ms: number): string {
   return minutes > 0 ? `${minutes}m ${String(seconds).padStart(2, '0')}s` : `${seconds}s`;
 }
 
+/** One resource transition parsed from a `cdk deploy --progress events` line. */
+export interface CdkResourceEvent {
+  /** CloudFormation resource status, e.g. `CREATE_IN_PROGRESS`, `CREATE_COMPLETE`. */
+  status: string;
+  /** CloudFormation resource type, e.g. `AWS::CloudFront::Distribution`. */
+  resourceType: string;
+  /** The resource's logical id, e.g. `HostingDistribution`. */
+  logicalId: string;
+}
+
+// A `cdk deploy --progress events` line is pipe-delimited:
+//   StackName | STATUS | Namespace::Service::Type | LogicalId  [| optional reason]
+// CDK prefixes each with a spinner/timestamp fragment and pads the columns, so
+// we match the STATUS | TYPE | LOGICALID triple anywhere in the line rather
+// than anchoring to the start. STATUS is an uppercase CloudFormation status
+// (a self-clearing transient the tracker ignores), TYPE is a CloudFormation
+// resource type — `AWS::x::y`, but also `Custom::x` (a custom resource such as
+// the DistributedTable GSI manager, which is exactly what a serialized-GSI
+// deploy sits on) — and LOGICALID is the first token after it. Purely
+// structural: no dependency on CDK's exact spacing or leading fragment.
+const CDK_EVENT_LINE = /\b([A-Z][A-Z0-9_]*(?:_IN_PROGRESS|_COMPLETE|_FAILED))\s*\|\s*([A-Za-z0-9]+::[A-Za-z0-9:]+)\s*\|\s*([^\s|]+)/;
+
+/**
+ * Parse a single CDK `--progress events` line into a resource transition, or
+ * return `null` for any line that is not one (banners, summaries, blank lines).
+ * Pure and exported so the parsing is unit-tested directly against real CDK
+ * output shapes.
+ */
+export function parseCdkEventLine(line: string): CdkResourceEvent | null {
+  const m = CDK_EVENT_LINE.exec(line);
+  if (!m) return null;
+  return { status: m[1], resourceType: m[2], logicalId: m[3] };
+}
+
+/**
+ * Render the human-friendly resource name used in the heartbeat, e.g.
+ * `HostingDistribution (AWS::CloudFront::Distribution)`. Kept pure so the
+ * heartbeat's wording is asserted without a running deploy.
+ */
+export function describeConvergingResource(event: CdkResourceEvent): string {
+  return `${event.logicalId} (${event.resourceType})`;
+}
+
+/**
+ * Track which resource is currently converging, from the stream of CDK event
+ * lines. A resource becomes "current" when it enters `*_IN_PROGRESS` and is
+ * cleared when it reaches a terminal `*_COMPLETE` / `*_FAILED`, so the heartbeat
+ * can say what the deploy is actually waiting on right now instead of a bare
+ * tick. Pure and stateful like {@link createLineAssembler}; feed it every
+ * relayed line.
+ */
+export function createResourceTracker(): {
+  observe(line: string): void;
+  current(): CdkResourceEvent | null;
+} {
+  let current: CdkResourceEvent | null = null;
+  return {
+    observe(line: string): void {
+      const event = parseCdkEventLine(line);
+      if (!event) return;
+      if (event.status.endsWith('_IN_PROGRESS')) {
+        current = event;
+      } else if (
+        current &&
+        event.logicalId === current.logicalId &&
+        (event.status.endsWith('_COMPLETE') || event.status.endsWith('_FAILED'))
+      ) {
+        // The resource we were reporting on has settled; stop naming it. The
+        // next _IN_PROGRESS line names whatever the deploy moves on to.
+        current = null;
+      }
+    },
+    current: () => current,
+  };
+}
+
+// CDK prints the stack's CloudFront/hosting URL as an Outputs line once the
+// distribution is created, e.g.  `Foo.HostingDistributionUrl = https://d123.cloudfront.net`
+// — which lands on stdout well BEFORE full CREATE_COMPLETE and the post-run
+// outputs.json read. Matching it lets deploy() surface the URL early, so a
+// deploy that is still converging (or gets killed at a caller timeout) has
+// already told the agent where the app lives.
+const CDK_HOSTING_URL_LINE = /(?:Hosting|Cdn|Distribution)\w*Url\s*[:=]\s*(https:\/\/[^\s]+)/i;
+
+/**
+ * Extract the hosting (CloudFront) URL from a single streamed line, or `null`.
+ * Pure and exported so the recognition is unit-tested against real CDK Outputs
+ * shapes without a deploy.
+ */
+export function extractHostingUrlFromLine(line: string): string | null {
+  const m = CDK_HOSTING_URL_LINE.exec(line);
+  return m ? m[1].replace(/[.,);]+$/, '') : null;
+}
+
 export interface CdkDeployArgsOptions {
   /** Project root passed to synth as `--context projectRoot=…`. */
   projectRoot: string;
@@ -268,6 +362,13 @@ export interface RunStreamingOptions {
   now?: () => number;
   /** Injected for tests: signal registration seam. */
   signalTarget?: SignalRegistry;
+  /**
+   * Called with the hosting (CloudFront) URL the first time it is seen in the
+   * streamed CDK output — which is BEFORE the child exits and the post-run
+   * outputs.json read. Lets a caller emit the "deployed" signal early so it
+   * survives a caller-timeout kill. Fired at most once.
+   */
+  onHostingUrl?: (url: string) => void;
 }
 
 /** Raised when the child exits non-zero, is killed, or the operator aborts. */
@@ -335,12 +436,19 @@ export async function runStreaming(
     stderr = process.stderr,
     now = Date.now,
     signalTarget = process,
+    onHostingUrl,
   } = options;
 
   const startedAt = now();
   let lastOutputAt = startedAt;
   let aborting = false;
   let exitObserved = false;
+  // Tracks the resource CloudFormation is currently converging, so the
+  // heartbeat can name it instead of printing a bare tick.
+  const resources = createResourceTracker();
+  // The hosting URL is reported at most once, the first time it appears in the
+  // stream (well before the child exits).
+  let hostingUrlSeen = false;
   // Per signal, when its current deferral window opened. Kept per signal so a
   // deferred SIGHUP neither consumes the SIGTERM abort budget nor silently
   // swallows its own log line.
@@ -358,27 +466,50 @@ export async function runStreaming(
   const relay = (
     stream: NodeJS.ReadableStream | null | undefined,
     sink: OutputSink,
+    trackProgress: boolean,
   ): void => {
     if (!stream) return;
     const assembler = createLineAssembler();
     stream.setEncoding('utf-8');
     stream.on('data', (chunk: string) => {
       lastOutputAt = now();
-      for (const line of assembler.push(chunk)) sink.write(`${line}\n`);
+      for (const line of assembler.push(chunk)) {
+        if (trackProgress) observeProgressLine(line);
+        sink.write(`${line}\n`);
+      }
     });
     stream.on('end', () => {
-      for (const line of assembler.flush()) sink.write(`${line}\n`);
+      for (const line of assembler.flush()) {
+        if (trackProgress) observeProgressLine(line);
+        sink.write(`${line}\n`);
+      }
     });
   };
-  relay(child.stdout, stdout);
-  relay(child.stderr, stderr);
+  // Update the converging-resource tracker and surface the hosting URL the first
+  // time it appears — both read from the CDK progress stream on stdout.
+  const observeProgressLine = (line: string): void => {
+    resources.observe(line);
+    if (!hostingUrlSeen && onHostingUrl) {
+      const url = extractHostingUrlFromLine(line);
+      if (url) {
+        hostingUrlSeen = true;
+        onHostingUrl(url);
+      }
+    }
+  };
+  relay(child.stdout, stdout, true);
+  relay(child.stderr, stderr, false);
 
   const heartbeat =
     heartbeatMs > 0
       ? setInterval(() => {
           if (now() - lastOutputAt < heartbeatMs) return;
+          const converging = resources.current();
+          const waitingOn = converging
+            ? `waiting on ${describeConvergingResource(converging)}`
+            : 'CloudFormation is converging';
           stdout.write(
-            `⏳ [${label}] still running after ${formatElapsed(now() - startedAt)} — CloudFormation is converging (pid ${child.pid ?? '?'})\n`,
+            `⏳ [${label}] still running after ${formatElapsed(now() - startedAt)} — ${waitingOn} (pid ${child.pid ?? '?'})\n`,
           );
         }, heartbeatMs)
       : undefined;

@@ -16,6 +16,10 @@ import {
   runStreaming,
   DeployProcessError,
   SIGNAL_COALESCE_MS,
+  parseCdkEventLine,
+  describeConvergingResource,
+  createResourceTracker,
+  extractHostingUrlFromLine,
   type OutputSink,
   type SignalRegistry,
 } from './deploy-stream.js';
@@ -1031,5 +1035,98 @@ describe('a backgrounded deploy survives the group SIGTERM that killed it before
       if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ } }
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── Converging-resource attribution (Part A: name what the deploy waits on) ──
+// The heartbeat used to print a bare "CloudFormation is converging"; these cover
+// the pure pieces that let it say WHICH resource instead.
+
+describe('parseCdkEventLine — reads a `cdk deploy --progress events` line', () => {
+  it('parses the STATUS | TYPE | LOGICALID triple from a padded CDK line', (t: TestContext) => {
+    const event = parseCdkEventLine(
+      'ProbeStack | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | HostingDistribution',
+    );
+    t.assert.deepStrictEqual(event, {
+      status: 'CREATE_IN_PROGRESS',
+      resourceType: 'AWS::CloudFront::Distribution',
+      logicalId: 'HostingDistribution',
+    });
+  });
+
+  it('parses a COMPLETE transition too', (t: TestContext) => {
+    const event = parseCdkEventLine('Foo | CREATE_COMPLETE | AWS::Lambda::Function | Handler');
+    t.assert.strictEqual(event?.status, 'CREATE_COMPLETE');
+    t.assert.strictEqual(event?.logicalId, 'Handler');
+  });
+
+  it('returns null for a non-event line (banner, summary, blank)', (t: TestContext) => {
+    t.assert.strictEqual(parseCdkEventLine('✨  Deployment time: 421s'), null);
+    t.assert.strictEqual(parseCdkEventLine(''), null);
+    t.assert.strictEqual(parseCdkEventLine('🌐 Frontend URL: https://x.cloudfront.net'), null);
+  });
+});
+
+describe('describeConvergingResource — the heartbeat name', () => {
+  it('renders `LogicalId (AWS::Type)`', (t: TestContext) => {
+    t.assert.strictEqual(
+      describeConvergingResource({
+        status: 'CREATE_IN_PROGRESS',
+        resourceType: 'AWS::CloudFront::Distribution',
+        logicalId: 'HostingDistribution',
+      }),
+      'HostingDistribution (AWS::CloudFront::Distribution)',
+    );
+  });
+});
+
+describe('createResourceTracker — what is converging right now', () => {
+  it('reports the resource that entered *_IN_PROGRESS', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | Dist');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Dist');
+  });
+
+  it('clears the current resource when it reaches *_COMPLETE', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | Dist');
+    tracker.observe('S | CREATE_COMPLETE | AWS::CloudFront::Distribution | Dist');
+    t.assert.strictEqual(tracker.current(), null);
+  });
+
+  it('advances to the next in-progress resource (the serialized-GSI case)', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | CREATE_IN_PROGRESS | Custom::GsiManager | gsiresource');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'gsiresource');
+    tracker.observe('S | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | Dist');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Dist');
+  });
+
+  it('ignores non-event lines without dropping the current resource', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | Dist');
+    tracker.observe('some banner line');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Dist');
+  });
+});
+
+describe('extractHostingUrlFromLine — surface the URL early', () => {
+  it('recognizes a CDK Outputs hosting-url line (= form)', (t: TestContext) => {
+    t.assert.strictEqual(
+      extractHostingUrlFromLine('Foo.HostingDistributionUrl = https://d123.cloudfront.net'),
+      'https://d123.cloudfront.net',
+    );
+  });
+
+  it('recognizes the : form and trims trailing punctuation', (t: TestContext) => {
+    t.assert.strictEqual(
+      extractHostingUrlFromLine('HostingCdnDistributionUrl: https://d456.cloudfront.net.'),
+      'https://d456.cloudfront.net',
+    );
+  });
+
+  it('returns null for an unrelated line', (t: TestContext) => {
+    t.assert.strictEqual(extractHostingUrlFromLine('📡 API URL: https://api.example.com'), null);
+    t.assert.strictEqual(extractHostingUrlFromLine('CREATE_COMPLETE'), null);
   });
 });

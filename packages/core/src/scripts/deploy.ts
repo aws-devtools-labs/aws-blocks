@@ -79,6 +79,12 @@ export async function deploy(options: DeployOptions) {
     console.log('   Streaming CloudFormation events below; the deploy keeps running if this');
     console.log('   process is backgrounded (press Ctrl-C, or send SIGTERM twice, to abort).');
 
+    // Captured from the CDK progress stream the moment CloudFront's URL appears
+    // — well before CREATE_COMPLETE and the post-run outputs.json read. Printing
+    // it early means a deploy that is still converging, or gets killed at a
+    // caller's timeout, has already surfaced where the frontend lives.
+    let earlyHostingUrl: string | undefined;
+
     try {
       await runStreaming(
         "npx",
@@ -93,7 +99,15 @@ export async function deploy(options: DeployOptions) {
             ...process.env,
             NODE_OPTIONS: '--conditions=cdk',
             ...getCdkTelemetryEnv('production')
-          }
+          },
+          onHostingUrl: (url) => {
+            earlyHostingUrl = url;
+            // Not the canonical BLOCKS_DEPLOYED line (that needs the API URL,
+            // known only from outputs.json below). This is an early, greppable
+            // frontend-URL line so a caller learns where the app lives even if
+            // the process is killed before the deploy fully completes.
+            console.log(`\n🌐 Frontend URL (converging): ${url}`);
+          },
         }
       );
     } catch (error) {
@@ -114,7 +128,7 @@ export async function deploy(options: DeployOptions) {
     
     const hostingUrl = Object.entries(stackOutputs).find(([key]) => 
       key.includes('Hosting') && key.includes('Url')
-    )?.[1];
+    )?.[1] ?? earlyHostingUrl;
     
     if (!apiUrl) {
       throw new Error('Could not find API URL in CDK outputs');
