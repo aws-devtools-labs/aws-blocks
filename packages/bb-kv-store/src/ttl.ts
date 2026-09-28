@@ -6,6 +6,7 @@
  * on the exact epoch-seconds value written and on when an item counts as
  * expired. Zero runtime dependencies beyond the error constants.
  */
+import { brandBlocksError } from '@aws-blocks/core';
 import { KVStoreErrors } from './errors.js';
 import type { PutOptions } from './types.js';
 
@@ -27,7 +28,7 @@ const MAX_PLAUSIBLE_EPOCH_SECONDS = 1e11;
 function invalidTtl(message: string): never {
 	const err = new Error(`${KVStoreErrors.ValidationFailed}: ${message}`);
 	err.name = KVStoreErrors.ValidationFailed;
-	throw err;
+	throw brandBlocksError(err);
 }
 
 /** Current time as Unix epoch seconds — the unit DynamoDB TTL expects. */

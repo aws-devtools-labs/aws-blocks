@@ -192,7 +192,7 @@ export function remapItemTooLarge(err: unknown): unknown {
 	if (err instanceof Error && err.name === 'ValidationException' && /size has exceeded/i.test(err.message)) {
 		const remapped = new Error(err.message, { cause: err });
 		remapped.name = DistributedTableErrors.ItemTooLarge;
-		return remapped;
+		return brandBlocksError(remapped);
 	}
 	return err;
 }

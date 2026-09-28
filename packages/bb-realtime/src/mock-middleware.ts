@@ -10,6 +10,7 @@
  */
 
 import { registerMiddleware } from '@aws-blocks/core/client';
+import { brandBlocksError } from '@aws-blocks/core';
 import type { RealtimeChannelDescriptor, RealtimeSubscription, SubscribeOptions, DisconnectReason } from './types.js';
 
 /** Callback for receiving realtime messages. */
@@ -132,6 +133,7 @@ function doConnect(wsUrl: string, isReconnect = false) {
 					if (pending) {
 						const err = new Error(data.message || 'Subscription rejected');
 						err.name = 'ConnectionFailedException';
+						brandBlocksError(err);
 						pending.forEach(p => { p.reject(err); });
 						conn.pendingEstablished.delete(data.channel);
 					}
