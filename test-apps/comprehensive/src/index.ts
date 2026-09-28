@@ -277,7 +277,7 @@ console.log('[Comprehensive Test App] Loaded — all Building Blocks wired up');
 // Agent Chat
 // ============================================================================
 
-import { useChat } from '@aws-blocks/bb-agent/client';
+import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
 
 const chatMessages = document.getElementById('chat-messages')!;
 const chatInput = document.getElementById('chat-input') as HTMLInputElement;
@@ -285,7 +285,7 @@ const chatStatus = document.getElementById('chat-status')!;
 const chatConvos = document.getElementById('chat-convos')!;
 
 const conversations: { conversationId: string; name: string }[] = [];
-let activeChat: ReturnType<typeof useChat> | null = null;
+let activeChat: ReturnType<typeof createChat> | null = null;
 let activeConvoId: string | null = null;
 
 function renderConvoList() {
@@ -317,21 +317,23 @@ function createChatForConvo(conversationId: string) {
 	if (activeChat) activeChat.destroy();
 
 	activeConvoId = conversationId;
-	activeChat = useChat({
-		api: {
-			sendMessage: async (convId, message, channelId) => {
-				await api.agentStream(message, convId, channelId);
+	activeChat = createChat({
+		transport: realtimeTransport({
+			subscribe: async (channelId, handler) => {
+				const { channel } = await api.agentGetChannel(channelId);
+				return channel.subscribe(handler);
 			},
+			sendMessage: async (channelId, message, convId) => {
+				await api.agentStream(message, convId ?? undefined, channelId);
+			},
+			resume: async (channelId, responses, convId) => {
+				await api.agentResume(channelId, responses.map(r => ({ interruptId: r.interruptId, approved: r.approved ?? false, trust: r.trust, toolName: r.toolName, input: r.input })), convId ?? undefined);
+			},
+		}),
+		api: {
 			createConversation: async () => ({ conversationId }),
 			getConversation: async (id) => await api.agentGetConversation(id),
-			resume: async (channelId, responses, convId) => {
-				await api.agentResume(channelId, responses, convId);
-			},
 			getPendingInterrupts: async (id) => await api.agentGetPendingInterrupts(id),
-		},
-		subscribe: async (channelId, handler) => {
-			const result: any = await api.agentGetChannel(channelId);
-			return result.channel.subscribe(handler);
 		},
 		onMessagesChange: (msgs) => {
 			chatMessages.innerHTML = msgs.map(m => {
@@ -360,29 +362,32 @@ function createChatForConvo(conversationId: string) {
 			// Remove any existing interrupt boxes
 			document.querySelectorAll('.blocks-approval-box').forEach(el => el.remove());
 			chatMessages.innerHTML += interrupts.map(i => {
-				const toolName = i.reason?.tool ?? i.name;
-				const isCustomInterrupt = i.reason?.message && i.reason?.trustable === undefined;
+				// `reason` is `unknown` on the createChat surface — narrow it once to the
+				// shape the Agent BB publishes for a tool approval before reading fields.
+				const reason = (i.reason ?? {}) as { tool?: string; message?: string; trustable?: boolean; input?: unknown };
+				const toolName = reason.tool ?? i.name;
+				const isCustomInterrupt = reason.message && reason.trustable === undefined;
 
 				// Custom interrupt — show message with Yes/No (or freeform input in future)
 				if (isCustomInterrupt) {
-					return `<div class="blocks-approval-box" id="approval-${i.id}" style="margin:12px 0; padding:12px; border:2px solid #1565c0; border-radius:8px; background:#e3f2fd; color:#333;">
-						<strong style="font-size:1.1em; color:#1565c0;">⚡ ${toolName}:</strong> ${i.reason.message}<br/>
-						<pre style="margin:8px 0; font-size:0.85em; background:#e8eaf6; padding:8px; border-radius:4px; color:#333;">${JSON.stringify(i.reason?.input, null, 2)}</pre>
-						<button style="padding:8px 16px; margin:4px; background:#4caf50; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.respondInterrupt('${i.id}', 'yes', '${toolName}')">✅ Yes</button>
-						<button style="padding:8px 16px; margin:4px; background:#f44336; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.respondInterrupt('${i.id}', 'no', '${toolName}')">❌ No</button>
+					return `<div class="blocks-approval-box" id="approval-${i.interruptId}" style="margin:12px 0; padding:12px; border:2px solid #1565c0; border-radius:8px; background:#e3f2fd; color:#333;">
+						<strong style="font-size:1.1em; color:#1565c0;">⚡ ${toolName}:</strong> ${reason.message}<br/>
+						<pre style="margin:8px 0; font-size:0.85em; background:#e8eaf6; padding:8px; border-radius:4px; color:#333;">${JSON.stringify(reason.input, null, 2)}</pre>
+						<button style="padding:8px 16px; margin:4px; background:#4caf50; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.respondInterrupt('${i.interruptId}', 'yes', '${toolName}')">✅ Yes</button>
+						<button style="padding:8px 16px; margin:4px; background:#f44336; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.respondInterrupt('${i.interruptId}', 'no', '${toolName}')">❌ No</button>
 					</div>`;
 				}
 
 				// Standard approval interrupt
-				const trustBtn = i.reason?.trustable
-					? `<button style="padding:8px 16px; margin:4px; background:#2196f3; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.id}', true, '${toolName}', true)">🤝 Trust</button>`
+				const trustBtn = reason.trustable
+					? `<button style="padding:8px 16px; margin:4px; background:#2196f3; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.interruptId}', true, '${toolName}', true)">🤝 Trust</button>`
 					: '';
-				return `<div class="blocks-approval-box" id="approval-${i.id}" style="margin:12px 0; padding:12px; border:2px solid #e65100; border-radius:8px; background:#fff3e0; color:#333;">
+				return `<div class="blocks-approval-box" id="approval-${i.interruptId}" style="margin:12px 0; padding:12px; border:2px solid #e65100; border-radius:8px; background:#fff3e0; color:#333;">
 					<strong style="font-size:1.1em; color:#e65100;">🔒 Approval needed:</strong> ${toolName}<br/>
-					<pre style="margin:8px 0; font-size:0.85em; background:#fff8e1; padding:8px; border-radius:4px; color:#333;">${JSON.stringify(i.reason?.input, null, 2)}</pre>
-					<button style="padding:8px 16px; margin:4px; background:#4caf50; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.id}', true, '${toolName}')">✅ Yes</button>
+					<pre style="margin:8px 0; font-size:0.85em; background:#fff8e1; padding:8px; border-radius:4px; color:#333;">${JSON.stringify(reason.input, null, 2)}</pre>
+					<button style="padding:8px 16px; margin:4px; background:#4caf50; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.interruptId}', true, '${toolName}')">✅ Yes</button>
 					${trustBtn}
-					<button style="padding:8px 16px; margin:4px; background:#f44336; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.id}', false, '${toolName}')">❌ No</button>
+					<button style="padding:8px 16px; margin:4px; background:#f44336; color:white; border:none; border-radius:4px; cursor:pointer; font-size:1em;" onclick="window.approveInterrupt('${i.interruptId}', false, '${toolName}')">❌ No</button>
 				</div>`;
 			}).join('');
 		},
@@ -400,7 +405,7 @@ w.approveInterrupt = async (interruptId: string, approved: boolean, toolName: st
 		box.style.background = approved ? '#e8f5e9' : '#ffebee';
 		box.innerHTML = `<strong style="color:${approved ? '#388e3c' : '#c62828'};">${approved ? '✓' : '✗'} ${toolName}: ${label}</strong>`;
 	}
-	await activeChat.respondToInterrupt([{ interruptId, approved, trust, toolName }]);
+	await activeChat.sendMessage({ interruptResponses: [{ interruptId, approved, trust, toolName }] });
 };
 
 w.respondInterrupt = async (interruptId: string, response: string, toolName: string) => {
@@ -412,7 +417,7 @@ w.respondInterrupt = async (interruptId: string, response: string, toolName: str
 		box.style.background = approved ? '#e8f5e9' : '#ffebee';
 		box.innerHTML = `<strong style="color:${approved ? '#388e3c' : '#c62828'};">${approved ? '✓' : '✗'} ${toolName}: ${response}</strong>`;
 	}
-	await activeChat.respondToInterrupt([{ interruptId, approved: response === 'yes', toolName }]);
+	await activeChat.sendMessage({ interruptResponses: [{ interruptId, approved: response === 'yes', toolName }] });
 };
 
 w.chatNew = async () => {

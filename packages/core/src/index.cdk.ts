@@ -97,3 +97,4 @@ export {
 	blocksConfigParameterName,
 	blocksSecretParameterName,
 } from './secret-naming.js';
+export { installClientUserAgent } from './server/client-user-agent.js';

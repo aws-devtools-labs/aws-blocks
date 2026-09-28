@@ -25,6 +25,8 @@ export const AgentErrors = {
 	BrowserNotSupported: 'BrowserNotSupportedException',
 	StreamFailed: 'StreamFailedException',
 	InterruptRequired: 'InterruptRequiredException',
+	/** A client-side usage precondition was violated (e.g. subscribe() with no channel). */
+	InvalidUsage: 'InvalidUsageException',
 } as const;
 
 export function blocksAgentError(name: string, message: string): Error {
