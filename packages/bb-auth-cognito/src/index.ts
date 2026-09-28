@@ -398,7 +398,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 				requireUser(username);
 				delete this.state.users[username];
 				for (const group of Object.keys(this.state.groups)) {
-					this.state.groups[group] = this.state.groups[group].filter((u) => u !== username);
+					this.state.groups[group] = (this.state.groups[group] ?? []).filter((u) => u !== username);
 				}
 				this.flushToDisk();
 			},
@@ -1394,7 +1394,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 		const signed = await this.requireAuth(context);
 		delete this.state.users[signed.username];
 		for (const group of Object.keys(this.state.groups)) {
-			this.state.groups[group] = this.state.groups[group].filter((u) => u !== signed.username);
+			this.state.groups[group] = (this.state.groups[group] ?? []).filter((u) => u !== signed.username);
 		}
 		this.flushToDisk();
 		const id = await this.sessionIdFromCookie(context);

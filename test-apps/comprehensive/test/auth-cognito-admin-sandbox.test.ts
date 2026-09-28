@@ -93,6 +93,28 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 			await api.authCAdminDeleteUser(u);
 		});
 
+		test('requireRole fails closed with 403 (not 404) when the user is deleted mid-session', async () => {
+			const api = getApi();
+			const u = uniqueUser();
+			await api.authCAdminCreateUser(u, PW);
+			await api.authCAdminSetPassword(u, PW);
+			await api.authCAdminAddToGroup(u, 'admins');
+			await api.authCSignIn(u, PW);
+			assert.strictEqual((await api.authCRequireRole('admins')).username, u);
+
+			// Delete the user out from under the live session. deleteUser does NOT
+			// revoke the Blocks session, so requireAuth still succeeds off the record,
+			// but the live AdminListGroupsForUser now throws UserNotFoundException.
+			// The guard must fail closed with its own 403 NotAuthorizedException —
+			// not leak Cognito's 404 (which breaks the documented 401/403 contract
+			// a client bounces to sign-in on).
+			await api.authCAdminDeleteUser(u);
+			await assert.rejects(
+				() => api.authCRequireRole('admins'),
+				(e: unknown) => isBlocksError(e, 'NotAuthorizedException'),
+			);
+		});
+
 		test('admin.revokeUserSessions revokes Cognito refresh tokens (succeeds end-to-end)', async () => {
 			const api = getApi();
 			const u = uniqueUser();

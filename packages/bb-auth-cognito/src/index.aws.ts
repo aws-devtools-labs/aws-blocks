@@ -579,6 +579,53 @@ function asApiError(e: unknown): never {
 	throw new ApiError('Unknown error', 500);
 }
 
+/**
+ * Request-scoped memo: dedupe `factory()` by (`context`, `key`) on a `WeakMap`.
+ * Caches the in-flight Promise so concurrent callers in one request share a
+ * single call, and evicts on rejection so a later caller in the same request can
+ * retry a transient failure (e.g. a Cognito throttle) rather than replay it.
+ * Entries are GC'd with `context` — a fresh per-request object — so a long-lived
+ * singleton holding the `WeakMap` never accumulates. Pure logic, exported so the
+ * dedupe/eviction invariant is unit-testable without an SDK client mock.
+ *
+ * @internal
+ */
+export function memoizePerContext<C extends object, V>(
+	memo: WeakMap<C, Map<string, Promise<V>>>,
+	context: C,
+	key: string,
+	factory: () => Promise<V>,
+): Promise<V> {
+	let bucket = memo.get(context);
+	if (!bucket) {
+		bucket = new Map();
+		memo.set(context, bucket);
+	}
+	const cached = bucket.get(key);
+	if (cached) return cached;
+	const pending = factory();
+	bucket.set(key, pending);
+	// Don't cache a failure — evict once settled-rejected so a later guard retries
+	// rather than replays. The `.catch` also keeps the rejection from surfacing as
+	// unhandled if a caller ever fires and forgets. Guard the identity so a retry's
+	// fresh entry isn't clobbered by the original's late rejection.
+	const owned = bucket;
+	pending.catch(() => {
+		if (owned.get(key) === pending) owned.delete(key);
+	});
+	return pending;
+}
+
+/**
+ * Names declared in `options.groups`, or `undefined` when none are declared
+ * (in which case `GroupOf<O>` is unconstrained `string`). Used by `requireRole`
+ * to keep the returned `groups` within the declared literal union.
+ */
+function declaredGroupNames(groups: AuthCognitoOptions['groups']): Set<string> | undefined {
+	if (!groups || groups.length === 0) return undefined;
+	return new Set(groups.map((g) => (typeof g === 'string' ? g : g.name)));
+}
+
 function statusForCognitoError(name: string): number {
 	switch (name) {
 		case AuthCognitoErrors.NotAuthenticated:
@@ -1624,13 +1671,22 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		// `removeUserFromGroup` against an already-signed-in user would otherwise
 		// not take effect (grant) or not revoke (removal) until that user's token
 		// next refreshed or they re-logged in. Costs one extra Cognito call per
-		// guarded request (deduped per request — see `liveGroupsMemo`); the
-		// returned user's `groups` reflects the live read.
+		// guarded request (deduped per request — see `liveGroupsMemo`).
 		const liveGroups = await this.liveGroupsForUser(user.username, context);
 		if (!liveGroups.includes(role)) {
 			throw new ApiError(`Not in group '${role}'`, 403, { name: AuthCognitoErrors.NotAuthorized });
 		}
-		return { ...user, groups: liveGroups as GroupOf<O>[] };
+		// Narrow the returned list to the declared groups. `AdminListGroupsForUser`
+		// can return groups never declared in `options.groups` (created out of band,
+		// or a pool brought in via `fromExisting`), but `CognitoUser<O>.groups`
+		// promises the declared literal union — so returning the raw live list would
+		// hand an exhaustive caller a value outside its type. The authorization
+		// decision above already used the raw read, so gating the returned field
+		// costs nothing and matches the mock (which only knows declared groups).
+		// No declared groups → `GroupOf<O>` is `string`, so the raw list is sound.
+		const declared = declaredGroupNames(this.options.groups);
+		const groups = declared ? liveGroups.filter((g) => declared.has(g)) : liveGroups;
+		return { ...user, groups: groups as GroupOf<O>[] };
 	}
 
 	/**
@@ -1641,16 +1697,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	 * execution role (see `grantCognitoPermissions` in `index.cdk.ts`).
 	 */
 	private liveGroupsForUser(username: string, context: BlocksContext): Promise<string[]> {
-		let perRequest = this.liveGroupsMemo.get(context);
-		if (!perRequest) {
-			perRequest = new Map();
-			this.liveGroupsMemo.set(context, perRequest);
-		}
-		const cached = perRequest.get(username);
-		if (cached) return cached;
-		const pending = this.fetchGroupsFromCognito(username);
-		perRequest.set(username, pending);
-		return pending;
+		return memoizePerContext(this.liveGroupsMemo, context, username, () => this.fetchGroupsFromCognito(username));
 	}
 
 	private async fetchGroupsFromCognito(username: string): Promise<string[]> {
@@ -1658,6 +1705,10 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		let nextToken: string | undefined;
 		try {
 			do {
+				// The NextToken loop paginates memberships. `Limit` is unset, so the
+				// page size is Cognito's default (60); the sandbox e2e never seeds
+				// enough groups to cross a page, so multi-page accumulation is
+				// deliberately not covered by an automated test.
 				const resp = await this.client.send(new AdminListGroupsForUserCommand({
 					UserPoolId: this.adminUserPoolId(), Username: username, NextToken: nextToken,
 				}));
@@ -1665,6 +1716,16 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				nextToken = resp.NextToken;
 			} while (nextToken);
 		} catch (e) {
+			// A user deleted out from under a live session (deleteUser doesn't revoke
+			// the Blocks session, so `requireAuth` still succeeds off the record) is
+			// the maximally-unauthorized case — answer it with the guard's own 403
+			// rather than leaking Cognito's 404 `UserNotFoundException`, which breaks
+			// the documented 401/403 contract a client bounces to sign-in on. Also
+			// restores mock parity: the mock's session survives deletion and reads
+			// empty membership → 403.
+			if (e instanceof Error && e.name === AuthCognitoErrors.UserNotFound) {
+				throw new ApiError('Not authorized', 403, { name: AuthCognitoErrors.NotAuthorized });
+			}
 			throw asApiError(e);
 		}
 		return out;
