@@ -269,7 +269,10 @@ export function createChat(options: CreateChatOptions): ChatController {
 			if (destroyed) return;
 			if (loading) {
 				setLoading(false);
-				options.onError?.('Timed out waiting for the agent to respond after reconnect.');
+				// Route through reportError so the once-per-turn errorReported latch covers the
+				// failsafe path too — a later `error` chunk for the same server-started turn
+				// won't then double-report after a failsafe timeout.
+				reportError('Timed out waiting for the agent to respond after reconnect.');
 			}
 		}, RECONNECT_FAILSAFE_MS);
 	}
