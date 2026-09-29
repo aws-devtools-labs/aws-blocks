@@ -78,17 +78,67 @@ export function getConfigLocation(scope: Construct): { bucketName: string; key: 
  * `BlocksBackend` embedded in a customer stack must keep `Blocks/BlocksConfigBucket` (no replacement).
  * Falls back to the stack when no owner is registered (isolated unit tests). Returns a concrete
  * `s3.Bucket` so callers don't need a non-null assertion.
+ *
+ * Security posture — this bucket holds `blocks-config.json`, which feeds `process.env` (incl.
+ * `CORS_HOSTING_ORIGINS`) for every compute in the stack, so tamper is high-value:
+ * - **TLS enforced** (`enforceSSL`): CDK attaches a bucket policy denying `aws:SecureTransport=false`,
+ *   protecting the config in transit. Matches every other bucket in the repo (bb-file-bucket etc.).
+ * - **Versioned**: a tamper/overwrite of `blocks-config.json` is recoverable, and it activates the
+ *   noncurrent-version expiration lifecycle rule (inert while versioning was off). Noncurrent versions
+ *   expire after 1 day to bound version-storage cost.
+ * - **Server access logging**: reads/writes are delivered to a dedicated, locked-down log bucket
+ *   (`serverAccessLogsBucket`), so access to the config object is attributable. The log bucket is kept
+ *   separate from the config bucket so log delivery can't loop back onto the audited data; its own logs
+ *   expire after 90 days.
+ * - **DESTROY / autoDeleteObjects are DELIBERATE, not preset-driven**: the only object here is
+ *   `blocks-config.json`, a derived artifact that `BlocksConfigDeployment` (BucketDeployment, in
+ *   {@link finalizeConfigRegistry}) regenerates from the CDK app and re-uploads on every deploy. It has
+ *   no source of truth on the bucket, so destroying it with the stack — even under the production
+ *   preset — leaves no orphaned bucket and loses nothing recoverable. Kept DESTROY on purpose, not an
+ *   overlooked default.
  */
 function ensureConfigBucket(scope: Construct): s3.Bucket {
 	const stack = cdk.Stack.of(scope);
 	const registry = getRegistry(stack);
 	if (!registry.bucket) {
 		const owner = ((globalThis as any).CURRENT_BLOCKS_STACK as Construct | undefined) ?? stack;
+
+		// Dedicated, locked-down bucket that receives the config bucket's S3 server access logs, so any
+		// access to blocks-config.json is attributable. Kept separate from the config bucket (rather
+		// than self-logging) so log delivery can't loop back onto the audited data — mirrors the
+		// bb-file-bucket access-log-bucket approach. Same DESTROY/autoDelete posture as the config
+		// bucket (both hold only regenerated/derived data); its own logs expire after 90 days.
+		const logBucket = new s3.Bucket(owner, 'BlocksConfigLogsBucket', {
+			blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+			encryption: s3.BucketEncryption.S3_MANAGED,
+			enforceSSL: true,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+			autoDeleteObjects: true,
+			lifecycleRules: [
+				{ id: 'expire-access-logs', expiration: cdk.Duration.days(90) },
+			],
+		});
+
 		registry.bucket = new s3.Bucket(owner, 'BlocksConfigBucket', {
+			// removalPolicy DESTROY + autoDeleteObjects are DELIBERATE, NOT preset-driven: the only
+			// object here is blocks-config.json, which `BlocksConfigDeployment` (BucketDeployment, in
+			// finalizeConfigRegistry) regenerates from the CDK app and re-uploads on every deploy. It is
+			// a derived artifact with no source of truth on the bucket, so it is safe to destroy with the
+			// stack even under the production preset — kept DESTROY on purpose so a torn-down stack leaves
+			// no orphaned bucket, not an oversight.
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 			autoDeleteObjects: true,
 			encryption: s3.BucketEncryption.S3_MANAGED,
 			blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+			// Deny non-TLS access (aws:SecureTransport=false). This bucket feeds process.env
+			// (incl. CORS_HOSTING_ORIGINS) for every compute, so protect it in transit — matches every
+			// other bucket in the repo (bb-file-bucket, bb-knowledge-base, bb-async-job, hosting).
+			enforceSSL: true,
+			// Make a tamper/overwrite of blocks-config.json recoverable, and activate the
+			// noncurrent-version expiration lifecycle rule below (inert while versioning was off).
+			versioned: true,
+			serverAccessLogsBucket: logBucket,
+			serverAccessLogsPrefix: 'access-logs/',
 			lifecycleRules: [
 				{ noncurrentVersionExpiration: cdk.Duration.days(1) },
 			],

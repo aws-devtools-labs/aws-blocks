@@ -79,7 +79,7 @@ test('finalize uploads + wires the computes even with zero entries when a bucket
 	finalizeConfigRegistry(stack, role, computes);
 
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 1, 'one config bucket');
+	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + its access-log bucket');
 	t.resourceCountIs('Custom::CDKBucketDeployment', 1); // the (empty) blocks-config.json is uploaded
 	t.hasResourceProperties('AWS::Lambda::Function', {
 		Environment: { Variables: Match.objectLike({ BLOCKS_CONFIG_KEY: 'blocks-config.json' }) },
@@ -111,7 +111,7 @@ test('finalize uploads + wires the computes when config was registered (bucket a
 	finalizeConfigRegistry(stack, role, computes);
 
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 1, 'one config bucket');
+	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + its access-log bucket');
 	t.resourceCountIs('Custom::CDKBucketDeployment', 1);
 	t.hasResourceProperties('AWS::Lambda::Function', {
 		Environment: { Variables: Match.objectLike({ BLOCKS_CONFIG_KEY: 'blocks-config.json' }) },
@@ -131,10 +131,18 @@ test('the config bucket is created under the owning stack/backend, not the (deep
 
 	const t = Template.fromStack(stack);
 	const bucketIds = Object.keys(t.findResources('AWS::S3::Bucket'));
-	assert.strictEqual(bucketIds.length, 1, 'exactly one config bucket');
+	assert.strictEqual(bucketIds.length, 2, 'config bucket + its access-log bucket');
 	// Logical IDs encode the construct path — under the owner it's `EmbeddedBlocksConfigBucket…`,
-	// at the stack root it would be `BlocksConfigBucket…`. Pin that it follows the owner.
-	assert.ok(bucketIds[0].startsWith('Embedded'), `bucket should be nested under the owner, got ${bucketIds[0]}`);
+	// at the stack root it would be `BlocksConfigBucket…`. Pin that both follow the owner, and that
+	// the config bucket specifically is nested under it.
+	assert.ok(
+		bucketIds.every(id => id.startsWith('Embedded')),
+		`buckets should be nested under the owner, got ${bucketIds.join(', ')}`,
+	);
+	assert.ok(
+		bucketIds.some(id => id.startsWith('EmbeddedBlocksConfigBucket')),
+		`config bucket should be nested under the owner, got ${bucketIds.join(', ')}`,
+	);
 });
 
 test('getConfigLocation creates exactly one bucket across repeated calls (idempotent)', () => {
@@ -145,5 +153,37 @@ test('getConfigLocation creates exactly one bucket across repeated calls (idempo
 	assert.strictEqual(a.key, b.key, 'same config key');
 	assert.strictEqual(a.bucketName, b.bucketName, 'same bucket');
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 1, 'exactly one bucket');
+	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + its access-log bucket (created once)');
+});
+
+test('the config bucket enforces TLS, enables versioning, and delivers server access logs', () => {
+	const { stack, role, computes } = stackWithCompute('SecurePosture');
+	registerConfig(stack, 'BLOCKS_SOMETHING', 'value');
+	finalizeConfigRegistry(stack, role, computes);
+
+	const t = Template.fromStack(stack);
+
+	// A dedicated access-log bucket is provisioned alongside the config bucket.
+	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + dedicated access-log bucket');
+
+	// (a) Versioning enabled + (c) the config bucket ships access logs to the log bucket under a prefix.
+	t.hasResourceProperties('AWS::S3::Bucket', {
+		VersioningConfiguration: { Status: 'Enabled' },
+		LoggingConfiguration: {
+			DestinationBucketName: Match.anyValue(),
+			LogFilePrefix: 'access-logs/',
+		},
+	});
+
+	// (b) enforceSSL generates a bucket policy denying non-TLS access (aws:SecureTransport=false).
+	t.hasResourceProperties('AWS::S3::BucketPolicy', {
+		PolicyDocument: {
+			Statement: Match.arrayWith([
+				Match.objectLike({
+					Effect: 'Deny',
+					Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+				}),
+			]),
+		},
+	});
 });
