@@ -38,9 +38,6 @@ export const ApiNamespace: ApiNamespaceConstructor;
 export const BLOCKS_AUTH_PREFIX = "/aws-blocks/auth";
 
 // @public
-export const BLOCKS_ERROR_BRAND: unique symbol;
-
-// @public
 export const BLOCKS_RPC_PREFIX = "/aws-blocks/api";
 
 // @public (undocumented)
@@ -127,9 +124,6 @@ export { isConfig }
 export { isManagedValue }
 
 export { isSecret }
-
-// @public
-export function isWireSafeError(e: unknown): e is Error;
 
 // @public
 export function loadConfigToProcessEnv(): Promise<void>;
