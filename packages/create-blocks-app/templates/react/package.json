@@ -31,21 +31,21 @@
   "dependencies": {
     "@aws-blocks/blocks": "*",
     "@aws-blocks/hosting": "*",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "zod": "^4.3.0"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^4.3.0",
-    "typescript": "^5.3.0",
+    "@types/node": "^20.19.43",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "typescript": "^5.9.3",
     "vite": "^6.4.3",
-    "tsx": "^4.7.0",
-    "esbuild": "^0.27.1",
-    "aws-cdk": "^2.1138.0",
-    "aws-cdk-lib": "^2.257.0",
-    "constructs": "^10.6.0"
+    "tsx": "^4.23.15",
+    "esbuild": "^0.28.2",
+    "aws-cdk": "^2.1143.0",
+    "aws-cdk-lib": "^2.271.0",
+    "constructs": "^10.8.1"
   }
 }
