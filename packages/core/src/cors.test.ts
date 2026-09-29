@@ -3,7 +3,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 
-import { parseCorsPatterns, _resetCorsPatterns, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
+import { parseCorsPatterns, escapeOriginToPattern, _resetCorsPatterns, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 import { createLambdaHandler } from './lambda-handler.js';
 import { clearRouteRegistry } from './raw-route.js';
 
@@ -56,6 +56,54 @@ describe('parseCorsPatterns', () => {
     assert.strictEqual(patterns.length, 1);
     assert.ok(patterns[0].test('https://anything.example.org'));
     assert.ok(patterns[0].test('http://localhost:9999'));
+  });
+
+  it('appends $ to a start-only-anchored pattern (closes missing-end-anchor bypass)', () => {
+    const patterns = parseCorsPatterns('^https://app\\.example\\.com');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('https://app.example.com'));
+    assert.ok(!patterns[0].test('https://app.example.com.attacker.test'));
+  });
+
+  it('leaves a fully-anchored pattern unchanged (no double-anchor)', () => {
+    const patterns = parseCorsPatterns('^https?://localhost(:\\d+)?$');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('http://localhost:3000'));
+    assert.ok(!patterns[0].test('http://localhost:3000.evil.com'));
+  });
+
+  it('treats a trailing escaped dollar as literal and appends a real end anchor', () => {
+    const patterns = parseCorsPatterns('^https://foo\\$');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('https://foo$'));
+    assert.ok(!patterns[0].test('https://foo$bar'));
+  });
+});
+
+// ── escapeOriginToPattern unit tests ─────────────────────────────────────────
+
+describe('escapeOriginToPattern', () => {
+  it('escapes a literal origin so its dots are not wildcards', () => {
+    const pattern = escapeOriginToPattern('https://d123.cloudfront.net');
+    const patterns = parseCorsPatterns(pattern);
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('https://d123.cloudfront.net'));
+    assert.ok(!patterns[0].test('https://d123xcloudfrontxnet'));
+  });
+
+  it('returns an already-anchored pattern that is not double-anchored by parseCorsPatterns', () => {
+    const pattern = escapeOriginToPattern('https://d123.cloudfront.net');
+    assert.ok(pattern.startsWith('^'));
+    assert.ok(pattern.endsWith('$'));
+    // Feeding it back through parseCorsPatterns must still match the exact origin.
+    const patterns = parseCorsPatterns(pattern);
+    assert.ok(patterns[0].test('https://d123.cloudfront.net'));
+  });
+
+  it('leaves the documented .* wildcard escape hatch intact end-to-end', () => {
+    const patterns = parseCorsPatterns('.*');
+    assert.ok(patterns[0].test('https://d123.cloudfront.net'));
+    assert.ok(patterns[0].test('https://anything.example.org'));
   });
 });
 

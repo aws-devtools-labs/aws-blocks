@@ -22,6 +22,7 @@ import { Construct } from 'constructs';
 import { registerConfig } from './cdk/config-registry.js';
 import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+import { escapeOriginToPattern } from './cors.js';
 import {
 	assertMarkersExistAtSynth,
   collectSynthMarkers,
@@ -831,7 +832,7 @@ export class Hosting extends Construct {
       // execute-api host (which strips the viewer Host header). Kept a literal
       // key (like CORS_HOSTING_ORIGINS below) rather than a shared constant.
       registerConfig(this, 'BLOCKS_PUBLIC_ORIGIN', hosting.distributionUrl);
-      registerConfig(this, 'CORS_HOSTING_ORIGINS', hosting.distributionUrl);
+      registerConfig(this, 'CORS_HOSTING_ORIGINS', escapeOriginToPattern(hosting.distributionUrl));
     }
 
     // ── 10. Expose resources ──────────────────────────────────────
