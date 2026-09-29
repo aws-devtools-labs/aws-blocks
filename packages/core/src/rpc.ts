@@ -240,6 +240,8 @@ export function errorResponseFromCatch(error: unknown, id: string | number | nul
   // brand: forward its BB `name` (D-003: isBlocksError matches on the client) but
   // drop the raw message. The brand — not a non-generic `.name` — is the signal,
   // so raw driver/SDK exceptions (PostgresError, …) still collapse to a nameless 500.
+  // (Every ApiError is wire-safe too, but branch 1 already returned for those, so
+  // this arm only ever sees the branded plain-Error case.)
   if (isWireSafeError(error) && error.name && error.name !== DEFAULT_ERROR_NAME) {
     return errorResponse(500, 'Internal error', id, { name: error.name });
   }
