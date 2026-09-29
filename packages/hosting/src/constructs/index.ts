@@ -103,3 +103,10 @@ export { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 export { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 export { backendBaseUrl } from './apigw_routes.js';
 export { coalesceRoutes, routeSpecificity } from '../plan/route-table.js';
+// ── Multi-tenant front-door POC (experimental) ────────────────────────────────
+export {
+	MultiTenantAlb,
+	type MultiTenantAlbEntry,
+	type MultiTenantAlbProps,
+	type MultiTenantAlbRouting,
+} from './mt_alb.js';
