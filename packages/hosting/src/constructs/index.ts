@@ -116,3 +116,9 @@ export {
 	type MultiTenantApiGatewayProps,
 	type MultiTenantRouting,
 } from './mt_apigw.js';
+export {
+	MultiTenantAlb,
+	type MultiTenantAlbEntry,
+	type MultiTenantAlbProps,
+	type MultiTenantAlbRouting,
+} from './mt_alb.js';
