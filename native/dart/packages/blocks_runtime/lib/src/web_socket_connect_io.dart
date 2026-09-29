@@ -15,6 +15,7 @@ WebSocketChannel connectWebSocket(Uri uri, Map<String, String> headers) {
     headers: extra.isEmpty ? null : extra,
     customClient: client,
   );
+  // The upgrade detaches the socket, so closing the client leaves it open.
   channel.ready.whenComplete(client.close).ignore();
   return channel;
 }
