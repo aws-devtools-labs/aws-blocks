@@ -70,10 +70,29 @@ cd "$TEST_DIR"
 npm install @aws-blocks/create-blocks-app@latest 2>&1
 CREATE_CMD="$TEST_DIR/node_modules/.bin/create-blocks-app"
 
-# Every fresh-project template the CLI can scaffold. The "amplify" template is
-# an integration into an existing Amplify Gen 2 project, not a standalone
-# scaffold, so it is covered by e2e-amplify-interop.yml instead.
-TEMPLATES=("default" "demo" "backend" "bare" "react" "nextjs" "auth-cognito")
+# Derive the template set from templates/ so it can never drift from what the
+# CLI actually scaffolds (the CLI treats that dir as the only source of truth).
+# A fresh-project template is one whose package.json declares a "test:e2e"
+# script; that excludes "amplify" (an integration into an existing Amplify Gen 2
+# project, covered by e2e-amplify-interop.yml, with no test:e2e/vendorize) and
+# any future overlay template, so the loop below never runs against a dir that
+# has no e2e suite to run.
+TEMPLATES_DIR="$ROOT/packages/create-blocks-app/templates"
+TEMPLATES=()
+while IFS= read -r name; do
+  TEMPLATES+=("$name")
+done < <(
+  for d in "$TEMPLATES_DIR"/*/; do
+    name="$(basename "$d")"
+    node -e "process.exit(require('$d/package.json').scripts?.['test:e2e']?0:1)" 2>/dev/null \
+      && echo "$name"
+  done | sort
+)
+if [[ ${#TEMPLATES[@]} -eq 0 ]]; then
+  echo "  FAIL: no scaffoldable templates found under $TEMPLATES_DIR"
+  exit 1
+fi
+echo "Templates under e2e: ${TEMPLATES[*]}"
 FAILED=0
 
 for TEMPLATE in "${TEMPLATES[@]}"; do
