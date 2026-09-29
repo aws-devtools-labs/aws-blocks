@@ -1287,3 +1287,48 @@ describe('alg:none rejection', () => {
 		assert.strictEqual(user, null, 'alg:none with valid claims must still be rejected');
 	});
 });
+
+describe('deployed-mock guard', () => {
+	test('constructor throws when AWS_LAMBDA_FUNCTION_NAME is set (mock in deployed env)', () => {
+		const origFnName = process.env.AWS_LAMBDA_FUNCTION_NAME;
+		const origExecEnv = process.env.AWS_EXECUTION_ENV;
+		process.env.AWS_LAMBDA_FUNCTION_NAME = 'blocks-backend-handler';
+		delete process.env.AWS_EXECUTION_ENV;
+
+		try {
+			assert.throws(
+				() => new AuthOIDC(ROOT, unique('guard'), { providers: [stubIdp({ name: 'p' })] }),
+				(err: Error) => {
+					assert.ok(
+						err.message.includes('loaded in a deployed environment'),
+						`Expected deployed-mock error, got: ${err.message}`,
+					);
+					return true;
+				},
+			);
+		} finally {
+			if (origFnName === undefined) delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+			else process.env.AWS_LAMBDA_FUNCTION_NAME = origFnName;
+			if (origExecEnv === undefined) delete process.env.AWS_EXECUTION_ENV;
+			else process.env.AWS_EXECUTION_ENV = origExecEnv;
+		}
+	});
+
+	test('constructor does NOT throw locally (no Lambda env vars)', () => {
+		const origFnName = process.env.AWS_LAMBDA_FUNCTION_NAME;
+		const origExecEnv = process.env.AWS_EXECUTION_ENV;
+		delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+		delete process.env.AWS_EXECUTION_ENV;
+
+		try {
+			assert.doesNotThrow(
+				() => new AuthOIDC(ROOT, unique('guard'), { providers: [stubIdp({ name: 'p' })] }),
+			);
+		} finally {
+			if (origFnName === undefined) delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+			else process.env.AWS_LAMBDA_FUNCTION_NAME = origFnName;
+			if (origExecEnv === undefined) delete process.env.AWS_EXECUTION_ENV;
+			else process.env.AWS_EXECUTION_ENV = origExecEnv;
+		}
+	});
+});

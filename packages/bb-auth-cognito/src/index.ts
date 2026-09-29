@@ -19,7 +19,7 @@ import {
 	Scope,
 	registerSdkIdentifiers,
 } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { assertNotDeployedMock, getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
 import type { AuthActionInput, AuthState, AuthStateApi, BlocksAuth } from '@aws-blocks/auth-common';
 import { decodeIdToken, decodeJwtPayload, jwtExpMs, safeStringClaim, sessionToTokens, SessionStore, type SessionRecord } from './sessions.js';
@@ -229,6 +229,9 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+		// Fail closed if this mock entry is loaded in a deployed Lambda (artifact
+		// bundled without the `aws-runtime` export condition). No-op locally.
+		assertNotDeployedMock('bb-auth-cognito');
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		// `AuthCognitoMockOptions` has all-optional fields so `{}` is assignable
 		// to any concrete `O` the customer passes. TS can't see this because
