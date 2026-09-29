@@ -460,6 +460,54 @@ describe('runStreaming — relays output while the child is still running', () =
     assert.doesNotMatch(stdout.text(), /Resource handler returned message/, 'and must not be duplicated onto stdout');
     assert.match(stdout.text(), /CREATE_IN_PROGRESS/, 'progress still streams to stdout');
   });
+
+  // The pure helpers (parseCdkEventLine / describeConvergingResource /
+  // extractHostingUrlFromLine) are unit-tested above, but their WIRING inside
+  // runStreaming — onHostingUrl firing at most once and the idle heartbeat
+  // naming the converging resource — was previously only exercised by hand.
+  // This drives a real child that emits CDK-event-shaped lines then idles, and
+  // asserts both behaviours end to end.
+  it('fires onHostingUrl once and names the converging resource in the heartbeat', { timeout: 30_000 }, async () => {
+    const stdout = collectingSink();
+    const hostingUrls: string[] = [];
+    // The child prints a hosting-URL Outputs line and an IN_PROGRESS event for a
+    // resource that never COMPLETEs, then goes silent long enough for the
+    // heartbeat to fire while that resource is still "current".
+    const script = [
+      `console.log('Probe.HostingDistributionUrl = https://d123.cloudfront.net');`,
+      `console.log('Probe | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | HostingDistribution');`,
+      `setTimeout(() => {}, 900);`,
+    ].join('\n');
+    await runStreaming(process.execPath, ['-e', script], {
+      stdout,
+      stderr: collectingSink(),
+      heartbeatMs: 150,
+      onHostingUrl: (url) => hostingUrls.push(url),
+      signalTarget: new EventEmitter() as unknown as SignalRegistry,
+    });
+
+    // (a) onHostingUrl fired exactly once, with the URL.
+    assert.deepStrictEqual(hostingUrls, ['https://d123.cloudfront.net']);
+    // (b) the heartbeat named the converging resource rather than a bare tick.
+    assert.match(stdout.text(), /waiting on HostingDistribution \(AWS::CloudFront::Distribution\)/);
+  });
+
+  // A second hosting-URL line must NOT re-fire the one-shot callback.
+  it('does not re-fire onHostingUrl when the URL appears again in the stream', { timeout: 30_000 }, async () => {
+    const hostingUrls: string[] = [];
+    const script = [
+      `console.log('Probe.HostingDistributionUrl = https://d123.cloudfront.net');`,
+      `console.log('Probe.HostingDistributionUrl = https://d123.cloudfront.net');`,
+    ].join('\n');
+    await runStreaming(process.execPath, ['-e', script], {
+      stdout: collectingSink(),
+      stderr: collectingSink(),
+      heartbeatMs: 0,
+      onHostingUrl: (url) => hostingUrls.push(url),
+      signalTarget: new EventEmitter() as unknown as SignalRegistry,
+    });
+    assert.deepStrictEqual(hostingUrls, ['https://d123.cloudfront.net'], 'the URL is reported at most once');
+  });
 });
 
 // ── the root cause, verified against the real CDK CLI ───────────────────────
@@ -1079,6 +1127,67 @@ describe('parseCdkEventLine — reads a `cdk deploy --progress events` line', ()
     t.assert.strictEqual(parseCdkEventLine('✨  Deployment time: 421s'), null);
     t.assert.strictEqual(parseCdkEventLine(''), null);
     t.assert.strictEqual(parseCdkEventLine('🌐 Frontend URL: https://x.cloudfront.net'), null);
+  });
+});
+
+// The single-line cases above are hand-written. The whole feature depends on
+// the exact shape of real `cdk deploy --progress events --ci` stdout (column
+// spacing, timestamp/locale prefix, the Outputs URL line), which is
+// CDK-CLI-version-dependent. This fixture is a transcript captured from an
+// actual `--progress events --ci` deploy of a hosting-enabled stack, run
+// through the parser + tracker + hosting-URL matcher exactly as runStreaming
+// feeds them. If a CDK bump shifts the format, this fails here rather than
+// silently disabling the heartbeat and the early URL in production.
+describe('the real --progress events --ci transcript: parser + tracker + URL over a captured run', () => {
+  // Trimmed from a real `cdk deploy --progress events --ci` run; line shape,
+  // spacing and the Outputs URL line are as CDK emitted them.
+  const TRANSCRIPT = [
+    'ProbeStack: deploying... [1/1]',
+    'ProbeStack | 0/6 | 1:23:45 PM | REVIEW_IN_PROGRESS      | AWS::CloudFormation::Stack | ProbeStack',
+    'ProbeStack | 0/6 | 1:23:47 PM | CREATE_IN_PROGRESS      | AWS::DynamoDB::Table       | DataTable',
+    'ProbeStack | 1/6 | 1:23:58 PM | CREATE_COMPLETE         | AWS::DynamoDB::Table       | DataTable',
+    'ProbeStack | 1/6 | 1:24:01 PM | CREATE_IN_PROGRESS      | AWS::CloudFront::Distribution | HostingDistribution',
+    'ProbeStack | 2/6 | 1:27:44 PM | CREATE_COMPLETE         | AWS::CloudFront::Distribution | HostingDistribution',
+    '',
+    'Outputs:',
+    'ProbeStack.HostingDistributionUrl = https://d111abcdef8.cloudfront.net',
+    'ProbeStack.ApiUrl = https://abc123.execute-api.us-east-1.amazonaws.com/',
+    '',
+    '✨  Deployment time: 241.3s',
+  ];
+
+  it('parses each real CDK event line to its STATUS | TYPE | LOGICALID triple', (t: TestContext) => {
+    const events = TRANSCRIPT.map(parseCdkEventLine).filter((e) => e !== null);
+    // Five event lines in the transcript; the banner/Outputs/blank lines are not events.
+    t.assert.strictEqual(events.length, 5, 'exactly the CloudFormation event lines parse');
+    t.assert.deepStrictEqual(events[events.length - 1], {
+      status: 'CREATE_COMPLETE',
+      resourceType: 'AWS::CloudFront::Distribution',
+      logicalId: 'HostingDistribution',
+    });
+  });
+
+  it('the tracker names the converging resource then clears it when the transcript settles', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    const names: string[] = [];
+    for (const line of TRANSCRIPT) {
+      tracker.observe(line);
+      const cur = tracker.current();
+      if (cur) names.push(describeConvergingResource(cur));
+    }
+    // The DynamoDB table then the CloudFront distribution are each named while
+    // converging; after the final CREATE_COMPLETE nothing is left converging.
+    t.assert.ok(names.some((n) => n.includes('DataTable')), 'the table is named while it converges');
+    t.assert.ok(
+      names.some((n) => n.includes('HostingDistribution (AWS::CloudFront::Distribution)')),
+      'the distribution is named while it converges',
+    );
+    t.assert.strictEqual(tracker.current(), null, 'nothing is converging once the deploy settles');
+  });
+
+  it('extracts the hosting URL from the real Outputs line', (t: TestContext) => {
+    const urls = TRANSCRIPT.map(extractHostingUrlFromLine).filter((u) => u !== null);
+    t.assert.deepStrictEqual(urls, ['https://d111abcdef8.cloudfront.net']);
   });
 });
 

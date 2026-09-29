@@ -97,8 +97,10 @@ export async function deploy(options: DeployOptions) {
             // Not the canonical BLOCKS_DEPLOYED line (that needs the API URL,
             // known only from outputs.json below). This is an early, greppable
             // frontend-URL line so a caller learns where the app lives even if
-            // the process is killed before the deploy fully completes.
-            console.log(`\n🌐 Frontend URL (converging): ${url}`);
+            // the process is killed before the deploy fully completes. Its label
+            // deliberately differs from the final `🌐 Frontend URL:` line so a
+            // naive grep does not match both — the early line says "converging".
+            console.log(`\n🌐 Frontend deploying to: ${url}`);
           },
         }
       );

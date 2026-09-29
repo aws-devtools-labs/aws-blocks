@@ -207,13 +207,6 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("\n✅ Sandbox deployed!");
   console.log(`📡 API URL: ${apiUrl}`);
 
-  // Same machine-readable completion line as `npm run deploy`, so a caller can
-  // grep one stable line after a sandbox deploy instead of parsing streamed
-  // output. Sandbox serves the frontend locally (no CloudFront), so there is no
-  // hosting URL — the signal is backend-only (`BLOCKS_DEPLOYED api=…`). Printed
-  // before the deploy-only return below so both paths emit it.
-  console.log(`\n${formatDeploySignal(apiUrl)}`);
-
   buildAndSendEvent({
     command: 'sandbox',
     state: 'SUCCESS',
@@ -225,6 +218,15 @@ export async function startSandbox(options: SandboxOptions) {
   const config: Record<string, string> = { apiUrl, environment: 'sandbox' };
   mkdirSync(outDir, { recursive: true });
   writeFileSync(`${outDir}/config.json`, JSON.stringify(config, null, 2));
+
+  // Same machine-readable completion line as `npm run deploy`, so a caller can
+  // grep one stable line after a sandbox deploy instead of parsing streamed
+  // output. Sandbox serves the frontend locally (no CloudFront), so there is no
+  // hosting URL — the signal is backend-only (`BLOCKS_DEPLOYED api=…`). Emitted
+  // AFTER config.json is written (matching `deploy()`), so the signal always
+  // implies the on-disk artifacts a consumer reads next are already present;
+  // printed before the deploy-only return below so both paths emit it.
+  console.log(`\n${formatDeploySignal(apiUrl)}`);
 
   // Generate client code targeting AWS (aws-runtime condition ensures
   // the backend registers aws-middleware, not mock-middleware).
