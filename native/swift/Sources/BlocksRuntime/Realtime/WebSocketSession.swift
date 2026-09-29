@@ -187,8 +187,7 @@ class WebSocketSession {
         let dispatcher = DispatchingListener()
         dispatcher.add(listener)
 
-        // Set the user-agent on the handshake request so the upgrade carries it even
-        // when a caller supplies a session whose configuration does not include it.
+        // Set User-Agent on the handshake because caller-supplied sessions may omit it.
         var request = URLRequest(url: url)
         request.setValue(blocksUserAgentToken, forHTTPHeaderField: "User-Agent")
         let wsTask = session.webSocketTask(with: request)

@@ -90,8 +90,7 @@ final class UserAgentHeaderTests: XCTestCase {
         let listener = try LoopbackListener()
         defer { listener.close() }
 
-        // A caller-supplied session whose configuration carries no user-agent: the token
-        // reaches the wire only via the explicit setValue on the handshake request.
+        // Use a session without User-Agent to verify request-level header injection.
         let bareSession = URLSession(configuration: .ephemeral)
         let session = WebSocketSession(session: bareSession)
         let delegate = NoopWebSocketDelegate()

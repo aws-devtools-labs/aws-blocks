@@ -64,7 +64,7 @@ final class LoopbackListener: @unchecked Sendable {
             // I/O so the timed recv below waits for data instead of returning EAGAIN.
             _ = fcntl(client, F_SETFL, 0)
 
-            // Accepted sockets do not reliably inherit the listener's timeout, so set it.
+            // Set a receive timeout on the accepted socket.
             var timeout = timeval(tv_sec: 4, tv_usec: 0)
             setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
@@ -84,8 +84,6 @@ final class LoopbackListener: @unchecked Sendable {
         }
     }
 
-    /// Polls the non-blocking listen socket until a connection is ready or the deadline
-    /// elapses, then accepts it. Returns nil on timeout so the loop never blocks forever.
     private func acceptWithDeadline(seconds: Int) -> Int32? {
         let deadline = Date().addingTimeInterval(TimeInterval(seconds))
         while Date() < deadline {
