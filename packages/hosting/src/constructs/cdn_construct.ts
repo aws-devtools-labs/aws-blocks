@@ -4,21 +4,21 @@ import { CfnOutput, Duration, Fn, Stack } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
   AllowedMethods,
-  BehaviorOptions,
+  type BehaviorOptions,
   CacheCookieBehavior,
   CacheHeaderBehavior,
   CachePolicy,
   CacheQueryStringBehavior,
   Function as CloudFrontFunction,
   Distribution,
-  ErrorResponse,
+  type ErrorResponse,
   FunctionCode,
   FunctionEventType,
   FunctionRuntime,
   GeoRestriction,
   HttpVersion,
-  IOrigin,
-  IResponseHeadersPolicy,
+  type IOrigin,
+  type IResponseHeadersPolicy,
   KeyValueStore,
   LambdaEdgeEventType,
   OriginRequestCookieBehavior,
@@ -34,16 +34,16 @@ import {
   HttpOrigin,
   S3BucketOrigin,
 } from 'aws-cdk-lib/aws-cloudfront-origins';
-import { IBucket } from 'aws-cdk-lib/aws-s3';
+import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
 import {
   CfnPermission,
-  IFunction,
-  IFunctionUrl,
-  IVersion,
+  type IFunction,
+  type IFunctionUrl,
+  type IVersion,
 } from 'aws-cdk-lib/aws-lambda';
-import { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
-import { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
+import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
+import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import {
   EndpointType,
   LambdaIntegration,
@@ -52,9 +52,9 @@ import {
 } from 'aws-cdk-lib/aws-apigateway';
 import { HostingError } from '../hosting_error.js';
 import { prependBasePath } from '../adapters/shared/basepath.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
-import { SkewProtectionConfig } from './skew_protection.js';
+import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
   ORIGIN_ID,
@@ -66,6 +66,11 @@ import {
   routeSpecificity,
 } from './kvs_router.js';
 import { KvKeys } from './kv_keys.js';
+import {
+  type AccessLogFormat,
+  type AccessLogPartitioning,
+  wireStandardLoggingV2,
+} from './access_logging.js';
 import {
   AwsCustomResource,
   AwsCustomResourcePolicy,
@@ -147,6 +152,23 @@ export type CdnConstructProps = {
   wwwRedirect?: 'toApex' | 'toWww' | 'none';
   /** S3 bucket for CloudFront access logging. */
   accessLogBucket?: IBucket;
+  /**
+   * CloudFront logging pipeline. `'v1'` (default) enables legacy standard
+   * logging inline on the distribution (`enableLogging`/`logBucket`); `'v2'`
+   * provisions the standard-logging-v2 delivery pipeline instead (see
+   * {@link wireStandardLoggingV2}). Only takes effect when
+   * {@link accessLogBucket} is set.
+   * @default 'v1'
+   */
+  accessLogVersion?: 'v1' | 'v2';
+  /** (v2 only) S3 key layout for delivered logs. @default 'date' */
+  accessLogPartitioning?: AccessLogPartitioning;
+  /** (v2 only) Delivered log record format. @default 'w3c' */
+  accessLogFormat?: AccessLogFormat;
+  /**
+   * (v2 only) Skip the us-east-1 delivery-source Region check. @default false
+   */
+  skipLoggingRegionValidation?: boolean;
   /** CloudFront price class. Default: PRICE_CLASS_100 (US, Canada, Europe). */
   priceClass?: PriceClass;
   /** Geo-restriction configuration. */
@@ -1135,7 +1157,10 @@ export class CdnConstruct extends Construct {
         : props.webAcl
           ? { webAclId: props.webAcl.attrArn }
           : {}),
-      ...(props.accessLogBucket
+      // v1 (legacy) logging is enabled inline on the distribution. v2 logging
+      // is provisioned separately via the delivery pipeline after the
+      // distribution exists (see below), so it must NOT set enableLogging here.
+      ...(props.accessLogBucket && props.accessLogVersion !== 'v2'
         ? { enableLogging: true, logBucket: props.accessLogBucket }
         : {}),
       ...(props.geoRestriction
@@ -1148,6 +1173,30 @@ export class CdnConstruct extends Construct {
         : {}),
       errorResponses: errorResponses.length > 0 ? errorResponses : undefined,
     });
+
+    // ---- Standard logging v2 (opt-in) ----
+    // v1 logging was enabled inline above. For v2, provision the CloudWatch
+    // Logs vended-logs delivery pipeline (DeliverySource → DeliveryDestination
+    // → Delivery + bucket policy) against the now-created distribution. The
+    // log bucket is provisioned with BUCKET_OWNER_ENFORCED by the storage
+    // construct when v2 is selected, so no ACLs are involved.
+    if (props.accessLogBucket && props.accessLogVersion === 'v2') {
+      const distributionArn = Stack.of(this).formatArn({
+        service: 'cloudfront',
+        region: '',
+        account,
+        resource: 'distribution',
+        resourceName: this.distribution.distributionId,
+      });
+      wireStandardLoggingV2(this, {
+        distributionArn,
+        distributionId: this.distribution.distributionId,
+        logBucket: props.accessLogBucket,
+        partitioning: props.accessLogPartitioning,
+        format: props.accessLogFormat,
+        skipRegionValidation: props.skipLoggingRegionValidation,
+      });
+    }
 
     // ---- OAC: S3 bucket policy ----
     // GetObject for serving assets, plus ListBucket so S3 returns a real
