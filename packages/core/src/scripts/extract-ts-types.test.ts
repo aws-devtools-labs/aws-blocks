@@ -749,6 +749,84 @@ describe('extractMethodTypes — namespace returned by a factory, then destructu
 		}
 	});
 
+	it('skips a rest binding so it adds no noise keys, still attributing the real namespace (#552)', () => {
+		// `const [first, ...rest] = factory()` — `rest` is an array whose members carry
+		// call signatures (push/map/…); the walk must skip it (it's never a namespace)
+		// rather than emit `rest.push`-style keys.
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+				class Scope { constructor(id: string) {} }
+
+				class Factory {
+					constructor(private readonly scope: Scope) {}
+					build() {
+						return [
+							new ApiNamespace(this.scope, 'first', () => ({
+								async ping(count: number): Promise<string> { return 'p'; },
+							})),
+							new ApiNamespace(this.scope, 'second', () => ({
+								async ping(count: number): Promise<string> { return 'p'; },
+							})),
+						] as const;
+					}
+				}
+				const scope = new Scope('app');
+				const [first, ...rest] = new Factory(scope).build();
+				export { first, rest };
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			assert.ok(types.get('first.ping'), 'the named element is still attributed');
+			// No array-member noise from the rest binding.
+			assert.ok(!types.has('rest.push'), 'rest binding must not emit array-member keys');
+			assert.ok(![...types.keys()].some(k => k.startsWith('rest.')), 'no rest.* keys at all');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('attributes a renamed object binding to the LOCAL name (#552 — locks the rename path)', () => {
+		// `const { widgets: w } = factory()` binds `w` reading property `widgets`. The
+		// recursive leaf resolution resolves `w`'s destructured type via the checker, so
+		// the namespace keys under the local name `w` — locking the rename semantics the
+		// deleted explicit `element.propertyName` code used to handle.
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+				class Scope { constructor(id: string) {} }
+
+				class Factory {
+					constructor(private readonly scope: Scope) {}
+					build() {
+						return {
+							widgets: new ApiNamespace(this.scope, 'widgets', () => ({
+								async create(name: string): Promise<string> { return name; },
+							})),
+						};
+					}
+				}
+				const scope = new Scope('app');
+				const { widgets: w } = new Factory(scope).build();
+				export { w };
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			assert.ok(types.get('w.create'), 'renamed binding should key under the LOCAL name (w.create)');
+			assert.ok(!types.has('widgets.create'), 'must NOT key under the property name (widgets.create)');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it('attributes BOTH namespaces of a colliding-method tuple, dropping neither (#552 → the #445 class)', () => {
 		// The motivating case: a factory returns a tuple of namespaces that share a
 		// method name. Before #552 both `create`s landed on the bare `create` key and

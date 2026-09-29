@@ -216,6 +216,11 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 	function attributeBindingPattern(pattern: ts.BindingPattern): void {
 		for (const element of pattern.elements) {
 			if (ts.isOmittedExpression(element)) continue; // an array hole, e.g. `const [, ns] = …`
+			// A rest binding (`const [a, ...rest]` / `const { a, ...rest }`) resolves to
+			// an array/object type whose members (push/map/…) carry call signatures, which
+			// would add benign but noisy `rest.push`-style keys. A namespace is never a
+			// rest binding, so skip it and keep the map tight.
+			if (element.dotDotDotToken) continue;
 			if (ts.isIdentifier(element.name)) {
 				const elementType = checker.getTypeAtLocation(element.name);
 				extractMethodsFromResolvedType(elementType, checker, result, element.name.text);
