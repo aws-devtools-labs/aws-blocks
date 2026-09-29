@@ -3,6 +3,13 @@ import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 const outputs = JSON.parse(readFileSync('amplify_outputs.json', 'utf-8'));
+if (!outputs.auth?.user_pool_id) {
+  throw new Error(
+    'amplify_outputs.json has no auth.user_pool_id — the sandbox deploy did not ' +
+      'generate outputs (AmplifyOutputsNotFoundError). Check the "Deploy sandbox" ' +
+      'step; a re-run reusing a deleted stack is the usual cause.',
+  );
+}
 const userPoolId = outputs.auth.user_pool_id;
 
 import { randomUUID } from 'node:crypto';

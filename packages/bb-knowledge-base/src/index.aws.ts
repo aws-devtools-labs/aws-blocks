@@ -13,7 +13,7 @@ import {
 	GetIngestionJobCommand,
 	type IngestionJobSummary,
 } from '@aws-sdk/client-bedrock-agent';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type {
 	KnowledgeBaseOptions,
@@ -240,6 +240,7 @@ export class KnowledgeBase extends Scope {
 			retryMode: 'adaptive',
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(this.runtimeClient);
 		const kbId = process.env[envKey(this.fullIdCached, 'KB_ID')] ?? '';
 		const dataSourceId = process.env[envKey(this.fullIdCached, 'DATA_SOURCE_ID')] ?? '';
 		registerSdkIdentifiers(this.fullId, { kbId, dataSourceId });
@@ -550,6 +551,7 @@ export class KnowledgeBase extends Scope {
 				retryMode: 'adaptive',
 				customUserAgent: this.buildUserAgentChain(),
 			});
+			installClientUserAgent(this.agentClient);
 		}
 		return this.agentClient;
 	}

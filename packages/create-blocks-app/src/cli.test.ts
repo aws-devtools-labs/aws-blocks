@@ -3,8 +3,9 @@ import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
+import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
@@ -288,6 +289,92 @@ describe('create-blocks-app auto-detection', () => {
       const result = run([tmpDir]);
       assert.strictEqual(result.exitCode, 1);
       assert.match(result.stderr, /not empty/);
+      // The error now lists the conflicting (non-allowlisted) entries.
+      assert.match(result.stderr, /somefile\.txt/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('scaffolds a fresh project into a directory containing only allowlisted files (e.g. INSTRUCTIONS.md)', () => {
+    const tmpDir = join(__dirname, '../.test-nonempty-allowlisted');
+    mkdirSync(tmpDir, { recursive: true });
+    // Benign, allowlisted seed files (e.g. a benchmark-seeded INSTRUCTIONS.md)
+    // must not block a fresh scaffold.
+    writeFileSync(join(tmpDir, 'INSTRUCTIONS.md'), '# seed instructions');
+    try {
+      const result = run([tmpDir, '-y', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      // A fresh Blocks app was scaffolded into the directory.
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks')), 'expected aws-blocks/ to be scaffolded');
+      assert.ok(existsSync(join(tmpDir, 'package.json')), 'expected root package.json to be created');
+      // The original seed file is preserved.
+      assert.strictEqual(readFileSync(join(tmpDir, 'INSTRUCTIONS.md'), 'utf-8'), '# seed instructions');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('lists conflicting files but omits allowlisted siblings from the conflict output', () => {
+    const tmpDir = join(__dirname, '../.test-nonempty-mixed');
+    mkdirSync(tmpDir, { recursive: true });
+    // A mix of an allowlisted seed file and a genuine conflict: only the
+    // conflict should be reported, proving allowlisted entries are filtered out.
+    writeFileSync(join(tmpDir, 'INSTRUCTIONS.md'), '# seed instructions');
+    writeFileSync(join(tmpDir, 'realfile.txt'), 'content');
+    try {
+      const result = run([tmpDir]);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /realfile\.txt/);
+      assert.doesNotMatch(result.stderr, /INSTRUCTIONS\.md/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('blocks scaffolding on a pre-existing README.md and preserves it (no overwrite)', () => {
+    const tmpDir = join(__dirname, '../.test-nonempty-readme');
+    mkdirSync(tmpDir, { recursive: true });
+    // The template ships a README.md, so a user's README.md must block
+    // scaffolding rather than being silently overwritten.
+    writeFileSync(join(tmpDir, 'README.md'), '# my original readme');
+    try {
+      const result = run([tmpDir]);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /README\.md/);
+      // The original file is untouched on disk.
+      assert.strictEqual(readFileSync(join(tmpDir, 'README.md'), 'utf-8'), '# my original readme');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('blocks scaffolding on a pre-existing .gitignore and preserves it (no overwrite)', () => {
+    const tmpDir = join(__dirname, '../.test-nonempty-gitignore');
+    mkdirSync(tmpDir, { recursive: true });
+    // The template ships a .gitignore (renamed from gitignore), so a user's
+    // .gitignore must block scaffolding rather than being silently overwritten.
+    writeFileSync(join(tmpDir, '.gitignore'), '# my original gitignore');
+    try {
+      const result = run([tmpDir]);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /\.gitignore/);
+      // The original file is untouched on disk.
+      assert.strictEqual(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), '# my original gitignore');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('treats an editor project file as safe and scaffolds a fresh project', () => {
+    const tmpDir = join(__dirname, '../.test-nonempty-iml');
+    mkdirSync(tmpDir, { recursive: true });
+    // A stray *.iml file is safe-to-scaffold-over and must not block a fresh scaffold.
+    writeFileSync(join(tmpDir, 'project.iml'), '<module />');
+    try {
+      const result = run([tmpDir, '-y', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks')), 'expected aws-blocks/ to be scaffolded');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -432,6 +519,89 @@ describe('create-blocks-app auto-detection', () => {
       assert.doesNotMatch(result.stdout, /Installing dependencies/);
       assert.match(result.stdout, /\n  npm install\n/);
       assert.strictEqual(existsSync(join(targetDir, 'node_modules')), false);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+});
+
+describe('create-blocks-app scaffold allowlist safety', () => {
+  it('no template writes a file whose name is in the scaffold allowlist (never-overwrite invariant)', () => {
+    // A fresh scaffold copies a template dir into the target (overwriting on
+    // collision), renames `gitignore` -> `.gitignore`, and overlays AGENTS.md.
+    // The safe-to-scaffold allowlist must stay DISJOINT from that written-set,
+    // or a user's pre-existing same-named file would be silently overwritten.
+    // Locate the source templates dir relative to the compiled test at dist/.
+    const candidates = [
+      join(__dirname, '../templates'),
+      join(__dirname, '../../templates'),
+    ];
+    const templatesDir = candidates.find((dir) => existsSync(dir));
+    assert.ok(
+      templatesDir,
+      `could not locate templates/ dir (looked in: ${candidates.join(', ')})`,
+    );
+
+    // Build the set of top-level names a fresh scaffold writes at the target:
+    // each template's top-level entries (gitignore -> .gitignore), plus the
+    // AGENTS.md shared-resource overlay.
+    const written = new Map<string, string>(); // written name -> source (template or overlay)
+    written.set('AGENTS.md', 'shared resource overlay (resources/AGENTS.md)');
+    for (const entry of readdirSync(templatesDir!, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      for (const name of readdirSync(join(templatesDir!, entry.name))) {
+        const writtenName = name === 'gitignore' ? '.gitignore' : name;
+        if (!written.has(writtenName)) written.set(writtenName, `template "${entry.name}"`);
+      }
+    }
+
+    // Collect ALL collisions so the failure lists every offender, not just the first.
+    const collisions: string[] = [];
+    for (const [name, source] of written) {
+      if (SAFE_TO_SCAFFOLD_ENTRIES.has(name) || SAFE_TO_SCAFFOLD_PATTERN.test(name)) {
+        collisions.push(`${source} writes "${name}" which is in the scaffold allowlist — a user's same-named file would be overwritten`);
+      }
+    }
+
+    assert.ok(
+      collisions.length === 0,
+      `scaffold allowlist collides with template-written files:\n  ${collisions.join('\n  ')}`,
+    );
+  });
+});
+
+describe('create-blocks-app bin-symlink invocation', () => {
+  it('runs the scaffold when invoked through a bin symlink (argv[1] is a symlink to the module)', (t) => {
+    // When installed, the CLI is invoked through its npm bin symlink
+    // (node_modules/.bin/create-blocks-app -> dist/index.js), so argv[1] is the
+    // symlink path while import.meta.url is the real file. The run() helper
+    // above calls dist/index.js directly and would NOT catch a guard that
+    // compares argv[1] verbatim; this test reproduces the symlink path.
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-binsymlink-'));
+    const linkPath = join(tmpDir, 'create-blocks-app-link');
+    const targetDir = join(tmpDir, 'my-app');
+    try {
+      try {
+        symlinkSync(CLI_PATH, linkPath);
+      } catch (err: any) {
+        // Some CI environments disallow symlink creation (e.g. EPERM); skip
+        // gracefully rather than hard-failing on unsupported platforms.
+        t.skip(`symlink creation unsupported: ${err?.code ?? err}`);
+        return;
+      }
+      let exitCode = 0;
+      try {
+        execFileSync('node', [linkPath, targetDir, '-y', '--skip-install'], {
+          encoding: 'utf-8',
+          timeout: 30000,
+        });
+      } catch (err: any) {
+        exitCode = err.status ?? 1;
+      }
+      assert.strictEqual(exitCode, 0);
+      // The guard let create() run through the symlink, so the scaffold happened.
+      assert.ok(existsSync(join(targetDir, 'aws-blocks')), 'expected aws-blocks/ to be scaffolded via the bin symlink');
+      assert.ok(existsSync(join(targetDir, 'package.json')), 'expected package.json to be created via the bin symlink');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

@@ -3,6 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { KVStore } from './index.aws.js';
@@ -172,5 +173,68 @@ describe('KVStore user-agent integration (real KVStore)', () => {
 		assert.deepStrictEqual(ua2[0], ['aws-blocks', CORE_VERSION]);
 		assert.deepStrictEqual(ua2[1], ['bb', 'AuthBasic/1.0.1']);
 		assert.deepStrictEqual(ua2[2], ['bb', `${BB_NAME}/${BB_VERSION}`]);
+	});
+});
+
+/**
+ * Proves the base-client middleware fires through the DynamoDBDocumentClient
+ * wrapper, appending the per-request token to the outgoing DynamoDB user-agent.
+ */
+describe('KVStore forwards the native client user-agent on outgoing requests', () => {
+	const STORE_KEY = '__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__';
+
+	// Drive one GetItem, capture the built user-agent at the request handler,
+	// then abort before the network. Region and dummy creds let auth resolve.
+	async function capturedUserAgentFor(id: string, token: string | undefined): Promise<string | undefined> {
+		const prevEnv: Record<string, string | undefined> = {
+			AWS_REGION: process.env.AWS_REGION,
+			AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
+			AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
+		};
+		process.env.AWS_REGION = 'us-east-1';
+		process.env.AWS_ACCESS_KEY_ID = 'AKIDTEST';
+		process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+		const prevStore = (globalThis as any)[STORE_KEY];
+		const als = new AsyncLocalStorage<string | undefined>();
+		(globalThis as any)[STORE_KEY] = als;
+		let captured: string | undefined;
+		try {
+			const store = new KVStore({ id: 'my-app' }, id);
+			(store as any).docClient.config.requestHandler = {
+				handle: async (req: any) => {
+					captured = req.headers['user-agent'] ?? req.headers['x-amz-user-agent'];
+					throw new Error('__captured__');
+				},
+			};
+			await als.run(token, async () => {
+				try {
+					await store.get('probe');
+				} catch (err) {
+					if (!(err instanceof Error) || err.message !== '__captured__') throw err;
+				}
+			});
+		} finally {
+			if (prevStore === undefined) {
+				delete (globalThis as any)[STORE_KEY];
+			} else {
+				(globalThis as any)[STORE_KEY] = prevStore;
+			}
+			for (const [key, value] of Object.entries(prevEnv)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+		return captured;
+	}
+
+	test('appends the request-scoped token to the outgoing user-agent header', async () => {
+		const ua = await capturedUserAgentFor('ua-store', 'client/swift/9.9.9');
+		assert.match(ua ?? '', / client\/swift\/9\.9\.9$/);
+	});
+
+	test('does not append a native token when none is set for the request', async () => {
+		const ua = await capturedUserAgentFor('ua-store-none', undefined);
+		assert.ok(ua && ua.length > 0, 'user-agent header should still be present');
+		assert.doesNotMatch(ua ?? '', /client\/[a-z]+\//);
 	});
 });
