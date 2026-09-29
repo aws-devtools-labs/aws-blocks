@@ -61,6 +61,7 @@ import { join, resolve } from "node:path";
 const ROOT = resolve(import.meta.dirname, "..");
 const PACKAGES_DIR = join(ROOT, "packages");
 const CHANGESET_DIR = join(ROOT, ".changeset");
+const NATIVE_DIR = join(ROOT, "native");
 const SCOPE = "@aws-blocks/";
 const UMBRELLA_PKG = "@aws-blocks/blocks";
 
@@ -427,28 +428,28 @@ function getWorkspacePackageNames(): Set<string> {
 	return names;
 }
 
-function validateStructure(): number {
-	if (!existsSync(CHANGESET_DIR)) {
-		console.log("✓ No .changeset directory; nothing to validate.");
-		return 0;
-	}
+/**
+ * Validate every changeset .md in one directory: frontmatter present, each
+ * entry line parseable, bump in VALID_BUMPS, and package name in `validNames`.
+ * Extracted so the same rules apply to the root .changeset dir and to each
+ * native/<x>/.changeset dir (see validateStructure). `label` is the dir's
+ * repo-relative name, used as the file-path prefix in error messages;
+ * `scopeDesc` names where valid package names come from (e.g. "the workspace").
+ * Regex/parsing is identical to the original inline root-dir loop.
+ */
+function validateChangesetDir(dir: string, validNames: Set<string>, label: string, scopeDesc: string): string[] {
+	const errors: string[] = [];
+	if (!existsSync(dir)) return errors;
 
-	const files = readdirSync(CHANGESET_DIR).filter(
+	const files = readdirSync(dir).filter(
 		(f) => f.endsWith(".md") && f !== "README.md",
 	);
-	if (files.length === 0) {
-		console.log("✓ No changesets to validate.");
-		return 0;
-	}
-
-	const validNames = getWorkspacePackageNames();
-	const errors: string[] = [];
 
 	for (const file of files) {
-		const content = readFileSync(join(CHANGESET_DIR, file), "utf-8");
+		const content = readFileSync(join(dir, file), "utf-8");
 		const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
 		if (!frontmatterMatch) {
-			errors.push(`${file}: missing or malformed frontmatter (expected a leading '---' … '---' block).`);
+			errors.push(`${label}/${file}: missing or malformed frontmatter (expected a leading '---' … '---' block).`);
 			continue;
 		}
 
@@ -458,19 +459,85 @@ function validateStructure(): number {
 
 			const entryMatch = line.match(/^['"]?([^'":]+?)['"]?\s*:\s*['"]?([^'"\s]+)['"]?$/);
 			if (!entryMatch) {
-				errors.push(`${file}: cannot parse entry line: "${line}"`);
+				errors.push(`${label}/${file}: cannot parse entry line: "${line}"`);
 				continue;
 			}
 
 			const pkg = entryMatch[1].trim();
 			const bump = entryMatch[2].trim();
 			if (!VALID_BUMPS.has(bump as BumpType)) {
-				errors.push(`${file}: invalid bump "${bump}" for ${pkg} (expected major, minor, or patch).`);
+				errors.push(`${label}/${file}: invalid bump "${bump}" for ${pkg} (expected major, minor, or patch).`);
 			}
 			if (!validNames.has(pkg)) {
-				errors.push(`${file}: unknown package "${pkg}" (not found in the workspace).`);
+				errors.push(`${label}/${file}: unknown package "${pkg}" (not found in ${scopeDesc}).`);
 			}
 		}
+	}
+	return errors;
+}
+
+/** Count of validatable changeset files (.md, excluding README) in a dir. */
+function countChangesetFiles(dir: string): number {
+	if (!existsSync(dir)) return 0;
+	return readdirSync(dir).filter((f) => f.endsWith(".md") && f !== "README.md").length;
+}
+
+/**
+ * A native package validates its changesets against its own package name
+ * (e.g. "aws-blocks-swift"), read from native/<x>/package.json — those names
+ * are not JS workspace packages. A missing manifest yields an empty set, so
+ * every entry flags as an unknown package below rather than passing silently;
+ * a manifest that exists but is unreadable or invalid fails the guard loudly
+ * (a GuardError), matching how the workspace manifests are read.
+ */
+function readNativePackageNames(nativeDir: string, label: string): Set<string> {
+	const pkgJson = join(nativeDir, "package.json");
+	const names = new Set<string>();
+	if (existsSync(pkgJson)) {
+		const { name } = readJson(pkgJson, `${label}/package.json`);
+		if (typeof name === "string" && name) names.add(name);
+	}
+	return names;
+}
+
+function validateStructure(): number {
+	const hasRoot = existsSync(CHANGESET_DIR);
+	const hasNative = existsSync(NATIVE_DIR);
+
+	if (!hasRoot && !hasNative) {
+		console.log("✓ No .changeset directory; nothing to validate.");
+		return 0;
+	}
+
+	const errors: string[] = [];
+	let validated = 0;
+
+	// Root changesets: validated against the JS workspace package names,
+	// exactly as before.
+	if (hasRoot) {
+		validated += countChangesetFiles(CHANGESET_DIR);
+		errors.push(...validateChangesetDir(CHANGESET_DIR, getWorkspacePackageNames(), ".changeset", "the workspace"));
+	}
+
+	// Native changesets (native/<x>/.changeset) carry contributor-authored
+	// prose/frontmatter for the native SDKs. Validating them here means a
+	// malformed or wrong-package native changeset fails on the PR instead of
+	// being trusted until it breaks the release. Each native tree validates
+	// against its OWN package.json name, not the JS workspace.
+	if (hasNative) {
+		for (const entry of readdirSync(NATIVE_DIR)) {
+			const dir = join(NATIVE_DIR, entry, ".changeset");
+			if (!existsSync(dir)) continue;
+			validated += countChangesetFiles(dir);
+			errors.push(
+				...validateChangesetDir(dir, readNativePackageNames(join(NATIVE_DIR, entry), `native/${entry}`), `native/${entry}/.changeset`, `native/${entry}`),
+			);
+		}
+	}
+
+	if (validated === 0) {
+		console.log("✓ No changesets to validate.");
+		return 0;
 	}
 
 	if (errors.length > 0) {
@@ -486,7 +553,7 @@ function validateStructure(): number {
 		return 1;
 	}
 
-	console.log(`✓ ${files.length} changeset(s) are structurally valid.`);
+	console.log(`✓ ${validated} changeset(s) are structurally valid.`);
 	return 0;
 }
 

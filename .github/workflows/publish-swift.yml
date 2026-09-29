@@ -45,6 +45,9 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.OPS_GITHUB_TOKEN }}
+          # Don't persist the PAT into .git/config; pushes below authenticate
+          # via an explicit tokenised remote URL instead.
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -77,9 +80,19 @@ jobs:
           echo "Swift SDK version: $VERSION"
 
       - name: Guard against existing release branch
+        env:
+          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          if git ls-remote --heads origin "release/swift-${VERSION}" | grep -q .; then
+          # persist-credentials:false leaves `origin` unauthenticated. Supply the
+          # token via a GIT_ASKPASS helper (reads it from the environment) so it
+          # is never placed in the git command's argv / process list.
+          ASKPASS="$(mktemp)"
+          printf '#!/bin/sh\nprintf %%s "$GH_TOKEN"\n' > "$ASKPASS"
+          chmod +x "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          REMOTE="https://x-access-token@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --heads "$REMOTE" "release/swift-${VERSION}" | grep -q .; then
             echo "::error::Release branch release/swift-${VERSION} already exists."
             exit 1
           fi
@@ -89,13 +102,23 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           ENTRY=$(./scripts/extract-changelog.sh CHANGELOG.md "$VERSION")
-          echo "entry<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$ENTRY" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          # Use a randomised heredoc delimiter so a changelog line that happens
+          # to equal a fixed "EOF" can't terminate this $GITHUB_OUTPUT block
+          # early and disturb the captured value.
+          DELIM="ENTRY_$(openssl rand -hex 16)"
+          {
+            echo "entry<<${DELIM}"
+            echo "$ENTRY"
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create monorepo release PR
         env:
           GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          # Pass the changelog to the step as data via env rather than letting
+          # the workflow expression expand into the script text, so the shell
+          # treats the value as data and does not evaluate it.
+          CHANGELOG_ENTRY: ${{ steps.changelog.outputs.entry }}
         working-directory: .
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -107,18 +130,32 @@ jobs:
           git checkout -b "$BRANCH"
           git add -A
           git commit -m "chore(swift): release ${VERSION}"
-          git push origin "$BRANCH"
+          # persist-credentials:false keeps the PAT out of .git/config. Supply
+          # the token via a GIT_ASKPASS helper (reads it from the environment)
+          # so it is never placed in the git command's argv / process list.
+          ASKPASS="$(mktemp)"
+          printf '#!/bin/sh\nprintf %%s "$GH_TOKEN"\n' > "$ASKPASS"
+          chmod +x "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          git push "https://x-access-token@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
+
+          # Build the PR body from a quoted heredoc (<<'EOF' = pure literal, no
+          # command substitution or expansion), then inject the dynamic values
+          # via bash parameter substitution so they are data, never code.
+          BODY=$(cat <<'EOF'
+          ## Swift SDK Release __VERSION__
+
+          __CHANGELOG_ENTRY__
+
+          On merge, this will be tagged `swift@__VERSION__` and synced to aws-blocks-swift.
+          EOF
+          )
+          BODY=${BODY//__VERSION__/$VERSION}
+          BODY=${BODY/__CHANGELOG_ENTRY__/$CHANGELOG_ENTRY}
 
           gh pr create \
             --title "chore(swift): release ${VERSION}" \
-            --body "$(cat <<EOF
-          ## Swift SDK Release ${VERSION}
-
-          ${{ steps.changelog.outputs.entry }}
-
-          On merge, this will be tagged \`swift@${VERSION}\` and synced to aws-blocks-swift.
-          EOF
-          )"
+            --body "$BODY"
 
       - name: Checkout aws-blocks-swift
         uses: actions/checkout@v7
@@ -126,6 +163,9 @@ jobs:
           repository: aws-devtools-labs/aws-blocks-swift
           path: target-repo
           token: ${{ secrets.OPS_GITHUB_TOKEN }}
+          # Don't persist the PAT into .git/config; the release-PR step pushes
+          # via an explicit tokenised remote URL instead.
+          persist-credentials: false
 
       - name: Sync files to aws-blocks-swift
         run: |
@@ -159,6 +199,9 @@ jobs:
         working-directory: target-repo
         env:
           GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          # Pass the changelog as data, not as script text (see the monorepo
+          # step) — prevents $(...) in changelog prose executing on the runner.
+          CHANGELOG_ENTRY: ${{ steps.changelog.outputs.entry }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           BRANCH="release/swift-${VERSION}"
@@ -175,17 +218,31 @@ jobs:
           fi
 
           git commit -m "chore: release ${VERSION}"
-          git push origin "$BRANCH"
+          # persist-credentials:false keeps the PAT out of .git/config. Supply
+          # the token via a GIT_ASKPASS helper (reads it from the environment)
+          # so it is never placed in the git command's argv / process list.
+          ASKPASS="$(mktemp)"
+          printf '#!/bin/sh\nprintf %%s "$GH_TOKEN"\n' > "$ASKPASS"
+          chmod +x "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          git push "https://x-access-token@github.com/aws-devtools-labs/aws-blocks-swift.git" "$BRANCH"
+
+          # Build the PR body from a quoted heredoc (<<'EOF' = pure literal),
+          # then inject the dynamic values via bash parameter substitution so
+          # they are treated as data, never code.
+          BODY=$(cat <<'EOF'
+          ## Release __VERSION__
+
+          __CHANGELOG_ENTRY__
+
+          Synced from aws-blocks monorepo branch `release/swift-__VERSION__`.
+
+          On merge, a git tag `__VERSION__` will be created automatically and a GitHub Release published. Swift Package Manager will pick up the new version via the tag.
+          EOF
+          )
+          BODY=${BODY//__VERSION__/$VERSION}
+          BODY=${BODY/__CHANGELOG_ENTRY__/$CHANGELOG_ENTRY}
 
           gh pr create \
             --title "chore: release ${VERSION}" \
-            --body "$(cat <<EOF
-          ## Release ${VERSION}
-
-          ${{ steps.changelog.outputs.entry }}
-
-          Synced from aws-blocks monorepo branch \`release/swift-${VERSION}\`.
-
-          On merge, a git tag \`${VERSION}\` will be created automatically and a GitHub Release published. Swift Package Manager will pick up the new version via the tag.
-          EOF
-          )"
+            --body "$BODY"

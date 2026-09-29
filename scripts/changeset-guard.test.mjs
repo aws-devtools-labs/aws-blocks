@@ -507,6 +507,81 @@ describe("validate-structure", () => {
 	});
 });
 
+describe("validate-structure: native changesets", () => {
+	// native/<x>/.changeset dirs validate against that native package's own name
+	// (read from native/<x>/package.json), not the JS workspace. The root
+	// workspace stays valid in every case so the native behaviour is isolated.
+	it("passes when a native changeset names its own package", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			"native/swift/.changeset/config.json": `${JSON.stringify({ changelog: "@changesets/cli/changelog" }, null, 2)}\n`,
+			"native/swift/.changeset/README.md": "# Changesets\n",
+			"native/swift/.changeset/ok.md": changeset({ "aws-blocks-swift": "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 0, output);
+	});
+
+	it("fails when a native changeset names a package that is not the native package", (t) => {
+		// A JS-workspace name is still "unknown" here: native trees validate only
+		// against their own manifest, not the workspace.
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			"native/swift/.changeset/wrong.md": changeset({ [SIBLING]: "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /native\/swift\/\.changeset\/[^:]*: unknown package/);
+		assert.match(output, /not found in native\/swift/);
+	});
+
+	it("skips a native package that has no .changeset directory", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/dart/package.json": pkgJson("aws-blocks-dart"),
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			"native/swift/.changeset/ok.md": changeset({ "aws-blocks-swift": "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 0, output);
+		assert.doesNotMatch(output, /native\/dart/);
+	});
+
+	it("fails loudly when an existing native package.json cannot be parsed", (t) => {
+		// The .changeset dir must exist so the native walk enters it and reads the
+		// manifest; an unreadable-but-present manifest fails loudly (a GuardError),
+		// exactly like the workspace-manifest fail-loud case — not a silent empty set.
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/.changeset/ok.md": changeset({ "aws-blocks-swift": "patch" }),
+			"native/swift/package.json": "{ not json\n",
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /Cannot parse native\/swift\/package\.json/);
+		assert.doesNotMatch(output, /unknown package/);
+	});
+
+	it("flags every entry as unknown when a native package.json is missing", (t) => {
+		// The documented fail-safe: a missing manifest yields an empty name set, so
+		// every native entry flags as unknown rather than passing silently.
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/.changeset/ok.md": changeset({ "aws-blocks-swift": "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /unknown package "aws-blocks-swift".*not found in native\/swift/s);
+	});
+});
+
 describe("cli", () => {
 	it("exits 2 on an unknown command", (t) => {
 		const dir = baseRepo(t);
