@@ -231,12 +231,25 @@ export function parseCdkEventLine(line: string): CdkResourceEvent | null {
 }
 
 /**
+ * Whether a CloudFormation status is a ROLLBACK — a failure being undone, not
+ * forward progress. Both `ROLLBACK_IN_PROGRESS` and `UPDATE_ROLLBACK_COMPLETE`
+ * qualify; the latter ENDS in `_COMPLETE` but is emphatically not a clean
+ * completion, which is the distinction the tracker and heartbeat turn on.
+ */
+export function isRollbackStatus(status: string): boolean {
+  return status.includes('ROLLBACK');
+}
+
+/**
  * Render the human-friendly resource name used in the heartbeat, e.g.
- * `HostingDistribution (AWS::CloudFront::Distribution)`. Kept pure so the
- * heartbeat's wording is asserted without a running deploy.
+ * `HostingDistribution (AWS::CloudFront::Distribution)`. A resource that is
+ * rolling back is flagged so the heartbeat surfaces the failure ("⚠️ … rolling
+ * back") instead of reading like ordinary progress. Kept pure so the wording is
+ * asserted without a running deploy.
  */
 export function describeConvergingResource(event: CdkResourceEvent): string {
-  return `${event.logicalId} (${event.resourceType})`;
+  const name = `${event.logicalId} (${event.resourceType})`;
+  return isRollbackStatus(event.status) ? `⚠️ ${name} rolling back` : name;
 }
 
 /**
@@ -257,13 +270,29 @@ export function createResourceTracker(): {
       const event = parseCdkEventLine(line);
       if (!event) return;
       if (event.status.endsWith('_IN_PROGRESS')) {
+        // Covers both forward progress (CREATE/UPDATE/DELETE_IN_PROGRESS) and
+        // UPDATE_ROLLBACK_IN_PROGRESS — a rollback is still something the deploy
+        // is actively doing, and it is a failure signal the heartbeat should
+        // keep naming rather than fall silent on.
+        current = event;
+      } else if (
+        current &&
+        event.logicalId === current.logicalId &&
+        isRollbackStatus(event.status)
+      ) {
+        // A ROLLBACK reached its terminal state. This ENDS in `_COMPLETE`
+        // (UPDATE_ROLLBACK_COMPLETE / ROLLBACK_COMPLETE), but it is NOT a clean
+        // settle — the resource failed and was rolled back. Keep it current so
+        // the heartbeat surfaces the rollback instead of silently clearing it
+        // as if the deploy succeeded.
         current = event;
       } else if (
         current &&
         event.logicalId === current.logicalId &&
         (event.status.endsWith('_COMPLETE') || event.status.endsWith('_FAILED'))
       ) {
-        // The resource we were reporting on has settled; stop naming it. The
+        // A clean terminal (CREATE/UPDATE/DELETE_COMPLETE) or a plain _FAILED:
+        // the resource we were reporting on has settled; stop naming it. The
         // next _IN_PROGRESS line names whatever the deploy moves on to.
         current = null;
       }

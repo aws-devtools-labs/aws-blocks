@@ -1060,6 +1060,21 @@ describe('parseCdkEventLine — reads a `cdk deploy --progress events` line', ()
     t.assert.strictEqual(event?.logicalId, 'Handler');
   });
 
+  it('parses UPDATE_*, DELETE_* and ROLLBACK statuses', (t: TestContext) => {
+    t.assert.strictEqual(
+      parseCdkEventLine('S | UPDATE_IN_PROGRESS | AWS::DynamoDB::Table | T')?.status,
+      'UPDATE_IN_PROGRESS',
+    );
+    t.assert.strictEqual(
+      parseCdkEventLine('S | DELETE_COMPLETE | AWS::S3::Bucket | B')?.status,
+      'DELETE_COMPLETE',
+    );
+    t.assert.strictEqual(
+      parseCdkEventLine('S | UPDATE_ROLLBACK_COMPLETE | AWS::Lambda::Function | Fn')?.status,
+      'UPDATE_ROLLBACK_COMPLETE',
+    );
+  });
+
   it('returns null for a non-event line (banner, summary, blank)', (t: TestContext) => {
     t.assert.strictEqual(parseCdkEventLine('✨  Deployment time: 421s'), null);
     t.assert.strictEqual(parseCdkEventLine(''), null);
@@ -1076,6 +1091,17 @@ describe('describeConvergingResource — the heartbeat name', () => {
         logicalId: 'HostingDistribution',
       }),
       'HostingDistribution (AWS::CloudFront::Distribution)',
+    );
+  });
+
+  it('flags a rolling-back resource with a warning instead of a neutral name', (t: TestContext) => {
+    t.assert.strictEqual(
+      describeConvergingResource({
+        status: 'UPDATE_ROLLBACK_IN_PROGRESS',
+        resourceType: 'AWS::CloudFront::Distribution',
+        logicalId: 'HostingDistribution',
+      }),
+      '⚠️ HostingDistribution (AWS::CloudFront::Distribution) rolling back',
     );
   });
 });
@@ -1107,6 +1133,38 @@ describe('createResourceTracker — what is converging right now', () => {
     tracker.observe('S | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | Dist');
     tracker.observe('some banner line');
     t.assert.strictEqual(tracker.current()?.logicalId, 'Dist');
+  });
+
+  it('tracks and clears an UPDATE_* transition like a CREATE_*', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | UPDATE_IN_PROGRESS | AWS::DynamoDB::Table | Table');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Table');
+    tracker.observe('S | UPDATE_COMPLETE | AWS::DynamoDB::Table | Table');
+    t.assert.strictEqual(tracker.current(), null);
+  });
+
+  it('tracks and clears a DELETE_* transition', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | DELETE_IN_PROGRESS | AWS::S3::Bucket | Bucket');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Bucket');
+    tracker.observe('S | DELETE_COMPLETE | AWS::S3::Bucket | Bucket');
+    t.assert.strictEqual(tracker.current(), null);
+  });
+
+  it('does NOT clear on UPDATE_ROLLBACK_COMPLETE — a rollback is not a clean settle', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | UPDATE_IN_PROGRESS | AWS::CloudFront::Distribution | Dist');
+    // Ends in `_COMPLETE`, but it is a rollback: the resource failed and was
+    // reverted. The heartbeat must keep surfacing it, not read it as success.
+    tracker.observe('S | UPDATE_ROLLBACK_COMPLETE | AWS::CloudFront::Distribution | Dist');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Dist');
+    t.assert.strictEqual(tracker.current()?.status, 'UPDATE_ROLLBACK_COMPLETE');
+  });
+
+  it('keeps naming a resource that entered ROLLBACK_IN_PROGRESS', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | UPDATE_ROLLBACK_IN_PROGRESS | AWS::Lambda::Function | Fn');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Fn');
   });
 });
 
