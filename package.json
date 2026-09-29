@@ -60,6 +60,7 @@
     "test-apps/db-pull-typecheck",
     "scripts/agent-bench",
     "test-apps/telemetry",
+    "test-apps/mt-apigw-proof",
     "test-infra"
   ],
   "scripts": {
