@@ -19,6 +19,7 @@
     "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "sandbox:console": "tsx aws-blocks/scripts/console.ts",
+    "console": "tsx aws-blocks/scripts/console.ts --production",
     "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "secret": "tsx aws-blocks/scripts/secret.ts",
