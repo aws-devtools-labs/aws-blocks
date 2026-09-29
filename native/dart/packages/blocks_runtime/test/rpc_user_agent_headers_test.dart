@@ -1,3 +1,6 @@
+@TestOn('vm')
+library;
+
 import 'package:blocks_runtime/src/rpc_user_agent_headers.dart';
 import 'package:blocks_runtime/src/rpc_user_agent_headers_io.dart' as io;
 import 'package:blocks_runtime/src/rpc_user_agent_headers_web.dart' as web;

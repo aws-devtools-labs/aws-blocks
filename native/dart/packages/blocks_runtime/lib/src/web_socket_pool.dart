@@ -14,8 +14,8 @@ class WebSocketPool {
       entry.refCount++;
       return entry.channel;
     }
-    // The WebSocket upgrade bypasses http.Client, so the User-Agent is
-    // passed onto the upgrade request through connectWebSocket.
+    // WebSocket upgrades bypass http.Client; connectWebSocket attaches this
+    // header where the platform permits custom upgrade headers.
     final channel = connectWebSocket(Uri.parse(url), {
       'User-Agent': blocksUserAgentToken,
     });
