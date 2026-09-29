@@ -3,7 +3,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 
-import { parseCorsPatterns, escapeOriginToPattern, _resetCorsPatterns, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
+import { parseCorsPatterns, escapeOriginToPattern, getCorsPatterns, isOriginAllowed, _resetCorsPatterns, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 import { createLambdaHandler } from './lambda-handler.js';
 import { clearRouteRegistry } from './raw-route.js';
 
@@ -104,6 +104,38 @@ describe('escapeOriginToPattern', () => {
     const patterns = parseCorsPatterns('.*');
     assert.ok(patterns[0].test('https://d123.cloudfront.net'));
     assert.ok(patterns[0].test('https://anything.example.org'));
+  });
+});
+
+// ── getCorsPatterns channel separation ───────────────────────────────────────
+
+describe('getCorsPatterns — channel separation', () => {
+  beforeEach(() => {
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
+  });
+
+  it('compiles CORS_ALLOWED_ORIGINS as regex and CORS_HOSTING_ORIGINS as escaped literal', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://app\\.example\\.com'; // regex channel
+    process.env.CORS_HOSTING_ORIGINS = 'https://d123.cloudfront.net'; // literal channel (raw)
+    _resetCorsPatterns();
+
+    assert.strictEqual(isOriginAllowed('https://app.example.com'), true);
+    assert.strictEqual(isOriginAllowed('https://d123.cloudfront.net'), true);
+    // The hosting literal is escaped, so a dot-substituted variant must not match.
+    assert.strictEqual(isOriginAllowed('https://d123xcloudfrontxnet'), false);
+  });
+
+  it('keeps the regex channel intact: CORS_ALLOWED_ORIGINS=.* alone allows anything', () => {
+    process.env.CORS_ALLOWED_ORIGINS = '.*';
+    _resetCorsPatterns();
+
+    assert.strictEqual(isOriginAllowed('https://anything.test'), true);
+  });
+
+  it('returns null when neither source is configured', () => {
+    assert.strictEqual(getCorsPatterns(), null);
   });
 });
 
@@ -356,12 +388,14 @@ describe('createLambdaHandler — CORS wildcard pattern (.*)', () => {
   });
 });
 
-// ── CORS hosting origin merge ───────────────────────────────────────────────
+// ── CORS hosting origin (literal channel) ───────────────────────────────────
 
-describe('createLambdaHandler — CORS hosting origin merge', () => {
+describe('createLambdaHandler — CORS hosting origin (literal channel)', () => {
   beforeEach(() => {
     process.env.CORS_ALLOWED_ORIGINS = '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$';
-    process.env.CORS_HOSTING_ORIGINS = 'https://d111111abcdef8\\.cloudfront\\.net';
+    // Raw, unescaped resolved origin — CORS_HOSTING_ORIGINS is the literal
+    // channel, escaped at runtime by getCorsPatterns() (not pre-escaped).
+    process.env.CORS_HOSTING_ORIGINS = 'https://d111111abcdef8.cloudfront.net';
     _resetCorsPatterns();
     clearRouteRegistry();
   });
@@ -402,6 +436,15 @@ describe('createLambdaHandler — CORS hosting origin merge', () => {
     }));
     assert.strictEqual(result.statusCode, 200);
     assert.strictEqual(result.headers['access-control-allow-origin'], 'https://d111111abcdef8.cloudfront.net');
+  });
+
+  it('escapes the literal origin dots (a dot-substituted variant is rejected 403)', async () => {
+    // Proves CORS_HOSTING_ORIGINS is compiled as an escaped literal, not a regex:
+    // the dots must match literally, so this single-char variant does NOT match.
+    const result = await invoke(echoBackend, makeEvent({
+      headers: { 'Content-Type': 'application/json', origin: 'https://d111111abcdef8xcloudfrontxnet' },
+    }));
+    assert.strictEqual(result.statusCode, 403);
   });
 
   it('rejects origins not matching either source', async () => {

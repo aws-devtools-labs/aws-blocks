@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { config, secret } from '@aws-blocks/hosting';
 import { _setSynthExistsChecker } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
-import { App, Duration, Stack } from 'aws-cdk-lib';
+import { App, Duration, Stack, Token } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
 import { type BlocksStackApi, Hosting } from './hosting.js';
@@ -1081,6 +1081,46 @@ describe('Hosting', () => {
         },
       });
       assert.strictEqual(Object.keys(lambdas).length, 0, 'Should NOT create a CORS merge Lambda');
+    });
+
+    it('registers the RAW CloudFront domain token (not an escaped dead literal)', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'CorsTokenRoundTripStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+      });
+
+      // Read the registered value straight from the per-stack config registry,
+      // matching how other synth-state tests inspect registerConfig() entries.
+      const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
+        | { entries: Map<string, unknown> }
+        | undefined;
+      assert.ok(registry, 'config registry exists on the stack');
+      const value = registry.entries.get('CORS_HOSTING_ORIGINS');
+      assert.ok(value !== undefined, 'CORS_HOSTING_ORIGINS is registered');
+
+      // (i) The token must be intact — either still unresolved, or resolving to
+      // an intrinsic object (Fn::GetAtt/Fn::Join), NOT a plain escaped string.
+      const resolved = stack.resolve(value);
+      if (!Token.isUnresolved(value)) {
+        assert.strictEqual(
+          typeof resolved,
+          'object',
+          'resolved CORS_HOSTING_ORIGINS must be a CFN intrinsic object, not a plain string',
+        );
+      }
+
+      // (ii) A dead escaped-token literal would carry the substring 'Token[';
+      // the raw registration must not. This fails against the buggy
+      // escapeOriginToPattern(distributionUrl) version and passes against the fix.
+      assert.ok(
+        !JSON.stringify(resolved).includes('Token['),
+        'CORS_HOSTING_ORIGINS must not be a dead escaped-token literal',
+      );
     });
 
     it('does not register CORS_HOSTING_ORIGINS when api prop is missing', () => {

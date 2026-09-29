@@ -22,7 +22,6 @@ import { Construct } from 'constructs';
 import { registerConfig } from './cdk/config-registry.js';
 import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
-import { escapeOriginToPattern } from './cors.js';
 import {
 	assertMarkersExistAtSynth,
   collectSynthMarkers,
@@ -832,7 +831,13 @@ export class Hosting extends Construct {
       // execute-api host (which strips the viewer Host header). Kept a literal
       // key (like CORS_HOSTING_ORIGINS below) rather than a shared constant.
       registerConfig(this, 'BLOCKS_PUBLIC_ORIGIN', hosting.distributionUrl);
-      registerConfig(this, 'CORS_HOSTING_ORIGINS', escapeOriginToPattern(hosting.distributionUrl));
+      // CORS_HOSTING_ORIGINS: registered RAW (the unresolved CloudFront domain
+      // token) — never escaped here at synth. `hosting.distributionUrl` is a CDK
+      // token whose real value (Fn::GetAtt DomainName) only exists post-deploy, so
+      // calling `.replace()` on it now would escape the `${Token[...]}` marker into
+      // a dead literal that never resolves. The literal origin is escaped at
+      // runtime by getCorsPatterns() once the token has resolved to a plain string.
+      registerConfig(this, 'CORS_HOSTING_ORIGINS', hosting.distributionUrl);
     }
 
     // ── 10. Expose resources ──────────────────────────────────────
