@@ -70,7 +70,10 @@ cd "$TEST_DIR"
 npm install @aws-blocks/create-blocks-app@latest 2>&1
 CREATE_CMD="$TEST_DIR/node_modules/.bin/create-blocks-app"
 
-TEMPLATES=("default" "demo" "backend" "bare")
+# Every fresh-project template the CLI can scaffold. The "amplify" template is
+# an integration into an existing Amplify Gen 2 project, not a standalone
+# scaffold, so it is covered by e2e-amplify-interop.yml instead.
+TEMPLATES=("default" "demo" "backend" "bare" "react" "nextjs" "auth-cognito")
 FAILED=0
 
 for TEMPLATE in "${TEMPLATES[@]}"; do
