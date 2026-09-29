@@ -15,9 +15,9 @@ class PersistentCookiesStorageTest {
 
     private class InMemoryKeyValueStore : KeyValueStore {
         val data = mutableMapOf<String, String>()
-        override fun put(key: String, value: String) { data[key] = value }
-        override fun get(key: String): String? = data[key]
-        override fun remove(key: String) { data.remove(key) }
+        override suspend fun put(key: String, value: String) { data[key] = value }
+        override suspend fun get(key: String): String? = data[key]
+        override suspend fun remove(key: String) { data.remove(key) }
     }
 
     private val store = InMemoryKeyValueStore()

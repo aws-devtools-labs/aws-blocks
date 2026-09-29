@@ -89,7 +89,7 @@ private class QueryBuilder {
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
 private class KeychainKeyValueStore(private val service: String) : KeyValueStore {
 
-    override fun put(key: String, value: String) {
+    override suspend fun put(key: String, value: String) {
         remove(key)
         val data = (value as NSString).dataUsingEncoding(NSUTF8StringEncoding) ?: return
         withQuery({
@@ -102,7 +102,7 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
         }
     }
 
-    override fun get(key: String): String? = withQuery({
+    override suspend fun get(key: String): String? = withQuery({
         constant(kSecClass, kSecClassGenericPassword)
         bridged(kSecAttrService, service as NSString)
         bridged(kSecAttrAccount, key as NSString)
@@ -117,7 +117,7 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
         }
     }
 
-    override fun remove(key: String) {
+    override suspend fun remove(key: String) {
         withQuery({
             constant(kSecClass, kSecClassGenericPassword)
             bridged(kSecAttrService, service as NSString)

@@ -9,8 +9,8 @@ import io.ktor.http.Url
 import io.ktor.http.parseServerSetCookieHeader
 import io.ktor.http.renderSetCookieHeader
 import io.ktor.util.date.getTimeMillis
-import kotlinx.atomicfu.locks.SynchronizedObject
-import kotlinx.atomicfu.locks.synchronized
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 
 /**
@@ -33,7 +33,7 @@ internal val sharedCookiesStorage: PersistentCookiesStorage by lazy { Persistent
 internal class PersistentCookiesStorage(
     private val store: KeyValueStore = encryptedKeyValueStore(STORE_NAME),
     private val clock: () -> Long = { getTimeMillis() },
-) : CookiesStorage, SynchronizedObject() {
+) : CookiesStorage {
 
     private companion object {
         const val STORE_NAME = "cookies"
@@ -47,10 +47,11 @@ internal class PersistentCookiesStorage(
 
     private class Stored(val cookie: Cookie, val createdAt: Long)
 
+    private val mutex = Mutex()
     private val cookies = mutableListOf<Stored>()
     private var loaded = false
 
-    override suspend fun get(requestUrl: Url): List<Cookie> = synchronized(this) {
+    override suspend fun get(requestUrl: Url): List<Cookie> = mutex.withLock {
         load()
         if (removeExpired()) persist()
         cookies.filter { it.cookie.matches(requestUrl) }.map { it.cookie }
@@ -58,7 +59,7 @@ internal class PersistentCookiesStorage(
 
     override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
         if (cookie.name.isBlank()) return
-        synchronized(this) {
+        mutex.withLock {
             load()
             val stored = cookie.fillDefaults(requestUrl)
             cookies.removeAll { it.cookie.name == stored.name && it.cookie.matches(requestUrl) }
@@ -69,7 +70,7 @@ internal class PersistentCookiesStorage(
     }
 
     /** Drops every cookie, in memory and on disk. */
-    fun clear() = synchronized(this) {
+    suspend fun clear() = mutex.withLock {
         cookies.clear()
         loaded = true
         store.remove(JAR_KEY)
@@ -78,7 +79,7 @@ internal class PersistentCookiesStorage(
     override fun close() {}
 
     /** Reads the persisted jar on first use. */
-    private fun load() {
+    private suspend fun load() {
         if (loaded) return
         loaded = true
         val serialized = store.get(JAR_KEY) ?: return
@@ -95,7 +96,7 @@ internal class PersistentCookiesStorage(
         removeExpired()
     }
 
-    private fun persist() {
+    private suspend fun persist() {
         val entries = cookies.map { Entry(renderSetCookieHeader(it.cookie), it.createdAt) }
         store.put(JAR_KEY, BlocksJson.encodeToString(entries))
     }

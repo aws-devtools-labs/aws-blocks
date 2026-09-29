@@ -5,6 +5,8 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 internal actual fun encryptedKeyValueStore(name: String): KeyValueStore =
     AndroidKeyValueStore(name)
@@ -27,21 +29,23 @@ private class AndroidKeyValueStore(
         )
     }
 
-    override fun put(key: String, value: String) {
-        synchronized(this) {
-            prefs?.edit()?.putString(key, value)?.apply()
+    override suspend fun put(key: String, value: String) = withContext(Dispatchers.IO) {
+        synchronized(this@AndroidKeyValueStore) {
+            prefs.edit().putString(key, value).apply()
         }
     }
 
-    override fun get(key: String): String? {
-        return synchronized(this) {
+    override suspend fun get(key: String): String? = withContext(Dispatchers.IO) {
+        synchronized(this@AndroidKeyValueStore) {
             prefs.getString(key, null)
         }
     }
 
-    override fun remove(key: String) {
-        synchronized(this) {
-            prefs.edit()?.remove(key)?.apply()
+    override suspend fun remove(key: String) {
+        withContext(Dispatchers.IO) {
+            synchronized(this@AndroidKeyValueStore) {
+                prefs.edit().remove(key).apply()
+            }
         }
     }
 }

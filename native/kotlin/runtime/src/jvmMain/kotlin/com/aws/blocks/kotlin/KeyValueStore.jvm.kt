@@ -1,5 +1,7 @@
 package com.aws.blocks.kotlin
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.FileAlreadyExistsException
@@ -47,18 +49,18 @@ internal class EncryptedFileKeyValueStore(
 
     private val secretKey: SecretKey by lazy { loadOrCreateKey() }
 
-    override fun put(key: String, value: String) {
+    override suspend fun put(key: String, value: String) = withContext(Dispatchers.IO) {
         writeAtomically(pathFor(key), encrypt(value))
     }
 
-    override fun get(key: String): String? {
+    override suspend fun get(key: String): String? = withContext(Dispatchers.IO) {
         val path = pathFor(key)
-        if (!Files.exists(path)) return null
-        return decrypt(Files.readString(path))
+        if (!Files.exists(path)) return@withContext null
+        decrypt(Files.readString(path))
     }
 
-    override fun remove(key: String) {
-        Files.deleteIfExists(pathFor(key))
+    override suspend fun remove(key: String) {
+        withContext(Dispatchers.IO) { Files.deleteIfExists(pathFor(key)) }
     }
 
     private fun pathFor(key: String): Path =
