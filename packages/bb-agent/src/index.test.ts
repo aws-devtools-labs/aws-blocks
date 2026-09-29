@@ -1531,6 +1531,45 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
+	test('reconnect does NOT re-surface a stale pending interrupt over a turn resolved during re-sync', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let interruptsReceived: Array<{ id: string; name: string; reason?: unknown }> | undefined;
+		let errorReceived: string | undefined;
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn already COMPLETED server-side: history ends with a final assistant message,
+				// so the turn-state block adopts it and resolves the turn (nulls assistantId,
+				// clears loading) before we ever look at pending interrupts.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: 'All done — resolved before the interrupt read.' },
+				] }),
+				// Eventually-consistent read still lists a since-resolved interrupt (stale).
+				getPendingInterrupts: async () => ({ interrupts: [{ id: 'int-stale', name: 'approve:refund' }] }),
+			},
+			subscribe,
+			onInterrupt: (ints) => { interruptsReceived = ints; },
+			onError: (e) => { errorReceived = e; },
+		});
+
+		await chat.sendMessage('hello');
+		cap.reconnect!();
+		await flush();
+
+		// The turn was resolved by the persisted read; a stale pending interrupt must NOT
+		// re-fire onInterrupt or re-open the already-completed turn (the liveness gate blocks it).
+		assert.strictEqual(interruptsReceived, undefined, 'stale interrupt must not surface over a resolved turn');
+		assert.strictEqual(chat.isLoading(), false, 'resolved turn stays resolved (loading not re-opened)');
+		t.mock.timers.tick(700_000); // past the whole failsafe window
+		assert.strictEqual(chat.isLoading(), false, 'no failsafe fires — turn already resolved, none armed');
+		assert.strictEqual(errorReceived, undefined, 'no spurious error surfaces');
+		chat.destroy();
+	});
+
 	test('bounded failsafe: chunks re-arm it; it fires only after a fully silent window', async (t) => {
 		t.mock.timers.enable({ apis: ['setTimeout'] });
 		let errorReceived: string | undefined;
@@ -2433,6 +2472,52 @@ describe('createChat', () => {
 		t.mock.timers.tick(700_000); // past the whole failsafe window
 		assert.strictEqual(chat.isLoading(), false, 'no failsafe fires while paused at a recovered interrupt');
 		assert.strictEqual(errorReceived, undefined, 'no spurious Timed-out error fires at the approval prompt');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect does NOT re-surface a stale pending interrupt over a turn resolved during re-sync', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let interruptsReceived: Array<{ interruptId: string; name: string; reason?: unknown }> | undefined;
+		let errorReceived: string | undefined;
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn already COMPLETED server-side: history ends with a final assistant message,
+				// so the turn-state block adopts it and resolves the turn (nulls assistantId,
+				// clears loading) before we ever look at pending interrupts.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: 'All done — resolved before the interrupt read.' },
+					],
+				}),
+				// Eventually-consistent read still lists a since-resolved interrupt (stale).
+				getPendingInterrupts: async () => ({ interrupts: [{ id: 'int-stale', name: 'approve:refund' }] }),
+			},
+			onInterrupt: (ints) => {
+				interruptsReceived = ints;
+			},
+			onError: (e) => {
+				errorReceived = e;
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.reconnect!();
+		await flush();
+
+		// The turn was resolved by the persisted read; a stale pending interrupt must NOT
+		// re-fire onInterrupt or re-open the already-completed turn (the liveness gate blocks it).
+		assert.strictEqual(interruptsReceived, undefined, 'stale interrupt must not surface over a resolved turn');
+		assert.strictEqual(chat.isLoading(), false, 'resolved turn stays resolved (loading not re-opened)');
+		t.mock.timers.tick(700_000); // past the whole failsafe window
+		assert.strictEqual(chat.isLoading(), false, 'no failsafe fires — turn already resolved, none armed');
+		assert.strictEqual(errorReceived, undefined, 'no spurious error surfaces');
 		chat.destroy();
 		await flush();
 	});

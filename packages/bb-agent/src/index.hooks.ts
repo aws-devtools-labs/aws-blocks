@@ -341,7 +341,18 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			if (options.api.getPendingInterrupts) {
 				const { interrupts } = await options.api.getPendingInterrupts(conversationId);
 				if (destroyed) return;
-				if (interrupts.length) {
+				// Recompute liveness FRESH here — the getPendingInterrupts await above is another
+				// window in which a live terminal `done` chunk can resolve the turn (nulling
+				// assistantId / clearing loading), so the earlier stillSameInFlightTurn snapshot
+				// may be stale. getPendingInterrupts reads eventually-consistent DynamoDB, so a
+				// turn a live `done` already closed can still list a since-resolved interrupt;
+				// surfacing it would re-null assistantId / re-clear loading and re-open a turn
+				// that already completed. DESIGN.md tells handlers to dedupe by interrupt id, but
+				// that does not license us to clobber a resolved turn's state. A GENUINE pause
+				// keeps the turn in-flight (turn-state block above armed the failsafe, still
+				// loading, assistantId still === turnAtStart), so this gate still fires for it.
+				const stillInFlight = assistantId !== null && assistantId === turnAtStart && loading;
+				if (interrupts.length && stillInFlight) {
 					// The turn is PAUSED at an approval prompt — treat it exactly like a live
 					// `interrupt` chunk: clear the failsafe armed just above and drop loading,
 					// so the ~11-min 'Timed out' failsafe cannot fire while the user is legitimately
