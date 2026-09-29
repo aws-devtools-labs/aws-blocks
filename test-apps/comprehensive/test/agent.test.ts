@@ -5,7 +5,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
 import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
-import type { AgentStreamChunk } from '@aws-blocks/bb-agent/client';
+import type { AgentStreamChunk, ChatMessage, CreateChatOptions } from '@aws-blocks/bb-agent/client';
 import { codePoller } from './poll-for-code.js';
 
 /**
@@ -28,6 +28,42 @@ function cannedTransport(api: typeof apiType) {
         conversationId ?? undefined,
       );
     },
+  });
+}
+
+/**
+ * Poll `predicate` until true or `ms` elapses, rejecting with `label` on timeout.
+ * Mirrors the existing waitForMessages helper; keeps the createChat tests free of
+ * repeated setInterval/setTimeout timer plumbing.
+ */
+function waitUntil(predicate: () => boolean, ms: number, label: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => { clearInterval(check); reject(new Error(label)); }, ms);
+    const check = setInterval(() => {
+      if (predicate()) { clearTimeout(timer); clearInterval(check); resolve(); }
+    }, 200);
+  });
+}
+
+/**
+ * Build a createChat wired to the canned agent for a fixed conversationId — the
+ * api adapter (createConversation / getConversation / getPendingInterrupts) is
+ * identical across the createChat tests, so each test only passes its own on*
+ * callbacks via `handlers`.
+ */
+function cannedChat(
+  api: typeof apiType,
+  conversationId: string,
+  handlers: Partial<Pick<CreateChatOptions, 'onChunk' | 'onInterrupt' | 'onMessagesChange' | 'onLoadingChange' | 'onError'>>,
+) {
+  return createChat({
+    transport: cannedTransport(api),
+    api: {
+      createConversation: async () => ({ conversationId }),
+      getConversation: async (id) => await api.cannedGetConversation(id),
+      getPendingInterrupts: (id) => api.cannedGetPendingInterrupts(id),
+    },
+    ...handlers,
   });
 }
 
@@ -551,6 +587,124 @@ export function agentTests(getApi: () => typeof apiType) {
 
         assert.ok(chunks.some(c => c.type === 'done'), 'resume should complete the turn');
         assert.ok(chat.getMessages().some(m => m.role === 'approval'), 'approval decision recorded in the chat');
+        chat.destroy();
+      });
+
+      test('loadConversation rehydrates history and projects approval metadata', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        // First chat: run a turn, hit the approval interrupt, approve it. This
+        // persists an `approval` message (with decision metadata) to history.
+        let interrupts: Array<{ interruptId: string; name: string; reason?: unknown }> = [];
+        const chunks: AgentStreamChunk[] = [];
+        const first = cannedChat(api, conversationId, {
+          onChunk: (chunk) => chunks.push(chunk),
+          onInterrupt: (ints) => { interrupts = ints; },
+        });
+        await first.sendMessage('use deleteRecords');
+        await waitUntil(() => interrupts.length > 0, 15_000, 'No interrupt within 15s');
+        await first.sendMessage({ interruptResponses: interrupts.map(i => ({ interruptId: i.interruptId, approved: true })) });
+        await waitUntil(() => chunks.some(c => c.type === 'done'), 15_000, 'No done after resume within 15s');
+        first.destroy();
+
+        // Second chat, fresh instance: load the SAME conversation and assert the
+        // history rehydrates. The customer passes canned metadata straight through
+        // (getConversation returns `unknown`); loadConversation projects it through
+        // asJSONRecord into the message list.
+        let loaded: ChatMessage[] = [];
+        const second = cannedChat(api, conversationId, {
+          onMessagesChange: (msgs) => { loaded = msgs; },
+        });
+        await second.loadConversation(conversationId);
+
+        assert.ok(loaded.length > 0, 'loadConversation should rehydrate the message list');
+        assert.strictEqual(second.getConversationId(), conversationId, 'conversationId is set after load');
+        const approval = loaded.find(m => m.role === 'approval');
+        assert.ok(approval, 'approval message should be present in loaded history');
+        // Asserts the persisted decision survives loadConversation's projection and is
+        // readable as `metadata.approved`. (Note: the `/client` ChatMessage is currently
+        // the flat interface from index.hooks.ts, so this is a value round-trip check,
+        // not a compile-time discriminated-union narrowing proof — see the ChatMessage
+        // de-dup follow-up.)
+        assert.strictEqual(approval?.metadata?.approved, true, 'approval metadata.approved round-trips as true');
+        second.destroy();
+      });
+
+      test('denying an interrupt continues the turn without executing the tool', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        const chunks: AgentStreamChunk[] = [];
+        let interrupts: Array<{ interruptId: string; name: string; reason?: unknown }> = [];
+        const chat = cannedChat(api, conversationId, {
+          onChunk: (chunk) => chunks.push(chunk),
+          onInterrupt: (ints) => { interrupts = ints; },
+        });
+
+        await chat.sendMessage('use deleteRecords');
+        await waitUntil(() => interrupts.length > 0, 15_000, 'No interrupt within 15s');
+
+        // Deny (approved: false) — the turn should still complete, with the denial recorded.
+        await chat.sendMessage({ interruptResponses: interrupts.map(i => ({ interruptId: i.interruptId, approved: false })) });
+        await waitUntil(() => chunks.some(c => c.type === 'done'), 15_000, 'No done after denial within 15s');
+
+        const denial = chat.getMessages().find(m => m.role === 'approval');
+        assert.ok(denial, 'a decision message should be recorded on denial');
+        assert.strictEqual(denial?.metadata?.approved, false, 'denial metadata.approved round-trips as false');
+        assert.strictEqual(chat.isLoading(), false, 'loading clears after a denied turn completes');
+        // The tool must NOT have run: the persisted tool-result records the denial
+        // rather than a successful execution (mirrors the pre-existing denial test).
+        const { messages: persisted } = await api.cannedGetConversation(conversationId);
+        const toolResult = persisted.find((m) => m.role === 'tool-result');
+        assert.ok(toolResult, 'a tool-result message should be persisted');
+        assert.ok(
+          JSON.stringify(toolResult?.metadata?.toolOutput).includes('denied'),
+          'tool-result records the denial, proving the tool was not executed',
+        );
+        chat.destroy();
+      });
+
+      test('newConversation() clears messages and conversation id', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        const chunks: AgentStreamChunk[] = [];
+        const chat = cannedChat(api, conversationId, {
+          onChunk: (chunk) => chunks.push(chunk),
+        });
+
+        await chat.sendMessage('Say hello');
+        await waitUntil(() => chunks.some(c => c.type === 'done'), 25_000, 'No done within 25s');
+        assert.ok(chat.getMessages().length > 0, 'messages accumulate during the turn');
+
+        chat.newConversation();
+        assert.strictEqual(chat.getMessages().length, 0, 'newConversation clears the message list');
+        assert.strictEqual(chat.getConversationId(), null, 'newConversation clears the conversation id');
+        assert.strictEqual(chat.isLoading(), false, 'newConversation is not loading');
+        chat.destroy();
+      });
+
+      test('onMessagesChange fires as the assistant message streams in', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        let latest: ChatMessage[] = [];
+        let changeCount = 0;
+        const chat = cannedChat(api, conversationId, {
+          onMessagesChange: (msgs) => { latest = msgs; changeCount++; },
+        });
+
+        await chat.sendMessage('Say hello');
+        await waitUntil(
+          () => latest.some(m => m.role === 'assistant' && m.content.length > 0),
+          25_000,
+          'No assistant text within 25s',
+        );
+
+        assert.ok(changeCount > 0, 'onMessagesChange fires at least once');
+        assert.ok(latest.some(m => m.role === 'user'), 'user message present in the rendered list');
+        // (the assistant-with-content check is the waitUntil predicate above — not repeated here)
         chat.destroy();
       });
     });

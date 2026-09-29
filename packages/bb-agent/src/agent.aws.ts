@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from 'node:crypto';
-import { getConfig } from '@aws-blocks/core';
+import { getConfig, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { FileBucket } from '@aws-blocks/bb-file-bucket';
 import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } from '@aws-sdk/client-bedrock-agentcore';
@@ -65,9 +65,12 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 				`AgentCore Runtime ARN not found (config key ${runtimeArnKey}). Ensure the app build produced the AgentCore asset and the stack deployed the Runtime.`,
 			);
 		}
-		this._agentCore ??= new BedrockAgentCoreClient({
-			customUserAgent: this.buildUserAgentChain(),
-		});
+		if (!this._agentCore) {
+			this._agentCore = new BedrockAgentCoreClient({
+				customUserAgent: this.buildUserAgentChain(),
+			});
+			installClientUserAgent(this._agentCore);
+		}
 		const body = {
 			prompt: payload.message,
 			channelId: payload.channelId,
