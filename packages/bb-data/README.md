@@ -238,10 +238,12 @@ try {
 
 - **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs. Storage
   is **encrypted at rest by default** using the account's AWS-managed `aws/rds`
-  key; pass a `storageEncryptionKey` (KMS `IKey`) to use a customer-managed key
-  instead (it also encrypts the generated credentials secret).
+  key; pass a `storageEncryptionKeyArn` (the ARN of a customer-managed KMS key) to
+  use a customer-managed key instead (it also encrypts the generated credentials
+  secret).
 - **Automated backups** — retained **15 days** by default (override via
-  `backupRetention`), which is also the point-in-time-recovery window.
+  `backupRetentionDays`, a number of days), which is also the point-in-time-recovery
+  window.
 - **CloudWatch log export** — the PostgreSQL engine log is exported to CloudWatch
   Logs. Log-group retention follows the stack-wide `defaults.logRetention` when
   set; otherwise it uses the account default.
@@ -249,7 +251,7 @@ try {
 - **RDS Proxy** — Connection pooling
 - **Secrets Manager** — Auto-generated credentials. Automatic rotation is not yet
   wired up (a rotation Lambda in the cluster VPC is a planned follow-up); the
-  secret is encrypted with your `storageEncryptionKey` when one is supplied.
+  secret is encrypted with your `storageEncryptionKeyArn` when one is supplied.
 - **Migration Lambda** — Runs `.sql` files on deploy via CustomResource
 - **IAM** — `rds-data:*` and `secretsmanager:GetSecretValue` granted to the app Lambda
 

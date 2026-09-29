@@ -6,6 +6,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import { materialize, grantExternalDataApi } from './infra.js';
 import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX } from './constants.js';
 import type { DatabaseOptions, ExternalDatabaseRef, SubnetSelection } from './types.js';
@@ -130,6 +131,15 @@ export class Database extends BuildingBlockScope {
       // an override like `{ ...production, deletionProtection: false }` is honored.
       deletionProtection: this.defaults.deletionProtection,
       postgresVersion: options?.postgresVersion,
+      // Resolve the CDK-free public options into the CDK types AuroraInfraConfig
+      // expects: a key ARN becomes a kms.IKey, a day count becomes a cdk.Duration.
+      // A single Database provisions exactly one cluster, so the fixed
+      // 'db-storage-key' construct id for the imported key is unique in this scope.
+      storageEncryptionKey: options?.storageEncryptionKeyArn
+        ? kms.Key.fromKeyArn(this, 'db-storage-key', options.storageEncryptionKeyArn)
+        : undefined,
+      backupRetention:
+        options?.backupRetentionDays !== undefined ? cdk.Duration.days(options.backupRetentionDays) : undefined,
       vpcContext: getVpcContext(this),
       clusterSubnets: resolveClusterSubnets(this, options?.subnets),
       // Migration Lambda log retention follows the stack-wide default.

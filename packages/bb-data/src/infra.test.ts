@@ -89,6 +89,41 @@ test('CDK: storageEncryptionKey option sets a customer-managed KmsKeyId on the c
   });
 });
 
+test('CDK: default (no CMK) keeps the engine-default master username "postgres" (no rename)', () => {
+  // Without a CMK, `credentials` stays undefined, so the cluster's auto-generated
+  // secret keeps the aurora-postgres engine-default master username ('postgres')
+  // and is not renamed. The cluster's MasterUsername resolves via a Secrets
+  // Manager dynamic reference ({{resolve:secretsmanager:...:username}}), so the
+  // load-bearing value lives in the generated secret's SecretStringTemplate.
+  const template = synthTemplate({ databaseName: 'mydb' });
+  template.hasResourceProperties('AWS::SecretsManager::Secret', {
+    GenerateSecretString: Match.objectLike({
+      SecretStringTemplate: Match.stringLikeRegexp('"username":"postgres"'),
+    }),
+  });
+});
+
+test('CDK: storageEncryptionKey does not rename the master user (stays "postgres")', () => {
+  // With a CMK, `credentials` is pinned via fromGeneratedSecret('postgres', ...)
+  // — matching the engine default — so supplying a key never silently renames the
+  // DB user. This path emits a literal MasterUsername, so assert it directly, and
+  // confirm the generated secret pins the same username. Both paths therefore
+  // agree on username 'postgres': supplying a key introduces no divergence.
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack');
+  const key = new cdk.aws_kms.Key(stack, 'DbKey');
+  materialize(stack, 'testdb', { databaseName: 'mydb', storageEncryptionKey: key });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    MasterUsername: 'postgres',
+  });
+  template.hasResourceProperties('AWS::SecretsManager::Secret', {
+    GenerateSecretString: Match.objectLike({
+      SecretStringTemplate: Match.stringLikeRegexp('"username":"postgres"'),
+    }),
+  });
+});
+
 // --- Engine version ---
 
 test('CDK: default engine version is 16.13', () => {

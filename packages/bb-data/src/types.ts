@@ -61,6 +61,26 @@ export interface DatabaseOptions {
    * and the tier by a string. The CDK layer resolves these against the VPC.
    */
   subnets?: SubnetSelection;
+  /**
+   * ARN of an existing customer-managed KMS key to use for the Aurora cluster's
+   * storage-at-rest encryption. The same key also encrypts the cluster's
+   * auto-generated credentials secret. When omitted, storage is still encrypted,
+   * but with the account's AWS-managed `aws/rds` key — storage encryption is
+   * always on regardless of this option.
+   *
+   * Referenced by **ARN** (a plain string) rather than a `kms.IKey` for the same
+   * reason as `subnets`: the `Database` constructor resolves to a runtime entry
+   * point that must not import `aws-cdk-lib`. The CDK layer rehydrates the ARN
+   * into a `kms.IKey` (via `kms.Key.fromKeyArn`) and passes it to the cluster.
+   */
+  storageEncryptionKeyArn?: string;
+  /**
+   * Retention window, in days, for the cluster's automated backups. This is also
+   * the point-in-time-recovery (PITR) window. The CDK layer converts this number
+   * into a `cdk.Duration` before applying it to the cluster.
+   * @default 15
+   */
+  backupRetentionDays?: number;
 }
 
 /**

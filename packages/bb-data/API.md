@@ -88,6 +88,7 @@ export const DatabaseErrors: {
 
 // @public (undocumented)
 export interface DatabaseOptions {
+    backupRetentionDays?: number;
     connection?: ExternalDatabaseRef;
     databaseName?: string;
     logger?: ChildLogger;
@@ -98,6 +99,7 @@ export interface DatabaseOptions {
     removalPolicy?: 'destroy' | 'retain' | 'snapshot';
     rlsPolicy?: 'enforce';
     schema?: TableSchema;
+    storageEncryptionKeyArn?: string;
     subnets?: SubnetSelection;
 }
 

@@ -60,7 +60,6 @@ export interface AuroraInfraConfig {
    */
   backupRetention?: cdk.Duration;
   /**
-  /**
    * VPC context from the parent scope. When provided, Aurora is placed in the
    * shared VPC's isolated subnets instead of creating its own VPC.
    * @internal

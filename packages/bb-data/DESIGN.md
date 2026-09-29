@@ -88,12 +88,12 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 | Resource | Purpose |
 |----------|---------|
-| Aurora Serverless v2 cluster | PostgreSQL database. Storage **encrypted at rest** (`storageEncrypted: true`) with the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKey` |
+| Aurora Serverless v2 cluster | PostgreSQL database. Storage **encrypted at rest** (`storageEncrypted: true`) with the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
 | VPC + private subnets | Network isolation |
 | RDS Proxy | Connection pooling |
 | Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
-| Secrets Manager secret | Auto-generated credentials; encrypted with `storageEncryptionKey` when one is supplied |
-| Automated backups | Retained 15 days by default (`backupRetention` override); also the PITR window |
+| Secrets Manager secret | Auto-generated credentials; encrypted with `storageEncryptionKeyArn` when one is supplied |
+| Automated backups | Retained 15 days by default (`backupRetentionDays` override); also the PITR window |
 | CloudWatch log export | PostgreSQL engine log exported to CloudWatch Logs; retention follows `defaults.logRetention` when set, else the account default |
 | Migration Lambda + CustomResource | Runs .sql files on deploy (retries with exponential backoff, 1s → 30s × 8, while the cluster is unreachable — a new cluster's writer coming up, or a scale-to-zero cluster resuming from auto-pause) |
 | IAM grants | `rds-data:*`, `secretsmanager:GetSecretValue` |
@@ -112,7 +112,7 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
   access path.
 - **Automatic secret rotation is a deliberate follow-up**, not implemented here.
   Rotation requires a rotation Lambda wired into the cluster VPC — a larger change
-  than this hardening pass. Supplying a `storageEncryptionKey` does encrypt the
+  than this hardening pass. Supplying a `storageEncryptionKeyArn` does encrypt the
   generated secret today.
 - **Upgrade note:** enabling storage encryption on an already-provisioned,
   unencrypted cluster requires a replacement; existing stacks will show a
