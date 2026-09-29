@@ -1780,7 +1780,7 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
-	test('a re-sync failure on reconnect reports onError once and does NOT arm the failsafe (loading persists until a later chunk/unmount)', async (t) => {
+	test('a re-sync failure on reconnect reports onError once and arms the failsafe so loading recovers', async (t) => {
 		t.mock.timers.enable({ apis: ['setTimeout'] });
 		const errors: string[] = [];
 		const { cap, subscribe } = subscribeCapture();
@@ -1803,18 +1803,72 @@ describe('useChat', () => {
 		cap.reconnect!();
 		await flush();
 
-		// The re-sync failure is surfaced via onError (once).
+		// The re-sync failure is surfaced via onError (once)...
 		assert.strictEqual(errors.length, 1, 're-sync failure reports onError exactly once');
-		// Deliberate trade-off: the throw does NOT arm the failsafe, so loading persists —
-		// the channel is resubscribed and a later terminal chunk can still resolve the turn.
-		assert.strictEqual(chat.isLoading(), true, 'a re-sync throw does not clear loading on its own');
-		t.mock.timers.tick(700_000); // past the whole failsafe window
-		assert.strictEqual(chat.isLoading(), true, 'no failsafe was armed by the re-sync throw, so loading is unchanged');
+		// ...and the catch now arms the failsafe, making the non-hang guarantee LOCAL (no longer
+		// dependent on a preceding onDisconnect). loading is still true immediately — the failsafe
+		// is a bounded backstop, not an immediate clear.
+		assert.strictEqual(chat.isLoading(), true, 'still loading — the failsafe is armed, not immediate');
 
-		// A later terminal chunk still resolves the turn (the intended recovery path).
-		cap.handler!({ type: 'done', text: 'recovered via a later live chunk' });
-		assert.strictEqual(chat.isLoading(), false, 'a subsequent terminal chunk clears loading');
-		assert.strictEqual(errors.length, 1, 'still exactly one onError for the turn');
+		// Once the window elapses with no recovering chunk, loading RECOVERS (clears) rather than
+		// hanging forever, and the errorReported latch keeps onError at exactly one.
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'the failsafe armed by the re-sync throw clears the stuck spinner');
+		assert.strictEqual(errors.length, 1, 'the latch suppresses the failsafe double onError — still exactly one');
+		chat.destroy();
+	});
+
+	test('a failsafe armed on an abandoned (send-failed) turn does not leak into a later healthy turn', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		let rejectSend!: (e: Error) => void;
+		let sendMode: 'fail' | 'ok' = 'fail';
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {
+					if (sendMode === 'ok') return;
+					// Turn 1: stay pending so the test can arm the failsafe via a disconnect
+					// BEFORE the send rejects — the window where the leaked timer is created.
+					await new Promise<void>((_res, rej) => { rejectSend = rej; });
+				},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			onError: (e) => { errors.push(e); },
+		});
+
+		// Turn 1: in flight (send pending). A non-'client' drop arms the failsafe...
+		const turn1 = chat.sendMessage('first');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'turn 1 is in flight');
+		cap.disconnect!('timeout');
+		await flush();
+		// ...then the send rejects. handleSendFailure clears loading but does NOT itself clear the
+		// armed failsafe — that leaked timer is what this test guards against.
+		rejectSend(new Error('504 Gateway Timeout'));
+		await turn1;
+		await flush();
+		assert.strictEqual(chat.isLoading(), false, 'send failure cleared loading for the abandoned turn');
+		assert.strictEqual(errors.length, 1, 'the send failure surfaced exactly one onError');
+
+		// Turn 2: a fresh, healthy turn. sendMessage clears the stale failsafe at turn-start.
+		sendMode = 'ok';
+		await chat.sendMessage('second');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'turn 2 is in flight');
+
+		// Advance past the failsafe window. The turn-1 timer was cleared at turn 2's start, so it
+		// must NOT fire: turn 2's spinner survives and no bogus 'Timed out' onError is added.
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), true, 'the stale timer did not kill the new healthy turn');
+		assert.strictEqual(errors.length, 1, 'no bogus Timed out onError from the leaked timer (still just the send failure)');
+
+		// Resolve turn 2 cleanly.
+		cap.handler!({ type: 'done', text: 'answer 2' });
+		assert.strictEqual(chat.isLoading(), false, 'turn 2 completes on its terminal chunk');
 		chat.destroy();
 	});
 
@@ -2449,6 +2503,55 @@ describe('createChat', () => {
 		await new Promise(r => setTimeout(r, 10));
 	});
 
+	test('a failsafe armed on an abandoned turn does not leak into a later healthy turn (cleared at turn-start)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onError: (e) => {
+				errors.push(e);
+			},
+		});
+
+		// Turn 1: in flight, then a non-'client' drop arms the failsafe (a terminal drop fires no
+		// onReconnect, so the failsafe is the only guard).
+		await chat.sendMessage('first');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'turn 1 is in flight');
+		cap.disconnect!('timeout');
+		await flush();
+
+		// Abandon turn 1 WITHOUT a terminal chunk. newConversation() closes the stream but does
+		// NOT itself clear the armed failsafe — that leaked timer is what this test guards against.
+		chat.newConversation();
+		await flush();
+		assert.strictEqual(chat.isLoading(), false, 'newConversation cleared loading for the abandoned turn');
+
+		// Turn 2: a fresh, healthy turn. sendMessage clears the stale failsafe at turn-start.
+		await chat.sendMessage('second');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'turn 2 is in flight');
+
+		// Advance well past the failsafe window. The turn-1 timer was cleared at turn 2's start,
+		// so it must NOT fire: turn 2's spinner survives and no bogus 'Timed out' onError fires.
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), true, 'the stale timer did not kill the new healthy turn');
+		assert.deepStrictEqual(errors, [], 'no bogus Timed out onError from the leaked timer');
+
+		// Resolve turn 2 cleanly and tear down.
+		cap.chunk({ type: 'done', text: 'answer 2' });
+		await flush();
+		assert.strictEqual(chat.isLoading(), false, 'turn 2 completes on its terminal chunk');
+		chat.destroy();
+		await flush();
+	});
+
 	// ── Mid-turn reconnect re-sync + bounded failsafe (ported from useChat) ──────
 	// These mirror the useChat reconnect spec (search 'reconnect re-syncs' above),
 	// adapted to createChat's ChunkStream/AsyncIterable model via reconnectCapture.
@@ -2738,7 +2841,7 @@ describe('createChat', () => {
 		await flush();
 	});
 
-	test('a re-sync failure on reconnect reports onError once and does NOT arm the failsafe', async (t) => {
+	test('a re-sync failure on reconnect reports onError once and arms the failsafe so loading recovers', async (t) => {
 		t.mock.timers.enable({ apis: ['setTimeout'] });
 		const errors: string[] = [];
 		const { cap, transport } = reconnectCapture();
@@ -2765,19 +2868,18 @@ describe('createChat', () => {
 		cap.reconnect!();
 		await flush();
 
-		// The re-sync failure is surfaced via onError (once).
+		// The re-sync failure is surfaced via onError (once)...
 		assert.strictEqual(errors.length, 1, 're-sync failure reports onError exactly once');
-		// Deliberate trade-off: the throw does NOT arm the failsafe, so loading persists —
-		// the channel is resubscribed and a later terminal chunk can still resolve the turn.
-		assert.strictEqual(chat.isLoading(), true, 'a re-sync throw does not clear loading on its own');
-		t.mock.timers.tick(700_000); // past the whole failsafe window
-		assert.strictEqual(chat.isLoading(), true, 'no failsafe was armed by the re-sync throw, so loading is unchanged');
+		// ...and the catch now arms the failsafe, making the non-hang guarantee LOCAL (no longer
+		// dependent on a preceding onDisconnect). loading persists immediately — the failsafe is a
+		// bounded backstop, not an immediate clear.
+		assert.strictEqual(chat.isLoading(), true, 'still loading — the failsafe is armed, not immediate');
 
-		// A later terminal chunk still resolves the turn (the intended recovery path).
-		cap.chunk({ type: 'done', text: 'recovered via a later live chunk' });
-		await flush();
-		assert.strictEqual(chat.isLoading(), false, 'a subsequent terminal chunk clears loading');
-		assert.strictEqual(errors.length, 1, 'still exactly one onError for the turn');
+		// Once the window elapses with no recovering chunk, loading RECOVERS (clears) rather than
+		// hanging forever, and the errorReported latch keeps onError at exactly one.
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'the failsafe armed by the re-sync throw clears the stuck spinner');
+		assert.strictEqual(errors.length, 1, 'the latch suppresses the failsafe double onError — still exactly one');
 		chat.destroy();
 		await flush();
 	});

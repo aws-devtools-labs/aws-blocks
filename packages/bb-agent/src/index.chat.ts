@@ -361,6 +361,17 @@ export function createChat(options: CreateChatOptions): ChatController {
 				// adopting it would overwrite live text with prior-turn content and halt
 				// streaming, so we treat the turn as still running and wait for the terminal
 				// chunk instead.
+				//
+				// INVARIANT (resume path): a resume-start conversation must not end in a
+				// content-bearing assistant row. On resume, sendMessage({ interruptResponses })
+				// resets assistantText='', which makes extendsStream=true and BYPASSES the prefix
+				// guard — so any content-bearing assistant row that getConversation returns as
+				// `last` would be adopted and the resumed turn closed early. Not reachable today:
+				// the backend does not persist an assistant message on interrupt, so `last` is the
+				// raw empty-content interrupt row and turnComplete is false at resume-start. A
+				// custom getConversation adapter that role-filters to user/assistant (as
+				// loadConversation does client-side) could re-expose this by dropping the interrupt
+				// row and surfacing a prior assistant row as `last`.
 				const extendsStream = assistantText === '' || last.content.startsWith(assistantText);
 				if (extendsStream) {
 					// Turn finished while we were disconnected; the terminal `done` chunk was lost.
@@ -415,11 +426,16 @@ export function createChat(options: CreateChatOptions): ChatController {
 			if (destroyed) return;
 			// Re-sync itself failed. Surface it via reportError so the once-per-turn onError
 			// contract holds uniformly: if a send-rejection already reported onError for this
-			// turn, a re-sync throw here won't emit a second one. We deliberately do NOT also
-			// arm the failsafe here (NIT): the channel is resubscribed, so a terminal chunk can
-			// still resolve the turn; arming would fire a second, misleading 'Timed out' error
-			// ~11min later on top of the error we just surfaced.
+			// turn, a re-sync throw here won't emit a second one.
 			reportError(err instanceof Error ? err.message : String(err), err);
+			// Arm the failsafe so the non-hang guarantee is LOCAL — independent of whether the
+			// transport happened to fire onDisconnect before this onReconnect. We used to skip
+			// arming here to avoid a second 'Timed out' onError ~11min later, relying on the
+			// PRECEDING onDisconnect having armed it; that reasoning is now stale. The
+			// errorReported latch (set by the reportError above) already suppresses that second
+			// onError, and armFailsafe is idempotent + re-armed by any later chunk, so a
+			// still-live turn on the resubscribed channel is unaffected.
+			armFailsafe();
 		}
 	}
 
@@ -438,6 +454,11 @@ export function createChat(options: CreateChatOptions): ChatController {
 
 	/** Drive UI state from a single chunk. Mirrors the useChat state machine. */
 	function handleChunk(chunk: AgentStreamChunk) {
+		// Teardown guard: the ChunkQueue drains items buffered before destroy() closed the
+		// stream, so a chunk can still arrive after destroy(). Drop it so no onChunk/
+		// onMessagesChange/onError/onInterrupt fires post-teardown (mirrors handleReconnect
+		// and the failsafe's destroyed guards).
+		if (destroyed) return;
 		// Liveness: ANY received chunk proves the stream is alive. If the post-reconnect
 		// failsafe is armed, re-arm it (reset its countdown) so it only ever fires after a
 		// window of COMPLETE silence — not during a long tool-call/thinking gap or a slow
@@ -568,7 +589,10 @@ export function createChat(options: CreateChatOptions): ChatController {
 				// stream ended by unsubscribe() (newConversation()/destroy() mid-turn) sees
 				// no terminal chunk, so without this `loading` would stay true and the
 				// `if (loading) return` guard in sendMessage would drop every future send.
-				setLoading(false);
+				// Skip it after destroy(): this finally runs on a microtask that can land AFTER
+				// destroy(), and firing onLoadingChange then would emit a callback post-teardown
+				// (the instance is dead, so its loading value no longer matters).
+				if (!destroyed) setLoading(false);
 			}
 		})();
 	}
@@ -615,6 +639,13 @@ export function createChat(options: CreateChatOptions): ChatController {
 				assistantText = '';
 			}
 			options.onMessagesChange?.(messages);
+			// Turn-start cleanup: bind the failsafe timer's lifecycle to the turn, exactly like
+			// errorReported/assistantText. newConversation(), handleSendFailure(), and the
+			// background consumer's finally can all end a loading turn WITHOUT a terminal chunk,
+			// leaving a failsafe armed by an onDisconnect. Clearing it here stops a STALE timer
+			// from an abandoned turn firing during this healthy turn — which would setLoading(false)
+			// and latch a bogus 'Timed out' onError, suppressing this turn's real error.
+			clearFailsafe();
 			errorReported = false; // fresh turn — allow one onError report
 			setLoading(true);
 			// startTurn's attach + submit run before the background consumer's try/catch,
@@ -628,7 +659,17 @@ export function createChat(options: CreateChatOptions): ChatController {
 		},
 
 		async run(input: SendInput): Promise<{ channelId: string }> {
+			// run() deliberately has NO `if (loading) return` guard (unlike sendMessage /
+			// respondToInterrupt): its contract is to return a channelId, so there is no coherent
+			// early-return value. run() and sendMessage are therefore an EITHER-OR contract on a
+			// single instance — do NOT interleave them. Interleaving would let this errorReported
+			// reset (and the clearFailsafe below) disturb an in-flight sendMessage turn's shared
+			// single-turn state. The errorReported reset is kept (added defensively for
+			// f_3076d418) for the standalone run() path.
 			errorReported = false; // fresh turn — allow one onError report (mirrors sendMessage)
+			// Turn-start cleanup: clear a failsafe left armed by a prior abandoned turn (see
+			// sendMessage) so a stale timer can't fire during this run.
+			clearFailsafe();
 			const id = await ensureConversation();
 			// run() does NOT touch `lastChannelId` (sendMessage owns it). Persisted chat →
 			// conversationId; inference-only → a fresh channel per call. Resume an

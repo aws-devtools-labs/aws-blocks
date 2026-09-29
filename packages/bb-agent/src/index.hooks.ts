@@ -315,6 +315,17 @@ export function useChat(options: UseChatOptions): ChatInstance {
 				// adopting it would overwrite live text with prior-turn content and halt
 				// streaming, so we treat the turn as still running and wait for the terminal
 				// chunk instead.
+				//
+				// INVARIANT (resume path): a resume-start conversation must not end in a
+				// content-bearing assistant row. On resume, respondToInterrupt resets
+				// assistantText='', which makes extendsStream=true and BYPASSES the prefix guard —
+				// so any content-bearing assistant row that getConversation returns as `last` would
+				// be adopted and the resumed turn closed early. Not reachable today: the backend
+				// does not persist an assistant message on interrupt, so `last` is the raw
+				// empty-content interrupt row and turnComplete is false at resume-start. A custom
+				// getConversation adapter that role-filters to user/assistant (as loadConversation
+				// does client-side) could re-expose this by dropping the interrupt row and
+				// surfacing a prior assistant row as `last`.
 				const extendsStream = assistantText === '' || last.content.startsWith(assistantText);
 				if (extendsStream) {
 					// Turn finished while we were disconnected; the terminal `done` chunk was lost.
@@ -371,16 +382,26 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			if (destroyed) return;
 			// Re-sync itself failed. Surface it via reportError so the once-per-turn onError
 			// contract holds uniformly: if a send-rejection already reported onError for this
-			// turn, a re-sync throw here won't emit a second one. We deliberately do NOT also
-			// arm the failsafe here (NIT): the channel is resubscribed, so a terminal chunk can
-			// still resolve the turn; arming would fire a second, misleading 'Timed out' error
-			// ~11min later on top of the error we just surfaced.
+			// turn, a re-sync throw here won't emit a second one.
 			reportError(err instanceof Error ? err.message : String(err));
+			// Arm the failsafe so the non-hang guarantee is LOCAL — independent of whether the
+			// transport happened to fire onDisconnect before this onReconnect. We used to skip
+			// arming here to avoid a second 'Timed out' onError ~11min later, relying on the
+			// PRECEDING onDisconnect having armed it; that reasoning is now stale. The
+			// errorReported latch (set by the reportError above) already suppresses that second
+			// onError, and armFailsafe is idempotent + re-armed by any later chunk, so a
+			// still-live turn on the resubscribed channel is unaffected.
+			armFailsafe();
 		}
 	}
 
 	/** Handle a chunk from the Realtime subscription. */
 	function handleChunk(chunk: AgentStreamChunk) {
+		// Teardown guard: the ChunkQueue drains items buffered before destroy()'s unsubscribe()
+		// closed the stream, so a chunk can still arrive after destroy(). Drop it so no onChunk/
+		// onMessagesChange/onError/onInterrupt fires post-teardown (mirrors handleReconnect and
+		// the failsafe's destroyed guards).
+		if (destroyed) return;
 		// Liveness: ANY received chunk proves the stream is alive. If the post-reconnect
 		// failsafe is armed, re-arm it (reset its countdown) so it only ever fires after a
 		// window of COMPLETE silence — not during a long tool-call/thinking gap or a slow
@@ -518,6 +539,13 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			assistantText = '';
 			messages = [...messages, userMsg, aMsg];
 			options.onMessagesChange?.(messages);
+			// Turn-start cleanup: bind the failsafe timer's lifecycle to the turn, exactly like
+			// errorReported/assistantText. handleSendFailure() and a mid-turn newConversation-style
+			// teardown can end a loading turn WITHOUT a terminal chunk, leaving a failsafe armed by
+			// an onDisconnect. Clearing it here stops a STALE timer from an abandoned turn firing
+			// during this healthy turn — which would clear loading and latch a bogus 'Timed out'
+			// onError, suppressing this turn's real error.
+			clearFailsafe();
 			errorReported = false; // fresh turn — allow one onError report
 			loading = true;
 			options.onLoadingChange?.(loading);
@@ -561,6 +589,9 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			}
 			assistantText = '';
 			options.onMessagesChange?.(messages);
+			// Turn-start cleanup: clear a failsafe left armed by a prior abandoned turn (see
+			// sendMessage) so a stale timer can't fire during this resumed turn.
+			clearFailsafe();
 			errorReported = false; // fresh turn — allow one onError report
 			loading = true;
 			options.onLoadingChange?.(loading);
