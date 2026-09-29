@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Construct } from 'constructs';
-import { Table, type ITable, AttributeType, BillingMode, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
+import { Table, type ITable, AttributeType, BillingMode, TableEncryption, ProjectionType } from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
@@ -198,7 +198,7 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 			encryption = TableEncryption.AWS_MANAGED;
 		}
 
-		this.table = new Table(this, 'table', {
+		const table = new Table(this, 'table', {
 			tableName,
 			partitionKey: {
 				name: config.key.partitionKey,
@@ -230,6 +230,39 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 			// key lets CDK provision a dedicated one.
 			encryptionKey,
 		});
+		this.table = table;
+
+		// Declare the configured indexes NATIVELY on the table so a fresh
+		// CreateTable provisions every GSI in a single shot. DynamoDB allows any
+		// number of GSIs at table-creation time — the "one GSI change in flight"
+		// limit only bites when ADDING an index to a live table via UpdateTable.
+		// `addGlobalSecondaryIndex` folds the indexes into the same
+		// AWS::DynamoDB::Table resource, so an empty new table goes ACTIVE with
+		// every index at once, collapsing the create-then-add-one-at-a-time tail
+		// that otherwise dominates a fresh deploy.
+		//
+		// The `gsi-resource` custom resource below is RETAINED for GSI mutations
+		// on an already-existing table (a later redeploy that adds or removes an
+		// index). Its Lambda is a diff reconciler: on a fresh table whose indexes
+		// CloudFormation just created natively it sees them already present and
+		// no-ops. Projection is ALL to match exactly what that reconciler creates,
+		// so the native declaration and the reconciler never disagree.
+		if (config.indexes) {
+			for (const [indexName, indexConfig] of Object.entries(config.indexes) as [string, any][]) {
+				table.addGlobalSecondaryIndex({
+					indexName,
+					partitionKey: {
+						name: indexConfig.partitionKey,
+						type: getDdbType(indexConfig.partitionKey),
+					},
+					sortKey: indexConfig.sortKey ? {
+						name: indexConfig.sortKey,
+						type: getDdbType(indexConfig.sortKey),
+					} : undefined,
+					projectionType: ProjectionType.ALL,
+				});
+			}
+		}
 
 		this.table.grantReadWriteData(this.executionRole);
 
