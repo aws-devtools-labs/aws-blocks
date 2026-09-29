@@ -13,7 +13,7 @@ import { TTL_ATTRIBUTE, isExpired, resolveTtlEpochSeconds } from './ttl.js';
 
 // Re-export public types and errors
 export { KVStoreErrors } from './errors.js';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ScanOptions } from './types.js';
+export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef, ScanOptions } from './types.js';
 import type { ScanOptions } from './types.js';
 
 /**
@@ -260,5 +260,9 @@ export class KVStore<T = string> extends Scope {
 	 */
 	static fromExisting(tableName: string): import('./index.mock.js').ExternalTableRef {
 		return { __brand: 'ExternalTableRef' as const, tableName };
+	}
+
+	static fromKmsKey(keyArn: string): import('./index.mock.js').ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
 	}
 }

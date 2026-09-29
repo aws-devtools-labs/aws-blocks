@@ -140,9 +140,71 @@ export interface KVStoreOptions<T = string> {
 	 * ```
 	 */
 	ttl?: boolean;
+	/**
+	 * DynamoDB Point-in-Time Recovery (continuous backups) — restore the table
+	 * to any second within a retention window, protecting against accidental
+	 * writes/deletes and logical corruption.
+	 *
+	 * A single knob, since the recovery window only means anything when PITR is
+	 * on:
+	 * - `true` — enable PITR with the default 35-day window.
+	 * - `false` — disable PITR.
+	 * - `{ retentionDays: n }` — enable PITR and keep `n` days of continuous
+	 *   backups (**1–35**). A shorter window reduces backup-storage cost at the
+	 *   expense of how far back you can restore.
+	 *
+	 * When omitted, the stack-wide default applies (`defaults.pointInTimeRecovery`
+	 * from `BlocksPresets` — on under `production`, off under `sandbox`). A
+	 * per-block value always wins.
+	 *
+	 * Note: PITR bills for continuous-backup storage (per GB-month of table
+	 * size), so it is not free on large tables.
+	 *
+	 * Ignored by the mock and browser runtimes (no AWS resource to back up).
+	 */
+	pointInTimeRecovery?: boolean | { retentionDays: number };
+	/**
+	 * Server-side encryption at rest.
+	 *
+	 * - `'aws-managed'` (default): SSE with the AWS-managed `aws/dynamodb` KMS
+	 *   key. Auditable via CloudTrail with no per-key monthly charge.
+	 * - `'customer-managed'`: provisions a **dedicated** customer-managed KMS
+	 *   key (CMK) for this table, giving you full control over rotation and key
+	 *   policy. Incurs standard KMS key + request charges — and note this mints
+	 *   a **separate key per table**, so a dozen tables means a dozen keys.
+	 * - a {@link ExternalKmsKeyRef} from {@link KVStore.fromKmsKey}:
+	 *   uses an **existing** CMK you already own, so several tables can share one
+	 *   key (and one monthly charge) instead of each provisioning its own.
+	 *
+	 * DynamoDB is always encrypted at rest; this only selects the key.
+	 *
+	 * @example
+	 * ```ts
+	 * // Share one key across several stores
+	 * const key = KVStore.fromKmsKey(
+	 *   'arn:aws:kms:us-east-1:111122223333:key/abcd-1234',
+	 * );
+	 * new KVStore(scope, 'sessions', { encryption: key });
+	 * new KVStore(scope, 'cache', { encryption: key });
+	 * ```
+	 *
+	 * Ignored by the mock and browser runtimes (no AWS resource to encrypt).
+	 */
+	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
 }
 
 export interface ExternalTableRef {
 	readonly __brand: 'ExternalTableRef';
 	readonly tableName: string;
+}
+
+/**
+ * A reference to an existing customer-managed KMS key, produced by
+ * {@link KVStore.fromKmsKey}. Pass it as the `encryption` option to encrypt the
+ * table with a CMK you already own — letting several tables share one key
+ * instead of each provisioning its own dedicated key.
+ */
+export interface ExternalKmsKeyRef {
+	readonly __brand: 'ExternalKmsKeyRef';
+	readonly keyArn: string;
 }

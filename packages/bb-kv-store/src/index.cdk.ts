@@ -1,17 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Table, type ITable, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
+import { Table, type ITable, AttributeType, BillingMode, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { RemovalPolicy } from 'aws-cdk-lib';
+import { Annotations, RemovalPolicy } from 'aws-cdk-lib';
+import { Key, type IKey } from 'aws-cdk-lib/aws-kms';
 import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { KVStoreOptions, ExternalTableRef } from './types.js';
+import type { KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 import { TTL_ATTRIBUTE } from './ttl.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { KVStoreErrors } from './errors.js';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef } from './types.js';
+export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 
 export class KVStore extends BuildingBlockScope {
 	private table: ITable;
@@ -25,12 +26,39 @@ export class KVStore extends BuildingBlockScope {
 		return { __brand: 'ExternalTableRef' as const, tableName };
 	}
 
+	/**
+	 * Reference an existing customer-managed KMS key to encrypt the table,
+	 * instead of letting `encryption: 'customer-managed'` provision a dedicated
+	 * key per table. Pass the result as the `encryption` option so several
+	 * stores can share one key (and one monthly charge).
+	 *
+	 * @param keyArn - ARN of a KMS key you already own. The deploying principal
+	 *   and the DynamoDB service must have the usual grants on it.
+	 */
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
+	}
+
 	constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<unknown>) {
 		super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
 
 		if (options?.table) {
 			// `fromExisting`: don't provision; bind to the pre-existing table by name
 			// and grant the runtime Lambda read/write access.
+			//
+			// Durability/encryption options don't apply to an existing table (we
+			// never emit a `Table` resource to attach them to). Surface that at
+			// synth so a `pointInTimeRecovery: true` on what looks like a fresh
+			// table isn't a silent no-op.
+			const ignoredForExisting = (['pointInTimeRecovery', 'encryption'] as const)
+				.filter((key) => options[key] !== undefined);
+			if (ignoredForExisting.length > 0) {
+				Annotations.of(this).addWarningV2(
+					'@aws-blocks/bb-kv-store:IgnoredOptionsForExistingTable',
+					`Ignoring ${ignoredForExisting.join(', ')} because this table is wrapped via fromExisting() — ` +
+						`the existing table owns its own durability/encryption configuration.`,
+				);
+			}
 			this.table = Table.fromTableName(this, 'table', options.table.tableName);
 		} else {
 			// Resolve durability from the per-block option (a `'destroy'|'retain'`
@@ -45,6 +73,68 @@ export class KVStore extends BuildingBlockScope {
 						? RemovalPolicy.RETAIN
 						: this.defaults.removalPolicy;
 
+			// `encryption` accepts two string literals or an ExternalKmsKeyRef
+			// (a `{ __brand: 'ExternalKmsKeyRef', keyArn }` from `fromKmsKey`).
+			// Anything else is a typo — warn rather than silently using the default.
+			const isKmsKeyRef = typeof options?.encryption === 'object'
+				&& options.encryption !== null
+				&& options.encryption.__brand === 'ExternalKmsKeyRef';
+			if (
+				options?.encryption !== undefined
+				&& options.encryption !== 'aws-managed'
+				&& options.encryption !== 'customer-managed'
+				&& !isKmsKeyRef
+			) {
+				Annotations.of(this).addWarningV2(
+					'@aws-blocks/bb-kv-store:UnknownEncryption',
+					`Unrecognized encryption '${String(options.encryption)}' (expected 'aws-managed', ` +
+						`'customer-managed', or KVStore.fromKmsKey(arn)) — falling back to 'aws-managed'.`,
+				);
+			}
+
+			// PITR is one knob (`boolean | { retentionDays }`) resolved from the
+			// per-block option, else the stack-wide `defaults.pointInTimeRecovery`
+			// — production on, sandbox off. The object form both enables PITR and
+			// pins the window, so "days set but PITR off" can't be expressed.
+			// `retentionDays` must be 1–35; warn and drop back to the 35-day
+			// default on an out-of-range value rather than failing the deploy.
+			const pitrSetting = options?.pointInTimeRecovery ?? this.defaults.pointInTimeRecovery;
+			let pitrEnabled: boolean;
+			let pitrDays: number | undefined;
+			if (typeof pitrSetting === 'object' && pitrSetting !== null) {
+				pitrEnabled = true;
+				pitrDays = pitrSetting.retentionDays;
+				if (!Number.isInteger(pitrDays) || (pitrDays as number) < 1 || (pitrDays as number) > 35) {
+					Annotations.of(this).addWarningV2(
+						'@aws-blocks/bb-kv-store:InvalidPitrDays',
+						`pointInTimeRecovery.retentionDays must be an integer between 1 and 35 (got ${String(pitrDays)}) — ` +
+							`falling back to the 35-day default.`,
+					);
+					pitrDays = undefined;
+				}
+			} else {
+				pitrEnabled = pitrSetting === true;
+				pitrDays = undefined;
+			}
+
+			// `fromKmsKey(arn)` → encrypt with an existing CMK (shareable across
+			// tables). `'customer-managed'` → CDK provisions a fresh dedicated CMK.
+			// Otherwise the AWS-managed `aws/dynamodb` key.
+			let encryptionKey: IKey | undefined;
+			let encryption: TableEncryption;
+			if (
+				typeof options?.encryption === 'object'
+				&& options.encryption !== null
+				&& options.encryption.__brand === 'ExternalKmsKeyRef'
+			) {
+				encryption = TableEncryption.CUSTOMER_MANAGED;
+				encryptionKey = Key.fromKeyArn(this, 'encryption-key', options.encryption.keyArn);
+			} else if (options?.encryption === 'customer-managed') {
+				encryption = TableEncryption.CUSTOMER_MANAGED;
+			} else {
+				encryption = TableEncryption.AWS_MANAGED;
+			}
+
 			this.table = new Table(this, 'table', {
 				tableName: this.fullId.substring(0, 255),
 				partitionKey: { name: 'pk', type: AttributeType.STRING },
@@ -54,6 +144,20 @@ export class KVStore extends BuildingBlockScope {
 				// Opt-in: enabling TTL on an already-deployed table is a live table
 				// update, so it must never happen implicitly.
 				timeToLiveAttribute: options?.ttl ? TTL_ATTRIBUTE : undefined,
+				// PITR spec is only emitted when enabled — leaving it undefined keeps
+				// the CloudFormation template clean for sandboxes / opt-outs.
+				// recoveryPeriodInDays is only set when the caller narrows it (an
+				// omitted value keeps DynamoDB's 35-day default without emitting it).
+				pointInTimeRecoverySpecification: pitrEnabled
+					? {
+						pointInTimeRecoveryEnabled: true,
+						...(pitrDays !== undefined ? { recoveryPeriodInDays: pitrDays } : {}),
+					}
+					: undefined,
+				encryption,
+				// Only set when bringing an existing CMK; `CUSTOMER_MANAGED` without a
+				// key lets CDK provision a dedicated one.
+				encryptionKey,
 			});
 		}
 

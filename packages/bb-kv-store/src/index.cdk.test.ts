@@ -164,3 +164,62 @@ test('CDK: fromExisting + ttl still provisions nothing (no table to configure)',
   new KVStore(parent, 'sessions', { ttl: true, table: KVStore.fromExisting('preexisting-table-123') });
   Template.fromStack(stack).resourceCountIs('AWS::DynamoDB::Table', 0);
 });
+
+// ── Point-in-Time Recovery & encryption (secure-by-default in production) ────
+// Regression for the AppSec finding: KVStore's prod DDB table shipped with PITR
+// disabled and no customer-managed encryption option, so a consumer on the
+// production preset believed PITR was on (bb-distributed-table honors it) when
+// it was NOT.
+
+test('CDK: prod KVStore enables PITR by default', () => {
+  const { stack, parent } = setup(BlocksPresets.production);
+  new KVStore(parent, 'sessions');
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+  });
+});
+
+test('CDK: PITR follows the stack defaults — off under the sandbox preset', () => {
+  const { stack, parent } = setup(BlocksPresets.sandbox);
+  new KVStore(parent, 'sessions');
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    PointInTimeRecoverySpecification: Match.absent(),
+  });
+});
+
+test('CDK: pointInTimeRecovery { retentionDays } enables PITR and pins the window', () => {
+  const { stack, parent } = setup();
+  new KVStore(parent, 'sessions', { pointInTimeRecovery: { retentionDays: 7 } });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    PointInTimeRecoverySpecification: {
+      PointInTimeRecoveryEnabled: true,
+      RecoveryPeriodInDays: 7,
+    },
+  });
+});
+
+test('CDK: customer-managed encryption provisions a KMS key', () => {
+  const { stack, parent } = setup();
+  new KVStore(parent, 'sessions', { encryption: 'customer-managed' });
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::KMS::Key', 1);
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    SSESpecification: { SSEEnabled: true, SSEType: 'KMS' },
+  });
+});
+
+test('CDK: fromKmsKey encrypts with an existing key and provisions no new KMS key', () => {
+  const { stack, parent } = setup();
+  const keyArn = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56';
+  new KVStore(parent, 'sessions', { encryption: KVStore.fromKmsKey(keyArn) });
+  const template = Template.fromStack(stack);
+  // Bringing an existing key must NOT mint a new one (the whole point — a
+  // shared key across tables instead of one dedicated key each).
+  template.resourceCountIs('AWS::KMS::Key', 0);
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    SSESpecification: { SSEEnabled: true, SSEType: 'KMS', KMSMasterKeyId: keyArn },
+  });
+});

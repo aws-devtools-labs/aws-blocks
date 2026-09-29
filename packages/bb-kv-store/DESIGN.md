@@ -15,9 +15,26 @@ Creates a single DynamoDB table:
 - **Table name:** Derived from `scope.fullId` (includes stack name for uniqueness)
 - **Removal policy:** DESTROY (sandbox), configurable for production
 - **Time-to-Live:** Disabled by default; `{ ttl: true }` sets `timeToLiveAttribute: 'ttl'`
+- **Durability & encryption:** Secure-by-default in production — Point-in-Time Recovery and SSE-KMS follow the stack-wide `defaults` (see below)
 - **Permissions:** `grantReadWriteData` to the parent scope's handler automatically
 
 No sort key, no GSIs. This is intentional — `KVStore` is the simple case. Customers needing sort keys or secondary indexes should use `DistributedTable`.
+
+### Durability & encryption
+
+Point-in-Time Recovery (PITR) and server-side encryption resolve the same way as `DistributedTable`, from the per-block option first and then the stack-wide `defaults` (`BlocksPresets` — on under `production`, off under `sandbox`). Before this, `KVStore` ignored the preset entirely, so a consumer on the production preset believed PITR was on (as it is for `DistributedTable`) when it was not.
+
+- **`pointInTimeRecovery?: boolean | { retentionDays: number }`** — `true` enables continuous backups with DynamoDB's default 35-day window; `{ retentionDays: n }` both enables PITR and pins the window (**1–35**; an out-of-range value warns at synth and falls back to the default window); `false` disables it. Omitted, it follows `defaults.pointInTimeRecovery`. The `PointInTimeRecoverySpecification` is only emitted when enabled, keeping sandbox/opt-out templates clean.
+- **`encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef`** — `'aws-managed'` (default) uses the `aws/dynamodb` key; `'customer-managed'` provisions a dedicated CMK per table; `KVStore.fromKmsKey(arn)` reuses an existing CMK you own, so several tables can share one key. An unrecognized value warns at synth and falls back to `'aws-managed'`.
+
+```typescript
+// Share one customer-managed key across several stores
+const key = KVStore.fromKmsKey('arn:aws:kms:us-east-1:111122223333:key/abcd-1234');
+const sessions = new KVStore(scope, 'sessions', { encryption: key, pointInTimeRecovery: { retentionDays: 7 } });
+const cache = new KVStore(scope, 'cache', { encryption: key });
+```
+
+Both options are ignored when wrapping an existing table via `fromExisting()` (the existing table owns its own configuration); passing them alongside `fromExisting()` warns at synth.
 
 ## Expiry (TTL)
 
