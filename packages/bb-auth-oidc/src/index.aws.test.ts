@@ -14,12 +14,13 @@
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { clearRouteRegistry } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-blocks/core';
 import { AuthOIDC, google, stubIdp } from './index.aws.js';
 import { sandboxFlagEnvVar } from './utils.js';
 
 // A parentless root: `scopeFullId(ROOT, id)` resolves to `test-app-<id>`, so the
 // sandbox flag env-var key is derived the same way the runtime derives it.
-const ROOT = { id: 'test-app' } as any;
+const ROOT: ScopeParent = { id: 'test-app' };
 const sandboxKeyFor = (id: string): string => sandboxFlagEnvVar(`${ROOT.id}-${id}`);
 
 describe('AWS runtime: stub IdP deploy guard', () => {
