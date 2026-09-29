@@ -329,6 +329,7 @@ it is absent — the operational paths read the CA from the environment only.
 
 **Date:** 2026-06-10
 **Authors:** sarayev
+**Status**: Superseded by D-017
 
 ### Context
 
@@ -706,7 +707,7 @@ For the two edge cases above we **warn and skip only the CloudFront alarm** rath
 D-010 let the `--telemetry-file` sink fire regardless of consent. Building the event is itself a side effect: it creates `~/.blocks/telemetry/installation-id` (printing the first-run notice to stderr) and persists a project ID into `<project>/.blocks/config.json`. An opted-out user who passed the flag therefore still got identifier files on disk and the notice printed.
 
 ### Decision
-Consent is checked first, before any event is built. When telemetry is disabled there is no event, no identifiers persisted, no first-run notice, no file, and no HTTP request — `--telemetry-file` does not override opt-out. This adopts D-010's rejected alternative 2, "File gated by consent (same as HTTP)". D-010's remaining points stand: with telemetry enabled the flag is additive to the HTTP send, skips pre-existing files, and writes one event per invocation. To inspect events without reaching the production endpoint, point `BLOCKS_TELEMETRY_ENDPOINT` at a local sink rather than disabling telemetry.
+Consent is checked first, before any event is built. When telemetry is disabled there is no event, no identifiers persisted, no first-run notice, no file, and no HTTP request — `--telemetry-file` does not override opt-out. This adopts D-010's rejected alternative 2, "File gated by consent (same as HTTP)". D-010's remaining points stand: with telemetry enabled the flag is additive to the HTTP send, skips pre-existing files, and writes one event per invocation. To capture events without sending them anywhere, run `BLOCKS_TELEMETRY_ENDPOINT=http://127.0.0.1:1 <cmd> --telemetry-file=<path>` — the send is fire-and-forget and its failure is swallowed, so no listener is needed.
 
 ### Rationale
 Opting out must mean nothing is captured and nothing is written. A debugging flag must not re-enable data capture — nor disk writes and a consent notice — for a user who has opted out.

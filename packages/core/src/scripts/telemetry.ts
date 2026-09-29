@@ -33,6 +33,7 @@ Examples:
 
 Environment:
   AWS_BLOCKS_DISABLE_TELEMETRY=1              Disables telemetry (overrides config files)
+  BLOCKS_TELEMETRY_ENDPOINT=http://127.0.0.1:1  Capture to --telemetry-file without sending (no listener needed)
 `);
 }
 
