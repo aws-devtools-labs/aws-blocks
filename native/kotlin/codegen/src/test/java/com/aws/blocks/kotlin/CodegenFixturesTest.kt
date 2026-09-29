@@ -2,6 +2,9 @@ package com.aws.blocks.kotlin
 
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
+import com.aws.blocks.kotlin.model.Info
+import com.aws.blocks.kotlin.model.RpcModel
+import com.aws.blocks.kotlin.model.ServerDefinition
 import com.aws.blocks.kotlin.parser.OpenRpcParser
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -9,6 +12,17 @@ import io.kotest.matchers.shouldBe
 import java.io.File
 
 class CodegenFixturesTest : FunSpec({
+
+    test("uses the RPC endpoint for a spec without servers") {
+        val model = RpcModel(
+            info = Info(title = "Test", version = "1.0.0"),
+            methods = emptyList(),
+        )
+
+        CodegenModelBuilder().build(model).servers shouldBe listOf(
+            ServerDefinition("local", "http://localhost:3001/aws-blocks/api"),
+        )
+    }
 
     val regenerate = System.getProperty("REGENERATE_FIXTURES") == "1"
     val fixturesDir = System.getProperty("FIXTURES_DIR")?.let { File(it) }

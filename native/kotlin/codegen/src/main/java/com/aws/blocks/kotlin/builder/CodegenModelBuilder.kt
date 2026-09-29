@@ -48,7 +48,7 @@ class CodegenModelBuilder {
         val apiGroups = groupMethods(model.methods, collector)
 
         val servers = if (model.servers.isEmpty()) {
-            listOf(ServerDefinition("local", "http://localhost:3001"))
+            listOf(ServerDefinition("local", "http://localhost:3001/aws-blocks/api"))
         } else {
             model.servers.map { ServerDefinition(it.name, it.url) }
         }
