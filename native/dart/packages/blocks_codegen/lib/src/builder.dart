@@ -225,6 +225,7 @@ class CodegenModelBuilder {
     'FileDownloadHandle',
     'OidcClient',
     'BlocksClient',
+    'UnknownTransferable',
   };
   final Map<String, ResolvedType> _types = {};
   // Every named type synthesized during a build, in creation order.

@@ -383,6 +383,56 @@ void main() {
         ),
       );
     });
+
+    test('a spec schema named UnknownTransferable does not shadow the runtime '
+        'fallback type', () {
+      // UnknownTransferable is a reserved runtime name, so a same-named spec
+      // schema must not be generated as a class that would collide with the
+      // fallback reference.
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.connectDevice',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'ConnectDeviceResult',
+                'schema': {'x-blocks-transferable': 'example-iot/device-link'},
+              },
+            },
+            {
+              'name': 'api.getThing',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {r'$ref': '#/components/schemas/UnknownTransferable'},
+              },
+            },
+          ],
+          'components': {
+            'schemas': {
+              'UnknownTransferable': {
+                'type': 'object',
+                'properties': {
+                  'x': {'type': 'string'},
+                },
+                'required': ['x'],
+              },
+            },
+          },
+        }),
+      );
+      expect(output, isNot(contains('class UnknownTransferable')));
+      expect(
+        output,
+        contains(
+          "UnknownTransferable.fromJson(result, "
+          "expectedTag: 'example-iot/device-link')",
+        ),
+      );
+    });
   });
 
   group('unbound transferable is direct-results-only (out-of-scope shapes)', () {

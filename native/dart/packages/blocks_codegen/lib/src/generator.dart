@@ -50,7 +50,8 @@ class DartCodeGenerator {
       );
     }
 
-    // Re-export UnknownTransferable only when the fallback is actually emitted.
+    // Re-export UnknownTransferable for unbound top-level types and operation
+    // results.
     final hasUnknownTransferable =
         model.types.values.any(_isUnboundTransferable) ||
         model.namespaces.any(
@@ -729,8 +730,7 @@ class DartCodeGenerator {
     List<ResolvedType> typeArgs,
     Map<String, ResolvedType> allTypes,
   ) {
-    // Single registry of hydratable tags: a tag outside it never reaches a
-    // concrete arm, so the set and switch cannot disagree.
+    // Tags outside the registry stay dynamic even if a switch arm exists.
     if (!kKnownTransferableTags.contains(blocksType)) return 'dynamic';
     return switch (blocksType) {
       'realtime/channel' =>
