@@ -18,7 +18,7 @@ import { OidcClientEngine } from './engines/oidc-client-engine.js';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
 import { mountAuthRoutes, mountStubIdpRoutes } from './routes.js';
-import { cookieSecretEnvVar, resolveProviderIssuerUrl } from './utils.js';
+import { cookieSecretEnvVar, resolveProviderIssuerUrl, sandboxFlagEnvVar } from './utils.js';
 import type { AuthOIDCOptions, ProviderConfig, SessionRow } from './types.js';
 
 export { AuthOIDCErrors, type AuthOIDCErrorName } from './errors.js';
@@ -148,6 +148,29 @@ export class AuthOIDC<
 			sessionTableName: getSdkIdentifiers(sessions).tableName,
 		});
 		mountAuthRoutes(this);
+
+		// Security guard (CWE-798 / CWE-489 / CWE-290), defense-in-depth with the
+		// synth guard in `index.cdk.ts`: the stub IdP forges identities with no
+		// real credential check, so its routes must never be mounted in a
+		// deployed, non-sandbox app. The synth guard should already have blocked
+		// this before deploy, but a stale or hand-rolled artifact could still
+		// reach here — fail loud rather than silently exposing a forgeable IdP.
+		//
+		// `AWS_LAMBDA_FUNCTION_NAME` is set only in the real Lambda execution
+		// environment, not during client-code generation (which imports this
+		// module with no env), so the guard fires only in genuine deployed
+		// runtimes and never trips codegen. The sandbox bit is read from the
+		// runtime config stamped by `index.cdk.ts` (see `sandboxFlagEnvVar`).
+		const isDeployedRuntime = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+		const isSandboxDeploy = process.env[sandboxFlagEnvVar(fullIdForEnv)] === 'true';
+		const stubProvider = options.providers.find((provider) => provider.kind === 'stub');
+		if (stubProvider && isDeployedRuntime && !isSandboxDeploy) {
+			throw new Error(
+				`AuthOIDC: stub IdP provider '${stubProvider.name}' cannot run in a deployed non-sandbox app. ` +
+					'The stub IdP issues identities with no real authentication and is trivially forgeable. Remove the ' +
+					'stubIdp() provider before deploying, or deploy in sandbox mode (`npm run sandbox`).',
+			);
+		}
 
 		for (const provider of options.providers) {
 			if (provider.kind === 'stub') {
