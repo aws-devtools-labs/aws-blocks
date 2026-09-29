@@ -102,7 +102,7 @@ final class LoopbackListener: @unchecked Sendable {
         return nil
     }
 
-    /// Blocks until the first request head is captured (or the timeout elapses).
+    /// Waits up to the timeout, then returns the captured request head or an empty string.
     func waitForRequestHead(timeout: TimeInterval = 5) -> String {
         _ = sem.wait(timeout: .now() + timeout)
         return captured
