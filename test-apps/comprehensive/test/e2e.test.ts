@@ -8,6 +8,7 @@ import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { api as apiType } from 'aws-blocks';
+import { ApiError } from '@aws-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
 import { kvStoreTests } from './kv-store.test.js';
 import { distributedTableTests } from './distributed-table.test.js';
@@ -300,7 +301,9 @@ test('Context - access headers', { timeout: 10_000 }, async () => {
 });
 
 test('Error handling - propagates errors', { timeout: 10_000 }, async () => {
-  await assert.rejects(() => api.throwError('test error'), /test error/);
+  // throwError throws a raw Error; the RPC gate sanitizes it to a generic 500,
+  // so the client sees an ApiError with no leaked message (D-003 / #227).
+  await assert.rejects(() => api.throwError('test error'), ApiError);
 });
 
 test('Data types - serialization', { timeout: 10_000 }, async () => {
