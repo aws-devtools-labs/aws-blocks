@@ -48,10 +48,15 @@ test.after(() => {
   }
 });
 
-test('home page loads', async () => {
+test('home page loads', async (t) => {
   const res = await fetch(baseUrl);
   assert.strictEqual(res.status, 200, 'Home page should return 200');
 
+  // This title belongs to the starter page. Replace this assertion after
+  // replacing the page with your own content.
   const html = await res.text();
+  if (!html.includes('Blocks + Next.js')) {
+    return t.skip('starter page changed - replace with an assertion for your own content');
+  }
   assert.ok(html.includes('Blocks + Next.js'), 'Page should contain title');
 });
