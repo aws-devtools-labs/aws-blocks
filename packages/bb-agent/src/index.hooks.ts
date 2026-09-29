@@ -407,6 +407,16 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		}
 
 		if (chunk.type === 'error') {
+			// Drop the empty assistant placeholder if the error arrived before any text
+			// (mirror the interrupt branch / createChat), so a failed-before-first-token
+			// turn leaves no blank assistant bubble.
+			if (assistantId) {
+				const assistant = messages.find(m => m.id === assistantId);
+				if (assistant && !assistant.content) {
+					messages = messages.filter(m => m.id !== assistantId);
+					options.onMessagesChange?.(messages);
+				}
+			}
 			// Null assistantId (mirroring done/interrupt) so a later reconnect re-sync treats
 			// the turn as resolved and won't clobber the bubble with a stale getConversation read.
 			assistantId = null;

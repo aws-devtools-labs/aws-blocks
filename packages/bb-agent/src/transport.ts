@@ -143,6 +143,10 @@ const TERMINAL_TYPES: ReadonlySet<AgentStreamChunk['type']> = new Set(['done', '
  *     // onDisconnect } options object). Branch on the shape so the options form reaches
  *     // the channel intact — reconnect re-sync only wires up when it does, so DON'T
  *     // unwrap it to a bare handler.
+ *     // NOTE: both arms pass the SAME value (`handlerOrOptions`) — the branch is NOT a
+ *     // transform, it exists ONLY to pick a distinct overload. The union arg matches
+ *     // NEITHER overload, so a single direct `channel.subscribe(handlerOrOptions)` does
+ *     // not type-check; narrowing via `typeof` first is required.
  *     return typeof handlerOrOptions === 'function'
  *       ? channel.subscribe(handlerOrOptions)
  *       : channel.subscribe(handlerOrOptions);

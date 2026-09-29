@@ -1281,6 +1281,41 @@ describe('useChat', () => {
 		assert.strictEqual(loadingStates.at(-1), false, 'loading should be false after error');
 	});
 
+	test('an error chunk before any text drops the empty assistant placeholder (mirrors createChat)', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-err-drop' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			onError: () => {},
+		});
+
+		await chat.sendMessage('hello');
+		// The optimistic empty assistant bubble exists while the turn is in flight.
+		assert.ok(
+			chat.getMessages().some(m => m.role === 'assistant' && !m.content),
+			'empty assistant placeholder is present before the error',
+		);
+
+		// Error arrives BEFORE any text-delta — a failed-before-first-token turn. The empty
+		// placeholder must be dropped (mirrors createChat / the interrupt branch), leaving no
+		// blank assistant bubble.
+		cap.handler!({ type: 'error', error: 'model throttled' });
+
+		const msgs = chat.getMessages();
+		assert.ok(
+			!msgs.some(m => m.role === 'assistant'),
+			'the empty assistant placeholder must be dropped on a failed-before-first-token turn',
+		);
+		assert.ok(
+			msgs.some(m => m.role === 'user' && m.content === 'hello'),
+			'the user message is retained',
+		);
+	});
+
 	test('onInterrupt is called when interrupt chunk arrives', async () => {
 		let chunkHandler: (chunk: any) => void;
 		let interruptsReceived: any[] | undefined;
@@ -2321,6 +2356,56 @@ describe('createChat', () => {
 		}
 	});
 
+	test('run() drives multiple produce-only turns; each turn\'s error reaches the subscriber (and run() resets errorReported per turn)', async () => {
+		// run() is the produce-only primitive (fan-out / observer / decoupled produce-consume,
+		// per DESIGN.md and the createChat docstring): it does NOT wire createChat's own
+		// consumer (that is startTurn, driven by sendMessage), so a run()-driven turn's chunks
+		// surface to whoever attaches via the subscribe() primitive — NOT through
+		// createChat.onError. run() resets `errorReported` at its top (fresh-turn state hygiene,
+		// mirroring sendMessage) so the once-per-turn contract restarts on every run()-started
+		// turn rather than staying latched for the instance's life.
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-run' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onError: e => errors.push(e),
+		});
+
+		// Turn 1: produce via run(), consume via the subscribe() primitive.
+		const r1 = await chat.run('first');
+		assert.strictEqual(r1.channelId, 'conv-run', 'run() returns the produced turn\'s channelId');
+		const got1: AgentStreamChunk[] = [];
+		const consume1 = (async () => {
+			for await (const ch of chat.subscribe({ channelId: r1.channelId })) got1.push(ch);
+		})();
+		cap.chunk({ type: 'error', error: 'boom-1' });
+		await consume1;
+
+		// Turn 2: run() again on the SAME instance — a fresh produce-only turn.
+		const r2 = await chat.run('second');
+		assert.strictEqual(r2.channelId, 'conv-run', 'run() is reusable across turns');
+		const got2: AgentStreamChunk[] = [];
+		const consume2 = (async () => {
+			for await (const ch of chat.subscribe({ channelId: r2.channelId })) got2.push(ch);
+		})();
+		cap.chunk({ type: 'error', error: 'boom-2' });
+		await consume2;
+
+		// BOTH turns' error chunks reached the subscriber (the produce-only surface) — the 2nd
+		// turn is NOT swallowed after the 1st.
+		assert.deepStrictEqual(got1, [{ type: 'error', error: 'boom-1' }], 'turn 1 error reaches the subscriber');
+		assert.deepStrictEqual(got2, [{ type: 'error', error: 'boom-2' }], 'turn 2 error reaches the subscriber');
+		// createChat.onError is intentionally NOT fired on the produce-only run()+subscribe path:
+		// errors surface to the attached consumer, and createChat only owns onError for the
+		// sendMessage-driven turn (see startTurn). This locks in that produce-only contract.
+		assert.strictEqual(errors.length, 0, 'run()+subscribe surfaces errors via the stream, not createChat.onError');
+		chat.destroy();
+	});
+
 	test('newConversation() mid-turn clears loading so the next sendMessage is not dropped', async () => {
 		let runCalls = 0;
 		// A stream that stays open (never emits a terminal chunk) until unsubscribed,
@@ -2924,3 +3009,4 @@ describe('createChat loadConversation + metadata narrowing', () => {
 		assert.deepStrictEqual(seen, [{ interruptId: 'int-9', name: 'approve:delete' }], 'backend id surfaces to the consumer as interruptId');
 	});
 });
+

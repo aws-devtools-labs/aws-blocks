@@ -625,6 +625,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 		},
 
 		async run(input: SendInput): Promise<{ channelId: string }> {
+			errorReported = false; // fresh turn — allow one onError report (mirrors sendMessage)
 			const id = await ensureConversation();
 			// run() does NOT touch `lastChannelId` (sendMessage owns it). Persisted chat →
 			// conversationId; inference-only → a fresh channel per call. Resume an
