@@ -86,6 +86,7 @@ import {
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
+import { declaredGroupNames } from './groups.js';
 
 export * from './types.js';
 export { SessionStore, type SessionRecord } from './sessions.js';
@@ -1290,15 +1291,20 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 		// `fetchUserAttributes`. An admin who runs `addUserToGroup` /
 		// `removeUserFromGroup` against an already-signed-in user would otherwise
 		// not take effect (grant) or not revoke (removal) until that user's token
-		// next refreshed or they re-logged in. The returned user's `groups`
-		// reflects the live read so callers never see a stale list. The mock
-		// derives from `this.state.groups`; the AWS runtime calls
-		// `AdminListGroupsForUser`.
+		// next refreshed or they re-logged in. The mock derives membership from
+		// `this.state.groups`; the AWS runtime calls `AdminListGroupsForUser`.
 		const liveGroups = Object.keys(this.state.groups).filter((g) => (this.state.groups[g] ?? []).includes(user.username));
 		if (!liveGroups.includes(role)) {
 			throw new ApiError(`Not in group '${role}'`, 403, { name: AuthCognitoErrors.NotAuthorized });
 		}
-		return { ...user, groups: liveGroups as GroupOf<O>[] };
+		// Narrow the returned list to the declared groups — same as the AWS runtime.
+		// `state.groups` can hold a key that outlived a change to `options.groups`
+		// (rehydrated from a stale `.bb-data` blob), which isn't in the declared
+		// union `CognitoUser<O>.groups` promises. The membership decision above used
+		// the raw read. No declared groups → `GroupOf<O>` is `string`, so raw is sound.
+		const declared = declaredGroupNames(this.options.groups);
+		const groups = declared ? liveGroups.filter((g) => declared.has(g)) : liveGroups;
+		return { ...user, groups: groups as GroupOf<O>[] };
 	}
 
 	/**

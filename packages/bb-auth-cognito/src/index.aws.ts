@@ -73,6 +73,7 @@ import {
 import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { BB_NAME, BB_VERSION } from './version.js';
+import { declaredGroupNames } from './groups.js';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import type { AuthActionInput, AuthState, AuthStateApi, BlocksAuth } from '@aws-blocks/auth-common';
 import { decodeIdToken, decodeJwtPayload, jwtExpMs, safeStringClaim, sessionToTokens, SessionStore, type SessionRecord } from './sessions.js';
@@ -616,15 +617,6 @@ export function memoizePerContext<C extends object, V>(
 	return pending;
 }
 
-/**
- * Names declared in `options.groups`, or `undefined` when none are declared
- * (in which case `GroupOf<O>` is unconstrained `string`). Used by `requireRole`
- * to keep the returned `groups` within the declared literal union.
- */
-function declaredGroupNames(groups: AuthCognitoOptions['groups']): Set<string> | undefined {
-	if (!groups || groups.length === 0) return undefined;
-	return new Set(groups.map((g) => (typeof g === 'string' ? g : g.name)));
-}
 
 function statusForCognitoError(name: string): number {
 	switch (name) {

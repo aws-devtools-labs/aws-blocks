@@ -130,6 +130,23 @@ describe('auth.admin group membership', () => {
 		);
 	});
 
+	test('requireRole narrows returned groups to the declared set (matches AWS filter)', async () => {
+		const auth = new AuthCognito(ROOT, unique(), { groups: ['admins'], admin: {} });
+		await signUpAndConfirm(auth, 'nate');
+		await auth.admin.addUserToGroup('nate', 'admins');
+
+		// Simulate a stale `.bb-data` blob: a membership key that outlived its
+		// removal from `options.groups` (loadState rehydrates raw.groups as-is).
+		// It must NOT leak into the returned `groups` — `CognitoUser<O>.groups`
+		// promises the declared union, and the AWS path filters it out.
+		(auth as unknown as { state: { groups: Record<string, string[]> } }).state.groups.legacy = ['nate'];
+
+		const ctx = freshContext();
+		await auth.signIn('nate', 'Password!1', ctx);
+		const user = await auth.requireRole(ctx, 'admins');
+		assert.deepStrictEqual(user.groups, ['admins'], 'undeclared stale group must be filtered from the returned list');
+	});
+
 	test('addUserToGroup to an unseeded group throws GroupNotFound', async () => {
 		const auth = new AuthCognito(ROOT, unique(), { groups: ['admins'], admin: {} });
 		await signUpAndConfirm(auth, 'bob');
