@@ -22,6 +22,9 @@ export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+// Prefixes the message with the error `name`. The `blocksError` in validation.ts
+// is deliberately UNPREFIXED to preserve the CDK synth error text — keep these
+// separate; do not merge them into one prefixing helper. @see validation.ts
 function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;

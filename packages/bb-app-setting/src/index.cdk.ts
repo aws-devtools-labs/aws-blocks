@@ -10,8 +10,8 @@ import * as cr from 'aws-cdk-lib/custom-resources';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import { AppSettingErrors } from './errors.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
+import { validateAppSettingOptions } from './validation.js';
 
 export { AppSettingErrors } from './errors.js';
 export type { AppSettingOptions } from './types.js';
@@ -58,81 +58,14 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 
 		// `external` is package-internal (set only by fromExisting), not on the
 		// public AppSettingOptions — read it via the internal options type.
-		const external = (options as InternalAppSettingOptions<T>).external ?? false;
+		const internalOptions = options as InternalAppSettingOptions<T>;
+		const external = internalOptions.external ?? false;
 
 		// ── Validation ──────────────────────────────────────────────────────
-		if (options.secret && options.schema) {
-			const err = new Error(
-				`AppSetting '${id}': 'secret' and 'schema' cannot be used together. ` +
-				`Secrets are always plain strings. Remove the schema or the secret flag.`
-			);
-			err.name = AppSettingErrors.ValidationFailed;
-			throw err;
-		}
-
-		if (options.schema && options.value === undefined) {
-			const err = new Error(
-				`AppSetting '${id}': a schema is provided but no value. ` +
-				`Provide a value that conforms to the schema so the SSM parameter is valid on first deploy.`
-			);
-			err.name = AppSettingErrors.ValidationFailed;
-			throw err;
-		}
-
-		if (options.kmsKeyArn !== undefined) {
-			if (!options.secret) {
-				const err = new Error(
-					`AppSetting '${id}': 'kmsKeyArn' is only valid with 'secret: true'. ` +
-					`Non-secret String parameters are not encrypted.`
-				);
-				err.name = AppSettingErrors.ValidationFailed;
-				throw err;
-			}
-			if (options.kmsKeyArn.trim() === '') {
-				const err = new Error(
-					`AppSetting '${id}': 'kmsKeyArn' must be a non-empty KMS key ARN. ` +
-					`Omit it to use the default aws/ssm key.`
-				);
-				err.name = AppSettingErrors.ValidationFailed;
-				throw err;
-			}
-		}
-
-		if (options.secret && options.value !== undefined) {
-			const err = new Error(
-				`AppSetting '${id}': secrets should not have a value in source code. ` +
-				`Remove the value — a random secret will be generated on first deploy. ` +
-				`Set the real value at runtime via AppSetting.put().`
-			);
-			err.name = AppSettingErrors.ValidationFailed;
-			throw err;
-		}
-
-		if (external && options.value !== undefined) {
-			const err = new Error(
-				`AppSetting '${id}': 'external' settings are owned elsewhere and must not have a value. ` +
-				`Remove the value — the parameter is created and seeded outside this stack.`
-			);
-			err.name = AppSettingErrors.ValidationFailed;
-			throw err;
-		}
-
-		if (external && !options.name) {
-			const err = new Error(
-				`AppSetting '${id}': 'external' requires an explicit 'name' referencing the existing parameter.`
-			);
-			err.name = AppSettingErrors.ValidationFailed;
-			throw err;
-		}
-
-		if (!options.secret && !external && options.value === undefined) {
-			const err = new Error(
-				`AppSetting '${id}': non-secret settings require a value. ` +
-				`Provide an initial value for the SSM parameter.`
-			);
-			err.name = AppSettingErrors.ValidationFailed;
-			throw err;
-		}
+		// Synchronous option-combination checks are shared with the mock variant
+		// (see validation.ts) so local dev fails fast with the same error CDK
+		// synth would throw. Async schema value validation stays per-variant.
+		validateAppSettingOptions(id, internalOptions);
 
 		const parameterName = options.name ?? `/${this.fullId}`;
 

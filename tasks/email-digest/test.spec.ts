@@ -1,11 +1,12 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 
-const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3000';
+const BASE = process.env.BLOCKS_URL || 'http://localhost:3000';
 const T = 5_000;
 
 const RUN = process.env.RUN_ID || String(Date.now());
-let seq = 0;
-const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
+let rpcSeq = 0;
+let uniqSeq = 0;
+const uniq = (base: string) => `${base}-${RUN}-${++uniqSeq}-${Date.now()}`;
 
 // Per-test no-error gate: ONLY uncaught page errors.
 function watchErrors(page: Page, sink: string[] = []): string[] {
@@ -22,7 +23,7 @@ async function rpc(
 ): Promise<{ status: number; body: any }> {
 	const res = await request.post(`${BASE}/aws-blocks/api`, {
 		headers: { 'Content-Type': 'application/json' },
-		data: { jsonrpc: '2.0', method, params, id: Date.now() },
+		data: { jsonrpc: '2.0', method, params, id: ++rpcSeq },
 	});
 	return { status: res.status(), body: await res.json().catch(() => null) };
 }
@@ -144,12 +145,7 @@ test.describe('email-digest', () => {
 		await expect
 			.poll(
 				async () => {
-					const res = await request.post(`${BASE}/aws-blocks/api`, {
-						headers: { 'Content-Type': 'application/json' },
-						data: { jsonrpc: '2.0', method: 'api.getLastDigest', params: [], id: Date.now() },
-					});
-					if (!res.ok()) return false;
-					last = (await res.json().catch(() => null))?.result ?? null;
+					last = await getLast(request);
 					return !!last && typeof last.to === 'string' && typeof last.at === 'string';
 				},
 				{ timeout: T },

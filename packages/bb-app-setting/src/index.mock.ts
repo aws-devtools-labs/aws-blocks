@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { AppSettingErrors } from './errors.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
+import { validateAppSettingOptions } from './validation.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -38,6 +39,9 @@ function writeSettings(scope: Scope, data: Record<string, unknown>): void {
 	writeFileSync(fp, JSON.stringify(data, null, 2));
 }
 
+// Prefixes the message with the error `name`. The `blocksError` in validation.ts
+// is deliberately UNPREFIXED to preserve the CDK synth error text — keep these
+// separate; do not merge them into one prefixing helper. @see validation.ts
 function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
@@ -104,6 +108,12 @@ export class AppSetting<T = string> extends Scope {
 	constructor(scope: ScopeParent, id: string, options: AppSettingOptions<T>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
+
+		// Synchronous option-combination checks, shared with the CDK variant
+		// (see validation.ts), so local dev rejects configs that would fail at
+		// synth instead of silently defaulting a missing value to ''.
+		validateAppSettingOptions(id, options as InternalAppSettingOptions<T>);
+
 		this.parameterName = options.name ?? `/${this.fullId}`;
 		this.schema = options.schema;
 		this.isSecret = options.secret ?? false;
