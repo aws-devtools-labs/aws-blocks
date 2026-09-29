@@ -9,6 +9,7 @@ import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import * as rds from 'aws-cdk-lib/aws-rds';
@@ -44,6 +45,20 @@ export interface AuroraInfraConfig {
   deletionProtection?: boolean;
   /** Aurora PostgreSQL engine version, e.g. `'16.13'`. @default '16.13' */
   postgresVersion?: string;
+  /**
+   * Customer-managed KMS key for encrypting the cluster storage at rest. When
+   * provided it is also used to encrypt the cluster's auto-generated credentials
+   * secret. When omitted, storage encryption stays on but uses the account's
+   * AWS-managed `aws/rds` key. Storage encryption itself is always enabled (see
+   * `storageEncrypted: true` on the cluster).
+   */
+  storageEncryptionKey?: kms.IKey;
+  /**
+   * Retention period for the cluster's automated backups (which also drives the
+   * point-in-time-recovery window). @default `cdk.Duration.days(15)` — matches
+   * the SecureCDK baseline.
+   */
+  backupRetention?: cdk.Duration;
   /**
   /**
    * VPC context from the parent scope. When provided, Aurora is placed in the
@@ -185,6 +200,12 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     engineVersion = rds.AuroraPostgresEngineVersion.of(options.postgresVersion, majorVersion);
   }
 
+  // Backup retention for the cluster's automated backups. Aurora keeps continuous
+  // backups within this window, which is also what point-in-time recovery restores
+  // from. Default to 15 days to match the SecureCDK baseline cited in the AppSec
+  // finding; callers may override via `backupRetention`.
+  const backupRetention = options.backupRetention ?? cdk.Duration.days(15);
+
   const cluster = new rds.DatabaseCluster(scope, `${name}Cluster`, {
     engine: rds.DatabaseClusterEngine.auroraPostgres({
       version: engineVersion,
@@ -197,6 +218,37 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     securityGroups: [securityGroup],
     defaultDatabaseName: databaseName,
     enableDataApi: true,
+    // Encrypt cluster storage at rest. Set explicitly rather than relying on the
+    // implicit RDS default so the intent is visible in synth/CloudFormation output.
+    // With a `storageEncryptionKey` the cluster uses that customer-managed key;
+    // without one, `storageEncrypted: true` uses the account's AWS-managed
+    // `aws/rds` key (an acceptable default).
+    storageEncrypted: true,
+    storageEncryptionKey: options.storageEncryptionKey,
+    // When a CMK is supplied, also encrypt the auto-generated credentials secret
+    // with it. CDK cannot set an encryption key on the cluster's auto-generated
+    // secret without providing an explicit generated-secret credential, so we pin
+    // the exact master username the aurora-postgres engine defaults to
+    // ('postgres') — keeping the generated credentials identical apart from the
+    // secret's KMS key. Without a CMK, credentials stay undefined so the default
+    // AWS-managed secret encryption is unchanged.
+    credentials: options.storageEncryptionKey
+      ? rds.Credentials.fromGeneratedSecret('postgres', { encryptionKey: options.storageEncryptionKey })
+      : undefined,
+    // Retain automated backups (and the PITR window they provide).
+    backup: { retention: backupRetention },
+    // Export the PostgreSQL engine log to CloudWatch Logs. Retention follows the
+    // stack-wide `defaults.logRetention` when provided (the same knob every other
+    // Blocks-managed log group reads); when omitted, CloudWatch keeps the log
+    // group at the account default retention.
+    cloudwatchLogsExports: ['postgresql'],
+    cloudwatchLogsRetention: options.logRetention,
+    // iamAuthentication is intentionally NOT enabled: the cluster is reached
+    // exclusively over the RDS Data API (HTTPS + Secrets Manager credentials),
+    // never a direct DB socket, so database-level IAM authentication does not
+    // apply here (explicit acknowledgement per the AppSec finding). Automatic
+    // secret rotation is likewise a deliberate follow-up: it requires a rotation
+    // Lambda wired into the cluster VPC, a larger change than this hardening pass.
     // Read independently from defaults (falling back to the removalPolicy-derived
     // value for direct materialize() callers that don't pass it).
     deletionProtection: options.deletionProtection ?? removalPolicy !== cdk.RemovalPolicy.DESTROY,

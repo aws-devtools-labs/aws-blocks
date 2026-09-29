@@ -236,12 +236,31 @@ try {
 
 ## What It Provisions (AWS)
 
-- **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs
+- **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs. Storage
+  is **encrypted at rest by default** using the account's AWS-managed `aws/rds`
+  key; pass a `storageEncryptionKey` (KMS `IKey`) to use a customer-managed key
+  instead (it also encrypts the generated credentials secret).
+- **Automated backups** — retained **15 days** by default (override via
+  `backupRetention`), which is also the point-in-time-recovery window.
+- **CloudWatch log export** — the PostgreSQL engine log is exported to CloudWatch
+  Logs. Log-group retention follows the stack-wide `defaults.logRetention` when
+  set; otherwise it uses the account default.
 - **VPC** — Private subnets (isolated, no NAT)
 - **RDS Proxy** — Connection pooling
-- **Secrets Manager** — Auto-generated credentials, auto-rotated
+- **Secrets Manager** — Auto-generated credentials. Automatic rotation is not yet
+  wired up (a rotation Lambda in the cluster VPC is a planned follow-up); the
+  secret is encrypted with your `storageEncryptionKey` when one is supplied.
 - **Migration Lambda** — Runs `.sql` files on deploy via CustomResource
 - **IAM** — `rds-data:*` and `secretsmanager:GetSecretValue` granted to the app Lambda
+
+> **Access model:** the database is reached exclusively over the RDS Data API
+> (HTTPS + Secrets Manager credentials), never a raw Postgres socket. Database-level
+> IAM authentication (`iamAuthentication`) is therefore intentionally left off — it
+> does not apply to the Data API access path.
+>
+> **Enabling encryption on an existing cluster:** turning on storage encryption for
+> an already-provisioned, unencrypted cluster requires a replacement. On existing
+> stacks, expect a CloudFormation diff on the cluster properties after upgrading.
 
 ## Local Development
 

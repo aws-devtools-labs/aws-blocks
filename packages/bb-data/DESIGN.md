@@ -88,15 +88,35 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 | Resource | Purpose |
 |----------|---------|
-| Aurora Serverless v2 cluster | PostgreSQL database |
+| Aurora Serverless v2 cluster | PostgreSQL database. Storage **encrypted at rest** (`storageEncrypted: true`) with the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKey` |
 | VPC + private subnets | Network isolation |
 | RDS Proxy | Connection pooling |
 | Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
-| Secrets Manager secret | Auto-generated credentials |
+| Secrets Manager secret | Auto-generated credentials; encrypted with `storageEncryptionKey` when one is supplied |
+| Automated backups | Retained 15 days by default (`backupRetention` override); also the PITR window |
+| CloudWatch log export | PostgreSQL engine log exported to CloudWatch Logs; retention follows `defaults.logRetention` when set, else the account default |
 | Migration Lambda + CustomResource | Runs .sql files on deploy (retries with exponential backoff, 1s → 30s × 8, while the cluster is unreachable — a new cluster's writer coming up, or a scale-to-zero cluster resuming from auto-pause) |
 | IAM grants | `rds-data:*`, `secretsmanager:GetSecretValue` |
 
 Removal policy: DESTROY in sandbox, RETAIN in production.
+
+### Security posture (Aurora)
+
+- **Encryption at rest** is always enabled and set explicitly (not left to the
+  implicit RDS default) so it is visible in synth output. A customer-managed KMS
+  key is optional; when supplied it encrypts both the storage volume and the
+  auto-generated credentials secret.
+- **`iamAuthentication` is intentionally NOT enabled.** The cluster is reached
+  exclusively over the RDS Data API (HTTPS + Secrets Manager credentials), never a
+  direct DB socket, so database-level IAM authentication does not apply to this
+  access path.
+- **Automatic secret rotation is a deliberate follow-up**, not implemented here.
+  Rotation requires a rotation Lambda wired into the cluster VPC — a larger change
+  than this hardening pass. Supplying a `storageEncryptionKey` does encrypt the
+  generated secret today.
+- **Upgrade note:** enabling storage encryption on an already-provisioned,
+  unencrypted cluster requires a replacement; existing stacks will show a
+  CloudFormation diff after upgrading.
 
 ## Schema Migrations (External Databases)
 

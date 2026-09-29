@@ -46,6 +46,49 @@ test('CDK: default capacity is 0.5-2 ACUs', () => {
   });
 });
 
+// --- Storage encryption, backups, and log exports ---
+
+test('CDK: cluster storage is encrypted by default (AWS-managed key)', () => {
+  const template = synthTemplate({ databaseName: 'mydb' });
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    StorageEncrypted: true,
+  });
+});
+
+test('CDK: cluster backup retention defaults to 15 days', () => {
+  const template = synthTemplate({ databaseName: 'mydb' });
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    BackupRetentionPeriod: 15,
+  });
+});
+
+test('CDK: backupRetention override sets the retention period', () => {
+  const template = synthTemplate({ databaseName: 'mydb', backupRetention: cdk.Duration.days(30) });
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    BackupRetentionPeriod: 30,
+  });
+});
+
+test('CDK: PostgreSQL engine log is exported to CloudWatch', () => {
+  const template = synthTemplate({ databaseName: 'mydb' });
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    EnableCloudwatchLogsExports: Match.arrayWith(['postgresql']),
+  });
+});
+
+test('CDK: storageEncryptionKey option sets a customer-managed KmsKeyId on the cluster', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack');
+  const key = new cdk.aws_kms.Key(stack, 'DbKey');
+  materialize(stack, 'testdb', { databaseName: 'mydb', storageEncryptionKey: key });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    StorageEncrypted: true,
+    // The cluster references the CMK rather than the AWS-managed aws/rds key.
+    KmsKeyId: Match.anyValue(),
+  });
+});
+
 // --- Engine version ---
 
 test('CDK: default engine version is 16.13', () => {
