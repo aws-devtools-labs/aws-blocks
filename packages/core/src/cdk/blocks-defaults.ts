@@ -97,6 +97,12 @@ export interface BlocksDefaults {
 	 * deploy or, on teardown, leave the survivor's access logging broken.
 	 * Enabling it is therefore safe for **one Blocks stack per region** — see
 	 * `ensureApiGatewayAccount` for the full multi-stack teardown caveat.
+	 *
+	 * Because a durable production deployment then has no request-level audit
+	 * trail, a **synth-time warning** is emitted under a production posture (see
+	 * `BlocksPresets.production`) while this is off, so the tradeoff is visible at
+	 * `cdk synth`. It is a warning only — synth does not fail — and clears once
+	 * you opt in with the override above.
 	 */
 	accessLogging: boolean;
 

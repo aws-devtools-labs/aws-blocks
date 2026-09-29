@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
@@ -471,5 +471,48 @@ describe('VPC placement', () => {
 				'handler must not have VpcConfig when no VPC is configured',
 			);
 		}
+	});
+});
+
+describe('production access-logging audit-gap synth warning', () => {
+	const AUDIT_WARNING = Match.stringLikeRegexp('API Gateway access logging is disabled');
+
+	test('production posture with accessLogging off warns at synth (no request-level audit trail)', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditWarnProdStack');
+
+		// BlocksPresets.production has accessLogging: false (opt-in), so the audit
+		// gap warning must fire.
+		await makeBackend(parent, 'Blocks', sideEffectBackendPath);
+
+		Annotations.fromStack(parent).hasWarning('*', AUDIT_WARNING);
+	});
+
+	test('production posture with accessLogging overridden to true does NOT warn', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditNoWarnOptInStack');
+
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: { ...BlocksPresets.production, accessLogging: true },
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		Annotations.fromStack(parent).hasNoWarning('*', AUDIT_WARNING);
+	});
+
+	test('sandbox posture does NOT warn (disposable stack, not a production audit gap)', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditNoWarnSandboxStack');
+
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.sandbox,
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		Annotations.fromStack(parent).hasNoWarning('*', AUDIT_WARNING);
 	});
 });
