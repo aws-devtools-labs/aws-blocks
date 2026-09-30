@@ -12,7 +12,7 @@ data class OidcClientConfig(
     val signInBasePath: String,
     val authorizeParamsBasePath: String,
     val callbackPath: String,
-    @Transient val redirectUrl: String = ""
+    @Transient val relayTo: String = ""
 )
 
 @Serializable

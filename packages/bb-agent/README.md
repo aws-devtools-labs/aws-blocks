@@ -760,6 +760,12 @@ await chat.sendMessage('Hello!');
 
 **Note:** `createChat` is a factory, not a React hook — call it **once** (outside a component or in a ref). Message history only surfaces `user`, `assistant`, and `approval` messages; use `getConversation()` for the full history.
 
+### Reconnect resilience — no app code required
+
+`createChat` transparently survives a mid-turn Realtime WebSocket disconnect/reconnect. Long agent turns can outlive API Gateway's WebSocket limits (2h max connection, 10-min idle), so the socket can drop and re-establish mid-stream. When it does, `createChat` re-syncs authoritative state from the database on reconnect: it recovers a final assistant message whose `done` chunk was missed during the gap, and recovers a missed interrupt. While the turn is still running it holds `loading` (the spinner stays up), it surfaces `onError` at most once per turn, and a bounded failsafe guarantees `loading` can't hang indefinitely even if no channel comes back.
+
+You get all of this with **no app code** when you use `realtimeTransport` — it forwards the reconnect callbacks to the channel for you, so the standard wiring above is already reconnect-safe as copy-pasted. See [DESIGN.md](./DESIGN.md#reconnect-recovery-createchat--usechat) for the internals (DB re-sync guards, the `RECONNECT_FAILSAFE_MS` backstop, and the send-path failsafe).
+
 ### React: hold the instance once, drive `useState` from the callbacks
 
 `createChat` is a factory, so it must **not** run on every render — recreating it drops the transport subscription and conversation state each time. Hold the single instance (and the transport it wraps) in a `useRef`, created lazily so it survives re-renders, and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. This example keeps the `api` wiring minimal; thread a `userId` through `createConversation` / the transport's `sendMessage` the same way when your API needs it (or resolve the user server-side).
@@ -868,7 +874,7 @@ Key points:
 
 ## Client Hook — `useChat` (deprecated)
 
-> **Deprecated — prefer [`createChat`](#client-api--createchat-recommended).** `useChat` couples call sites to the Realtime channel mechanism (you hand-write a `subscribe` callback and an `api` adapter). `createChat` replaces the `subscribe` callback with a single `transport` and fuses subscribe + run. `useChat` remains for backward compatibility and is unchanged.
+> **Deprecated — prefer [`createChat`](#client-api--createchat-recommended).** `useChat` couples call sites to the Realtime channel mechanism (you hand-write a `subscribe` callback and an `api` adapter). `createChat` replaces the `subscribe` callback with a single `transport` and fuses subscribe + run. `useChat` remains for backward compatibility and is unchanged. The reconnect-recovery contract below applies to both surfaces — with `createChat`, `realtimeTransport` forwards these reconnect callbacks automatically, so you don't hand-write the `subscribe` adapter.
 
 Import from `@aws-blocks/bb-agent/client`. Manages conversation state, streaming subscriptions, and interrupt handling. Handles the subscribe-before-send ordering automatically.
 
@@ -882,9 +888,12 @@ const chat = useChat({
     getConversation: (id) => api.getConversation(id),
     resume: (chId, responses, convId) => api.resume(chId, responses, convId),
   },
-  subscribe: async (channelId, handler) => {
+  // Forward the subscribe argument (`sub`) VERBATIM to the channel — it is an
+  // options object carrying onMessage/onReconnect/onDisconnect. Passing only a
+  // bare handler would drop the reconnect callbacks the transport needs.
+  subscribe: async (channelId, sub) => {
     const channel = await api.getChannel(channelId);
-    return channel.subscribe(handler);
+    return channel.subscribe(sub);
   },
   onMessagesChange: (msgs) => renderMessages(msgs),
   onLoadingChange: (loading) => updateSpinner(loading),
@@ -947,9 +956,12 @@ const chat = useChat({
     createConversation: () => api.createConversation(userId),
     getConversation: (id) => api.getConversation(id),
   },
-  subscribe: async (channelId, handler) => {
+  // Forward the subscribe argument (`sub`) VERBATIM to the channel — it is an
+  // options object carrying onMessage/onReconnect/onDisconnect. Passing only a
+  // bare handler would drop the reconnect callbacks the transport needs.
+  subscribe: async (channelId, sub) => {
     const channel = await api.getChannel(channelId);
-    return channel.subscribe(handler);
+    return channel.subscribe(sub);
   },
   onMessagesChange: (msgs) => renderMessages(msgs),
   onLoadingChange: (loading) => updateSpinner(loading),
@@ -993,9 +1005,12 @@ export function Chat() {
         createConversation: () => api.createConversation(),
         getConversation: (id) => api.getConversation(id),
       },
-      subscribe: async (channelId, handler) => {
+      subscribe: async (channelId, sub) => {
         const channel = await api.getChannel(channelId);
-        return channel.subscribe(handler);
+        // `sub` is a ChatSubscribeOptions object (onMessage/onReconnect/onDisconnect).
+        // Forward it VERBATIM — channel.subscribe branches on `typeof arg === 'function'`
+        // first, so wrapping it in a callable-with-props would silently drop reconnect handling.
+        return channel.subscribe(sub);
       },
       // Bridge the mutable instance into React state — these fire on every change.
       onMessagesChange: setMessages,

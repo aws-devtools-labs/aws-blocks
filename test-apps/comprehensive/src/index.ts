@@ -319,9 +319,18 @@ function createChatForConvo(conversationId: string) {
 	activeConvoId = conversationId;
 	activeChat = createChat({
 		transport: realtimeTransport({
-			subscribe: async (channelId, handler) => {
+			subscribe: async (channelId, handlerOrOptions) => {
 				const { channel } = await api.agentGetChannel(channelId);
-				return channel.subscribe(handler);
+				// channel.subscribe is overloaded (bare handler | options object). Branch on
+				// the shape so each arm narrows to one overload and the options form
+				// (onReconnect/onDisconnect) reaches the channel intact.
+				// NOTE: both arms pass the SAME value (`handlerOrOptions`) — the branch is NOT
+				// a transform, it exists ONLY to select a distinct overload. The union arg
+				// matches NEITHER overload, so a single direct `channel.subscribe(handlerOrOptions)`
+				// does not type-check; narrowing via `typeof` first is required.
+				return typeof handlerOrOptions === 'function'
+					? channel.subscribe(handlerOrOptions)
+					: channel.subscribe(handlerOrOptions);
 			},
 			sendMessage: async (channelId, message, convId) => {
 				await api.agentStream(message, convId ?? undefined, channelId);
