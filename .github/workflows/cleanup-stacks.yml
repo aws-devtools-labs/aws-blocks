@@ -33,6 +33,12 @@ jobs:
       - name: Find and delete stale e2e stacks
         run: |
           CUTOFF=$(date -d '2 hours ago' +%s)
+          # Only run the destructive --retain-resources retry against stacks that
+          # have been proven stuck, not transiently throttled: a DELETE_FAILED that
+          # has persisted past this window is not going to clear on a plain retry.
+          # (A stack throttled mid-delete this run recovers on the next scheduled
+          # run without ever orphaning a resource.)
+          STUCK_CUTOFF=$(date -d '6 hours ago' +%s)
           # Wall-clock budget for the inline empty+trigger loop. Emptying large
           # versioned buckets is synchronous, so cap total work well under the
           # job's 60-min timeout and defer the rest to the next run — rather than
@@ -40,6 +46,7 @@ jobs:
           DEADLINE=$((SECONDS + 2400)) # 40 minutes
           TRIGGERED=0
           TRIGGER_FAILED=0
+          RETAINED=0
           SKIPPED_NOT_E2E=0
           SKIPPED_TOO_NEW=0
 
@@ -51,45 +58,108 @@ jobs:
           # bucket then blocks delete-stack, the stack sticks in DELETE_FAILED, and
           # its IAM roles leak — worsening the very quota that caused the failure.
           # Emptying out-of-band lets the subsequent delete-stack succeed.
+          #
+          # Walk nested child stacks too: on Amplify sandboxes and OpenNext SSR
+          # stacks the blocking bucket lives in a nested `-blocksCD…`/`-data…`
+          # child, so emptying only the named stack's own bucket resources leaves
+          # the child bucket full and the parent delete re-fails. A NESTED child
+          # (its own StackName differs from the resource's PhysicalResourceId) is
+          # recursed into so its buckets are emptied in the same pass.
           empty_stack_buckets() {
-            local STACK="$1" B BUCKETS PAYLOAD
-            # Use list-stack-resources (paginated), NOT describe-stack-resources —
-            # the latter caps at 100 resources and on a large OpenNext SSR stack omits
-            # the very HostingStorageHostingBucket that blocks the delete, so it never
-            # gets emptied.
-            BUCKETS=$(aws cloudformation list-stack-resources --stack-name "$STACK" \
-              --query "StackResourceSummaries[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" \
-              --output text 2>/dev/null || echo "")
-            for B in $BUCKETS; do
-              [ -z "$B" ] && continue
-              # Delete in pages of 1000 (the delete-objects limit) until empty.
+            local STACK="$1" TYPE PID
+            # list-stack-resources is paginated (describe-stack-resources caps at
+            # 100 and can omit the very bucket that blocks the delete on a large
+            # SSR stack). Pull type + physical id for buckets AND nested stacks in
+            # one call so we can recurse without a second list.
+            while IFS=$'\t' read -r TYPE PID; do
+              [ -z "$PID" ] && continue
+              case "$TYPE" in
+                AWS::S3::Bucket)
+                  _empty_one_bucket "$PID"
+                  ;;
+                AWS::CloudFormation::Stack)
+                  # PhysicalResourceId of a nested stack is its ARN/name; recurse
+                  # only into a distinct child to avoid self-recursion.
+                  [ "$PID" != "$STACK" ] && empty_stack_buckets "$PID"
+                  ;;
+              esac
+            done < <(aws cloudformation list-stack-resources --stack-name "$STACK" \
+              --query "StackResourceSummaries[?ResourceType=='AWS::S3::Bucket' || ResourceType=='AWS::CloudFormation::Stack'].[ResourceType,PhysicalResourceId]" \
+              --output text 2>/dev/null)
+          }
+
+          # Empty a single bucket by physical id, in pages of 1000 (the
+          # delete-objects limit) until empty.
+          _empty_one_bucket() {
+            local B="$1" PAYLOAD RESP
+            [ -z "$B" ] && return 0
+            while :; do
               # The `|| echo ""` keeps the substitution total: under `set -eo pipefail`
               # a jq error on empty/null stdin (empty bucket) would otherwise abort the
               # whole step instead of falling through to the empty-guard below.
-              while :; do
-                PAYLOAD=$(aws s3api list-object-versions --bucket "$B" --max-items 1000 --output json 2>/dev/null \
-                  | jq -c '{Objects: ((.Versions // []) + (.DeleteMarkers // []) | map({Key, VersionId}))}' 2>/dev/null || echo "")
-                [ -z "$PAYLOAD" ] && break
-                [ "$(echo "$PAYLOAD" | jq '.Objects | length' 2>/dev/null || echo 0)" = "0" ] && break
-                # delete-objects exits 0 even when individual keys fail (legal hold,
-                # retention lock, or keys the role can't delete) and reports them in
-                # `.Errors`. We re-list from the start each pass, so an object that
-                # never disappears would loop forever until the job timeout — break on
-                # any reported Errors (no forward progress), not just a non-zero exit.
-                RESP=$(aws s3api delete-objects --bucket "$B" --delete "$PAYLOAD" --output json 2>/dev/null) || break
-                if echo "$RESP" | jq -e '(.Errors // []) | length > 0' >/dev/null 2>&1; then
-                  echo "⚠️  undeletable objects in $B (legal hold / retention / access denied); skipping"
-                  break
-                fi
-              done
+              PAYLOAD=$(aws s3api list-object-versions --bucket "$B" --max-items 1000 --output json 2>/dev/null \
+                | jq -c '{Objects: ((.Versions // []) + (.DeleteMarkers // []) | map({Key, VersionId}))}' 2>/dev/null || echo "")
+              [ -z "$PAYLOAD" ] && break
+              [ "$(echo "$PAYLOAD" | jq '.Objects | length' 2>/dev/null || echo 0)" = "0" ] && break
+              # delete-objects exits 0 even when individual keys fail (legal hold,
+              # retention lock, or keys the role can't delete) and reports them in
+              # `.Errors`. We re-list from the start each pass, so an object that
+              # never disappears would loop forever until the job timeout — break on
+              # any reported Errors (no forward progress), not just a non-zero exit.
+              RESP=$(aws s3api delete-objects --bucket "$B" --delete "$PAYLOAD" --output json 2>/dev/null) || break
+              if echo "$RESP" | jq -e '(.Errors // []) | length > 0' >/dev/null 2>&1; then
+                echo "⚠️  undeletable objects in $B (legal hold / retention / access denied); skipping"
+                break
+              fi
             done
+          }
+
+          # A plain delete-stack cannot clear a stack whose blocker can never
+          # respond: a CloudFormation CustomResource whose backing Lambda is already
+          # gone hangs to timeout forever, and an ApiGateway REST API being deleted
+          # under throttling re-fails every attempt. For a proven-stuck stack, re-run
+          # delete-stack retaining ONLY the exact logical ids CloudFormation itself
+          # reports as the delete blockers — never a blanket retain — so the stack
+          # (and everything else it holds) is finally reclaimed while the genuinely
+          # unremovable resource is left as an orphan for the targeted sweeps to mop
+          # up (the REST-API sweep step below reclaims a retained DefaultComputeAPI).
+          #
+          # Guardrail: we NEVER retain an S3 bucket or a nested CloudFormation::Stack.
+          # A bucket blocker means "not emptied yet" — the answer is to empty it and
+          # retry plainly, not to orphan a versioned bucket. A nested data/API stack
+          # is exactly the AppSync-bearing child we are trying to reclaim; retaining
+          # it would leak the very quota this job frees. If the only failed resources
+          # are of those two protected types, we skip the retain and let the plain
+          # retry (after emptying) handle it.
+          retry_delete_failed() {
+            local STACK="$1" FAILED_JSON RETAIN_IDS SAFE_IDS
+            # Logical ids CloudFormation flagged with a DELETE_FAILED resource status.
+            FAILED_JSON=$(aws cloudformation describe-stack-resources --stack-name "$STACK" \
+              --query "StackResources[?ResourceStatus=='DELETE_FAILED'].[LogicalResourceId,ResourceType]" \
+              --output json 2>/dev/null || echo "[]")
+            # Drop protected types (S3 buckets, nested stacks); keep the rest as
+            # retain candidates.
+            SAFE_IDS=$(echo "$FAILED_JSON" | jq -r \
+              '[.[] | select(.[1] != "AWS::S3::Bucket" and .[1] != "AWS::CloudFormation::Stack") | .[0]] | .[]' \
+              2>/dev/null || echo "")
+            RETAIN_IDS=$(echo "$SAFE_IDS" | tr '\n' ' ' | sed 's/ *$//')
+            if [ -z "$RETAIN_IDS" ]; then
+              echo "  ↩️  $STACK: no retainable failed resources (only buckets/nested stacks) — plain retry after empty"
+              return 1
+            fi
+            echo "  🩹 $STACK: retrying delete, retaining unremovable resources: $RETAIN_IDS"
+            # shellcheck disable=SC2086
+            if aws cloudformation delete-stack --stack-name "$STACK" --retain-resources $RETAIN_IDS; then
+              return 0
+            fi
+            return 1
           }
 
           # Get all e2e stacks in deletable states across all name patterns
           STACKS=""
-          for PREFIX in blocks-test- blocks-hosting- bb-test- bb-telemetry- bb-vpc-smoke-; do
+          for PREFIX in blocks-test- blocks-hosting- bb-test- bb-telemetry- bb-vpc-smoke- my-app-; do
             BATCH=$(aws cloudformation list-stacks \
-              --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE DELETE_FAILED UPDATE_ROLLBACK_COMPLETE REVIEW_IN_PROGRESS \
+              --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE DELETE_FAILED UPDATE_ROLLBACK_COMPLETE ROLLBACK_FAILED REVIEW_IN_PROGRESS \
               --query "StackSummaries[?starts_with(StackName, '${PREFIX}')].StackName" \
               --output text)
             STACKS="$STACKS $BATCH"
@@ -103,51 +173,75 @@ jobs:
               break
             fi
 
+            # Single describe-stacks call: purpose tag, status, creation time.
+            INFO=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+              --query "Stacks[0].[Tags[?Key=='blocks:purpose'].Value | [0], StackStatus, CreationTime]" \
+              --output text 2>/dev/null || echo "")
+            PURPOSE=$(echo "$INFO" | cut -f1)
+            STATUS=$(echo "$INFO" | cut -f2)
+            CREATION_TIME=$(echo "$INFO" | cut -f3)
+
             # Verify this is an e2e-test stack. The blocks:purpose tag is either
             # `e2e-*` (hosting/bb-test: e2e-hosting-ssr, e2e-native-bindings, …) or
             # `*-e2e` (telemetry-e2e, vpc-smoke-e2e) — accept both shapes.
-            PURPOSE=$(aws cloudformation describe-stacks --stack-name "$STACK" \
-              --query "Stacks[0].Tags[?Key=='blocks:purpose'].Value | [0]" --output text 2>/dev/null || echo "")
-
+            # `my-app-*` throwaway deploys carry no e2e purpose tag but ARE test
+            # artifacts in this shared account (they hold a REST API slot); accept
+            # them by name prefix so they are not stranded forever.
             case "$PURPOSE" in
               e2e-* | *-e2e) ;;
               *)
-                echo "⏭️  Skipping $STACK (blocks:purpose='$PURPOSE' is not an e2e marker)"
-                SKIPPED_NOT_E2E=$((SKIPPED_NOT_E2E + 1))
-                continue
+                case "$STACK" in
+                  my-app-*) ;;
+                  *)
+                    echo "⏭️  Skipping $STACK (blocks:purpose='$PURPOSE' is not an e2e marker)"
+                    SKIPPED_NOT_E2E=$((SKIPPED_NOT_E2E + 1))
+                    continue
+                    ;;
+                esac
                 ;;
             esac
 
-            # Use CloudFormation's CreationTime for precise age check (ISO 8601)
-            CREATION_TIME=$(aws cloudformation describe-stacks --stack-name "$STACK" \
-              --query "Stacks[0].CreationTime" --output text 2>/dev/null || echo "")
-
             if [ -z "$CREATION_TIME" ] || [ "$CREATION_TIME" = "None" ]; then
               echo "⚠️  $STACK has no creation time, deleting as orphan"
+              CREATED_TS=0
             else
               CREATED_TS=$(date -d "$CREATION_TIME" +%s 2>/dev/null || echo "0")
-              if [ "$CREATED_TS" -gt "$CUTOFF" ]; then
+              # DELETE_FAILED stacks are always stale (already torn down once);
+              # delete regardless of age. Everything else respects the 2h guard.
+              if [ "$STATUS" != "DELETE_FAILED" ] && [ "$CREATED_TS" -gt "$CUTOFF" ]; then
                 echo "⏭️  Skipping $STACK (created $CREATION_TIME, less than 2 hours old)"
                 SKIPPED_TOO_NEW=$((SKIPPED_TOO_NEW + 1))
                 continue
               fi
             fi
 
-            # Empty the versioned buckets (see empty_stack_buckets above for why),
-            # then trigger the delete WITHOUT waiting. Fire-and-forget lets
-            # CloudFormation delete asynchronously — CloudFront-backed hosting stacks
-            # take 15-20 min each, and waiting serially is what blew past the 60-min
-            # timeout; anything that doesn't finish is retried on the next run.
-            # Count only deletes we actually triggered, so the summary is a trigger
-            # count, not an attempt count.
+            # Empty the versioned buckets (incl. nested children — see
+            # empty_stack_buckets), then trigger the delete WITHOUT waiting.
+            # Fire-and-forget lets CloudFormation delete asynchronously —
+            # CloudFront-backed hosting stacks take 15-20 min each, and waiting
+            # serially is what blew past the 60-min timeout; anything that doesn't
+            # finish is retried on the next run.
             echo "🧹 Emptying buckets for $STACK"
             empty_stack_buckets "$STACK"
+
             if aws cloudformation delete-stack --stack-name "$STACK"; then
-              echo "🗑️  Delete triggered: $STACK (created $CREATION_TIME)"
+              echo "🗑️  Delete triggered: $STACK (status $STATUS, created $CREATION_TIME)"
               TRIGGERED=$((TRIGGERED + 1))
             else
               echo "⚠️  delete-stack call failed for $STACK (will retry next run)"
               TRIGGER_FAILED=$((TRIGGER_FAILED + 1))
+            fi
+
+            # Self-heal the proven-stuck backlog: a stack that is ALREADY
+            # DELETE_FAILED and has been for longer than STUCK_CUTOFF will not clear
+            # on the plain retry above if its blocker is a dead custom resource or a
+            # throttled REST API. Re-issue with a scoped --retain-resources so it can
+            # finally drain. Transiently-throttled stacks (younger than STUCK_CUTOFF)
+            # are left to recover on the plain path — no orphaning.
+            if [ "$STATUS" = "DELETE_FAILED" ] && [ "$CREATED_TS" -ne 0 ] && [ "$CREATED_TS" -lt "$STUCK_CUTOFF" ]; then
+              if retry_delete_failed "$STACK"; then
+                RETAINED=$((RETAINED + 1))
+              fi
             fi
           done
 
@@ -156,7 +250,7 @@ jobs:
           # silent backlog growth that exhausted the quota can't recur unnoticed,
           # without hard-failing this best-effort cleanup job.
           STILL_FAILED=0
-          for PREFIX in blocks-test- blocks-hosting- bb-test- bb-telemetry- bb-vpc-smoke-; do
+          for PREFIX in blocks-test- blocks-hosting- bb-test- bb-telemetry- bb-vpc-smoke- my-app-; do
             CNT=$(aws cloudformation list-stacks \
               --stack-status-filter DELETE_FAILED \
               --query "length(StackSummaries[?starts_with(StackName, '${PREFIX}')])" \
@@ -167,6 +261,7 @@ jobs:
           echo ""
           echo "## Stack Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete triggered: $TRIGGERED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Retain-resources retries (proven-stuck): $RETAINED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete-stack call failed: $TRIGGER_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (not e2e): $SKIPPED_NOT_E2E" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (< 2h old): $SKIPPED_TOO_NEW" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -188,12 +283,50 @@ jobs:
           TRIGGERED=0
           TRIGGER_FAILED=0
 
+          # Empty every S3 bucket in a stack and its nested children. Amplify
+          # sandboxes stick in DELETE_FAILED on a non-empty versioned bucket that
+          # lives in a nested `-blocksCD…`/`-data…` child (blocksBlocksConfigBucket,
+          # codegen/introspection buckets), so emptying only the root's own buckets
+          # never unblocks the delete. Recurse into distinct nested children.
+          empty_stack_buckets() {
+            local STACK="$1" TYPE PID
+            while IFS=$'\t' read -r TYPE PID; do
+              [ -z "$PID" ] && continue
+              case "$TYPE" in
+                AWS::S3::Bucket)
+                  _empty_one_bucket "$PID"
+                  ;;
+                AWS::CloudFormation::Stack)
+                  [ "$PID" != "$STACK" ] && empty_stack_buckets "$PID"
+                  ;;
+              esac
+            done < <(aws cloudformation list-stack-resources --stack-name "$STACK" \
+              --query "StackResourceSummaries[?ResourceType=='AWS::S3::Bucket' || ResourceType=='AWS::CloudFormation::Stack'].[ResourceType,PhysicalResourceId]" \
+              --output text 2>/dev/null)
+          }
+
+          _empty_one_bucket() {
+            local B="$1" PAYLOAD RESP
+            [ -z "$B" ] && return 0
+            while :; do
+              PAYLOAD=$(aws s3api list-object-versions --bucket "$B" --max-items 1000 --output json 2>/dev/null \
+                | jq -c '{Objects: ((.Versions // []) + (.DeleteMarkers // []) | map({Key, VersionId}))}' 2>/dev/null || echo "")
+              [ -z "$PAYLOAD" ] && break
+              [ "$(echo "$PAYLOAD" | jq '.Objects | length' 2>/dev/null || echo 0)" = "0" ] && break
+              RESP=$(aws s3api delete-objects --bucket "$B" --delete "$PAYLOAD" --output json 2>/dev/null) || break
+              if echo "$RESP" | jq -e '(.Errors // []) | length > 0' >/dev/null 2>&1; then
+                echo "⚠️  undeletable objects in $B (legal hold / retention / access denied); skipping"
+                break
+              fi
+            done
+          }
+
           # Root sandbox stacks only: end in "-sandbox-<hex>" (skip nested -blocksCD/-data/-auth/-amplifyData stacks).
           # The middle identifier segment is matched loosely ([a-z0-9]+) so a future change to
           # Amplify's sandbox naming doesn't silently exclude stacks; the deployment-type tag
           # check below is the real safety gate before any delete.
           STACKS=$(aws cloudformation list-stacks \
-            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE DELETE_FAILED UPDATE_ROLLBACK_COMPLETE REVIEW_IN_PROGRESS \
+            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE DELETE_FAILED UPDATE_ROLLBACK_COMPLETE ROLLBACK_FAILED REVIEW_IN_PROGRESS \
             --query "StackSummaries[?starts_with(StackName, 'amplify-amplifygen2-') || starts_with(StackName, 'amplify-amplifyinteroptest-')].StackName" \
             --output text | tr '\t' '\n' | grep -E '^amplify-(amplifygen2|amplifyinteroptest)-[a-z0-9]+-sandbox-[0-9a-f]+$' || true)
 
@@ -223,15 +356,23 @@ jobs:
               fi
             fi
 
-            # Fire-and-forget (no wait) so the job can't time out draining a backlog;
-            # CloudFormation deletes asynchronously and anything that doesn't finish is
-            # retried on the next scheduled run. We intentionally do NOT retry with
-            # --retain-resources: at the root level the only stuck child is the nested
-            # data stack, which *contains* the AppSync GraphQLApi we are trying to
-            # reclaim — retaining it would orphan that API (and the managed DynamoDB
-            # table), leaking the very quota this job exists to free. A persistent
-            # failure here is usually the Amplify managed DynamoDB table (its
-            # table-manager Lambda role lacks dynamodb:DescribeTable) — a real upstream bug.
+            # Empty the nested versioned buckets that block the delete BEFORE
+            # triggering, then fire-and-forget (no wait) so the job can't time out
+            # draining a backlog; CloudFormation deletes asynchronously and anything
+            # that doesn't finish is retried on the next scheduled run.
+            #
+            # We intentionally do NOT retry with --retain-resources here: at the
+            # root level the only stuck child is the nested data stack, which
+            # *contains* the AppSync GraphQLApi we are trying to reclaim — retaining
+            # it would orphan that API (and the managed DynamoDB table), leaking the
+            # very quota this job exists to free. The correct unblock is emptying the
+            # nested buckets above so the plain delete succeeds; a persistent failure
+            # after that is usually the Amplify managed DynamoDB table (its
+            # table-manager Lambda role lacks dynamodb:DescribeTable) — a real
+            # upstream bug surfaced by the warning below, not orphaned away.
+            echo "🧹 Emptying nested buckets for $STACK"
+            empty_stack_buckets "$STACK"
+
             if aws cloudformation delete-stack --stack-name "$STACK"; then
               echo "🗑️  Delete triggered: $STACK (status $STATUS, created $CREATION_TIME)"
               TRIGGERED=$((TRIGGERED + 1))
@@ -258,6 +399,101 @@ jobs:
           echo "_Deletes run asynchronously; stacks that don't finish (commonly the Amplify managed DynamoDB table) are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$STILL_FAILED" -gt 0 ]; then
             echo "::warning::$STILL_FAILED Amplify sandbox stack(s) still in DELETE_FAILED after cleanup; AppSync API quota may be at risk"
+          fi
+
+      - name: Cleanup orphaned API Gateway REST APIs
+        if: always()
+        run: |
+          # The EDGE REST-API count is the hard quota (120 per region) that reds the
+          # deploy-dependent E2E lanes when it saturates. A REST API becomes a
+          # stack-less orphan two ways: a stack's delete retained it (the
+          # DefaultComputeAPI retained by the retry_delete_failed step above, because
+          # it was un-deletable under throttling), or an old stack was force-removed
+          # leaving the API behind. Neither is reclaimed by stack deletion, so sweep
+          # them by name here: our test APIs are named for the app/stack that made
+          # them and are owned by NO live CloudFormation stack.
+          echo "🔍 Checking for orphaned API Gateway REST APIs..."
+
+          # Names of REST APIs that ARE still owned by a live stack — never delete these.
+          OWNED=$(aws cloudformation list-stacks \
+            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS \
+            --query "StackSummaries[].StackName" --output text 2>/dev/null | tr '\t' '\n' | sort -u || echo "")
+
+          # All custom REST APIs with id, name and creation epoch.
+          APIS=$(aws apigateway get-rest-apis \
+            --query "items[].[id,name,createdDate]" --output text 2>/dev/null || echo "")
+
+          # Only sweep APIs that (a) match a test-artifact name shape, (b) are old
+          # enough to be clearly abandoned (>6h), and (c) are not owned by any live
+          # stack. The name gate is deliberately conservative — a real, in-use API is
+          # never in scope.
+          STUCK_CUTOFF=$(date -d '6 hours ago' +%s)
+          DELETED=0
+          SKIPPED_YOUNG=0
+          SKIPPED_UNMATCHED=0
+          SKIPPED_OWNED=0
+
+          if [ -z "$APIS" ]; then
+            echo "✅ No custom REST APIs found"
+            exit 0
+          fi
+
+          while IFS=$'\t' read -r ID NAME CREATED; do
+            [ -z "$ID" ] && continue
+
+            # (a) test-artifact name shape only. These are the prefixes CI apps use.
+            case "$NAME" in
+              blocks-test-* | blocks-hosting-* | bb-test-* | bb-telemetry-* | bb-vpc-smoke-* | my-app-* | *-e2e-* | DefaultCompute* | *DefaultComputeAPI*) ;;
+              *)
+                SKIPPED_UNMATCHED=$((SKIPPED_UNMATCHED + 1))
+                continue
+                ;;
+            esac
+
+            # (b) age gate. createdDate is epoch seconds from the API.
+            if [ -n "$CREATED" ] && [ "$CREATED" != "None" ]; then
+              # API createdDate may be a float epoch; strip any fractional part.
+              CREATED_TS=${CREATED%%.*}
+              if [ "$CREATED_TS" -gt "$STUCK_CUTOFF" ] 2>/dev/null; then
+                SKIPPED_YOUNG=$((SKIPPED_YOUNG + 1))
+                continue
+              fi
+            fi
+
+            # (c) not owned by any live stack. Match the API name against live stack
+            # names (test APIs embed their stack/app id in the name).
+            if echo "$OWNED" | grep -qxF "$NAME" 2>/dev/null; then
+              echo "  ⏭️ Skipping $NAME ($ID) — owned by a live stack"
+              SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
+              continue
+            fi
+
+            if aws apigateway delete-rest-api --rest-api-id "$ID" 2>/dev/null; then
+              echo "🗑️ Deleted orphaned REST API: $NAME ($ID)"
+              DELETED=$((DELETED + 1))
+            else
+              # delete-rest-api is throttled aggressively (429 TooManyRequests); a
+              # failed delete is retried on the next scheduled run.
+              echo "  ⚠️ delete-rest-api failed for $NAME ($ID) (throttled?; will retry next run)"
+            fi
+            # Space calls out — the REST API delete quota is ~1 request/30s.
+            sleep 31
+          done <<< "$APIS"
+
+          # Report current headroom against the 120-EDGE cap so quota pressure is visible.
+          TOTAL=$(aws apigateway get-rest-apis --query "length(items)" --output text 2>/dev/null || echo "?")
+          EDGE=$(aws apigateway get-rest-apis \
+            --query "length(items[?contains(endpointConfiguration.types, 'EDGE')])" --output text 2>/dev/null || echo "?")
+
+          echo ""
+          echo "## API Gateway REST API Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Orphaned REST APIs deleted: $DELETED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (< 6h old): $SKIPPED_YOUNG" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (owned by live stack): $SKIPPED_OWNED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (non-test name): $SKIPPED_UNMATCHED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- REST APIs remaining: $TOTAL total, $EDGE EDGE (cap 120)" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$EDGE" != "?" ] && [ "$EDGE" -ge 110 ] 2>/dev/null; then
+            echo "::warning::$EDGE/120 EDGE REST APIs in use — approaching the hard quota"
           fi
 
       - name: Cleanup orphaned CloudFront Response Headers Policies
