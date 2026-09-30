@@ -42,11 +42,14 @@ export function normalizeClassName(raw: string): string {
 }
 
 /** Validate an npm scope (the part after `@`, before `/`). */
-export function validateScope(scope: string): { ok: true } | { ok: false; reason: string } {
+export function validateScope(
+	scope: string,
+	label = '--scope',
+): { ok: true } | { ok: false; reason: string } {
 	if (!/^[a-z0-9][a-z0-9._-]*$/.test(scope)) {
 		return {
 			ok: false,
-			reason: `--scope "${scope}" is not a valid npm scope (lowercase letters, digits, and ._- ; must not start with ._-)`,
+			reason: `${label} "${scope}" is not a valid npm scope (lowercase letters, digits, and ._- ; must not start with ._-)`,
 		};
 	}
 	return { ok: true };
@@ -274,10 +277,14 @@ function resolvePublishedRange(pkgName: string): string {
 	// Escape hatch for hermetic tests (avoid a network call to the registry).
 	if (process.env.CREATE_BLOCK_SKIP_REGISTRY) return 'latest';
 	try {
-		// execFileSync (argv array, no shell) — pkgName never touches a shell string.
+		// argv array (no interpolation) + shell only on Windows, where `npm` is an
+		// `npm.cmd` shim that execFileSync can't spawn without a shell. Safe because
+		// pkgName here is a validated npm package name (an `@aws-blocks/*` constant
+		// form), so it carries no shell-significant characters.
 		const v = execFileSync('npm', ['view', pkgName, 'version'], {
 			encoding: 'utf-8',
 			stdio: ['ignore', 'pipe', 'ignore'],
+			shell: process.platform === 'win32',
 		}).trim();
 		if (/^\d+\.\d+\.\d+/.test(v)) return `^${v}`;
 	} catch {
@@ -615,9 +622,20 @@ test('${className}: scaffolded placeholder — replace with real e2e coverage', 
 
 function verify(root: string, pkgName: string): boolean {
 	try {
-		// execFileSync (argv array, no shell) — pkgName never touches a shell string.
-		execFileSync('npm', ['run', 'build', '-w', pkgName], { cwd: root, stdio: 'inherit' });
-		execFileSync('npm', ['test', '-w', pkgName], { cwd: root, stdio: 'inherit' });
+		// argv array (no interpolation) + shell only on Windows, where `npm` is an
+		// `npm.cmd` shim that execFileSync can't spawn without a shell. Safe because
+		// the resolved scope is allowlisted upstream (validateScope), so pkgName
+		// carries no shell-significant characters.
+		execFileSync('npm', ['run', 'build', '-w', pkgName], {
+			cwd: root,
+			stdio: 'inherit',
+			shell: process.platform === 'win32',
+		});
+		execFileSync('npm', ['test', '-w', pkgName], {
+			cwd: root,
+			stdio: 'inherit',
+			shell: process.platform === 'win32',
+		});
 		return true;
 	} catch {
 		return false;
@@ -757,7 +775,7 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 	}
 
 	// Validate a user-supplied --scope up front (it flows into package.json).
-	if (opts.scope) {
+	if (opts.scope !== undefined) {
 		const scopeCheck = validateScope(opts.scope);
 		if (!scopeCheck.ok) {
 			console.error(`Error: ${scopeCheck.reason}`);
@@ -779,14 +797,17 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 	// workspace build/test commands, so it must pass the allowlist regardless of
 	// origin. A `--scope` flag is already checked up front; this also guards a
 	// scope derived from the customer workspace package.json `name`, which is
-	// otherwise unvalidated.
-	const scopeCheck = validateScope(scope);
+	// otherwise unvalidated. Attribute the error to its origin (via the shared
+	// label) so the rule text lives in one place: a flag value (including
+	// `--scope ""`) blames `--scope`; a derived value blames the workspace
+	// package.json and points at `--scope` as the override.
+	const scopeFromFlag = opts.scope !== undefined;
+	const scopeCheck = scopeFromFlag
+		? validateScope(scope)
+		: validateScope(scope, 'derived npm scope (from the workspace package.json "name")');
 	if (!scopeCheck.ok) {
-		console.error(
-			opts.scope
-				? `Error: ${scopeCheck.reason}`
-				: `Error: derived npm scope "${scope}" (from the workspace package.json "name") is not a valid npm scope (lowercase letters, digits, and ._- ; must not start with ._-)`,
-		);
+		const hint = scopeFromFlag ? '' : ' — pass --scope <name> to override';
+		console.error(`Error: ${scopeCheck.reason}${hint}`);
 		return 1;
 	}
 	const names = deriveNames(className, mode, scope);

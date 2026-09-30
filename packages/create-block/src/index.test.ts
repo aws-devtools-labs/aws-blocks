@@ -176,13 +176,16 @@ describe('workspaces helpers', () => {
 		assert.strictEqual(scopeFromPkgName('plain-app'), null);
 		assert.strictEqual(scopeFromPkgName(undefined), null);
 	});
-	test('scopeFromPkgName extracts raw scopes verbatim (only `/` is excluded)', () => {
-		// Extraction is deliberately permissive — the `/^@([^/]+)\//` regex only
-		// stops at `/`, so shell metacharacters survive into the scope. Downstream
-		// use MUST run the result through validateScope before it flows anywhere.
-		assert.strictEqual(scopeFromPkgName('@acme;rm -rf/app'), 'acme;rm -rf');
-		assert.strictEqual(scopeFromPkgName('@a`b`/app'), 'a`b`');
-		assert.strictEqual(scopeFromPkgName('@a|b/app'), 'a|b');
+	test('a malicious scope extracted from a package name is rejected by validateScope', () => {
+		// The security invariant is not that scopeFromPkgName sanitizes its input
+		// (it deliberately doesn't — the `/^@([^/]+)\//` regex only stops at `/`),
+		// but that every extracted scope MUST pass validateScope before it flows
+		// into a command. Assert that invariant rather than pinning the permissive
+		// extraction, so a future hardening of scopeFromPkgName can't silently
+		// regress security.
+		for (const name of ['@acme;rm -rf/app', '@a`b`/app', '@a|b/app', '@a$(id)/app', '@a b/app']) {
+			assert.strictEqual(validateScope(scopeFromPkgName(name) ?? '').ok, false, `expected "${name}" to be rejected`);
+		}
 	});
 	test('workspacesCover matches exact entries and parent globs', () => {
 		assert.strictEqual(workspacesCover(['packages/*'], 'packages/bb-foo'), true);
@@ -292,6 +295,42 @@ describe('run() integration — customer mode', () => {
 			assert.strictEqual(code, 0);
 			assert.ok(!existsSync(join(dir, 'packages')));
 			assert.deepEqual(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')).workspaces, ['apps/*']);
+		}),
+	);
+
+	test(
+		'aborts (no packages/) when the scope derived from the root package.json name is invalid',
+		withWorkspace(async (dir) => {
+			writeFileSync(
+				join(dir, 'package.json'),
+				JSON.stringify({ name: '@acme;touch x/app', workspaces: ['packages/*'] }),
+			);
+			const code = await run(['Widget', '--yes', '--skip-install', '--skip-verify'], dir);
+			assert.strictEqual(code, 1);
+			assert.ok(!existsSync(join(dir, 'packages')));
+		}),
+	);
+
+	test(
+		'--scope overrides an invalid derived scope',
+		withWorkspace(async (dir) => {
+			writeFileSync(
+				join(dir, 'package.json'),
+				JSON.stringify({ name: '@acme;touch x/app', workspaces: ['packages/*'] }),
+			);
+			const code = await run(['Widget', '--scope', 'acme', '--yes', '--skip-install', '--skip-verify'], dir);
+			assert.strictEqual(code, 0);
+			assert.ok(existsSync(join(dir, 'packages', 'bb-widget', 'package.json')));
+		}),
+	);
+
+	test(
+		'--scope "" is rejected up front and writes nothing',
+		withWorkspace(async (dir) => {
+			writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@acme/app', workspaces: ['packages/*'] }));
+			const code = await run(['Widget', '--scope', '', '--yes', '--skip-install', '--skip-verify'], dir);
+			assert.strictEqual(code, 1);
+			assert.ok(!existsSync(join(dir, 'packages')));
 		}),
 	);
 });
