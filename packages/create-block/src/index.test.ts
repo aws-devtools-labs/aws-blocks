@@ -57,6 +57,13 @@ describe('scope validation', () => {
 		assert.strictEqual(validateScope('has space').ok, false);
 		assert.strictEqual(validateScope('has"quote').ok, false);
 	});
+	test('rejects scopes containing shell metacharacters', () => {
+		// The resolved scope flows into `verify`'s workspace build/test commands, so
+		// the allowlist must exclude any shell-significant character.
+		for (const bad of ['a;b', 'a|b', 'a&b', 'a`b`', 'a b', 'a$b', 'a(b', 'a)b']) {
+			assert.strictEqual(validateScope(bad).ok, false, `expected "${bad}" to be rejected`);
+		}
+	});
 });
 
 describe('kebab derivation', () => {
@@ -168,6 +175,14 @@ describe('workspaces helpers', () => {
 		assert.strictEqual(scopeFromPkgName('@acme/app'), 'acme');
 		assert.strictEqual(scopeFromPkgName('plain-app'), null);
 		assert.strictEqual(scopeFromPkgName(undefined), null);
+	});
+	test('scopeFromPkgName extracts raw scopes verbatim (only `/` is excluded)', () => {
+		// Extraction is deliberately permissive — the `/^@([^/]+)\//` regex only
+		// stops at `/`, so shell metacharacters survive into the scope. Downstream
+		// use MUST run the result through validateScope before it flows anywhere.
+		assert.strictEqual(scopeFromPkgName('@acme;rm -rf/app'), 'acme;rm -rf');
+		assert.strictEqual(scopeFromPkgName('@a`b`/app'), 'a`b`');
+		assert.strictEqual(scopeFromPkgName('@a|b/app'), 'a|b');
 	});
 	test('workspacesCover matches exact entries and parent globs', () => {
 		assert.strictEqual(workspacesCover(['packages/*'], 'packages/bb-foo'), true);

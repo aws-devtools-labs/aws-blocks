@@ -615,8 +615,9 @@ test('${className}: scaffolded placeholder — replace with real e2e coverage', 
 
 function verify(root: string, pkgName: string): boolean {
 	try {
-		execSync(`npm run build -w ${pkgName}`, { cwd: root, stdio: 'inherit' });
-		execSync(`npm test -w ${pkgName}`, { cwd: root, stdio: 'inherit' });
+		// execFileSync (argv array, no shell) — pkgName never touches a shell string.
+		execFileSync('npm', ['run', 'build', '-w', pkgName], { cwd: root, stdio: 'inherit' });
+		execFileSync('npm', ['test', '-w', pkgName], { cwd: root, stdio: 'inherit' });
 		return true;
 	} catch {
 		return false;
@@ -774,6 +775,20 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		mode === 'customer'
 			? (opts.scope ?? scopeFromPkgName(customer?.pkg?.name) ?? 'app')
 			: (opts.scope ?? 'your-org');
+	// The resolved scope flows into the package name and (via `verify`) into the
+	// workspace build/test commands, so it must pass the allowlist regardless of
+	// origin. A `--scope` flag is already checked up front; this also guards a
+	// scope derived from the customer workspace package.json `name`, which is
+	// otherwise unvalidated.
+	const scopeCheck = validateScope(scope);
+	if (!scopeCheck.ok) {
+		console.error(
+			opts.scope
+				? `Error: ${scopeCheck.reason}`
+				: `Error: derived npm scope "${scope}" (from the workspace package.json "name") is not a valid npm scope (lowercase letters, digits, and ._- ; must not start with ._-)`,
+		);
+		return 1;
+	}
 	const names = deriveNames(className, mode, scope);
 
 	// Resolve target directory.
