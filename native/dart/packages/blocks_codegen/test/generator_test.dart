@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
+import 'package:blocks_codegen/src/parser.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -209,4 +212,389 @@ void main() {
       expect(output, contains(r"'coords': [coords.$1, coords.$2]"));
     });
   });
+
+  group('unbound transferable fallback (Iteration 0)', () {
+    // Direct result with an unknown tag + one $ref type-arg, so a payload
+    // model is still generated.
+    final spec = jsonEncode({
+      'openrpc': '1.3.2',
+      'info': {'title': 'test', 'version': '1.0.0'},
+      'methods': [
+        {
+          'name': 'api.connectDevice',
+          'params': [
+            {
+              'name': 'deviceId',
+              'required': true,
+              'schema': {'type': 'string'},
+            },
+          ],
+          'result': {
+            'name': 'ConnectDeviceResult',
+            'schema': {
+              'x-blocks-transferable': 'example-iot/device-link',
+              'x-blocks-type-args': [
+                {r'$ref': '#/components/schemas/Telemetry'},
+              ],
+            },
+          },
+        },
+      ],
+      'components': {
+        'schemas': {
+          'Telemetry': {
+            'type': 'object',
+            'properties': {
+              'temperature': {'type': 'number'},
+            },
+            'required': ['temperature'],
+          },
+        },
+      },
+    });
+
+    test('emits UnknownTransferable as the return type', () {
+      final output = _generate(spec);
+      expect(output, contains('Future<UnknownTransferable> connectDevice('));
+    });
+
+    test(
+      'emits UnknownTransferable.fromJson with the declared expectedTag',
+      () {
+        final output = _generate(spec);
+        expect(
+          output,
+          contains(
+            'UnknownTransferable.fromJson(result, '
+            "expectedTag: 'example-iot/device-link')",
+          ),
+        );
+      },
+    );
+
+    test('still emits the type-argument payload model', () {
+      expect(_generate(spec), contains('class Telemetry'));
+    });
+
+    test('emits the AWSBLOCKS-NATIVE-001 diagnostic naming the type arg', () {
+      final model = _build(spec);
+      expect(
+        model.warnings,
+        contains(
+          'AWSBLOCKS-NATIVE-001: api.connectDevice returns unbound transferable '
+          "'example-iot/device-link' on dart; generated UnknownTransferable "
+          'with type argument Telemetry.',
+        ),
+      );
+    });
+
+    test('diagnostic says "no generated type-argument models" for a '
+        'type-arg that produces no model', () {
+      // A primitive type-arg is a real type argument but yields no standalone
+      // model class, so the diagnostic reports the models, not the args.
+      final model = _build(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.connectDevice',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'ConnectDeviceResult',
+                'schema': {
+                  'x-blocks-transferable': 'example-iot/device-link',
+                  'x-blocks-type-args': [
+                    {'type': 'string'},
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(
+        model.warnings,
+        contains(
+          'AWSBLOCKS-NATIVE-001: api.connectDevice returns unbound transferable '
+          "'example-iot/device-link' on dart; generated UnknownTransferable "
+          'with no generated type-argument models.',
+        ),
+      );
+    });
+
+    test('diagnostic names the type-arg model after a collision rename', () {
+      // Two same-named methods in different namespaces with differently-shaped
+      // inline type-args both synthesize `GetResultMessage`; collision
+      // resolution renames one to `GetResultMessage2`. The diagnostic must name
+      // the post-rename model, so it is formatted after that pass.
+      final model = _build(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.get',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'GetResult',
+                'schema': {
+                  'x-blocks-transferable': 'example-iot/device-link',
+                  'x-blocks-type-args': [
+                    {
+                      'type': 'object',
+                      'properties': {
+                        'a': {'type': 'string'},
+                      },
+                      'required': ['a'],
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              'name': 'other.get',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'GetResult',
+                'schema': {
+                  'x-blocks-transferable': 'example-iot/device-link',
+                  'x-blocks-type-args': [
+                    {
+                      'type': 'object',
+                      'properties': {
+                        'b': {'type': 'integer'},
+                      },
+                      'required': ['b'],
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(
+        model.warnings,
+        contains(
+          'AWSBLOCKS-NATIVE-001: other.get returns unbound transferable '
+          "'example-iot/device-link' on dart; generated UnknownTransferable "
+          'with type argument GetResultMessage2.',
+        ),
+      );
+    });
+
+    test('a spec schema named UnknownTransferable does not shadow the runtime '
+        'fallback type', () {
+      // UnknownTransferable is a reserved runtime name, so a same-named spec
+      // schema must not be generated as a class that would collide with the
+      // fallback reference.
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.connectDevice',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'ConnectDeviceResult',
+                'schema': {'x-blocks-transferable': 'example-iot/device-link'},
+              },
+            },
+            {
+              'name': 'api.getThing',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {r'$ref': '#/components/schemas/UnknownTransferable'},
+              },
+            },
+          ],
+          'components': {
+            'schemas': {
+              'UnknownTransferable': {
+                'type': 'object',
+                'properties': {
+                  'x': {'type': 'string'},
+                },
+                'required': ['x'],
+              },
+            },
+          },
+        }),
+      );
+      expect(output, isNot(contains('class UnknownTransferable')));
+      expect(
+        output,
+        contains(
+          "UnknownTransferable.fromJson(result, "
+          "expectedTag: 'example-iot/device-link')",
+        ),
+      );
+    });
+  });
+
+  group('unbound transferable is direct-results-only (out-of-scope shapes)', () {
+    // Out of scope (doc): a nested/list/nullable transferable stays `dynamic`,
+    // not UnknownTransferable, with no diagnostic. Fails against an un-gated arm.
+    String resultSpec(Map<String, dynamic> resultSchema) => jsonEncode({
+      'openrpc': '1.3.2',
+      'info': {'title': 'test', 'version': '1.0.0'},
+      'methods': [
+        {
+          'name': 'api.get',
+          'params': <Map<String, dynamic>>[],
+          'result': {'name': 'R', 'schema': resultSchema},
+        },
+      ],
+    });
+
+    const unknownTransferable = {
+      'x-blocks-transferable': 'example-iot/device-link',
+    };
+
+    test('nested record field stays dynamic', () {
+      final model = _build(
+        resultSpec({
+          'type': 'object',
+          'properties': {'link': unknownTransferable},
+          'required': ['link'],
+        }),
+      );
+      final output = _generateModel(model);
+      expect(output, contains('final dynamic link;'));
+      expect(output, isNot(contains('UnknownTransferable')));
+      expect(model.warnings, isEmpty);
+    });
+
+    test('nullable direct result stays dynamic', () {
+      final model = _build(
+        resultSpec({
+          'oneOf': [
+            unknownTransferable,
+            {'type': 'null'},
+          ],
+        }),
+      );
+      final output = _generateModel(model);
+      expect(output, contains('Future<dynamic?> get'));
+      expect(output, isNot(contains('UnknownTransferable')));
+      expect(model.warnings, isEmpty);
+    });
+
+    test('list of transferables stays List<dynamic>', () {
+      final model = _build(
+        resultSpec({'type': 'array', 'items': unknownTransferable}),
+      );
+      final output = _generateModel(model);
+      expect(output, contains('Future<List<dynamic>> get'));
+      expect(output, contains('.cast<dynamic>()'));
+      expect(output, isNot(contains('UnknownTransferable')));
+      expect(model.warnings, isEmpty);
+    });
+  });
+
+  group('knownTransferableTags drift guards', () {
+    // tag → expected return type. Keys drift-guard the set; values let the loop
+    // assert the concrete type positively (a set tag with no switch arm fails).
+    const expectedTypes = {
+      'realtime/channel': 'RealtimeChannel<dynamic>',
+      'file-bucket/download': 'FileDownloadHandle',
+      'file-bucket/upload': 'FileUploadHandle',
+      'oidc/client': 'OidcClient',
+    };
+
+    test('set equals the exact known-tag map keys', () {
+      expect(knownTransferableTags, expectedTypes.keys.toSet());
+    });
+
+    expectedTypes.forEach((tag, expectedType) {
+      test("'$tag' maps to $expectedType with no diagnostic", () {
+        final model = _build(
+          jsonEncode({
+            'openrpc': '1.3.2',
+            'info': {'title': 'test', 'version': '1.0.0'},
+            'methods': [
+              {
+                'name': 'api.get',
+                'params': <Map<String, dynamic>>[],
+                'result': {
+                  'name': 'R',
+                  'schema': {'x-blocks-transferable': tag},
+                },
+              },
+            ],
+          }),
+        );
+        final output = _generateModel(model);
+        expect(output, contains('Future<$expectedType> get'));
+        expect(output, isNot(contains('UnknownTransferable')));
+        expect(
+          model.warnings.where((w) => w.contains('AWSBLOCKS-NATIVE-001')),
+          isEmpty,
+        );
+      });
+    });
+
+    // Locks the gate: a tag outside the set never maps to a concrete type,
+    // so a switch arm added without a set entry can't bind silently.
+    test('a tag outside the set never maps to a concrete type', () {
+      const tag = 'drift-probe/never-registered';
+      expect(knownTransferableTags, isNot(contains(tag)));
+
+      // Nested position: stays dynamic, not a concrete runtime type.
+      final nested = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.get',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'type': 'object',
+                  'properties': {
+                    'link': {'x-blocks-transferable': tag},
+                  },
+                  'required': ['link'],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(nested, contains('final dynamic link;'));
+
+      // Direct position: the only in-scope fallback — UnknownTransferable,
+      // never a concrete handle type.
+      final direct = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.get',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {'x-blocks-transferable': tag},
+              },
+            },
+          ],
+        }),
+      );
+      expect(direct, contains('Future<UnknownTransferable> get'));
+    });
+  });
 }
+
+CodegenModel _build(String spec) =>
+    CodegenModelBuilder().build(const OpenRpcParser().parse(spec));
+
+String _generateModel(CodegenModel model) =>
+    const DartCodeGenerator().generate(model);
+
+String _generate(String spec) => _generateModel(_build(spec));

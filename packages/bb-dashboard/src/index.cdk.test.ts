@@ -169,3 +169,16 @@ describe('Dashboard against a real compute (synth)', () => {
 	});
 
 });
+
+describe('Dashboard synth ids', () => {
+	test('logical id, construct path and dashboard name are stable', async () => {
+		const stack = await makeStack('DashboardIds');
+		const dash = new Dashboard(stack, 'dashboard', { routePath: false });
+		finalizeDashboards(stack);
+		const resources = Template.fromStack(stack).findResources('AWS::CloudWatch::Dashboard');
+		assert.deepStrictEqual(
+			{ path: dash.node.path, logicalIds: Object.keys(resources), names: Object.values(resources).map((r: any) => r.Properties.DashboardName) },
+			{ path: 'DashboardIds/dashboard', logicalIds: ['dashboardE8F903B5'], names: ['DashboardIds-dashboard'] },
+		);
+	});
+});

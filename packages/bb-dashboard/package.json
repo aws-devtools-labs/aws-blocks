@@ -37,6 +37,7 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../scripts/generate-version.mjs Dashboard",
     "build": "tsc --build",
     "test": "node --test dist/**/*.test.js"
   },
