@@ -1,11 +1,13 @@
 package com.aws.blocks.kotlin
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import java.io.File
 import java.nio.file.Files
+import java.util.Base64
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -136,6 +138,30 @@ class EncryptedFileKeyValueStoreTest {
         }
 
         failures.shouldBeEmpty()
+    }
+
+    @Test
+    fun publishesAWholeKeyAndLeavesNoTemporaryFileBehind() = runTest {
+        store().put("jar", "hello")
+
+        // A key file that appears before it is written can never be read, and every entry written
+        // under it is lost, so the key is staged in a temporary file and linked into place. The
+        // staging file must not survive.
+        val key = File(storageDir, ".key")
+        Base64.getDecoder().decode(key.readText()).size shouldBe 32
+        storageDir.listFiles().orEmpty().filter { it.name.endsWith(".tmp") }.shouldBeEmpty()
+    }
+
+    @Test
+    fun reportsAnUnreadableEntryRatherThanCallingItAbsent() = runTest {
+        val store = store()
+        store.put("jar", "hello")
+
+        // Overwrite the entry with bytes that cannot be decrypted. Returning null here would tell
+        // the caller the key is absent and invite it to overwrite a jar that is still present.
+        Files.writeString(storageDir.toPath().resolve(Base64.getUrlEncoder().encodeToString("jar".toByteArray())), "garbage")
+
+        shouldThrow<KeyValueStoreException> { store().get("jar") }
     }
 
     @Test

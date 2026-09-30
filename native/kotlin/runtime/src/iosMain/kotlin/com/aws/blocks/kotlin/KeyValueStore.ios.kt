@@ -25,6 +25,7 @@ import platform.Foundation.dataUsingEncoding
 import platform.Security.SecItemAdd
 import platform.Security.SecItemCopyMatching
 import platform.Security.SecItemDelete
+import platform.Security.SecItemUpdate
 import platform.Security.errSecItemNotFound
 import platform.Security.errSecSuccess
 import platform.Security.kSecAttrAccount
@@ -90,16 +91,40 @@ private class QueryBuilder {
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
 private class KeychainKeyValueStore(private val service: String) : KeyValueStore {
 
+    /**
+     * Updates the item in place, adding it only when it is not there yet. Deleting and re-adding
+     * would leave nothing behind if the add failed, and the whole jar is one item, so that would
+     * discard every cookie rather than one. A status that is neither success nor "not found" is
+     * raised rather than dropped, so a caller does not read a failed write as a stored one.
+     */
     override suspend fun put(key: String, value: String) {
-        delete(key)
-        val data = (value as NSString).dataUsingEncoding(NSUTF8StringEncoding) ?: return
-        withQuery({
+        val data = (value as NSString).dataUsingEncoding(NSUTF8StringEncoding)
+            ?: throw KeyValueStoreException("The value for '$key' is not encodable as UTF-8")
+
+        val updateStatus = withQuery({
+            constant(kSecClass, kSecClassGenericPassword)
+            bridged(kSecAttrService, service as NSString)
+            bridged(kSecAttrAccount, key as NSString)
+        }) { query ->
+            withQuery({ bridged(kSecValueData, data) }) { attributes ->
+                SecItemUpdate(query, attributes)
+            }
+        }
+        if (updateStatus == errSecSuccess) return
+        if (updateStatus != errSecItemNotFound) {
+            throw KeyValueStoreException("Updating '$key' in the keychain failed: OSStatus $updateStatus")
+        }
+
+        val addStatus = withQuery({
             constant(kSecClass, kSecClassGenericPassword)
             bridged(kSecAttrService, service as NSString)
             bridged(kSecAttrAccount, key as NSString)
             bridged(kSecValueData, data)
         }) { query ->
             SecItemAdd(query, null)
+        }
+        if (addStatus != errSecSuccess) {
+            throw KeyValueStoreException("Adding '$key' to the keychain failed: OSStatus $addStatus")
         }
     }
 
@@ -139,13 +164,4 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
         }
     }
 
-    private fun delete(key: String) {
-        withQuery({
-            constant(kSecClass, kSecClassGenericPassword)
-            bridged(kSecAttrService, service as NSString)
-            bridged(kSecAttrAccount, key as NSString)
-        }) { query ->
-            SecItemDelete(query)
-        }
-    }
 }

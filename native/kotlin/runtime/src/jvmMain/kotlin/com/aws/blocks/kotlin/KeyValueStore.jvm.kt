@@ -96,32 +96,55 @@ internal class EncryptedFileKeyValueStore(
         }
     }
 
-    /**
-     * Creates the key only when one is absent. `CREATE_NEW` fails if the file already exists, so
-     * concurrent first runs cannot each install a key and then write entries the other cannot
-     * read: the loser reads the key the winner created.
-     */
+    /** Creates the key only when one is absent, otherwise adopts the one already there. */
     private fun loadOrCreateKey(): SecretKey {
         val keyPath = storageDir.resolve(KEY_FILE)
         if (!Files.exists(keyPath)) {
             val bytes = ByteArray(AES_KEY_SIZE).also { SecureRandom().nextBytes(it) }
-            try {
-                Files.newOutputStream(keyPath, StandardOpenOption.CREATE_NEW).use { out ->
-                    out.write(Base64.getEncoder().encodeToString(bytes).toByteArray())
-                }
-                restrictToOwner(keyPath, directory = false)
-                return SecretKeySpec(bytes, "AES")
-            } catch (_: FileAlreadyExistsException) {
-                // Another process created the key between the check and the write.
-            }
+            if (installKey(keyPath, bytes)) return SecretKeySpec(bytes, "AES")
         }
         return readKey(keyPath)
     }
 
     /**
-     * The creating process makes the key file visible before it has written to it, so a reader
-     * arriving in that window sees a short file. Retry briefly rather than adopting a truncated
-     * key, which would make every entry written with it unreadable.
+     * Publishes a new key, reporting whether this call is the one that installed it.
+     *
+     * The bytes are written to a temporary file and linked into place, because a link both fails
+     * when the target exists and only ever exposes a file that is already complete. Creating the
+     * key file first and writing to it afterwards leaves an empty key behind if the process stops
+     * in between, and an empty key can never be read: entries become undecryptable and every write
+     * fails until the file is deleted by hand.
+     */
+    private fun installKey(keyPath: Path, bytes: ByteArray): Boolean {
+        val encoded = Base64.getEncoder().encodeToString(bytes)
+        val temp = Files.createTempFile(storageDir, KEY_FILE, ".tmp")
+        try {
+            // The link shares this file's inode, and with it these permissions.
+            restrictToOwner(temp, directory = false)
+            Files.writeString(temp, encoded)
+            Files.createLink(keyPath, temp)
+            return true
+        } catch (_: FileAlreadyExistsException) {
+            // Another process installed a key first, and its key is the one that entries use.
+            return false
+        } catch (_: UnsupportedOperationException) {
+            // The filesystem has no links, so fall back to creating the file directly and accept
+            // the window that reopens.
+            return runCatching {
+                Files.newOutputStream(keyPath, StandardOpenOption.CREATE_NEW).use { out ->
+                    out.write(encoded.toByteArray())
+                }
+                restrictToOwner(keyPath, directory = false)
+            }.isSuccess
+        } finally {
+            Files.deleteIfExists(temp)
+        }
+    }
+
+    /**
+     * Retries briefly rather than adopting a truncated key, which would make every entry written
+     * with it unreadable. A key installed by a link is complete the moment it appears; this covers
+     * the fallback path on a filesystem without links.
      */
     private fun readKey(keyPath: Path): SecretKey {
         repeat(KEY_READ_ATTEMPTS) { attempt ->
