@@ -134,9 +134,20 @@ class PersistentCookiesStorageTest {
         now += 61_000L
         cookiesStorage.get(url)
 
-        // The jar is rewritten without the expired cookie rather than only filtered on read.
-        val reloaded = PersistentCookiesStorage(store) { now }
-        reloaded.get(url).shouldBeEmpty()
+        // Assert on the stored jar, not on a reloaded instance: a reload drops expired entries on
+        // its own, so it reports an empty jar whether or not the read rewrote storage.
+        store.data.getValue(JAR_KEY_FOR_TEST) shouldBe "[]"
+    }
+
+    @Test
+    fun rewritesTheJarWhenALoadDropsExpiredCookies() = runTest {
+        val url = Url("https://example.com/")
+        cookiesStorage.addCookie(url, Cookie(name = "short", value = "1", maxAge = 60))
+
+        now += 61_000L
+        PersistentCookiesStorage(store) { now }.get(url).shouldBeEmpty()
+
+        store.data.getValue(JAR_KEY_FOR_TEST) shouldBe "[]"
     }
 
     @Test
@@ -167,6 +178,69 @@ class PersistentCookiesStorageTest {
         cookiesStorage.addCookie(Url("https://other.com/"), Cookie(name = "b", value = "2"))
 
         store.data.keys shouldHaveSize 1
+    }
+
+    @Test
+    fun doesNotSendACookieWithoutDomainToASubdomain() = runTest {
+        cookiesStorage.addCookie(
+            Url("https://example.com/"),
+            Cookie(name = "session", value = "abc123"),
+        )
+
+        cookiesStorage.get(Url("https://files.example.com/x")).shouldBeEmpty()
+        cookiesStorage.get(Url("https://example.com/x")) shouldHaveSize 1
+    }
+
+    @Test
+    fun sendsACookieWithAnExplicitDomainToSubdomains() = runTest {
+        cookiesStorage.addCookie(
+            Url("https://example.com/"),
+            Cookie(name = "session", value = "abc123", domain = "example.com"),
+        )
+
+        cookiesStorage.get(Url("https://files.example.com/x")) shouldHaveSize 1
+    }
+
+    @Test
+    fun survivesAJarWrittenBeforeHostOnlyWasRecorded() = runTest {
+        // An entry without the flag is read as host-only, the narrower of the two readings.
+        store.data[JAR_KEY_FOR_TEST] =
+            """[{"setCookie":"session=abc123; Domain=example.com; Path=/","createdAt":$now}]"""
+
+        val reloaded = PersistentCookiesStorage(store) { now }
+
+        reloaded.get(Url("https://example.com/")) shouldHaveSize 1
+        reloaded.get(Url("https://files.example.com/")).shouldBeEmpty()
+    }
+
+    @Test
+    fun appliesACookieWithoutPathToTheRequestDirectory() = runTest {
+        cookiesStorage.addCookie(
+            Url("https://example.com/api/signin"),
+            Cookie(name = "sid", value = "1"),
+        )
+
+        // The default path is the directory, so the cookie covers the rest of /api rather than
+        // only the endpoint that set it.
+        cookiesStorage.get(Url("https://example.com/api/todos")) shouldHaveSize 1
+        cookiesStorage.get(Url("https://example.com/other")).shouldBeEmpty()
+    }
+
+    @Test
+    fun appliesACookieSetAtTheRootToTheWholeHost() = runTest {
+        cookiesStorage.addCookie(Url("https://example.com/"), Cookie(name = "sid", value = "1"))
+
+        cookiesStorage.get(Url("https://example.com/anything/deep")) shouldHaveSize 1
+    }
+
+    @Test
+    fun dropsADeletionCookieReceivedInTheSameMillisecond() = runTest {
+        val url = Url("https://example.com/")
+        cookiesStorage.addCookie(url, Cookie(name = "session", value = "abc123"))
+
+        cookiesStorage.addCookie(url, Cookie(name = "session", value = "", maxAge = 0))
+
+        cookiesStorage.get(url).shouldBeEmpty()
     }
 
     @Test

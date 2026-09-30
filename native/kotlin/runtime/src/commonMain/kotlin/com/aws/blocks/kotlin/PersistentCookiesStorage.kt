@@ -25,7 +25,10 @@ internal val sharedCookiesStorage: PersistentCookiesStorage by lazy { Persistent
  *
  * Matching and expiry follow the cookie rules Ktor already implements: [matches] decides whether
  * a stored cookie belongs on a request (domain, path and `Secure`), and [fillDefaults] resolves
- * `domain`/`path` from the request URL before a cookie is stored.
+ * `domain`/`path` from the request URL before a cookie is stored. Two rules Ktor leaves out are
+ * added here: a cookie that arrived without a `Domain` is host-only and is not sent to
+ * subdomains, and one that arrived without a `Path` applies to the directory of the request path
+ * rather than to that path alone.
  *
  * `maxAge` is relative to the moment a cookie was received, which a rendered `Set-Cookie` header
  * does not carry, so the arrival time is persisted alongside each cookie.
@@ -42,10 +45,25 @@ internal class PersistentCookiesStorage(
         const val JAR_KEY = "jar"
     }
 
+    /**
+     * `hostOnly` defaults to true so a jar written before the flag existed is narrowed rather
+     * than widened: the worst case is a cookie that stops being sent and a caller that signs in
+     * again, where the opposite would keep sending it to subdomains.
+     */
     @Serializable
-    private data class Entry(val setCookie: String, val createdAt: Long)
+    private data class Entry(val setCookie: String, val createdAt: Long, val hostOnly: Boolean = true)
 
-    private class Stored(val cookie: Cookie, val createdAt: Long)
+    private class Stored(val cookie: Cookie, val createdAt: Long, val hostOnly: Boolean) {
+        /**
+         * Whether this cookie belongs on a request. Domain, path and `Secure` are Ktor's
+         * [matches]; on top of that a cookie that arrived without a `Domain` attribute is
+         * host-only and goes to that exact host, never to a subdomain of it.
+         */
+        fun matches(requestUrl: Url): Boolean {
+            if (!cookie.matches(requestUrl)) return false
+            return !hostOnly || requestUrl.host.equals(cookie.domain, ignoreCase = true)
+        }
+    }
 
     private val mutex = Mutex()
     private val cookies = mutableListOf<Stored>()
@@ -54,16 +72,19 @@ internal class PersistentCookiesStorage(
     override suspend fun get(requestUrl: Url): List<Cookie> = mutex.withLock {
         load()
         if (removeExpired()) persist()
-        cookies.filter { it.cookie.matches(requestUrl) }.map { it.cookie }
+        cookies.filter { it.matches(requestUrl) }.map { it.cookie }
     }
 
     override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
         if (cookie.name.isBlank()) return
         mutex.withLock {
             load()
-            val stored = cookie.fillDefaults(requestUrl)
-            cookies.removeAll { it.cookie.name == stored.name && it.cookie.matches(requestUrl) }
-            cookies += Stored(stored, clock())
+            // A cookie is host-only exactly when the server sent no `Domain`, which has to be
+            // read before `fillDefaults` substitutes the request host for it.
+            val hostOnly = cookie.domain.isNullOrBlank()
+            val stored = cookie.withDefaultPath(requestUrl).fillDefaults(requestUrl)
+            cookies.removeAll { it.cookie.name == stored.name && it.matches(requestUrl) }
+            cookies += Stored(stored, clock(), hostOnly)
             removeExpired()
             persist()
         }
@@ -94,23 +115,41 @@ internal class PersistentCookiesStorage(
             return
         }
         entries.forEach { entry ->
-            cookies += Stored(parseServerSetCookieHeader(entry.setCookie), entry.createdAt)
+            cookies += Stored(parseServerSetCookieHeader(entry.setCookie), entry.createdAt, entry.hostOnly)
         }
-        removeExpired()
+        // Rewrite here rather than leaving the drop to the caller: the caller's own check finds
+        // nothing left to remove, so expired entries would stay in storage until an unrelated write.
+        if (removeExpired()) persist()
     }
 
     private suspend fun persist() {
-        val entries = cookies.map { Entry(renderSetCookieHeader(it.cookie), it.createdAt) }
+        val entries = cookies.map { Entry(renderSetCookieHeader(it.cookie), it.createdAt, it.hostOnly) }
         store.put(JAR_KEY, BlocksJson.encodeToString(entries))
     }
 
-    /** Removes expired cookies, reporting whether anything was dropped. */
+    /**
+     * Removes expired cookies, reporting whether anything was dropped. An expiry that has exactly
+     * arrived counts as passed, so the `Max-Age=0` cookie a sign-out sends does not linger for the
+     * millisecond it was received in.
+     */
     private fun removeExpired(): Boolean {
         val now = clock()
         return cookies.removeAll { stored ->
             val expiresAt = stored.expiresAt() ?: return@removeAll false
-            expiresAt < now
+            expiresAt <= now
         }
+    }
+
+    /**
+     * Applies the path a cookie gets when it carries no usable `Path`: the directory of the
+     * request path. [fillDefaults] would use the whole request path, which scopes the cookie to
+     * the single endpoint that set it instead of the rest of the site.
+     */
+    private fun Cookie.withDefaultPath(requestUrl: Url): Cookie {
+        if (path?.startsWith("/") == true) return this
+        val requestPath = requestUrl.encodedPath
+        val lastSlash = requestPath.lastIndexOf('/')
+        return copy(path = if (lastSlash <= 0) "/" else requestPath.substring(0, lastSlash))
     }
 
     /**
