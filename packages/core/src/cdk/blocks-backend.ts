@@ -109,7 +109,7 @@ function warnIfProductionAccessLoggingDisabled(scope: Construct, defaults: Block
 
 	cdk.Annotations.of(scope).addWarningV2(
 		'blocks:apigateway:access-logging-disabled',
-		'Production preset selected but API Gateway access logging is disabled, so this stack has ' +
+		'This stack has a production durability posture (RETAIN + deletion protection) but API Gateway access logging is disabled, so this stack has ' +
 			'no request-level audit trail. It is off by default because enabling it provisions the ' +
 			'account/region-level API Gateway CloudWatch Logs role — an AWS-side singleton that a ' +
 			'second Blocks stack in the same account+region can repoint on deploy or leave broken on ' +

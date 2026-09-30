@@ -475,7 +475,7 @@ describe('VPC placement', () => {
 });
 
 describe('production access-logging audit-gap synth warning', () => {
-	const AUDIT_WARNING = Match.stringLikeRegexp('API Gateway access logging is disabled');
+	const AUDIT_WARNING = Match.stringLikeRegexp('access logging is disabled');
 
 	test('production posture with accessLogging off warns at synth (no request-level audit trail)', async () => {
 		const app = new cdk.App();
@@ -486,6 +486,11 @@ describe('production access-logging audit-gap synth warning', () => {
 		await makeBackend(parent, 'Blocks', sideEffectBackendPath);
 
 		Annotations.fromStack(parent).hasWarning('*', AUDIT_WARNING);
+
+		// Also assert the opt-in remedy is present so a future refactor that drops
+		// the `accessLogging: true` guidance is caught. `:` is literal in the regex
+		// and the space matches the emitted message verbatim.
+		Annotations.fromStack(parent).hasWarning('*', Match.stringLikeRegexp('accessLogging: true'));
 	});
 
 	test('production posture with accessLogging overridden to true does NOT warn', async () => {
