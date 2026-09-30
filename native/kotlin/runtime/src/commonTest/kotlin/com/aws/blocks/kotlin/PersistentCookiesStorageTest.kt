@@ -5,6 +5,7 @@ import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.ktor.http.Cookie
 import io.ktor.http.Url
 import io.ktor.util.date.GMTDate
@@ -27,6 +28,18 @@ class PersistentCookiesStorageTest {
         override suspend fun get(key: String): String? =
             if (readable) backing[key] else throw KeyValueStoreException("locked")
         override suspend fun clear() { backing.clear() }
+    }
+
+    /** A store whose writes fail while [writable] is false. */
+    private class UnwritableKeyValueStore : KeyValueStore {
+        val data = mutableMapOf<String, String>()
+        var writable = false
+        override suspend fun put(key: String, value: String) {
+            if (!writable) throw KeyValueStoreException("locked")
+            data[key] = value
+        }
+        override suspend fun get(key: String): String? = data[key]
+        override suspend fun clear() { data.clear() }
     }
 
     private val store = InMemoryKeyValueStore()
@@ -273,6 +286,94 @@ class PersistentCookiesStorageTest {
         cookiesStorage.clear()
 
         store.data.keys.shouldBeEmpty()
+    }
+
+    @Test
+    fun ignoresACookieScopedToAnUnrelatedDomain() = runTest {
+        // One jar serves every client in the process, so a response from one host must not be able
+        // to store a cookie that requests to an unrelated host would then send.
+        cookiesStorage.addCookie(
+            Url("https://downloads.other.test/file"),
+            Cookie(name = "session", value = "injected", domain = "api.example.com"),
+        )
+
+        cookiesStorage.get(Url("https://api.example.com/")).shouldBeEmpty()
+        store.data[JAR_KEY_FOR_TEST].shouldBeNull()
+    }
+
+    @Test
+    fun acceptsACookieScopedToADomainTheHostBelongsTo() = runTest {
+        cookiesStorage.addCookie(
+            Url("https://api.example.com/"),
+            Cookie(name = "session", value = "abc123", domain = "example.com"),
+        )
+
+        cookiesStorage.get(Url("https://other.example.com/")) shouldHaveSize 1
+    }
+
+    @Test
+    fun ignoresACookieWhoseDomainOnlySuffixMatchesTheHost() = runTest {
+        // "notexample.com" ends with "example.com" as text but is a different domain.
+        cookiesStorage.addCookie(
+            Url("https://notexample.com/"),
+            Cookie(name = "session", value = "injected", domain = "example.com"),
+        )
+
+        cookiesStorage.get(Url("https://example.com/")).shouldBeEmpty()
+    }
+
+    @Test
+    fun aCookieSetWhileUnloadedWinsOverTheStoredCopy() = runTest {
+        val url = Url("https://example.com/")
+        cookiesStorage.addCookie(url, Cookie(name = "session", value = "old"))
+        val unreadable = UnreadableKeyValueStore(store.data.toMutableMap())
+
+        val storage = PersistentCookiesStorage(unreadable) { now }
+        storage.addCookie(url, Cookie(name = "session", value = "new"))
+        unreadable.readable = true
+
+        // Appending the stored jar on the later read would send both copies at once.
+        storage.get(url).map { it.value } shouldBe listOf("new")
+    }
+
+    @Test
+    fun aSignOutWhileUnloadedIsNotUndoneByTheStoredCopy() = runTest {
+        val url = Url("https://example.com/")
+        cookiesStorage.addCookie(url, Cookie(name = "session", value = "old"))
+        val unreadable = UnreadableKeyValueStore(store.data.toMutableMap())
+
+        val storage = PersistentCookiesStorage(unreadable) { now }
+        storage.addCookie(url, Cookie(name = "session", value = "", maxAge = 0))
+        unreadable.readable = true
+
+        // The deletion leaves nothing in memory, so it has to be remembered on its own.
+        storage.get(url).shouldBeEmpty()
+    }
+
+    @Test
+    fun aFailedWriteDoesNotFailTheCallThatCausedIt() = runTest {
+        val store = UnwritableKeyValueStore()
+        val storage = PersistentCookiesStorage(store) { now }
+        val url = Url("https://example.com/")
+
+        // persist() runs inside the request pipeline, so raising here would fail a request the
+        // server has already answered.
+        storage.addCookie(url, Cookie(name = "session", value = "abc123"))
+        storage.get(url) shouldHaveSize 1
+        store.data.keys.shouldBeEmpty()
+    }
+
+    @Test
+    fun retriesAFailedWriteOnTheNextCall() = runTest {
+        val store = UnwritableKeyValueStore()
+        val storage = PersistentCookiesStorage(store) { now }
+        val url = Url("https://example.com/")
+        storage.addCookie(url, Cookie(name = "session", value = "abc123"))
+
+        store.writable = true
+        storage.get(url)
+
+        store.data.getValue(JAR_KEY_FOR_TEST) shouldContain "session=abc123"
     }
 
     @Test
