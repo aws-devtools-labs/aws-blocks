@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/hosting": minor
+"@aws-blocks/core": minor
 ---
 
 fix(hosting): fail-closed SSR cache key + per-credential cache-key options
@@ -10,5 +11,6 @@ Ensures cacheable SSR responses on compute deployments are keyed per credential,
 - **New `cdn.cacheKeyCookies` and `cdn.cacheKeyHeaders` options.** Add your session cookie name(s) and/or credential-bearing header(s) (e.g. `'authorization'`) to the SSR cache key so authenticated responses are cached per credential. `'accept-encoding'` is rejected (handled by the brotli/gzip flags), and at most 8 caller cookies are allowed (CloudFront's 10-cookie cap, 2 reserved for Next.js preview mode).
 - **Behavior change: SSR `maxTtl` lowered from 365 days to 1 day.** Clamps wild origin `Cache-Control` values and bounds how long a cached SSR response can persist at the edge. Origins that intentionally cache longer than a day at the edge will now be capped.
 - **Cache-key JSDoc** on `ssrDefaultTtl`, `cacheKeyCookies`, and `cacheKeyHeaders` documenting how credentials enter the cache key and safe usage.
+- **`@aws-blocks/core`:** `Hosting` exposes `ssrDefaultTtl`, `cacheKeyCookies`, and `cacheKeyHeaders` as top-level props and forwards them to the CDN cache-key config.
 
 Note: any route that sets cookies via `Set-Cookie`, or otherwise varies per user without opting into the cache key, must emit `Cache-Control: private` so its response is not cached as a single shared entry at the edge.

@@ -632,6 +632,11 @@ export class CdnConstruct extends Construct {
       '__prerender_bypass',
       '__next_preview_data',
     ];
+    // CloudFront caps the SSR cache key at 10 cookies and 10 headers total;
+    // the reserved names above consume some of each, leaving the remainder
+    // for caller-supplied cdn.cacheKeyCookies/cacheKeyHeaders.
+    const CLOUDFRONT_CACHE_KEY_COOKIE_CAP = 10;
+    const CLOUDFRONT_CACHE_KEY_HEADER_CAP = 10;
     const extraCacheKeyHeaders = [
       ...new Set((props.cacheKeyHeaders ?? []).map((h) => h.toLowerCase())),
     ].filter((h) => !RESERVED_SSR_CACHE_HEADERS.includes(h));
@@ -674,31 +679,46 @@ export class CdnConstruct extends Construct {
         resolution: 'Remove it — encoding is handled automatically.',
       });
     }
-    // CloudFront caps cookies in the cache key at 10 total; the 2 Next.js
-    // preview cookies below are reserved, leaving at most 8 for callers.
-    if (hasCompute && extraCacheKeyCookies.length + 2 > 10) {
+    // CloudFront caps cookies in the cache key at CLOUDFRONT_CACHE_KEY_COOKIE_CAP
+    // total; the Next.js preview cookies below are reserved, leaving the rest
+    // for callers. Deriving the reserved count from the array keeps this in
+    // sync with RESERVED_SSR_CACHE_COOKIES if it ever changes.
+    if (
+      hasCompute &&
+      extraCacheKeyCookies.length + RESERVED_SSR_CACHE_COOKIES.length >
+        CLOUDFRONT_CACHE_KEY_COOKIE_CAP
+    ) {
+      const available =
+        CLOUDFRONT_CACHE_KEY_COOKIE_CAP - RESERVED_SSR_CACHE_COOKIES.length;
       throw new HostingError('SsrCacheKeyCookieCapError', {
         message:
           `cdn.cacheKeyCookies adds ${extraCacheKeyCookies.length} cookie(s) to the SSR cache key, but ` +
-          'CloudFront allows at most 10 cookies total (2 are reserved for Next.js preview mode, ' +
-          'leaving 8 available).',
+          `CloudFront allows at most ${CLOUDFRONT_CACHE_KEY_COOKIE_CAP} cookies total (${RESERVED_SSR_CACHE_COOKIES.length} are reserved for Next.js preview mode, ` +
+          `leaving ${available} available).`,
         resolution:
-          'Reduce cdn.cacheKeyCookies to at most 8 entries, or opt personalized routes out of ' +
+          `Reduce cdn.cacheKeyCookies to at most ${available} entries, or opt personalized routes out of ` +
           'caching with `Cache-Control: private`.',
       });
     }
-    // CloudFront caps headers in the cache key at 10 total; the 5 Next.js
-    // router headers below (rsc, next-router-prefetch, next-router-state-tree,
-    // next-router-segment-prefetch, next-action) are reserved, leaving at most
-    // 5 for callers.
-    if (hasCompute && extraCacheKeyHeaders.length + 5 > 10) {
+    // CloudFront caps headers in the cache key at CLOUDFRONT_CACHE_KEY_HEADER_CAP
+    // total; the Next.js router headers below (rsc, next-router-prefetch,
+    // next-router-state-tree, next-router-segment-prefetch, next-action) are
+    // reserved, leaving the rest for callers. Deriving the reserved count from
+    // the array keeps this in sync with RESERVED_SSR_CACHE_HEADERS.
+    if (
+      hasCompute &&
+      extraCacheKeyHeaders.length + RESERVED_SSR_CACHE_HEADERS.length >
+        CLOUDFRONT_CACHE_KEY_HEADER_CAP
+    ) {
+      const available =
+        CLOUDFRONT_CACHE_KEY_HEADER_CAP - RESERVED_SSR_CACHE_HEADERS.length;
       throw new HostingError('SsrCacheKeyHeaderCapError', {
         message:
           `cdn.cacheKeyHeaders adds ${extraCacheKeyHeaders.length} header(s) to the SSR cache key, but ` +
-          'CloudFront allows at most 10 headers total (5 are reserved for the Next.js router ' +
-          'headers, leaving 5 available).',
+          `CloudFront allows at most ${CLOUDFRONT_CACHE_KEY_HEADER_CAP} headers total (${RESERVED_SSR_CACHE_HEADERS.length} are reserved for the Next.js router ` +
+          `headers, leaving ${available} available).`,
         resolution:
-          'Reduce cdn.cacheKeyHeaders to at most 5 entries, or opt personalized routes out of ' +
+          `Reduce cdn.cacheKeyHeaders to at most ${available} entries, or opt personalized routes out of ` +
           'caching with `Cache-Control: private`.',
       });
     }
