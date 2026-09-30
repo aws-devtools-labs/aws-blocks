@@ -679,7 +679,7 @@ jobs:
           SKIPPED=0
           while read -r ID NAME; do
             if [ -z "$ID" ]; then continue; fi
-            ETAG=$(aws cloudfront get-response-headers-policy --id "$ID" --query 'ETag' --output text 2>/dev/null)
+            ETAG=$(aws cloudfront get-response-headers-policy --id "$ID" --query 'ETag' --output text 2>/dev/null || echo "")
             if [ -n "$ETAG" ]; then
               if aws cloudfront delete-response-headers-policy --id "$ID" --if-match "$ETAG" 2>/dev/null; then
                 echo "🗑️ Deleted orphaned policy: $NAME ($ID)"
