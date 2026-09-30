@@ -2,7 +2,7 @@ import 'model.dart';
 
 /// Tags the generator maps to concrete runtime types; any other tag on a
 /// direct result falls back to `UnknownTransferable`. The switches gate on this set.
-const kKnownTransferableTags = {
+const knownTransferableTags = {
   'realtime/channel',
   'file-bucket/download',
   'file-bucket/upload',
@@ -304,7 +304,7 @@ class CodegenModelBuilder {
       // Bare transferable only: a nullable/list/record-wrapped one is a
       // different ResolvedType and skipped, matching the generator's fallback.
       if (resultType is TransferableType &&
-          !kKnownTransferableTags.contains(resultType.blocksType)) {
+          !knownTransferableTags.contains(resultType.blocksType)) {
         unboundResults.add((method.name, resultType));
       }
 

@@ -731,7 +731,7 @@ class DartCodeGenerator {
     Map<String, ResolvedType> allTypes,
   ) {
     // Tags outside the registry stay dynamic even if a switch arm exists.
-    if (!kKnownTransferableTags.contains(blocksType)) return 'dynamic';
+    if (!knownTransferableTags.contains(blocksType)) return 'dynamic';
     return switch (blocksType) {
       'realtime/channel' =>
         'RealtimeChannel<${typeArgs.isNotEmpty ? _dartTypeStr(typeArgs[0], allTypes) : 'dynamic'}>',
@@ -1136,7 +1136,7 @@ class DartCodeGenerator {
   ) {
     // Same registry gate as _transferableDartType: an unknown tag isn't
     // hydrated to a concrete factory.
-    if (!kKnownTransferableTags.contains(blocksType)) return accessor;
+    if (!knownTransferableTags.contains(blocksType)) return accessor;
     final cast = '$accessor as Map<String, dynamic>';
     return switch (blocksType) {
       'realtime/channel' => () {
@@ -1158,7 +1158,7 @@ class DartCodeGenerator {
   /// A nested/nullable/list-wrapped one is out of scope and stays `dynamic`.
   bool _isUnboundTransferable(ResolvedType type) =>
       type is TransferableType &&
-      !kKnownTransferableTags.contains(type.blocksType);
+      !knownTransferableTags.contains(type.blocksType);
 
   /// Single-quoted Dart string literal for [value], escaping `\`, `$`, `'`,
   /// `\n`, and `\r`.

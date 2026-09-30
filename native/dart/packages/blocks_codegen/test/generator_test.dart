@@ -495,7 +495,7 @@ void main() {
     });
   });
 
-  group('kKnownTransferableTags drift guards', () {
+  group('knownTransferableTags drift guards', () {
     // tag → expected return type. Keys drift-guard the set; values let the loop
     // assert the concrete type positively (a set tag with no switch arm fails).
     const expectedTypes = {
@@ -506,7 +506,7 @@ void main() {
     };
 
     test('set equals the exact known-tag map keys', () {
-      expect(kKnownTransferableTags, expectedTypes.keys.toSet());
+      expect(knownTransferableTags, expectedTypes.keys.toSet());
     });
 
     expectedTypes.forEach((tag, expectedType) {
@@ -541,7 +541,7 @@ void main() {
     // so a switch arm added without a set entry can't bind silently.
     test('a tag outside the set never maps to a concrete type', () {
       const tag = 'drift-probe/never-registered';
-      expect(kKnownTransferableTags, isNot(contains(tag)));
+      expect(knownTransferableTags, isNot(contains(tag)));
 
       // Nested position: stays dynamic, not a concrete runtime type.
       final nested = _generate(
