@@ -334,6 +334,36 @@ export interface HostingProps {
   };
 
   /**
+   * Default TTL for SSR/compute cache behaviors when the origin sends no
+   * `Cache-Control`. Enables CloudFront edge caching of SSR responses.
+   *
+   * ⚠️ SECURITY: enabling this makes SSR responses without explicit
+   * `Cache-Control` shared at the edge. The SSR cache key does NOT include
+   * Authorization or session cookies by default, so one cached response
+   * would answer requests regardless of their credentials (CloudFront
+   * ignores `Vary`). Set {@link cacheKeyCookies}
+   * and/or {@link cacheKeyHeaders}, or ensure personalized routes emit
+   * `Cache-Control: private`. Synth fails closed if this is > 0 and neither
+   * cache-key option is set.
+   * @default Duration.seconds(0)
+   */
+  ssrDefaultTtl?: cdk.Duration;
+  /**
+   * Cookie names to include in the SSR cache key so authenticated SSR
+   * responses are cached per-session rather than shared across users.
+   * Required (with or instead of {@link cacheKeyHeaders}) to safely enable
+   * {@link ssrDefaultTtl}. CloudFront allows at most 10 cookies in the key
+   * (2 reserved for Next.js preview mode).
+   */
+  cacheKeyCookies?: string[];
+  /**
+   * Header names to include in the SSR cache key (e.g. `'authorization'`).
+   * Required (with or instead of {@link cacheKeyCookies}) to safely enable
+   * {@link ssrDefaultTtl}. `'accept-encoding'` is not allowed.
+   */
+  cacheKeyHeaders?: string[];
+
+  /**
    * Build cache configuration. When enabled, provisions an S3 bucket for
    * framework build caches (e.g. Next.js .next/cache) and exports the bucket
    * name as a CfnOutput. Reduces cold-build times in CI.
@@ -710,12 +740,21 @@ export class Hosting extends Construct {
             }
           : undefined,
       cdn:
-        props.contentSecurityPolicy || props.priceClass || props.geoRestriction || props.quotas
+        props.contentSecurityPolicy ||
+        props.priceClass ||
+        props.geoRestriction ||
+        props.quotas ||
+        props.ssrDefaultTtl ||
+        props.cacheKeyCookies ||
+        props.cacheKeyHeaders
           ? {
               contentSecurityPolicy: props.contentSecurityPolicy,
               priceClass: props.priceClass,
               geoRestriction: props.geoRestriction,
               quotas: props.quotas,
+              ssrDefaultTtl: props.ssrDefaultTtl,
+              cacheKeyCookies: props.cacheKeyCookies,
+              cacheKeyHeaders: props.cacheKeyHeaders,
             }
           : undefined,
       logging: props.logging,

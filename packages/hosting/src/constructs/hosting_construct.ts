@@ -205,9 +205,45 @@ export type HostingConstructProps = {
      * When set, SSR responses without an explicit `Cache-Control` header
      * are cached at the edge for this duration. The origin can always
      * override via `s-maxage` or `no-store`.
+     *
+     * ⚠️ SECURITY: enabling this makes SSR responses without an explicit
+     * `Cache-Control` header shared at the CloudFront edge. Because the SSR
+     * cache key does NOT include Authorization or session cookies by default,
+     * one cached response would answer requests regardless of their
+     * credentials. CloudFront ignores `Vary`.
+     * Before enabling, set {@link cacheKeyCookies} (your session cookie
+     * name(s)) and/or {@link cacheKeyHeaders} (e.g. `'authorization'`) to
+     * include credentials in the cache key, or ensure personalized routes
+     * (and any route that sets cookies via `Set-Cookie`) emit
+     * `Cache-Control: private`. Synth fails closed if this resolves to > 0
+     * and neither `cacheKeyCookies` nor `cacheKeyHeaders` is set.
+     *
+     * NOTE: this fail-closed guard covers only `ssrDefaultTtl` — it cannot
+     * detect origin-emitted caching. Routes made cacheable via an origin
+     * `s-maxage`/`revalidate` header (e.g. Next `revalidate`, Nuxt/Astro
+     * defaults) with `ssrDefaultTtl` unset are NOT caught by synth, so such
+     * routes must themselves set `cacheKeyCookies`/`cacheKeyHeaders` or emit
+     * `Cache-Control: private`.
      * @default Duration.seconds(0) — no caching unless origin opts in
      */
     ssrDefaultTtl?: Duration;
+    /**
+     * Cookie names to include in the SSR cache key. Set your session cookie
+     * name(s) here so authenticated SSR responses are cached per-session
+     * rather than shared across users. Required (together with or instead of
+     * `cacheKeyHeaders`) to safely enable `ssrDefaultTtl`.
+     * CloudFront allows at most 10 cookies in the cache key (2 are reserved
+     * for Next.js preview mode).
+     */
+    cacheKeyCookies?: string[];
+    /**
+     * Header names to include in the SSR cache key (e.g. `'authorization'`).
+     * Use to vary cached SSR responses by credential-bearing headers.
+     * `'accept-encoding'` is not allowed (handled automatically). Required
+     * (together with or instead of `cacheKeyCookies`) to safely enable
+     * `ssrDefaultTtl`.
+     */
+    cacheKeyHeaders?: string[];
     /**
      * Bring-your-own ResponseHeadersPolicy. When provided, the construct
      * skips creating its own policy — use this to share a single policy
@@ -1147,6 +1183,8 @@ export class HostingConstruct extends Construct {
       geoRestriction: props.cdn?.geoRestriction,
       skewProtection: props.skewProtection ?? { enabled: true },
       ssrDefaultTtl: props.cdn?.ssrDefaultTtl,
+      cacheKeyCookies: props.cdn?.cacheKeyCookies,
+      cacheKeyHeaders: props.cdn?.cacheKeyHeaders,
       webAclArn: effectiveWebAclArn ?? props.cdn?.webAclArn,
       quotas: props.cdn?.quotas,
       customErrorPages: props.errorPages

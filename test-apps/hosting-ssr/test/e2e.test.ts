@@ -331,6 +331,62 @@ test.describe('SSR origin regression coverage', () => {
   });
 });
 
+test.describe('SSR cache isolation (per-session cache key)', () => {
+  // /cache-isolation is an SSR route that echoes the `bb_session` cookie and
+  // emits `Cache-Control: public, s-maxage=300`, so CloudFront caches it. The
+  // app sets cdn.cacheKeyCookies=['bb_session'], putting the session cookie in
+  // the CDN cache key — so each session keys a separate cache entry. Without
+  // the cookie in the key, this s-maxage response would be a single shared
+  // cache entry.
+
+  test('two different session cookies never share a cached response', async ({ request }) => {
+    const isolationUrl = `${hostingUrl}/cache-isolation`;
+    const userA = `alice-${randomBytes(6).toString('hex')}`;
+    const userB = `bob-${randomBytes(6).toString('hex')}`;
+
+    // Warm the edge for user A: the first request is a MISS that populates the
+    // cache; a repeat may be a HIT — either way it must be A's body.
+    const a1 = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userA}` } });
+    expect(a1.status()).toBe(200);
+    expect(await a1.text()).toContain(`user=${userA}`);
+
+    const a2 = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userA}` } });
+    expect(a2.status()).toBe(200);
+    expect(await a2.text()).toContain(`user=${userA}`);
+
+    // Prove A's repeat was actually served from the CloudFront cache — without
+    // a real HIT, the per-session check below could pass simply because B
+    // MISSed and rendered its own body even without a per-session cache key.
+    // Only CloudFront (in front only in sandbox) sets `x-cache: Hit from
+    // cloudfront`; local/dev mode has no CDN, so gate the HIT assertion on
+    // sandbox.
+    if (ENV === 'sandbox') {
+      expect(a2.headers()['x-cache'] || '').toContain('Hit from cloudfront');
+    }
+
+    // User B hits the SAME URL with a different session cookie. Because the
+    // session cookie is in the cache key, B gets its own cache entry and its
+    // own body, not A's.
+    const b1 = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userB}` } });
+    expect(b1.status()).toBe(200);
+    const bBody = await b1.text();
+    expect(bBody).toContain(`user=${userB}`);
+    expect(bBody).not.toContain(userA);
+  });
+
+  test('the isolation route is edge-cacheable (origin emits s-maxage)', async ({ request }) => {
+    const isolationUrl = `${hostingUrl}/cache-isolation`;
+    const resp = await request.get(isolationUrl, {
+      headers: { Cookie: `bb_session=probe-${randomBytes(4).toString('hex')}` },
+    });
+    expect(resp.status()).toBe(200);
+    // The origin's Cache-Control (honored by the SSR cache policy) makes the
+    // response cacheable; if this were absent the isolation test above would
+    // never exercise a cache entry.
+    expect(resp.headers()['cache-control'] || '').toMatch(/s-maxage=300/);
+  });
+});
+
 test.describe('Build cache infrastructure', () => {
   test('BuildCacheBucketName output exists when deployed', async () => {
     if (ENV !== 'sandbox') {
