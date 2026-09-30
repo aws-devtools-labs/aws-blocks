@@ -1955,8 +1955,9 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     >;
     const statements = keyPolicy['Statement'] as Array<Record<string, unknown>>;
 
-    // Find the CloudFront decrypt statement
-    const cfDecryptStatement = statements.find((stmt) => {
+    // Find the CloudFront decrypt statement(s). CDK's own OAC wiring emits one grant, and this
+    // construct adds an explicit one; collect all of them so we can assert on the explicit grant.
+    const cfDecryptStatements = statements.filter((stmt) => {
       const actions = stmt.Action;
       const principal = stmt.Principal as Record<string, unknown> | undefined;
       const service = principal?.Service;
@@ -1971,23 +1972,25 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     });
 
     assert.ok(
-      cfDecryptStatement,
+      cfDecryptStatements.length > 0,
       'KMS key policy must grant kms:Decrypt to cloudfront.amazonaws.com',
     );
 
-    // The grant must be scoped to this account so it isn't a cross-account confused-deputy shape
-    // (a distribution in another account being pointed at the key). We assert a source-scoping
-    // condition is present (case-insensitively, since CDK's own OAC grant uses `AWS:SourceArn`
-    // while the explicit grant uses `aws:SourceAccount`/`aws:SourceArn`). We do not pin an exact
-    // distribution id, because that would close a CloudFormation dependency cycle
-    // (key -> distribution -> origin bucket -> key).
-    const condition = cfDecryptStatement?.Condition as
-      | Record<string, Record<string, unknown>>
-      | undefined;
-    const conditionJson = JSON.stringify(condition ?? {}).toLowerCase();
+    // The construct's explicit grant scopes the key to this account so it isn't a cross-account
+    // confused-deputy shape (a distribution in another account being pointed at the key). It emits
+    // BOTH `aws:SourceAccount` and `aws:SourceArn`, so assert both are present on that grant to
+    // guard the code as written (case-insensitive, since the coexisting CDK OAC grant uses
+    // `AWS:SourceArn`). We do not pin an exact distribution id, because that would close a
+    // CloudFormation dependency cycle (key -> distribution -> origin bucket -> key).
+    const explicitGrant = cfDecryptStatements.find((stmt) => {
+      const conditionJson = JSON.stringify(stmt.Condition ?? {}).toLowerCase();
+      return (
+        conditionJson.includes('aws:sourceaccount') && conditionJson.includes('aws:sourcearn')
+      );
+    });
     assert.ok(
-      conditionJson.includes('aws:sourceaccount') || conditionJson.includes('aws:sourcearn'),
-      'CloudFront KMS decrypt grant must be scoped by aws:SourceAccount / aws:SourceArn',
+      explicitGrant,
+      'CloudFront KMS decrypt grant must be scoped by BOTH aws:SourceAccount and aws:SourceArn',
     );
   });
 
