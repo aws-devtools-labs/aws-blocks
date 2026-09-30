@@ -79,11 +79,11 @@ export function getConfigLocation(scope: Construct): { bucketName: string; key: 
  * Falls back to the stack when no owner is registered (isolated unit tests). Returns a concrete
  * `s3.Bucket` so callers don't need a non-null assertion.
  *
- * Security posture — this bucket holds `blocks-config.json`, which feeds `process.env` (incl.
- * `CORS_HOSTING_ORIGINS`) for every compute in the stack, so tamper is high-value:
+ * Bucket configuration — this bucket holds `blocks-config.json`, which feeds `process.env` (incl.
+ * `CORS_HOSTING_ORIGINS`) for every compute in the stack, so it is configured with these controls:
  * - **TLS enforced** (`enforceSSL`): CDK attaches a bucket policy denying `aws:SecureTransport=false`,
- *   protecting the config in transit. Matches every other bucket in the repo (bb-file-bucket etc.).
- * - **Versioned**: a tamper/overwrite of `blocks-config.json` is recoverable, and it activates the
+ *   so requests use HTTPS. Matches every other bucket in the repo (bb-file-bucket etc.).
+ * - **Versioned**: a prior version of `blocks-config.json` is recoverable after an overwrite, and it activates the
  *   noncurrent-version expiration lifecycle rule (inert while versioning was off). Noncurrent versions
  *   expire after 1 day to bound version-storage cost.
  * - **Server access logging**: reads/writes are delivered to a dedicated, locked-down log bucket
@@ -114,6 +114,11 @@ function ensureConfigBucket(scope: Construct): s3.Bucket {
 			enforceSSL: true,
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 			autoDeleteObjects: true,
+			// The 90-day access-log retention here and the config bucket's 1-day noncurrent-version
+			// expiry below are fixed literals for this framework-internal bucket, intentionally NOT
+			// driven by the stack `logRetention` default: ensureConfigBucket is a free function with no
+			// access to stack defaults. (bb-file-bucket derives its access-log expiry from
+			// defaults.logRetention; this internal bucket keeps fixed values on purpose.)
 			lifecycleRules: [
 				{ id: 'expire-access-logs', expiration: cdk.Duration.days(90) },
 			],
@@ -134,13 +139,15 @@ function ensureConfigBucket(scope: Construct): s3.Bucket {
 			// (incl. CORS_HOSTING_ORIGINS) for every compute, so protect it in transit — matches every
 			// other bucket in the repo (bb-file-bucket, bb-knowledge-base, bb-async-job, hosting).
 			enforceSSL: true,
-			// Make a tamper/overwrite of blocks-config.json recoverable, and activate the
-			// noncurrent-version expiration lifecycle rule below (inert while versioning was off).
+			// Make a prior version of blocks-config.json recoverable after an overwrite, and activate
+			// the noncurrent-version expiration lifecycle rule below (inert while versioning was off).
 			versioned: true,
 			serverAccessLogsBucket: logBucket,
 			serverAccessLogsPrefix: 'access-logs/',
+			// 1-day noncurrent-version expiry is a fixed literal (see the log bucket's note above):
+			// intentionally NOT driven by the stack `logRetention` default.
 			lifecycleRules: [
-				{ noncurrentVersionExpiration: cdk.Duration.days(1) },
+				{ id: 'ExpireNoncurrentVersions', noncurrentVersionExpiration: cdk.Duration.days(1) },
 			],
 		});
 	}
