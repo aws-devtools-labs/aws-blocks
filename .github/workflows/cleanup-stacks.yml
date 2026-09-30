@@ -585,14 +585,16 @@ jobs:
             fi
 
             # (a) test-artifact name shape only. These are the prefixes CI apps use.
-            # NOTE: DefaultCompute* / *DefaultComputeAPI* are ALSO the default API
-            # name on live blocks-compute stacks, so a name match is NOT a safety
-            # signal for them — a live DefaultCompute API is protected solely by the
-            # OWNED_IDS id-ownership check above (gate (c), which runs first). Do not
-            # weaken or reorder that id gate on the assumption this name list only
-            # ever matches abandoned artifacts; it does not.
+            # NOTE: DefaultCompute* / *DefaultComputeAPI* / 'Blocks API' are ALSO
+            # default API names on LIVE blocks stacks — 'Blocks API' is the hardcoded
+            # restApiName of the bb-lambda-compute construct, so EVERY blocks-compute
+            # deploy (live or orphaned) creates a REST API with that exact name. So a
+            # name match is NOT a safety signal for these — a live one is protected
+            # SOLELY by the OWNED_IDS id-ownership check above (gate (c), which runs
+            # first). Do not weaken or reorder that id gate on the assumption this
+            # name list only ever matches abandoned artifacts; it does not.
             case "$NAME" in
-              blocks-test-* | blocks-hosting-* | bb-test-* | bb-telemetry-* | bb-vpc-smoke-* | my-app-* | *-e2e-* | DefaultCompute* | *DefaultComputeAPI*) ;;
+              blocks-test-* | blocks-hosting-* | bb-test-* | bb-telemetry-* | bb-vpc-smoke-* | my-app-* | *-e2e-* | DefaultCompute* | *DefaultComputeAPI* | 'Blocks API') ;;
               *)
                 SKIPPED_UNMATCHED=$((SKIPPED_UNMATCHED + 1))
                 continue
