@@ -90,7 +90,7 @@ private class QueryBuilder {
 private class KeychainKeyValueStore(private val service: String) : KeyValueStore {
 
     override suspend fun put(key: String, value: String) {
-        remove(key)
+        delete(key)
         val data = (value as NSString).dataUsingEncoding(NSUTF8StringEncoding) ?: return
         withQuery({
             constant(kSecClass, kSecClassGenericPassword)
@@ -117,7 +117,20 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
         }
     }
 
-    override suspend fun remove(key: String) {
+    /**
+     * Deletes every item for this service. Omitting `kSecAttrAccount` widens the query from one
+     * entry to all of them, so entries this version never reads are still removed.
+     */
+    override suspend fun clear() {
+        withQuery({
+            constant(kSecClass, kSecClassGenericPassword)
+            bridged(kSecAttrService, service as NSString)
+        }) { query ->
+            SecItemDelete(query)
+        }
+    }
+
+    private fun delete(key: String) {
         withQuery({
             constant(kSecClass, kSecClassGenericPassword)
             bridged(kSecAttrService, service as NSString)
@@ -126,5 +139,4 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
             SecItemDelete(query)
         }
     }
-
 }

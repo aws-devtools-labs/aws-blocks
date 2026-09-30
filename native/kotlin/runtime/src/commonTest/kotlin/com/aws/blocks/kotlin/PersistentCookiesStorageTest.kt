@@ -17,7 +17,7 @@ class PersistentCookiesStorageTest {
         val data = mutableMapOf<String, String>()
         override suspend fun put(key: String, value: String) { data[key] = value }
         override suspend fun get(key: String): String? = data[key]
-        override suspend fun remove(key: String) { data.remove(key) }
+        override suspend fun clear() { data.clear() }
     }
 
     private val store = InMemoryKeyValueStore()
@@ -179,6 +179,17 @@ class PersistentCookiesStorageTest {
         cookiesStorage.get(url).shouldBeEmpty()
         store.data.keys.shouldBeEmpty()
         PersistentCookiesStorage(store) { now }.get(url).shouldBeEmpty()
+    }
+
+    @Test
+    fun clearRemovesEntriesThisVersionNeverReads() = runTest {
+        // An earlier version stored one entry per cookie, keyed by host and name. Those entries
+        // are never read back, so clearing has to remove them without enumerating keys.
+        store.data["example.com|session"] = "session=stale; Path=/"
+
+        cookiesStorage.clear()
+
+        store.data.keys.shouldBeEmpty()
     }
 
     @Test

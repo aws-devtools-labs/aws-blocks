@@ -40,7 +40,7 @@ private class AndroidKeyValueStore(
         prefs.getString(key, null)
     }
 
-    override suspend fun remove(key: String) {
-        withContext(Dispatchers.IO) { prefs.edit().remove(key).commit() }
+    override suspend fun clear() {
+        withContext(Dispatchers.IO) { prefs.edit().clear().commit() }
     }
 }

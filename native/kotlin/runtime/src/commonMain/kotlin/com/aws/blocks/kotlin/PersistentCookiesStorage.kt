@@ -69,11 +69,14 @@ internal class PersistentCookiesStorage(
         }
     }
 
-    /** Drops every cookie, in memory and on disk. */
+    /**
+     * Drops every cookie, in memory and in storage. The whole store is cleared rather than the
+     * jar key alone, so cookies written by an earlier version of the library go too.
+     */
     suspend fun clear() = mutex.withLock {
         cookies.clear()
         loaded = true
-        store.remove(JAR_KEY)
+        store.clear()
     }
 
     override fun close() {}

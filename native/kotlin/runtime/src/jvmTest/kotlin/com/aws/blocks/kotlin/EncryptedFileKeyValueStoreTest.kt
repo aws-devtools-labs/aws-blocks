@@ -41,11 +41,29 @@ class EncryptedFileKeyValueStoreTest {
     }
 
     @Test
-    fun removesAValue() = runTest {
+    fun clearRemovesEveryEntry() = runTest {
         val store = store()
         store.put("jar", "hello")
-        store.remove("jar")
+        store.put("example.com|session", "stale")
+
+        store.clear()
+
         store.get("jar").shouldBeNull()
+        store.get("example.com|session").shouldBeNull()
+    }
+
+    @Test
+    fun clearKeepsTheEncryptionKey() = runTest {
+        val store = store()
+        store.put("jar", "hello")
+
+        store.clear()
+
+        // Dropping the key would leave a second instance generating a different one, after which
+        // neither could read what the other wrote.
+        File(storageDir, ".key").exists() shouldBe true
+        store.put("jar", "after")
+        EncryptedFileKeyValueStore("cookies", root).get("jar") shouldBe "after"
     }
 
     @Test

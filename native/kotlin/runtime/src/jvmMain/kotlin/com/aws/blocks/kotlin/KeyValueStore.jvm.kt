@@ -59,8 +59,17 @@ internal class EncryptedFileKeyValueStore(
         decrypt(Files.readString(path))
     }
 
-    override suspend fun remove(key: String) {
-        withContext(Dispatchers.IO) { Files.deleteIfExists(pathFor(key)) }
+    /**
+     * Deletes every entry but keeps the key file. Dropping the key would leave this instance
+     * writing with the key it already memoized while another process installed a different one,
+     * so neither could read the other's entries.
+     */
+    override suspend fun clear() {
+        withContext(Dispatchers.IO) {
+            Files.newDirectoryStream(storageDir).use { entries ->
+                entries.forEach { if (it.fileName.toString() != KEY_FILE) Files.deleteIfExists(it) }
+            }
+        }
     }
 
     private fun pathFor(key: String): Path =
