@@ -16,9 +16,15 @@ export const DistributedDatabaseErrors = {
   /**
    * A DDL statement was attempted on the app-runtime connection, which is
    * DML-only (parity with the production `dsql:DbConnect` IAM grant). Raised by
-   * the mock's DDL guard before execution; on the deployed path the equivalent
-   * rejection comes from DSQL itself and is re-tagged by {@link translateDsqlError}.
-   * Matchable via `isBlocksError(e, DistributedDatabaseErrors.Permission)`.
+   * the mock's DDL guard before execution, and matchable via
+   * `isBlocksError(e, DistributedDatabaseErrors.Permission)`.
+   *
+   * NOTE: this is a MOCK-path name only. On the deployed path DSQL rejects
+   * unsupported statements (DDL, foreign keys) with SQLSTATE 42501, which is
+   * indistinguishable from a genuine grant denial by code alone, so
+   * {@link translateDsqlError} does NOT re-tag 42501 to `Permission` — it lets
+   * it fall through to `QueryFailed` rather than mislabel unsupported DDL as a
+   * permission error.
    */
   Permission: 'DsqlPermissionException',
 } as const;
@@ -34,8 +40,6 @@ export const PG_SERIALIZATION_FAILURE = '40001';
 export const PG_UNIQUE_VIOLATION = '23505';
 /** Connection exception class prefix. Class 08 (Connection Exception). */
 export const PG_CONNECTION_EXCEPTION_CLASS = '08';
-/** Insufficient privilege — a DML/DDL statement the connection's role may not run. Class 42 (Syntax Error or Access Rule Violation). */
-export const PG_INSUFFICIENT_PRIVILEGE = '42501';
 
 /**
  * Maximum rows mutated per DSQL transaction.
@@ -135,14 +139,14 @@ export function translateDsqlError(e: Error): never {
     // the full rationale (409 mapping, preserved name, retained cause, and why
     // it is NOT retriable).
     throw uniqueConstraintConflict(e);
-  } else if (code === PG_INSUFFICIENT_PRIVILEGE) {
-    // Insufficient privilege (SQLSTATE 42501): DSQL rejected a statement the
-    // app-runtime role may not run — the deployed-path equivalent of the mock's
-    // DDL guard. Re-tag to `Permission` with a stable BB message so
-    // `isBlocksError(e, DistributedDatabaseErrors.Permission)` matches on the
-    // DEPLOYED path too, not only against the mock (raw driver text kept as cause).
-    throw reTagged(DistributedDatabaseErrors.Permission, e);
   }
+  // SQLSTATE 42501 (insufficient_privilege) is intentionally NOT special-cased:
+  // on DSQL it covers both a genuine grant denial AND the rejection of an
+  // unsupported statement (DDL, foreign keys), which cannot be told apart by
+  // code alone. Re-tagging every 42501 to `Permission` mislabels an unsupported
+  // FOREIGN KEY as a permission error, so it falls through to `QueryFailed` —
+  // the app-runtime DDL denial is surfaced by the mock's DDL guard, not here.
+  //
   // Brand the re-tagged connection/query error (stable BB message, raw driver
   // error kept as `cause`) so its name crosses the wire without leaking driver
   // text (D-003).
