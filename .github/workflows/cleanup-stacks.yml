@@ -410,23 +410,48 @@ jobs:
           # DefaultComputeAPI retained by the retry_delete_failed step above, because
           # it was un-deletable under throttling), or an old stack was force-removed
           # leaving the API behind. Neither is reclaimed by stack deletion, so sweep
-          # them by name here: our test APIs are named for the app/stack that made
-          # them and are owned by NO live CloudFormation stack.
+          # them by id here: a REST API in scope is owned by NO live CloudFormation
+          # stack.
           echo "🔍 Checking for orphaned API Gateway REST APIs..."
 
-          # Names of REST APIs that ARE still owned by a live stack — never delete these.
-          OWNED=$(aws cloudformation list-stacks \
-            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS \
+          # Ground-truth ownership: the set of REST-API *ids* that ARE resources of a
+          # live stack — never delete an id in this set. We enumerate every live stack
+          # (any non-terminal status) and pull the PhysicalResourceId of each
+          # AWS::ApiGateway::RestApi it owns. This is exact: it matches on the API's
+          # own id, not a guess from its name. The prior name-vs-stackname check was
+          # unsound — a REST API is named for its construct ("DefaultComputeAPI"),
+          # never identically to its stack, so it read as unowned even when live, and
+          # the destructive gate collapsed to name-prefix + age. Matching by id closes
+          # that: "orphan" now means genuinely stack-less.
+          #
+          # DescribeStackResources is one call per stack; the live-stack count in this
+          # account is small (tens), and this step runs at most every 2h, so the call
+          # volume is well within API limits. A describe that errors (race with a
+          # concurrent delete) contributes nothing to OWNED_IDS — the id then falls
+          # through to the name+age gates below, which still refuse anything not
+          # matching a test-artifact name shape.
+          LIVE_STACKS=$(aws cloudformation list-stacks \
+            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS \
             --query "StackSummaries[].StackName" --output text 2>/dev/null | tr '\t' '\n' | sort -u || echo "")
+
+          OWNED_IDS=""
+          for S in $LIVE_STACKS; do
+            [ -z "$S" ] && continue
+            IDS=$(aws cloudformation describe-stack-resources --stack-name "$S" \
+              --query "StackResources[?ResourceType=='AWS::ApiGateway::RestApi'].PhysicalResourceId" \
+              --output text 2>/dev/null | tr '\t' '\n' || echo "")
+            [ -n "$IDS" ] && OWNED_IDS="$OWNED_IDS"$'\n'"$IDS"
+          done
+          OWNED_IDS=$(echo "$OWNED_IDS" | sed '/^$/d' | sort -u)
 
           # All custom REST APIs with id, name and creation epoch.
           APIS=$(aws apigateway get-rest-apis \
             --query "items[].[id,name,createdDate]" --output text 2>/dev/null || echo "")
 
           # Only sweep APIs that (a) match a test-artifact name shape, (b) are old
-          # enough to be clearly abandoned (>6h), and (c) are not owned by any live
-          # stack. The name gate is deliberately conservative — a real, in-use API is
-          # never in scope.
+          # enough to be clearly abandoned (>6h), and (c) are owned by NO live stack
+          # (by id — see OWNED_IDS above). All three must hold; the id-ownership gate
+          # is the hard safety, the name+age gates are conservative belt-and-suspenders.
           STUCK_CUTOFF=$(date -d '6 hours ago' +%s)
           DELETED=0
           SKIPPED_YOUNG=0
@@ -440,6 +465,14 @@ jobs:
 
           while IFS=$'\t' read -r ID NAME CREATED; do
             [ -z "$ID" ] && continue
+
+            # (c) HARD SAFETY: owned by a live stack, matched by id (ground truth).
+            # Checked first so an owned API is never at risk regardless of its name.
+            if echo "$OWNED_IDS" | grep -qxF "$ID" 2>/dev/null; then
+              echo "  ⏭️ Skipping $NAME ($ID) — owned by a live stack"
+              SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
+              continue
+            fi
 
             # (a) test-artifact name shape only. These are the prefixes CI apps use.
             case "$NAME" in
@@ -458,14 +491,6 @@ jobs:
                 SKIPPED_YOUNG=$((SKIPPED_YOUNG + 1))
                 continue
               fi
-            fi
-
-            # (c) not owned by any live stack. Match the API name against live stack
-            # names (test APIs embed their stack/app id in the name).
-            if echo "$OWNED" | grep -qxF "$NAME" 2>/dev/null; then
-              echo "  ⏭️ Skipping $NAME ($ID) — owned by a live stack"
-              SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
-              continue
             fi
 
             if aws apigateway delete-rest-api --rest-api-id "$ID" 2>/dev/null; then
