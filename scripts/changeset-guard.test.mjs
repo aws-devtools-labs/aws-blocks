@@ -580,6 +580,69 @@ describe("validate-structure: native changesets", () => {
 		assert.equal(status, 1, output);
 		assert.match(output, /unknown package "aws-blocks-swift".*not found in native\/swift/s);
 	});
+
+	it("fails on an invalid bump in a native changeset", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			"native/swift/.changeset/bad-bump.md": changeset({ "aws-blocks-swift": "pathc" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /invalid bump "pathc"/);
+		assert.match(output, /native\/swift\/\.changeset\//);
+	});
+
+	it("fails on malformed frontmatter in a native changeset", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			// No leading '---' frontmatter block.
+			"native/swift/.changeset/no-frontmatter.md": `"aws-blocks-swift": patch\n`,
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /missing or malformed frontmatter/);
+		assert.match(output, /native\/swift\/\.changeset\//);
+	});
+
+	it("collects errors across two native trees that both fail", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			// Names a JS-workspace package, unknown to the swift native tree.
+			"native/swift/.changeset/wrong.md": changeset({ [SIBLING]: "patch" }),
+			"native/kotlin/package.json": pkgJson("aws-blocks-kotlin"),
+			// Names the swift package, unknown to the kotlin native tree.
+			"native/kotlin/.changeset/wrong.md": changeset({ "aws-blocks-swift": "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /native\/swift\/\.changeset\/[^:]*: unknown package/);
+		assert.match(output, /native\/kotlin\/\.changeset\/[^:]*: unknown package/);
+	});
+
+	it("counts native changesets in the structurally-valid total", (t) => {
+		// Root has no changesets (config/README only), swift has exactly one valid
+		// changeset, so the count must be 1 — proving native files are validated,
+		// not skipped past the count.
+		const dir = baseRepo(t, {
+			".changeset/config.json": null,
+			".changeset/README.md": null,
+		});
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			"native/swift/.changeset/ok.md": changeset({ "aws-blocks-swift": "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 0, output);
+		assert.match(output, /✓ \d+ changeset\(s\) are structurally valid\./);
+		assert.match(output, /✓ 1 changeset\(s\) are structurally valid\./);
+	});
 });
 
 describe("cli", () => {

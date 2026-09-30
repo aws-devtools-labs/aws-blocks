@@ -45,9 +45,22 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.OPS_GITHUB_TOKEN }}
-          # Don't persist the PAT into .git/config; pushes below authenticate
-          # via an explicit tokenised remote URL instead.
+          # Don't persist the PAT into .git/config. A dedicated "Configure git
+          # auth" step wires up the gh credential helper for the git operations
+          # that need it, so the token is neither stored on disk nor placed in a
+          # git command's argv.
           persist-credentials: false
+
+      - name: Configure git auth
+        env:
+          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+        # Registers `gh auth git-credential` as the credential helper in the
+        # global git config. It stores no secret on disk and only returns the
+        # token to processes that already carry GH_TOKEN in their environment,
+        # so steps without GH_TOKEN stay unauthenticated. This keeps the
+        # `origin` remote usable (so the remote-tracking ref `gh pr create`
+        # needs still gets written) without persisting credentials.
+        run: gh auth setup-git
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -84,15 +97,7 @@ jobs:
           GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          # persist-credentials:false leaves `origin` unauthenticated. Supply the
-          # token via a GIT_ASKPASS helper (reads it from the environment) so it
-          # is never placed in the git command's argv / process list.
-          ASKPASS="$(mktemp)"
-          printf '#!/bin/sh\nprintf %%s "$GH_TOKEN"\n' > "$ASKPASS"
-          chmod +x "$ASKPASS"
-          export GIT_ASKPASS="$ASKPASS"
-          REMOTE="https://x-access-token@github.com/${GITHUB_REPOSITORY}.git"
-          if git ls-remote --heads "$REMOTE" "release/swift-${VERSION}" | grep -q .; then
+          if git ls-remote --heads origin "release/swift-${VERSION}" | grep -q .; then
             echo "::error::Release branch release/swift-${VERSION} already exists."
             exit 1
           fi
@@ -130,30 +135,21 @@ jobs:
           git checkout -b "$BRANCH"
           git add -A
           git commit -m "chore(swift): release ${VERSION}"
-          # persist-credentials:false keeps the PAT out of .git/config. Supply
-          # the token via a GIT_ASKPASS helper (reads it from the environment)
-          # so it is never placed in the git command's argv / process list.
-          ASKPASS="$(mktemp)"
-          printf '#!/bin/sh\nprintf %%s "$GH_TOKEN"\n' > "$ASKPASS"
-          chmod +x "$ASKPASS"
-          export GIT_ASKPASS="$ASKPASS"
-          git push "https://x-access-token@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
+          # Credentials come from the gh credential helper configured in
+          # "Configure git auth", so `origin` (which the checkout set to this
+          # repo) pushes without the token appearing in argv, and the
+          # remote-tracking ref that `gh pr create --head` relies on is written.
+          git push origin "$BRANCH"
 
-          # Build the PR body from a quoted heredoc (<<'EOF' = pure literal, no
-          # command substitution or expansion), then inject the dynamic values
-          # via bash parameter substitution so they are data, never code.
-          BODY=$(cat <<'EOF'
-          ## Swift SDK Release __VERSION__
-
-          __CHANGELOG_ENTRY__
-
-          On merge, this will be tagged `swift@__VERSION__` and synced to aws-blocks-swift.
-          EOF
-          )
-          BODY=${BODY//__VERSION__/$VERSION}
-          BODY=${BODY/__CHANGELOG_ENTRY__/$CHANGELOG_ENTRY}
+          # The PR body is rendered by the tested script
+          # native/swift/scripts/render-release-body.sh: the changelog entry is
+          # piped in on stdin (never argv) and kept literal, so `&`, backticks,
+          # `$(...)` or a bare EOF line in it can't be expanded or truncated.
+          BODY=$(printf '%s' "$CHANGELOG_ENTRY" | native/swift/scripts/render-release-body.sh monorepo "$VERSION")
 
           gh pr create \
+            --base main \
+            --head "$BRANCH" \
             --title "chore(swift): release ${VERSION}" \
             --body "$BODY"
 
@@ -163,8 +159,9 @@ jobs:
           repository: aws-devtools-labs/aws-blocks-swift
           path: target-repo
           token: ${{ secrets.OPS_GITHUB_TOKEN }}
-          # Don't persist the PAT into .git/config; the release-PR step pushes
-          # via an explicit tokenised remote URL instead.
+          # Don't persist the PAT into .git/config; the gh credential helper
+          # configured earlier supplies the token to the push in the release-PR
+          # step below.
           persist-credentials: false
 
       - name: Sync files to aws-blocks-swift
@@ -199,8 +196,9 @@ jobs:
         working-directory: target-repo
         env:
           GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
-          # Pass the changelog as data, not as script text (see the monorepo
-          # step) — prevents $(...) in changelog prose executing on the runner.
+          # Pass the changelog to the step as data via env rather than letting
+          # the workflow expression expand into the script text (see the
+          # monorepo step), so the shell treats the value as data.
           CHANGELOG_ENTRY: ${{ steps.changelog.outputs.entry }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -218,31 +216,21 @@ jobs:
           fi
 
           git commit -m "chore: release ${VERSION}"
-          # persist-credentials:false keeps the PAT out of .git/config. Supply
-          # the token via a GIT_ASKPASS helper (reads it from the environment)
-          # so it is never placed in the git command's argv / process list.
-          ASKPASS="$(mktemp)"
-          printf '#!/bin/sh\nprintf %%s "$GH_TOKEN"\n' > "$ASKPASS"
-          chmod +x "$ASKPASS"
-          export GIT_ASKPASS="$ASKPASS"
-          git push "https://x-access-token@github.com/aws-devtools-labs/aws-blocks-swift.git" "$BRANCH"
+          # Credentials come from the gh credential helper configured in
+          # "Configure git auth"; `origin` here is aws-blocks-swift (set by that
+          # repo's checkout). The token stays out of argv and the
+          # remote-tracking ref `gh pr create --head` needs gets written.
+          git push origin "$BRANCH"
 
-          # Build the PR body from a quoted heredoc (<<'EOF' = pure literal),
-          # then inject the dynamic values via bash parameter substitution so
-          # they are treated as data, never code.
-          BODY=$(cat <<'EOF'
-          ## Release __VERSION__
-
-          __CHANGELOG_ENTRY__
-
-          Synced from aws-blocks monorepo branch `release/swift-__VERSION__`.
-
-          On merge, a git tag `__VERSION__` will be created automatically and a GitHub Release published. Swift Package Manager will pick up the new version via the tag.
-          EOF
-          )
-          BODY=${BODY//__VERSION__/$VERSION}
-          BODY=${BODY/__CHANGELOG_ENTRY__/$CHANGELOG_ENTRY}
+          # The PR body is rendered by the tested script in the monorepo
+          # checkout. This step runs in target-repo (a sibling of the monorepo
+          # root at ../target-repo, per the rsync '../../target-repo'), so the
+          # swift script sits at ../native/swift/scripts. The changelog entry is
+          # piped in on stdin (never argv) and kept literal.
+          BODY=$(printf '%s' "$CHANGELOG_ENTRY" | ../native/swift/scripts/render-release-body.sh target "$VERSION")
 
           gh pr create \
+            --base main \
+            --head "$BRANCH" \
             --title "chore: release ${VERSION}" \
             --body "$BODY"

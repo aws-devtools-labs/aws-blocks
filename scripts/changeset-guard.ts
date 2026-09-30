@@ -17,9 +17,12 @@
  *   validate-structure  Exit non-zero if any changeset on disk is malformed:
  *                   broken frontmatter, an unparseable entry line, an invalid
  *                   bump type, or a package name that does not exist in the
- *                   workspace. The other guards' regex silently ignores lines
- *                   it can't parse, so a typo'd package or bad bump would slip
- *                   through and only fail post-merge at `changeset version`.
+ *                   workspace (or, for a changeset under native/<x>/.changeset,
+ *                   a name that is not that native package from
+ *                   native/<x>/package.json). The other guards' regex silently
+ *                   ignores lines it can't parse, so a typo'd package or bad
+ *                   bump would slip through and only fail post-merge at
+ *                   `changeset version`.
  *
  *   verify-umbrella Exit non-zero if this PR releases a package the umbrella
  *                   `@aws-blocks/blocks` re-exports without any pending
@@ -436,10 +439,15 @@ function getWorkspacePackageNames(): Set<string> {
  * repo-relative name, used as the file-path prefix in error messages;
  * `scopeDesc` names where valid package names come from (e.g. "the workspace").
  * Regex/parsing is identical to the original inline root-dir loop.
+ *
+ * Returns both the `count` of .md files it actually iterated (README.md
+ * excluded) and the `errors` it found, from ONE readdir. Deriving the count and
+ * the errors from the same listing means a zero-count shortcut can never mask
+ * an error a separately-filtered count missed.
  */
-function validateChangesetDir(dir: string, validNames: Set<string>, label: string, scopeDesc: string): string[] {
+function validateChangesetDir(dir: string, validNames: Set<string>, label: string, scopeDesc: string): { count: number; errors: string[] } {
 	const errors: string[] = [];
-	if (!existsSync(dir)) return errors;
+	if (!existsSync(dir)) return { count: 0, errors };
 
 	const files = readdirSync(dir).filter(
 		(f) => f.endsWith(".md") && f !== "README.md",
@@ -473,13 +481,7 @@ function validateChangesetDir(dir: string, validNames: Set<string>, label: strin
 			}
 		}
 	}
-	return errors;
-}
-
-/** Count of validatable changeset files (.md, excluding README) in a dir. */
-function countChangesetFiles(dir: string): number {
-	if (!existsSync(dir)) return 0;
-	return readdirSync(dir).filter((f) => f.endsWith(".md") && f !== "README.md").length;
+	return { count: files.length, errors };
 }
 
 /**
@@ -515,8 +517,9 @@ function validateStructure(): number {
 	// Root changesets: validated against the JS workspace package names,
 	// exactly as before.
 	if (hasRoot) {
-		validated += countChangesetFiles(CHANGESET_DIR);
-		errors.push(...validateChangesetDir(CHANGESET_DIR, getWorkspacePackageNames(), ".changeset", "the workspace"));
+		const result = validateChangesetDir(CHANGESET_DIR, getWorkspacePackageNames(), ".changeset", "the workspace");
+		validated += result.count;
+		errors.push(...result.errors);
 	}
 
 	// Native changesets (native/<x>/.changeset) carry contributor-authored
@@ -528,18 +531,16 @@ function validateStructure(): number {
 		for (const entry of readdirSync(NATIVE_DIR)) {
 			const dir = join(NATIVE_DIR, entry, ".changeset");
 			if (!existsSync(dir)) continue;
-			validated += countChangesetFiles(dir);
-			errors.push(
-				...validateChangesetDir(dir, readNativePackageNames(join(NATIVE_DIR, entry), `native/${entry}`), `native/${entry}/.changeset`, `native/${entry}`),
-			);
+			const result = validateChangesetDir(dir, readNativePackageNames(join(NATIVE_DIR, entry), `native/${entry}`), `native/${entry}/.changeset`, `native/${entry}`);
+			validated += result.count;
+			errors.push(...result.errors);
 		}
 	}
 
-	if (validated === 0) {
-		console.log("✓ No changesets to validate.");
-		return 0;
-	}
-
+	// Check for errors BEFORE the zero-count shortcut. Counting and validation
+	// now come from the same readdir per dir, but ordering the errors check
+	// first guarantees a non-empty errors list can never be masked by a
+	// (correct or not) zero count.
 	if (errors.length > 0) {
 		console.error("\n❌ Changeset structural validation failed:\n");
 		for (const e of errors) {
@@ -548,9 +549,15 @@ function validateStructure(): number {
 		console.error(
 			"\nThese slip past the regex guards but would fail post-merge at `changeset version`.\n" +
 			'Each frontmatter line must read `"<package>": <major|minor|patch>` with a package\n' +
-			"name that exists in the workspace.\n",
+			"name that exists in the workspace. A changeset under native/<x>/.changeset must name\n" +
+			"that native package (from native/<x>/package.json) instead.\n",
 		);
 		return 1;
+	}
+
+	if (validated === 0) {
+		console.log("✓ No changesets to validate.");
+		return 0;
 	}
 
 	console.log(`✓ ${validated} changeset(s) are structurally valid.`);
