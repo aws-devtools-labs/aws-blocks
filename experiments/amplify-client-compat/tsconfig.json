@@ -6,9 +6,22 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "lib": [
+      "ES2022",
+      "DOM"
+    ]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "live-app/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "live-app/**/*.ts",
+    "storage-browser/aws-blocks/**/*.ts",
+    "storage-browser/test/**/*.ts",
+    "storage-browser/web/*.ts"
+  ]
 }
