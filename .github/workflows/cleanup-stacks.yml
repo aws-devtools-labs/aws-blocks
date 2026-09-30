@@ -478,15 +478,6 @@ jobs:
           while IFS=$'\t' read -r ID NAME CREATED; do
             [ -z "$ID" ] && continue
 
-            # Stop attempting deletes once the wall-clock budget is spent; the
-            # remainder defers to the next scheduled run. Guards below still run for
-            # the rest so the counts (young/owned/unmatched) stay accurate, but no
-            # further 31s delete-sleep is incurred once we are over budget.
-            if [ "$SECONDS" -ge "$SWEEP_DEADLINE" ]; then
-              DEFERRED=$((DEFERRED + 1))
-              continue
-            fi
-
             # (c) HARD SAFETY: owned by a live stack, matched by id (ground truth).
             # Checked first so an owned API is never at risk regardless of its name.
             if echo "$OWNED_IDS" | grep -qxF "$ID" 2>/dev/null; then
@@ -518,6 +509,16 @@ jobs:
                 SKIPPED_YOUNG=$((SKIPPED_YOUNG + 1))
                 continue
               fi
+            fi
+
+            # Wall-clock budget spent? This API passed every gate above, so it is a
+            # genuine delete candidate — only such candidates increment DEFERRED, so
+            # the young/owned/unmatched counts stay exact. Stop attempting deletes
+            # and let the next scheduled run (every 2h) take the remainder; the
+            # summary below still runs.
+            if [ "$SECONDS" -ge "$SWEEP_DEADLINE" ]; then
+              DEFERRED=$((DEFERRED + 1))
+              continue
             fi
 
             # Space delete calls out — the REST API delete quota is ~1 request/30s.
