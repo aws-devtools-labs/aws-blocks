@@ -24,6 +24,31 @@ class CodegenFixturesTest : FunSpec({
         )
     }
 
+    for (endpoint in listOf("/aws-blocks/api", "/custom/rpc")) {
+        test("appends the explicit endpoint $endpoint once when servers are absent") {
+            val spec = """
+                {
+                  "openrpc": "1.3.2",
+                  "info": { "title": "Test", "version": "1.0.0" },
+                  "x-blocks-endpoint": "$endpoint",
+                  "methods": [{ "name": "api.greet", "params": [] }]
+                }
+            """.trimIndent()
+            val model = CodegenModelBuilder().build(OpenRpcParser.parse(spec))
+
+            model.servers shouldBe listOf(ServerDefinition("local", "http://localhost:3001"))
+            model.endpoint shouldBe endpoint
+            model.servers.single().url + model.endpoint shouldBe "http://localhost:3001$endpoint"
+
+            val result = KotlinCodeGenerator("com.example.app").generate(model)
+            val serversSource = result.files.single { it.name == "Servers" }.toString()
+            serversSource.contains("url = \"http://localhost:3001\"") shouldBe true
+            val apiSource = result.files.single { it.name == "Api" }.toString()
+                .replace(Regex("\\s+"), " ")
+            apiSource.contains("server.url.toString() + \"$endpoint\"") shouldBe true
+        }
+    }
+
     val regenerate = System.getProperty("REGENERATE_FIXTURES") == "1"
     val fixturesDir = System.getProperty("FIXTURES_DIR")?.let { File(it) }
         ?: throw IllegalStateException("Fixtures dir property must be set - check build.gradle.kts")

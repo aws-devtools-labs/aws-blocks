@@ -48,7 +48,8 @@ class CodegenModelBuilder {
         val apiGroups = groupMethods(model.methods, collector)
 
         val servers = if (model.servers.isEmpty()) {
-            listOf(ServerDefinition("local", "http://localhost:3001/aws-blocks/api"))
+            val fallbackPath = if (model.endpoint == null) "/aws-blocks/api" else ""
+            listOf(ServerDefinition("local", "http://localhost:3001$fallbackPath"))
         } else {
             model.servers.map { ServerDefinition(it.name, it.url) }
         }

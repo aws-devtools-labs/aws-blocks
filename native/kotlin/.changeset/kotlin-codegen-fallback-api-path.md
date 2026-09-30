@@ -2,4 +2,4 @@
 "aws-blocks-kotlin": patch
 ---
 
-Generate the local fallback server URL with the Blocks RPC endpoint path.
+Generate a complete local fallback RPC URL when a spec omits servers, adding the default path only when no explicit endpoint is provided.
