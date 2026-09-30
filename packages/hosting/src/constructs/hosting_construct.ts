@@ -24,7 +24,6 @@ import {
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Rule, RuleTargetInput, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction as LambdaFunctionTarget } from 'aws-cdk-lib/aws-events-targets';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import type { IKey } from 'aws-cdk-lib/aws-kms';
 import { type Alias, Code, type FunctionUrl, type IVersion, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
@@ -1359,32 +1358,11 @@ export class HostingConstruct extends Construct {
       }
     }
 
-    // ---- 9b. KMS decrypt grant for CloudFront OAC ----
-    const kmsKey = props.storage?.encryptionKey ?? storage.bucket.encryptionKey;
-    if (props.storage?.encryption === 'KMS' && kmsKey) {
-      // Scope the grant to CloudFront distributions in THIS account so a distribution in another
-      // account can't be pointed at the key (confused-deputy). We use an account-scoped ArnLike
-      // wildcard rather than this distribution's exact id on purpose: the key is consumed by the
-      // origin bucket that the distribution's OAC depends on, so referencing distributionId here
-      // closes a CloudFormation dependency cycle (key -> distribution -> bucket -> key). The
-      // account boundary is what removes the cross-account shape; the bucket policy already pins
-      // the exact distribution. Mirrors the account-scoped ArnLike trust in bb-agent.
-      kmsKey.addToResourcePolicy(
-        new iam.PolicyStatement({
-          actions: ['kms:Decrypt'],
-          resources: ['*'],
-          principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
-          conditions: {
-            StringEquals: {
-              'aws:SourceAccount': Stack.of(this).account,
-            },
-            ArnLike: {
-              'aws:SourceArn': `arn:aws:cloudfront::${Stack.of(this).account}:distribution/*`,
-            },
-          },
-        }),
-      );
-    }
+    // ---- 9b. KMS decrypt for CloudFront OAC ----
+    // No explicit key-policy statement is added here: `S3BucketOrigin.withOriginAccessControl`
+    // (cdn_construct.ts) grants `kms:Decrypt` on the bucket's key — including a BYO
+    // `storage.encryptionKey`, which is set as the bucket's encryption key — conditioned on
+    // `AWS:SourceArn` matching this account's CloudFront distributions.
 
     // ---- 10. DNS records ----
     if (props.domain && dnsConstructs.length > 0) {

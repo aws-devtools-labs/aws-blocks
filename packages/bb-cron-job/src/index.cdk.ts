@@ -77,16 +77,17 @@ function getOrCreateSchedulerRole(stack: cdk.Stack, handlerArn: string): iam.Rol
 	const existing = (stack as any)[SCHEDULER_ROLE_KEY] as iam.Role | undefined;
 	if (existing) return existing;
 
-	// Scope the trust to this account/region so only EventBridge Scheduler schedules in THIS
-	// account can assume the role. Without these keys any account's schedule could assume the
-	// role and invoke the backend Lambda directly (the 'direct' dispatch path bypasses the HTTP
-	// layer's auth/CORS/origin checks), so IAM is the only boundary. Mirrors the AgentCore
-	// Runtime trust in bb-agent/src/agentcore-runtime.cdk.ts.
+	// The trust is limited to EventBridge Scheduler schedules in this stack's account and region.
+	// Scheduler reports the schedule GROUP ARN (not the individual schedule ARN) as aws:SourceArn,
+	// so the ArnLike pattern matches `schedule-group/*`. Same shape as the AgentCore Runtime trust
+	// in bb-agent/src/agentcore-runtime.cdk.ts.
 	const role = new iam.Role(stack, 'BlocksSchedulerRole', {
 		assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com', {
 			conditions: {
 				StringEquals: { 'aws:SourceAccount': stack.account },
-				ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:scheduler:${stack.region}:${stack.account}:schedule/*` },
+				ArnLike: {
+					'aws:SourceArn': `arn:${stack.partition}:scheduler:${stack.region}:${stack.account}:schedule-group/*`,
+				},
 			},
 		}),
 	});

@@ -4,13 +4,11 @@
 "@aws-blocks/blocks": patch
 ---
 
-fix(bb-cron-job,hosting): scope service-principal trust and resource policies to this account
+fix(bb-cron-job,hosting): scope service-principal grants to the deploying account
 
-Add source-account/source-ARN conditions to two service-principal grants so they
-only apply within the deploying account:
-
-- **bb-cron-job**: the EventBridge Scheduler assume-role trust is now scoped by
-  `aws:SourceAccount` and `aws:SourceArn` (schedule ARN), matching the AgentCore
-  Runtime trust in `bb-agent`.
-- **hosting**: the CloudFront `kms:Decrypt` grant on the SSE-KMS key is now scoped by
-  `aws:SourceAccount` / `aws:SourceArn` to CloudFront distributions in this account.
+- **bb-cron-job**: the EventBridge Scheduler role's trust policy is now limited to
+  schedules in the stack's account and region (`aws:SourceAccount` and an `aws:SourceArn`
+  schedule-group pattern).
+- **hosting**: removed a redundant CloudFront `kms:Decrypt` statement from the SSE-KMS key
+  policy. The Origin Access Control wiring already grants CloudFront decrypt on the bucket key,
+  conditioned on `AWS:SourceArn` matching the account's CloudFront distributions.

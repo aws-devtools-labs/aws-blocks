@@ -165,10 +165,22 @@ describe('CronJob scheduler role trust', () => {
 		);
 		assert.strictEqual(schedulerRoles.length, 1, 'exactly one role trusts scheduler.amazonaws.com');
 
-		const doc = JSON.stringify(schedulerRoles[0].Properties.AssumeRolePolicyDocument);
-		// Without both condition keys any account's schedule could assume this role and drive the
-		// backend Lambda's 'direct' dispatch path (which bypasses the HTTP auth/CORS/origin gates).
-		assert.ok(doc.includes('aws:SourceAccount'), 'scheduler trust must be scoped by aws:SourceAccount');
-		assert.ok(doc.includes('aws:SourceArn'), 'scheduler trust must be scoped by aws:SourceArn');
+		const statements = schedulerRoles[0].Properties.AssumeRolePolicyDocument.Statement as Array<
+			Record<string, Record<string, Record<string, unknown>>>
+		>;
+		const trust = statements.find((s) => JSON.stringify(s.Principal).includes('scheduler.amazonaws.com'));
+		assert.ok(trust, 'scheduler trust statement exists');
+
+		// aws:SourceAccount must equal this stack's account.
+		assert.deepStrictEqual(trust.Condition?.StringEquals?.['aws:SourceAccount'], { Ref: 'AWS::AccountId' });
+
+		// aws:SourceArn must match a schedule-group ARN in this account/region — Scheduler reports the
+		// schedule group ARN, so a `schedule/*` pattern would never match.
+		const sourceArn = JSON.stringify(trust.Condition?.ArnLike?.['aws:SourceArn']);
+		assert.ok(sourceArn.includes(':scheduler:'), `SourceArn targets scheduler: ${sourceArn}`);
+		assert.ok(sourceArn.includes(':schedule-group/*'), `SourceArn is a schedule-group pattern: ${sourceArn}`);
+		assert.ok(sourceArn.includes('AWS::Region'), `SourceArn is region-scoped: ${sourceArn}`);
+		assert.ok(sourceArn.includes('AWS::AccountId'), `SourceArn is account-scoped: ${sourceArn}`);
+		assert.ok(sourceArn.includes('AWS::Partition'), `SourceArn uses the stack partition: ${sourceArn}`);
 	});
 });
