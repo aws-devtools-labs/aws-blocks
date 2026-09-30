@@ -6,6 +6,11 @@ import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
+import kotlinx.coroutines.Dispatchers
+// On Kotlin/Native the public `Dispatchers.IO` is an extension property shadowed by an internal
+// member of the same name, so it resolves only when imported explicitly.
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.withContext
 import platform.CoreFoundation.CFDictionaryAddValue
 import platform.CoreFoundation.CFDictionaryCreateMutable
 import platform.CoreFoundation.CFDictionaryRef
@@ -28,6 +33,8 @@ import platform.Security.SecItemDelete
 import platform.Security.SecItemUpdate
 import platform.Security.errSecItemNotFound
 import platform.Security.errSecSuccess
+import platform.Security.kSecAttrAccessible
+import platform.Security.kSecAttrAccessibleAfterFirstUnlock
 import platform.Security.kSecAttrAccount
 import platform.Security.kSecAttrService
 import platform.Security.kSecClass
@@ -97,7 +104,7 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
      * discard every cookie rather than one. A status that is neither success nor "not found" is
      * raised rather than dropped, so a caller does not read a failed write as a stored one.
      */
-    override suspend fun put(key: String, value: String) {
+    override suspend fun put(key: String, value: String) = withContext(Dispatchers.IO) {
         val data = (value as NSString).dataUsingEncoding(NSUTF8StringEncoding)
             ?: throw KeyValueStoreException("The value for '$key' is not encodable as UTF-8")
 
@@ -110,7 +117,7 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
                 SecItemUpdate(query, attributes)
             }
         }
-        if (updateStatus == errSecSuccess) return
+        if (updateStatus == errSecSuccess) return@withContext
         if (updateStatus != errSecItemNotFound) {
             throw KeyValueStoreException("Updating '$key' in the keychain failed: OSStatus $updateStatus")
         }
@@ -120,6 +127,10 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
             bridged(kSecAttrService, service as NSString)
             bridged(kSecAttrAccount, key as NSString)
             bridged(kSecValueData, data)
+            // Readable once the device has been unlocked after boot, rather than only while it is
+            // unlocked, so a request that completes with the screen locked can still store what it
+            // received. Set only when the item is created; an existing item keeps its own.
+            constant(kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock)
         }) { query ->
             SecItemAdd(query, null)
         }
@@ -128,26 +139,28 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
         }
     }
 
-    override suspend fun get(key: String): String? = withQuery({
-        constant(kSecClass, kSecClassGenericPassword)
-        bridged(kSecAttrService, service as NSString)
-        bridged(kSecAttrAccount, key as NSString)
-        constant(kSecReturnData, kCFBooleanTrue)
-    }) { query ->
-        memScoped {
-            val result = alloc<CFTypeRefVar>()
-            val status: OSStatus = SecItemCopyMatching(query, result.ptr)
-            // Only "not found" means the key is absent. Every other status — a locked device
-            // denying access being the common one — leaves the item in place, so reporting it as
-            // absent would invite the caller to overwrite a keychain item it could not read.
-            if (status == errSecItemNotFound) return@memScoped null
-            if (status != errSecSuccess) {
-                throw KeyValueStoreException("Reading '$key' from the keychain failed: OSStatus $status")
+    override suspend fun get(key: String): String? = withContext(Dispatchers.IO) {
+        withQuery({
+            constant(kSecClass, kSecClassGenericPassword)
+            bridged(kSecAttrService, service as NSString)
+            bridged(kSecAttrAccount, key as NSString)
+            constant(kSecReturnData, kCFBooleanTrue)
+        }) { query ->
+            memScoped {
+                val result = alloc<CFTypeRefVar>()
+                val status: OSStatus = SecItemCopyMatching(query, result.ptr)
+                // Only "not found" means the key is absent. Every other status — a locked device
+                // denying access being the common one — leaves the item in place, so reporting it
+                // as absent would invite the caller to overwrite an item it could not read.
+                if (status == errSecItemNotFound) return@memScoped null
+                if (status != errSecSuccess) {
+                    throw KeyValueStoreException("Reading '$key' from the keychain failed: OSStatus $status")
+                }
+                val data = CFBridgingRelease(result.value) as? NSData
+                    ?: throw KeyValueStoreException("The keychain returned no data for '$key'")
+                NSString.create(data = data, encoding = NSUTF8StringEncoding) as? String
+                    ?: throw KeyValueStoreException("The keychain value for '$key' is not valid UTF-8")
             }
-            val data = CFBridgingRelease(result.value) as? NSData
-                ?: throw KeyValueStoreException("The keychain returned no data for '$key'")
-            NSString.create(data = data, encoding = NSUTF8StringEncoding) as? String
-                ?: throw KeyValueStoreException("The keychain value for '$key' is not valid UTF-8")
         }
     }
 
@@ -156,12 +169,13 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
      * entry to all of them, so entries this version never reads are still removed.
      */
     override suspend fun clear() {
-        withQuery({
-            constant(kSecClass, kSecClassGenericPassword)
-            bridged(kSecAttrService, service as NSString)
-        }) { query ->
-            SecItemDelete(query)
+        withContext(Dispatchers.IO) {
+            withQuery({
+                constant(kSecClass, kSecClassGenericPassword)
+                bridged(kSecAttrService, service as NSString)
+            }) { query ->
+                SecItemDelete(query)
+            }
         }
     }
-
 }

@@ -13,9 +13,8 @@ internal class KeyValueStoreException(
 /**
  * Persistent storage for small string values.
  *
- * Operations suspend so that an implementation can move its I/O off the calling thread. The file
- * and shared-preferences backed stores do; the keychain-backed one runs its calls inline, because
- * they are short synchronous C calls rather than blocking I/O.
+ * Operations suspend because every implementation moves its I/O off the calling thread. Keychain
+ * calls count: they are inter-process requests that block until they return, not local calls.
  */
 internal interface KeyValueStore {
     suspend fun put(key: String, value: String)

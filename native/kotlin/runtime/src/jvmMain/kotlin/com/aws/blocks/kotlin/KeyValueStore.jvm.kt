@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.FileAlreadyExistsException
+import java.nio.file.FileSystemException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -125,21 +126,32 @@ internal class EncryptedFileKeyValueStore(
             Files.createLink(keyPath, temp)
             return true
         } catch (_: FileAlreadyExistsException) {
-            // Another process installed a key first, and its key is the one that entries use.
+            // Another process installed a key first, and its key is the one that entries use. This
+            // clause has to precede the one below, which catches its supertype.
             return false
+        } catch (_: FileSystemException) {
+            // A filesystem with no hard links (FAT, some network mounts) fails the link call
+            // itself rather than declining to offer the operation.
+            return createKeyInPlace(keyPath, encoded)
         } catch (_: UnsupportedOperationException) {
-            // The filesystem has no links, so fall back to creating the file directly and accept
-            // the window that reopens.
-            return runCatching {
-                Files.newOutputStream(keyPath, StandardOpenOption.CREATE_NEW).use { out ->
-                    out.write(encoded.toByteArray())
-                }
-                restrictToOwner(keyPath, directory = false)
-            }.isSuccess
+            // A provider that declines to offer links at all.
+            return createKeyInPlace(keyPath, encoded)
         } finally {
             Files.deleteIfExists(temp)
         }
     }
+
+    /**
+     * Creates the key file directly, for filesystems that cannot link. This reopens the window a
+     * link closes: the file exists before it holds anything, so a process that stops in between
+     * leaves a key that cannot be read.
+     */
+    private fun createKeyInPlace(keyPath: Path, encoded: String): Boolean = runCatching {
+        Files.newOutputStream(keyPath, StandardOpenOption.CREATE_NEW).use { out ->
+            out.write(encoded.toByteArray())
+        }
+        restrictToOwner(keyPath, directory = false)
+    }.isSuccess
 
     /**
      * Retries briefly rather than adopting a truncated key, which would make every entry written
