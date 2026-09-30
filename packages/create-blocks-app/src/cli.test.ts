@@ -34,7 +34,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, nextjs, auth-cognito, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth-cognito, amplify, demo/);
     assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
     assert.match(result.stdout, /auto-detected/);

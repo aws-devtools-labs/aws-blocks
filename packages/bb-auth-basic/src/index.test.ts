@@ -81,6 +81,35 @@ describe('AuthBasic setAuthState errorName', () => {
 	});
 });
 
+describe('AuthBasic confirm forms echo the username (no blank retype)', () => {
+	test('signUp → confirmingSignUp carries the username as a hidden, prefilled field', async () => {
+		const auth = makeAuth({ codeDelivery: async () => {} });
+		const api = apiFor(auth, ctx());
+
+		const next = await api.setAuthState({ action: 'signUp', username: 'alice@example.com', password: 'password123' });
+
+		assert.strictEqual(next.state, 'confirmingSignUp');
+		const field = next.actions?.[0]?.fields?.find((f) => f.name === 'username');
+		assert.ok(field, 'confirmSignUp exposes a username field');
+		assert.strictEqual(field!.type, 'hidden', 'username is hidden (echoed, not a blank retype box)');
+		assert.strictEqual(field!.defaultValue, 'alice@example.com', 'username is prefilled with the just-entered value');
+	});
+
+	test('resetPassword → confirmingPasswordReset carries the username as a hidden, prefilled field', async () => {
+		const auth = makeAuth({ codeDelivery: async () => {} });
+		await auth.signUp('bob@example.com', 'password123');
+		const api = apiFor(auth, ctx());
+
+		const next = await api.setAuthState({ action: 'resetPassword', username: 'bob@example.com' });
+
+		assert.strictEqual(next.state, 'confirmingPasswordReset');
+		const field = next.actions?.[0]?.fields?.find((f) => f.name === 'username');
+		assert.ok(field, 'confirmResetPassword exposes a username field');
+		assert.strictEqual(field!.type, 'hidden');
+		assert.strictEqual(field!.defaultValue, 'bob@example.com');
+	});
+});
+
 /**
  * Telemetry-registration tests for AuthBasic.
  *

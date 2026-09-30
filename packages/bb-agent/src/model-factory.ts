@@ -3,6 +3,7 @@
 
 // Strands runtime is loaded lazily inside createStrandsModel(); only types are
 // imported here. See loadStrands() in agent.ts and issue #153.
+import { installClientUserAgent } from '@aws-blocks/core';
 import type { Model, BaseModelConfig } from '@strands-agents/sdk';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 // `./providers/canned` and `./providers/throwing` extend Strands' `Model`, so importing
@@ -37,7 +38,14 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, cu
 	}
 	log.info(`Checking model health: ${config.provider}${config.modelId ? ` (${config.modelId})` : ''}`);
 	if (config.provider === 'bedrock') {
-		const client: BedrockHealthClient = _testClient ?? new (await import('@aws-sdk/client-bedrock')).BedrockClient({ customUserAgent });
+		let client: BedrockHealthClient;
+		if (_testClient) {
+			client = _testClient;
+		} else {
+			const bedrock = new (await import('@aws-sdk/client-bedrock')).BedrockClient({ customUserAgent });
+			installClientUserAgent(bedrock);
+			client = bedrock;
+		}
 
 		// Try GetInferenceProfile first (covers cross-region and global profiles).
 		try {

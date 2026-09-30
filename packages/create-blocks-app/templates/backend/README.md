@@ -28,6 +28,8 @@ npm run dev         # Local dev server (long-running - use background job)
 npm run sandbox     # Deploy to AWS sandbox
 npm run deploy      # Deploy to production
 npm run test:e2e    # Run end-to-end tests against dev server
+npm run sandbox:destroy  # Tear down the AWS sandbox stack
+npm run destroy          # Tear down the production stack
 ```
 
 ## Local dev vs Sandbox vs Deploy (process model)
