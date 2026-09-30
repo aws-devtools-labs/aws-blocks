@@ -260,6 +260,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async getUrl(path: string, options?: GetUrlOptionsFor<O>): Promise<string> {
+		this.validateKey(path);
 		const expiresIn = (options as any)?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'GET', expiresIn, LOCAL_FILE_SECRET);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -285,6 +286,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async putUrl(path: string, options?: PutUrlOptions): Promise<string> {
+		this.validateKey(path);
 		const expiresIn = options?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -355,6 +357,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async createUploadHandle(path: string, options?: PutUrlOptions): Promise<FileUploadClient> {
+		this.validateKey(path);
 		const expiresIn = options?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -419,6 +422,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async listVersions(path: string): Promise<FileVersionInfo[]> {
+		this.validateKey(path);
 		const versionsDir = versionsDirFor(this.dataDir, path);
 		if (!existsSync(versionsDir)) return [];
 		const entries = readdirSync(versionsDir).filter(isVersionEntry);
@@ -461,6 +465,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async restoreVersion(path: string, versionId: string): Promise<void> {
+		this.validateKey(path);
 		const vPath = versionContentPath(this.dataDir, path, versionId);
 		if (!existsSync(vPath)) {
 			throw blocksError(FileBucketErrors.VersionNotFound, `Version "${versionId}" does not exist for "${path}"`);

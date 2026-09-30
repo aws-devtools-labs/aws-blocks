@@ -176,25 +176,46 @@ describe('restoreVersion() encodes both the key and the caller-supplied versionI
 // the shared validator: a key rejected in local dev must be rejected on AWS too.
 const INVALID_KEYS = ['../etc/passwd', 'a/../../b', '/leading', 'foo\x00bar', 'ctrl\x01char', '.', 'a/./b'];
 
-describe('object-key validation has mock↔AWS parity', () => {
-	for (const key of INVALID_KEYS) {
-		test(`the mock rejects ${JSON.stringify(key)} via its public put()`, async () => {
-			const mock = mockBucket();
-			await assert.rejects(
-				() => mock.put(key, Buffer.from('x')),
-				(err: Error) => err.name === 'ValidationFailed',
-			);
-		});
+// Every public method that accepts an object key. Each is invoked with a single
+// invalid key so both layers are asserted to reject it on the SAME method —
+// guarding against a future divergence where one layer validates a method the
+// other does not. deleteBatch takes an array; the rest take the key first.
+const KEY_METHODS: ReadonlyArray<{
+	name: string;
+	call: (bucket: { [k: string]: (...args: any[]) => unknown }, key: string) => Promise<unknown>;
+}> = [
+	{ name: 'put', call: (b, k) => b.put(k, Buffer.from('x')) as Promise<unknown> },
+	{ name: 'get', call: (b, k) => b.get(k) as Promise<unknown> },
+	{ name: 'delete', call: (b, k) => b.delete(k) as Promise<unknown> },
+	{ name: 'deleteBatch', call: (b, k) => b.deleteBatch([k]) as Promise<unknown> },
+	{ name: 'getUrl', call: (b, k) => b.getUrl(k) as Promise<unknown> },
+	{ name: 'putUrl', call: (b, k) => b.putUrl(k) as Promise<unknown> },
+	{ name: 'createUploadHandle', call: (b, k) => b.createUploadHandle(k) as Promise<unknown> },
+	{ name: 'listVersions', call: (b, k) => b.listVersions(k) as Promise<unknown> },
+	{ name: 'restoreVersion', call: (b, k) => b.restoreVersion(k, 'v1') as Promise<unknown> },
+];
 
-		test(`the AWS runtime rejects ${JSON.stringify(key)} without reaching S3`, async () => {
-			// Any send() reaching the SDK fails the test: the key must be rejected
-			// before the command is dispatched.
-			const { bucket, sent } = awsBucket(() => { throw new Error('should not reach S3'); });
-			await assert.rejects(
-				() => bucket.put(key, Buffer.from('x')),
-				(err: Error) => err.name === 'ValidationFailed',
-			);
-			assert.strictEqual(sent().length, 0, 'no S3 command should have been sent');
-		});
+describe('object-key validation has mock↔AWS parity', () => {
+	for (const { name, call } of KEY_METHODS) {
+		for (const key of INVALID_KEYS) {
+			test(`the mock rejects ${JSON.stringify(key)} on ${name}()`, async () => {
+				const mock = mockBucket();
+				await assert.rejects(
+					() => call(mock as unknown as { [k: string]: (...a: any[]) => unknown }, key),
+					(err: Error) => err.name === 'ValidationFailed',
+				);
+			});
+
+			test(`the AWS runtime rejects ${JSON.stringify(key)} on ${name}() without reaching S3`, async () => {
+				// Any send() reaching the SDK fails the test: the key must be rejected
+				// before the command is dispatched.
+				const { bucket, sent } = awsBucket(() => { throw new Error('should not reach S3'); });
+				await assert.rejects(
+					() => call(bucket as unknown as { [k: string]: (...a: any[]) => unknown }, key),
+					(err: Error) => err.name === 'ValidationFailed',
+				);
+				assert.strictEqual(sent().length, 0, 'no S3 command should have been sent');
+			});
+		}
 	}
 });
