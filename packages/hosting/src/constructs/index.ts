@@ -56,3 +56,41 @@ export {
 	wireManagedValue,
 } from '../secret-resolve.js';
 export { FrameworkType, HostingProps, HostingResources } from '../types.js';
+// Front-door adapters. CloudFront is the default door; ALB, API Gateway, and
+// S3-website are the alternatives.
+export type {
+	AdapterContext,
+	BackendIngress,
+	BackendOrigin,
+	BackendPlan,
+	CapabilityId,
+	CapabilityPlan,
+	FrontDoorAdapter,
+	FrontDoorGraph,
+	FrontDoorLayer,
+	FrontDoorResult,
+	FrontDoorTarget,
+	LayerRole,
+	Origin,
+	OriginRef,
+	RouteTable,
+	SupportTier,
+} from '../plan/types.js';
+export { isOriginRef } from '../plan/types.js';
+export type { FrontDoorLayerAdapter, LayerHandle, OriginHandle } from './layer.js';
+export { renderGraph } from './render-graph.js';
+export { buildCapabilityPlan, ORIGIN_IDS } from '../plan/capability-plan.js';
+export { composeGraph, composeCloudFrontOverRouter } from '../plan/compose.js';
+export type { FrontDoorChoice } from '../plan/compose.js';
+export { negotiate, requiredCapabilities } from '../plan/negotiate.js';
+export { CloudFrontAdapter } from './cloudfront_adapter.js';
+export { AlbAdapter, type AlbRenderContext } from './alb_adapter.js';
+export { AlbConstruct, type AlbConstructProps } from './alb_construct.js';
+export { ApiGatewayAdapter, type ApiGatewayRenderContext } from './apigw_adapter.js';
+export { ApiGatewayConstruct, type ApiGatewayConstructProps } from './apigw_construct.js';
+export { S3WebsiteAdapter, type S3WebsiteRenderContext } from './s3_website_adapter.js';
+export { S3WebsiteConstruct, type S3WebsiteConstructProps } from './s3_website_construct.js';
+// Security-headers ResponseHeadersPolicy factory — reused by core.Hosting to
+// attach HSTS / X-Frame-Options / X-Content-Type-Options on the thin CloudFront
+// edge of the composed CF → ALB door (parity with the default CloudFront door).
+export { createSecurityHeadersPolicy, type SecurityHeadersProps } from './security_headers.js';

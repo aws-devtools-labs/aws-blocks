@@ -1,0 +1,219 @@
+- generic [ref=f2e3]:
+  - navigation [ref=f2e4]:
+    - link "Home" [ref=f2e5] [cursor=pointer]:
+      - /url: /
+    - text: ·
+    - link "About" [ref=f2e6] [cursor=pointer]:
+      - /url: /about
+    - text: ·
+    - link "Routing" [ref=f2e7] [cursor=pointer]:
+      - /url: /routing
+    - text: ·
+    - link "Posts+API" [ref=f2e8] [cursor=pointer]:
+      - /url: /posts
+    - text: ·
+    - link "Deep link" [ref=f2e9] [cursor=pointer]:
+      - /url: /dashboard/settings/profile
+    - text: ·
+    - link "In-app 404" [ref=f2e10] [cursor=pointer]:
+      - /url: /this-route-does-not-exist-xyz
+  - generic [ref=f2e11]:
+    - strong [ref=f2e12]: "Framework:"
+    - code [ref=f2e13]: React + Vite
+    - text: ·
+    - strong [ref=f2e14]: "Variant:"
+    - code [ref=f2e15]: single-page app (client-side routing)
+    - text: ·
+    - strong [ref=f2e16]: "Render mode:"
+    - code [ref=f2e17]: CSR (one index.html, hydrated client-side)
+    - strong [ref=f2e18]: "Built:"
+    - code [ref=f2e19]: Sep 13, 2026, 4:56:35 PM UTC
+    - text: ·
+    - strong [ref=f2e20]: "Rendered:"
+    - code [ref=f2e21]: Sep 14, 2026, 8:57:19 AM UTC
+    - text: ·
+    - emphasis [ref=f2e22]: "SPA: build-time frozen per deploy; render-time is the browser clock"
+  - main [ref=f2e23]:
+    - heading "Home" [level=1] [ref=f2e24]
+    - paragraph [ref=f2e25]:
+      - text: React + Vite single-page-app stress dashboard. Click
+      - strong [ref=f2e26]: Run probes
+      - text: to fetch every route from the browser and auto-check status / body / header. Each row maps to a test-matrix ID.
+    - button "▶ Run probes" [ref=f2e27] [cursor=pointer]
+    - text: 0 pass · 0 fail
+    - group [ref=f2e28]:
+      - generic "Routing (4)" [ref=f2e29] [cursor=pointer]
+      - table [ref=f2e30]:
+        - rowgroup [ref=f2e31]:
+          - row [ref=f2e32]:
+            - columnheader "●" [ref=f2e33]
+            - columnheader "Matrix" [ref=f2e34]
+            - columnheader "Route / feature" [ref=f2e35]
+            - columnheader "How to test" [ref=f2e36]
+            - columnheader "Expected" [ref=f2e37]
+        - rowgroup [ref=f2e38]:
+          - row [ref=f2e39]:
+            - cell "○" [ref=f2e40]
+            - cell [ref=f2e41]:
+              - code [ref=f2e42]: M1.2 / F.1
+            - cell "/ Home (SPA shell) The single index.html shell; React mounts and renders the dashboard." [ref=f2e43]:
+              - link / [ref=f2e44] [cursor=pointer]:
+                - /url: /
+              - generic [ref=f2e45]: Home (SPA shell)
+              - generic [ref=f2e46]: The single index.html shell; React mounts and renders the dashboard.
+            - 'cell "GET / → 200 text/html containing the #root mount node." [ref=f2e47]'
+            - cell "200; index.html shell served from S3." [ref=f2e48]
+          - row [ref=f2e49]:
+            - cell "○" [ref=f2e50]
+            - cell [ref=f2e51]:
+              - code [ref=f2e52]: M7.2 / F.1
+            - cell "/about Deep link → index.html (200 fallback) A client route with no matching file. spaFallback returns /index.html (200); the router renders /about." [ref=f2e53]:
+              - link "/about" [ref=f2e54] [cursor=pointer]:
+                - /url: /about
+              - generic [ref=f2e55]: Deep link → index.html (200 fallback)
+              - generic [ref=f2e56]: A client route with no matching file. spaFallback returns /index.html (200); the router renders /about.
+            - cell "GET /about (hard nav) → 200 + the SAME index.html shell (NOT a 404)." [ref=f2e57]
+            - cell "200; index.html shell (client router owns /about)." [ref=f2e58]
+          - row [ref=f2e59]:
+            - cell "○" [ref=f2e60]
+            - cell [ref=f2e61]:
+              - code [ref=f2e62]: M7.2 / M1.6
+            - cell "/dashboard/settings/profile Deep nested client route → index.html Multi-segment client-only path also falls back to index.html (200)." [ref=f2e63]:
+              - link "/dashboard/settings/profile" [ref=f2e64] [cursor=pointer]:
+                - /url: /dashboard/settings/profile
+              - generic [ref=f2e65]: Deep nested client route → index.html
+              - generic [ref=f2e66]: Multi-segment client-only path also falls back to index.html (200).
+            - cell "GET /dashboard/settings/profile → 200 + index.html shell." [ref=f2e67]
+            - cell "200; index.html shell." [ref=f2e68]
+          - row [ref=f2e69]:
+            - cell "○" [ref=f2e70]
+            - cell [ref=f2e71]:
+              - code [ref=f2e72]: M7.2
+            - cell "/this-route-does-not-exist-xyz Unknown route → 200 shell + in-app 404 Unknown SPA path STILL returns index.html (200); the in-app catch-all route renders a 404 view client-side." [ref=f2e73]:
+              - link "/this-route-does-not-exist-xyz" [ref=f2e74] [cursor=pointer]:
+                - /url: /this-route-does-not-exist-xyz
+              - generic [ref=f2e75]: Unknown route → 200 shell + in-app 404
+              - generic [ref=f2e76]: Unknown SPA path STILL returns index.html (200); the in-app catch-all route renders a 404 view client-side.
+            - cell "GET /nope → 200 (NOT a server 404); open in browser → in-app \"404\" view." [ref=f2e77]
+            - cell "200 shell; client-side 404 view." [ref=f2e78]
+    - group [ref=f2e79]:
+      - generic "Static files (2)" [ref=f2e80] [cursor=pointer]
+      - table [ref=f2e81]:
+        - rowgroup [ref=f2e82]:
+          - row [ref=f2e83]:
+            - columnheader "●" [ref=f2e84]
+            - columnheader "Matrix" [ref=f2e85]
+            - columnheader "Route / feature" [ref=f2e86]
+            - columnheader "How to test" [ref=f2e87]
+            - columnheader "Expected" [ref=f2e88]
+        - rowgroup [ref=f2e89]:
+          - row [ref=f2e90]:
+            - cell "○" [ref=f2e91]
+            - cell [ref=f2e92]:
+              - code [ref=f2e93]: M1.3
+            - cell "/robots.txt Extension path served from S3 A path WITH an extension is a real file → served directly from S3, NOT SPA-fallbacked to index.html." [ref=f2e94]:
+              - link "/robots.txt" [ref=f2e95] [cursor=pointer]:
+                - /url: /robots.txt
+              - generic [ref=f2e96]: Extension path served from S3
+              - generic [ref=f2e97]: A path WITH an extension is a real file → served directly from S3, NOT SPA-fallbacked to index.html.
+            - cell "GET /robots.txt → 200 text/plain with robots body (not HTML)." [ref=f2e98]
+            - cell "200; text/plain robots.txt from S3." [ref=f2e99]
+          - row [ref=f2e100]:
+            - cell "○" [ref=f2e101]
+            - cell [ref=f2e102]:
+              - code [ref=f2e103]: M1.3 / M3.8
+            - cell "/pixel.png Binary asset correct MIME A real PNG under public/ is served from S3 with image/png (not octet-stream / not HTML)." [ref=f2e104]:
+              - link "/pixel.png" [ref=f2e105] [cursor=pointer]:
+                - /url: /pixel.png
+              - generic [ref=f2e106]: Binary asset correct MIME
+              - generic [ref=f2e107]: A real PNG under public/ is served from S3 with image/png (not octet-stream / not HTML).
+            - 'cell "GET /pixel.png → 200 content-type: image/png." [ref=f2e108]'
+            - cell "200; content-type image/png." [ref=f2e109]
+    - group [ref=f2e110]:
+      - generic "Caching (2)" [ref=f2e111] [cursor=pointer]
+      - table [ref=f2e112]:
+        - rowgroup [ref=f2e113]:
+          - row [ref=f2e114]:
+            - columnheader "●" [ref=f2e115]
+            - columnheader "Matrix" [ref=f2e116]
+            - columnheader "Route / feature" [ref=f2e117]
+            - columnheader "How to test" [ref=f2e118]
+            - columnheader "Expected" [ref=f2e119]
+        - rowgroup [ref=f2e120]:
+          - row [ref=f2e121]:
+            - cell "○" [ref=f2e122]
+            - cell [ref=f2e123]:
+              - code [ref=f2e124]: M3.1
+            - cell "/ Hashed JS chunk is immutable Vite emits /assets/*-<hash>.js; those hashed chunks get a long-lived immutable Cache-Control." [ref=f2e125]:
+              - link / [ref=f2e126] [cursor=pointer]:
+                - /url: /
+              - generic [ref=f2e127]: Hashed JS chunk is immutable
+              - generic [ref=f2e128]: Vite emits /assets/*-<hash>.js; those hashed chunks get a long-lived immutable Cache-Control.
+            - cell "Find an /assets/*.js URL in index.html; GET it → cache-control includes immutable + max-age." [ref=f2e129]
+            - cell "immutable, max-age=31536000 on hashed assets." [ref=f2e130]
+          - row [ref=f2e131]:
+            - cell "○" [ref=f2e132]
+            - cell [ref=f2e133]:
+              - code [ref=f2e134]: M3.2
+            - cell "/ index.html not cached stale index.html must revalidate so a redeploy is picked up (no long browser max-age without revalidation)." [ref=f2e135]:
+              - link / [ref=f2e136] [cursor=pointer]:
+                - /url: /
+              - generic [ref=f2e137]: index.html not cached stale
+              - generic [ref=f2e138]: index.html must revalidate so a redeploy is picked up (no long browser max-age without revalidation).
+            - cell "GET / → cache-control has a revalidation signal (must-revalidate / max-age=0 / no-cache) or s-maxage only." [ref=f2e139]
+            - cell "Edge may cache; browser revalidates → no stale shell after deploy." [ref=f2e140]
+    - group [ref=f2e141]:
+      - generic "Headers (1)" [ref=f2e142] [cursor=pointer]
+      - table [ref=f2e143]:
+        - rowgroup [ref=f2e144]:
+          - row [ref=f2e145]:
+            - columnheader "●" [ref=f2e146]
+            - columnheader "Matrix" [ref=f2e147]
+            - columnheader "Route / feature" [ref=f2e148]
+            - columnheader "How to test" [ref=f2e149]
+            - columnheader "Expected" [ref=f2e150]
+        - rowgroup [ref=f2e151]:
+          - row [ref=f2e152]:
+            - cell "○" [ref=f2e153]
+            - cell [ref=f2e154]:
+              - code [ref=f2e155]: M6.5/M6.6/M6.1
+            - cell "/ L3 security headers The L3 attaches HSTS / X-Frame-Options / X-Content-Type-Options on every response." [ref=f2e156]:
+              - link / [ref=f2e157] [cursor=pointer]:
+                - /url: /
+              - generic [ref=f2e158]: L3 security headers
+              - generic [ref=f2e159]: The L3 attaches HSTS / X-Frame-Options / X-Content-Type-Options on every response.
+            - cell "curl -I / → nosniff + SAMEORIGIN + HSTS present." [ref=f2e160]
+            - cell "Security headers on every response." [ref=f2e161]
+    - group [ref=f2e162]:
+      - generic "API (2)" [ref=f2e163] [cursor=pointer]
+      - table [ref=f2e164]:
+        - rowgroup [ref=f2e165]:
+          - row [ref=f2e166]:
+            - columnheader "●" [ref=f2e167]
+            - columnheader "Matrix" [ref=f2e168]
+            - columnheader "Route / feature" [ref=f2e169]
+            - columnheader "How to test" [ref=f2e170]
+            - columnheader "Expected" [ref=f2e171]
+        - rowgroup [ref=f2e172]:
+          - row [ref=f2e173]:
+            - cell "○" [ref=f2e174]
+            - cell [ref=f2e175]:
+              - code [ref=f2e176]: single-origin
+            - cell "POST /aws-blocks/api Blocks API via same origin POST a JSON-RPC call to the relative /aws-blocks/api — CloudFront proxies to the Blocks API GW (no CORS). This is how a static SPA reaches a backend without a second origin." [ref=f2e177]:
+              - link "POST /aws-blocks/api" [ref=f2e178] [cursor=pointer]:
+                - /url: /aws-blocks/api
+              - generic [ref=f2e179]: Blocks API via same origin
+              - generic [ref=f2e180]: POST a JSON-RPC call to the relative /aws-blocks/api — CloudFront proxies to the Blocks API GW (no CORS). This is how a static SPA reaches a backend without a second origin.
+            - 'cell "POST {method:\"api.ping\"} → 200 JSON with result.ok." [ref=f2e181]'
+            - cell "200; backend reachable through the same domain." [ref=f2e182]
+          - row [ref=f2e183]:
+            - cell "○" [ref=f2e184]
+            - cell [ref=f2e185]:
+              - code [ref=f2e186]: single-origin
+            - cell "/.blocks-sandbox/config.json Runtime config.json The deployed config.json carries the relative apiUrl the SPA reads at runtime." [ref=f2e187]:
+              - link "/.blocks-sandbox/config.json" [ref=f2e188] [cursor=pointer]:
+                - /url: /.blocks-sandbox/config.json
+              - generic [ref=f2e189]: Runtime config.json
+              - generic [ref=f2e190]: The deployed config.json carries the relative apiUrl the SPA reads at runtime.
+            - cell "GET /.blocks-sandbox/config.json → apiUrl is /aws-blocks/api." [ref=f2e191]
+            - 'cell "200; apiUrl: /aws-blocks/api." [ref=f2e192]'

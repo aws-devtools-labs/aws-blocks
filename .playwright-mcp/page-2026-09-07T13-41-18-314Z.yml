@@ -1,0 +1,16 @@
+- generic [active] [ref=e1]:
+  - heading "📝 Notes Manager" [level=1] [ref=e2]
+  - paragraph [ref=e3]: Ready
+  - generic [ref=e22]:
+    - paragraph [ref=e23]:
+      - text: Logged in as
+      - strong [ref=e24]: e2e-alb-1757253700@example.com
+      - text: ·
+      - button "Log Out" [ref=e25] [cursor=pointer]
+    - heading "Create Note" [level=2] [ref=e26]
+    - textbox "Title" [ref=e28]
+    - textbox "Content" [ref=e30]
+    - button "Create Note" [ref=e32] [cursor=pointer]
+    - paragraph
+    - heading "Your Notes" [level=2] [ref=e33]
+    - paragraph [ref=e35]: "Failed to load notes: Authentication required"

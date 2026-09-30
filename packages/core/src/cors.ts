@@ -23,15 +23,22 @@ export const CORS_MAX_AGE = '7200';
  * @returns Array of anchored RegExp patterns
  */
 export function parseCorsPatterns(raw: string): RegExp[] {
+  // Case-INSENSITIVE (`i`): an Origin's scheme and host are case-insensitive per
+  // the URL spec, and some AWS hostnames are case-preserving but resolved
+  // case-insensitively — notably an Application Load Balancer's DNS name
+  // (`blocks-Hosti-AbCd….elb.amazonaws.com`), which the browser lowercases in
+  // the `Origin` header. A case-sensitive match would then reject the very
+  // origin the deploy configured (`CORS_HOSTING_ORIGINS`). Matching
+  // case-insensitively is both spec-correct and required for the ALB front door.
   return raw.split(',').map(p => p.trim()).filter(Boolean).map(pattern => {
     try {
       if (pattern.startsWith('^')) {
-        return new RegExp(pattern);
+        return new RegExp(pattern, 'i');
       }
-      return new RegExp(`^${pattern}$`);
+      return new RegExp(`^${pattern}$`, 'i');
     } catch {
       const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return new RegExp(`^${escaped}$`);
+      return new RegExp(`^${escaped}$`, 'i');
     }
   });
 }

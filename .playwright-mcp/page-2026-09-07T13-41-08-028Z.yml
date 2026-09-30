@@ -1,0 +1,16 @@
+- generic [active] [ref=e1]:
+  - heading "📝 Notes Manager" [level=1] [ref=e2]
+  - paragraph [ref=e3]: Ready
+  - generic [ref=e4]:
+    - paragraph [ref=e6]:
+      - text: "Community stats:"
+      - strong [ref=e7]: "0"
+      - text: notes created so far
+    - heading "Sign In" [level=2] [ref=e8]
+    - textbox "Email" [ref=e10]: e2e-alb-1757253700@example.com
+    - textbox "Password" [ref=e12]: TestPass123!
+    - generic [ref=e13]:
+      - button "Log In" [ref=e14] [cursor=pointer]
+      - button "Sign Up" [ref=e15] [cursor=pointer]
+    - paragraph
+    - paragraph [ref=e21]: Confirmed! You can now log in.

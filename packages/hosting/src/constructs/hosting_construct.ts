@@ -56,6 +56,10 @@ import {
 } from '../secret-resolve.js';
 import type { HostingResources } from '../types.js';
 import { CdnConstruct } from './cdn_construct.js';
+import type { LayerHandle } from './layer.js';
+import { renderGraph } from './render-graph.js';
+import { buildCapabilityPlan } from '../plan/capability-plan.js';
+import { composeGraph } from '../plan/compose.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
@@ -351,6 +355,98 @@ export type HostingConstructProps = {
     /** How long to honor old build cookies (seconds). Default: 86400 (24h) */
     maxAge?: number;
   };
+  /**
+   * Which FRONT DOOR serves the deploy. The front door is the public entry
+   * point that routes requests to the origins (static/S3, SSR, image-opt) AND
+   * to the backend/API surface same-origin.
+   *
+   * When Hosting is present this IS the app's shared front door: it owns the
+   * full front-door surface — routing, caching, security (WAF), private-asset
+   * access (S3 OAC / asset-proxy), deployment/atomic-release, custom domains/TLS,
+   * and same-origin routing to the backend/API (each namespace → its owning
+   * compute; see the plan's `backend`). The multi-compute `apiFrontDoor` concept
+   * only stands up its own door when there is NO Hosting to reuse.
+   *
+   * - `'cloudfront'` (default) — the global CloudFront CDN (today's behavior;
+   *   full edge caching, WAF, custom domains, streaming). Unchanged.
+   * - `{ kind: 'alb', … }` — an Application Load Balancer (regional, no CDN).
+   *   For enterprises behind an existing ALB, private/internal deploys, or
+   *   apps that simply don't need a global edge. Capabilities CloudFront does
+   *   at the edge (edge cache, per-route response headers, skew-pin, geo)
+   *   are degraded on ALB and must be accepted via `degrade` (the negotiator
+   *   fails synth otherwise — conscious, never silent).
+   * - `{ kind: 'apiGateway', … }` — an Amazon API Gateway as the front door
+   *   (regional, no CDN, no VPC/NAT, scale-to-zero, pay-per-request). The
+   *   *serverless* sibling of the ALB door: API Gateway owns routing (a route
+   *   per origin/namespace), serves private S3 assets via an asset-proxy
+   *   Lambda, and proxies `/aws-blocks/*` same-origin to the backend natively
+   *   (no forwarder Lambda). Best for a SPA/SSR app that wants no CDN and no
+   *   always-on ALB baseline. Edge capabilities (edge cache, per-route headers,
+   *   skew-pin, geo) and response streaming are degraded/unsupported and must
+   *   be accepted via `degrade`. Choose the flavor with `api`: `'rest'`
+   *   (default) or `'http'` (cheaper HTTP API v2).
+   *
+   * Omit for the CloudFront default (backward-compatible).
+   */
+  frontDoor?:
+    | 'cloudfront'
+    /**
+     * No front door — the app is served DIRECTLY from S3 static-website hosting
+     * (public bucket, HTTP-only, no edge, no router). The cheapest option for a
+     * pure static site / SPA. There is no front door to route to a backend, so
+     * SSR / same-origin API / image-opt / TLS are `unsupported`; the negotiator
+     * fails synth for anything beyond static/SPA (use `'cloudfront'` or
+     * `{ kind: 'alb' }`). `s3-website` is the internal mechanism, not a front door.
+     */
+    | 'none'
+    | {
+        kind: 'alb';
+        /** BYO VPC; a default 2-AZ VPC is created when omitted. */
+        vpc?: import('aws-cdk-lib/aws-ec2').IVpc;
+        /** Internal (private) ALB vs internet-facing. Default: internet-facing. */
+        internal?: boolean;
+        /** Regional ACM certificate for an HTTPS listener (same region as the ALB). */
+        certificate?: ICertificate;
+        /**
+         * Backend API Gateway URL to proxy same-origin (`/aws-blocks/*`) through
+         * the ALB via a Lambda target. Set by the Blocks integration layer from
+         * the `api` prop; enables cookie auth with no CORS.
+         */
+        backendApiUrl?: string;
+        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
+        degrade?: import('../plan/types.js').CapabilityId[];
+      }
+    | {
+        kind: 'apiGateway';
+        /**
+         * The API Gateway flavor. `'http'` (default) is an HTTP API v2 — its auto
+         * `$default` stage is **rootless**, so a SPA/SSR app's root-absolute asset
+         * URLs (`/assets/*`, `/favicon.ico`) resolve directly; it's also cheaper.
+         * `'rest'` is a REST API: it invokes the SSR/image Lambdas with
+         * `lambda:InvokeFunction` (no Function-URL body-hash mismatch), but a bare
+         * REST `execute-api` URL always carries a **stage path** (`/prod/`), which
+         * breaks root-absolute asset URLs — so `'rest'` is only suitable behind a
+         * **custom domain** (base-path mapping to the stage) or a CloudFront edge,
+         * not as a bare standalone door for a root SPA.
+         * @default 'http'
+         */
+        api?: 'rest' | 'http';
+        /** Regional ACM certificate for a custom-domain HTTPS listener (same region). */
+        certificate?: ICertificate;
+        /**
+         * Backend API URL to proxy same-origin (`/aws-blocks/*`) through the
+         * gateway. Set by the Blocks integration layer from the `api` prop;
+         * enables cookie auth with no CORS. API Gateway proxies an external
+         * HTTPS URL natively — no forwarder Lambda (unlike the ALB door).
+         */
+        backendApiUrl?: string;
+        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
+        degrade?: import('../plan/types.js').CapabilityId[];
+      };
+  // NOTE: S3-website is not a public front-door *kind* — it is an ORIGIN, not a
+  // front door (it fronts nothing). It is surfaced as `frontDoor: 'none'` (serve
+  // the origin directly); `s3-website` is the internal adapter/mechanism name,
+  // reachable via `composeGraph`/`renderGraph`, never via this public union.
 };
 
 // ---- Main construct ----
@@ -371,10 +467,36 @@ export type HostingConstructProps = {
  */
 export class HostingConstruct extends Construct {
   readonly bucket: Bucket;
-  readonly distribution: Distribution;
+  /**
+   * The CloudFront distribution. Present for the default `cloudfront` front
+   * door; `undefined` when a non-CloudFront front door (e.g. `alb`) is selected.
+   */
+  readonly distribution?: Distribution;
+  /**
+   * The Application Load Balancer's DNS name, present when the front door is an
+   * ALB (`frontDoor: { kind: 'alb' }`, or the ALB router built for the composed
+   * CF → ALB door). Mutually exclusive with {@link distribution}. The composed
+   * door's edge reads this to point CloudFront's single origin at the ALB.
+   */
+  loadBalancerDnsName?: string;
+  /**
+   * The PUBLIC website bucket, present only for `frontDoor: 'none'` (served
+   * directly from S3 website hosting — its own public bucket, from root). The Blocks
+   * wrapper publishes `config.json` here so a cross-origin SPA reads the absolute
+   * API URL from the origin it loads from. Absent for every other door.
+   */
+  readonly websiteBucket?: import('aws-cdk-lib/aws-s3').IBucket;
   readonly distributionUrl: string;
+  /**
+   * The immutable Build ID for this deploy. Static assets live under
+   * `builds/<buildId>/`; a composed router layer (e.g. the CF → ALB → infra
+   * front door) reads it to prefix the same asset keys.
+   */
+  readonly buildId: string;
   readonly computeFunctions: Map<string, LambdaFunction | experimental.EdgeFunction> = new Map();
-  private readonly cdn: CdnConstruct;
+  // Present only for the default CloudFront door; a non-CloudFront front door
+  // (ALB / API Gateway / S3-website) builds no CdnConstruct.
+  private readonly cdn?: CdnConstruct;
   readonly computeFunctionUrls: Map<string, FunctionUrl> = new Map();
   /**
    * `live` aliases for compute resources with provisioned concurrency.
@@ -416,7 +538,8 @@ export class HostingConstruct extends Construct {
    * reachable through the KVS route table.
    */
   addBuildAssetDependency(dependency: IDependable): void {
-    this.cdn.addBuildAssetDependency(dependency);
+    // No-op for non-CloudFront doors — there's no KVS route table to gate.
+    this.cdn?.addBuildAssetDependency(dependency);
   }
 
   /**
@@ -445,6 +568,7 @@ export class HostingConstruct extends Construct {
       );
     }
     const buildId = manifest.buildId ?? generateBuildId();
+    this.buildId = buildId;
 
     // Skew-protection cookie must not outlive the build artifacts it pins
     // to. A `maxAge` longer than `buildRetentionDays` lets a returning
@@ -1040,6 +1164,21 @@ export class HostingConstruct extends Construct {
       }
     }
 
+    // ---- Front-door selection ----
+    // Which front door serves the deploy: CloudFront (default) or a
+    // non-CloudFront door (ALB). Storage + compute + cache + image + the S3
+    // asset upload (sections 1-5, 11-12) are front-door-AGNOSTIC and run for
+    // BOTH; the CloudFront-specific wiring (WAF, DNS-via-CF, security-headers
+    // policy, the CDN distribution, OPEN_NEXT_ORIGIN, OAC KMS grant) is guarded
+    // by `!useAlb` below. The ALB branch renders the same neutral CapabilityPlan
+    // onto an Application Load Balancer.
+    // The CloudFront default handles `undefined` and `'cloudfront'`. Every other
+    // value — `'none'` (serve S3 directly) or `{ kind: 'alb' }` — is a
+    // non-CloudFront door rendered via the front-door graph below.
+    const useCustomDoor = props.frontDoor !== undefined && props.frontDoor !== 'cloudfront';
+    let cdn: CdnConstruct | undefined;
+
+    if (!useCustomDoor) {
     // ---- 6. WAF (conditional) ----
     // Determine effective WebACL ARN: waf.webAclArn > cdn.webAclArn > create new
     const effectiveWebAclArn = props.waf?.webAclArn ?? props.cdn?.webAclArn;
@@ -1128,7 +1267,7 @@ export class HostingConstruct extends Construct {
       }
     }
 
-    const cdn = new CdnConstruct(this, 'Cdn', {
+    cdn = new CdnConstruct(this, 'Cdn', {
       bucket: this.bucket,
       manifest: manifestWithBuildId,
       securityHeadersPolicy,
@@ -1165,7 +1304,7 @@ export class HostingConstruct extends Construct {
     // BYO domain users need this to set up their external DNS CNAME.
     if (resolvedDomainNames.length > 0) {
       new CfnOutput(this, 'DistributionDomainName', {
-        value: this.distribution.distributionDomainName,
+        value: cdn.distribution.distributionDomainName,
         description: 'CloudFront distribution domain name. Point your DNS CNAME to this value.',
       });
     }
@@ -1374,8 +1513,131 @@ export class HostingConstruct extends Construct {
     // ---- 10. DNS records ----
     if (props.domain && dnsConstructs.length > 0) {
       for (const dns of dnsConstructs) {
-        dns.createDnsRecords(this.distribution);
+        dns.createDnsRecords(cdn.distribution);
       }
+    }
+    } else {
+      // ---- Front door: non-CloudFront (dispatch by kind) ----
+      // Storage + compute are already built above (front-door-agnostic). Each
+      // adapter renders the SAME neutral CapabilityPlan onto its service, after
+      // negotiating (conscious degradation). Static assets are uploaded to
+      // `builds/<buildId>/` by the shared section 12 below and read by each
+      // door's asset-proxy. Skew-pin is a CloudFront-edge capability; leave it
+      // off the plan so it is not a required capability these doors would reject
+      // (apps opt into other degradations via `degrade`).
+      // `'none'` (bare string) → serve S3 directly; otherwise an object door (alb).
+      const isNone = props.frontDoor === 'none';
+      const fd = isNone ? undefined : (props.frontDoor as Extract<HostingConstructProps['frontDoor'], { kind: string }>);
+      const serverName = this.computeFunctions.has('default')
+        ? 'default'
+        : this.computeFunctions.has('server')
+          ? 'server'
+          : undefined;
+      const hasImageOrigin = this.computeFunctions.has('image-optimization');
+      const computeFunctions = this.computeFunctions as Map<
+        string,
+        import('aws-cdk-lib/aws-lambda').IFunction
+      >;
+      // Same-origin backend routing: a single `'*'` origin (single-compute) from
+      // the backend API URL the Blocks layer threads in. A future multi-compute
+      // caller passes several named-namespace origins here; the adapters already
+      // loop over `plan.backend.origins`. Omitting it = cross-origin API.
+      const backendApiUrl = fd && 'backendApiUrl' in fd ? fd.backendApiUrl : undefined;
+      const backendOrigins = backendApiUrl
+        ? [{ namespace: '*', ingress: { kind: 'url' as const, url: backendApiUrl } }]
+        : undefined;
+      // Demand signals from the app's props/manifest (the demand surface) — the
+      // negotiator requires the matching capability ONLY when the app asked for
+      // it, so a door that lacks an UN-demanded feature negotiates clean (missing
+      // ≠ degraded). A door that lacks a DEMANDED feature fails/degrades loudly
+      // instead of silently dropping it.
+      const serverStreams = serverName ? manifest.compute?.[serverName]?.streaming === true : false;
+      const plan = buildCapabilityPlan({
+        manifest,
+        buildId,
+        hasServer: Boolean(serverName),
+        hasImage: hasImageOrigin,
+        skewEnabled: false,
+        wwwRedirect: props.domain?.wwwRedirect,
+        backendOrigins,
+        demand: {
+          customDomain: Boolean(props.domain),
+          wafEnabled: props.waf?.enabled === true || Boolean(props.waf?.webAclArn),
+          loggingEnabled: Boolean(props.logging),
+          hasCustomErrorPages: Boolean(props.errorPages),
+          needsStreaming: serverStreams,
+          geoRestricted: Boolean(props.cdn?.geoRestriction),
+          monitoringEnabled: Boolean(props.monitoring),
+        },
+      });
+      const common = {
+        bucket: this.bucket,
+        computeFunctions,
+        serverComputeName: serverName,
+        imageComputeName: hasImageOrigin ? 'image-optimization' : undefined,
+      };
+      // Compose the (single-layer) front-door graph and render it. The graph is
+      // now the dispatch driver for the non-CloudFront doors; each door's ctx
+      // carries the CDK handles the neutral graph can't. Output is byte-identical
+      // to the previous direct `adapter.render(...)` (renderGraph → the same
+      // adapter's renderLayer → the same construct).
+      let handle: LayerHandle;
+      if (isNone) {
+        // No front door — serve the origin directly via S3 website hosting. The
+        // negotiator throws here if the app demands anything beyond static/SPA
+        // (SSR, same-origin API, image-opt, TLS) — never a silently broken deploy.
+        // ('none' maps to the internal `s3-website` renderer.)
+        handle = renderGraph(this, composeGraph(plan, 's3-website'), plan, {
+          staticDir: manifest.staticAssets.directory,
+        });
+      } else if (fd?.kind === 'alb') {
+        handle = renderGraph(this, composeGraph(plan, 'alb'), plan, {
+          ...common,
+          vpc: fd.vpc,
+          internal: fd.internal,
+          certificate: fd.certificate,
+          // Native ALB features, driven by the same props that set the demand
+          // flags — so a demanded capability is actually built, not just claimed.
+          accessLogging: Boolean(props.logging),
+          waf: props.waf,
+          monitoring: Boolean(props.monitoring),
+          degrade: fd.degrade,
+        });
+        // The ALB's DNS (from the layer's origin handle) — the composed CF → ALB
+        // edge reads this to point CloudFront's single origin at the ALB.
+        this.loadBalancerDnsName = handle.originHandle?.domainName;
+      } else if (fd?.kind === 'apiGateway') {
+        // API Gateway owns routing: a route per origin (asset-proxy → private S3,
+        // SSR/image Lambdas) plus native same-origin backend proxy. `api` picks
+        // REST (default; lambda:InvokeFunction — no Function-URL body-hash issue)
+        // vs the cheaper HTTP API v2. Edge capabilities (cache/headers/skew/geo)
+        // and streaming are degraded/unsupported and accepted via `degrade`.
+        handle = renderGraph(this, composeGraph(plan, 'api-gateway'), plan, {
+          ...common,
+          apiType: fd.api ?? 'http',
+          // Custom domain: names come from `domain`; the regional cert is the
+          // door's `certificate` (BYO, stack-region) or `domain.certificate`,
+          // else DNS-validated against the hosted zone by the construct.
+          domain: props.domain
+            ? {
+                names: Array.isArray(props.domain.domainName) ? props.domain.domainName : [props.domain.domainName],
+                hostedZone: props.domain.hostedZone,
+                hostedZoneId: props.domain.hostedZoneId,
+                certificate: fd.certificate ?? props.domain.certificate,
+              }
+            : undefined,
+          degrade: fd.degrade,
+        });
+      } else {
+        throw new HostingError('UnsupportedFrontDoorError', {
+          message: `Unknown front door '${JSON.stringify(props.frontDoor)}'.`,
+          resolution: "Use 'cloudfront' (default), 'none' (S3 website), { kind: 'alb' }, or { kind: 'apiGateway' }.",
+        });
+      }
+      this.distributionUrl = handle.url ?? '';
+      // The S3-website door serves from its own public bucket; expose it so the
+      // Blocks wrapper can publish config.json to the same (cross-origin) origin.
+      if (handle.publicBucket) this.websiteBucket = handle.publicBucket;
     }
 
     // ---- 11. Error page deployment (SSR only) ----
@@ -1385,7 +1647,7 @@ export class HostingConstruct extends Construct {
     // them (see `cdn.addBuildAssetDependency` at the end of this method) so
     // the buildId cutover never races ahead of the asset uploads.
     const buildAssetDeployments: BucketDeployment[] = [];
-    if (hasCompute) {
+    if (hasCompute && cdn) {
       buildAssetDeployments.push(
         new BucketDeployment(this, 'ErrorPageDeployment', {
           sources: [Source.data(ERROR_PAGE_KEY, cdn.errorPageHtml)],
@@ -1401,7 +1663,7 @@ export class HostingConstruct extends Construct {
     // (spaFallback === false) that shipped no 404.html and got no
     // user-supplied notFound page. Deploy it so the wired CloudFront 403/404
     // → /builds/<id>/_not_found.html responses resolve from S3.
-    if (cdn.defaultNotFoundPageHtml) {
+    if (cdn?.defaultNotFoundPageHtml) {
       new BucketDeployment(this, 'DefaultNotFoundPageDeployment', {
         sources: [Source.data(NOT_FOUND_PAGE_KEY, cdn.defaultNotFoundPageHtml)],
         destinationBucket: this.bucket,
@@ -1724,8 +1986,12 @@ export class HostingConstruct extends Construct {
     // functions / updates the distribution to route at the new buildId.
     // Without this, the buildId could propagate globally before the assets
     // landed, 403-ing new/cookieless visitors for the deploy window.
-    for (const dep of buildAssetDeployments) {
-      cdn.addBuildAssetDependency(dep);
+    // (CloudFront only — the ALB front door reads S3 live, so there is no
+    // build-id cutover to gate.)
+    if (cdn) {
+      for (const dep of buildAssetDeployments) {
+        cdn.addBuildAssetDependency(dep);
+      }
     }
 
     // ---- CloudFormation resource-count guard ----

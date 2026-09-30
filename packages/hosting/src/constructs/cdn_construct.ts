@@ -21,6 +21,7 @@ import {
   IResponseHeadersPolicy,
   KeyValueStore,
   LambdaEdgeEventType,
+  OriginProtocolPolicy,
   OriginRequestCookieBehavior,
   OriginRequestHeaderBehavior,
   OriginRequestPolicy,
@@ -58,13 +59,14 @@ import { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
   ORIGIN_ID,
-  buildKvsEntries,
   generateKvsRouterRequestCode,
   generateKvsRouterResponseCode,
   generateSentinelGuardCode,
   generateEdgeBasePathStripCode,
+  renderKvsEntries,
   routeSpecificity,
 } from './kvs_router.js';
+import { buildCapabilityPlan } from '../plan/capability-plan.js';
 import { KvKeys } from './kv_keys.js';
 import {
   AwsCustomResource,
@@ -123,6 +125,14 @@ export type CdnConstructProps = {
    * built-in default CSP is used.
    */
   contentSecurityPolicy?: string;
+  /**
+   * Extra public HTTP origins to front as nested child layers (composition:
+   * CloudFront edge → a child router/origin, e.g. CF → ALB). Each becomes an
+   * `HttpOrigin(domainName)` bound to an additional behavior at `pattern`, with
+   * cookies/Authorization forwarded and caching disabled. Omit for the default
+   * CloudFront-over-own-origins shape (byte-identical).
+   */
+  extraHttpOrigins?: { pattern: string; domainName: string; protocol: 'http' | 'https' }[];
   /** Map of compute name → Function URL for per-origin routing. */
   computeFunctionUrls?: Map<string, IFunctionUrl>;
   /** Map of compute name → Lambda function for OAC permission patching. */
@@ -721,7 +731,11 @@ export class CdnConstruct extends Construct {
     // server Lambda (which doesn't contain the split routes → 500).
     const edgeTargets = new Set(props.routeEdgeFunctions?.keys() ?? []);
 
-    const kvsEntries = buildKvsEntries({
+    // Build the service-agnostic CapabilityPlan (origins + route table +
+    // policies + release), then RENDER it onto CloudFront's KVS. The plan is the
+    // single source of routing truth every front-door adapter shares; CloudFront
+    // is one renderer of it.
+    const plan = buildCapabilityPlan({
       manifest,
       buildId,
       hasServer: Boolean(taggedServerOrigin),
@@ -729,6 +743,8 @@ export class CdnConstruct extends Construct {
       wwwRedirect: props.wwwRedirect,
       skewEnabled,
       edgeTargets,
+    });
+    const kvsEntries = renderKvsEntries(plan, {
       // Tunable route-table budget (issue #8) — raise via quotas.maxRouteChunks
       // for a very large site after verifying edge-function compute headroom.
       maxChunksPerTable: props.quotas?.maxRouteChunks,
@@ -859,6 +875,25 @@ export class CdnConstruct extends Construct {
         functionAssociations: [
           { function: getSentinelGuardFn(), eventType: FunctionEventType.VIEWER_REQUEST },
         ],
+      };
+    }
+
+    // ---- Nested-layer origins (composition: CloudFront edge → a child layer) ----
+    // Each entry fronts a child front-door layer (e.g. an ALB router) as a public
+    // HTTP origin at its own path — the same mechanism as the API HttpOrigin
+    // above. Cookies/Authorization are forwarded and caching is disabled so the
+    // child owns the response. Empty/undefined ⇒ no behaviors added ⇒ the default
+    // CloudFront template is byte-identical (guarded by the golden test).
+    for (const child of props.extraHttpOrigins ?? []) {
+      additionalBehaviors[child.pattern] = {
+        origin: new HttpOrigin(child.domainName, {
+          protocolPolicy: child.protocol === 'https' ? OriginProtocolPolicy.HTTPS_ONLY : OriginProtocolPolicy.HTTP_ONLY,
+        }),
+        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        allowedMethods: AllowedMethods.ALLOW_ALL,
+        cachePolicy: CachePolicy.CACHING_DISABLED,
+        originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        responseHeadersPolicy: props.securityHeadersPolicy,
       };
     }
 

@@ -1,0 +1,77 @@
+- generic [ref=e257]:
+  - navigation [ref=e258]:
+    - link "Home" [ref=e259] [cursor=pointer]:
+      - /url: /
+    - text: ·
+    - link "About" [ref=e260] [cursor=pointer]:
+      - /url: /about
+    - text: ·
+    - link "Routing" [ref=e261] [cursor=pointer]:
+      - /url: /routing
+    - text: ·
+    - link "Posts+API" [ref=e262] [cursor=pointer]:
+      - /url: /posts
+    - text: ·
+    - link "Auth" [ref=e263] [cursor=pointer]:
+      - /url: /auth
+    - text: ·
+    - link "Data" [ref=e264] [cursor=pointer]:
+      - /url: /data
+    - text: ·
+    - link "Storage" [ref=e265] [cursor=pointer]:
+      - /url: /storage
+    - text: ·
+    - link "Deep link" [ref=e266] [cursor=pointer]:
+      - /url: /dashboard/settings/profile
+    - text: ·
+    - link "In-app 404" [ref=e267] [cursor=pointer]:
+      - /url: /this-route-does-not-exist-xyz
+  - generic [ref=e268]:
+    - strong [ref=e269]: "Framework:"
+    - code [ref=e270]: React + Vite
+    - text: ·
+    - strong [ref=e271]: "Variant:"
+    - code [ref=e272]: single-page app (client-side routing)
+    - text: ·
+    - strong [ref=e273]: "Render mode:"
+    - code [ref=e274]: CSR (one index.html, hydrated client-side)
+    - strong [ref=e275]: "Built:"
+    - code [ref=e276]: Sep 18, 2026, 5:00:02 PM UTC
+    - text: ·
+    - strong [ref=e277]: "Rendered:"
+    - code [ref=e278]: Sep 18, 2026, 5:02:41 PM UTC
+    - text: ·
+    - emphasis [ref=e279]: "SPA: build-time frozen per deploy; render-time is the browser clock"
+  - main [ref=e280]:
+    - heading "Storage (FileBucket)" [level=1] [ref=e281]
+    - paragraph [ref=e282]:
+      - text: Per-user files backed by the
+      - code [ref=e283]: FileBucket
+      - text: "Building Block:"
+      - code [ref=e284]: put
+      - text: /
+      - code [ref=e285]: get
+      - text: /
+      - code [ref=e286]: scan
+      - text: ", all gated behind a session and namespaced by username."
+    - button "Sign in + list my files" [ref=e287]
+    - generic [ref=e288]: (not run)
+    - generic [ref=e289]:
+      - generic [ref=e290]:
+        - heading "🔬 Storage BB — FileBucket (per-user)" [level=2] [ref=e291]
+        - code [ref=e292]: storage / file-bucket
+        - generic [ref=e293]: 0 pass · 0 fail
+      - paragraph [ref=e294]:
+        - strong [ref=e295]: "Validates:"
+        - text: A signed-in user's file put→get returns content+size, scan lists it, and a fresh user's listing is empty (per-user prefix isolation).
+      - button "▶ Run validation" [ref=e296] [cursor=pointer]
+      - list [ref=e297]:
+        - listitem [ref=e298]:
+          - generic [ref=e299]: ○
+          - generic [ref=e300]: "protected: filePut then fileGet returns the content + size"
+        - listitem [ref=e301]:
+          - generic [ref=e302]: ○
+          - generic [ref=e303]: "protected: fileList (scan) shows the uploaded file"
+        - listitem [ref=e304]:
+          - generic [ref=e305]: ○
+          - generic [ref=e306]: "isolation: a fresh user sees an empty bucket listing"
