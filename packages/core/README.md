@@ -379,7 +379,7 @@ By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin
 If you use the `Hosting` construct with your API, CORS is handled automatically:
 
 - **Same-origin requests** (frontend fetches through the CloudFront proxy at `/aws-blocks/api`) work without CORS headers since the browser treats them as same-origin.
-- **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct automatically adds the CloudFront distribution's domain to `CORS_ALLOWED_ORIGINS` on the backend Lambda. You do **not** need to configure CORS manually.
+- **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct registers the CloudFront distribution's domain (or your custom domain) as `CORS_HOSTING_ORIGINS` in the backend's S3 config, where it is compiled separately as an escaped literal origin. Your `CORS_ALLOWED_ORIGINS` is left untouched. You do **not** need to configure CORS manually.
 
 In sandbox mode, the localhost pattern is also preserved so your local dev frontend still works.
 
@@ -414,6 +414,6 @@ Each entry is treated as a **regex pattern** (anchored with `^` and `$`). Exampl
 
 Multiple patterns are comma-separated. If a pattern is invalid regex, it falls back to literal string match.
 
-> **Escape the dots.** Because each entry is a regex, an unescaped `.` matches *any* character — so `https://app.example.com` also matches unrelated hosts like `https://appXexample.com`. Always escape literal dots: write `https://app\\.example\\.com`, not `https://app.example.com`. A start-anchored entry (one beginning with `^`) is automatically end-anchored with `$` if you omit it, so `^https://app\\.example\\.com` only matches that exact origin, not `https://app.example.com.extra`; the appended anchor wraps the whole expression, so every branch of a top-level `|` alternation is end-anchored too. Prefer separate comma-separated entries over one `|`-joined entry for readability. The CloudFront origin the `Hosting` construct injects for you is always escaped and anchored automatically.
+> **Escape the dots.** Because each entry is a regex, an unescaped `.` matches *any* character — so `https://app.example.com` also matches unrelated hosts like `https://appXexample.com`. Always escape literal dots: write `https://app\\.example\\.com`, not `https://app.example.com`. Each entry is compiled as `^(?:<entry>)$`, so it must match the whole origin: `^https://app\\.example\\.com` (or just `https://app\\.example\\.com`) matches that exact origin, not `https://app.example.com.extra`. Because the anchors wrap the whole expression, every branch of a top-level `|` alternation is anchored too. Prefer separate comma-separated entries over one `|`-joined entry for readability. The CloudFront origin the `Hosting` construct injects for you is always escaped and anchored automatically.
 
 If an origin doesn't match any pattern, the handler omits the `Access-Control-Allow-Origin` header (browser blocks the response) and logs a `[CORS]` warning to CloudWatch.

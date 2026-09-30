@@ -12,47 +12,34 @@
 export const CORS_MAX_AGE = '7200';
 
 /**
+ * Split a comma-separated origin string into trimmed, non-empty entries. Shared
+ * by {@link parseCorsPatterns} and {@link getCorsPatterns} so the regex and
+ * hosting-literal channels tokenize the CSV identically.
+ */
+function splitOrigins(raw: string): string[] {
+  return raw.split(',').map(p => p.trim()).filter(Boolean);
+}
+
+/**
  * Parse a comma-separated CORS origin string into anchored RegExp patterns.
  *
- * Each entry is treated as a regex pattern:
- * - If it starts with `^`, it's used as start-anchored; a `$` end anchor is
- *   appended (wrapping the whole expression as `(?:…)$`) unless the pattern
- *   already ends with an unescaped `$`. Wrapping makes the end anchor bind the
- *   entire expression — including a top-level `|` alternation — so every branch
- *   is end-anchored, not just the last. This keeps a start-only-anchored entry
- *   like `^https://app\.example\.com` from also matching a longer origin such as
- *   `https://app.example.com.extra`.
- * - Otherwise it's wrapped with `^...$` anchors.
- * - If the resulting regex is invalid, the entry is escaped and matched literally.
+ * Each entry is compiled as `^(?:<entry>)$`: the `^` and `$` bind the whole
+ * expression, so every branch of a top-level `|` alternation is end-anchored,
+ * not just the last. A leading `^` or trailing `$` inside the entry is
+ * redundant and harmless. If the resulting regex is invalid, the entry falls
+ * back to a literal (escaped) match via {@link escapeOriginToPattern}.
  *
  * @param raw - Comma-separated CORS patterns (e.g. `"https://example\\.com,^https?://localhost(:\\d+)?$"`)
  * @returns Array of anchored RegExp patterns
  */
 export function parseCorsPatterns(raw: string): RegExp[] {
-  return raw.split(',').map(p => p.trim()).filter(Boolean).map(pattern => {
+  return splitOrigins(raw).map(pattern => {
     try {
-      if (pattern.startsWith('^')) {
-        return endsWithUnescapedDollar(pattern) ? new RegExp(pattern) : new RegExp(`(?:${pattern})$`);
-      }
-      return new RegExp(`^${pattern}$`);
+      return new RegExp(`^(?:${pattern})$`);
     } catch {
-      const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return new RegExp(`^${escaped}$`);
+      return new RegExp(escapeOriginToPattern(pattern));
     }
   });
-}
-
-/**
- * Whether `p` ends with an *unescaped* `$` (i.e. a real end anchor, not the
- * literal dollar `\$`). A trailing `$` is unescaped iff it's preceded by an
- * even number of backslashes (0, 2, ...); an odd count means the last `$` is
- * itself escaped, so the pattern is not end-anchored and a `$` must be appended.
- */
-function endsWithUnescapedDollar(p: string): boolean {
-  if (!p.endsWith('$')) return false;
-  let backslashes = 0;
-  for (let i = p.length - 2; i >= 0 && p[i] === '\\'; i--) backslashes++;
-  return backslashes % 2 === 0;
 }
 
 /**
@@ -63,8 +50,13 @@ function endsWithUnescapedDollar(p: string): boolean {
  * `https://d123.cloudfront.net`) must have its regex metacharacters escaped —
  * otherwise the unescaped dots become single-char wildcards and
  * `https://d123xcloudfrontxnet` would match. This escapes every metacharacter
- * (reusing the same charclass as the invalid-regex fallback above) and returns
- * an already-anchored `^...$` pattern.
+ * and returns an already-anchored `^...$` pattern.
+ *
+ * Module-internal: both the {@link getCorsPatterns} hosting-literal channel and
+ * the {@link parseCorsPatterns} invalid-regex fallback escape through this
+ * helper (single source of truth). The `export` keyword is kept only so unit
+ * tests can import it — `cors.ts` is not in any package export map, so this is
+ * not a public API.
  *
  * Applied at **runtime** by `getCorsPatterns()` to each `CORS_HOSTING_ORIGINS`
  * entry, where the value is a resolved plain-string origin. It is deliberately
@@ -117,10 +109,7 @@ export function getCorsPatterns(): RegExp[] | null {
   const regexPatterns = envOrigins ? parseCorsPatterns(envOrigins) : [];
   // Literal channel: framework-injected resolved origins, escaped so regex
   // metacharacters (notably dots) match literally rather than as wildcards.
-  const hostingPatterns = hostingOrigins
-    .split(',')
-    .map(o => o.trim())
-    .filter(Boolean)
+  const hostingPatterns = splitOrigins(hostingOrigins)
     .map(origin => new RegExp(escapeOriginToPattern(origin)));
 
   const all = [...regexPatterns, ...hostingPatterns];

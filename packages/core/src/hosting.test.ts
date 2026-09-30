@@ -1103,24 +1103,50 @@ describe('Hosting', () => {
       const value = registry.entries.get('CORS_HOSTING_ORIGINS');
       assert.ok(value !== undefined, 'CORS_HOSTING_ORIGINS is registered');
 
-      // (i) The token must be intact — either still unresolved, or resolving to
-      // an intrinsic object (Fn::GetAtt/Fn::Join), NOT a plain escaped string.
-      const resolved = stack.resolve(value);
-      if (!Token.isUnresolved(value)) {
-        assert.strictEqual(
-          typeof resolved,
-          'object',
-          'resolved CORS_HOSTING_ORIGINS must be a CFN intrinsic object, not a plain string',
-        );
-      }
-
-      // (ii) A dead escaped-token literal would carry the substring 'Token[';
-      // the raw registration must not. This fails against the buggy
-      // escapeOriginToPattern(distributionUrl) version and passes against the fix.
+      // The default-domain origin is `https://<distributionDomainName>`, so the
+      // registered value stays an unresolved token that resolves to the
+      // distribution DomainName intrinsic — never a plain escaped string.
+      assert.ok(Token.isUnresolved(value), 'CORS_HOSTING_ORIGINS must stay an unresolved token');
       assert.ok(
-        !JSON.stringify(resolved).includes('Token['),
-        'CORS_HOSTING_ORIGINS must not be a dead escaped-token literal',
+        JSON.stringify(stack.resolve(value)).includes('Fn::GetAtt'),
+        'must resolve to the distribution DomainName intrinsic',
       );
+    });
+
+    it('registers the raw custom-domain origin (not escaped, not anchored)', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'CorsCustomDomainStack', {
+        env: { account: '123456789012', region: 'us-east-1' },
+      });
+
+      // A custom domain requires a certificate when no hostedZone is given
+      // (mirrors the BYO-domain tests above).
+      const cert = cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+        stack,
+        'ImportedCert',
+        'arn:aws:acm:us-east-1:123456789012:certificate/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      );
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        domain: {
+          domainName: 'custom.example.com',
+          certificate: cert,
+        },
+      });
+
+      const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
+        | { entries: Map<string, unknown> }
+        | undefined;
+      assert.ok(registry, 'config registry exists on the stack');
+      const value = registry.entries.get('CORS_HOSTING_ORIGINS');
+      // A custom domain resolves distributionUrl to a plain string at synth, so
+      // Hosting registers the RAW origin. Escaping/anchoring is deferred to
+      // runtime by getCorsPatterns(); the registered value must be untouched.
+      assert.strictEqual(value, 'https://custom.example.com');
     });
 
     it('does not register CORS_HOSTING_ORIGINS when api prop is missing', () => {
