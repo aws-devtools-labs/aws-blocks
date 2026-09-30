@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { extractUserAttributes } from './index.aws.js';
+import { extractUserAttributes, memoizePerContext } from './index.aws.js';
 
 describe('extractUserAttributes (JWT allow-shape)', () => {
 	test('passes through standard OIDC attributes', () => {
@@ -84,5 +84,60 @@ describe('extractUserAttributes (JWT allow-shape)', () => {
 			hypothetical_future_standard_claim: 'value',
 			email: 'alice@example.com',
 		});
+	});
+});
+
+describe('memoizePerContext (requireRole per-request dedupe)', () => {
+	// Locks the "one AdminListGroupsForUser per request" invariant that requireRole
+	// relies on — a refactor handing liveGroupsForUser a per-call object instead of
+	// the request context would silently restore N calls per request, and only this
+	// asserts against it.
+	test('same context + key → factory runs once; concurrent lookups share one call', async () => {
+		const memo = new WeakMap<object, Map<string, Promise<number>>>();
+		const ctx = {};
+		let calls = 0;
+		const factory = () => Promise.resolve(++calls);
+		const [a, b] = await Promise.all([
+			memoizePerContext(memo, ctx, 'alice', factory),
+			memoizePerContext(memo, ctx, 'alice', factory),
+		]);
+		assert.strictEqual(calls, 1, 'two lookups on the same context+key run the factory once');
+		assert.strictEqual(a, 1);
+		assert.strictEqual(b, 1);
+		assert.strictEqual(await memoizePerContext(memo, ctx, 'alice', factory), 1, 'cache hit after settle');
+		assert.strictEqual(calls, 1);
+	});
+
+	test('different contexts each run the factory (per-request scope)', async () => {
+		const memo = new WeakMap<object, Map<string, Promise<number>>>();
+		let calls = 0;
+		const factory = () => Promise.resolve(++calls);
+		await memoizePerContext(memo, {}, 'alice', factory);
+		await memoizePerContext(memo, {}, 'alice', factory);
+		assert.strictEqual(calls, 2);
+	});
+
+	test('different keys on one context each run the factory', async () => {
+		const memo = new WeakMap<object, Map<string, Promise<number>>>();
+		const ctx = {};
+		let calls = 0;
+		const factory = () => Promise.resolve(++calls);
+		await memoizePerContext(memo, ctx, 'alice', factory);
+		await memoizePerContext(memo, ctx, 'bob', factory);
+		assert.strictEqual(calls, 2);
+	});
+
+	test('a rejected call is evicted → a later call in the same context retries (not replayed)', async () => {
+		const memo = new WeakMap<object, Map<string, Promise<number>>>();
+		const ctx = {};
+		let calls = 0;
+		const factory = () => {
+			calls++;
+			return calls === 1 ? Promise.reject(new Error('throttle')) : Promise.resolve(calls);
+		};
+		await assert.rejects(() => memoizePerContext(memo, ctx, 'alice', factory), /throttle/);
+		const second = await memoizePerContext(memo, ctx, 'alice', factory);
+		assert.strictEqual(second, 2, 'the retry re-runs the factory rather than replaying the cached rejection');
+		assert.strictEqual(calls, 2);
 	});
 });
