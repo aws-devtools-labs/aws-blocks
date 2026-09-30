@@ -15,7 +15,7 @@
  *   node_modules/@aws-blocks/blocks/README.md
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, Scope, AuthBasic, DistributedTable, Realtime } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, AuthBasic, DistributedTable, Realtime } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -108,7 +108,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async toggleTodo(todoId: string) {
     const user = await auth.requireAuth(context);
     const todo = await todos.get({ userId: user.username, todoId });
-    if (!todo) throw new Error('Todo not found');
+    if (!todo) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
     await todos.put(
       { ...todo, completed: !todo.completed, version: todo.version + 1 },
       { ifFieldEquals: { version: todo.version } },
@@ -121,7 +121,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async updatePriority(todoId: string, priority: number) {
     const user = await auth.requireAuth(context);
     const todo = await todos.get({ userId: user.username, todoId });
-    if (!todo) throw new Error('Todo not found');
+    if (!todo) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
     await todos.put(
       { ...todo, priority, version: todo.version + 1 },
       { ifFieldEquals: { version: todo.version } },

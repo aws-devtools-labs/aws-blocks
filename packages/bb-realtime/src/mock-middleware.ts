@@ -133,6 +133,10 @@ function doConnect(wsUrl: string, isReconnect = false) {
 					if (pending) {
 						const err = new Error(data.message || 'Subscription rejected');
 						err.name = 'ConnectionFailedException';
+						// Client-side rejection: consumers match on `err.name` via
+						// isBlocksError, so the wire-safe brand is inert here (it only
+						// matters at the server RPC serializer). Kept for consistency
+						// with the server throw sites, and harmless — the name carries.
 						brandBlocksError(err);
 						pending.forEach(p => { p.reject(err); });
 						conn.pendingEstablished.delete(data.channel);

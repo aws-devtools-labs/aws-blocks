@@ -4,7 +4,7 @@
 import { DatabaseBase } from '@aws-blocks/data-common';
 import type { DatabaseEngine, TransactionHandle, Transaction, SqlQuery } from '@aws-blocks/data-common';
 import { unwrapQuery } from '@aws-blocks/data-common';
-import { DatabaseErrors } from './errors.js';
+import { DatabaseErrors, reTagged } from './errors.js';
 import { setRLSContext, type RLSContext } from './rls.js';
 
 /**
@@ -92,10 +92,12 @@ export class RLSEnabledDatabase extends DatabaseBase {
       return await super.transaction(fn);
     } catch (e) {
       const error = e instanceof Error ? e : new Error(String(e));
-      if (!Object.values(DatabaseErrors).includes(error.name as any)) {
-        error.name = DatabaseErrors.TransactionFailed;
-      }
-      throw error;
+      // A known DatabaseErrors name means an engine translator already produced a
+      // branded BB error — re-throw it as-is. Otherwise re-tag to TransactionFailed
+      // as a branded error with a stable message (raw error kept as cause) so the
+      // name crosses the wire without leaking driver text (D-003).
+      if (Object.values(DatabaseErrors).includes(error.name as any)) throw error;
+      throw reTagged(DatabaseErrors.TransactionFailed, error);
     }
   }
 }
@@ -174,10 +176,12 @@ class RLSScopedDatabase extends RLSEnabledDatabase {
         console.error('[Database] Rollback failed after transaction error', { code: err.code, severity: err.severity });
       }
       const error = e instanceof Error ? e : new Error(String(e));
-      if (!Object.values(DatabaseErrors).includes(error.name as any)) {
-        error.name = DatabaseErrors.TransactionFailed;
-      }
-      throw error;
+      // A known DatabaseErrors name means an engine translator already produced a
+      // branded BB error — re-throw it as-is. Otherwise re-tag to TransactionFailed
+      // as a branded error with a stable message (raw error kept as cause) so the
+      // name crosses the wire without leaking driver text (D-003).
+      if (Object.values(DatabaseErrors).includes(error.name as any)) throw error;
+      throw reTagged(DatabaseErrors.TransactionFailed, error);
     }
   }
 }

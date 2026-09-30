@@ -117,9 +117,14 @@ export function isWireSafeError(e: unknown): e is Error {
  * bundle (mock, aws-runtime, CDK synth), and `Symbol.for()` keeps the brand
  * valid across separately-bundled packages.
  *
- * Only stamp an error whose `name` is a BB error constant. Do NOT brand a raw
- * driver/SDK exception (`PostgresError`, `DynamoDBServiceException`) — the brand
- * is exactly the signal that keeps those class names from leaking.
+ * Only stamp an error whose `name` is a BB error constant AND whose `message` is
+ * BB-authored. Do NOT brand a raw driver/SDK exception (`PostgresError`,
+ * `DynamoDBServiceException`) — the brand is exactly the signal that keeps those
+ * class names from leaking. Because a branded error's `message` now also crosses
+ * the wire (D-003), never brand an error whose message embeds raw driver/SDK text
+ * (e.g. a re-tagged Postgres error, or an `err.message` copied from a DynamoDB
+ * `ValidationException`): give it a stable BB-authored message first, keeping the
+ * raw error as `cause` for server-side diagnostics.
  *
  * @example
  * ```typescript

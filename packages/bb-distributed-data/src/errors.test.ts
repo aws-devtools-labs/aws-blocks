@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError, isWireSafeError } from '@aws-blocks/core';
 import {
   translateDsqlError,
   DistributedDatabaseErrors,
@@ -83,11 +83,15 @@ test('translateDsqlError: connection error (08001) → ConnectionFailed', () => 
 });
 
 test('translateDsqlError: unknown pg error code → QueryFailed', () => {
-  const err = Object.assign(new Error('syntax error'), { code: '42601' });
+  const err = Object.assign(new Error('syntax error at or near "SELCT"'), { code: '42601' });
   assert.throws(
     () => translateDsqlError(err),
     (e: Error) => {
       assert.equal(e.name, DistributedDatabaseErrors.QueryFailed);
+      assert.ok(isWireSafeError(e), 'expected the re-tagged error to be branded');
+      assert.equal(e.message, `${DistributedDatabaseErrors.QueryFailed}: The database query failed`);
+      assert.ok(!e.message.includes('SELCT'), 'raw driver text must not leak into the message');
+      assert.equal((e.cause as Error).message, 'syntax error at or near "SELCT"');
       return true;
     }
   );
@@ -99,7 +103,9 @@ test('translateDsqlError: Error without code → QueryFailed', () => {
     () => translateDsqlError(err),
     (e: Error) => {
       assert.equal(e.name, DistributedDatabaseErrors.QueryFailed);
-      assert.equal(e.message, 'something broke');
+      assert.ok(isWireSafeError(e));
+      assert.equal(e.message, `${DistributedDatabaseErrors.QueryFailed}: The database query failed`);
+      assert.equal((e.cause as Error).message, 'something broke');
       return true;
     }
   );

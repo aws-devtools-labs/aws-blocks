@@ -212,12 +212,14 @@ export function successResponse(result: unknown, id: string | number | null): st
  *    range), and its BB-level `name`/`retriable` flags cross the wire.
  * 2. A wire-safe Building Block error — a plain `Error` thrown via
  *    `blocksError()`, which stamps a non-enumerable brand identifying it as an
- *    intentional BB error (e.g. `ValidationFailedException`). Per D-003 the
- *    `name` crosses the wire so `isBlocksError()` keeps matching on the client,
- *    but the raw `message` is dropped for a generic `"Internal error"`. The
- *    brand — not a non-generic `.name` — is the signal, so a raw driver/SDK
- *    exception whose class name happens to be non-generic (`PostgresError`) is
- *    NOT treated as wire-safe.
+ *    intentional BB error (e.g. `ValidationFailedException`). Per D-003 both the
+ *    `name` AND the `message` cross the wire: `isBlocksError()` keeps matching on
+ *    the client, and the BB-authored message (e.g. "Batch contains 150 payloads,
+ *    exceeds the 100 limit") reaches the caller instead of a generic string. This
+ *    rests on the invariant that a branded message never embeds raw driver text
+ *    (see `brandBlocksError`). The brand — not a non-generic `.name` — is the
+ *    signal, so a raw driver/SDK exception whose class name happens to be
+ *    non-generic (`PostgresError`) is NOT treated as wire-safe.
  * 3. Anything else — a driver/SDK exception, a bare `Error`, or a non-`Error`
  *    throw — collapses to a nameless generic 500 so raw exception class names
  *    and messages never leak.
@@ -237,13 +239,19 @@ export function errorResponseFromCatch(error: unknown, id: string | number | nul
     return errorResponse(error.status, error.message, id, Object.keys(data).length > 0 ? data : undefined);
   }
   // A named Building Block error thrown via blocksError() carries the wire-safe
-  // brand: forward its BB `name` (D-003: isBlocksError matches on the client) but
-  // drop the raw message. The brand — not a non-generic `.name` — is the signal,
-  // so raw driver/SDK exceptions (PostgresError, …) still collapse to a nameless 500.
+  // brand: forward BOTH its BB `name` AND its `message` over the wire (D-003: the
+  // wire carries `name` alongside `message`). A branded error's message is
+  // BB-authored on purpose — e.g. "Batch contains 150 payloads, exceeds the 100
+  // limit" — and dropping it to a generic string is a DX regression, so it is
+  // preserved. The invariant this relies on: a branded error's message must never
+  // embed raw driver/SDK text (see brandBlocksError). The brand — not a
+  // non-generic `.name` — is the signal, so raw driver/SDK exceptions
+  // (PostgresError, …) are NOT branded and still collapse to a nameless 500 with a
+  // generic message, so their class name and raw text never leak.
   // (Every ApiError is wire-safe too, but branch 1 already returned for those, so
   // this arm only ever sees the branded plain-Error case.)
   if (isWireSafeError(error) && error.name && error.name !== DEFAULT_ERROR_NAME) {
-    return errorResponse(500, 'Internal error', id, { name: error.name });
+    return errorResponse(500, error.message, id, { name: error.name });
   }
   return errorResponse(500, 'Internal error', id);
 }

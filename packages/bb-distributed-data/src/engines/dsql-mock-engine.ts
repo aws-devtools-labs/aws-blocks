@@ -10,6 +10,7 @@ import { existsSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { initializePgliteWithRetry, type DatabaseEngine, type TransactionHandle } from '@aws-blocks/data-common';
 import { DistributedDatabaseErrors, PG_SERIALIZATION_FAILURE, translateDsqlError } from '../errors.js';
+import { brandBlocksError } from '@aws-blocks/core';
 import { validateStatement, classifyStatement, TransactionTracker } from '../validation.js';
 
 function cleanStaleLock(dataDir: string): void {
@@ -38,8 +39,11 @@ function preprocessSqlForDsqlMock(sql: string, { allowDdl = false } = {}): strin
       'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime. ' +
       'Use migration files instead — the migration Lambda has dsql:DbConnectAdmin for DDL.',
     );
-    err.name = 'DsqlPermissionError';
-    throw err;
+    err.name = DistributedDatabaseErrors.Permission;
+    // Branded so the name crosses the RPC wire and isBlocksError(e,
+    // DistributedDatabaseErrors.Permission) keeps matching on the client. The
+    // message is BB-authored (no raw driver text), so forwarding it is safe (D-003).
+    throw brandBlocksError(err);
   }
   return sql.replace(/\b(CREATE\s+(?:UNIQUE\s+)?INDEX)\s+ASYNC\b/gi, '$1');
 }

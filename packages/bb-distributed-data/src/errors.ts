@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { ApiError } from '@aws-blocks/core';
+import { ApiError, brandBlocksError } from '@aws-blocks/core';
 
 /**
  * DSQL-specific error constants.
@@ -13,6 +13,14 @@ export const DistributedDatabaseErrors = {
   UniqueConstraintViolation: 'UniqueConstraintViolationException',
   SerializationFailure: 'SerializationFailureException',
   TransactionRowLimitExceeded: 'TransactionRowLimitExceededException',
+  /**
+   * A DDL statement was attempted on the app-runtime connection, which is
+   * DML-only (parity with the production `dsql:DbConnect` IAM grant). Raised by
+   * the mock's DDL guard before execution; on the deployed path the equivalent
+   * rejection comes from DSQL itself and is re-tagged by {@link translateDsqlError}.
+   * Matchable via `isBlocksError(e, DistributedDatabaseErrors.Permission)`.
+   */
+  Permission: 'DsqlPermissionError',
 } as const;
 
 /**
@@ -77,6 +85,32 @@ export function uniqueConstraintConflict(cause: Error): ApiError {
   });
 }
 
+/**
+ * Stable, BB-authored client-facing messages per DistributedDatabaseErrors name.
+ * The raw DSQL/pg driver text is never sent — kept only as `cause` for
+ * server-side diagnostics. A branded error's `name` AND `message` cross the wire
+ * (D-003), so a re-tag path gives the error a stable message here rather than
+ * forwarding the driver's.
+ */
+const RE_TAG_MESSAGES: Record<string, string> = {
+  [DistributedDatabaseErrors.QueryFailed]: 'The database query failed',
+  [DistributedDatabaseErrors.ConnectionFailed]: 'The database connection failed',
+};
+
+/**
+ * Build a BRANDED re-tag error: a fresh `Error` with the BB `name` and a stable
+ * BB message, keeping the original driver error as `cause` (server-side only).
+ * The name crosses the wire so `isBlocksError(e, DistributedDatabaseErrors.QueryFailed
+ * | .ConnectionFailed)` keeps matching on the client, while the raw driver text
+ * never leaks (D-003).
+ */
+function reTagged(name: string, cause: Error): Error {
+  const message = RE_TAG_MESSAGES[name] ?? RE_TAG_MESSAGES[DistributedDatabaseErrors.QueryFailed];
+  const wrapped = new Error(`${name}: ${message}`, { cause });
+  wrapped.name = name;
+  return brandBlocksError(wrapped);
+}
+
 /** Translate a pg error code to a DistributedDatabaseErrors name. */
 export function translateDsqlError(e: Error): never {
   const code = (e as any).code as string | undefined;
@@ -91,10 +125,12 @@ export function translateDsqlError(e: Error): never {
     // the full rationale (409 mapping, preserved name, retained cause, and why
     // it is NOT retriable).
     throw uniqueConstraintConflict(e);
-  } else if (code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)) {
-    e.name = DistributedDatabaseErrors.ConnectionFailed;
-  } else {
-    e.name = DistributedDatabaseErrors.QueryFailed;
   }
-  throw e;
+  // Brand the re-tagged connection/query error (stable BB message, raw driver
+  // error kept as `cause`) so its name crosses the wire without leaking driver
+  // text (D-003).
+  const name = code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)
+    ? DistributedDatabaseErrors.ConnectionFailed
+    : DistributedDatabaseErrors.QueryFailed;
+  throw reTagged(name, e);
 }

@@ -248,6 +248,10 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 				if (pending) {
 					const err = new Error(msg.message || 'Subscription rejected');
 					err.name = 'ConnectionFailedException';
+					// Client-side rejection: consumers match on `err.name` via
+					// isBlocksError, so the wire-safe brand is inert here (it only
+					// matters at the server RPC serializer). Kept for consistency with
+					// the server throw sites, and harmless — the name is what carries.
 					brandBlocksError(err);
 					pending.forEach(p => { p.reject(err); });
 					conn.pendingEstablished.delete(msg.channel);

@@ -101,38 +101,36 @@ describe('errorResponseFromCatch does not leak backend internals', () => {
     assert.strictEqual(parsed.error.data, undefined);
   });
 
-  it('forwards the BB name of a blocksError() throw but drops its raw message (D-003)', () => {
+  it('forwards the BB name AND message of a blocksError() throw (D-003)', () => {
     // A Building Block error (thrown via blocksError) is a plain named Error, not
-    // an ApiError. Its BB name must cross the wire so isBlocksError() keeps matching
-    // on the client, while the raw message (possibly carrying internals) is dropped.
-    const raw = blocksError('ValidationFailedException', 'value at /var/task fails schema: age must be a number');
+    // an ApiError. Both its BB name AND its BB-authored message cross the wire so
+    // isBlocksError() keeps matching on the client and the caller sees the real,
+    // actionable message. The invariant this relies on: a branded message never
+    // embeds raw driver/SDK text (see brandBlocksError).
+    const raw = blocksError('BatchSubmitFailedException', 'Batch contains 150 payloads, exceeds the 100 limit');
     const parsed = JSON.parse(errorResponseFromCatch(raw, 7));
     assert.strictEqual(parsed.error.code, 500);
-    assert.strictEqual(parsed.error.message, 'Internal error');
-    assert.strictEqual(parsed.error.data.name, 'ValidationFailedException');
-    // The raw message must not leak.
-    assert.ok(!JSON.stringify(parsed).includes('/var/task'));
-    // Round-trips: the client reconstructs an error isBlocksError() matches.
+    assert.strictEqual(parsed.error.message, 'BatchSubmitFailedException: Batch contains 150 payloads, exceeds the 100 limit');
+    assert.strictEqual(parsed.error.data.name, 'BatchSubmitFailedException');
+    // Round-trips: the client reconstructs an error isBlocksError() matches, with the message intact.
     assert.throws(
       () => decodeRpcResponse(parsed),
-      (e: unknown) => isBlocksError(e, 'ValidationFailedException'),
+      (e: unknown) => isBlocksError(e, 'BatchSubmitFailedException') && (e as Error).message.includes('exceeds the 100 limit'),
     );
   });
 
-  it('forwards the BB name when a Building Block brands its OWN error via brandBlocksError() (D-003)', () => {
+  it('forwards the BB name AND message when a Building Block brands its OWN error via brandBlocksError() (D-003)', () => {
     // Most Building Blocks define a local blocksError() with a package-specific
     // message format, then stamp the wire-safe brand through core's
     // brandBlocksError(). This simulates that path: a fresh named Error built by a
     // BB (here with an UNPREFIXED message, like bb-app-setting / bb-auth-oidc) and
-    // branded. Its BB name must cross the wire so isBlocksError() keeps matching.
-    const bbErr = new Error('Invalid email address: not-an-email');
+    // branded. Its BB name AND message must cross the wire.
+    const bbErr = new Error('Invalid email address');
     bbErr.name = 'InvalidInputException';
     const parsed = JSON.parse(errorResponseFromCatch(brandBlocksError(bbErr), 9));
     assert.strictEqual(parsed.error.code, 500);
-    assert.strictEqual(parsed.error.message, 'Internal error');
+    assert.strictEqual(parsed.error.message, 'Invalid email address');
     assert.strictEqual(parsed.error.data.name, 'InvalidInputException');
-    // The raw message must not leak.
-    assert.ok(!JSON.stringify(parsed).includes('not-an-email'));
     // Round-trips: the client reconstructs an error isBlocksError() matches.
     assert.throws(
       () => decodeRpcResponse(parsed),
@@ -186,6 +184,58 @@ describe('errorResponseFromCatch does not leak backend internals', () => {
     assert.strictEqual(parsed.error.code, 500);
     assert.strictEqual(parsed.error.message, 'Something went wrong');
     assert.strictEqual(parsed.error.data, undefined);
+  });
+
+  it('brand is non-enumerable — it never appears in JSON.stringify or the wire body', () => {
+    const err = blocksError('ValidationFailedException', 'bad input');
+    // The brand symbol must not surface in any serialization.
+    assert.ok(!Object.keys(err).some(k => k.toLowerCase().includes('brand')));
+    assert.ok(!JSON.stringify({ ...err }).toLowerCase().includes('wiresafe'));
+    const wire = errorResponseFromCatch(err, 1);
+    assert.ok(!wire.toLowerCase().includes('wiresafe'));
+    assert.ok(!wire.includes('Symbol('));
+  });
+
+  it('a branded error still at the default name Error collapses to a nameless 500', () => {
+    // Branding alone is not enough: the name must be a real BB constant. A branded
+    // error whose name is still the JS default must not put data.name on the wire.
+    const err = brandBlocksError(new Error('some branded but unnamed failure'));
+    const parsed = JSON.parse(errorResponseFromCatch(err, 1));
+    assert.strictEqual(parsed.error.code, 500);
+    assert.strictEqual(parsed.error.message, 'Internal error');
+    assert.strictEqual(parsed.error.data, undefined);
+  });
+
+  it('recognizes a brand stamped through a SEPARATELY bundled copy of core (Symbol.for)', () => {
+    // brandBlocksError uses Symbol.for('aws-blocks.wireSafeError') so a brand
+    // stamped by another bundled copy of core (a BB compiled with its own core
+    // instance) is still recognized by this serializer. Simulate that copy by
+    // stamping the same well-known symbol without going through this module's fn.
+    const err = new Error('cross-copy branded BB error');
+    err.name = 'ConnectionFailedException';
+    Object.defineProperty(err, Symbol.for('aws-blocks.wireSafeError'), { value: true, enumerable: false });
+    const parsed = JSON.parse(errorResponseFromCatch(err, 1));
+    assert.strictEqual(parsed.error.data.name, 'ConnectionFailedException');
+    assert.strictEqual(parsed.error.message, 'cross-copy branded BB error');
+  });
+
+  it('a re-tagged (already-branded) BB error forwards its name and stable message', () => {
+    // The re-tag paths (wrapError / translateDsqlError / translatePgError) brand a
+    // fresh Error with a BB name and a stable BB message; the serializer forwards
+    // both, and no driver text is present to leak (the raw error is kept as cause,
+    // which stays server-side).
+    const retagged = brandBlocksError(
+      Object.assign(new Error('QueryFailedException: The database query failed'), {
+        name: 'QueryFailedException',
+        cause: new Error('ERROR: relation "todos" does not exist'),
+      }),
+    );
+    const parsed = JSON.parse(errorResponseFromCatch(retagged, 1));
+    assert.strictEqual(parsed.error.data.name, 'QueryFailedException');
+    assert.strictEqual(parsed.error.message, 'QueryFailedException: The database query failed');
+    // cause is server-side only — never serialized.
+    assert.ok(!JSON.stringify(parsed).includes('relation'));
+    assert.ok(!JSON.stringify(parsed).includes('cause'));
   });
 });
 
