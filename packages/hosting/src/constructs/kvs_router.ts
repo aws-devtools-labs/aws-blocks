@@ -628,6 +628,10 @@ function buildQueryString(request) {
     ? '?' + Object.keys(request.querystring).map(function(k){ var v = request.querystring[k]; return v.multiValue ? v.multiValue.map(function(mv){ return k + '=' + mv.value; }).join('&') : k + '=' + v.value; }).join('&')
     : '';
 }
+function stripCred(request, meta) {
+  var ck = meta.ck; if (ck) for (var i = 0; i < ck.length; i++) delete request.cookies[ck[i]];
+  var hh = meta.hh; if (hh) for (var j = 0; j < hh.length; j++) delete request.headers[hh[j]];
+}
 async function handler(event) {
   var request = event.request;
   var uri = request.uri;
@@ -638,6 +642,7 @@ async function handler(event) {
   // re-request /builds/<id>/<page> through this same behavior). Send straight
   // to S3 with no re-prefix / no redirect / no rewrite.
   if (uri.indexOf('/builds/') === 0) {
+    stripCred(request, meta);
     cf.selectRequestOriginById(meta.oS3);
     return request;
   }
@@ -734,10 +739,7 @@ async function handler(event) {
   if (kind === null) { kind = meta.srv ? 'c' : 's'; }
 
   // static/image routes share a cache key: drop credential cache-key entries.
-  if (kind !== 'c') {
-    var ck = meta.ck; if (ck) for (var i = 0; i < ck.length; i++) delete request.cookies[ck[i]];
-    var hh = meta.hh; if (hh) for (var j = 0; j < hh.length; j++) delete request.headers[hh[j]];
-  }
+  if (kind !== 'c') { stripCred(request, meta); }
 
   // 4a. image-opt origin — strip basePath, then keep URI (no build-id prefix).
   // The image optimizer (Next /_next/image, Nuxt IPX /_ipx) parses the source
