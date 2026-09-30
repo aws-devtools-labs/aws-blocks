@@ -14,7 +14,7 @@ import {
 } from './paths.js';
 import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 import { validateBucketName } from './bucket-name.js';
-import { validateFileBucketOptions } from './validation.js';
+import { validateFileBucketOptions, assertValidKey } from './validation.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
 	FileContent, FileInfo, ExternalBucketRef,
@@ -482,6 +482,9 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	// ── Internal helpers ──────────────────────────────────────────────────
 
 	private validateKey(key: string): void {
+		// Portable, filesystem-independent key rules shared with the AWS runtime,
+		// so a key rejected here is rejected identically on AWS (and vice versa).
+		assertValidKey(key);
 		if (Buffer.byteLength(key, 'utf8') > MAX_KEY_BYTES) {
 			this.log.warn(`Key "${key}" exceeds S3's 1,024-byte limit`);
 		}

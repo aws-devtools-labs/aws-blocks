@@ -171,3 +171,30 @@ describe('restoreVersion() encodes both the key and the caller-supplied versionI
 		assert.ok(input.CopySource.includes('/reports/q1%20report.pdf?versionId='), input.CopySource);
 	});
 });
+
+// The keys both runtimes must reject identically. This is the whole point of
+// the shared validator: a key rejected in local dev must be rejected on AWS too.
+const INVALID_KEYS = ['../etc/passwd', 'a/../../b', '/leading', 'foo\x00bar', 'ctrl\x01char', '.', 'a/./b'];
+
+describe('object-key validation has mock↔AWS parity', () => {
+	for (const key of INVALID_KEYS) {
+		test(`the mock rejects ${JSON.stringify(key)} via its public put()`, async () => {
+			const mock = mockBucket();
+			await assert.rejects(
+				() => mock.put(key, Buffer.from('x')),
+				(err: Error) => err.name === 'ValidationFailed',
+			);
+		});
+
+		test(`the AWS runtime rejects ${JSON.stringify(key)} without reaching S3`, async () => {
+			// Any send() reaching the SDK fails the test: the key must be rejected
+			// before the command is dispatched.
+			const { bucket, sent } = awsBucket(() => { throw new Error('should not reach S3'); });
+			await assert.rejects(
+				() => bucket.put(key, Buffer.from('x')),
+				(err: Error) => err.name === 'ValidationFailed',
+			);
+			assert.strictEqual(sent().length, 0, 'no S3 command should have been sent');
+		});
+	}
+});
