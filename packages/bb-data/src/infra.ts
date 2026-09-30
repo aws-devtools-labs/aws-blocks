@@ -201,8 +201,8 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
 
   // Backup retention for the cluster's automated backups. Aurora keeps continuous
   // backups within this window, which is also what point-in-time recovery restores
-  // from. Default to 15 days to match the SecureCDK baseline cited in the AppSec
-  // finding; callers may override via `backupRetention`.
+  // from. Default to 15 days to match the SecureCDK baseline; callers may
+  // override via `backupRetention`.
   const backupRetention = options.backupRetention ?? cdk.Duration.days(15);
 
   const cluster = new rds.DatabaseCluster(scope, `${name}Cluster`, {
@@ -245,9 +245,9 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     // iamAuthentication is intentionally NOT enabled: the cluster is reached
     // exclusively over the RDS Data API (HTTPS + Secrets Manager credentials),
     // never a direct DB socket, so database-level IAM authentication does not
-    // apply here (explicit acknowledgement per the AppSec finding). Automatic
-    // secret rotation is likewise a deliberate follow-up: it requires a rotation
-    // Lambda wired into the cluster VPC, a larger change than this hardening pass.
+    // apply here. Automatic secret rotation is likewise a deliberate follow-up:
+    // it requires a rotation Lambda wired into the cluster VPC, a larger change
+    // than this one.
     // Read independently from defaults (falling back to the removalPolicy-derived
     // value for direct materialize() callers that don't pass it).
     deletionProtection: options.deletionProtection ?? removalPolicy !== cdk.RemovalPolicy.DESTROY,

@@ -282,6 +282,10 @@ interface DatabaseOptions {
   schema?: TableSchema;
   /** Aurora PostgreSQL engine version, e.g. '16.13'. Override the Aurora engine version. @default '16.13' */
   postgresVersion?: string;
+  /** ARN of a customer-managed KMS key for the cluster's storage-at-rest encryption (also encrypts the auto-generated credentials secret). When omitted, storage is still encrypted with the account's AWS-managed `aws/rds` key. */
+  storageEncryptionKeyArn?: string;
+  /** Retention window, in days, for the cluster's automated backups; also the point-in-time-recovery (PITR) window. @default 15 */
+  backupRetentionDays?: number;
 }
 ```
 
