@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { parseCorsPatterns, _resetCorsPatterns, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 import { createLambdaHandler } from './lambda-handler.js';
 import { clearRouteRegistry } from './raw-route.js';
+import { CLIENT_USER_AGENT_HEADER } from './constants.js';
 
 // ── parseCorsPatterns unit tests ────────────────────────────────────────────
 
@@ -247,7 +248,10 @@ describe('createLambdaHandler — CORS origin validation', () => {
     assert.strictEqual(result.headers['Access-Control-Allow-Origin'], 'http://localhost:3000');
     assert.strictEqual(result.headers['Access-Control-Allow-Credentials'], 'true');
     assert.ok(result.headers['Access-Control-Allow-Methods']);
-    assert.ok(result.headers['Access-Control-Allow-Headers']);
+    assert.strictEqual(
+      result.headers['Access-Control-Allow-Headers'],
+      `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
+    );
     assert.strictEqual(result.headers['Access-Control-Max-Age'], CORS_MAX_AGE);
     assert.strictEqual(result.headers['Vary'], 'Origin');
   });

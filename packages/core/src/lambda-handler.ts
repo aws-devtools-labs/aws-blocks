@@ -4,7 +4,7 @@
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ApiError } from './errors.js';
-import { BLOCKS_RPC_PREFIX } from './constants.js';
+import { BLOCKS_RPC_PREFIX, CLIENT_USER_AGENT_HEADER } from './constants.js';
 import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
@@ -16,7 +16,7 @@ import {
   methodNotFoundResponse,
 } from './rpc.js';
 import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
-import { CLIENT_USER_AGENT_HEADER, validateClientUserAgentToken } from './server/client-user-agent.js';
+import { validateClientUserAgentToken } from './server/client-user-agent.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -516,7 +516,7 @@ function createHandler(backend: any) {
         headers: {
           ...corsHeaders,
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Access-Control-Allow-Headers': `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
           'Access-Control-Max-Age': CORS_MAX_AGE,
         },
         body: '',

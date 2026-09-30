@@ -42,3 +42,11 @@ export const BLOCKS_AUTH_PREFIX = '/aws-blocks/auth';
  * the browser client work the same in `dev`, `sandbox`, and deployed.
  */
 export const BLOCKS_SANDBOX_PREFIX = '/.blocks-sandbox';
+
+/**
+ * Custom because browsers forbid scripts from setting `User-Agent`, and
+ * non-safelisted, so the CORS preflight must name it.
+ *
+ * @internal Not public API.
+ */
+export const CLIENT_USER_AGENT_HEADER = 'x-blocks-user-agent';
