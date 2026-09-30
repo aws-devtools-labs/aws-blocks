@@ -114,3 +114,13 @@ what one CloudFormation update can express. When a redeploy changes more than on
 index at once, expect the change to serialize across the two owners rather than
 apply in a single pass — plan multi-index add/remove changes one index per
 deploy where practical.
+
+If you do change several indexes in one redeploy, the observable symptom is a
+slow-moving `UPDATE_IN_PROGRESS`: the stack stalls on the Table resource while
+each GSI mutation is applied and settles one at a time (DynamoDB rejects a second
+concurrent index change), and the retained custom resource converges any residual
+on a later reconcile poll rather than in the same CloudFormation pass. This is
+expected serialization, not a failure — but if a single index change is left
+`CREATING`/`DELETING` when CloudFormation's own `UpdateTable` fires, you may see a
+`ResourceInUse`/`LimitExceeded` on that resource; re-running the deploy once the
+in-flight index reaches `ACTIVE` clears it.
