@@ -22,6 +22,9 @@
     "live-app/**/*.ts",
     "storage-browser/aws-blocks/**/*.ts",
     "storage-browser/test/**/*.ts",
-    "storage-browser/web/*.ts"
+    "storage-browser/web/*.ts",
+    "liveness/aws-blocks/**/*.ts",
+    "liveness/test/**/*.ts",
+    "liveness/*.ts"
   ]
 }
