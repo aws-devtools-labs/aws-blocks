@@ -6,6 +6,12 @@ plugins {
 }
 
 kotlin {
+    compilerOptions {
+        // This module declares InternalBlocksApi. The guarantee it withholds is one this
+        // module makes to its consumers, so it does not constrain the module's own sources.
+        optIn.add("com.aws.blocks.kotlin.InternalBlocksApi")
+    }
+
     jvm()
 
     android {
