@@ -1659,20 +1659,20 @@ void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
 });
 
 void describe('shared-route cache-key credential strip', () => {
-  void it('emits meta.ck / meta.ah only when configured', () => {
+  void it('emits meta.ck / meta.hh only when configured', () => {
     const withCreds = buildKvsEntries({
       manifest: baseManifest(),
       buildId: 'b1',
       hasServer: true,
       hasImage: false,
       cacheKeyCookies: ['session'],
-      stripAuthorizationOnSharedRoutes: true,
+      cacheKeyHeaders: ['authorization'],
     });
     const metaWith = JSON.parse(withCreds.meta);
     assert.deepEqual(metaWith.ck, ['session']);
-    assert.equal(metaWith.ah, 1);
+    assert.deepEqual(metaWith.hh, ['authorization']);
 
-    // No cache-key options ⇒ meta blob is unchanged (no ck/ah keys).
+    // No cache-key options ⇒ meta blob is unchanged (no ck/hh keys).
     const without = buildKvsEntries({
       manifest: baseManifest(),
       buildId: 'b1',
@@ -1681,16 +1681,28 @@ void describe('shared-route cache-key credential strip', () => {
     });
     const metaWithout = JSON.parse(without.meta);
     assert.equal('ck' in metaWithout, false);
-    assert.equal('ah' in metaWithout, false);
+    assert.equal('hh' in metaWithout, false);
   });
 
-  void it('generated request fn contains the delete-cookies strip loop', () => {
+  void it('lowercases + de-dupes cacheKeyHeaders into meta.hh', () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest(),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+      cacheKeyHeaders: ['Authorization', 'authorization', 'X-Api-Key'],
+    });
+    const meta = JSON.parse(entries.meta);
+    assert.deepEqual(meta.hh, ['authorization', 'x-api-key']);
+  });
+
+  void it('generated request fn contains the delete-cookies + delete-headers strip loops', () => {
     const code = generateKvsRouterRequestCode();
     assert.match(code, /delete request\.cookies\[/);
-    assert.match(code, /delete request\.headers\['authorization'\]/);
+    assert.match(code, /delete request\.headers\[hh\[/);
   });
 
-  void it('strips the configured cookie + authorization on a static route, keeps them on compute', async () => {
+  void it('strips the configured cookie + headers on a static route, keeps them on compute', async () => {
     const manifest = baseManifest({
       routes: [
         { pattern: '/about', target: 'static' },
@@ -1703,7 +1715,7 @@ void describe('shared-route cache-key credential strip', () => {
       hasServer: true,
       hasImage: false,
       cacheKeyCookies: ['session'],
-      stripAuthorizationOnSharedRoutes: true,
+      cacheKeyHeaders: ['authorization', 'x-api-key'],
     });
     const code = generateKvsRouterRequestCode();
 
@@ -1712,23 +1724,33 @@ void describe('shared-route cache-key credential strip', () => {
       entries,
       req('/about', {
         cookies: { session: { value: 's' } },
-        headers: { host: { value: 'x.test' }, authorization: { value: 'Bearer t' } },
+        headers: {
+          host: { value: 'x.test' },
+          authorization: { value: 'Bearer t' },
+          'x-api-key': { value: 'k' },
+        },
       }),
     );
     assert.equal(staticOut.selectedOrigin, ORIGIN_ID.s3);
     assert.equal(staticOut.output.cookies.session, undefined);
     assert.equal(staticOut.output.headers.authorization, undefined);
+    assert.equal(staticOut.output.headers['x-api-key'], undefined);
 
     const computeOut = await runRequestFn(
       code,
       entries,
       req('/api/x', {
         cookies: { session: { value: 's' } },
-        headers: { host: { value: 'x.test' }, authorization: { value: 'Bearer t' } },
+        headers: {
+          host: { value: 'x.test' },
+          authorization: { value: 'Bearer t' },
+          'x-api-key': { value: 'k' },
+        },
       }),
     );
     assert.equal(computeOut.selectedOrigin, ORIGIN_ID.server);
     assert.ok(computeOut.output.cookies.session, 'compute keeps the session cookie');
     assert.ok(computeOut.output.headers.authorization, 'compute keeps authorization');
+    assert.ok(computeOut.output.headers['x-api-key'], 'compute keeps x-api-key');
   });
 });

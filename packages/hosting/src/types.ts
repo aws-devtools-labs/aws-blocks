@@ -323,20 +323,27 @@ export type HostingProps = {
      */
     ssrDefaultTtl?: Duration;
     /**
-     * Cookie names to include in the SSR cache key. Set your session cookie
-     * name(s) here so authenticated SSR responses are cached per-session
-     * rather than shared across users. Required (together with or instead of
-     * `cacheKeyHeaders`) to safely enable `ssrDefaultTtl`.
-     * CloudFront allows at most 10 cookies in the cache key (2 are reserved
-     * for Next.js preview mode).
+     * Cookie names that vary the SSR response (e.g. your session cookie).
+     * Listing a name declares that the response differs by that cookie, so
+     * CloudFront keys the SSR cache on it and authenticated responses are
+     * cached per-session rather than shared. Required (together with or instead
+     * of `cacheKeyHeaders`) to safely enable `ssrDefaultTtl`. CloudFront allows
+     * at most 10 cookies in the cache key (2 are reserved for Next.js preview
+     * mode).
      */
     cacheKeyCookies?: string[];
     /**
-     * Header names to include in the SSR cache key (e.g. `'authorization'`).
-     * Use to vary cached SSR responses by credential-bearing headers.
-     * `'accept-encoding'` is not allowed (handled automatically). Required
-     * (together with or instead of `cacheKeyCookies`) to safely enable
-     * `ssrDefaultTtl`.
+     * Header names that vary the SSR response (e.g. `'authorization'`). Listing
+     * a name declares that the response differs by that header, so CloudFront
+     * keys the SSR cache on it. `'accept-encoding'` is not allowed (handled
+     * automatically). Required (together with or instead of `cacheKeyCookies`)
+     * to safely enable `ssrDefaultTtl`.
+     *
+     * On compute deploys the configured cache-key cookies and headers are
+     * stripped from static and image routes, so those assets keep a shared
+     * cache key. Because the router deletes them at viewer-request, they are
+     * also not forwarded to the origin on static/image routes (e.g. an
+     * auth-gated image source would not receive them).
      */
     cacheKeyHeaders?: string[];
     /**

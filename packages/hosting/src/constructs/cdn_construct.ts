@@ -655,8 +655,10 @@ export class CdnConstruct extends Construct {
           'cookies, so one cached response would answer requests regardless of their ' +
           'credentials (CloudFront ignores Vary).',
         resolution:
-          "Set cdn.cacheKeyCookies (your session cookie name(s)) and/or cdn.cacheKeyHeaders (e.g. 'authorization') " +
-          'to include credentials in the cache key, or ensure personalized routes emit `Cache-Control: private`.',
+          'Declare which credentials vary the response so CloudFront keys the ' +
+          'cache on them: set cdn.cacheKeyCookies (your session cookie name(s)) ' +
+          "and/or cdn.cacheKeyHeaders (e.g. 'authorization'). Otherwise ensure " +
+          'personalized routes emit `Cache-Control: private`.',
       });
     }
     // CloudFront forbids 'accept-encoding' in the header allowList when the
@@ -896,8 +898,7 @@ export class CdnConstruct extends Construct {
       // key every route; the router strips them on static + image routes so
       // shared assets keep a shared cache key (compute routes keep them).
       cacheKeyCookies: extraCacheKeyCookies,
-      stripAuthorizationOnSharedRoutes:
-        extraCacheKeyHeaders.includes('authorization'),
+      cacheKeyHeaders: extraCacheKeyHeaders,
     });
 
     // ---- Router functions (build-independent; routing data lives in KVS) ----

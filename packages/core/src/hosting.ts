@@ -339,8 +339,9 @@ export interface HostingProps {
    * fails closed if this is `> 0` and neither {@link cacheKeyCookies} nor
    * {@link cacheKeyHeaders} is set.
    *
-   * @see HostingProps.cdn.ssrDefaultTtl for the full note on cache-key
-   * credentials and the fail-closed guard.
+   * Enabling this shares SSR responses at the CloudFront edge; set
+   * {@link cacheKeyCookies}/{@link cacheKeyHeaders} to declare which
+   * credentials vary the response so cached entries are keyed per credential.
    * @default Duration.seconds(0)
    */
   ssrDefaultTtl?: cdk.Duration;

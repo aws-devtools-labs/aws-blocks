@@ -3,8 +3,8 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { App, Duration, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { App, CfnParameter, Duration, Stack } from 'aws-cdk-lib';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { PriceClass } from 'aws-cdk-lib/aws-cloudfront';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import {
@@ -915,6 +915,207 @@ void describe('CdnConstruct', () => {
             cacheKeyHeaders: sixHeaders,
           }),
         /at most 10 headers/,
+      );
+    });
+
+    // ---- boundary / positive cases ----
+
+    void it('accepts exactly 8 cacheKeyCookies (boundary: 8 + 2 reserved = cap)', () => {
+      const eight = Array.from({ length: 8 }, (_, i) => `c${i}`);
+      const cfg = synthSsrCachePolicy({
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyCookies: eight,
+      });
+      const params = cfg.ParametersInCacheKeyAndForwardedToOrigin as Record<
+        string,
+        unknown
+      >;
+      const cookies = ((params.CookiesConfig as Record<string, unknown>)
+        .Cookies ?? []) as string[];
+      for (const c of eight) {
+        assert.ok(cookies.includes(c), `cookie ${c} must be in the allowList`);
+      }
+    });
+
+    void it('accepts exactly 5 cacheKeyHeaders (boundary: 5 + 5 reserved = cap)', () => {
+      const five = Array.from({ length: 5 }, (_, i) => `x-h${i}`);
+      const cfg = synthSsrCachePolicy({
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyHeaders: five,
+      });
+      const params = cfg.ParametersInCacheKeyAndForwardedToOrigin as Record<
+        string,
+        unknown
+      >;
+      const headers = ((params.HeadersConfig as Record<string, unknown>)
+        .Headers ?? []) as string[];
+      for (const h of five) {
+        assert.ok(headers.includes(h), `header ${h} must be in the allowList`);
+      }
+    });
+
+    void it('treats an unresolved (token) ssrDefaultTtl as > 0 and fails closed', () => {
+      // A CfnParameter-backed Duration is an unresolved token; the guard cannot
+      // prove it <= 0, so it must fail closed exactly like a literal > 0.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const param = new CfnParameter(stack, 'Ttl', { type: 'Number' });
+      assert.throws(
+        () =>
+          new CdnConstruct(stack, 'Cdn', {
+            bucket,
+            manifest: ssrManifest,
+            securityHeadersPolicy: policy,
+            computeFunctionUrls: new Map([['default', fnUrl]]),
+            computeFunctions: new Map([['default', fn]]),
+            ssrDefaultTtl: Duration.seconds(param.valueAsNumber),
+          }),
+        /does not include Authorization or session/,
+      );
+    });
+
+    void it('lowercases cacheKeyHeaders in the cache-key header allowList', () => {
+      const cfg = synthSsrCachePolicy({
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyHeaders: ['Authorization'],
+      });
+      const params = cfg.ParametersInCacheKeyAndForwardedToOrigin as Record<
+        string,
+        unknown
+      >;
+      const headers = ((params.HeadersConfig as Record<string, unknown>)
+        .Headers ?? []) as string[];
+      assert.ok(
+        headers.includes('authorization'),
+        "'Authorization' must be lowercased to 'authorization' in the allowList",
+      );
+      assert.ok(!headers.includes('Authorization'));
+    });
+
+    void it('reserved-only cache-key names do not satisfy the guard (fails closed)', () => {
+      // Reserved names are filtered out before the credential check, so listing
+      // ONLY a reserved name leaves hasCacheKeyCredentials false → fail closed.
+      assert.throws(
+        () =>
+          buildCdn({
+            ssrDefaultTtl: Duration.seconds(60),
+            cacheKeyCookies: ['__prerender_bypass'],
+          }),
+        /does not include Authorization or session/,
+      );
+      // __dpl is the router-reserved skew cookie (also filtered out).
+      assert.throws(
+        () =>
+          buildCdn({
+            ssrDefaultTtl: Duration.seconds(60),
+            cacheKeyCookies: ['__dpl'],
+          }),
+        /does not include Authorization or session/,
+      );
+    });
+
+    // ---- construct-level wiring (mutation-survival) ----
+
+    void it('wires cache-key names into the KVS meta blob (ck filtered, hh lowercased)', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: ssrManifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyCookies: ['sess', '__dpl'],
+        cacheKeyHeaders: ['Authorization'],
+      });
+
+      // The RouteStoreKeys custom resource carries the KVS entries (incl. the
+      // meta blob) as a JSON string in its Entries property.
+      const resources = (
+        Template.fromStack(stack).toJSON() as {
+          Resources: Record<string, { Properties?: { Entries?: string } }>;
+        }
+      ).Resources;
+      const kvEntry = Object.values(resources).find(
+        (r) =>
+          typeof r.Properties?.Entries === 'string' &&
+          r.Properties.Entries.includes('"meta"'),
+      );
+      assert.ok(kvEntry, 'RouteStoreKeys custom resource with Entries required');
+      const entries = JSON.parse(kvEntry.Properties!.Entries!) as Record<
+        string,
+        string
+      >;
+      const meta = JSON.parse(entries.meta) as {
+        ck?: string[];
+        hh?: string[];
+      };
+      // __dpl is router-reserved → filtered out of ck.
+      assert.deepEqual(meta.ck, ['sess']);
+      // Authorization lowercased into hh.
+      assert.deepEqual(meta.hh, ['authorization']);
+    });
+
+    void it('accepts >8 cacheKeyCookies when quotas.cacheKeyCookies raises the cap', () => {
+      const nine = Array.from({ length: 9 }, (_, i) => `c${i}`);
+      assert.doesNotThrow(() => {
+        const stack = createStack();
+        const bucket = new Bucket(stack, 'Bucket');
+        const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+        const { fn, fnUrl } = createSsrFunction(stack);
+        new CdnConstruct(stack, 'Cdn', {
+          bucket,
+          manifest: ssrManifest,
+          securityHeadersPolicy: policy,
+          computeFunctionUrls: new Map([['default', fnUrl]]),
+          computeFunctions: new Map([['default', fn]]),
+          ssrDefaultTtl: Duration.seconds(60),
+          cacheKeyCookies: nine,
+          quotas: { cacheKeyCookies: 20 },
+        });
+      });
+    });
+
+    void it('accepts >5 cacheKeyHeaders when quotas.cacheKeyHeaders raises the cap', () => {
+      const six = Array.from({ length: 6 }, (_, i) => `x-h${i}`);
+      assert.doesNotThrow(() => {
+        const stack = createStack();
+        const bucket = new Bucket(stack, 'Bucket');
+        const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+        const { fn, fnUrl } = createSsrFunction(stack);
+        new CdnConstruct(stack, 'Cdn', {
+          bucket,
+          manifest: ssrManifest,
+          securityHeadersPolicy: policy,
+          computeFunctionUrls: new Map([['default', fnUrl]]),
+          computeFunctions: new Map([['default', fn]]),
+          ssrDefaultTtl: Duration.seconds(60),
+          cacheKeyHeaders: six,
+          quotas: { cacheKeyHeaders: 20 },
+        });
+      });
+    });
+
+    void it('warns (does not throw) when cache-key options are set on a static-only deploy', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      // No compute functions → static-only deploy.
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: spaManifest,
+        securityHeadersPolicy: policy,
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyCookies: ['session'],
+      });
+      Annotations.fromStack(stack).hasWarning(
+        '*',
+        Match.stringLikeRegexp('no effect on a static-only deploy'),
       );
     });
   });

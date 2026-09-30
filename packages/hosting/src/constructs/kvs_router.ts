@@ -83,12 +83,14 @@ type BuildKvsInput = {
    */
   cacheKeyCookies?: string[];
   /**
-   * Whether `authorization` is among `cdn.cacheKeyHeaders`. When true the
-   * router deletes the `authorization` header on the static and image branches
-   * (same rationale as {@link cacheKeyCookies}). Omitted / false ⇒ no strip
-   * and the `ah` meta key is not emitted.
+   * Extra cache-key header names configured via `cdn.cacheKeyHeaders`. On the
+   * single default behavior these key EVERY route; the router deletes them on
+   * the static and image branches (same rationale as {@link cacheKeyCookies})
+   * so shared assets keep a shared cache key, while compute (SSR) routes retain
+   * them. Names are lowercased + de-duped before emitting. Omitted / empty ⇒ no
+   * strip step and the `hh` meta key is not emitted.
    */
-  stripAuthorizationOnSharedRoutes?: boolean;
+  cacheKeyHeaders?: string[];
 };
 
 /**
@@ -363,7 +365,11 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   // keep them). Omitted from meta when nothing is configured, so existing apps'
   // meta blob is unchanged.
   const ck = (input.cacheKeyCookies ?? []).filter((c) => c.length > 0);
-  const ah = input.stripAuthorizationOnSharedRoutes === true;
+  // Header names are case-INsensitive per HTTP; lowercase + de-dupe so the
+  // strip loop matches CloudFront's own casing and never double-lists a name.
+  const hh = [
+    ...new Set((input.cacheKeyHeaders ?? []).map((h) => h.toLowerCase())),
+  ].filter((h) => h.length > 0);
 
   const meta = {
     b: buildId,
@@ -387,9 +393,9 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
     rc: routeChunks.length,
     dc: redirectChunks.length,
     hc: headerChunks.length,
-    // shared-route credential strip (see `ck`/`ah` note above); omitted empty.
+    // shared-route credential strip (see `ck`/`hh` note above); omitted empty.
     ...(ck.length ? { ck } : {}),
-    ...(ah ? { ah: 1 } : {}),
+    ...(hh.length ? { hh } : {}),
   };
   const metaJson = JSON.stringify(meta);
   if (byteLen(metaJson) > 1024) {
@@ -730,7 +736,7 @@ async function handler(event) {
   // static/image routes share a cache key: drop credential cache-key entries.
   if (kind !== 'c') {
     var ck = meta.ck; if (ck) for (var i = 0; i < ck.length; i++) delete request.cookies[ck[i]];
-    if (meta.ah) delete request.headers['authorization'];
+    var hh = meta.hh; if (hh) for (var j = 0; j < hh.length; j++) delete request.headers[hh[j]];
   }
 
   // 4a. image-opt origin — strip basePath, then keep URI (no build-id prefix).

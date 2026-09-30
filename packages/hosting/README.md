@@ -379,10 +379,12 @@ automatically and is not allowed in `cacheKeyHeaders`.
 On a compute deploy every request is routed through a single default cache
 behavior, so `cacheKeyCookies`/`cacheKeyHeaders` affect the cache key for **all**
 routes on that behavior. To keep shared assets from being keyed per credential,
-the edge router deletes the configured cache-key cookies and the `authorization`
-header on static and image routes before origin selection — those routes compute
-a shared cache key, while SSR/compute routes keep the credentials and stay keyed
-per credential.
+the edge router deletes the configured cache-key cookies and headers on static
+and image routes before origin selection — those routes compute a shared cache
+key, while SSR/compute routes keep the credentials and stay keyed per credential.
+Because the router deletes them at viewer-request, those cookies and headers are
+also not forwarded to the origin on static and image routes (e.g. an auth-gated
+image source would not receive them).
 
 ## Custom domains
 
