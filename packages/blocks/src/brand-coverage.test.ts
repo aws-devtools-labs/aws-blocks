@@ -37,7 +37,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -58,9 +58,9 @@ const FILE_ALLOWLIST: Record<string, string> = {
 /** Recursively collect `*.ts` sources under `dir`, skipping tests, `.d.ts`, `dist`. */
 function collectSources(dir: string): string[] {
 	const out: string[] = [];
-	let entries: ReturnType<typeof readdirSync>;
+	let entries: Dirent[];
 	try {
-		entries = readdirSync(dir, { withFileTypes: true });
+		entries = readdirSync(dir, { withFileTypes: true, encoding: 'utf-8' });
 	} catch {
 		return out;
 	}
@@ -77,7 +77,7 @@ function collectSources(dir: string): string[] {
 }
 
 function discoverBBSrcDirs(): { pkg: string; srcDir: string }[] {
-	const dirs = readdirSync(packagesDir, { withFileTypes: true })
+	const dirs = readdirSync(packagesDir, { withFileTypes: true, encoding: 'utf-8' })
 		.filter(d => d.isDirectory() && d.name.startsWith('bb-'));
 	const result: { pkg: string; srcDir: string }[] = [];
 	for (const d of dirs) {
