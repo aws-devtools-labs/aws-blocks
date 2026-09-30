@@ -517,12 +517,11 @@ void describe('CdnConstruct', () => {
         Match.objectLike({
           CachePolicyConfig: Match.objectLike({
             Comment: Match.stringLikeRegexp('SSR/ISR/SWR'),
-            // Min/default 0 (origin opts out via no-store); max 1 day
-            // (clamps wild origin values AND bounds how long a
-            // mistakenly-cached personalized response can persist).
+            // Min/default 0 (origin opts out via no-store); max 1 year
+            // (clamps wild origin values).
             MinTTL: 0,
             DefaultTTL: 0,
-            MaxTTL: 86400,
+            MaxTTL: 31536000,
             ParametersInCacheKeyAndForwardedToOrigin: Match.objectLike({
               EnableAcceptEncodingBrotli: true,
               EnableAcceptEncodingGzip: true,
@@ -796,10 +795,10 @@ void describe('CdnConstruct', () => {
       });
     };
 
-    void it('clamps the SSR CachePolicy MaxTTL to 1 day (86400s)', () => {
-      // Bounds how long a cached SSR response can persist at the edge.
+    void it('clamps the SSR CachePolicy MaxTTL to 1 year (31536000s)', () => {
+      // Clamps wild origin Cache-Control values to at most a year.
       const cfg = synthSsrCachePolicy({});
-      assert.strictEqual(cfg.MaxTTL, 86400);
+      assert.strictEqual(cfg.MaxTTL, 31536000);
     });
 
     void it('threads cacheKeyHeaders into the cache key alongside the router headers', () => {

@@ -198,32 +198,14 @@ export type HostingConstructProps = {
       countries: string[];
     };
     /**
-     * Default TTL for SSR/compute cache behaviors when the origin response
-     * does not include a `Cache-Control` header. Set this to enable
-     * CloudFront edge caching of SSR responses and improve hit ratio.
+     * Default TTL for SSR/compute cache behaviors when the origin sends no
+     * `Cache-Control` header. Enables CloudFront edge caching of SSR
+     * responses; the origin can override via `s-maxage`/`no-store`. Synth
+     * fails closed if this resolves to `> 0` and neither {@link cacheKeyCookies}
+     * nor {@link cacheKeyHeaders} is set.
      *
-     * When set, SSR responses without an explicit `Cache-Control` header
-     * are cached at the edge for this duration. The origin can always
-     * override via `s-maxage` or `no-store`.
-     *
-     * ⚠️ SECURITY: enabling this makes SSR responses without an explicit
-     * `Cache-Control` header shared at the CloudFront edge. Because the SSR
-     * cache key does NOT include Authorization or session cookies by default,
-     * one cached response would answer requests regardless of their
-     * credentials. CloudFront ignores `Vary`.
-     * Before enabling, set {@link cacheKeyCookies} (your session cookie
-     * name(s)) and/or {@link cacheKeyHeaders} (e.g. `'authorization'`) to
-     * include credentials in the cache key, or ensure personalized routes
-     * (and any route that sets cookies via `Set-Cookie`) emit
-     * `Cache-Control: private`. Synth fails closed if this resolves to > 0
-     * and neither `cacheKeyCookies` nor `cacheKeyHeaders` is set.
-     *
-     * NOTE: this fail-closed guard covers only `ssrDefaultTtl` — it cannot
-     * detect origin-emitted caching. Routes made cacheable via an origin
-     * `s-maxage`/`revalidate` header (e.g. Next `revalidate`, Nuxt/Astro
-     * defaults) with `ssrDefaultTtl` unset are NOT caught by synth, so such
-     * routes must themselves set `cacheKeyCookies`/`cacheKeyHeaders` or emit
-     * `Cache-Control: private`.
+     * @see HostingProps.cdn.ssrDefaultTtl for the full note on cache-key
+     * credentials and the fail-closed guard.
      * @default Duration.seconds(0) — no caching unless origin opts in
      */
     ssrDefaultTtl?: Duration;

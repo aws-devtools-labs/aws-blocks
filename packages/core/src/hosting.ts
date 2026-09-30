@@ -335,16 +335,12 @@ export interface HostingProps {
 
   /**
    * Default TTL for SSR/compute cache behaviors when the origin sends no
-   * `Cache-Control`. Enables CloudFront edge caching of SSR responses.
+   * `Cache-Control`. Enables CloudFront edge caching of SSR responses. Synth
+   * fails closed if this is `> 0` and neither {@link cacheKeyCookies} nor
+   * {@link cacheKeyHeaders} is set.
    *
-   * ⚠️ SECURITY: enabling this makes SSR responses without explicit
-   * `Cache-Control` shared at the edge. The SSR cache key does NOT include
-   * Authorization or session cookies by default, so one cached response
-   * would answer requests regardless of their credentials (CloudFront
-   * ignores `Vary`). Set {@link cacheKeyCookies}
-   * and/or {@link cacheKeyHeaders}, or ensure personalized routes emit
-   * `Cache-Control: private`. Synth fails closed if this is > 0 and neither
-   * cache-key option is set.
+   * @see HostingProps.cdn.ssrDefaultTtl for the full note on cache-key
+   * credentials and the fail-closed guard.
    * @default Duration.seconds(0)
    */
   ssrDefaultTtl?: cdk.Duration;

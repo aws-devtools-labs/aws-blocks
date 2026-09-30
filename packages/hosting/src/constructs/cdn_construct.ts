@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Construct, type IDependable } from 'constructs';
-import { CfnOutput, Duration, Fn, Stack, Token } from 'aws-cdk-lib';
+import { Annotations, CfnOutput, Duration, Fn, Stack, Token } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
   AllowedMethods,
@@ -270,6 +270,21 @@ export class CdnConstruct extends Construct {
       (props.computeFunctionUrls && props.computeFunctionUrls.size > 0) ||
       hasComputeRoutes;
     this.errorPageHtml = props.errorPageHtml ?? SSR_ERROR_PAGE_HTML;
+
+    // SSR cache-key options only affect the compute (SSR) cache policy. On a
+    // static-only deploy there is none, so warn (rather than fail) that they
+    // have no effect — keeps a shared config that toggles compute on/off usable.
+    if (
+      !hasCompute &&
+      (props.ssrDefaultTtl !== undefined ||
+        props.cacheKeyCookies !== undefined ||
+        props.cacheKeyHeaders !== undefined)
+    ) {
+      Annotations.of(this).addWarning(
+        'cdn.ssrDefaultTtl / cacheKeyCookies / cacheKeyHeaders have no effect ' +
+          'on a static-only deploy (no compute origin); the options are ignored.',
+      );
+    }
 
     // ---- Lambda@Edge function-count validation ----
     // The KVS single-behavior model removed the per-route cache-behavior and
@@ -565,38 +580,6 @@ export class CdnConstruct extends Construct {
     // (the router copies Host → x-forwarded-host before selecting the server
     // origin). Redirects + build-id rewrite are likewise handled by the router.
 
-    // ---- SSR cache policy (B21) ----
-    // CACHING_DISABLED used to short-circuit caching on every compute
-    // behavior, which silently broke ISR/SWR: the framework's
-    // `Cache-Control: s-max-age=N` header was emitted by the origin but
-    // CloudFront never honored it. Every request hit Lambda regardless
-    // of origin caching directives. This policy honors origin
-    // Cache-Control while including the headers App Router needs to
-    // separate RSC payloads from HTML responses (otherwise an RSC
-    // prefetch's payload would be served to a full-page request).
-    //
-    // Min/default/max TTL bounds:
-    // - minTtl: 0 — origin can opt out via `Cache-Control: no-store`
-    // - defaultTtl: 0 — when origin sends no Cache-Control, no caching
-    //   (preserves the safe default; SSR routes that forget to set
-    //   Cache-Control still don't accidentally cache personalized
-    //   responses)
-    // - maxTtl: 1 day — clamps any wild origin values (e.g. corrupted
-    //   Cache-Control: s-max-age=999999999) AND bounds how long a cached
-    //   SSR response can persist at the edge.
-    //
-    // Content negotiation is handled by enableAcceptEncodingBrotli/Gzip
-    // flags — CloudFront normalizes the Accept-Encoding header into
-    // gzip|br|identity buckets internally, which is more efficient than
-    // caching per literal header value. CloudFront forbids adding
-    // 'accept-encoding' to the headerBehavior allowList alongside these
-    // flags.
-    //
-    // The cache key includes the Next.js router headers (RSC, prefetch,
-    // state tree, segment prefetch) so prefetch payloads don't bleed
-    // into full-page responses. Cookies are explicitly excluded — any
-    // route that varies on cookies must emit `Cache-Control: private`
-    // to opt out.
     // ── Fail-closed cache-key guard ─────────────────────────────────
     // The origin-request policy forwards Cookie + Authorization to the
     // origin, but the SSR cache key below keys only on Next.js router
@@ -632,17 +615,25 @@ export class CdnConstruct extends Construct {
       '__prerender_bypass',
       '__next_preview_data',
     ];
-    // CloudFront caps the SSR cache key at 10 cookies and 10 headers total;
-    // the reserved names above consume some of each, leaving the remainder
-    // for caller-supplied cdn.cacheKeyCookies/cacheKeyHeaders.
-    const CLOUDFRONT_CACHE_KEY_COOKIE_CAP = 10;
-    const CLOUDFRONT_CACHE_KEY_HEADER_CAP = 10;
+    // Cookie names the router itself consumes and must never treat as a
+    // caller cache-key cookie. `__dpl` carries the skew-protected build pin
+    // that the router reads on static routes; the two preview cookies above
+    // are already in the SSR cache key. A caller cannot opt any of these into
+    // (or, for `__dpl`, have the router strip it out from under itself) the
+    // cache key.
+    const ROUTER_RESERVED_COOKIES = [...RESERVED_SSR_CACHE_COOKIES, '__dpl'];
+    // CloudFront caps the SSR cache key at 10 cookies and 10 headers total by
+    // default (raisable via quotas.cacheKeyCookies/cacheKeyHeaders); the
+    // reserved names above consume some of each, leaving the remainder for
+    // caller-supplied cdn.cacheKeyCookies/cacheKeyHeaders.
+    const CLOUDFRONT_CACHE_KEY_COOKIE_CAP = budget.limit('cacheKeyCookies');
+    const CLOUDFRONT_CACHE_KEY_HEADER_CAP = budget.limit('cacheKeyHeaders');
     const extraCacheKeyHeaders = [
       ...new Set((props.cacheKeyHeaders ?? []).map((h) => h.toLowerCase())),
     ].filter((h) => !RESERVED_SSR_CACHE_HEADERS.includes(h));
     const extraCacheKeyCookies = [
       ...new Set(props.cacheKeyCookies ?? []),
-    ].filter((c) => !RESERVED_SSR_CACHE_COOKIES.includes(c));
+    ].filter((c) => !ROUTER_RESERVED_COOKIES.includes(c));
     const hasCacheKeyCredentials =
       extraCacheKeyHeaders.length > 0 || extraCacheKeyCookies.length > 0;
     // ssrDefaultTtl may be an unresolved CDK token. Same-unit conversion
@@ -722,13 +713,45 @@ export class CdnConstruct extends Construct {
           'caching with `Cache-Control: private`.',
       });
     }
+    // ---- SSR cache policy (B21) ----
+    // CACHING_DISABLED used to short-circuit caching on every compute
+    // behavior, which silently broke ISR/SWR: the framework's
+    // `Cache-Control: s-max-age=N` header was emitted by the origin but
+    // CloudFront never honored it. Every request hit Lambda regardless
+    // of origin caching directives. This policy honors origin
+    // Cache-Control while including the headers App Router needs to
+    // separate RSC payloads from HTML responses (otherwise an RSC
+    // prefetch's payload would be served to a full-page request).
+    //
+    // Min/default/max TTL bounds:
+    // - minTtl: 0 — origin can opt out via `Cache-Control: no-store`
+    // - defaultTtl: 0 — when origin sends no Cache-Control, no caching
+    //   (preserves the safe default; SSR routes that forget to set
+    //   Cache-Control still don't accidentally cache personalized
+    //   responses)
+    // - maxTtl: 1 year — clamps any wild origin values (e.g. corrupted
+    //   Cache-Control: s-max-age=999999999) to at most a year.
+    //
+    // Content negotiation is handled by enableAcceptEncodingBrotli/Gzip
+    // flags — CloudFront normalizes the Accept-Encoding header into
+    // gzip|br|identity buckets internally, which is more efficient than
+    // caching per literal header value. CloudFront forbids adding
+    // 'accept-encoding' to the headerBehavior allowList alongside these
+    // flags.
+    //
+    // The cache key includes the Next.js router headers (RSC, prefetch,
+    // state tree, segment prefetch) so prefetch payloads don't bleed
+    // into full-page responses. Cookies are excluded from the SSR cache
+    // key BY DEFAULT; cdn.cacheKeyCookies opts specific cookies (e.g. a
+    // session cookie) in, and any route that must not be shared should
+    // emit `Cache-Control: private`.
     const ssrCachePolicy = hasCompute
       ? new CachePolicy(this, 'SsrCachePolicy', {
           comment:
             'SSR/ISR/SWR: honor origin Cache-Control; key on Next.js router headers',
           minTtl: Duration.seconds(0),
           defaultTtl: props.ssrDefaultTtl ?? Duration.seconds(0),
-          maxTtl: Duration.days(1),
+          maxTtl: Duration.days(365),
           headerBehavior: CacheHeaderBehavior.allowList(
             'rsc',
             'next-router-prefetch',
@@ -869,6 +892,12 @@ export class CdnConstruct extends Construct {
       // Tunable route-table budget (issue #8) — raise via quotas.maxRouteChunks
       // for a very large site after verifying edge-function compute headroom.
       maxChunksPerTable: props.quotas?.maxRouteChunks,
+      // On the single default behavior, configured cache-key cookies/headers
+      // key every route; the router strips them on static + image routes so
+      // shared assets keep a shared cache key (compute routes keep them).
+      cacheKeyCookies: extraCacheKeyCookies,
+      stripAuthorizationOnSharedRoutes:
+        extraCacheKeyHeaders.includes('authorization'),
     });
 
     // ---- Router functions (build-independent; routing data lives in KVS) ----

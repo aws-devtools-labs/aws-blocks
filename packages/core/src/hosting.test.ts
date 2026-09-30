@@ -925,13 +925,13 @@ describe('Hosting', () => {
       const template = Template.fromStack(stack);
 
       // The L3 construct should create an SsrCachePolicy with these values.
-      // maxTtl is 1 day (86400s): it clamps wild origin Cache-Control values
-      // and bounds how long a cached SSR response can persist at the edge.
+      // maxTtl is 1 year (31536000s): it clamps wild origin Cache-Control
+      // values to at most a year.
       template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
         CachePolicyConfig: Match.objectLike({
           MinTTL: 0,
           DefaultTTL: 0,
-          MaxTTL: 86400,
+          MaxTTL: 31536000,
         }),
       });
     });

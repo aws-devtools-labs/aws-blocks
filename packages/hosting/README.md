@@ -376,6 +376,14 @@ CloudFront caps the cache key at 10 cookies and 10 headers; reserved slots leave
 **8 cookies** and **5 headers** for callers. `accept-encoding` is handled
 automatically and is not allowed in `cacheKeyHeaders`.
 
+On a compute deploy every request is routed through a single default cache
+behavior, so `cacheKeyCookies`/`cacheKeyHeaders` affect the cache key for **all**
+routes on that behavior. To keep shared assets from being keyed per credential,
+the edge router deletes the configured cache-key cookies and the `authorization`
+header on static and image routes before origin selection — those routes compute
+a shared cache key, while SSR/compute routes keep the credentials and stay keyed
+per credential.
+
 ## Custom domains
 
 Configure a custom domain through the `domain` prop on `HostingConstruct`

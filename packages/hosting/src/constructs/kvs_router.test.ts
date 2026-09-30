@@ -1657,3 +1657,78 @@ void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
     assert.ok(!out.some(([p]) => p === '/blog/*'));
   });
 });
+
+void describe('shared-route cache-key credential strip', () => {
+  void it('emits meta.ck / meta.ah only when configured', () => {
+    const withCreds = buildKvsEntries({
+      manifest: baseManifest(),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+      cacheKeyCookies: ['session'],
+      stripAuthorizationOnSharedRoutes: true,
+    });
+    const metaWith = JSON.parse(withCreds.meta);
+    assert.deepEqual(metaWith.ck, ['session']);
+    assert.equal(metaWith.ah, 1);
+
+    // No cache-key options ⇒ meta blob is unchanged (no ck/ah keys).
+    const without = buildKvsEntries({
+      manifest: baseManifest(),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const metaWithout = JSON.parse(without.meta);
+    assert.equal('ck' in metaWithout, false);
+    assert.equal('ah' in metaWithout, false);
+  });
+
+  void it('generated request fn contains the delete-cookies strip loop', () => {
+    const code = generateKvsRouterRequestCode();
+    assert.match(code, /delete request\.cookies\[/);
+    assert.match(code, /delete request\.headers\['authorization'\]/);
+  });
+
+  void it('strips the configured cookie + authorization on a static route, keeps them on compute', async () => {
+    const manifest = baseManifest({
+      routes: [
+        { pattern: '/about', target: 'static' },
+        { pattern: '/api/*', target: 'server' },
+      ],
+    });
+    const entries = buildKvsEntries({
+      manifest,
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+      cacheKeyCookies: ['session'],
+      stripAuthorizationOnSharedRoutes: true,
+    });
+    const code = generateKvsRouterRequestCode();
+
+    const staticOut = await runRequestFn(
+      code,
+      entries,
+      req('/about', {
+        cookies: { session: { value: 's' } },
+        headers: { host: { value: 'x.test' }, authorization: { value: 'Bearer t' } },
+      }),
+    );
+    assert.equal(staticOut.selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(staticOut.output.cookies.session, undefined);
+    assert.equal(staticOut.output.headers.authorization, undefined);
+
+    const computeOut = await runRequestFn(
+      code,
+      entries,
+      req('/api/x', {
+        cookies: { session: { value: 's' } },
+        headers: { host: { value: 'x.test' }, authorization: { value: 'Bearer t' } },
+      }),
+    );
+    assert.equal(computeOut.selectedOrigin, ORIGIN_ID.server);
+    assert.ok(computeOut.output.cookies.session, 'compute keeps the session cookie');
+    assert.ok(computeOut.output.headers.authorization, 'compute keeps authorization');
+  });
+});

@@ -74,6 +74,21 @@ type BuildKvsInput = {
    * edge-function headroom. See issue #8.
    */
   maxChunksPerTable?: number;
+  /**
+   * Cache-key cookie names configured via `cdn.cacheKeyCookies`. On the single
+   * default behavior these key EVERY route; the router deletes them on the
+   * static and image branches so shared assets keep a shared cache key, while
+   * compute (SSR) routes retain them for per-credential keying. Omitted /
+   * empty ⇒ no strip step and the `ck` meta key is not emitted.
+   */
+  cacheKeyCookies?: string[];
+  /**
+   * Whether `authorization` is among `cdn.cacheKeyHeaders`. When true the
+   * router deletes the `authorization` header on the static and image branches
+   * (same rationale as {@link cacheKeyCookies}). Omitted / false ⇒ no strip
+   * and the `ah` meta key is not emitted.
+   */
+  stripAuthorizationOnSharedRoutes?: boolean;
 };
 
 /**
@@ -341,6 +356,15 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   const redirectChunks = chunkRows(redirectRows);
   const headerChunks = chunkRows(headerRows);
 
+  // Cache-key credentials to strip on shared (static/image) routes. On the
+  // single default behavior a configured cacheKeyCookies/cacheKeyHeaders would
+  // otherwise key every asset per credential; the router deletes these on the
+  // static + image branches so shared assets keep a shared key (compute routes
+  // keep them). Omitted from meta when nothing is configured, so existing apps'
+  // meta blob is unchanged.
+  const ck = (input.cacheKeyCookies ?? []).filter((c) => c.length > 0);
+  const ah = input.stripAuthorizationOnSharedRoutes === true;
+
   const meta = {
     b: buildId,
     bp: basePath ?? '',
@@ -363,6 +387,9 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
     rc: routeChunks.length,
     dc: redirectChunks.length,
     hc: headerChunks.length,
+    // shared-route credential strip (see `ck`/`ah` note above); omitted empty.
+    ...(ck.length ? { ck } : {}),
+    ...(ah ? { ah: 1 } : {}),
   };
   const metaJson = JSON.stringify(meta);
   if (byteLen(metaJson) > 1024) {
@@ -510,11 +537,8 @@ function matchPattern(uri, pattern) {
     if (uri.indexOf(prefix) === 0) return { tail: uri.substring(prefix.length) };
     return null;
   }
-  // General glob with '*' anywhere (incl. mid-segment). A non-trailing '*'
-  // matches a run of any chars EXCEPT '/' (a SINGLE path segment), so
-  // '/api/*/data' matches '/api/foo/data' but NOT '/api/foo/bar/data'. A
-  // trailing '*' matches the rest, including '/'. Literal scan (no regex —
-  // CloudFront Functions JS forbids dynamic RegExp from strings reliably).
+  // Glob with '*' anywhere: a non-trailing '*' matches one segment (no '/'),
+  // a trailing '*' matches the rest. Literal scan (no dynamic RegExp).
   return globMatch(uri, pattern);
 }
 function globMatch(uri, pattern) {
@@ -702,6 +726,12 @@ async function handler(event) {
   }
   // Default: server if present, else static (S3).
   if (kind === null) { kind = meta.srv ? 'c' : 's'; }
+
+  // static/image routes share a cache key: drop credential cache-key entries.
+  if (kind !== 'c') {
+    var ck = meta.ck; if (ck) for (var i = 0; i < ck.length; i++) delete request.cookies[ck[i]];
+    if (meta.ah) delete request.headers['authorization'];
+  }
 
   // 4a. image-opt origin — strip basePath, then keep URI (no build-id prefix).
   // The image optimizer (Next /_next/image, Nuxt IPX /_ipx) parses the source
