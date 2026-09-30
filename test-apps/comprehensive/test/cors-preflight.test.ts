@@ -12,7 +12,7 @@ function getBaseUrl(): string {
   return apiUrl.replace(/\/aws-blocks\/api$/, '');
 }
 
-/** Local and sandbox are separate preflight responders, so both are covered. */
+/** The dev server and API Gateway are separate responders; CI runs this per env. */
 export function corsPreflightTests(_getApi: () => typeof apiType) {
   describe('CORS preflight allow-list', () => {
     test('preflight allows Content-Type, Authorization and the client user-agent header', async () => {
