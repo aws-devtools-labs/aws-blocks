@@ -2,7 +2,8 @@
  * MultiTenantCloudFront — EXPERIMENTAL / PROOF-OF-CONCEPT.
  *
  * One CloudFront distribution fronting N tenant apps, routed by the first path
- * segment (`/<tenantId>/…`). This is the concrete demonstration of the shared
+ * segment (`/<tenantId>/…`, default) or the Host header's first DNS label
+ * (`<tenantId>.host`) — see `routing`. This is the concrete demonstration of the shared
  * multi-tenant front-door mechanism from the design notes:
  *
  *   single behavior + a KeyValueStore (KVS) tenant route table + one distribution
@@ -60,6 +61,13 @@ export type MultiTenantEntry = {
 export type MultiTenantCloudFrontProps = {
 	/** The tenants to front. Must be non-empty with unique, valid ids. */
 	tenants: MultiTenantEntry[];
+	/**
+	 * How tenants are addressed — `path` (`/<tenant>/…`, default) or `subdomain`
+	 * (tenant = the Host header's first DNS label, `<tenant>.host`). Note: real
+	 * subdomain serving needs the distribution's alternate domain names + a
+	 * wildcard TLS cert; this POC exercises the Host-based routing logic only.
+	 */
+	routing?: 'path' | 'subdomain';
 	/** Removal policy for the shared assets bucket. Default `DESTROY` (POC). */
 	removalPolicy?: RemovalPolicy;
 };
@@ -67,21 +75,33 @@ export type MultiTenantCloudFrontProps = {
 const TENANT_ID_RE = /^[a-z0-9-]+$/;
 
 /**
- * The viewer-request CloudFront Function: first-path-segment tenant → KVS
- * lookup → URI rewrite into the tenant's prefix. Runtime `cloudfront-js-2.0`
- * (async KVS access). Kept inline and dependency-free.
+ * The viewer-request CloudFront Function: resolves the tenant (first path
+ * segment in `path` mode, or the Host header's first DNS label in `subdomain`
+ * mode) → KVS lookup → URI rewrite into the tenant's prefix. Runtime
+ * `cloudfront-js-2.0` (async KVS access). Kept inline and dependency-free.
  */
-const generateTenantRouterCode = (): string => `import cf from 'cloudfront';
+const generateTenantRouterCode = (routing: 'path' | 'subdomain'): string => `import cf from 'cloudfront';
 var KVS = cf.kvs();
+var ROUTING = ${JSON.stringify(routing)};
 async function handler(event) {
   var req = event.request;
   var uri = req.uri || '/';
-  var m = uri.match(/^\\/([^\\/]+)(\\/.*)?$/);
-  if (!m) {
-    return { statusCode: 404, statusDescription: 'Not Found', headers: {}, body: 'MT-POC: no tenant in path' };
+  var tenant, rest;
+  if (ROUTING === 'subdomain') {
+    var hostHeader = (req.headers.host && req.headers.host.value) ? req.headers.host.value : '';
+    tenant = hostHeader.split(':')[0].split('.')[0];
+    rest = uri;
+    if (!tenant) {
+      return { statusCode: 404, statusDescription: 'Not Found', headers: {}, body: 'MT-POC: no tenant in host' };
+    }
+  } else {
+    var m = uri.match(/^\\/([^\\/]+)(\\/.*)?$/);
+    if (!m) {
+      return { statusCode: 404, statusDescription: 'Not Found', headers: {}, body: 'MT-POC: no tenant in path' };
+    }
+    tenant = m[1];
+    rest = m[2] || '/';
   }
-  var tenant = m[1];
-  var rest = m[2] || '/';
   var meta;
   try {
     var raw = await KVS.get(tenant);
@@ -131,7 +151,7 @@ export class MultiTenantCloudFront extends Construct {
 			if (!TENANT_ID_RE.test(t.tenantId)) {
 				throw new HostingError('InvalidPropsError', {
 					message: `Invalid tenantId '${t.tenantId}'.`,
-					resolution: 'Tenant ids must match /^[a-z0-9-]+$/ (they are a URL path segment).',
+					resolution: 'Tenant ids must match /^[a-z0-9-]+$/ (they are a URL path segment / DNS label).',
 				});
 			}
 			if (seen.has(t.tenantId)) {
@@ -167,11 +187,12 @@ export class MultiTenantCloudFront extends Construct {
 			),
 		});
 
+		const routing = props.routing ?? 'path';
 		const router = new CloudFrontFunction(this, 'TenantRouter', {
-			code: FunctionCode.fromInline(generateTenantRouterCode()),
+			code: FunctionCode.fromInline(generateTenantRouterCode(routing)),
 			runtime: FunctionRuntime.JS_2_0,
 			keyValueStore: store,
-			comment: 'MT-POC: first-path-segment tenant → KVS prefix rewrite',
+			comment: `MT-POC: ${routing} tenant → KVS prefix rewrite`,
 		});
 
 		this.distribution = new Distribution(this, 'Distribution', {
