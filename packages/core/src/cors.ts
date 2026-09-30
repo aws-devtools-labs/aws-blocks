@@ -16,9 +16,12 @@ export const CORS_MAX_AGE = '7200';
  *
  * Each entry is treated as a regex pattern:
  * - If it starts with `^`, it's used as start-anchored; a `$` end anchor is
- *   appended unless the pattern already ends with an unescaped `$`. This closes
- *   a bypass where a start-only-anchored entry like `^https://app\.example\.com`
- *   would otherwise match `https://app.example.com.attacker.test`.
+ *   appended (wrapping the whole expression as `(?:…)$`) unless the pattern
+ *   already ends with an unescaped `$`. Wrapping makes the end anchor bind the
+ *   entire expression — including a top-level `|` alternation — so every branch
+ *   is end-anchored, not just the last. This keeps a start-only-anchored entry
+ *   like `^https://app\.example\.com` from also matching a longer origin such as
+ *   `https://app.example.com.extra`.
  * - Otherwise it's wrapped with `^...$` anchors.
  * - If the resulting regex is invalid, the entry is escaped and matched literally.
  *
@@ -29,7 +32,7 @@ export function parseCorsPatterns(raw: string): RegExp[] {
   return raw.split(',').map(p => p.trim()).filter(Boolean).map(pattern => {
     try {
       if (pattern.startsWith('^')) {
-        return endsWithUnescapedDollar(pattern) ? new RegExp(pattern) : new RegExp(`${pattern}$`);
+        return endsWithUnescapedDollar(pattern) ? new RegExp(pattern) : new RegExp(`(?:${pattern})$`);
       }
       return new RegExp(`^${pattern}$`);
     } catch {

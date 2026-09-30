@@ -58,18 +58,29 @@ describe('parseCorsPatterns', () => {
     assert.ok(patterns[0].test('http://localhost:9999'));
   });
 
-  it('appends $ to a start-only-anchored pattern (closes missing-end-anchor bypass)', () => {
+  it('appends $ to a start-only-anchored pattern (enforces the end anchor)', () => {
     const patterns = parseCorsPatterns('^https://app\\.example\\.com');
     assert.strictEqual(patterns.length, 1);
     assert.ok(patterns[0].test('https://app.example.com'));
-    assert.ok(!patterns[0].test('https://app.example.com.attacker.test'));
+    assert.ok(!patterns[0].test('https://app.example.com.extra'));
+  });
+
+  it('end-anchors every branch of a top-level | alternation, not just the last', () => {
+    const patterns = parseCorsPatterns('^https://a\\.com|https://b\\.com');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('https://a.com'));
+    assert.ok(patterns[0].test('https://b.com'));
+    // Both branches are end-anchored: neither a longer first-branch nor a
+    // longer last-branch origin matches.
+    assert.ok(!patterns[0].test('https://a.com.extra'));
+    assert.ok(!patterns[0].test('https://b.com.extra'));
   });
 
   it('leaves a fully-anchored pattern unchanged (no double-anchor)', () => {
     const patterns = parseCorsPatterns('^https?://localhost(:\\d+)?$');
     assert.strictEqual(patterns.length, 1);
     assert.ok(patterns[0].test('http://localhost:3000'));
-    assert.ok(!patterns[0].test('http://localhost:3000.evil.com'));
+    assert.ok(!patterns[0].test('http://localhost:3000.other'));
   });
 
   it('treats a trailing escaped dollar as literal and appends a real end anchor', () => {
