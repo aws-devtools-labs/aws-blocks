@@ -2,18 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Telemetry-registration tests for LambdaCompute.
- *
- * `Scope.getRegisteredBlocks()` only names a block whose `bbName` is in
- * OFFICIAL_BB_NAMES. LambdaCompute is deliberately absent from the umbrella's
- * `aws-blocks.vendorize` map, so `scripts/generate-bb-names.mjs` adds it via
- * NON_VENDORIZED_BB_NAMES. These tests pin the block's generated BB_NAME to
- * that generated name set. A block that omits `bbMeta` still constructs fine
- * and every other test still passes, so that gap is only visible here.
- *
- * Imported through `./index.mock.js`, the package's default entry, which
- * re-exports the AWS runtime class — so both conditions resolve to the class
- * asserted here.
+ * Verifies that the default entry preserves LambdaCompute metadata and official
+ * telemetry registration, which construction alone does not validate.
  */
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert';

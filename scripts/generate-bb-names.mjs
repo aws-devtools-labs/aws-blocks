@@ -34,9 +34,7 @@ const BB_NAME_OVERRIDES = {
 	'AuthOIDC': 'AuthOidc',
 };
 
-// Official blocks that are deliberately absent from the vendorize map (e.g. the
-// internal default compute, which has no customer-facing symbol to vendorize)
-// but still report a `bbName` to telemetry.
+// Official telemetry names omitted from vendorization because they have no customer-facing export.
 const NON_VENDORIZED_BB_NAMES = ['LambdaCompute'];
 
 // Flatten all arrays, apply overrides, and deduplicate
