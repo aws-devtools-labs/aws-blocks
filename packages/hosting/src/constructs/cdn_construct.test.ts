@@ -843,6 +843,30 @@ void describe('CdnConstruct', () => {
       }
     });
 
+    void it('de-dupes caller cache-key names that collide with reserved Next.js names', () => {
+      const cfg = synthSsrCachePolicy({
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyHeaders: ['rsc', 'authorization'], // 'rsc' is reserved
+        cacheKeyCookies: ['__prerender_bypass', 'session'], // reserved cookie
+      });
+      const params = cfg.ParametersInCacheKeyAndForwardedToOrigin as Record<
+        string,
+        unknown
+      >;
+      const headers = ((params.HeadersConfig as Record<string, unknown>)
+        .Headers ?? []) as string[];
+      const cookies = ((params.CookiesConfig as Record<string, unknown>)
+        .Cookies ?? []) as string[];
+      // Reserved names appear exactly once; caller extras still present.
+      assert.strictEqual(headers.filter((h) => h === 'rsc').length, 1);
+      assert.ok(headers.includes('authorization'));
+      assert.strictEqual(
+        cookies.filter((c) => c === '__prerender_bypass').length,
+        1,
+      );
+      assert.ok(cookies.includes('session'));
+    });
+
     void it('fails closed: throws when ssrDefaultTtl > 0 without cacheKeyCookies/cacheKeyHeaders', () => {
       // Guard: a cacheable SSR response with no credentials in the key would
       // answer requests regardless of their credentials.

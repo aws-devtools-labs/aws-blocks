@@ -615,10 +615,29 @@ export class CdnConstruct extends Construct {
     // (avoids `Authorization` vs `authorization` double-counting against the
     // cap or duplicating in the allowList). Cookie names are case-SENSITIVE
     // per HTTP, so we dedupe by exact match only and preserve caller casing.
+    //
+    // Caller entries are also filtered against the reserved Next.js router
+    // headers / preview cookies that the allowLists below already include, so
+    // a caller passing e.g. 'rsc' or '__prerender_bypass' does not double-list
+    // the name and the cap arithmetic (+5 headers / +2 cookies) reflects the
+    // true distinct count.
+    const RESERVED_SSR_CACHE_HEADERS = [
+      'rsc',
+      'next-router-prefetch',
+      'next-router-state-tree',
+      'next-router-segment-prefetch',
+      'next-action',
+    ];
+    const RESERVED_SSR_CACHE_COOKIES = [
+      '__prerender_bypass',
+      '__next_preview_data',
+    ];
     const extraCacheKeyHeaders = [
       ...new Set((props.cacheKeyHeaders ?? []).map((h) => h.toLowerCase())),
-    ];
-    const extraCacheKeyCookies = [...new Set(props.cacheKeyCookies ?? [])];
+    ].filter((h) => !RESERVED_SSR_CACHE_HEADERS.includes(h));
+    const extraCacheKeyCookies = [
+      ...new Set(props.cacheKeyCookies ?? []),
+    ].filter((c) => !RESERVED_SSR_CACHE_COOKIES.includes(c));
     const hasCacheKeyCredentials =
       extraCacheKeyHeaders.length > 0 || extraCacheKeyCookies.length > 0;
     // ssrDefaultTtl may be an unresolved CDK token. Same-unit conversion
