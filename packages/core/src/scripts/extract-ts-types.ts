@@ -207,6 +207,29 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 		ts.forEachChild(node, visit);
 	});
 
+	// Recursively attribute every leaf identifier in a destructuring binding pattern
+	// to the namespace it binds, keyed by the leaf's LOCAL name. Object patterns
+	// (`{ ns }`, `{ ns: local }`), array/tuple patterns (`[ns]`), and any nesting
+	// (`{ a: { b } }`, `[{ ns }]`) all funnel here. The checker computes the
+	// destructuring, so each leaf's resolved type — a tuple element or a nested
+	// property — needs no manual index/property bookkeeping (#552).
+	function attributeBindingPattern(pattern: ts.BindingPattern): void {
+		for (const element of pattern.elements) {
+			if (ts.isOmittedExpression(element)) continue; // an array hole, e.g. `const [, ns] = …`
+			// A rest binding (`const [a, ...rest]` / `const { a, ...rest }`) resolves to
+			// an array/object type whose members (push/map/…) carry call signatures, which
+			// would add benign but noisy `rest.push`-style keys. A namespace is never a
+			// rest binding, so skip it and keep the map tight.
+			if (element.dotDotDotToken) continue;
+			if (ts.isIdentifier(element.name)) {
+				const elementType = checker.getTypeAtLocation(element.name);
+				extractMethodsFromResolvedType(elementType, checker, result, element.name.text);
+			} else {
+				attributeBindingPattern(element.name); // nested object/array pattern
+			}
+		}
+	}
+
 	// Second pass: resolve types for indirect ApiNamespace exports (e.g., auth.createApi()).
 	// The AST walk above only finds `new ApiNamespace(...)` in this file.
 	// For methods created by Building Block helpers in other files, use the type
@@ -232,13 +255,16 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 				continue;
 			}
 
-			// (b) Object binding pattern: `const { indirectNamespace } = factory()`.
-			// Each destructured binding is a separate namespace whose name is the
-			// LOCAL binding name (the name it's exported under). Resolve the property
-			// type off the initializer and extract methods keyed by that name, so a
-			// factory-returned namespace keys qualified (`indirectNamespace.method`)
-			// like a directly-constructed one — instead of landing on a bare key that
-			// collides with same-named methods in other namespaces (#444, #445).
+			// (b) Destructuring binding: `const { indirectNamespace } = factory()`,
+			// `const [ns] = factory()`, or any nesting of the two. Each destructured
+			// binding is a separate namespace whose name is the LOCAL binding name (the
+			// name it's exported under), so a factory-returned namespace keys qualified
+			// (`indirectNamespace.method`) like a directly-constructed one — instead of
+			// landing on a bare key that collides with same-named methods in other
+			// namespaces (#444, #445). See `attributeBindingPattern`, which recurses to
+			// every leaf identifier so object, array/tuple, and nested patterns are all
+			// attributed (#552 — a tuple of namespaces sharing a method name would
+			// otherwise hit the #445 cross-assignment class).
 			//
 			// This adds the qualified key ALONGSIDE the bare key the first-pass AST
 			// walk already emitted for the same `new ApiNamespace(...)` (its
@@ -249,29 +275,9 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 			// entry never influences the emitted schema (a regression test asserts
 			// this under a name collision). The #498 bare-name fallback is retained
 			// on purpose — it's the last resort for namespaces this pass still can't
-			// attribute (default exports, deeper indirection, the patterns below), so
-			// it is NOT redundant.
-			//
-			// Boundary: only a top-level identifier (a) and a shallow object binding
-			// pattern (b) are attributed. Array patterns (`const [ns] = factory()`)
-			// and nested patterns (`const { a: { b } } = …`) fall through to the
-			// bare-key path, where the #498 fallback still resolves the schema when
-			// there's no collision. These shapes are rare for namespace exports and
-			// fail soft; widening the traversal can come later if a real case appears.
-			if (ts.isObjectBindingPattern(decl.name)) {
-				const initType = checker.getTypeAtLocation(decl.initializer);
-				for (const element of decl.name.elements) {
-					if (!ts.isIdentifier(element.name)) continue;
-					const localName = element.name.text;
-					// `const { foo: bar } = …` binds `bar` but reads property `foo`.
-					const propKey = element.propertyName && ts.isIdentifier(element.propertyName)
-						? element.propertyName.text
-						: localName;
-					const propSymbol = initType.getProperty(propKey);
-					if (!propSymbol) continue;
-					const propType = checker.getTypeOfSymbol(propSymbol);
-					extractMethodsFromResolvedType(propType, checker, result, localName);
-				}
+			// attribute (default exports, deeper indirection), so it is NOT redundant.
+			if (ts.isObjectBindingPattern(decl.name) || ts.isArrayBindingPattern(decl.name)) {
+				attributeBindingPattern(decl.name);
 			}
 		}
 	});
