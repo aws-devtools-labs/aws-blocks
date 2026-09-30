@@ -32,6 +32,10 @@ jobs:
 
       - name: Find and delete stale e2e stacks
         run: |
+          # errexit + pipefail: a failure anywhere in a pipe (e.g. an aws call on the
+          # LEFT of `| jq`) is caught, not masked by the exit status of the last stage
+          # — which is what the `|| echo ""` guards throughout this block rely on.
+          set -eo pipefail
           CUTOFF=$(date -d '2 hours ago' +%s)
           # Only run the destructive --retain-resources retry against stacks that
           # have been proven stuck, not transiently throttled: a DELETE_FAILED that
@@ -65,8 +69,16 @@ jobs:
           # the child bucket full and the parent delete re-fails. A NESTED child
           # (its own StackName differs from the resource's PhysicalResourceId) is
           # recursed into so its buckets are emptied in the same pass.
+          # Tracks stack ids already walked this pass so the nested recursion is
+          # cycle-safe by construction (not merely guarded against self-reference):
+          # a stack whose id we've already visited is skipped, so even a pathological
+          # ancestor reference can't loop. Reset before each top-level walk.
+          _VISITED_STACKS=""
           empty_stack_buckets() {
             local STACK="$1" TYPE PID
+            # Skip a stack already emptied this pass (cycle guard).
+            case " $_VISITED_STACKS " in *" $STACK "*) return 0 ;; esac
+            _VISITED_STACKS="$_VISITED_STACKS $STACK"
             # list-stack-resources is paginated (describe-stack-resources caps at
             # 100 and can omit the very bucket that blocks the delete on a large
             # SSR stack). Pull type + physical id for buckets AND nested stacks in
@@ -79,7 +91,7 @@ jobs:
                   ;;
                 AWS::CloudFormation::Stack)
                   # PhysicalResourceId of a nested stack is its ARN/name; recurse
-                  # only into a distinct child to avoid self-recursion.
+                  # only into a distinct, not-yet-visited child.
                   [ "$PID" != "$STACK" ] && empty_stack_buckets "$PID"
                   ;;
               esac
@@ -124,27 +136,46 @@ jobs:
           # unremovable resource is left as an orphan for the targeted sweeps to mop
           # up (the REST-API sweep step below reclaims a retained DefaultComputeAPI).
           #
-          # Guardrail: we NEVER retain an S3 bucket or a nested CloudFormation::Stack.
-          # A bucket blocker means "not emptied yet" — the answer is to empty it and
-          # retry plainly, not to orphan a versioned bucket. A nested data/API stack
-          # is exactly the AppSync-bearing child we are trying to reclaim; retaining
-          # it would leak the very quota this job frees. If the only failed resources
-          # are of those two protected types, we skip the retain and let the plain
-          # retry (after emptying) handle it.
+          # Guardrail: retaining a resource ORPHANS it — it survives the stack delete
+          # with nothing left to reclaim it, UNLESS a targeted sweep in this job later
+          # collects it. So we only ever retain types that HAVE such a sweep. Today
+          # that is exactly AWS::ApiGateway::RestApi (the REST-API sweep step below
+          # deletes a stack-less DefaultComputeAPI). Everything else — IAM roles,
+          # Lambdas, custom resources, log groups, a directly-declared AppSync API,
+          # and (always) S3 buckets and nested CloudFormation stacks — is NOT retained:
+          #   * A bucket blocker means "not emptied yet"; empty it and retry plainly.
+          #   * A nested data/API stack is the AppSync-bearing child we are trying to
+          #     reclaim; retaining it leaks the very quota this job frees.
+          #   * A retained IAM role is the worst case: IAM-role-quota exhaustion is the
+          #     root cause of this backlog (see the empty_stack_buckets comment), so
+          #     orphaning a failed role would directly WORSEN the quota this job exists
+          #     to relieve.
+          # If the only blockers are non-reclaimable types we skip the retain (a
+          # ::warning:: surfaces them) and let the plain retry-after-empty handle what
+          # it can — never orphaning a resource no sweep can pick up.
+          RETAINABLE_TYPES='["AWS::ApiGateway::RestApi"]'
           retry_delete_failed() {
-            local STACK="$1" FAILED_JSON RETAIN_IDS SAFE_IDS
+            local STACK="$1" FAILED_JSON RETAIN_IDS RETAIN_JSON OTHER
             # Logical ids CloudFormation flagged with a DELETE_FAILED resource status.
             FAILED_JSON=$(aws cloudformation describe-stack-resources --stack-name "$STACK" \
               --query "StackResources[?ResourceStatus=='DELETE_FAILED'].[LogicalResourceId,ResourceType]" \
               --output json 2>/dev/null || echo "[]")
-            # Drop protected types (S3 buckets, nested stacks); keep the rest as
-            # retain candidates.
-            SAFE_IDS=$(echo "$FAILED_JSON" | jq -r \
-              '[.[] | select(.[1] != "AWS::S3::Bucket" and .[1] != "AWS::CloudFormation::Stack") | .[0]] | .[]' \
+            # Keep ONLY the allowlisted types (those with a reclaiming sweep) as retain
+            # candidates; everything else is reported, not orphaned.
+            RETAIN_JSON=$(echo "$FAILED_JSON" | jq -c --argjson keep "$RETAINABLE_TYPES" \
+              '[.[] | select(.[1] as $t | $keep | index($t)) | .[0]]' 2>/dev/null || echo "[]")
+            RETAIN_IDS=$(echo "$RETAIN_JSON" | jq -r '.[]' 2>/dev/null | tr '\n' ' ' | sed 's/ *$//' || echo "")
+            # Any DELETE_FAILED blocker whose type is NOT retainable — surface it so a
+            # non-reclaimable leak (esp. an IAM role) is visible rather than silently
+            # orphaned or silently re-stuck.
+            OTHER=$(echo "$FAILED_JSON" | jq -r --argjson keep "$RETAINABLE_TYPES" \
+              '[.[] | select(.[1] as $t | ($keep | index($t)) | not) | "\(.[0]) (\(.[1]))"] | join(", ")' \
               2>/dev/null || echo "")
-            RETAIN_IDS=$(echo "$SAFE_IDS" | tr '\n' ' ' | sed 's/ *$//')
+            if [ -n "$OTHER" ]; then
+              echo "::warning::$STACK has non-reclaimable DELETE_FAILED blocker(s), left for plain retry (not orphaned): $OTHER"
+            fi
             if [ -z "$RETAIN_IDS" ]; then
-              echo "  ↩️  $STACK: no retainable failed resources (only buckets/nested stacks) — plain retry after empty"
+              echo "  ↩️  $STACK: no retainable failed resources (no type with a reclaiming sweep) — plain retry after empty"
               return 1
             fi
             echo "  🩹 $STACK: retrying delete, retaining unremovable resources: $RETAIN_IDS"
@@ -155,13 +186,16 @@ jobs:
             return 1
           }
 
-          # Get all e2e stacks in deletable states across all name patterns
+          # Get all e2e stacks in deletable states across all name patterns.
+          # Guard each list-stacks (|| echo "") so a transient throttle/creds hiccup
+          # on any one prefix can't make the substitution non-zero and abort this
+          # best-effort step under errexit — it just contributes no stacks that pass.
           STACKS=""
           for PREFIX in blocks-test- blocks-hosting- bb-test- bb-telemetry- bb-vpc-smoke- my-app-; do
             BATCH=$(aws cloudformation list-stacks \
               --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE DELETE_FAILED UPDATE_ROLLBACK_COMPLETE ROLLBACK_FAILED REVIEW_IN_PROGRESS \
               --query "StackSummaries[?starts_with(StackName, '${PREFIX}')].StackName" \
-              --output text)
+              --output text 2>/dev/null || echo "")
             STACKS="$STACKS $BATCH"
           done
 
@@ -173,25 +207,38 @@ jobs:
               break
             fi
 
-            # Single describe-stacks call: purpose tag, status, creation time.
+            # Single describe-stacks call: purpose tag, deployment-type tag, status,
+            # creation time.
             INFO=$(aws cloudformation describe-stacks --stack-name "$STACK" \
-              --query "Stacks[0].[Tags[?Key=='blocks:purpose'].Value | [0], StackStatus, CreationTime]" \
+              --query "Stacks[0].[Tags[?Key=='blocks:purpose'].Value | [0], Tags[?Key=='blocks:deployment-type'].Value | [0], StackStatus, CreationTime]" \
               --output text 2>/dev/null || echo "")
             PURPOSE=$(echo "$INFO" | cut -f1)
-            STATUS=$(echo "$INFO" | cut -f2)
-            CREATION_TIME=$(echo "$INFO" | cut -f3)
+            DEPLOY_TYPE=$(echo "$INFO" | cut -f2)
+            STATUS=$(echo "$INFO" | cut -f3)
+            CREATION_TIME=$(echo "$INFO" | cut -f4)
 
             # Verify this is an e2e-test stack. The blocks:purpose tag is either
             # `e2e-*` (hosting/bb-test: e2e-hosting-ssr, e2e-native-bindings, …) or
             # `*-e2e` (telemetry-e2e, vpc-smoke-e2e) — accept both shapes.
-            # `my-app-*` throwaway deploys carry no e2e purpose tag but ARE test
-            # artifacts in this shared account (they hold a REST API slot); accept
-            # them by name prefix so they are not stranded forever.
+            # `my-app-*` throwaway deploys carry no blocks:purpose e2e tag, so they
+            # are gated on an EXPLICIT marker tag instead of name+age alone: the CI
+            # scaffold tags them `blocks:deployment-type=sandbox` (verified on every
+            # live my-app-* in this account). Requiring that tag — matching the
+            # discipline of every other destructive path in this file — means a
+            # developer's ad-hoc `my-app-foo` deploy, which carries no such tag, is
+            # never emptied or deleted on a name match, closing the one gate that
+            # could otherwise irreversibly destroy a live non-test resource.
             case "$PURPOSE" in
               e2e-* | *-e2e) ;;
               *)
                 case "$STACK" in
-                  my-app-*) ;;
+                  my-app-*)
+                    if [ "$DEPLOY_TYPE" != "sandbox" ]; then
+                      echo "⏭️  Skipping $STACK (my-app-* without blocks:deployment-type=sandbox; deployment-type='$DEPLOY_TYPE')"
+                      SKIPPED_NOT_E2E=$((SKIPPED_NOT_E2E + 1))
+                      continue
+                    fi
+                    ;;
                   *)
                     echo "⏭️  Skipping $STACK (blocks:purpose='$PURPOSE' is not an e2e marker)"
                     SKIPPED_NOT_E2E=$((SKIPPED_NOT_E2E + 1))
@@ -222,6 +269,7 @@ jobs:
             # serially is what blew past the 60-min timeout; anything that doesn't
             # finish is retried on the next run.
             echo "🧹 Emptying buckets for $STACK"
+            _VISITED_STACKS=""
             empty_stack_buckets "$STACK"
 
             if aws cloudformation delete-stack --stack-name "$STACK"; then
@@ -275,11 +323,20 @@ jobs:
       - name: Find and delete stale Amplify sandbox stacks
         if: always()
         run: |
+          # errexit + pipefail (see the e2e step): catch a failure anywhere in a pipe.
+          set -eo pipefail
           # Amplify Gen2 e2e/interop sandboxes are named amplify-amplifygen2-* and
           # amplify-amplifyinteroptest-* and tagged amplify:deployment-type=sandbox.
           # They are NOT covered by the prefix/tag rules above, so they accumulate
           # (each holds an AppSync GraphQL API and exhausts the per-region quota).
           CUTOFF=$(date -d '2 hours ago' +%s)
+          # Wall-clock budget (mirrors the e2e step's DEADLINE). This step's
+          # synchronous bucket-emptying over an arbitrary backlog is otherwise
+          # unbounded, and — because it runs BEFORE the REST-API sweep that relieves
+          # the 120-EDGE quota — a large drain could consume the shared 60-min job
+          # budget and let the timeout kill the sweep before its summary prints. Cap
+          # at 40 min and defer the remainder to the next scheduled run.
+          DEADLINE=$((SECONDS + 2400)) # 40 minutes
           TRIGGERED=0
           TRIGGER_FAILED=0
 
@@ -288,8 +345,13 @@ jobs:
           # lives in a nested `-blocksCD…`/`-data…` child (blocksBlocksConfigBucket,
           # codegen/introspection buckets), so emptying only the root's own buckets
           # never unblocks the delete. Recurse into distinct nested children.
+          # A visited-set makes the recursion cycle-safe by construction (see the
+          # e2e step's copy); reset before each top-level walk.
+          _VISITED_STACKS=""
           empty_stack_buckets() {
             local STACK="$1" TYPE PID
+            case " $_VISITED_STACKS " in *" $STACK "*) return 0 ;; esac
+            _VISITED_STACKS="$_VISITED_STACKS $STACK"
             while IFS=$'\t' read -r TYPE PID; do
               [ -z "$PID" ] && continue
               case "$TYPE" in
@@ -331,6 +393,12 @@ jobs:
             --output text | tr '\t' '\n' | grep -E '^amplify-(amplifygen2|amplifyinteroptest)-[a-z0-9]+-sandbox-[0-9a-f]+$' || true)
 
           for STACK in $STACKS; do
+            # Stop if we've spent the time budget; remaining stacks are picked up on
+            # the next scheduled run (so this step can't starve the REST-API sweep).
+            if [ "$SECONDS" -ge "$DEADLINE" ]; then
+              echo "⏱️  Time budget reached; deferring remaining Amplify stacks to the next run"
+              break
+            fi
             # Single describe-stacks call returns deployment-type tag, status, and creation time
             # as a tab-separated tuple to minimize API calls (and throttling) when draining a backlog.
             INFO=$(aws cloudformation describe-stacks --stack-name "$STACK" \
@@ -371,6 +439,7 @@ jobs:
             # table-manager Lambda role lacks dynamodb:DescribeTable) — a real
             # upstream bug surfaced by the warning below, not orphaned away.
             echo "🧹 Emptying nested buckets for $STACK"
+            _VISITED_STACKS=""
             empty_stack_buckets "$STACK"
 
             if aws cloudformation delete-stack --stack-name "$STACK"; then
@@ -404,6 +473,8 @@ jobs:
       - name: Cleanup orphaned API Gateway REST APIs
         if: always()
         run: |
+          # errexit + pipefail (see the e2e step): catch a failure anywhere in a pipe.
+          set -eo pipefail
           # The EDGE REST-API count is the hard quota (120 per region) that reds the
           # deploy-dependent E2E lanes when it saturates. A REST API becomes a
           # stack-less orphan two ways: a stack's delete retained it (the
@@ -416,7 +487,9 @@ jobs:
 
           # Ground-truth ownership: the set of REST-API *ids* that ARE resources of a
           # live stack — never delete an id in this set. We enumerate every live stack
-          # (any non-terminal status) and pull the PhysicalResourceId of each
+          # (any non-terminal status, INCLUDING IMPORT_COMPLETE and the IMPORT_*
+          # transitional states — an imported stack is fully healthy and still owns
+          # its RestApi) and pull the PhysicalResourceId of each
           # AWS::ApiGateway::RestApi it owns. This is exact: it matches on the API's
           # own id, not a guess from its name. The prior name-vs-stackname check was
           # unsound — a REST API is named for its construct ("DefaultComputeAPI"),
@@ -424,23 +497,35 @@ jobs:
           # the destructive gate collapsed to name-prefix + age. Matching by id closes
           # that: "orphan" now means genuinely stack-less.
           #
-          # DescribeStackResources is one call per stack; the live-stack count in this
-          # account is small (tens), and this step runs at most every 2h, so the call
-          # volume is well within API limits. A describe that errors (race with a
-          # concurrent delete) contributes nothing to OWNED_IDS — the id then falls
-          # through to the name+age gates below, which still refuse anything not
-          # matching a test-artifact name shape.
+          # FAIL-SAFE ON A DESCRIBE ERROR. DescribeStackResources is one call per
+          # stack. This job runs precisely under quota/throttle pressure (that is why
+          # it exists), so a throttled describe on a LIVE stack is likely, not
+          # hypothetical — and if we treated an errored describe as "unowned", that
+          # stack's live API would be absent from OWNED_IDS, pass the name shape, and
+          # be deleted out from under a running stack. So instead: if ANY per-stack
+          # describe errors, we record it and SKIP all REST-API deletes this run
+          # (the summary still prints; the next scheduled run retries with a complete
+          # ownership set). Correctness over throughput on a shared account.
           LIVE_STACKS=$(aws cloudformation list-stacks \
-            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS \
+            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE \
             --query "StackSummaries[].StackName" --output text 2>/dev/null | tr '\t' '\n' | sort -u || echo "")
 
           OWNED_IDS=""
+          OWNERSHIP_INCOMPLETE=0
           for S in $LIVE_STACKS; do
             [ -z "$S" ] && continue
-            IDS=$(aws cloudformation describe-stack-resources --stack-name "$S" \
+            # Capture stderr/exit separately so a throttled/errored describe on a live
+            # stack is treated as "ownership unknown → do not delete this run", NOT as
+            # "this stack owns no API".
+            if IDS=$(aws cloudformation describe-stack-resources --stack-name "$S" \
               --query "StackResources[?ResourceType=='AWS::ApiGateway::RestApi'].PhysicalResourceId" \
-              --output text 2>/dev/null | tr '\t' '\n' || echo "")
-            [ -n "$IDS" ] && OWNED_IDS="$OWNED_IDS"$'\n'"$IDS"
+              --output text 2>/dev/null); then
+              IDS=$(echo "$IDS" | tr '\t' '\n')
+              [ -n "$IDS" ] && OWNED_IDS="$OWNED_IDS"$'\n'"$IDS"
+            else
+              echo "  ⚠️ describe-stack-resources failed for $S — ownership set is incomplete this run"
+              OWNERSHIP_INCOMPLETE=1
+            fi
           done
           OWNED_IDS=$(echo "$OWNED_IDS" | sed '/^$/d' | sort -u)
 
@@ -470,9 +555,12 @@ jobs:
           # (every 2h) take the remainder, so the summary always runs.
           SWEEP_DEADLINE=$((SECONDS + 900))
 
+          # NOTE: no early exit on an empty API list — falling through lets the
+          # `while` iterate zero times (it guards `[ -z "$ID" ] && continue`) so the
+          # headroom summary and the EDGE-quota warning below always print, which is
+          # the one thing this step exists to report.
           if [ -z "$APIS" ]; then
             echo "✅ No custom REST APIs found"
-            exit 0
           fi
 
           while IFS=$'\t' read -r ID NAME CREATED; do
@@ -483,6 +571,16 @@ jobs:
             if echo "$OWNED_IDS" | grep -qxF "$ID" 2>/dev/null; then
               echo "  ⏭️ Skipping $NAME ($ID) — owned by a live stack"
               SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
+              continue
+            fi
+
+            # HARD SAFETY (throttle fail-safe): if the ownership scan above hit ANY
+            # describe error, OWNED_IDS is incomplete and a live API could be missing
+            # from it — so we do NOT delete anything this run. Count it as deferred and
+            # let the next scheduled run retry with a complete set. (Placed after the
+            # id check so a KNOWN-owned API is still logged as owned, not deferred.)
+            if [ "$OWNERSHIP_INCOMPLETE" -ne 0 ]; then
+              DEFERRED=$((DEFERRED + 1))
               continue
             fi
 
@@ -501,10 +599,14 @@ jobs:
                 ;;
             esac
 
-            # (b) age gate. createdDate is epoch seconds from the API.
+            # (b) age gate. get-rest-apis renders createdDate as ISO-8601
+            # (e.g. 2026-05-11T11:00:05+00:00), NOT epoch seconds — so it must be
+            # normalized with `date -d` (same as the e2e step does for CreationTime)
+            # before any integer compare. A value that fails to parse becomes 0,
+            # i.e. treated as OLD, so the age dimension fails CLOSED (still gated by
+            # ownership + name) rather than fizzling open and skipping the young-check.
             if [ -n "$CREATED" ] && [ "$CREATED" != "None" ]; then
-              # API createdDate may be a float epoch; strip any fractional part.
-              CREATED_TS=${CREATED%%.*}
+              CREATED_TS=$(date -d "$CREATED" +%s 2>/dev/null || echo 0)
               if [ "$CREATED_TS" -gt "$STUCK_CUTOFF" ] 2>/dev/null; then
                 SKIPPED_YOUNG=$((SKIPPED_YOUNG + 1))
                 continue
@@ -560,6 +662,8 @@ jobs:
       - name: Cleanup orphaned CloudFront Response Headers Policies
         if: always()
         run: |
+          # errexit + pipefail (see the e2e step): catch a failure anywhere in a pipe.
+          set -eo pipefail
           echo "🔍 Checking for orphaned CloudFront Response Headers Policies..."
           POLICIES=$(aws cloudfront list-response-headers-policies \
             --type custom \
