@@ -25,7 +25,7 @@ const scope = new Scope(SCOPE_ID);
 
 const auth = new AuthCognito(scope, 'auth', {
 	signInWith: 'email' as const,
-	selfSignUp: true,
+	selfSignUp: false, // hosted demo: admin-created users only
 	mfa: 'off' as const,
 	removalPolicy: 'destroy' as const,
 });

@@ -10,8 +10,9 @@
  * Steps (exit 1 on the first failed MUST):
  *  1. Write amplify_outputs.json from the stack outputs (the real emitter).
  *  2. Amplify.configure(outputs) with the real aws-amplify@6 package.
- *  3. signUp() a throwaway user; confirm it with AdminConfirmSignUp (operator
- *     credentials, so no mailbox is needed).
+ *  3. Create a confirmed throwaway user with AdminCreateUser +
+ *     AdminSetUserPassword (the pool disables self sign-up, so Amplify's
+ *     signUp() is refused; operator credentials, no mailbox needed).
  *  4. EXPECT: default signIn() (SRP) is rejected by the Blocks pool.
  *  5. MUST: signIn() with authFlowType USER_PASSWORD_AUTH succeeds, and the ID
  *     token's issuer is the Blocks pool.
@@ -21,7 +22,7 @@
  *  7. Cleanup: signOut + AdminDeleteUser (always runs).
  *
  * Needs AWS credentials for the deploy account with
- * cognito-idp:AdminConfirmSignUp and cognito-idp:AdminDeleteUser on the pool.
+ * cognito-idp:AdminCreateUser, AdminSetUserPassword and AdminDeleteUser on the pool.
  */
 
 import { readFileSync } from 'node:fs';
@@ -32,7 +33,8 @@ import { Amplify } from 'aws-amplify';
 import { signUp, signIn, signOut, fetchAuthSession } from 'aws-amplify/auth';
 import {
 	CognitoIdentityProviderClient,
-	AdminConfirmSignUpCommand,
+	AdminCreateUserCommand,
+	AdminSetUserPasswordCommand,
 	AdminDeleteUserCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { emitAmplifyOutputs } from '../src/emit-amplify-outputs.js';
@@ -68,10 +70,23 @@ const must = (name: string, ok: boolean, detail: string) => {
 };
 
 try {
-	const up = await signUp({ username: email, password, options: { userAttributes: { email } } });
-	must('signUp', up.nextStep.signUpStep === 'CONFIRM_SIGN_UP' || up.isSignUpComplete, up.nextStep.signUpStep);
-	await idp.send(new AdminConfirmSignUpCommand({ UserPoolId: facts.userPoolId, Username: email }));
-	results.push(['adminConfirmSignUp', 'PASS', 'confirmed']);
+	// Self sign-up is disabled, so the stock signUp() must be refused.
+	try {
+		await signUp({ username: `x-${email}`, password, options: { userAttributes: { email: `x-${email}` } } });
+		must('Amplify signUp() refused (self sign-up off)', false, 'unexpectedly accepted');
+	} catch (e) {
+		must('Amplify signUp() refused (self sign-up off)', true, `${(e as Error).name}: ${(e as Error).message}`);
+	}
+	await idp.send(
+		new AdminCreateUserCommand({
+			UserPoolId: facts.userPoolId,
+			Username: email,
+			MessageAction: 'SUPPRESS',
+			UserAttributes: [{ Name: 'email', Value: email }, { Name: 'email_verified', Value: 'true' }],
+		}),
+	);
+	await idp.send(new AdminSetUserPasswordCommand({ UserPoolId: facts.userPoolId, Username: email, Password: password, Permanent: true }));
+	results.push(['adminCreateUser', 'PASS', 'confirmed']);
 
 	try {
 		await signIn({ username: email, password });
