@@ -1362,11 +1362,26 @@ export class HostingConstruct extends Construct {
     // ---- 9b. KMS decrypt grant for CloudFront OAC ----
     const kmsKey = props.storage?.encryptionKey ?? storage.bucket.encryptionKey;
     if (props.storage?.encryption === 'KMS' && kmsKey) {
+      // Scope the grant to CloudFront distributions in THIS account so a distribution in another
+      // account can't be pointed at the key (confused-deputy). We use an account-scoped ArnLike
+      // wildcard rather than this distribution's exact id on purpose: the key is consumed by the
+      // origin bucket that the distribution's OAC depends on, so referencing distributionId here
+      // closes a CloudFormation dependency cycle (key -> distribution -> bucket -> key). The
+      // account boundary is what removes the cross-account shape; the bucket policy already pins
+      // the exact distribution. Mirrors the account-scoped ArnLike trust in bb-agent.
       kmsKey.addToResourcePolicy(
         new iam.PolicyStatement({
           actions: ['kms:Decrypt'],
           resources: ['*'],
           principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
+          conditions: {
+            StringEquals: {
+              'aws:SourceAccount': Stack.of(this).account,
+            },
+            ArnLike: {
+              'aws:SourceArn': `arn:aws:cloudfront::${Stack.of(this).account}:distribution/*`,
+            },
+          },
         }),
       );
     }

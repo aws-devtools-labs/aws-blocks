@@ -152,3 +152,23 @@ describe('CronJob synth-time schedule validation', () => {
 		);
 	});
 });
+
+describe('CronJob scheduler role trust', () => {
+	test('scheduler assume-role trust is scoped by aws:SourceAccount and aws:SourceArn', async () => {
+		const stack = await makeStack('CronTrust');
+		new CronJob(stack, 'nightly', { schedule: 'rate(1 day)', handler: async () => {} });
+
+		const template = Template.fromStack(stack);
+		const roles = template.findResources('AWS::IAM::Role');
+		const schedulerRoles = Object.values(roles).filter((r) =>
+			JSON.stringify(r.Properties?.AssumeRolePolicyDocument ?? {}).includes('scheduler.amazonaws.com'),
+		);
+		assert.strictEqual(schedulerRoles.length, 1, 'exactly one role trusts scheduler.amazonaws.com');
+
+		const doc = JSON.stringify(schedulerRoles[0].Properties.AssumeRolePolicyDocument);
+		// Without both condition keys any account's schedule could assume this role and drive the
+		// backend Lambda's 'direct' dispatch path (which bypasses the HTTP auth/CORS/origin gates).
+		assert.ok(doc.includes('aws:SourceAccount'), 'scheduler trust must be scoped by aws:SourceAccount');
+		assert.ok(doc.includes('aws:SourceArn'), 'scheduler trust must be scoped by aws:SourceArn');
+	});
+});

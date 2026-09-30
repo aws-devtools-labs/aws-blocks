@@ -1974,6 +1974,21 @@ void describe('HostingConstruct — KMS Key Policy', () => {
       cfDecryptStatement,
       'KMS key policy must grant kms:Decrypt to cloudfront.amazonaws.com',
     );
+
+    // The grant must be scoped to this account so it isn't a cross-account confused-deputy shape
+    // (a distribution in another account being pointed at the key). We assert a source-scoping
+    // condition is present (case-insensitively, since CDK's own OAC grant uses `AWS:SourceArn`
+    // while the explicit grant uses `aws:SourceAccount`/`aws:SourceArn`). We do not pin an exact
+    // distribution id, because that would close a CloudFormation dependency cycle
+    // (key -> distribution -> origin bucket -> key).
+    const condition = cfDecryptStatement?.Condition as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    const conditionJson = JSON.stringify(condition ?? {}).toLowerCase();
+    assert.ok(
+      conditionJson.includes('aws:sourceaccount') || conditionJson.includes('aws:sourcearn'),
+      'CloudFront KMS decrypt grant must be scoped by aws:SourceAccount / aws:SourceArn',
+    );
   });
 
   void it('does NOT create KMS key when encryption is S3_MANAGED (default)', () => {
