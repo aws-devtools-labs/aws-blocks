@@ -316,5 +316,5 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
   });
 }
 
-export { ApiError, blocksError, brandBlocksError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
+export { ApiError, blocksError, brandBlocksError, isBlocksError, hasAuthError, isWireSafeError, DEFAULT_API_ERROR_NAME } from '../errors.js';
 export { Scope, type ScopeOptions } from '../common/index.js';

@@ -126,6 +126,9 @@ export { isManagedValue }
 export { isSecret }
 
 // @public
+export function isWireSafeError(e: unknown): e is Error;
+
+// @public
 export function loadConfigToProcessEnv(): Promise<void>;
 
 // @public
