@@ -100,7 +100,7 @@ describe('DistributedDatabase E2E (mock)', () => {
     await assert.rejects(() => db.transaction(async (tx) => {
       await tx.execute(sql`INSERT INTO users (id, name) VALUES (${'x'}, ${'X'})`);
       await tx.execute(sql`CREATE TABLE fail (id TEXT)`);
-    }), { name: 'DsqlPermissionError' });
+    }), { name: 'DsqlPermissionException' });
   });
 
   it('unique constraint violation', async () => {

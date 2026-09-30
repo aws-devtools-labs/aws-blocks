@@ -22,6 +22,7 @@
 import {
   ApiNamespace,
   Scope,
+  ApiError,
   AuthBasic,
   Database,
   DatabaseErrors,
@@ -78,7 +79,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     } catch (e: unknown) {
       // The (owner, name) unique index rejects a duplicate name for this user.
       if (isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)) {
-        throw new Error(`You already have a notebook named "${name}"`);
+        throw new ApiError(`You already have a notebook named "${name}"`, 409, { name: 'NotebookNameConflictException' });
       }
       throw e;
     }
@@ -102,7 +103,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const notebook = await db.queryOne<Notebook>(
       sql`SELECT id FROM notebooks WHERE id = ${notebookId} AND owner = ${user.username}`,
     );
-    if (!notebook) throw new Error('Notebook not found');
+    if (!notebook) throw new ApiError('Notebook not found', 404, { name: 'NotebookNotFoundException' });
     const id = newId();
     await db.execute(
       sql`INSERT INTO notes (id, notebook_id, owner, body)

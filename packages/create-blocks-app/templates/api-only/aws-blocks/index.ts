@@ -17,7 +17,7 @@
  *   node_modules/@aws-blocks/blocks/README.md
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, Scope, AuthBasic, DistributedTable } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, AuthBasic, DistributedTable } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -81,7 +81,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getItem(itemId: string) {
     const user = await auth.requireAuth(context);
     const item = await items.get({ owner: user.username, itemId });
-    if (!item) throw new Error('Item not found');
+    if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     return item;
   },
 
@@ -96,7 +96,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async updateQuantity(itemId: string, quantity: number) {
     const user = await auth.requireAuth(context);
     const item = await items.get({ owner: user.username, itemId });
-    if (!item) throw new Error('Item not found');
+    if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     await items.put(
       { ...item, quantity, version: item.version + 1 },
       { ifFieldEquals: { version: item.version } },
@@ -115,7 +115,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async setQuantity(itemId: string, quantity: number, expectedVersion: number) {
     const user = await auth.requireAuth(context);
     const item = await items.get({ owner: user.username, itemId });
-    if (!item) throw new Error('Item not found');
+    if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     await items.put(
       { ...item, quantity, version: expectedVersion + 1 },
       { ifFieldEquals: { version: expectedVersion } },

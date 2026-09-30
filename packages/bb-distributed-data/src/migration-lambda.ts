@@ -36,17 +36,41 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       return await fn();
-    } catch (e: any) {
-      const isTransient = e?.code?.startsWith?.('08') || // connection exception class
-        e?.message?.includes?.('Connection terminated') ||
-        e?.message?.includes?.('ECONNREFUSED');
-      if (!isTransient || attempt === MAX_RETRIES) throw e;
+    } catch (e: unknown) {
+      if (!isTransientConnectionError(e) || attempt === MAX_RETRIES) throw e;
       const delay = Math.min(INITIAL_DELAY_MS * 2 ** attempt, MAX_DELAY_MS);
       console.log(`[bb-distributed-data] Connection not ready, retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
   throw new Error('unreachable');
+}
+
+/**
+ * Whether an error is a transient connection failure worth a retry — a pg
+ * connection-exception SQLSTATE (class `08`) or a socket-level
+ * `Connection terminated`/`ECONNREFUSED`.
+ *
+ * Checks the error AND its `cause`. DsqlEngine re-tags a caught driver error into
+ * a fresh branded error with a stable BB message and NO `code` (see
+ * `reTagged` in errors.ts), attaching the raw driver error as `cause`. So the
+ * `code`/`message` this predicate keys on live on `cause` after re-tagging, not on
+ * the surface error — reading only the surface would silently stop classifying
+ * these transient failures as retryable.
+ */
+function isTransientConnectionError(e: unknown): boolean {
+  const matches = (err: unknown): boolean => {
+    if (typeof err !== 'object' || err === null) return false;
+    const code = 'code' in err && typeof err.code === 'string' ? err.code : undefined;
+    const message = 'message' in err && typeof err.message === 'string' ? err.message : undefined;
+    return (
+      code?.startsWith('08') === true || // connection exception class
+      message?.includes('Connection terminated') === true ||
+      message?.includes('ECONNREFUSED') === true
+    );
+  };
+  const cause = e instanceof Error && e.cause instanceof Error ? e.cause : undefined;
+  return matches(e) || matches(cause);
 }
 
 /**

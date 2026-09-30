@@ -20,7 +20,7 @@ export const DistributedDatabaseErrors = {
    * rejection comes from DSQL itself and is re-tagged by {@link translateDsqlError}.
    * Matchable via `isBlocksError(e, DistributedDatabaseErrors.Permission)`.
    */
-  Permission: 'DsqlPermissionError',
+  Permission: 'DsqlPermissionException',
 } as const;
 
 /**
@@ -34,6 +34,8 @@ export const PG_SERIALIZATION_FAILURE = '40001';
 export const PG_UNIQUE_VIOLATION = '23505';
 /** Connection exception class prefix. Class 08 (Connection Exception). */
 export const PG_CONNECTION_EXCEPTION_CLASS = '08';
+/** Insufficient privilege — a DML/DDL statement the connection's role may not run. Class 42 (Syntax Error or Access Rule Violation). */
+export const PG_INSUFFICIENT_PRIVILEGE = '42501';
 
 /**
  * Maximum rows mutated per DSQL transaction.
@@ -95,6 +97,9 @@ export function uniqueConstraintConflict(cause: Error): ApiError {
 const RE_TAG_MESSAGES: Record<string, string> = {
   [DistributedDatabaseErrors.QueryFailed]: 'The database query failed',
   [DistributedDatabaseErrors.ConnectionFailed]: 'The database connection failed',
+  [DistributedDatabaseErrors.Permission]:
+    'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime. ' +
+    'Use migration files instead — the migration Lambda has dsql:DbConnectAdmin for DDL.',
 };
 
 /**
@@ -111,9 +116,14 @@ function reTagged(name: string, cause: Error): Error {
   return brandBlocksError(wrapped);
 }
 
+/** Read a pg driver error's SQLSTATE `code` without an `as` cast. */
+function pgErrorCode(e: Error): string | undefined {
+  return 'code' in e && typeof e.code === 'string' ? e.code : undefined;
+}
+
 /** Translate a pg error code to a DistributedDatabaseErrors name. */
 export function translateDsqlError(e: Error): never {
-  const code = (e as any).code as string | undefined;
+  const code = pgErrorCode(e);
   if (code === PG_SERIALIZATION_FAILURE) {
     // An OCC / serialization-failure conflict (SQLSTATE 40001) is a Conflict,
     // not an InternalServerError: see serializationConflict() for the full
@@ -125,6 +135,13 @@ export function translateDsqlError(e: Error): never {
     // the full rationale (409 mapping, preserved name, retained cause, and why
     // it is NOT retriable).
     throw uniqueConstraintConflict(e);
+  } else if (code === PG_INSUFFICIENT_PRIVILEGE) {
+    // Insufficient privilege (SQLSTATE 42501): DSQL rejected a statement the
+    // app-runtime role may not run — the deployed-path equivalent of the mock's
+    // DDL guard. Re-tag to `Permission` with a stable BB message so
+    // `isBlocksError(e, DistributedDatabaseErrors.Permission)` matches on the
+    // DEPLOYED path too, not only against the mock (raw driver text kept as cause).
+    throw reTagged(DistributedDatabaseErrors.Permission, e);
   }
   // Brand the re-tagged connection/query error (stable BB message, raw driver
   // error kept as `cause`) so its name crosses the wire without leaking driver

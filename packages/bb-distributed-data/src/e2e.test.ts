@@ -342,7 +342,7 @@ describe('DistributedDatabase — public API with migrations', () => {
 
     // DDL is rejected outright in the app runtime (parity with prod
     // dsql:DbConnect, which is DML-only), so any CREATE inside a normal
-    // transaction surfaces as DsqlPermissionError before the DDL/DML mixing
+    // transaction surfaces as DsqlPermissionException before the DDL/DML mixing
     // rule is ever evaluated.
     it('rejects DDL + DML in same transaction', async () => {
       await assert.rejects(
@@ -350,7 +350,7 @@ describe('DistributedDatabase — public API with migrations', () => {
           await tx.execute(sql`INSERT INTO users (id, name, email) VALUES (${'x'}, ${'X'}, ${'x@t.com'})`);
           await tx.execute(sql`CREATE TABLE should_fail (id TEXT PRIMARY KEY)`);
         }),
-        { name: 'DsqlPermissionError' }
+        { name: 'DsqlPermissionException' }
       );
     });
 
@@ -360,7 +360,7 @@ describe('DistributedDatabase — public API with migrations', () => {
           await tx.execute(sql`CREATE TABLE t1 (id TEXT PRIMARY KEY)`);
           await tx.execute(sql`CREATE TABLE t2 (id TEXT PRIMARY KEY)`);
         }),
-        { name: 'DsqlPermissionError' }
+        { name: 'DsqlPermissionException' }
       );
     });
   });

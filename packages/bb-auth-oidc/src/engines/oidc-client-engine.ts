@@ -323,7 +323,7 @@ export class OidcClientEngine implements AuthEngine {
 					idTokenExpected: true,
 				});
 			} catch (err) {
-				throw idpError(`code exchange failed: ${describeError(err)}`);
+				throw idpError('code exchange failed', err);
 			}
 			const claims = tokens.claims();
 			if (!claims) throw idpError('code exchange did not return an ID token');
@@ -642,7 +642,7 @@ export class OidcClientEngine implements AuthEngine {
 				idTokenExpected: true,
 			});
 		} catch (err) {
-			throw idpError(`code exchange failed: ${describeError(err)}`);
+			throw idpError('code exchange failed', err);
 		}
 		const claims = tokens.claims();
 		if (!claims) throw idpError('code exchange did not return an ID token');
@@ -828,7 +828,7 @@ export class OidcClientEngine implements AuthEngine {
 		try {
 			return await resolver();
 		} catch (err) {
-			throw providerNotConfigured(`${providerName}: clientId resolver threw: ${describeError(err)}`);
+			throw providerNotConfigured(`${providerName}: clientId resolver threw`, err);
 		}
 	}
 
@@ -838,7 +838,7 @@ export class OidcClientEngine implements AuthEngine {
 		try {
 			return await resolver();
 		} catch (err) {
-			throw providerNotConfigured(`${providerName}: clientSecret resolver threw: ${describeError(err)}`);
+			throw providerNotConfigured(`${providerName}: clientSecret resolver threw`, err);
 		}
 	}
 
@@ -871,10 +871,6 @@ function claimsToUser(claims: Record<string, unknown>, providerName: string): OI
 	};
 }
 
-function describeError(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
-}
-
 function blocksError(name: string, message: string): Error {
 	const err = new Error(message);
 	err.name = name;
@@ -889,10 +885,24 @@ function invalidCallback(msg: string): Error {
 	return blocksError('InvalidCallbackException', `invalid OIDC callback: ${msg}`);
 }
 
-function idpError(msg: string): Error {
-	return blocksError('IdpErrorException', `IdP error: ${msg}`);
+function idpError(msg: string, cause?: unknown): Error {
+	return withCause(blocksError('IdpErrorException', `IdP error: ${msg}`), cause);
 }
 
-function providerNotConfigured(msg: string): Error {
-	return blocksError('ProviderNotConfiguredException', `provider not configured: ${msg}`);
+function providerNotConfigured(msg: string, cause?: unknown): Error {
+	return withCause(blocksError('ProviderNotConfiguredException', `provider not configured: ${msg}`), cause);
+}
+
+/**
+ * Attach the raw underlying error as a NON-ENUMERABLE `cause` for server-side
+ * diagnostics. Non-enumerable so `JSON.stringify(err)` cannot leak it, and the
+ * branded error's own message (which crosses the RPC wire) stays BB-authored —
+ * the raw IdP/SDK/resolver text (which can carry SSM ARNs, account ids, provider
+ * detail) never reaches the wire. No-op when there is no underlying error.
+ */
+function withCause(err: Error, cause: unknown): Error {
+	if (cause !== undefined) {
+		Object.defineProperty(err, 'cause', { value: cause, enumerable: false, writable: true, configurable: true });
+	}
+	return err;
 }

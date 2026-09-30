@@ -15,8 +15,9 @@
  * This source-scan closes that gap in two tiers:
  *
  *  1. CLASS granularity (the exact recurrence class): every `class … extends Error`
- *     whose body declares `override readonly name = <BB constant | *Exception>`
- *     MUST brand itself — `brandBlocksError(this)` in its constructor. This is
+ *     whose body declares `readonly name = <BB constant | *Exception>` (with or
+ *     without `override`) MUST brand itself — `brandBlocksError(this)` in its
+ *     constructor. This is
  *     checked per-class, so an unbranded class-field error is caught even when the
  *     same file also contains other, branded producers (which is exactly why the
  *     original `BatchSubmitFailedError` / `InvalidRelayError` misses slipped a
@@ -93,7 +94,7 @@ const rel = (pkg: string, file: string) => `${pkg}/${file.slice(join(packagesDir
 
 // ── Tier 1: class-field error producers must brand themselves ────────────────
 
-const CLASS_FIELD_NAME = /class\s+(\w+)\s+extends\s+(?:\w+\.)?Error\b[\s\S]*?override\s+readonly\s+name\s*=/;
+const CLASS_FIELD_NAME = /class\s+(\w+)\s+extends\s+(?:\w+\.)?Error\b[\s\S]*?(?:override\s+)?readonly\s+name\s*=/;
 const CLASS_HEADER = /class\s+\w+\s+extends\s+(?:\w+\.)?Error\b/g;
 
 /** Extract each `class X extends Error { … }` body via brace matching. */
@@ -121,7 +122,7 @@ test('every class-field Error producer brands itself (brandBlocksError in the cl
 			const text = readFileSync(file, 'utf-8');
 			if (!CLASS_FIELD_NAME.test(text)) continue;
 			for (const { name, body } of extractErrorClassBodies(text)) {
-				if (!/override\s+readonly\s+name\s*=/.test(body)) continue;
+				if (!/(?:override\s+)?readonly\s+name\s*=/.test(body)) continue;
 				if (/brandBlocksError\s*\(/.test(body)) continue;
 				const key = rel(pkg, file);
 				if (key in FILE_ALLOWLIST) continue;

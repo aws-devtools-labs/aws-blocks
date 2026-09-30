@@ -112,25 +112,41 @@ function isFilterRelatedValidation(message: string): boolean {
 }
 
 function mapSdkError(err: unknown): Error {
-	// Non-Error throw (e.g., string or object) — stringify for diagnostics. There
-	// is no underlying Error to attach, so `cause` is left unset.
+	// Non-Error throw (e.g., string or object) — use a STABLE message (the raw
+	// value could be anything, so it must not reach the wire) and keep the
+	// stringified form server-side on a synthetic non-enumerable `cause`.
 	if (!(err instanceof Error)) {
-		return blocksError(KnowledgeBaseErrors.RetrievalFailed, String(err));
+		const mapped = blocksError(KnowledgeBaseErrors.RetrievalFailed, 'Knowledge base retrieval failed.');
+		Object.defineProperty(mapped, 'cause', {
+			value: new Error(String(err)),
+			enumerable: false,
+			writable: true,
+			configurable: true,
+		});
+		return mapped;
 	}
 
+	// Every branch below uses a STABLE, BB-authored message — never the raw SDK
+	// `err.message`/`String(err)`. Branded messages now cross the RPC wire, and a
+	// Bedrock error can embed the account id, role name, or KB ARN (e.g. an
+	// AccessDenied), so interpolating it here would re-open the leak. The raw SDK
+	// error is preserved server-side on the non-enumerable `cause` below.
 	let mapped: Error;
 	if (err.name === 'ResourceNotFoundException') {
 		mapped = blocksError(
 			KnowledgeBaseErrors.NotReady,
-			`Knowledge base not found. Run \`cdk deploy\` first. (${err.message})`,
+			'Knowledge base not found. Run `cdk deploy` first.',
 		);
 	} else if (err.name === 'ValidationException' && isFilterRelatedValidation(err.message)) {
-		mapped = blocksError(KnowledgeBaseErrors.InvalidFilter, err.message);
+		mapped = blocksError(
+			KnowledgeBaseErrors.InvalidFilter,
+			'Invalid metadata filter in the knowledge base query.',
+		);
 	} else if (err.name === 'ValidationException') {
-		mapped = blocksError(KnowledgeBaseErrors.ValidationError, err.message);
+		mapped = blocksError(KnowledgeBaseErrors.ValidationError, 'Knowledge base query validation failed.');
 	} else {
 		// Catch-all for unrecognized SDK errors (network, auth, throttling, etc.).
-		mapped = blocksError(KnowledgeBaseErrors.RetrievalFailed, err.message);
+		mapped = blocksError(KnowledgeBaseErrors.RetrievalFailed, 'Knowledge base retrieval failed.');
 	}
 
 	// Preserve the original SDK error as the standard `Error.cause` for diagnostics
@@ -523,11 +539,15 @@ export class KnowledgeBase extends Scope {
 				// control-plane errors, fold the most recent one into the message.
 				// Otherwise a timeout reads like a healthy KB that just never finished
 				// ingesting, hiding that the final polls were actually failing transiently.
+				// Surface the mapped error's stable NAME (e.g. RetrievalFailedException),
+				// never its message: `lastTransient` is a mapped KB error whose message is
+				// a stable BB string, and this Timeout error crosses the RPC wire, so
+				// interpolating raw driver/SDK text here would re-open the leak.
 				const base = `Knowledge base did not sync within ${timeoutMs}ms`;
 				throw blocksError(
 					KnowledgeBaseErrors.Timeout,
 					consecutiveTransientErrors > 0 && lastTransient
-						? `${base} (last transient error: ${lastTransient.message})`
+						? `${base} (last transient error: ${lastTransient.name})`
 						: `${base}.`,
 				);
 			}
