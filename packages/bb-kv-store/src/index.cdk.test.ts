@@ -166,7 +166,7 @@ test('CDK: fromExisting + ttl still provisions nothing (no table to configure)',
 });
 
 // ── Point-in-Time Recovery & encryption (secure-by-default in production) ────
-// Regression for the AppSec finding: KVStore's prod DDB table shipped with PITR
+// Regression: KVStore's production DynamoDB table previously shipped with PITR
 // disabled and no customer-managed encryption option, so a consumer on the
 // production preset believed PITR was on (bb-distributed-table honors it) when
 // it was NOT.

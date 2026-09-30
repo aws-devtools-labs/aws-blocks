@@ -76,9 +76,13 @@ export class KVStore extends BuildingBlockScope {
 			// `encryption` accepts two string literals or an ExternalKmsKeyRef
 			// (a `{ __brand: 'ExternalKmsKeyRef', keyArn }` from `fromKmsKey`).
 			// Anything else is a typo — warn rather than silently using the default.
-			const isKmsKeyRef = typeof options?.encryption === 'object'
-				&& options.encryption !== null
-				&& options.encryption.__brand === 'ExternalKmsKeyRef';
+			// Captured into a local const so the `isKmsKeyRef` discriminant below
+			// narrows it (aliased-condition narrowing doesn't reach through the
+			// optional `options?.encryption` access).
+			const encryptionOption = options?.encryption;
+			const isKmsKeyRef = typeof encryptionOption === 'object'
+				&& encryptionOption !== null
+				&& encryptionOption.__brand === 'ExternalKmsKeyRef';
 			if (
 				options?.encryption !== undefined
 				&& options.encryption !== 'aws-managed'
@@ -104,7 +108,7 @@ export class KVStore extends BuildingBlockScope {
 			if (typeof pitrSetting === 'object' && pitrSetting !== null) {
 				pitrEnabled = true;
 				pitrDays = pitrSetting.retentionDays;
-				if (!Number.isInteger(pitrDays) || (pitrDays as number) < 1 || (pitrDays as number) > 35) {
+				if (!Number.isInteger(pitrDays) || pitrDays < 1 || pitrDays > 35) {
 					Annotations.of(this).addWarningV2(
 						'@aws-blocks/bb-kv-store:InvalidPitrDays',
 						`pointInTimeRecovery.retentionDays must be an integer between 1 and 35 (got ${String(pitrDays)}) — ` +
@@ -122,13 +126,9 @@ export class KVStore extends BuildingBlockScope {
 			// Otherwise the AWS-managed `aws/dynamodb` key.
 			let encryptionKey: IKey | undefined;
 			let encryption: TableEncryption;
-			if (
-				typeof options?.encryption === 'object'
-				&& options.encryption !== null
-				&& options.encryption.__brand === 'ExternalKmsKeyRef'
-			) {
+			if (isKmsKeyRef) {
 				encryption = TableEncryption.CUSTOMER_MANAGED;
-				encryptionKey = Key.fromKeyArn(this, 'encryption-key', options.encryption.keyArn);
+				encryptionKey = Key.fromKeyArn(this, 'encryption-key', encryptionOption.keyArn);
 			} else if (options?.encryption === 'customer-managed') {
 				encryption = TableEncryption.CUSTOMER_MANAGED;
 			} else {
