@@ -110,6 +110,8 @@ jobs:
     if: needs.detect-changes.outputs.dart-changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -375,6 +377,10 @@ jobs:
       - uses: dart-lang/setup-dart@v1
         with:
           sdk: '3.13.0'
+
+      # Make sure we don't have an invalid OIDC token
+      - name: Remove setup-dart's pub.dev OIDC token
+        run: dart pub token remove https://pub.dev || true
 
       # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
       # traffic is consistent and identifiable (and can be excluded from product

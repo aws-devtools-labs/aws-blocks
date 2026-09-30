@@ -552,7 +552,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		const configs = Array.isArray(this.modelConfig) ? this.modelConfig : this.modelConfig ? [this.modelConfig] : [];
 		let resolvedConfig: ModelConfig | undefined;
 		for (const config of configs) {
-			if (await checkModelHealth(config, this.log)) { resolvedConfig = config; break; }
+			if (await checkModelHealth(config, this.log, this.buildUserAgentChain())) { resolvedConfig = config; break; }
 		}
 		if (!resolvedConfig && configs.length > 0) {
 			const tried = configs.map(c => `${c.provider}${c.modelId ? ` (${c.modelId})` : ''}`).join(', ');

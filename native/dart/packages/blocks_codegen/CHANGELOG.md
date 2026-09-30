@@ -1,3 +1,7 @@
+## 0.1.4
+
+- Bump `blocks_runtime` to `^0.1.4`
+
 ## 0.1.3
 
 - Minor bug fixes and improvements

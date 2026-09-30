@@ -144,3 +144,57 @@ describe('generateSpec — namespaces sharing a method name (regression: #445)',
 		}
 	});
 });
+
+describe('generateSpec — namespace returned by a factory, then destructured (regression: #444)', () => {
+	it('emits real schemas (not unknown) for a factory/destructured namespace', async () => {
+		const dir = join(tmpdir(), `blocks-spec-test-${Date.now()}-factory`);
+		mkdirSync(dir, { recursive: true });
+		writeTsconfig(dir);
+
+		// Typed foundation: one directly-exported namespace and one built inside a
+		// factory, returned as a property, destructured, and re-exported. Both use
+		// `create` with DIFFERENT params so a regression would cross-assign or emit
+		// unknown.
+		writeFileSync(join(dir, 'index.ts'), `
+			interface ApiNamespaceConstructor { new <T>(scope: any, name: string, handler: (ctx: any) => T): T; }
+			const ApiNamespace: ApiNamespaceConstructor = class {} as any;
+			class Scope { constructor(id: string) {} }
+
+			class Factory {
+				constructor(private readonly scope: Scope) {}
+				build() {
+					return {
+						subscriptions: new ApiNamespace(this.scope, 'subscriptions', () => ({
+							async create(topicCount: number): Promise<{ subId: number }> { return { subId: 1 }; },
+						})),
+					};
+				}
+			}
+
+			const scope = new Scope('app');
+			export const widgets = new ApiNamespace(scope, 'widgets', () => ({
+				async create(label: string): Promise<{ widgetId: string }> { return { widgetId: 'w' }; },
+			}));
+			const { subscriptions } = new Factory(scope).build();
+			export { subscriptions };
+		`);
+
+		const widgets = new ApiNamespace(null as any, 'widgets', () => ({ async create(_label: string) { return { widgetId: 'w' }; } }));
+		const subscriptions = new ApiNamespace(null as any, 'subscriptions', () => ({ async create(_topicCount: number) { return { subId: 1 }; } }));
+		const loader = async () => ({ widgets, subscriptions }) as Record<string, unknown>;
+
+		try {
+			const doc = await generateSpec(join(dir, 'index.ts'), loader);
+			const byName = new Map(doc.methods.map((m) => [m.name, m]));
+			const w = byName.get('widgets.create');
+			const s = byName.get('subscriptions.create');
+			assert.ok(w && s, 'both qualified methods present');
+			// The factory-returned namespace keeps its own param, not `unknown` and
+			// not the direct namespace's `string`.
+			assert.strictEqual((s!.params[0] as any)?.schema?.type, 'number');
+			assert.strictEqual((w!.params[0] as any)?.schema?.type, 'string');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

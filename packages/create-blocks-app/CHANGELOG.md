@@ -1,5 +1,21 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.23
+
+### Patch Changes
+
+- f24961b: Add a build script to the backend template so freshly scaffolded backend apps support `npm run build`.
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- fef57e7: Add the AWS CDK CLI to generated template development dependencies.
+- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
+- d9b442e: Make starter template E2E setup wait for the Blocks server without depending on a sample API.
+
 ## 0.1.22
 
 ### Patch Changes

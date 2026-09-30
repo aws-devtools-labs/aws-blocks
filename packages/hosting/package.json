@@ -1,6 +1,14 @@
 {
   "name": "@aws-blocks/hosting",
-  "version": "0.3.0",
+  "version": "0.3.1",
+  "keywords": [
+    "aws-blocks",
+    "hosting",
+    "cloudfront",
+    "s3",
+    "static-site",
+    "ssr"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

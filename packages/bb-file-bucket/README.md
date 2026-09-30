@@ -104,6 +104,7 @@ if (!file) {
 |----------|--------------|-------------|
 | `FileBucketErrors.FileNotFound` | `NoSuchKey` | Surfaced by presigned-URL 404s etc. **Not** thrown by `get()`, which returns `null`. |
 | `FileBucketErrors.FileTooLarge` | `EntityTooLarge` | File exceeds size limits. |
+| `FileBucketErrors.VersionNotFound` | `NoSuchVersion` | Thrown by `restoreVersion()` when the target `versionId` cannot be resolved. |
 
 ```typescript
 import { isBlocksError } from '@aws-blocks/core';
@@ -112,8 +113,8 @@ import { FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 try {
   await bucket.restoreVersion('report.pdf', 'non-existent-version');
 } catch (e: unknown) {
-  if (isBlocksError(e, FileBucketErrors.FileNotFound)) {
-    // source version does not exist
+  if (isBlocksError(e, FileBucketErrors.VersionNotFound)) {
+    // that version does not exist
   }
   throw e;
 }

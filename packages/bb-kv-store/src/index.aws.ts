@@ -3,7 +3,7 @@
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, DeleteCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, ApiError } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, ApiError, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -49,6 +49,7 @@ export class KVStore<T = string> extends Scope {
 		const client = new DynamoDBClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(client);
 		this.docClient = DynamoDBDocumentClient.from(client);
 	}
 
@@ -180,13 +181,29 @@ export class KVStore<T = string> extends Scope {
 			Key: { pk: key },
 		};
 
+		// Delete conditions are conjunctive — both `ifExists` and `ifValueEquals`
+		// must hold — so compose them with AND, matching the mock (which checks
+		// existence, then value, and requires both). Detect `ifValueEquals` with
+		// `!== undefined` (not `in conditions`), exactly like `put` and the mock: an
+		// explicit `{ ifValueEquals: undefined }` is a no-op on both layers, rather
+		// than emitting `#value = JSON.stringify(undefined)` (a DynamoDB
+		// marshalling error) here but nothing on the mock.
+		const deleteConditions: string[] = [];
+		const names: Record<string, string> = {};
+		const attrValues: Record<string, unknown> = {};
 		if (conditions?.ifExists) {
-			command.ConditionExpression = 'attribute_exists(#pk)';
-			command.ExpressionAttributeNames = { '#pk': 'pk' };
-		} else if (conditions && 'ifValueEquals' in conditions) {
-			command.ConditionExpression = '#value = :expected';
-			command.ExpressionAttributeNames = { '#value': 'value' };
-			command.ExpressionAttributeValues = { ':expected': JSON.stringify(conditions.ifValueEquals) };
+			deleteConditions.push('attribute_exists(#pk)');
+			names['#pk'] = 'pk';
+		}
+		if (conditions?.ifValueEquals !== undefined) {
+			deleteConditions.push('#value = :expected');
+			names['#value'] = 'value';
+			attrValues[':expected'] = JSON.stringify(conditions.ifValueEquals);
+		}
+		if (deleteConditions.length > 0) {
+			command.ConditionExpression = deleteConditions.join(' AND ');
+			command.ExpressionAttributeNames = names;
+			if (Object.keys(attrValues).length > 0) command.ExpressionAttributeValues = attrValues;
 		}
 
 		try {

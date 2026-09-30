@@ -5,6 +5,10 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { Scope } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
+import { createChat } from './index.chat.js';
+import type { ChatTransport, ChunkStream } from './transport.js';
+import type { DisconnectReason } from '@aws-blocks/bb-realtime';
+import type { AgentStreamChunk } from './types.js';
 import { CannedProvider } from './providers/canned.js';
 import { checkModelHealth } from './model-factory.js';
 import { z } from 'zod';
@@ -1185,7 +1189,46 @@ describe('model-factory', () => {
 // ── useChat ──────────────────────────────────────────────────────────────────
 
 import { useChat } from './index.hooks.js';
-import type { UseChatOptions } from './index.hooks.js';
+import type { ChatMessage, UseChatOptions, ChatChunkHandler, ChatSubscribeOptions } from './index.hooks.js';
+
+/** Flush pending microtasks so an async onReconnect handler settles before assertions. */
+function flush(): Promise<void> {
+	return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+/**
+ * useChat calls `subscribe` with a callable that ALSO carries the {@link ChatSubscribeOptions}
+ * properties (onMessage / onReconnect / onDisconnect) — a backward-compatible hybrid. Capture
+ * those callbacks cast-free (via a type guard, not a cast) so tests can drive chunks and
+ * simulate a transport reconnect. Also tolerates a plain options object and a truly-bare handler.
+ */
+function hasSubscribeOptions(arg: ChatChunkHandler | ChatSubscribeOptions): arg is ChatSubscribeOptions {
+	// Mirror the REAL bb-realtime middleware precedence: it branches on
+	// `typeof arg === 'function'` FIRST and treats any function as a bare handler,
+	// never reading properties off it. So onReconnect/onDisconnect are only honored
+	// when arg is a non-function options object. Testing it any other way would let a
+	// regression to a callable-with-props pass vacuously.
+	return typeof arg !== 'function';
+}
+
+function subscribeCapture() {
+	const cap: {
+		handler?: (chunk: AgentStreamChunk) => void;
+		reconnect?: () => void;
+		disconnect?: (reason: DisconnectReason) => void;
+	} = {};
+	const subscribe: UseChatOptions['subscribe'] = async (_channelId, handlerOrOptions) => {
+		if (hasSubscribeOptions(handlerOrOptions)) {
+			cap.handler = handlerOrOptions.onMessage;
+			cap.reconnect = handlerOrOptions.onReconnect;
+			cap.disconnect = handlerOrOptions.onDisconnect;
+		} else {
+			cap.handler = handlerOrOptions;
+		}
+		return { unsubscribe() {}, established: Promise.resolve() };
+	};
+	return { cap, subscribe };
+}
 
 describe('useChat', () => {
 	// Type-only regression guard for the api return-type contract (PR that widened
@@ -1222,8 +1265,8 @@ describe('useChat', () => {
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
+			subscribe: async (_channelId, handlerOrOptions) => {
+				chunkHandler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				return { unsubscribe() {}, established: Promise.resolve() };
 			},
 			onLoadingChange: (l) => { loadingStates.push(l); },
@@ -1238,6 +1281,41 @@ describe('useChat', () => {
 		assert.strictEqual(loadingStates.at(-1), false, 'loading should be false after error');
 	});
 
+	test('an error chunk before any text drops the empty assistant placeholder (mirrors createChat)', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-err-drop' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			onError: () => {},
+		});
+
+		await chat.sendMessage('hello');
+		// The optimistic empty assistant bubble exists while the turn is in flight.
+		assert.ok(
+			chat.getMessages().some(m => m.role === 'assistant' && !m.content),
+			'empty assistant placeholder is present before the error',
+		);
+
+		// Error arrives BEFORE any text-delta — a failed-before-first-token turn. The empty
+		// placeholder must be dropped (mirrors createChat / the interrupt branch), leaving no
+		// blank assistant bubble.
+		cap.handler!({ type: 'error', error: 'model throttled' });
+
+		const msgs = chat.getMessages();
+		assert.ok(
+			!msgs.some(m => m.role === 'assistant'),
+			'the empty assistant placeholder must be dropped on a failed-before-first-token turn',
+		);
+		assert.ok(
+			msgs.some(m => m.role === 'user' && m.content === 'hello'),
+			'the user message is retained',
+		);
+	});
+
 	test('onInterrupt is called when interrupt chunk arrives', async () => {
 		let chunkHandler: (chunk: any) => void;
 		let interruptsReceived: any[] | undefined;
@@ -1249,8 +1327,8 @@ describe('useChat', () => {
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
+			subscribe: async (_channelId, handlerOrOptions) => {
+				chunkHandler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				return { unsubscribe() {}, established: Promise.resolve() };
 			},
 			onLoadingChange: (l) => { loadingStates.push(l); },
@@ -1278,8 +1356,8 @@ describe('useChat', () => {
 				getConversation: async () => ({ messages: [] }),
 				resume: async (channelId, responses, convId) => { resumeCalled = true; resumeArgs = { channelId, responses, convId }; },
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
+			subscribe: async (_channelId, handlerOrOptions) => {
+				chunkHandler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				return { unsubscribe() {}, established: Promise.resolve() };
 			},
 		});
@@ -1304,8 +1382,8 @@ describe('useChat', () => {
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
+			subscribe: async (_channelId, handlerOrOptions) => {
+				chunkHandler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				return { unsubscribe() {}, established: Promise.resolve() };
 			},
 		});
@@ -1325,8 +1403,8 @@ describe('useChat', () => {
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
+			subscribe: async (_channelId, handlerOrOptions) => {
+				chunkHandler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				return { unsubscribe() {}, established: Promise.resolve() };
 			},
 			onMessagesChange: (msgs) => { lastMessages = msgs; },
@@ -1338,6 +1416,527 @@ describe('useChat', () => {
 		// Interrupt arrives — placeholder should be removed
 		chunkHandler!({ type: 'interrupt', interrupts: [{ id: 'int-1', name: 'approve:delete' }] });
 		assert.ok(!lastMessages.some(m => m.role === 'assistant' && m.content === ''), 'empty placeholder should be removed');
+	});
+
+	// ── Send-path failsafes + mid-turn reconnect re-sync (PR2 / Option A) ────────
+
+	test('sendMessage rejection (504) resets loading and calls onError', async () => {
+		let errorReceived: string | undefined;
+		const loadingStates: boolean[] = [];
+		let lastMessages: ChatMessage[] = [];
+		const { subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => { throw new Error('504 Gateway Timeout'); },
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			onLoadingChange: (l) => { loadingStates.push(l); },
+			onError: (e) => { errorReceived = e; },
+			onMessagesChange: (m) => { lastMessages = m; },
+		});
+
+		await chat.sendMessage('hello');
+
+		assert.strictEqual(chat.isLoading(), false, 'loading should be reset after send failure');
+		assert.strictEqual(loadingStates.at(-1), false);
+		assert.ok(errorReceived, 'onError should be called');
+		assert.match(errorReceived!, /504/);
+		assert.ok(!lastMessages.some(m => m.role === 'assistant' && m.content === ''), 'no orphaned empty assistant bubble');
+	});
+
+	test('respondToInterrupt rejection resets loading and calls onError', async () => {
+		let errorReceived: string | undefined;
+		let lastMessages: ChatMessage[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+				resume: async () => { throw new Error('resume failed'); },
+			},
+			subscribe,
+			onError: (e) => { errorReceived = e; },
+			onMessagesChange: (m) => { lastMessages = m; },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'interrupt', interrupts: [{ id: 'int-1', name: 'approve:delete' }] });
+		await chat.respondToInterrupt([{ interruptId: 'int-1', approved: true }]);
+
+		assert.strictEqual(chat.isLoading(), false, 'loading should be reset after resume failure');
+		assert.ok(errorReceived, 'onError should be called');
+		assert.match(errorReceived!, /resume failed/);
+		assert.ok(!lastMessages.some(m => m.role === 'assistant' && m.content === ''), 'no orphaned empty assistant bubble');
+	});
+
+	test('reconnect re-syncs final assistant text from getConversation when the done chunk was missed', async () => {
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn completed server-side: history ends with a non-empty assistant message.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: 'Hello! The final persisted answer.' },
+				] }),
+			},
+			subscribe,
+		});
+
+		await chat.sendMessage('hello');
+		// Two deltas arrive, then the socket drops before `done`.
+		cap.handler!({ type: 'text-delta', text: 'Hel' });
+		cap.handler!({ type: 'text-delta', text: 'lo' });
+		// Transport reconnects — useChat re-syncs from the DB.
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'loading cleared after re-sync of completed turn');
+		const assistant = chat.getMessages().find(m => m.role === 'assistant');
+		assert.ok(assistant, 'assistant message should exist');
+		assert.strictEqual(assistant!.content, 'Hello! The final persisted answer.', 'in-flight bubble replaced with persisted final text');
+		chat.destroy();
+	});
+
+	test('reconnect while turn still running keeps loading true (no premature clear)', async () => {
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn still running: history ends with the user message (no final assistant yet).
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			subscribe,
+		});
+
+		await chat.sendMessage('hello');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'loading stays true while the turn is still running');
+
+		// The terminal chunk finally arrives on the resubscribed channel.
+		cap.handler!({ type: 'done', text: 'done at last' });
+		assert.strictEqual(chat.isLoading(), false, 'a later done chunk clears loading');
+		chat.destroy();
+	});
+
+	test('reconnect re-checks pending interrupts', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let interruptsReceived: Array<{ id: string; name: string; reason?: unknown }> | undefined;
+		let errorReceived: string | undefined;
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+				// An interrupt was raised server-side while the socket was down.
+				getPendingInterrupts: async () => ({ interrupts: [{ id: 'int-9', name: 'approve:refund' }] }),
+			},
+			subscribe,
+			onInterrupt: (ints) => { interruptsReceived = ints; },
+			onError: (e) => { errorReceived = e; },
+		});
+
+		await chat.sendMessage('hello');
+		cap.reconnect!();
+		await flush();
+
+		assert.ok(interruptsReceived, 'pending interrupt should surface after reconnect');
+		assert.strictEqual(interruptsReceived!.length, 1);
+		assert.strictEqual(interruptsReceived![0].name, 'approve:refund');
+		// A recovered interrupt PAUSES the turn: loading must clear (the user is at the
+		// approval prompt) and the reconnect failsafe must NOT be left ticking, so it can't
+		// fire 'Timed out' ~11min later while the user is legitimately deciding.
+		assert.strictEqual(chat.isLoading(), false, 'a recovered pending interrupt clears loading (turn paused)');
+		t.mock.timers.tick(700_000); // past the whole failsafe window
+		assert.strictEqual(chat.isLoading(), false, 'no failsafe fires while paused at a recovered interrupt');
+		assert.strictEqual(errorReceived, undefined, 'no spurious Timed-out error fires at the approval prompt');
+		chat.destroy();
+	});
+
+	test('reconnect does NOT re-surface a stale pending interrupt over a turn resolved during re-sync', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let interruptsReceived: Array<{ id: string; name: string; reason?: unknown }> | undefined;
+		let errorReceived: string | undefined;
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn already COMPLETED server-side: history ends with a final assistant message,
+				// so the turn-state block adopts it and resolves the turn (nulls assistantId,
+				// clears loading) before we ever look at pending interrupts.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: 'All done — resolved before the interrupt read.' },
+				] }),
+				// Eventually-consistent read still lists a since-resolved interrupt (stale).
+				getPendingInterrupts: async () => ({ interrupts: [{ id: 'int-stale', name: 'approve:refund' }] }),
+			},
+			subscribe,
+			onInterrupt: (ints) => { interruptsReceived = ints; },
+			onError: (e) => { errorReceived = e; },
+		});
+
+		await chat.sendMessage('hello');
+		cap.reconnect!();
+		await flush();
+
+		// The turn was resolved by the persisted read; a stale pending interrupt must NOT
+		// re-fire onInterrupt or re-open the already-completed turn (the liveness gate blocks it).
+		assert.strictEqual(interruptsReceived, undefined, 'stale interrupt must not surface over a resolved turn');
+		assert.strictEqual(chat.isLoading(), false, 'resolved turn stays resolved (loading not re-opened)');
+		t.mock.timers.tick(700_000); // past the whole failsafe window
+		assert.strictEqual(chat.isLoading(), false, 'no failsafe fires — turn already resolved, none armed');
+		assert.strictEqual(errorReceived, undefined, 'no spurious error surfaces');
+		chat.destroy();
+	});
+
+	test('bounded failsafe: chunks re-arm it; it fires only after a fully silent window', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn still running on reconnect — arms the failsafe.
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			subscribe,
+			onError: (e) => { errorReceived = e; },
+		});
+
+		await chat.sendMessage('hello');
+		cap.reconnect!();
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'still loading right after reconnect (turn running)');
+
+		// A >30s tool-call/thinking gap (past the OLD 30s window) must NOT trip the failsafe.
+		t.mock.timers.tick(120_000);
+		assert.strictEqual(chat.isLoading(), true, 'a long silent gap under the new window must not fire');
+		assert.strictEqual(errorReceived, undefined, 'no premature timeout during a normal long gap');
+
+		// A text-delta proves the stream is alive and RE-ARMS the window from now.
+		cap.handler!({ type: 'text-delta', text: 'still working…' });
+		// Advance almost a full window since that delta — still alive, still no fire.
+		t.mock.timers.tick(600_000);
+		assert.strictEqual(chat.isLoading(), true, 'the delta re-armed the window, so it has not elapsed');
+		assert.strictEqual(errorReceived, undefined);
+
+		// Now go fully silent past the whole window — the failsafe finally fires.
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'failsafe clears loading after a fully silent window');
+		assert.ok(errorReceived, 'failsafe surfaces an error');
+		chat.destroy();
+	});
+
+	test('terminal onDisconnect(error) while loading arms the failsafe (all-stale/give-up path, no onReconnect)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			subscribe,
+			onError: (e) => { errorReceived = e; },
+		});
+
+		await chat.sendMessage('hello');
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// The transport gives up / every resubscribe is stale: it surfaces a terminal
+		// onDisconnect('error') and does NOT fire onReconnect. This must arm the failsafe
+		// so the spinner cannot hang forever with no other signal.
+		assert.ok(cap.disconnect, 'useChat must forward onDisconnect to the transport');
+		cap.disconnect!('error');
+		await flush();
+
+		// A benign 'client' disconnect (our own unsubscribe) must NOT arm it.
+		assert.strictEqual(chat.isLoading(), true, 'still loading — failsafe is armed, not immediate');
+
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'terminal-error failsafe clears the stuck spinner');
+		assert.ok(errorReceived, 'terminal-error failsafe surfaces an error');
+		chat.destroy();
+	});
+
+	test('terminal onDisconnect(timeout) while loading ALSO arms the failsafe (any non-client reason, no onReconnect)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			subscribe,
+			onError: (e) => { errorReceived = e; },
+		});
+
+		await chat.sendMessage('hello');
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// A genuinely terminal 'timeout' drop (like 'error', it fires NO onReconnect) must arm the
+		// failsafe just the same — the predicate keys off ANY non-'client' reason, so a future
+		// 'timeout'/'unknown' give-up can't hang the spinner.
+		assert.ok(cap.disconnect, 'useChat must forward onDisconnect to the transport');
+		cap.disconnect!('timeout');
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'still loading — failsafe is armed, not immediate');
+
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'terminal-timeout failsafe clears the stuck spinner');
+		assert.ok(errorReceived, 'terminal-timeout failsafe surfaces an error');
+		chat.destroy();
+	});
+
+	test('reconnect does not clobber final text delivered by a live done that arrived before getConversation resolved', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		// Gate getConversation so the reconnect re-sync resolves AFTER a live `done` chunk.
+		let resolveGet!: (v: { messages: { role: string; content: string }[] }) => void;
+		const getGate = new Promise<{ messages: { role: string; content: string }[] }>((r) => { resolveGet = r; });
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: () => getGate,
+			},
+			subscribe,
+		});
+
+		await chat.sendMessage('hello');
+		// Reconnect kicks off getConversation, which stays pending on the gate.
+		cap.reconnect!();
+		await flush();
+
+		// The live terminal `done` arrives on the resubscribed channel BEFORE the DB read resolves.
+		cap.handler!({ type: 'done', text: 'LIVE final answer' });
+		assert.strictEqual(chat.isLoading(), false, 'the live done cleared loading');
+
+		// The late getConversation now resolves with a DIFFERENT (stale/eventually-consistent) view.
+		resolveGet({ messages: [
+			{ role: 'user', content: 'hello' },
+			{ role: 'assistant', content: 'STALE db answer' },
+		] });
+		await flush();
+
+		const assistant = chat.getMessages().find(m => m.role === 'assistant');
+		assert.strictEqual(assistant!.content, 'LIVE final answer', 'the live done text is preserved; the late DB read is ignored');
+		assert.strictEqual(chat.isLoading(), false, 'loading stays cleared');
+		chat.destroy();
+	});
+
+	test('reconnect ignores a stale/previous-turn getConversation snapshot', async () => {
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The turn is still running, but the DB read's last row is a PRIOR turn's
+				// assistant message that does NOT extend what we've streamed this turn.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'previous question' },
+					{ role: 'assistant', content: 'answer to a PRIOR turn' },
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: 'answer to a PRIOR turn' },
+				] }),
+			},
+			subscribe,
+		});
+
+		await chat.sendMessage('hello');
+		// Live text for the CURRENT turn.
+		cap.handler!({ type: 'text-delta', text: 'live streaming answer' });
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'a stale snapshot must not resolve the still-running turn');
+		const assistant = chat.getMessages().find(m => m.role === 'assistant' && m.content !== '');
+		assert.strictEqual(assistant!.content, 'live streaming answer', 'in-flight bubble is not overwritten by prior-turn text');
+		chat.destroy();
+	});
+
+	test('a re-sync failure on reconnect reports onError once and arms the failsafe so loading recovers', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The reconnect re-sync read fails outright.
+				getConversation: async () => { throw new Error('DynamoDB read failed'); },
+			},
+			subscribe,
+			onError: (e) => { errors.push(e); },
+		});
+
+		await chat.sendMessage('hello');
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// Reconnect → getConversation throws.
+		cap.reconnect!();
+		await flush();
+
+		// The re-sync failure is surfaced via onError (once)...
+		assert.strictEqual(errors.length, 1, 're-sync failure reports onError exactly once');
+		// ...and the catch now arms the failsafe, making the non-hang guarantee LOCAL (no longer
+		// dependent on a preceding onDisconnect). loading is still true immediately — the failsafe
+		// is a bounded backstop, not an immediate clear.
+		assert.strictEqual(chat.isLoading(), true, 'still loading — the failsafe is armed, not immediate');
+
+		// Once the window elapses with no recovering chunk, loading RECOVERS (clears) rather than
+		// hanging forever, and the errorReported latch keeps onError at exactly one.
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'the failsafe armed by the re-sync throw clears the stuck spinner');
+		assert.strictEqual(errors.length, 1, 'the latch suppresses the failsafe double onError — still exactly one');
+		chat.destroy();
+	});
+
+	test('a failsafe armed on an abandoned (send-failed) turn does not leak into a later healthy turn', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		let rejectSend!: (e: Error) => void;
+		let sendMode: 'fail' | 'ok' = 'fail';
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {
+					if (sendMode === 'ok') return;
+					// Turn 1: stay pending so the test can arm the failsafe via a disconnect
+					// BEFORE the send rejects — the window where the leaked timer is created.
+					await new Promise<void>((_res, rej) => { rejectSend = rej; });
+				},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			onError: (e) => { errors.push(e); },
+		});
+
+		// Turn 1: in flight (send pending). A non-'client' drop arms the failsafe...
+		const turn1 = chat.sendMessage('first');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'turn 1 is in flight');
+		cap.disconnect!('timeout');
+		await flush();
+		// ...then the send rejects. handleSendFailure clears loading but does NOT itself clear the
+		// armed failsafe — that leaked timer is what this test guards against.
+		rejectSend(new Error('504 Gateway Timeout'));
+		await turn1;
+		await flush();
+		assert.strictEqual(chat.isLoading(), false, 'send failure cleared loading for the abandoned turn');
+		assert.strictEqual(errors.length, 1, 'the send failure surfaced exactly one onError');
+
+		// Turn 2: a fresh, healthy turn. sendMessage clears the stale failsafe at turn-start.
+		sendMode = 'ok';
+		await chat.sendMessage('second');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'turn 2 is in flight');
+
+		// Advance past the failsafe window. The turn-1 timer was cleared at turn 2's start, so it
+		// must NOT fire: turn 2's spinner survives and no bogus 'Timed out' onError is added.
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), true, 'the stale timer did not kill the new healthy turn');
+		assert.strictEqual(errors.length, 1, 'no bogus Timed out onError from the leaked timer (still just the send failure)');
+
+		// Resolve turn 2 cleanly.
+		cap.handler!({ type: 'done', text: 'answer 2' });
+		assert.strictEqual(chat.isLoading(), false, 'turn 2 completes on its terminal chunk');
+		chat.destroy();
+	});
+
+	test('a send rejection then a later error chunk reports onError exactly once', async () => {
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => { throw new Error('504 Gateway Timeout'); },
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			onError: (e) => { errors.push(e); },
+		});
+
+		await chat.sendMessage('hello');
+		// The 504 rejection already surfaced onError. The turn DID start server-side, so a
+		// later `error` chunk arrives for the same turn — it must NOT double-report.
+		cap.handler!({ type: 'error', error: 'server-side failure' });
+
+		assert.strictEqual(errors.length, 1, 'onError fires exactly once for the same failed turn');
+		assert.match(errors[0], /504/, 'the first (send-rejection) error is the one surfaced');
+		chat.destroy();
+	});
+
+	test('a send-rejected-but-server-started turn is NOT auto-adopted by reconnect, but recovers on a later loadConversation', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		// The turn started server-side (the 504 was on the response, not the dispatch), so the
+		// persisted conversation ends with the assistant's final answer.
+		const persisted = {
+			messages: [
+				{ role: 'user', content: 'hello' },
+				{ role: 'assistant', content: 'the server-side final answer' },
+			],
+		};
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => { throw new Error('504 Gateway Timeout'); },
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => persisted,
+			},
+			subscribe,
+			onError: () => {},
+		});
+
+		await chat.sendMessage('hello');
+		// Send failed → handleSendFailure nulled the turn identity and cleared loading.
+		assert.strictEqual(chat.isLoading(), false, 'loading cleared after the send rejection');
+
+		// A reconnect fires. Because the turn identity was nulled, the re-sync guard does NOT
+		// adopt the persisted assistant text into a live bubble — recovery is NOT automatic here.
+		cap.reconnect!();
+		await flush();
+		assert.ok(
+			!chat.getMessages().some((m) => m.role === 'assistant' && m.content === 'the server-side final answer'),
+			'reconnect must NOT auto-adopt the started turn (send was treated as failed)',
+		);
+
+		// Opening the conversation again recovers the persisted result (the documented path).
+		await chat.loadConversation('conv-1');
+		assert.ok(
+			chat.getMessages().some((m) => m.role === 'assistant' && m.content === 'the server-side final answer'),
+			'loadConversation recovers the persisted server-side final answer',
+		);
+		chat.destroy();
 	});
 });
 
@@ -1355,28 +1954,28 @@ describe('checkModelHealth', () => {
 			if (callCount === 1) throw new Error('not an inference profile');
 			return { modelDetails: { modelId: 'anthropic.claude-3-haiku' } };
 		} };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, mockClient), true);
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, undefined, mockClient), true);
 	});
 
 	test('bedrock model not found returns false', async () => {
 		const mockClient = { send: async () => { throw new Error('not found'); } };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'bad.model' }, log, mockClient), false);
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'bad.model' }, log, undefined, mockClient), false);
 	});
 
 	test('bedrock credential error returns false', async () => {
 		const err = new Error('no creds'); err.name = 'CredentialsProviderError';
 		const mockClient = { send: async () => { throw err; } };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, mockClient), false);
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, undefined, mockClient), false);
 	});
 
 	test('bedrock inference profile found returns true', async () => {
 		const mockClient = { send: async () => ({ inferenceProfileName: 'US Claude Sonnet' }) };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'us.anthropic.claude-sonnet-4' }, log, mockClient), true);
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'us.anthropic.claude-sonnet-4' }, log, undefined, mockClient), true);
 	});
 
 	test('bedrock global inference profile found returns true', async () => {
 		const mockClient = { send: async () => ({ inferenceProfileName: 'Global Claude Opus' }) };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'global.anthropic.claude-opus-4-8-v1' }, log, mockClient), true);
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'global.anthropic.claude-opus-4-8-v1' }, log, undefined, mockClient), true);
 	});
 
 	test('openai-api with unreachable endpoint returns false', async () => {
@@ -1596,3 +2195,920 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 		assert.ok(agent);
 	});
 });
+
+// ── createChat (client API) ─────────────────────────────────────────────────
+
+describe('createChat', () => {
+	// A fake transport that replays a scripted chunk sequence — exercises the
+	// client state machine without any Realtime/network dependency.
+	function fakeTransport(script: AgentStreamChunk[]): ChatTransport {
+		return {
+			subscribe(): ChunkStream {
+				let idx = 0;
+				return {
+					established: Promise.resolve(),
+					unsubscribe() {},
+					async *[Symbol.asyncIterator]() {
+						while (idx < script.length) yield script[idx++];
+					},
+				};
+			},
+			async run(turn) {
+				return { channelId: turn.channelId };
+			},
+		};
+	}
+
+	/**
+	 * A reconnect-capable fake transport for the createChat state machine. Unlike
+	 * {@link fakeTransport} (which replays a fixed script and IGNORES the subscribe opts),
+	 * this captures the `onReconnect`/`onDisconnect` callbacks that `startTurn` passes to
+	 * `subscribe(channelId, opts)` and lets a test drive chunks into the LIVE consumer —
+	 * the createChat analogue of useChat's `subscribeCapture`.
+	 *
+	 * The one adaptation: createChat consumes chunks via a background `for await` over the
+	 * returned {@link ChunkStream} (an AsyncIterable), NOT a direct callback. So instead of
+	 * a captured handler this exposes a small single-consumer push-queue — `cap.chunk(c)`
+	 * feeds the async iterator (buffering if the consumer has not parked yet), while
+	 * `cap.reconnect()` / `cap.disconnect(reason)` fire the captured transport callbacks.
+	 * The queue closes on a terminal chunk (done/error/interrupt) exactly like the real
+	 * Realtime transport, so the background `for await` ends on the turn's terminal chunk.
+	 *
+	 * Pass `runError` to make `transport.run` reject (a send-path failure), mirroring the
+	 * useChat tests that throw from `api.sendMessage`.
+	 */
+	function reconnectCapture(runError?: string): {
+		cap: {
+			reconnect?: () => void;
+			disconnect?: (reason: DisconnectReason) => void;
+			chunk: (c: AgentStreamChunk) => void;
+		};
+		transport: ChatTransport;
+	} {
+		const cap: {
+			reconnect?: () => void;
+			disconnect?: (reason: DisconnectReason) => void;
+			chunk: (c: AgentStreamChunk) => void;
+		} = { chunk() {} };
+
+		const transport: ChatTransport = {
+			subscribe(_channelId, opts) {
+				cap.reconnect = opts?.onReconnect;
+				cap.disconnect = opts?.onDisconnect;
+
+				const queue: AgentStreamChunk[] = [];
+				const waiters: ((r: IteratorResult<AgentStreamChunk>) => void)[] = [];
+				let closed = false;
+				const finish = () => {
+					if (closed) return;
+					closed = true;
+					for (const w of waiters.splice(0)) w({ value: undefined, done: true });
+				};
+
+				cap.chunk = (c: AgentStreamChunk) => {
+					if (closed) return;
+					const waiter = waiters.shift();
+					if (waiter) waiter({ value: c, done: false });
+					else queue.push(c);
+					// Mirror the real transport: a terminal chunk ends the stream.
+					if (c.type === 'done' || c.type === 'error' || c.type === 'interrupt') finish();
+				};
+
+				return {
+					established: Promise.resolve(),
+					unsubscribe() {
+						finish();
+					},
+					async *[Symbol.asyncIterator]() {
+						while (true) {
+							if (queue.length) {
+								yield queue.shift()!;
+								continue;
+							}
+							if (closed) return;
+							const next = await new Promise<IteratorResult<AgentStreamChunk>>((r) => waiters.push(r));
+							if (next.done) return;
+							yield next.value;
+						}
+					},
+				};
+			},
+			async run(turn) {
+				if (runError) throw new Error(runError);
+				return { channelId: turn.channelId };
+			},
+		};
+
+		return { cap, transport };
+	}
+
+	test('sendMessage streams text into the assistant message and clears loading on done', async () => {
+		const loadingStates: boolean[] = [];
+		const chat = createChat({
+			transport: fakeTransport([
+				{ type: 'text-delta', text: 'Hel' },
+				{ type: 'text-delta', text: 'lo' },
+				{ type: 'done' },
+			]),
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onLoadingChange: l => loadingStates.push(l),
+		});
+
+		await chat.sendMessage('hi');
+		// Let the background consumer drain the fake stream.
+		await new Promise(r => setTimeout(r, 10));
+
+		const msgs = chat.getMessages();
+		assert.strictEqual(msgs[0].role, 'user');
+		assert.strictEqual(msgs[0].content, 'hi');
+		assert.strictEqual(msgs[1].role, 'assistant');
+		assert.strictEqual(msgs[1].content, 'Hello', 'text-delta chunks should accumulate into the assistant message');
+		assert.strictEqual(chat.isLoading(), false, 'done should clear loading');
+		assert.deepStrictEqual(loadingStates, [true, false]);
+		assert.strictEqual(chat.getConversationId(), 'conv-1', 'first turn lazily creates the conversation');
+	});
+
+	test('interrupt fires onInterrupt and resume via sendMessage continues the turn', async () => {
+		const interruptsSeen: Array<{ interruptId: string }[]> = [];
+		let call = 0;
+		const chat = createChat({
+			// First turn interrupts; the resume turn completes.
+			transport: {
+				subscribe(): ChunkStream {
+					const script: AgentStreamChunk[] = call++ === 0
+						? [{ type: 'interrupt', interrupts: [{ id: 'i1', name: 'approve:x' }] }]
+						: [{ type: 'text-delta', text: 'done!' }, { type: 'done' }];
+					let idx = 0;
+					return {
+						established: Promise.resolve(),
+						unsubscribe() {},
+						async *[Symbol.asyncIterator]() {
+							while (idx < script.length) yield script[idx++];
+						},
+					};
+				},
+				async run(turn) {
+					return { channelId: turn.channelId };
+				},
+			},
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-2' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onInterrupt: ints => interruptsSeen.push(ints),
+		});
+
+		await chat.sendMessage('do risky thing');
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(interruptsSeen.length, 1, 'interrupt chunk should fire onInterrupt');
+		assert.strictEqual(interruptsSeen[0][0].interruptId, 'i1');
+		assert.strictEqual(chat.isLoading(), false, 'interrupt clears loading while awaiting the decision');
+
+		await chat.sendMessage({ interruptResponses: [{ interruptId: 'i1', approved: true }] });
+		await new Promise(r => setTimeout(r, 10));
+		const msgs = chat.getMessages();
+		assert.ok(msgs.some(m => m.role === 'approval' && m.content === 'Approved'), 'approval decision recorded');
+		assert.ok(msgs.some(m => m.role === 'assistant' && m.content === 'done!'), 'resume streams the completion');
+		assert.strictEqual(chat.isLoading(), false);
+	});
+
+	test('a failing attach/run clears loading, fires onError, and drops the empty placeholder', async () => {
+		for (const mode of ['run', 'established'] as const) {
+			const errors: string[] = [];
+			const chat = createChat({
+				transport: {
+					subscribe(): ChunkStream {
+						return {
+							// `established` rejects in that mode; otherwise resolves and `run` rejects.
+							established: mode === 'established' ? Promise.reject(new Error('attach failed')) : Promise.resolve(),
+							unsubscribe() {},
+							async *[Symbol.asyncIterator]() {},
+						};
+					},
+					async run() {
+						if (mode === 'run') throw new Error('run rejected');
+						return { channelId: 'c' };
+					},
+				},
+				api: {
+					createConversation: async () => ({ conversationId: 'conv-e' }),
+					getConversation: async () => ({ messages: [] }),
+				},
+				onError: e => errors.push(e),
+			});
+
+			await chat.sendMessage('hi');
+			await new Promise(r => setTimeout(r, 10));
+
+			assert.strictEqual(chat.isLoading(), false, `${mode} failure must clear loading (no wedge)`);
+			assert.strictEqual(errors.length, 1, `${mode} failure must fire onError once`);
+			// A second send must NOT be silently dropped by the `if (loading) return` guard.
+			assert.ok(!chat.getMessages().some(m => m.role === 'assistant' && !m.content), `${mode} failure must not leave an empty assistant bubble`);
+		}
+	});
+
+	test('run() drives multiple produce-only turns; each turn\'s error reaches the subscriber (and run() resets errorReported per turn)', async () => {
+		// run() is the produce-only primitive (fan-out / observer / decoupled produce-consume,
+		// per DESIGN.md and the createChat docstring): it does NOT wire createChat's own
+		// consumer (that is startTurn, driven by sendMessage), so a run()-driven turn's chunks
+		// surface to whoever attaches via the subscribe() primitive — NOT through
+		// createChat.onError. run() resets `errorReported` at its top (fresh-turn state hygiene,
+		// mirroring sendMessage) so the once-per-turn contract restarts on every run()-started
+		// turn rather than staying latched for the instance's life.
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-run' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onError: e => errors.push(e),
+		});
+
+		// Turn 1: produce via run(), consume via the subscribe() primitive.
+		const r1 = await chat.run('first');
+		assert.strictEqual(r1.channelId, 'conv-run', 'run() returns the produced turn\'s channelId');
+		const got1: AgentStreamChunk[] = [];
+		const consume1 = (async () => {
+			for await (const ch of chat.subscribe({ channelId: r1.channelId })) got1.push(ch);
+		})();
+		cap.chunk({ type: 'error', error: 'boom-1' });
+		await consume1;
+
+		// Turn 2: run() again on the SAME instance — a fresh produce-only turn.
+		const r2 = await chat.run('second');
+		assert.strictEqual(r2.channelId, 'conv-run', 'run() is reusable across turns');
+		const got2: AgentStreamChunk[] = [];
+		const consume2 = (async () => {
+			for await (const ch of chat.subscribe({ channelId: r2.channelId })) got2.push(ch);
+		})();
+		cap.chunk({ type: 'error', error: 'boom-2' });
+		await consume2;
+
+		// BOTH turns' error chunks reached the subscriber (the produce-only surface) — the 2nd
+		// turn is NOT swallowed after the 1st.
+		assert.deepStrictEqual(got1, [{ type: 'error', error: 'boom-1' }], 'turn 1 error reaches the subscriber');
+		assert.deepStrictEqual(got2, [{ type: 'error', error: 'boom-2' }], 'turn 2 error reaches the subscriber');
+		// createChat.onError is intentionally NOT fired on the produce-only run()+subscribe path:
+		// errors surface to the attached consumer, and createChat only owns onError for the
+		// sendMessage-driven turn (see startTurn). This locks in that produce-only contract.
+		assert.strictEqual(errors.length, 0, 'run()+subscribe surfaces errors via the stream, not createChat.onError');
+		chat.destroy();
+	});
+
+	test('newConversation() mid-turn clears loading so the next sendMessage is not dropped', async () => {
+		let runCalls = 0;
+		// A stream that stays open (never emits a terminal chunk) until unsubscribed,
+		// so the first turn is genuinely in flight when newConversation() closes it.
+		const chat = createChat({
+			transport: {
+				subscribe(): ChunkStream {
+					let done = false;
+					let wake: (() => void) | null = null;
+					return {
+						established: Promise.resolve(),
+						unsubscribe() { done = true; wake?.(); },
+						async *[Symbol.asyncIterator]() {
+							while (!done) await new Promise<void>(r => { wake = r; });
+						},
+					};
+				},
+				async run(turn) { runCalls++; return { channelId: turn.channelId }; },
+			},
+			api: {
+				createConversation: async () => ({ conversationId: `conv-${runCalls}` }),
+				getConversation: async () => ({ messages: [] }),
+			},
+		});
+
+		await chat.sendMessage('first');           // turn is now in flight (no terminal chunk)
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(chat.isLoading(), true, 'turn is in flight');
+
+		chat.newConversation();                     // closes the stream WITHOUT a terminal chunk
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(chat.isLoading(), false, 'newConversation must clear loading');
+
+		await chat.sendMessage('second');           // must NOT be dropped by the loading guard
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(runCalls, 2, 'the second send after newConversation must reach the transport');
+
+		// Tear down the still-open second turn so no async iterator is left parked
+		// when the test ends (node --test fails a test that leaves pending async work).
+		chat.destroy();
+		await new Promise(r => setTimeout(r, 10));
+	});
+
+	test('a failsafe armed on an abandoned turn does not leak into a later healthy turn (cleared at turn-start)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onError: (e) => {
+				errors.push(e);
+			},
+		});
+
+		// Turn 1: in flight, then a non-'client' drop arms the failsafe (a terminal drop fires no
+		// onReconnect, so the failsafe is the only guard).
+		await chat.sendMessage('first');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'turn 1 is in flight');
+		cap.disconnect!('timeout');
+		await flush();
+
+		// Abandon turn 1 WITHOUT a terminal chunk. newConversation() closes the stream but does
+		// NOT itself clear the armed failsafe — that leaked timer is what this test guards against.
+		chat.newConversation();
+		await flush();
+		assert.strictEqual(chat.isLoading(), false, 'newConversation cleared loading for the abandoned turn');
+
+		// Turn 2: a fresh, healthy turn. sendMessage clears the stale failsafe at turn-start.
+		await chat.sendMessage('second');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'turn 2 is in flight');
+
+		// Advance well past the failsafe window. The turn-1 timer was cleared at turn 2's start,
+		// so it must NOT fire: turn 2's spinner survives and no bogus 'Timed out' onError fires.
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), true, 'the stale timer did not kill the new healthy turn');
+		assert.deepStrictEqual(errors, [], 'no bogus Timed out onError from the leaked timer');
+
+		// Resolve turn 2 cleanly and tear down.
+		cap.chunk({ type: 'done', text: 'answer 2' });
+		await flush();
+		assert.strictEqual(chat.isLoading(), false, 'turn 2 completes on its terminal chunk');
+		chat.destroy();
+		await flush();
+	});
+
+	// ── Mid-turn reconnect re-sync + bounded failsafe (ported from useChat) ──────
+	// These mirror the useChat reconnect spec (search 'reconnect re-syncs' above),
+	// adapted to createChat's ChunkStream/AsyncIterable model via reconnectCapture.
+
+	test('reconnect re-syncs final assistant text from getConversation when the done chunk was missed', async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn completed server-side: history ends with a non-empty assistant message.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: 'Hello! The final persisted answer.' },
+					],
+				}),
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		// Two deltas arrive, then the socket drops before `done`.
+		cap.chunk({ type: 'text-delta', text: 'Hel' });
+		cap.chunk({ type: 'text-delta', text: 'lo' });
+		await flush();
+		// Transport reconnects — createChat re-syncs from the DB.
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'loading cleared after re-sync of completed turn');
+		const assistant = chat.getMessages().find((m) => m.role === 'assistant');
+		assert.ok(assistant, 'assistant message should exist');
+		assert.strictEqual(
+			assistant!.content,
+			'Hello! The final persisted answer.',
+			'in-flight bubble replaced with persisted final text',
+		);
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect while turn still running keeps loading true (no premature clear)', async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn still running: history ends with the user message (no final assistant yet).
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'loading stays true while the turn is still running');
+
+		// The terminal chunk finally arrives on the resubscribed channel.
+		cap.chunk({ type: 'done', text: 'done at last' });
+		await flush();
+		assert.strictEqual(chat.isLoading(), false, 'a later done chunk clears loading');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect re-checks pending interrupts (recovered interrupt pauses the turn)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let interruptsReceived: Array<{ interruptId: string; name: string; reason?: unknown }> | undefined;
+		let errorReceived: string | undefined;
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+				// An interrupt was raised server-side while the socket was down.
+				getPendingInterrupts: async () => ({ interrupts: [{ id: 'int-9', name: 'approve:refund' }] }),
+			},
+			onInterrupt: (ints) => {
+				interruptsReceived = ints;
+			},
+			onError: (e) => {
+				errorReceived = e;
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.reconnect!();
+		await flush();
+
+		assert.ok(interruptsReceived, 'pending interrupt should surface after reconnect');
+		assert.strictEqual(interruptsReceived!.length, 1);
+		assert.strictEqual(interruptsReceived![0].name, 'approve:refund');
+		assert.strictEqual(interruptsReceived![0].interruptId, 'int-9', 'backend id surfaces as interruptId');
+		// A recovered interrupt PAUSES the turn: loading must clear (the user is at the
+		// approval prompt) and the reconnect failsafe must NOT be left ticking, so it can't
+		// fire 'Timed out' ~11min later while the user is legitimately deciding.
+		assert.strictEqual(chat.isLoading(), false, 'a recovered pending interrupt clears loading (turn paused)');
+		t.mock.timers.tick(700_000); // past the whole failsafe window
+		assert.strictEqual(chat.isLoading(), false, 'no failsafe fires while paused at a recovered interrupt');
+		assert.strictEqual(errorReceived, undefined, 'no spurious Timed-out error fires at the approval prompt');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect does NOT re-surface a stale pending interrupt over a turn resolved during re-sync', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let interruptsReceived: Array<{ interruptId: string; name: string; reason?: unknown }> | undefined;
+		let errorReceived: string | undefined;
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn already COMPLETED server-side: history ends with a final assistant message,
+				// so the turn-state block adopts it and resolves the turn (nulls assistantId,
+				// clears loading) before we ever look at pending interrupts.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: 'All done — resolved before the interrupt read.' },
+					],
+				}),
+				// Eventually-consistent read still lists a since-resolved interrupt (stale).
+				getPendingInterrupts: async () => ({ interrupts: [{ id: 'int-stale', name: 'approve:refund' }] }),
+			},
+			onInterrupt: (ints) => {
+				interruptsReceived = ints;
+			},
+			onError: (e) => {
+				errorReceived = e;
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.reconnect!();
+		await flush();
+
+		// The turn was resolved by the persisted read; a stale pending interrupt must NOT
+		// re-fire onInterrupt or re-open the already-completed turn (the liveness gate blocks it).
+		assert.strictEqual(interruptsReceived, undefined, 'stale interrupt must not surface over a resolved turn');
+		assert.strictEqual(chat.isLoading(), false, 'resolved turn stays resolved (loading not re-opened)');
+		t.mock.timers.tick(700_000); // past the whole failsafe window
+		assert.strictEqual(chat.isLoading(), false, 'no failsafe fires — turn already resolved, none armed');
+		assert.strictEqual(errorReceived, undefined, 'no spurious error surfaces');
+		chat.destroy();
+		await flush();
+	});
+
+	test('bounded failsafe: chunks re-arm it; it fires only after a fully silent window', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn still running on reconnect — arms the failsafe.
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			onError: (e) => {
+				errorReceived = e;
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.reconnect!();
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'still loading right after reconnect (turn running)');
+
+		// A long tool-call/thinking gap under the window must NOT trip the failsafe.
+		t.mock.timers.tick(120_000);
+		assert.strictEqual(chat.isLoading(), true, 'a long silent gap under the window must not fire');
+		assert.strictEqual(errorReceived, undefined, 'no premature timeout during a normal long gap');
+
+		// A text-delta proves the stream is alive and RE-ARMS the window from now.
+		cap.chunk({ type: 'text-delta', text: 'still working…' });
+		await flush();
+		// Advance almost a full window since that delta — still alive, still no fire.
+		t.mock.timers.tick(600_000);
+		assert.strictEqual(chat.isLoading(), true, 'the delta re-armed the window, so it has not elapsed');
+		assert.strictEqual(errorReceived, undefined);
+
+		// Now go fully silent past the whole window — the failsafe finally fires.
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'failsafe clears loading after a fully silent window');
+		assert.ok(errorReceived, 'failsafe surfaces an error');
+		assert.match(errorReceived!, /Timed out.*after reconnect/, 'the failsafe reports the reconnect-timeout message');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect does not clobber final text delivered by a live done that arrived before getConversation resolved', async () => {
+		const { cap, transport } = reconnectCapture();
+		// Gate getConversation so the reconnect re-sync resolves AFTER a live `done` chunk.
+		let resolveGet!: (v: { messages: { role: string; content: string }[] }) => void;
+		const getGate = new Promise<{ messages: { role: string; content: string }[] }>((r) => {
+			resolveGet = r;
+		});
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: () => getGate,
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		// Reconnect kicks off getConversation, which stays pending on the gate.
+		cap.reconnect!();
+		await flush();
+
+		// The live terminal `done` arrives on the resubscribed channel BEFORE the DB read resolves.
+		cap.chunk({ type: 'done', text: 'LIVE final answer' });
+		await flush();
+		assert.strictEqual(chat.isLoading(), false, 'the live done cleared loading');
+
+		// The late getConversation now resolves with a DIFFERENT (stale/eventually-consistent) view.
+		resolveGet({
+			messages: [
+				{ role: 'user', content: 'hello' },
+				{ role: 'assistant', content: 'STALE db answer' },
+			],
+		});
+		await flush();
+
+		const assistant = chat.getMessages().find((m) => m.role === 'assistant');
+		assert.strictEqual(
+			assistant!.content,
+			'LIVE final answer',
+			'the live done text is preserved; the late DB read is ignored',
+		);
+		assert.strictEqual(chat.isLoading(), false, 'loading stays cleared');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect ignores a stale/previous-turn getConversation snapshot', async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The turn is still running, but the DB read's last row is a PRIOR turn's
+				// assistant message that does NOT extend what we've streamed this turn.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'previous question' },
+						{ role: 'assistant', content: 'answer to a PRIOR turn' },
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: 'answer to a PRIOR turn' },
+					],
+				}),
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		// Live text for the CURRENT turn.
+		cap.chunk({ type: 'text-delta', text: 'live streaming answer' });
+		await flush();
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'a stale snapshot must not resolve the still-running turn');
+		const assistant = chat.getMessages().find((m) => m.role === 'assistant' && m.content !== '');
+		assert.strictEqual(
+			assistant!.content,
+			'live streaming answer',
+			'in-flight bubble is not overwritten by prior-turn text',
+		);
+		chat.destroy();
+		await flush();
+	});
+
+	test('a re-sync failure on reconnect reports onError once and arms the failsafe so loading recovers', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The reconnect re-sync read fails outright.
+				getConversation: async () => {
+					throw new Error('DynamoDB read failed');
+				},
+			},
+			onError: (e) => {
+				errors.push(e);
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// Reconnect → getConversation throws.
+		cap.reconnect!();
+		await flush();
+
+		// The re-sync failure is surfaced via onError (once)...
+		assert.strictEqual(errors.length, 1, 're-sync failure reports onError exactly once');
+		// ...and the catch now arms the failsafe, making the non-hang guarantee LOCAL (no longer
+		// dependent on a preceding onDisconnect). loading persists immediately — the failsafe is a
+		// bounded backstop, not an immediate clear.
+		assert.strictEqual(chat.isLoading(), true, 'still loading — the failsafe is armed, not immediate');
+
+		// Once the window elapses with no recovering chunk, loading RECOVERS (clears) rather than
+		// hanging forever, and the errorReported latch keeps onError at exactly one.
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'the failsafe armed by the re-sync throw clears the stuck spinner');
+		assert.strictEqual(errors.length, 1, 'the latch suppresses the failsafe double onError — still exactly one');
+		chat.destroy();
+		await flush();
+	});
+
+	test('terminal onDisconnect(error) while loading arms the failsafe (all-stale/give-up path, no onReconnect)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			onError: (e) => {
+				errorReceived = e;
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// The transport gives up / every resubscribe is stale: it surfaces a terminal
+		// onDisconnect('error') and does NOT fire onReconnect. This must arm the failsafe
+		// so the spinner cannot hang forever with no other signal.
+		assert.ok(cap.disconnect, 'createChat must forward onDisconnect to the transport');
+		cap.disconnect!('error');
+
+		// The failsafe is armed, not immediate.
+		assert.strictEqual(chat.isLoading(), true, 'still loading — failsafe is armed, not immediate');
+
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'terminal-error failsafe clears the stuck spinner');
+		assert.ok(errorReceived, 'terminal-error failsafe surfaces an error');
+		chat.destroy();
+		await flush();
+	});
+
+	test('terminal onDisconnect(timeout) while loading ALSO arms the failsafe (any non-client reason, no onReconnect)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			onError: (e) => {
+				errorReceived = e;
+			},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'loading while the turn is in flight');
+
+		// A genuinely terminal 'timeout' drop (like 'error', it fires NO onReconnect) must arm the
+		// failsafe just the same — the predicate keys off ANY non-'client' reason, so a future
+		// 'timeout'/'unknown' give-up can't hang the spinner.
+		assert.ok(cap.disconnect, 'createChat must forward onDisconnect to the transport');
+		cap.disconnect!('timeout');
+
+		// The failsafe is armed, not immediate.
+		assert.strictEqual(chat.isLoading(), true, 'still loading — failsafe is armed, not immediate');
+
+		t.mock.timers.tick(660_001);
+		assert.strictEqual(chat.isLoading(), false, 'terminal-timeout failsafe clears the stuck spinner');
+		assert.ok(errorReceived, 'terminal-timeout failsafe surfaces an error');
+		chat.destroy();
+		await flush();
+	});
+
+	test('a send-rejected-but-server-started turn is NOT auto-adopted by reconnect, but recovers on a later loadConversation', async () => {
+		// The turn started server-side (the 504 was on the response, not the dispatch), so the
+		// persisted conversation ends with the assistant's final answer.
+		const { cap, transport } = reconnectCapture('504 Gateway Timeout');
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: 'the server-side final answer' },
+					],
+				}),
+			},
+			onError: () => {},
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		// Send failed → handleSendFailure nulled the turn identity and cleared loading.
+		assert.strictEqual(chat.isLoading(), false, 'loading cleared after the send rejection');
+
+		// A reconnect fires. Because the turn identity was nulled, the re-sync guard does NOT
+		// adopt the persisted assistant text into a live bubble — recovery is NOT automatic here.
+		cap.reconnect!();
+		await flush();
+		assert.ok(
+			!chat.getMessages().some((m) => m.role === 'assistant' && m.content === 'the server-side final answer'),
+			'reconnect must NOT auto-adopt the started turn (send was treated as failed)',
+		);
+
+		// Opening the conversation again recovers the persisted result (the documented path).
+		await chat.loadConversation('conv-1');
+		assert.ok(
+			chat.getMessages().some((m) => m.role === 'assistant' && m.content === 'the server-side final answer'),
+			'loadConversation recovers the persisted server-side final answer',
+		);
+		chat.destroy();
+		await flush();
+	});
+});
+
+describe('createChat loadConversation + metadata narrowing', () => {
+	// loadConversation never touches the transport, so a no-op stub suffices.
+	const noopTransport = {
+		subscribe: () => ({
+			[Symbol.asyncIterator]() { return { next: async () => ({ done: true, value: undefined as any }) }; },
+			established: Promise.resolve(),
+			unsubscribe() {},
+		}),
+		run: async () => ({ channelId: 'ch-1' }),
+	} as any;
+
+	test('narrows an approval message: known keys projected, unknown key dropped', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				// Customer passes raw backend metadata straight through (unknown).
+				getConversation: async () => ({
+					messages: [
+						{ role: 'approval', content: 'Approved', metadata: { approved: true, toolName: 'kv.put', trust: false, extra: 'ignored' } },
+					],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		const appr = rendered.find((m) => m.role === 'approval');
+		assert.ok(appr, 'approval message should be present');
+		assert.deepStrictEqual(appr.metadata, { approved: true, trust: false, toolName: 'kv.put' }, 'known ApprovalMetadata keys projected, unknown key dropped');
+	});
+
+	test('drops non-object metadata to undefined instead of crashing', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'assistant', content: 'hi', metadata: 'not-an-object' },
+						{ role: 'user', content: 'yo', metadata: null },
+					],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		const asst = rendered.find((m) => m.role === 'assistant');
+		const usr = rendered.find((m) => m.role === 'user');
+		assert.strictEqual(asst.metadata, undefined, 'string metadata narrows to undefined');
+		assert.strictEqual(usr.metadata, undefined, 'null metadata narrows to undefined');
+	});
+
+	test('passes a plain-object user/assistant metadata through as a JSON record', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({
+					messages: [{ role: 'assistant', content: 'hi', metadata: { latencyMs: 42, note: 'ok' } }],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		const asst = rendered.find((m) => m.role === 'assistant');
+		assert.deepStrictEqual(asst.metadata, { latencyMs: 42, note: 'ok' }, 'plain-object metadata passes through unchanged');
+	});
+
+	test('filters out non-renderable roles (e.g. tool-result)', async () => {
+		let rendered: any[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hi' },
+						{ role: 'tool-result', content: '{"ok":true}' },
+						{ role: 'assistant', content: 'done' },
+					],
+				}),
+			},
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('c1');
+		assert.deepStrictEqual(rendered.map((m) => m.role), ['user', 'assistant'], 'only user/assistant/approval roles are rendered');
+	});
+
+	test('maps pending interrupts id -> interruptId for onInterrupt', async () => {
+		const seen: { interruptId: string; name: string }[] = [];
+		const chat = createChat({
+			transport: noopTransport,
+			api: {
+				createConversation: async () => ({ conversationId: 'c1' }),
+				getConversation: async () => ({ messages: [] }),
+				getPendingInterrupts: async () => ({ interrupts: [{ id: 'int-9', name: 'approve:delete' }] }),
+			},
+			onInterrupt: (interrupts) => { for (const i of interrupts) seen.push({ interruptId: i.interruptId, name: i.name }); },
+		});
+
+		await chat.loadConversation('c1');
+		assert.deepStrictEqual(seen, [{ interruptId: 'int-9', name: 'approve:delete' }], 'backend id surfaces to the consumer as interruptId');
+	});
+});
+

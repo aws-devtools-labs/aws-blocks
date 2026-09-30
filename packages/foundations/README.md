@@ -2,6 +2,8 @@
 
 Standard Building Blocks for common AWS services in the AWS Blocks.
 
+> **Note:** This README describes an *aspirational* consolidated API for the foundation blocks. It is **not yet implemented** — this package is currently a stub. For the API that actually ships today, see [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) and [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md), which are the authoritative reference for the shipped blocks.
+
 ## Overview
 
 `foundations` provides production-ready Building Blocks for the most common AWS services. Each block includes CDK infrastructure, runtime SDK integration, and local mocking for development without an AWS account.
@@ -66,16 +68,20 @@ const table = new DistributedTable('app', 'data', {
 });
 ```
 
-### KeyValueStore
+### KVStore
 Simple key-value storage for user-scoped data.
 
 ```typescript
-import { KeyValueStore } from '@aws-blocks/blocks';
+import { KVStore } from '@aws-blocks/blocks';
 
-const store = new KeyValueStore('app', 'settings');
-await store.set(userId, 'theme', 'dark');
-const theme = await store.get(userId, 'theme');
+const store = new KVStore(scope, 'settings');
+
+// Data methods run at request time, inside a handler — not at CDK synth time.
+await store.put(`user:${userId}:theme`, 'dark');
+const theme = await store.get(`user:${userId}:theme`);
 ```
+
+See [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) for the full API, options, TTL, and conditional writes.
 
 ### SQLTable
 Relational database with SQL query support. Uses SQLite locally, DSQL on AWS.
@@ -104,15 +110,20 @@ const apiKey = new Secret('app', 'api-key');
 const key = await apiKey.getValue();
 ```
 
-### Setting
-Application configuration values using AWS Systems Manager Parameter Store.
+### AppSetting
+A single application configuration value using AWS Systems Manager Parameter Store.
 
 ```typescript
-import { Setting } from '@aws-blocks/blocks';
+import { AppSetting } from '@aws-blocks/blocks';
 
-const config = new Setting('app', 'feature-flags');
-await config.set('newUI', 'enabled');
+const newUiFlag = new AppSetting(scope, 'new-ui', { value: 'disabled' });
+
+// Data methods run at request time, inside a handler.
+await newUiFlag.put('enabled');
+const newUI = await newUiFlag.get();
 ```
+
+See [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md) for the full API and options.
 
 ### CronJob
 Scheduled background tasks using EventBridge.

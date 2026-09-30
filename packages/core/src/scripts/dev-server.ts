@@ -6,7 +6,8 @@ import { pathToFileURL, URL } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
 import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createConnection } from 'node:net';
+import { createConnection, type Socket } from 'node:net';
+import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
 import { ApiError } from '../errors.js';
@@ -448,6 +449,15 @@ export interface BindRetryDeps {
   warn: (msg: string) => void;
 }
 
+/** Schedule a front-door rebind retry; keep it refed so the retry deterministically fires. */
+export function scheduleBindRetry(
+  fn: () => void,
+  delayMs: number,
+  setTimer: (fn: () => void, delayMs: number) => NodeJS.Timeout = setTimeout,
+): NodeJS.Timeout {
+  return setTimer(fn, delayMs);
+}
+
 /**
  * Build the `:3000` front-door EADDRINUSE bind-retry handler. Extracted from the
  * `server.on('error')` closure so the retry *wiring* — the 1-based attempt
@@ -542,10 +552,11 @@ export type SingletonDecision = { action: 'proceed' } | { action: 'exit'; reason
  *
  * - **No / corrupt pidfile** → proceed (first start; startup reclaim covers any orphan socket).
  * - **Same pid** → proceed (defensive; the record is our own).
- * - **Same parent (`ppid`)** → proceed. `tsx watch` is the stable parent across
- *   reloads, so a matching parent means the watcher is relaunching OUR OWN script
- *   — not a competitor. A second `npm run dev` runs under a *different* watcher,
- *   so it never matches here. This carve-out is what preserves hot reload.
+ * - **Same parent (`ppid`) and dead recorded child** → proceed. `tsx watch` is
+ *   the stable parent across reloads, and it relaunches after the old child exits.
+ *   A live recorded child with the same parent can also happen when two
+ *   `npm run dev` jobs share a shell, so that still goes through the live-owner
+ *   check below.
  * - **Different, still-live owner actually holding the port** → exit cleanly with
  *   a clear message (do not spawn a competing supervisor).
  * - **Otherwise** (recorded owner is dead → stale pidfile, or the port is free)
@@ -559,8 +570,9 @@ export function evaluateSingleton(
 ): SingletonDecision {
   if (!existing) return { action: 'proceed' };
   if (existing.pid === self.pid) return { action: 'proceed' };
-  if (existing.ppid === self.ppid) return { action: 'proceed' }; // tsx-watch relaunch of our own supervisor
-  const ownerAlive = isAlive(existing.pid) || (existing.ppid > 1 && isAlive(existing.ppid));
+  const existingPidAlive = isAlive(existing.pid);
+  if (existing.ppid === self.ppid && !existingPidAlive) return { action: 'proceed' }; // tsx-watch relaunch after old child exit
+  const ownerAlive = existingPidAlive || (existing.ppid > 1 && isAlive(existing.ppid));
   if (ownerAlive && portInUse) {
     return { action: 'exit', reason: `dev server already running on :${existing.port} (pid ${existing.pid})` };
   }
@@ -952,6 +964,10 @@ export async function startDevServer(options: DevServerOptions) {
 
   // WebSocket upgrade — route to frontend (HMR) or dev attachments
   server.on('upgrade', (req, socket, head) => {
+    // A stale client can reset the connection mid-upgrade (ECONNRESET). The raw
+    // socket has no 'error' listener at this point, so Node's default handler
+    // would kill the dev server. Attach one before any parsing/routing.
+    socket.on('error', () => socket.destroy());
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     if (url.pathname === '/realtime') return; // handled by dev attachment (noServer mode)
     if (frontendProxy) {
@@ -1039,10 +1055,16 @@ export async function startDevServer(options: DevServerOptions) {
   const onEaddrinuse = createBindRetryController(port, {
     reclaim: (p) => reclaimPort(p),
     relisten: () => server.listen(port, onListening),
-    scheduleRetry: (fn, delayMs) => { setTimeout(fn, delayMs).unref?.(); },
+    scheduleRetry: (fn, delayMs) => { scheduleBindRetry(fn, delayMs); },
     onExhausted: () => process.exit(1),
     warn: (msg) => console.error(msg),
   });
+  // Malformed/aborted requests must not become unhandled socket errors.
+  server.on('clientError', (_err: Error, socket: Duplex) => {
+    if ((socket as Socket).writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+    else socket.destroy();
+  });
+
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       // Keep the telemetry signal (unchanged) …

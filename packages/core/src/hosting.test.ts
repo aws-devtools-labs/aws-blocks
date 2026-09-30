@@ -1477,7 +1477,7 @@ describe('Hosting', () => {
   // ── Monitoring ─────────────────────────────────────────────────
 
   describe('Monitoring', () => {
-    it('exposes monitoringTopic when monitoring is enabled', () => {
+    it('exposes monitoring surface (alarms + alarmTopics) when enabled', () => {
       createNextjsBuildOutput(tmpDir);
 
       const app = new App();
@@ -1490,8 +1490,15 @@ describe('Hosting', () => {
         monitoring: { enabled: true },
       });
 
-      // The L3 should create an SNS topic for alarms
-      assert.ok(hosting.monitoringTopic, 'Should expose monitoringTopic when enabled');
+      assert.ok(hosting.monitoring, 'Should expose monitoring when enabled');
+      assert.ok(
+        hosting.monitoring.alarmTopics.length >= 1,
+        'Should expose at least one alarm topic',
+      );
+      assert.ok(
+        hosting.monitoring.alarms.length >= 1,
+        'Should expose alarms',
+      );
     });
   });
 
@@ -1611,6 +1618,20 @@ describe('Hosting', () => {
         assetDeps.length >= 1,
         `BlocksConfigDeployment must DependsOn the asset deployment(s); ` +
           `found DependsOn=${JSON.stringify(dependsOn)}`,
+      );
+
+      const routeCutoverId = Object.entries(tpl.Resources).find(
+        ([id, resource]) =>
+          resource.Type === 'AWS::CloudFormation::CustomResource' &&
+          /RouteStoreKeys/.test(id),
+      )?.[0];
+      assert.ok(routeCutoverId, 'expected a RouteStoreKeys cutover resource');
+
+      const routeCutoverDeps = tpl.Resources[routeCutoverId].DependsOn ?? [];
+      assert.ok(
+        routeCutoverDeps.includes(configId),
+        `RouteStoreKeys must DependsOn BlocksConfigDeployment; ` +
+          `found DependsOn=${JSON.stringify(routeCutoverDeps)}`,
       );
     });
   });

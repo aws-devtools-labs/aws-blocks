@@ -10,7 +10,8 @@ import {
   type Field,
 } from '@aws-sdk/client-rds-data';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
-import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES, wrapError, serializationConflict } from '../errors.js';
+import { installClientUserAgent } from '@aws-blocks/core';
+import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES, wrapError, serializationConflict, uniqueConstraintConflict } from '../errors.js';
 
 /**
  * Translate `$1`, `$2`, ... placeholders to `:p1`, `:p2`, ... for Data API.
@@ -106,14 +107,19 @@ function translateError(e: unknown): never {
         // error as cause. Matches the PGlite / pg-client engine paths.
         throw serializationConflict(e);
       } else if (code === '23505') {
-        e.name = DatabaseErrors.UniqueConstraintViolation;
+        // Duplicate key: surface as a 409 (Conflict), not a generic 500. Not
+        // retriable. Matches the PGlite / pg-client engine paths.
+        throw uniqueConstraintConflict(e);
       } else if (code.startsWith('08')) {
         e.name = DatabaseErrors.ConnectionFailed;
       } else {
         e.name = DatabaseErrors.QueryFailed;
       }
     } else if (/unique constraint|duplicate key/i.test(msg)) {
-      e.name = DatabaseErrors.UniqueConstraintViolation;
+      // Data API errors without a parseable SQLState still carry the driver's
+      // unique-violation text — map to the same 409 (Conflict) as the
+      // SQLState-parsed path above.
+      throw uniqueConstraintConflict(e);
     } else if (TRANSIENT_DATA_API_ERROR_NAMES.has(e.name)) {
       e.name = DatabaseErrors.ConnectionFailed;
     } else {
@@ -148,6 +154,8 @@ export class DataApiEngine implements DatabaseEngine {
     this.client = config.client ?? new RDSDataClient({
       ...(config.customUserAgent ? { customUserAgent: config.customUserAgent } : {}),
     });
+    // Instrument only a client we created; an injected one is the caller's job.
+    if (!config.client) installClientUserAgent(this.client);
   }
 
   /** Execute a SQL query via ExecuteStatement and return rows mapped from column metadata. */

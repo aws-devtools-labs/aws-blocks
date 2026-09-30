@@ -69,6 +69,7 @@ import {
 	Scope,
 	registerSdkIdentifiers,
 	getSdkIdentifiers,
+	installClientUserAgent,
 } from '@aws-blocks/core';
 import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
@@ -652,6 +653,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			region: this.region,
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(this.client);
 		registerSdkIdentifiers(this.fullId, { userPoolId, clientId });
 		// Defer CognitoJwtVerifier.create until we actually verify a token —
 		// the factory validates userPoolId at construction time and blows up

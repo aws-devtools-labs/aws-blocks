@@ -6,6 +6,7 @@ import * as os from 'os';
 import { App, CfnResource, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { HostingConstruct } from './hosting_construct.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
@@ -2036,20 +2037,21 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     });
   });
 
-  void it('creates no alarm topic key when a BYO topic ARN is supplied', () => {
+  void it('applies monitoring.subscriptions to the alarm topic', () => {
     const staticDir = createStaticDir();
     const stack = createStack();
     new HostingConstruct(stack, 'Hosting', {
       manifest: spaManifest(staticDir),
       monitoring: {
-        snsTopicArn: 'arn:aws:sns:us-west-2:123456789012:existing-alarms',
+        subscriptions: [new subs.EmailSubscription('oncall@example.com')],
       },
     });
 
     const template = Template.fromStack(stack);
-    // The caller owns the imported topic's encryption.
-    template.resourceCountIs('AWS::KMS::Key', 0);
-    template.resourceCountIs('AWS::SNS::Topic', 0);
+    template.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: 'oncall@example.com',
+    });
   });
 
   // ---- cdn.ssrDefaultTtl ----

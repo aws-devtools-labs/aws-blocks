@@ -27,6 +27,29 @@ env:
   MIN_FLUTTER: '3.41.0'
 
 jobs:
+  version-constant:
+    name: Version constant is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      # version.dart is generated from pubspec.yaml by build_version. Regenerate
+      # and fail if it differs from the committed file, so the version cannot drift.
+      - name: Verify generated version.dart is up to date
+        working-directory: native/dart/packages/blocks_runtime
+        run: |
+          dart pub get
+          dart run build_runner build
+          git diff --exit-code lib/src/version.dart
+
   analyze:
     name: ${{ matrix.package-name }} (${{ matrix.sdk }})
     runs-on: ubuntu-latest
@@ -41,14 +64,17 @@ jobs:
             working-directory: native/dart/packages/blocks_runtime
             tool: dart
             runtime-override: false
+            web-tests: true
           - package-name: blocks_codegen
             working-directory: native/dart/packages/blocks_codegen
             tool: dart
             runtime-override: true
+            web-tests: false
           - package-name: blocks_runtime_flutter
             working-directory: native/dart/packages/blocks_runtime_flutter
             tool: flutter
             runtime-override: true
+            web-tests: false
     steps:
       - uses: actions/checkout@v7
         with:
@@ -110,6 +136,13 @@ jobs:
       - name: Run tests
         working-directory: ${{ matrix.working-directory }}
         run: ${{ matrix.tool }} test
+
+      # Blocking. The web variants are selected by conditional import, so they
+      # only run on a browser platform. Chrome ships on the runner.
+      - name: Run web tests
+        if: matrix.web-tests && matrix.sdk == 'stable'
+        working-directory: ${{ matrix.working-directory }}
+        run: dart test -p chrome
 
       # Report-only: prints the pub.dev package score and uploads the report.
       - name: Package score
