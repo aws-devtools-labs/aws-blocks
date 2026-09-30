@@ -70,15 +70,15 @@ internal class PersistentCookiesStorage(
     private var loaded = false
 
     override suspend fun get(requestUrl: Url): List<Cookie> = mutex.withLock {
-        load()
-        if (removeExpired()) persist()
+        val loadedJar = load()
+        if (removeExpired() && loadedJar) persist()
         cookies.filter { it.matches(requestUrl) }.map { it.cookie }
     }
 
     override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
         if (cookie.name.isBlank()) return
         mutex.withLock {
-            load()
+            val loadedJar = load()
             // A cookie is host-only exactly when the server sent no `Domain`, which has to be
             // read before `fillDefaults` substitutes the request host for it.
             val hostOnly = cookie.domain.isNullOrBlank()
@@ -86,7 +86,9 @@ internal class PersistentCookiesStorage(
             cookies.removeAll { it.cookie.name == stored.name && it.matches(requestUrl) }
             cookies += Stored(stored, clock(), hostOnly)
             removeExpired()
-            persist()
+            // Without a jar in hand there is nothing to add to: persisting would replace whatever
+            // is in storage with this one cookie. Keep it in memory so the session still works.
+            if (loadedJar) persist()
         }
     }
 
@@ -102,24 +104,35 @@ internal class PersistentCookiesStorage(
 
     override fun close() {}
 
-    /** Reads the persisted jar on first use. */
-    private suspend fun load() {
-        if (loaded) return
-        loaded = true
-        val serialized = store.get(JAR_KEY) ?: return
-        val entries = try {
-            BlocksJson.decodeFromString<List<Entry>>(serialized)
+    /**
+     * Reads the persisted jar on first use, reporting whether the jar is now in hand. False means
+     * storage could not be read, which is temporary — a locked keychain, a failed decrypt — and
+     * leaves the jar unloaded so a later call tries again and no write replaces what is stored.
+     */
+    private suspend fun load(): Boolean {
+        if (loaded) return true
+        val serialized = try {
+            store.get(JAR_KEY)
         } catch (_: Exception) {
-            // A jar that cannot be read leaves the caller unauthenticated, which is recoverable
-            // by signing in again; failing here would instead break every request.
-            return
+            return false
         }
-        entries.forEach { entry ->
-            cookies += Stored(parseServerSetCookieHeader(entry.setCookie), entry.createdAt, entry.hostOnly)
+        loaded = true
+        if (serialized == null) return true
+        try {
+            BlocksJson.decodeFromString<List<Entry>>(serialized).forEach { entry ->
+                cookies += Stored(parseServerSetCookieHeader(entry.setCookie), entry.createdAt, entry.hostOnly)
+            }
+        } catch (_: Exception) {
+            // The jar was read but cannot be interpreted, so it will never become readable and is
+            // treated as empty: the caller signs in again and the next write replaces it. Parsing
+            // is inside the same attempt as decoding so a partly rebuilt jar is discarded too.
+            cookies.clear()
+            return true
         }
         // Rewrite here rather than leaving the drop to the caller: the caller's own check finds
         // nothing left to remove, so expired entries would stay in storage until an unrelated write.
         if (removeExpired()) persist()
+        return true
     }
 
     private suspend fun persist() {

@@ -25,6 +25,7 @@ import platform.Foundation.dataUsingEncoding
 import platform.Security.SecItemAdd
 import platform.Security.SecItemCopyMatching
 import platform.Security.SecItemDelete
+import platform.Security.errSecItemNotFound
 import platform.Security.errSecSuccess
 import platform.Security.kSecAttrAccount
 import platform.Security.kSecAttrService
@@ -111,9 +112,17 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
         memScoped {
             val result = alloc<CFTypeRefVar>()
             val status: OSStatus = SecItemCopyMatching(query, result.ptr)
-            if (status != errSecSuccess) return@memScoped null
-            val data = CFBridgingRelease(result.value) as? NSData ?: return@memScoped null
+            // Only "not found" means the key is absent. Every other status — a locked device
+            // denying access being the common one — leaves the item in place, so reporting it as
+            // absent would invite the caller to overwrite a keychain item it could not read.
+            if (status == errSecItemNotFound) return@memScoped null
+            if (status != errSecSuccess) {
+                throw KeyValueStoreException("Reading '$key' from the keychain failed: OSStatus $status")
+            }
+            val data = CFBridgingRelease(result.value) as? NSData
+                ?: throw KeyValueStoreException("The keychain returned no data for '$key'")
             NSString.create(data = data, encoding = NSUTF8StringEncoding) as? String
+                ?: throw KeyValueStoreException("The keychain value for '$key' is not valid UTF-8")
         }
     }
 

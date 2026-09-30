@@ -56,7 +56,9 @@ internal class EncryptedFileKeyValueStore(
     override suspend fun get(key: String): String? = withContext(Dispatchers.IO) {
         val path = pathFor(key)
         if (!Files.exists(path)) return@withContext null
+        // The entry is there, so a failed decrypt is a read failure and not an absent key.
         decrypt(Files.readString(path))
+            ?: throw KeyValueStoreException("Could not decrypt the stored entry for '$key'")
     }
 
     /**

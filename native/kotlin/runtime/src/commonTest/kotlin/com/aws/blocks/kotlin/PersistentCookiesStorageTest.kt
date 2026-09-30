@@ -20,6 +20,15 @@ class PersistentCookiesStorageTest {
         override suspend fun clear() { data.clear() }
     }
 
+    /** A store whose reads fail while [readable] is false, as a locked keychain's would. */
+    private class UnreadableKeyValueStore(val backing: MutableMap<String, String>) : KeyValueStore {
+        var readable = false
+        override suspend fun put(key: String, value: String) { backing[key] = value }
+        override suspend fun get(key: String): String? =
+            if (readable) backing[key] else throw KeyValueStoreException("locked")
+        override suspend fun clear() { backing.clear() }
+    }
+
     private val store = InMemoryKeyValueStore()
     private var now = 1_000_000L
     private val cookiesStorage = PersistentCookiesStorage(store) { now }
@@ -264,6 +273,37 @@ class PersistentCookiesStorageTest {
         cookiesStorage.clear()
 
         store.data.keys.shouldBeEmpty()
+    }
+
+    @Test
+    fun keepsTheStoredJarWhenStorageCannotBeRead() = runTest {
+        val url = Url("https://example.com/path")
+        cookiesStorage.addCookie(url, Cookie(name = "session", value = "stored"))
+        val backing = store.data.toMutableMap()
+        val unreadable = UnreadableKeyValueStore(backing)
+        val jar = backing.getValue(JAR_KEY_FOR_TEST)
+
+        val storage = PersistentCookiesStorage(unreadable) { now }
+        storage.addCookie(url, Cookie(name = "other", value = "fresh"))
+
+        // The write is held in memory only; replacing the jar with it would drop the session that
+        // is still in storage and could not be read.
+        backing.getValue(JAR_KEY_FOR_TEST) shouldBe jar
+        storage.get(url).single().name shouldBe "other"
+    }
+
+    @Test
+    fun loadsTheJarOnceStorageBecomesReadable() = runTest {
+        val url = Url("https://example.com/path")
+        cookiesStorage.addCookie(url, Cookie(name = "session", value = "stored"))
+        val unreadable = UnreadableKeyValueStore(store.data.toMutableMap())
+
+        val storage = PersistentCookiesStorage(unreadable) { now }
+        storage.get(url).shouldBeEmpty()
+
+        // A failed read is not recorded as an empty jar, so the retry picks the session up.
+        unreadable.readable = true
+        storage.get(url).single().value shouldBe "stored"
     }
 
     @Test
