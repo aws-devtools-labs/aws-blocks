@@ -39,3 +39,26 @@ new CfnOutput(stack, 'TenantBUrl', { value: `https://${door.domainName}/tenant-b
 new CfnOutput(stack, 'TenantCUrl', { value: `https://${door.domainName}/tenant-c/` });
 
 Tags.of(stack).add('blocks:purpose', 'mt-cloudfront-poc');
+
+// Subdomain-mode variant — same three tenants, ONE distribution, but the tenant
+// is taken from the Host header's first DNS label (`tenant-a.<host>`) instead of
+// the path. Real per-tenant DNS + wildcard TLS is out of scope for the POC; the
+// Host-based routing logic is verified by sending the Host header.
+const subStack = new Stack(app, 'mt-cf-subdomain', {
+	env: {
+		account: process.env.CDK_DEFAULT_ACCOUNT,
+		region: process.env.CDK_DEFAULT_REGION ?? 'us-west-2',
+	},
+});
+
+const subDoor = new MultiTenantCloudFront(subStack, 'MultiTenant', {
+	routing: 'subdomain',
+	tenants: [
+		{ tenantId: 'tenant-a', assetDir: join(tenantsDir, 'tenant-a') },
+		{ tenantId: 'tenant-b', assetDir: join(tenantsDir, 'tenant-b') },
+		{ tenantId: 'tenant-c', assetDir: join(tenantsDir, 'tenant-c') },
+	],
+});
+
+new CfnOutput(subStack, 'DistributionDomain', { value: subDoor.domainName });
+Tags.of(subStack).add('blocks:purpose', 'mt-cloudfront-poc');
