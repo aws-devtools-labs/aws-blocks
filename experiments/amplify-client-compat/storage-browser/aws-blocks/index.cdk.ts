@@ -3,7 +3,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { IUserPool, IUserPoolClient } from 'aws-cdk-lib/aws-cognito';
 import type { IConstruct } from 'constructs';
-import { BlocksStack, BlocksPresets, AuthCognito } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets, AuthCognito, Hosting } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { SCOPE_ID, BUCKET_ID, VEND_ROLE_NAME } from './locations.js';
@@ -57,3 +57,19 @@ new cdk.CfnOutput(stack, 'AmplifyUserPoolClientId', { value: auth.userPoolClient
 new cdk.CfnOutput(stack, 'AmplifyRegion', { value: stack.region });
 new cdk.CfnOutput(stack, 'StorageBucketName', { value: BUCKET });
 new cdk.CfnOutput(stack, 'StorageVendRoleArn', { value: vendRole.roleArn });
+
+// Demo site (opt-in: `-c hosting=true`): web/ on CloudFront, with the Blocks API
+// proxied at /aws-blocks/api on the same domain. The CSP is the Hosting
+// default plus the S3 endpoints <StorageBrowser> calls directly and blob: for
+// in-memory downloads.
+if (app.node.tryGetContext('hosting') === 'true') {
+	new Hosting(blocksStack, 'Web', {
+		root: join(__dirname, '..', 'web'),
+		buildCommand: 'BLOCKS_HOSTED=1 node_modules/.bin/vite build',
+		buildOutputDir: 'dist',
+		framework: 'spa',
+		api: blocksStack,
+		contentSecurityPolicy:
+			"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss:; media-src 'self' blob: https:; worker-src 'self' blob:; object-src 'none'; frame-ancestors 'self'",
+	});
+}

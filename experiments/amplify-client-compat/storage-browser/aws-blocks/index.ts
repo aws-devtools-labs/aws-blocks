@@ -1,6 +1,6 @@
 import { ApiNamespace, Scope, AuthCognito, FileBucket, getSdkIdentifiers } from '@aws-blocks/blocks';
 import { STSClient, AssumeRoleCommand, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
-import { SCOPE_ID, BUCKET_ID, VEND_ROLE_NAME, WEB_ORIGIN, locationsFor, sessionPolicy, authorizeScope, type Permission } from './locations.js';
+import { SCOPE_ID, BUCKET_ID, VEND_ROLE_NAME, WEB_ORIGIN, HOSTED_WEB_ORIGIN, locationsFor, sessionPolicy, authorizeScope, type Permission } from './locations.js';
 
 // StorageBrowser-on-Blocks POC. The stock Amplify UI <StorageBrowser> talks to
 // S3 directly from the browser, but it never sees a Cognito token or an
@@ -14,7 +14,7 @@ const scope = new Scope(SCOPE_ID);
 
 const auth = new AuthCognito(scope, 'auth', {
 	signInWith: 'email' as const,
-	selfSignUp: true,
+	selfSignUp: false, // hosted demo: admin-created users only
 	mfa: 'off' as const,
 	removalPolicy: 'destroy' as const,
 });
@@ -27,7 +27,7 @@ const files = new FileBucket(scope, BUCKET_ID, {
 	versioned: false,
 	corsRules: [
 		{
-			allowedOrigins: [WEB_ORIGIN],
+			allowedOrigins: [WEB_ORIGIN, HOSTED_WEB_ORIGIN],
 			allowedMethods: ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'],
 			allowedHeaders: ['*'],
 			exposedHeaders: ['ETag', 'x-amz-checksum-crc32', 'x-amz-request-id'],

@@ -9,6 +9,14 @@ export const BUCKET_ID = 'files';
 export const VEND_ROLE_NAME = `${SCOPE_ID}-storage-vend`;
 /** Dev origin of the web demo, allowed by the bucket's CORS rule. */
 export const WEB_ORIGIN = 'http://localhost:5173';
+/**
+ * Origin of the hosted demo (Blocks Hosting on CloudFront). The distribution's
+ * domain is only known after deploy, and referencing it from the bucket would
+ * create a dependency cycle, so the CORS rule allows CloudFront origins by
+ * wildcard. CORS is not an access control here: every S3 request still needs
+ * credentials the Blocks API vends for one prefix.
+ */
+export const HOSTED_WEB_ORIGIN = 'https://*.cloudfront.net';
 export const SHARED_PREFIX = 'public/';
 
 export type Permission = 'get' | 'list' | 'write' | 'delete';

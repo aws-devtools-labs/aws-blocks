@@ -19,8 +19,9 @@ page.on('response', (r) => {
 	if (r.url().includes('amazonaws.com') && r.status() >= 400) log.push(`HTTP ${r.status()} ${r.request().method()} ${r.url().slice(0, 140)}`);
 });
 
-// Must be `localhost`: it is the origin the bucket's CORS rule allows.
-await page.goto('http://localhost:5173/');
+// Local dev must use `localhost` (the origin the bucket's CORS rule allows);
+// the hosted site passes BASE_URL=https://<distribution>.cloudfront.net.
+await page.goto(process.env.BASE_URL ?? 'http://localhost:5173/');
 await page.getByLabel('Email').fill(email);
 await page.getByLabel('Password').fill(password);
 await page.getByRole('button', { name: 'Sign in' }).click();
