@@ -28,8 +28,11 @@ describe('umbrella default compute telemetry registration', () => {
 		assert.strictEqual(customBlocksCount, 0);
 	});
 
-	test('registers a single instance, even when re-imported', async () => {
+	test('re-importing the umbrella does not register the default compute again', async () => {
+		const before = Scope.getRegisteredBlocks();
 		await import('./index.js');
-		assert.strictEqual(Scope.getRegisteredBlocks().totalCount, 1);
+		const after = Scope.getRegisteredBlocks();
+		assert.strictEqual(after.blocks.filter(b => b.name === 'LambdaCompute').length, 1);
+		assert.strictEqual(after.totalCount, before.totalCount);
 	});
 });
