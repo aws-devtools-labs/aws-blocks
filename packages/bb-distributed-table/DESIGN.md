@@ -178,6 +178,8 @@ GSIs are provisioned by two mechanisms that do not disagree:
 
 **Ownership boundary on a redeploy of an existing stack.** Because the indexes are declared on the Table resource, CloudFormation owns reconciling the Table's GSI set and drives a single-index mutation via its own `UpdateTable` (the one-create/delete-per-update limit applies there). The custom resource converges only the residual — a multi-index add/remove that exceeds what CloudFormation can express in one update. On a fresh table the reconciler no-ops (the GSIs CloudFormation just created natively already match desired); the two mechanisms use projection `ALL` so the native declaration and the reconciler never produce a different index shape. On a multi-index redeploy the ordering between CloudFormation's `UpdateTable` and the reconciler Lambda is not deterministic.
 
+A stack deployed before GSIs moved onto the Table resource has zero GSIs in its stored template while its live table physically has them, so its next redeploy would plan those indexes as creates and fail. Such a stack runs a one-time adoption migration (retain, remove, re-import the Table so CloudFormation adopts the existing indexes into stored state) before it can redeploy cleanly — see `MIGRATION-native-gsi.md`.
+
 **Architecture:**
 
 - **`onEvent` handler** — Invoked once per CloudFormation Create/Update/Delete. Compares the table's current GSIs against the desired state. If already matching, returns immediately. Otherwise, initiates the first GSI change and returns `IN_PROGRESS`. For sandbox deployments, takes a fast path (see below).
