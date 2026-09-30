@@ -49,7 +49,7 @@ try {
 	page.on('response', (r) => {
 		if (r.url().includes('/aws-blocks/api')) log.push(`blocks api ${r.status()}`);
 	});
-	await page.goto('http://localhost:5174/');
+	await page.goto(process.env.BASE_URL ?? 'http://localhost:5174/');
 	await page.getByLabel('Email').fill(email);
 	await page.getByLabel('Password').fill(password);
 	await page.getByRole('button', { name: 'Sign in' }).click();

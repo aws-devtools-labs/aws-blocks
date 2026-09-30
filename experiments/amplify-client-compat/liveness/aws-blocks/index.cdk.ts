@@ -2,7 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { IUserPool, IUserPoolClient } from 'aws-cdk-lib/aws-cognito';
 import type { IConstruct } from 'constructs';
-import { BlocksStack, BlocksPresets, AuthCognito } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets, AuthCognito, Hosting } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { VEND_ROLE_NAME } from './session.js';
@@ -47,3 +47,20 @@ const stack = cdk.Stack.of(auth);
 new cdk.CfnOutput(stack, 'AmplifyUserPoolId', { value: auth.userPool.userPoolId });
 new cdk.CfnOutput(stack, 'AmplifyRegion', { value: stack.region });
 new cdk.CfnOutput(stack, 'LivenessVendRoleArn', { value: vendRole.roleArn });
+
+// Demo site (opt-in: `-c hosting=true`): web/ on CloudFront, with the Blocks API
+// proxied at /aws-blocks/api on the same domain. HTTPS lets browsers grant
+// camera access. The CSP is the Hosting default plus what the liveness
+// component needs: WebAssembly for its face detector (models load from the
+// Rekognition liveness CDN over connect-src) and blob:/mediastream: media.
+if (app.node.tryGetContext('hosting') === 'true') {
+	new Hosting(blocksStack, 'Web', {
+		root: join(__dirname, '..', 'web'),
+		buildCommand: 'BLOCKS_HOSTED=1 ../node_modules/.bin/vite build',
+		buildOutputDir: 'dist',
+		framework: 'spa',
+		api: blocksStack,
+		contentSecurityPolicy:
+			"default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss: blob: data:; media-src 'self' blob: mediastream:; worker-src 'self' blob:; object-src 'none'; frame-ancestors 'self'",
+	});
+}
