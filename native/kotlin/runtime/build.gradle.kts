@@ -47,7 +47,6 @@ kotlin {
 
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
-            implementation(libs.androidx.core.ktx)
             implementation(libs.androidx.security.crypto)
             implementation(libs.androidx.startup.runtime)
             implementation(libs.androidx.browser)

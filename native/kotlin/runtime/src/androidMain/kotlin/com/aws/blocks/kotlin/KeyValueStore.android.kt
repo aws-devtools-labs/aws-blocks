@@ -1,7 +1,6 @@
 package com.aws.blocks.kotlin
 
 import android.content.SharedPreferences
-import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.Dispatchers
@@ -33,15 +32,15 @@ private class AndroidKeyValueStore(
      * no caller thread to spare, and an applied write is still in flight when the call returns and
      * is lost if the process dies first.
      */
-    override suspend fun put(key: String, value: String) = withContext(Dispatchers.IO) {
-        prefs.edit(commit = true) { putString(key, value) }
+    override suspend fun put(key: String, value: String) {
+        withContext(Dispatchers.IO) { prefs.edit().putString(key, value).commit() }
     }
 
     override suspend fun get(key: String): String? = withContext(Dispatchers.IO) {
         prefs.getString(key, null)
     }
 
-    override suspend fun remove(key: String) = withContext(Dispatchers.IO) {
-        prefs.edit(commit = true) { remove(key) }
+    override suspend fun remove(key: String) {
+        withContext(Dispatchers.IO) { prefs.edit().remove(key).commit() }
     }
 }
