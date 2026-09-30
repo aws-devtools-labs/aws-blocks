@@ -156,6 +156,10 @@ Two `x-blocks-*` extension fields cover the gaps where standard OpenRPC doesn't 
 
 The full reference, including the tag table for native codegen authors, lives in [`schema-generation-guide-for-devs.md` § Spec extensions reference](./schema-generation-guide-for-devs.md#spec-extensions-reference).
 
+#### Unbound transferables: the `UnknownTransferable` carrier
+
+When a bare direct result's `x-blocks-transferable` tag has no known runtime binding, the native clients degrade it to a typed `UnknownTransferable` carrier, validated against the declared `__blocks` tag. The unbound fallback is direct-only; an unbound transferable in a nested, nullable, or parameter position stays `JSONValue`. A nullable *bound* transferable result does hydrate to its optional concrete type.
+
 ---
 
 ## Authoring progression: plain TypeScript → Zod

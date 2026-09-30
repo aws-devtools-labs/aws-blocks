@@ -12,10 +12,16 @@ import Foundation
 // Thin translation layer that emits Swift source from a CodegenModel.
 // Makes no business logic decisions — only Swift-specific formatting.
 
+public struct GeneratedSources {
+    public let models: String
+    public let api: String
+    public let warnings: [String]
+}
+
 public struct SwiftCodeGenerator {
     public init() {}
 
-    public func generate(from model: CodegenModel) -> (models: String, api: String) {
+    public func generate(from model: CodegenModel) -> GeneratedSources {
         var modelLines: [String] = ["import Foundation", ""]
         var apiLines: [String] = ["import Foundation", "import BlocksRuntime", ""]
         var emittedTypes: Set<String> = []
@@ -46,6 +52,10 @@ public struct SwiftCodeGenerator {
             }
         }
 
+        // Diagnostics are emitted here (not in the builder) so the model name uses
+        // the same `operationQualifiedNames` authority that drives emission.
+        var warnings: [String] = []
+
         // Default server name for init parameter default
         let defaultServerName = model.servers.first.map { "Servers.\(camelCase($0.name))" } ?? "Servers.local"
 
@@ -63,6 +73,14 @@ public struct SwiftCodeGenerator {
                 apiLines.append("")
                 let opKey = "\(namespace.name).\(operation.name)"
                 let opQualified = operationQualifiedNames[opKey] ?? [:]
+                if case .transferable(let blocksType, let typeArgs) = operation.result.type,
+                   !knownTransferableTags.contains(blocksType) {
+                    let fullOp = namespace.name == "_default" ? operation.name : "\(namespace.name).\(operation.name)"
+                    warnings.append(formatUnboundTransferable(
+                        operation: fullOp, blocksType: blocksType, typeArgs: typeArgs,
+                        namespace: namespace.name, qualifiedNames: opQualified
+                    ))
+                }
                 emitOperation(
                     operation, namespace: namespace.name,
                     prefixNamespace: false, lines: &apiLines,
@@ -96,7 +114,7 @@ public struct SwiftCodeGenerator {
         let hasTypes = !model.typeDefinitions.isEmpty
         let modelsContent = hasTypes ? modelLines.joined(separator: "\n") : ""
         let apiContent = apiLines.joined(separator: "\n")
-        return (models: modelsContent, api: apiContent)
+        return GeneratedSources(models: modelsContent, api: apiContent, warnings: warnings)
     }
 
     // MARK: - Nested Type Emission
@@ -1112,6 +1130,8 @@ public struct SwiftCodeGenerator {
             return "\(qualifiedSwiftTypeName(inner, qualifiedNames: qualifiedNames))?"
         case .typeReference(let name):
             return qualifiedNames[name] ?? name
+        case .transferable(let blocksType, let typeArgs):
+            return transferableTypeName(blocksType, typeArgs) { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) }
         default:
             return swiftTypeNameNoEmit(type)
         }
@@ -1119,8 +1139,14 @@ public struct SwiftCodeGenerator {
 
     private func emitOperation(_ operation: Operation, namespace: String, prefixNamespace: Bool, lines: inout [String], emitted: inout Set<String>, modelLines: inout [String], qualifiedNames: [String: String] = [:]) {
         let fullMethodName = namespace == "_default" ? operation.name : "\(namespace).\(operation.name)"
-        let returnType = qualifiedSwiftTypeName(operation.result.type, qualifiedNames: qualifiedNames)
-        let isTransferable = isTransferableType(operation.result.type)
+        let transferable = transferableResult(operation.result.type)
+        let isTransferable = transferable != nil
+        // An unbound result returns UnknownTransferable; its type-arg model is still
+        // emitted (unreferenced here) so the AWSBLOCKS-NATIVE-001 diagnostic can name it.
+        let unboundTag = unboundTransferableTag(operation.result.type)
+        let returnType = unboundTag != nil
+            ? "BlocksRuntime.UnknownTransferable"
+            : qualifiedSwiftTypeName(operation.result.type, qualifiedNames: qualifiedNames)
 
         // Build parameter list
         var paramList: [String] = []
@@ -1182,38 +1208,40 @@ public struct SwiftCodeGenerator {
 
         if isTransferable {
             // Hydrate transferable from the raw JSON descriptor
-            if case .transferable(let blocksType, let typeArgs) = operation.result.type {
+            if let transferable, case .transferable(let blocksType, let typeArgs) = transferable.type {
+                // An optional result returns nil for a null body; a required one throws.
+                lines.append(transferable.optional
+                    ? "        guard let result else { return nil }"
+                    : "        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
+                let descriptorNoun: String
+                let returnLines: [String]
                 switch blocksType {
                 case "realtime/channel":
                     let messageType = typeArgs.first.map { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) } ?? "JSONValue"
-                    lines.append("        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
-                    lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
-                    lines.append("            throw RPCError(message: \"Invalid channel descriptor for \(fullMethodName)\")")
-                    lines.append("        }")
-                    lines.append("        return RealtimeChannel<\(messageType)>.fromJSON(descriptor, baseHost: BlocksClient.baseHost) { data in")
-                    lines.append("            try JSONDecoder().decode(\(messageType).self, from: data)")
-                    lines.append("        }")
+                    descriptorNoun = "channel"
+                    returnLines = [
+                        "        return RealtimeChannel<\(messageType)>.fromJSON(descriptor, baseHost: BlocksClient.baseHost) { data in",
+                        "            try JSONDecoder().decode(\(messageType).self, from: data)",
+                        "        }"
+                    ]
                 case "file-bucket/download":
-                    lines.append("        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
-                    lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
-                    lines.append("            throw RPCError(message: \"Invalid file descriptor for \(fullMethodName)\")")
-                    lines.append("        }")
-                    lines.append("        return try FileDownloadHandle.fromJSON(descriptor)")
+                    descriptorNoun = "file"
+                    returnLines = ["        return try FileDownloadHandle.fromJSON(descriptor)"]
                 case "file-bucket/upload":
-                    lines.append("        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
-                    lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
-                    lines.append("            throw RPCError(message: \"Invalid file descriptor for \(fullMethodName)\")")
-                    lines.append("        }")
-                    lines.append("        return try FileUploadHandle.fromJSON(descriptor)")
+                    descriptorNoun = "file"
+                    returnLines = ["        return try FileUploadHandle.fromJSON(descriptor)"]
                 case "oidc/client":
-                    lines.append("        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
-                    lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
-                    lines.append("            throw RPCError(message: \"Invalid OIDC client descriptor for \(fullMethodName)\")")
-                    lines.append("        }")
-                    lines.append("        return try OIDCClient.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)")
+                    descriptorNoun = "OIDC client"
+                    returnLines = ["        return try OIDCClient.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)"]
                 default:
-                    lines.append("        return result")
+                    // Any tag with no known binding: the unbound fallback.
+                    descriptorNoun = "transferable"
+                    returnLines = ["        return try BlocksRuntime.UnknownTransferable.fromJSON(descriptor, expectedTag: \(swiftStringLiteral(blocksType)))"]
                 }
+                lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
+                lines.append("            throw RPCError(message: \"Invalid \(descriptorNoun) descriptor for \(fullMethodName)\")")
+                lines.append("        }")
+                lines.append(contentsOf: returnLines)
             }
         } else if returnType == "Void" {
             // No return needed
@@ -1237,9 +1265,77 @@ public struct SwiftCodeGenerator {
         return false
     }
 
-    private func isTransferableType(_ type: ResolvedType) -> Bool {
-        if case .transferable = type { return true }
-        return false
+    /// The transferable to hydrate for a result: a direct transferable, or a nullable-wrapped
+    /// one whose tag has a known binding. A nullable unbound transferable returns nil (it keeps
+    /// its prior `JSONValue?` behavior, since the UnknownTransferable fallback is direct-only).
+    private func transferableResult(_ type: ResolvedType) -> (type: ResolvedType, optional: Bool)? {
+        switch type {
+        case .transferable:
+            return (type, false)
+        case .nullable(let inner):
+            guard case .transferable(let blocksType, _) = inner,
+                  knownTransferableTags.contains(blocksType) else { return nil }
+            return (inner, true)
+        default:
+            return nil
+        }
+    }
+
+    private func unboundTransferableTag(_ type: ResolvedType) -> String? {
+        guard case .transferable(let blocksType, _) = type,
+              !knownTransferableTags.contains(blocksType) else { return nil }
+        return blocksType
+    }
+
+    private func transferableTypeName(_ blocksType: String, _ typeArgs: [ResolvedType], renderArg: (ResolvedType) -> String) -> String {
+        guard let binding = knownTransferableBindings[blocksType] else { return "JSONValue" }
+        guard binding.isGeneric else { return binding.base }
+        let argType = typeArgs.first.map(renderArg) ?? "JSONValue"
+        return "\(binding.base)<\(argType)>"
+    }
+
+    /// From the emission `qualifiedNames`, so it matches the emitted nesting; a `$ref` stays bare.
+    private func diagnosticModelName(_ type: ResolvedType, namespace: String, qualifiedNames: [String: String]) -> String {
+        switch type {
+        case .record(let name, _, _, _), .enum(let name, _), .union(let name, _, _):
+            return "\(pascalCase(namespace)).\(qualifiedNames[name] ?? name)"
+        case .typeReference(let name):
+            return name
+        case .list(let elementType, _):
+            return diagnosticModelName(elementType, namespace: namespace, qualifiedNames: qualifiedNames)
+        case .map(let valueType):
+            return diagnosticModelName(valueType, namespace: namespace, qualifiedNames: qualifiedNames)
+        case .nullable(let inner):
+            return diagnosticModelName(inner, namespace: namespace, qualifiedNames: qualifiedNames)
+        default:
+            return ""
+        }
+    }
+
+    /// Names the operation, tag, platform, and generated type-argument models, never descriptor values.
+    private func formatUnboundTransferable(operation: String, blocksType: String, typeArgs: [ResolvedType], namespace: String, qualifiedNames: [String: String]) -> String {
+        let models = typeArgs.map { diagnosticModelName($0, namespace: namespace, qualifiedNames: qualifiedNames) }.filter { !$0.isEmpty }
+        let typeArgClause = switch models.count {
+        case 0: "no generated type-argument models"
+        case 1: "type argument \(models[0])"
+        default: "type arguments \(models.joined(separator: ", "))"
+        }
+        // Keep the diagnostic on one log line even if a tag carries a newline.
+        let safeTag = blocksType
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        return "AWSBLOCKS-NATIVE-001: \(operation) returns unbound transferable "
+            + "'\(safeTag)' on swift; generated UnknownTransferable with \(typeArgClause)."
+    }
+
+    /// Escapes an untrusted tag so it cannot break the emitted Swift literal.
+    private func swiftStringLiteral(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        return "\"\(escaped)\""
     }
 
     private func isPrimitiveSwiftType(_ type: String) -> Bool {
@@ -1322,19 +1418,7 @@ public struct SwiftCodeGenerator {
         case .typeReference(let name):
             return name
         case .transferable(let blocksType, let typeArgs):
-            switch blocksType {
-            case "realtime/channel":
-                let argType = typeArgs.first.map { swiftTypeNameNoEmit($0) } ?? "JSONValue"
-                return "RealtimeChannel<\(argType)>"
-            case "file-bucket/download":
-                return "FileDownloadHandle"
-            case "file-bucket/upload":
-                return "FileUploadHandle"
-            case "oidc/client":
-                return "OIDCClient"
-            default:
-                return "JSONValue"
-            }
+            return transferableTypeName(blocksType, typeArgs) { swiftTypeNameNoEmit($0) }
         }
     }
 
@@ -1375,19 +1459,7 @@ public struct SwiftCodeGenerator {
         case .typeReference(let name):
             return name
         case .transferable(let blocksType, let typeArgs):
-            switch blocksType {
-            case "realtime/channel":
-                let argType = typeArgs.first.map { swiftTypeName($0, emitted: &emitted, modelLines: &modelLines) } ?? "JSONValue"
-                return "RealtimeChannel<\(argType)>"
-            case "file-bucket/download":
-                return "FileDownloadHandle"
-            case "file-bucket/upload":
-                return "FileUploadHandle"
-            case "oidc/client":
-                return "OIDCClient"
-            default:
-                return "JSONValue"
-            }
+            return transferableTypeName(blocksType, typeArgs) { swiftTypeName($0, emitted: &emitted, modelLines: &modelLines) }
         }
     }
 }
