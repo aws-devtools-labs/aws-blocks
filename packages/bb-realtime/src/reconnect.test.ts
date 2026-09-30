@@ -1086,6 +1086,63 @@ describe('Mock (local-dev) middleware: token refresh on reconnect', () => {
 		);
 	});
 
+	// Finding #5 (LOW), mock mirror of the AWS test 'refresh resolving a malformed
+	// descriptor does not open a socket with stale tokens': refresh() RESOLVES with a
+	// malformed descriptor (fails the isRealtimeDescriptor guard / no string token). The
+	// mock must NOT fall through and reopen + resubscribe with the STALE stored token —
+	// it takes the same failure path as aws-middleware: onDisconnect('error') + backoff.
+	it('mock refresh resolving a malformed descriptor does not open a socket with stale tokens; surfaces error + backoff', async () => {
+		const STALE_TOKEN = 'mock-channel-token-stale';
+		// Well-formed enough to satisfy the RealtimeChannelDescriptor param type
+		// ({ __blocks, channel }), but MISSING wsUrl/token — so the mock
+		// isRealtimeDescriptor + string-token guard rejects it. Cast-free.
+		const refresh = mock.fn(async () => ({ __blocks: 'realtime/channel' as const, channel: CHANNEL }));
+		let errorDisconnects = 0;
+		const client = mockHydrate({
+			__blocks: 'realtime/channel',
+			channel: CHANNEL,
+			wsUrl: WS_URL,
+			token: STALE_TOKEN,
+		});
+		assert.ok(isChannelClient(client), 'mock hydrate should return a channel client');
+		client.subscribe({
+			onMessage: () => {},
+			onDisconnect: (reason) => { if (reason === 'error') errorDisconnects++; },
+			refresh,
+		});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop → mock reconnect calls refresh, which resolves malformed. Note the mock's
+		// onclose reports the drop as 'unknown' (it does not classify the close code), so
+		// the ONLY onDisconnect('error') here comes from the malformed-refresh failure path.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refresh.mock.callCount(), 1, 'refresh is attempted on the mock reconnect');
+		// The malformed descriptor was rejected BEFORE reopening, so no reconnect
+		// socket exists — crucially, none opened carrying the stale token.
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'a malformed refresh descriptor must not reopen a mock socket with the stale token',
+		);
+		// Surfaced (malformed-refresh → 'error'), not silently swallowed.
+		assert.strictEqual(
+			errorDisconnects,
+			1,
+			"onDisconnect('error') fires for the malformed refresh (the drop itself is reported 'unknown')",
+		);
+
+		// Backoff was rescheduled rather than proceeding — the next tick re-attempts refresh.
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+		assert.strictEqual(refresh.mock.callCount(), 2, 'refresh is retried on the next backoff tick (no crash, no stale-token socket)');
+	});
+
 	// PR3 guard #3 (BLOCKING, mock): a reset landing while refresh() is in flight
 	// must not let the continuation resurrect a fresh pooled entry via
 	// openMockSocket → getOrCreateConnection (tornDown unset), which would re-arm

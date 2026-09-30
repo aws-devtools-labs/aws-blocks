@@ -111,9 +111,15 @@ function doConnect(wsUrl: string, isReconnect = false) {
 				// hanging `node --test` — the exact leak PR1's teardown guard fixed.
 				const c = connections.get(wsUrl);
 				if (!c || c.tornDown || c.subscriptions.size === 0) { return; }
-				if (isRealtimeDescriptor(fresh) && typeof fresh.token === 'string') {
-					c.channelTokens.set(fresh.channel, fresh.token);
+				if (!(isRealtimeDescriptor(fresh) && typeof fresh.token === 'string')) {
+					// Malformed refresh result — mirror aws-middleware's applyFreshDescriptor-false path:
+					// surface the drop and back off rather than reopening + resubscribing with the STALE
+					// token (which would mask the production error path — T4).
+					c.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
+					scheduleReconnect(wsUrl);
+					return;
 				}
+				c.channelTokens.set(fresh.channel, fresh.token);
 				openMockSocket(wsUrl, isReconnect);
 			})
 			.catch(() => {
