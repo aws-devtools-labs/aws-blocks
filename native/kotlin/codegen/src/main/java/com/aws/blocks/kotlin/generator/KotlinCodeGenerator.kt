@@ -49,12 +49,17 @@ data class GeneratorResult(
 class KotlinCodeGenerator(
     private val packageName: String,
     private val internalVisibility: Boolean = false,
-    private val redirectUrl: String? = null,
+    private val relayTo: String? = null,
+    private val relayToRequirement: RelayToRequirement = RelayToRequirement.Required,
 ) {
 
     /** Visibility modifier applied to all top-level generated types. */
     private val apiModifiers: List<KModifier> =
         if (internalVisibility) listOf(KModifier.INTERNAL) else emptyList()
+
+    /** Whether OIDC methods must be replaced with a stub that names the missing configuration. */
+    private val stubOidc: Boolean
+        get() = relayTo == null && relayToRequirement == RelayToRequirement.Required
 
     private fun TypeSpec.withApiVisibility(): TypeSpec =
         if (apiModifiers.isEmpty()) this
@@ -74,15 +79,18 @@ class KotlinCodeGenerator(
         val warnings = mutableListOf<String>()
         val serializerRegistry = TransferableSerializerRegistry()
 
-        if (redirectUrl == null && model.hasOidcTransferable()) {
+        if (relayTo == null &&
+            relayToRequirement != RelayToRequirement.NotNeeded &&
+            model.hasOidcTransferable()
+        ) {
             warnings.add(
-                "Your Blocks spec includes OIDC auth, but no redirect URL is configured. " +
-                "OIDC operations will not be available. To enable OIDC, add to your build.gradle.kts:\n\n" +
-                "  awsBlocks {\n" +
-                "      oidc {\n" +
-                "          redirectUrl = \"com.yourcompany.yourapp://auth/callback\"\n" +
-                "      }\n" +
-                "  }"
+                "Your Blocks spec includes OIDC auth, but no relay target is configured. " +
+                    "OIDC operations will not be available. To enable OIDC, add to your build.gradle.kts:\n\n" +
+                    "  awsBlocks {\n" +
+                    "      oidc {\n" +
+                    "          relayTo = \"com.yourcompany.yourapp://auth/callback\"\n" +
+                    "      }\n" +
+                    "  }"
             )
         }
 
@@ -913,7 +921,7 @@ class KotlinCodeGenerator(
         }
 
         for (operation in namespace.operations) {
-            if (redirectUrl == null && containsOidcTransferable(operation.result.type)) {
+            if (stubOidc && containsOidcTransferable(operation.result.type)) {
                 classBuilder.addFunction(generateOidcStubMethod(operation))
             } else {
                 val opContext = operationContexts[operation]
@@ -1163,7 +1171,8 @@ class KotlinCodeGenerator(
     }
 
     private fun generateOidcStubMethod(operation: Operation): FunSpec {
-        val message = "OIDC is not configured. Add oidc { redirectUrl = \"...\" } to your awsBlocks block to enable this method."
+        val message = "OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block " +
+            "to enable this method."
         return FunSpec.builder(operation.name)
             .addModifiers(KModifier.SUSPEND)
             .addAnnotation(
@@ -1402,7 +1411,7 @@ class KotlinCodeGenerator(
         serializerRegistry: TransferableSerializerRegistry,
         serializerContext: OperationTypeContext?,
     ) {
-        if (redirectUrl == null && transferable.transferableName == "oidc/client") return
+        if (stubOidc && transferable.transferableName == "oidc/client") return
 
         val returnType = resolveTransferable(transferable, index, serializerContext, qualified = true)
         val typeArgument = transferable.typeArgs.firstOrNull()?.let {
@@ -1641,9 +1650,7 @@ class KotlinCodeGenerator(
             }
 
             "oidc/client" -> {
-                val url = redirectUrl
-                    ?: error("OIDC operation reached codegen without redirectUrl configured")
-                CodeBlock.of("%T.fromJson(%L, client, %S)", ClassNames.oidcClient, expr, url)
+                CodeBlock.of("%T.fromJson(%L, client, %S)", ClassNames.oidcClient, expr, relayTo ?: "")
             }
 
             else -> {

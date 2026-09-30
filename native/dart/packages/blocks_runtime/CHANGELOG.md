@@ -1,3 +1,7 @@
+## 0.1.4
+
+- Send the `aws-blocks-dart` user-agent token on outbound runtime requests
+
 ## 0.1.3
 
 - Minor bug fixes and improvements

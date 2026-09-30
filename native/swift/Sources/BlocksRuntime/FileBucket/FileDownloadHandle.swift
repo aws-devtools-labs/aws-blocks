@@ -24,9 +24,9 @@ public class FileDownloadHandle {
     private let url: String
     private let session: URLSession
 
-    public init(url: String, session: URLSession = .shared) {
+    public init(url: String, session: URLSession? = nil) {
         self.url = url
-        self.session = session
+        self.session = session ?? BlocksRuntimeSession.shared
     }
 
     /// Hydrates a FileDownloadHandle from a JSON descriptor.
