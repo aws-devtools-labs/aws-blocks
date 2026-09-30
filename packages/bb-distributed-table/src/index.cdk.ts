@@ -247,6 +247,18 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 		// CloudFormation just created natively it sees them already present and
 		// no-ops. Projection is ALL to match exactly what that reconciler creates,
 		// so the native declaration and the reconciler never disagree.
+		//
+		// Ownership boundary on a REDEPLOY of an existing stack: because the
+		// indexes are now declared on the Table resource, CloudFormation owns
+		// reconciling the Table's GSI set — and CloudFormation permits only ONE
+		// GSI create/delete per stack update. So a single-index mutation is
+		// driven by CloudFormation's own UpdateTable; the custom resource
+		// converges only the residual (a multi-index add/remove that exceeds the
+		// one-in-flight limit CloudFormation cannot express in a single update).
+		// The two never contend on a fresh table (reconciler no-ops), but on a
+		// multi-index redeploy the ordering between CloudFormation's UpdateTable
+		// and the reconciler Lambda is not deterministic — see DESIGN.md
+		// "GSI Management Custom Resource".
 		if (config.indexes) {
 			for (const [indexName, indexConfig] of Object.entries(config.indexes) as [string, any][]) {
 				table.addGlobalSecondaryIndex({
