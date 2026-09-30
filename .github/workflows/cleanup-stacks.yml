@@ -457,6 +457,18 @@ jobs:
           SKIPPED_YOUNG=0
           SKIPPED_UNMATCHED=0
           SKIPPED_OWNED=0
+          DEFERRED=0
+
+          # Wall-clock budget for this step (mirrors the e2e step's DEADLINE). This
+          # if: always() step runs THIRD in the job, after the e2e and Amplify steps
+          # have already spent part of the shared 60-min job budget, and each real
+          # delete sleeps 31s to stay under the ~1-req/30s delete quota. On a
+          # saturated account with dozens of qualifying orphans — the exact scenario
+          # this sweep targets — that could push past the job timeout and kill the
+          # step mid-drain, so the headroom summary/warning below never prints. Cap
+          # the drain at 15 min: break out cleanly and let the next scheduled run
+          # (every 2h) take the remainder, so the summary always runs.
+          SWEEP_DEADLINE=$((SECONDS + 900))
 
           if [ -z "$APIS" ]; then
             echo "✅ No custom REST APIs found"
@@ -465,6 +477,15 @@ jobs:
 
           while IFS=$'\t' read -r ID NAME CREATED; do
             [ -z "$ID" ] && continue
+
+            # Stop attempting deletes once the wall-clock budget is spent; the
+            # remainder defers to the next scheduled run. Guards below still run for
+            # the rest so the counts (young/owned/unmatched) stay accurate, but no
+            # further 31s delete-sleep is incurred once we are over budget.
+            if [ "$SECONDS" -ge "$SWEEP_DEADLINE" ]; then
+              DEFERRED=$((DEFERRED + 1))
+              continue
+            fi
 
             # (c) HARD SAFETY: owned by a live stack, matched by id (ground truth).
             # Checked first so an owned API is never at risk regardless of its name.
@@ -475,6 +496,12 @@ jobs:
             fi
 
             # (a) test-artifact name shape only. These are the prefixes CI apps use.
+            # NOTE: DefaultCompute* / *DefaultComputeAPI* are ALSO the default API
+            # name on live blocks-compute stacks, so a name match is NOT a safety
+            # signal for them — a live DefaultCompute API is protected solely by the
+            # OWNED_IDS id-ownership check above (gate (c), which runs first). Do not
+            # weaken or reorder that id gate on the assumption this name list only
+            # ever matches abandoned artifacts; it does not.
             case "$NAME" in
               blocks-test-* | blocks-hosting-* | bb-test-* | bb-telemetry-* | bb-vpc-smoke-* | my-app-* | *-e2e-* | DefaultCompute* | *DefaultComputeAPI*) ;;
               *)
@@ -493,6 +520,12 @@ jobs:
               fi
             fi
 
+            # Space delete calls out — the REST API delete quota is ~1 request/30s.
+            # Sleep BEFORE each delete except the first, so no needless ~31s tail is
+            # incurred after the final (or single) delete of a run.
+            if [ "$DELETED" -gt 0 ]; then
+              sleep 31
+            fi
             if aws apigateway delete-rest-api --rest-api-id "$ID" 2>/dev/null; then
               echo "🗑️ Deleted orphaned REST API: $NAME ($ID)"
               DELETED=$((DELETED + 1))
@@ -501,8 +534,6 @@ jobs:
               # failed delete is retried on the next scheduled run.
               echo "  ⚠️ delete-rest-api failed for $NAME ($ID) (throttled?; will retry next run)"
             fi
-            # Space calls out — the REST API delete quota is ~1 request/30s.
-            sleep 31
           done <<< "$APIS"
 
           # Report current headroom against the 120-EDGE cap so quota pressure is visible.
@@ -516,7 +547,11 @@ jobs:
           echo "- Skipped (< 6h old): $SKIPPED_YOUNG" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (owned by live stack): $SKIPPED_OWNED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (non-test name): $SKIPPED_UNMATCHED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Deferred to next run (15-min budget reached): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- REST APIs remaining: $TOTAL total, $EDGE EDGE (cap 120)" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$DEFERRED" -gt 0 ] 2>/dev/null; then
+            echo "::warning::REST-API sweep hit its 15-min budget with $DEFERRED candidate(s) left — remainder defers to the next scheduled run"
+          fi
           if [ "$EDGE" != "?" ] && [ "$EDGE" -ge 110 ] 2>/dev/null; then
             echo "::warning::$EDGE/120 EDGE REST APIs in use — approaching the hard quota"
           fi
