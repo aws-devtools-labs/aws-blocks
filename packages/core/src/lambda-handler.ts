@@ -326,18 +326,11 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
       throw new TransientConfigError();
     }
 
-    // Merge hosting-provided CORS origins into the main env var so the lazy
-    // getCorsPatterns() sees a combined value on first access.
-    // loadConfigToProcessEnv() won't override CORS_ALLOWED_ORIGINS if it's
-    // already set (sandbox env var), but CORS_HOSTING_ORIGINS always loads
-    // from S3 since it's never set as a direct env var.
-    const hostingOrigins = process.env.CORS_HOSTING_ORIGINS;
-    if (hostingOrigins) {
-      const existing = process.env.CORS_ALLOWED_ORIGINS;
-      process.env.CORS_ALLOWED_ORIGINS = existing
-        ? `${existing},${hostingOrigins}`
-        : hostingOrigins;
-    }
+    // CORS origins are read directly by getCorsPatterns(), which now compiles
+    // CORS_ALLOWED_ORIGINS (user-supplied regex channel) and CORS_HOSTING_ORIGINS
+    // (framework-injected literal origins, escaped at runtime) via separate paths.
+    // No pre-merge here: folding the resolved CloudFront domain into the regex
+    // channel would regex-compile its dots into wildcards, so the two stay split.
 
     const mod = await backendFactory();
     handler = createHandler(mod);
