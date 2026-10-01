@@ -34,6 +34,10 @@ import type { SubscribeOptions } from './types.js';
 // Mirror the mock's caps so the intended production behavior is asserted 1:1.
 const MAX_RECONNECT = 5;
 const KEEP_ALIVE_MS = 9 * 60 * 1000;
+// Mirror aws/mock-middleware's refresh deadline so the timeout behavior is asserted 1:1.
+const REFRESH_TIMEOUT_MS = 15_000;
+// Backoff ceiling, mirrored so a timeout test can tick past one full backoff + refresh deadline.
+const MAX_DELAY_MS = 30_000;
 
 const CHANNEL = 'my-app-rt/chat/room-1';
 const WS_URL = 'wss://example.execute-api.us-west-2.amazonaws.com/prod';
@@ -1176,6 +1180,103 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 			'C must reuse B\'s still-pooled connection — the torn-down conn must not have evicted it',
 		);
 	});
+
+	// ── PR #503 robustness #1: channel-membership validation ──────────────────
+	// A fulfilled refresh whose descriptor is for a DIFFERENT channel than the one
+	// it was fetched for (e.g. the short conversationId instead of the full
+	// `{fullId}/chunks/{id}` path) must NOT store a token under that dead/foreign
+	// key — doing so would leave the real channel replaying its stale token and
+	// silently going dead ~1h later. It is treated as THIS channel's refresh
+	// failure instead: all-failed → onDisconnect('error') + backoff, NOT a reopen
+	// with a dead-key/stale token.
+	it('a fulfilled refresh for a DIFFERENT channel is treated as a failure (no dead-key token, no stale replay)', async () => {
+		const FULL = 'my-app-rt/conv-1/chunks/abc';
+		// refresh resolves a descriptor for the SHORT conversationId, not the FULL
+		// subscribed channel path it was fetched for.
+		const refresh = mock.fn(async () => ({
+			__blocks: 'realtime/channel' as const,
+			channel: 'conv-1',
+			wsUrl: WS_URL,
+			connectToken: FRESH_CONNECT_TOKEN,
+			token: 'wrong-channel-token',
+		}));
+		let errorDisconnects = 0;
+		const client = hydrateClientFor(FULL, 'stale-token-full');
+		client.subscribe({
+			onMessage: () => {},
+			onDisconnect: (reason) => { if (reason === 'error') errorDisconnects++; },
+			refresh,
+		});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: FULL });
+
+		// Drop → reconnect calls refresh, which resolves the wrong channel.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refresh.mock.callCount(), 1, 'refresh is attempted on reconnect');
+		// If the dead-key token had been stored, anyApplied would be true and a socket
+		// would reopen replaying FULL's STALE token. Instead the wrong-channel descriptor
+		// is a refresh failure: no socket opens, and the failure surfaces.
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'a wrong-channel refresh must not reopen a socket (no dead-key token, no silent stale replay)',
+		);
+		assert.strictEqual(
+			errorDisconnects,
+			2,
+			'onDisconnect(error) fires for the drop and again for the wrong-channel refresh failure',
+		);
+
+		// Not wedged: the next backoff tick re-attempts refresh.
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+		assert.strictEqual(refresh.mock.callCount(), 2, 'refresh is retried on the next backoff tick');
+	});
+
+	// ── PR #503 robustness #2: bound refresh() with a timeout ─────────────────
+	// A refresh fetch that HANGS at the moment reconnect fires would, without a
+	// timeout, leave the connection with no socket and no reconnect timer — wedged
+	// forever (a later subscribe() joining it never settles `established`). The
+	// per-call timeout turns the hang into a per-channel rejection that feeds the
+	// all-failed → backoff path, so MAX_RECONNECT bounds it and the conn is never
+	// left 1-socket-forever-pending.
+	it('a never-settling refresh is bounded by REFRESH_TIMEOUT_MS and does not wedge the connection', async () => {
+		const refresh = mock.fn(() => new Promise<never>(() => {}));
+		const client = hydrateClient();
+		const sub = client.subscribe({ onMessage: () => {}, refresh });
+		// Give-up at the cap rejects the still-pending establishment; swallow it.
+		sub.established.catch(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop → each reconnect attempt calls refresh(), which hangs; the timeout turns
+		// it into a rejection, scheduling the next backoff. Drive well past the cap,
+		// covering both the backoff delay and the refresh timeout each iteration.
+		first.emitServerClose(1006);
+		for (let i = 0; i < 3 * MAX_RECONNECT; i++) {
+			mock.timers.tick(REFRESH_TIMEOUT_MS + MAX_DELAY_MS);
+			await new Promise((r) => setImmediate(r));
+		}
+
+		assert.strictEqual(
+			refresh.mock.callCount(),
+			MAX_RECONNECT,
+			`a hung refresh must time out and retry up to ${MAX_RECONNECT} times, then give up — not wedge at 1`,
+		);
+		// A hung refresh times out BEFORE any `new WebSocket(...)`, so no reconnect socket exists.
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'a timed-out refresh must not construct a reconnect socket (not 1-socket-forever-pending)',
+		);
+	});
 });
 
 describe('Mock (local-dev) middleware: token refresh on reconnect', () => {
@@ -1466,5 +1567,89 @@ describe('Mock (local-dev) middleware: token refresh on reconnect', () => {
 			'the stale refresh must not open a 3rd socket by scheduling a reconnect on the live conn',
 		);
 		assert.strictEqual(bDisconnects, 0, 'the stale refresh must not fire a spurious disconnect on the live conn');
+	});
+
+	// ── PR #503 robustness #1 (mock mirror): channel-membership validation ────
+	// The mock matters MORE here: a misconfigured refresh (wrong-channel descriptor)
+	// should blow up before deploy, not silently work locally. A fulfilled refresh
+	// whose descriptor is for a DIFFERENT channel than the one it was fetched for
+	// must NOT write a token under that dead/foreign key — it is this channel's
+	// refresh failure: all-failed → onDisconnect('error') + backoff, no stale replay.
+	it('mock: a fulfilled refresh for a DIFFERENT channel is treated as a failure (no dead-key token, no stale replay)', async () => {
+		const FULL = 'my-app-rt/conv-1/chunks/abc';
+		const refresh = mock.fn(async () => ({
+			__blocks: 'realtime/channel' as const,
+			channel: 'conv-1',
+			wsUrl: WS_URL,
+			token: 'wrong-channel-token',
+		}));
+		let errorDisconnects = 0;
+		const client = mockHydrate({ __blocks: 'realtime/channel', channel: FULL, wsUrl: WS_URL, token: 'stale-full' });
+		assert.ok(isChannelClient(client), 'mock hydrate should return a channel client');
+		client.subscribe({
+			onMessage: () => {},
+			onDisconnect: (reason) => { if (reason === 'error') errorDisconnects++; },
+			refresh,
+		});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: FULL });
+
+		// Drop → mock reconnect calls refresh, which resolves the wrong channel. The
+		// mock reports the drop itself as 'unknown', so the only 'error' here is the
+		// wrong-channel refresh failure.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refresh.mock.callCount(), 1, 'refresh is attempted on the mock reconnect');
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'a wrong-channel refresh must not reopen a mock socket (no dead-key token, no stale replay)',
+		);
+		assert.strictEqual(
+			errorDisconnects,
+			1,
+			"onDisconnect('error') fires for the wrong-channel refresh (the drop itself is reported 'unknown')",
+		);
+
+		// Not wedged: the next backoff tick re-attempts refresh.
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+		assert.strictEqual(refresh.mock.callCount(), 2, 'refresh is retried on the next backoff tick');
+	});
+
+	// ── PR #503 robustness #2 (mock mirror): bound refresh() with a timeout ───
+	// A never-settling mock refresh must time out into a per-channel rejection that
+	// feeds the all-failed → backoff path (MAX_RECONNECT bounds it), rather than
+	// leaving the connection wedged with no socket and no reconnect timer.
+	it('mock: a never-settling refresh is bounded by REFRESH_TIMEOUT_MS and does not wedge', async () => {
+		const refresh = mock.fn(() => new Promise<never>(() => {}));
+		const client = mockHydrate({ __blocks: 'realtime/channel', channel: CHANNEL, wsUrl: WS_URL, token: 'stale' });
+		assert.ok(isChannelClient(client), 'mock hydrate should return a channel client');
+		client.subscribe({ onMessage: () => {}, refresh });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		first.emitServerClose(1006);
+		for (let i = 0; i < 3 * MAX_RECONNECT; i++) {
+			mock.timers.tick(REFRESH_TIMEOUT_MS + MAX_DELAY_MS);
+			await new Promise((r) => setImmediate(r));
+		}
+
+		assert.strictEqual(
+			refresh.mock.callCount(),
+			MAX_RECONNECT,
+			`a hung mock refresh must time out and retry up to ${MAX_RECONNECT} times, not wedge at 1`,
+		);
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'a timed-out mock refresh must not reopen a socket (not 1-socket-forever-pending)',
+		);
 	});
 });

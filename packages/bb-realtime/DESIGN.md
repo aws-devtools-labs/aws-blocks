@@ -293,14 +293,16 @@ boundaries) supplies `SubscribeOptions.refresh`: `() => Promise<RealtimeChannelD
   `onDisconnect('error')` + backoff path rather than reopening with stale tokens; the awaited
   continuation re-checks teardown/pool-ownership both before and after applying the descriptor,
   so an `unsubscribe()` during a pending refresh cannot resurrect a zombie socket.
-- **Connection-level scoping (limitation):** `refresh` is stored per-connection with
-  last-writer-wins, and applying a fresh descriptor re-mints only *that* descriptor's channel
-  token. On a connection multiplexing several channels, sibling channels replay their original
-  tokens and their resubscribe is rejected once their TTL lapses (surfacing as a connection-wide
-  `onDisconnect('error')` that also reaches cleanly-reconnected siblings). This does not bite the
-  primary `useChat` case (one channel per conversation). An app multiplexing multiple long-lived
-  channels on one endpoint should be aware of this; a future per-channel `refresh` map would
-  close the gap.
+- **Per-channel refresh:** `refresh` is registered per-channel — a connection multiplexing
+  several channels keeps each channel's own refresher. On reconnect every live channel
+  re-mints its own token in parallel (the instance-scoped connect token is taken from any one
+  of them), then resubscribes with its fresh channel token. A channel whose `refresh` fails
+  falls back to its stored channel token; if that stored token has already lapsed, the server
+  rejects that channel's resubscribe and the drop is **channel-scoped** —
+  `onDisconnect('error')` reaches only that channel's owners, not its cleanly-reconnected
+  siblings. A connection-wide `onDisconnect('error')` fan-out is reserved for the refresh- or
+  reconnect-FAILURE path (retries exhausted / give-up), not a single sibling's stale-token
+  rejection.
 
 Absent `refresh`, reconnect replays the stored tokens (correct for short/transient drops).
 

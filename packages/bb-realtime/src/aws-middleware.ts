@@ -45,6 +45,17 @@ const KEEP_ALIVE_MS = 9 * 60 * 1000;
 const MAX_RECONNECT = 5;
 /** Ceiling for exponential backoff between reconnect attempts. */
 const MAX_DELAY_MS = 30_000;
+/**
+ * Per-channel refresh deadline. A refresh fetch that HANGS at the moment a
+ * reconnect fires (never resolving or rejecting) would otherwise leave the
+ * connection connected=false with no socket and no reconnect timer — wedged
+ * forever, and any later subscribe() that joins it would never settle its
+ * `established`. Racing each refresher against this timeout converts a hang into
+ * a per-channel REJECTION, which feeds the existing allSettled rejected→fallback
+ * (and all-failed→onDisconnect('error')+scheduleReconnect) path, so the
+ * MAX_RECONNECT cap still bounds it.
+ */
+const REFRESH_TIMEOUT_MS = 15_000;
 
 // ── Shared connection pool — keyed by wsUrl ─────────────────────────────────
 
@@ -158,12 +169,23 @@ function getOrCreateConnection(wsUrl: string, connectToken: string): Connection 
  *
  * Returns `true` when a well-formed descriptor was applied, `false` when the
  * descriptor is MALFORMED (fails `isRealtimeDescriptor` — e.g. missing
- * connect/channel token). On `false` the stored tokens are left untouched, and
- * the caller MUST NOT proceed to open a socket with the stale tokens; it should
+ * connect/channel token) OR fails channel-membership validation (its `channel`
+ * is not the `expectedChannel` it was refreshed for, or that channel is no
+ * longer subscribed). On `false` the stored tokens are left untouched, and the
+ * caller MUST NOT proceed to open a socket with the stale tokens; it should
  * treat this like a refresh failure (see `openSocket`).
  */
-function applyFreshDescriptor(conn: Connection, fresh: RealtimeChannelDescriptor): boolean {
+function applyFreshDescriptor(conn: Connection, expectedChannel: string, fresh: RealtimeChannelDescriptor): boolean {
 	if (!isRealtimeDescriptor(fresh)) { return false; }
+	// Channel-membership validation: the fulfilled descriptor must be for the SAME
+	// channel it was fetched for AND that channel must still be subscribed. A refresh
+	// that resolves a descriptor for a DIFFERENT channel (e.g. the short conversationId
+	// instead of the full `{fullId}/chunks/{id}` path, or another conversation) would
+	// otherwise write a token under a dead/foreign key, leaving the real channel to
+	// replay its stale token (surfacing ~1h later when it lapses). Treat a mismatch as
+	// THIS channel's refresh failure (stored-token fallback / counts toward all-failed)
+	// rather than storing a dead-key token.
+	if (fresh.channel !== expectedChannel || !conn.subscriptions.has(fresh.channel)) { return false; }
 	if (fresh.wsUrl !== conn.wsUrl) {
 		// Pool re-key collision guard: if another live connection already owns the
 		// fresh endpoint key, do NOT blind-overwrite it — that would evict a
@@ -181,6 +203,26 @@ function applyFreshDescriptor(conn: Connection, fresh: RealtimeChannelDescriptor
 	conn.connectToken = fresh.connectToken;
 	conn.channelTokens.set(fresh.channel, fresh.token);
 	return true;
+}
+
+/**
+ * Race a channel's refresh against REFRESH_TIMEOUT_MS so a hung fetch cannot
+ * wedge the reconnect. On timeout the returned promise REJECTS, feeding the
+ * allSettled rejected→fallback (and all-failed→backoff) path so the
+ * MAX_RECONNECT cap still applies. The timer is ALWAYS cleared on settle —
+ * whichever side of the race wins — so no dangling handle keeps `node --test`
+ * alive.
+ */
+function withRefreshTimeout(refreshing: Promise<RealtimeChannelDescriptor>): Promise<RealtimeChannelDescriptor> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<RealtimeChannelDescriptor>((_resolve, reject) => {
+		timer = setTimeout(() => {
+			const err = new Error(`channel refresh timed out after ${REFRESH_TIMEOUT_MS}ms`);
+			err.name = 'ConnectionFailedException';
+			reject(err);
+		}, REFRESH_TIMEOUT_MS);
+	});
+	return Promise.race([refreshing, timeout]).finally(() => { if (timer) { clearTimeout(timer); } });
 }
 
 /**
@@ -220,7 +262,7 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 		// channel whose refresh REJECTS (or resolves a malformed descriptor) simply
 		// falls back to its stored token below, so one bad channel cannot sink the
 		// others.
-		Promise.allSettled(channelsToRefresh.map((channel) => conn.refreshers.get(channel)!()))
+		Promise.allSettled(channelsToRefresh.map((channel) => withRefreshTimeout(conn.refreshers.get(channel)!())))
 			.then((results) => {
 				// GUARD (BLOCKING): a teardown (unsubscribe of the last channel,
 				// terminal close, give-up at the cap, or __resetConnectionsForTest)
@@ -240,8 +282,13 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 				// (applyFreshDescriptor returns false) is left with its stored token as
 				// a fallback. `anyApplied` tracks whether at least one channel re-minted.
 				let anyApplied = false;
-				for (const result of results) {
-					if (result.status === 'fulfilled' && applyFreshDescriptor(conn, result.value)) {
+				for (let i = 0; i < results.length; i++) {
+					const result = results[i];
+					// `results` is positionally aligned with `channelsToRefresh`, so
+					// channelsToRefresh[i] is the channel this descriptor was fetched FOR —
+					// applyFreshDescriptor rejects a descriptor that came back for a
+					// DIFFERENT channel instead of storing a dead-key token.
+					if (result.status === 'fulfilled' && applyFreshDescriptor(conn, channelsToRefresh[i], result.value)) {
 						anyApplied = true;
 					}
 				}

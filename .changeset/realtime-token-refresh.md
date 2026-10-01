@@ -23,12 +23,17 @@ re-call the server method that produced the descriptor.
 
 When `refresh` is provided, both middlewares now call it **before** opening the
 reconnect socket (never on the initial subscribe), then open with the fresh
-connect token in the URL and resubscribe with the fresh channel token. The
-refresh-before-open ordering is required because the connect token lives in the
-socket URL and is validated at `$connect`, so it must be fresh at construction
-time. If `refresh` rejects, the middleware does not crash: it surfaces the
-failure via the existing `onDisconnect('error')` path and falls back to the
-normal exponential-backoff reconnect so a later attempt can retry.
+connect token in the URL and resubscribe each channel with its fresh channel
+token. `refresh` is registered per-channel: a connection multiplexing several
+channels re-mints every live channel's token in parallel on reconnect (the
+instance-scoped connect token taken from any one of them), and a channel whose
+refresh fails falls back to its stored token with a channel-scoped rejection
+rather than dropping its siblings. The refresh-before-open ordering is required
+because the connect token lives in the socket URL and is validated at `$connect`,
+so it must be fresh at construction time. If `refresh` rejects, the middleware
+does not crash: it surfaces the failure via the existing `onDisconnect('error')`
+path and falls back to the normal exponential-backoff reconnect so a later
+attempt can retry.
 
 Fully backward compatible: with no `refresh` callback, a reconnect replays the
 stored `wsUrl` + token exactly as before, and the initial (non-reconnect) open

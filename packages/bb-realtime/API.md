@@ -32,10 +32,18 @@ export interface RealtimeChannel<T = unknown> {
     subscribe(handler: (message: T) => void): RealtimeSubscription;
     // (undocumented)
     subscribe(options: SubscribeOptions<T>): RealtimeSubscription;
-    // Warning: (ae-forgotten-export) The symbol "RealtimeChannelDescriptor" needs to be exported by the entry point index.aws.d.ts
-    //
     // @internal
     toJSON(): RealtimeChannelDescriptor;
+}
+
+// @public
+export interface RealtimeChannelDescriptor {
+    // (undocumented)
+    __blocks: 'realtime/channel';
+    // (undocumented)
+    [key: string]: unknown;
+    // (undocumented)
+    channel: string;
 }
 
 // @public

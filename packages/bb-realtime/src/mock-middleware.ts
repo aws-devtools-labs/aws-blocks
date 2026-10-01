@@ -70,6 +70,34 @@ const connections = new Map<string, {
 
 const MAX_RECONNECT = 5;
 const MAX_DELAY_MS = 30_000;
+/**
+ * Per-channel refresh deadline (mirrors aws-middleware). A refresh fetch that
+ * HANGS at the moment a reconnect fires would otherwise leave the connection
+ * with no socket and no reconnect timer — wedged forever. Racing each refresher
+ * against this timeout converts a hang into a per-channel REJECTION that feeds
+ * the allSettled rejected→fallback / all-failed→backoff path, so MAX_RECONNECT
+ * still bounds it.
+ */
+const REFRESH_TIMEOUT_MS = 15_000;
+
+/**
+ * Race a channel's refresh against REFRESH_TIMEOUT_MS so a hung fetch cannot
+ * wedge the reconnect (mirrors aws-middleware). On timeout the returned promise
+ * REJECTS, feeding the allSettled rejected→fallback / all-failed→backoff path.
+ * The timer is ALWAYS cleared on settle so no dangling handle keeps
+ * `node --test` alive.
+ */
+function withRefreshTimeout(refreshing: Promise<RealtimeChannelDescriptor>): Promise<RealtimeChannelDescriptor> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<RealtimeChannelDescriptor>((_resolve, reject) => {
+		timer = setTimeout(() => {
+			const err = new Error(`channel refresh timed out after ${REFRESH_TIMEOUT_MS}ms`);
+			err.name = 'ConnectionFailedException';
+			reject(err);
+		}, REFRESH_TIMEOUT_MS);
+	});
+	return Promise.race([refreshing, timeout]).finally(() => { if (timer) { clearTimeout(timer); } });
+}
 
 function getOrCreateConnection(wsUrl: string) {
 	let conn = connections.get(wsUrl);
@@ -109,7 +137,7 @@ function doConnect(wsUrl: string, isReconnect = false) {
 		? [...conn.subscriptions.keys()].filter((ch) => conn.refreshers.has(ch))
 		: [];
 	if (channelsToRefresh.length > 0) {
-		Promise.allSettled(channelsToRefresh.map((ch) => conn.refreshers.get(ch)!()))
+		Promise.allSettled(channelsToRefresh.map((ch) => withRefreshTimeout(conn.refreshers.get(ch)!())))
 			.then((results) => {
 				// GUARD (BLOCKING): re-fetch the pooled connection and verify THIS conn
 				// still owns the wsUrl key by IDENTITY (mirrors aws-middleware's
@@ -128,8 +156,24 @@ function doConnect(wsUrl: string, isReconnect = false) {
 				// refresh rejected or resolved malformed (fails the isRealtimeDescriptor /
 				// string-token guard) keeps its stored token as a fallback.
 				let anyApplied = false;
-				for (const result of results) {
-					if (result.status === 'fulfilled' && isRealtimeDescriptor(result.value) && typeof result.value.token === 'string') {
+				for (let i = 0; i < results.length; i++) {
+					const result = results[i];
+					// `results` is positionally aligned with `channelsToRefresh`, so
+					// channelsToRefresh[i] is the channel this descriptor was fetched FOR.
+					// Channel-membership validation (mirrors aws-middleware's applyFreshDescriptor):
+					// a descriptor for a DIFFERENT channel (e.g. the short conversationId instead of
+					// the full `{fullId}/chunks/{id}` path, or another conversation) must NOT write a
+					// token under a dead/foreign key — that would leave the real channel replaying its
+					// stale token. The mock matters MORE here: a misconfigured refresh should blow up
+					// before deploy, not silently work locally. Treat a mismatch as this channel's
+					// refresh failure (stored-token fallback / counts toward all-failed).
+					if (
+						result.status === 'fulfilled'
+						&& isRealtimeDescriptor(result.value)
+						&& typeof result.value.token === 'string'
+						&& result.value.channel === channelsToRefresh[i]
+						&& c.subscriptions.has(result.value.channel)
+					) {
 						c.channelTokens.set(result.value.channel, result.value.token);
 						anyApplied = true;
 					}

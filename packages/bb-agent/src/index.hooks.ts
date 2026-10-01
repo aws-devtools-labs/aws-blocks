@@ -14,7 +14,7 @@
  * 4. User sends message — chunks arrive via the already-open subscription
  */
 
-import type { DisconnectReason } from '@aws-blocks/bb-realtime';
+import type { DisconnectReason, RealtimeChannelDescriptor } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk } from './types.js';
 
 export type { AgentStreamChunk } from './types.js';
@@ -48,18 +48,13 @@ export interface ChatMessage {
 export type ChatChunkHandler = (chunk: AgentStreamChunk) => void;
 
 /**
- * Minimal structural mirror of bb-realtime's `RealtimeChannelDescriptor` — the wire
- * format an app's `subscribe` adapter hands to `channel.subscribe(...)` to hydrate a
- * live channel. Mirrored here rather than imported, matching how {@link ChatSubscribeOptions}
- * mirrors bb-realtime's `SubscribeOptions` structurally, so the client hooks take no hard
- * type dependency on bb-realtime. Its fields match the descriptor exactly, so a `refresh`
- * typed against it stays assignable to bb-realtime's `SubscribeOptions.refresh`.
+ * The wire format an app's `subscribe` adapter hands to `channel.subscribe(...)` to
+ * hydrate a live channel. Kept as a bb-agent-facing alias of bb-realtime's
+ * `RealtimeChannelDescriptor` so existing consumers can keep naming `ChatChannelDescriptor`,
+ * and so a `refresh` typed against it is the exact type bb-realtime's `SubscribeOptions.refresh`
+ * expects.
  */
-export interface ChatChannelDescriptor {
-	__blocks: 'realtime/channel';
-	channel: string;
-	[key: string]: unknown;
-}
+export type ChatChannelDescriptor = RealtimeChannelDescriptor;
 
 /**
  * Options form accepted by {@link UseChatOptions.subscribe}.
@@ -127,9 +122,17 @@ export interface UseChatOptions {
 	 * survive the channel (~1h) / connect (~2h) token TTLs: a reconnect mints fresh tokens
 	 * instead of replaying expired ones. Receives the resolved `channelId` so it re-mints for
 	 * the channel actually in use (which changes across loadConversation), not one captured
-	 * once at construction. This MUST resolve to the RAW channel descriptor (the wire object
-	 * with `__blocks`/token fields), NOT a hydrated channel client — so point it at a
-	 * raw-descriptor server method, e.g.
+	 * once at construction.
+	 *
+	 * Contract: this MUST resolve to the RAW channel descriptor (the wire object with
+	 * `__blocks`/token fields), NOT a hydrated channel client. To produce one: the app
+	 * exposes a server method that returns the channel's `toJSON()` descriptor with the
+	 * `__blocks` discriminant stripped (so the response middleware does not hydrate it on
+	 * the way back); this callback re-adds `__blocks: 'realtime/channel'`. That server
+	 * method re-issues a connect + channel token, so it MUST apply the SAME authorization
+	 * as the method that issued the original channel — it is a credential-issuing endpoint
+	 * and must be gated like the original. For example, with the test app's example server
+	 * method `agentGetRawDescriptor`:
 	 * `async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' })`.
 	 * When omitted, a reconnect replays the original tokens (fine for short turns).
 	 */
@@ -216,7 +219,11 @@ const RECONNECT_FAILSAFE_MS = 660_000;
  *   // Re-mint a fresh channel descriptor on reconnect so long turns outlive the channel
  *   // (~1h) / connect (~2h) token TTLs. useChat binds this to the current channelId and
  *   // forwards the bound zero-arg form to the subscription as sub.refresh.
- *   // Must resolve to the RAW descriptor (wire object with token fields), not a hydrated channel.
+ *   // Must resolve to the RAW descriptor (wire object with token fields), not a hydrated
+ *   // channel: the app's server method returns channel.toJSON() with __blocks stripped and
+ *   // this callback re-adds it. That method re-issues tokens, so gate it with the SAME
+ *   // authorization as the method that issued the original channel. `agentGetRawDescriptor`
+ *   // here is the test app's example server method.
  *   refresh: async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' }),
  *   onMessagesChange: (msgs) => renderMessages(msgs),
  *   onLoadingChange: (loading) => updateSpinner(loading),
