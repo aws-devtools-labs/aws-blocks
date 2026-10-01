@@ -12,8 +12,13 @@ interface OidcPlatformLauncher {
      *
      * [configuredRelayTo] is the build-configured URI, empty when none was configured.
      * Implementations that bind their own address ignore it and return their own.
+     * [options] carries the caller's per-attempt choices; an implementation reads only
+     * [OidcSignInOptions.platformOptions], which has its own shape on each target.
      */
-    suspend fun openSession(configuredRelayTo: String): OidcRedirectSession
+    suspend fun openSession(
+        configuredRelayTo: String,
+        options: OidcSignInOptions = OidcSignInOptions(),
+    ): OidcRedirectSession
 }
 
 /**

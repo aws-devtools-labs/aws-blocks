@@ -20,8 +20,10 @@ internal class JvmOidcLauncher(
      * The relay target is a loopback address bound here, so [configuredRelayTo] is unused:
      * the port is assigned by the operating system for each sign-in attempt.
      */
-    override suspend fun openSession(configuredRelayTo: String): OidcRedirectSession =
-        JvmLoopbackSession(browserOpener, timeout)
+    override suspend fun openSession(
+        configuredRelayTo: String,
+        options: OidcSignInOptions,
+    ): OidcRedirectSession = JvmLoopbackSession(browserOpener, timeout, options.platformOptions)
 }
 
 /**
@@ -34,6 +36,7 @@ internal class JvmOidcLauncher(
 internal class JvmLoopbackSession(
     private val browserOpener: BrowserOpener,
     private val timeout: Duration,
+    private val options: OidcSignInPlatformOptions = OidcSignInPlatformOptions(),
 ) : OidcRedirectSession {
 
     private val redirect = CompletableDeferred<String>()
