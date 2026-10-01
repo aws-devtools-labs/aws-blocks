@@ -79,7 +79,7 @@ latency-sensitive work — a batching window makes SQS wait up to
 a user-facing path starts up to that many seconds late. `maxBatchingWindowSeconds: 0`
 opts out of the wait while keeping batching.
 
-The queue's visibility timeout is set to the shared Lambda's timeout plus
+The queue's visibility timeout is set to the Lambda timeout plus
 `maxBatchingWindowSeconds`, because a message's visibility clock starts when the
 poller receives it — before the batching window elapses and before the handler runs.
 
@@ -107,7 +107,14 @@ AsyncJobErrors.ValidationFailed   // schema validation failed
 AsyncJobErrors.BatchSubmitFailed  // one or more messages failed to enqueue
 AsyncJobErrors.Timeout            // waitUntilComplete() gave up before the job settled
 AsyncJobErrors.StatusNotTracked   // status method called without trackStatus: true
+AsyncJobErrors.UnsupportedCompute // resolved compute is not Lambda (thrown at synth time)
 ```
+
+## Compute Compatibility
+
+AsyncJob attaches its SQS event source to its resolved compute. It currently
+supports Lambda compute only; constructing an AsyncJob under another compute
+fails at synth time with `UnsupportedComputeException`.
 
 ## Local Development
 
@@ -115,7 +122,9 @@ In local dev mode, AsyncJob uses an in-process queue. Jobs process via `setTimeo
 
 ## AWS Deployment
 
-Automatically provisions an SQS queue, dead-letter queue, and connects to the shared API Lambda. Failed jobs become visible for retry after 900 seconds (matching the Lambda timeout).
+Automatically provisions an SQS queue, dead-letter queue, and attaches the event
+source to the resolved Lambda compute. Failed jobs become visible for retry after
+900 seconds (matching the Lambda timeout).
 
 ## How Do I Know My Job Ran?
 
@@ -198,5 +207,4 @@ handler: async (payload, ctx) => {
 ```
 
 **Check the dead-letter queue:** Jobs that fail after `maxRetries` attempts land in the DLQ. In AWS, check the `{scope}-{id}-dlq` queue in the SQS console. In local dev, failed jobs are logged to the console with their full payload.
-
 
