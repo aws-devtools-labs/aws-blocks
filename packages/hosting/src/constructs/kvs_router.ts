@@ -74,6 +74,23 @@ type BuildKvsInput = {
    * edge-function headroom. See issue #8.
    */
   maxChunksPerTable?: number;
+  /**
+   * Cache-key cookie names configured via `cdn.cacheKeyCookies`. On the single
+   * default behavior these key EVERY route; the router deletes them on the
+   * static and image branches so shared assets keep a shared cache key, while
+   * compute (SSR) routes retain them for per-credential keying. Omitted /
+   * empty ⇒ no strip step and the `ck` meta key is not emitted.
+   */
+  cacheKeyCookies?: string[];
+  /**
+   * Extra cache-key header names configured via `cdn.cacheKeyHeaders`. On the
+   * single default behavior these key EVERY route; the router deletes them on
+   * the static and image branches (same rationale as {@link cacheKeyCookies})
+   * so shared assets keep a shared cache key, while compute (SSR) routes retain
+   * them. Names are lowercased + de-duped before emitting. Omitted / empty ⇒ no
+   * strip step and the `hh` meta key is not emitted.
+   */
+  cacheKeyHeaders?: string[];
 };
 
 /**
@@ -341,6 +358,19 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   const redirectChunks = chunkRows(redirectRows);
   const headerChunks = chunkRows(headerRows);
 
+  // Cache-key credentials to strip on shared (static/image) routes. On the
+  // single default behavior a configured cacheKeyCookies/cacheKeyHeaders would
+  // otherwise key every asset per credential; the router deletes these on the
+  // static + image branches so shared assets keep a shared key (compute routes
+  // keep them). Omitted from meta when nothing is configured, so existing apps'
+  // meta blob is unchanged.
+  const ck = (input.cacheKeyCookies ?? []).filter((c) => c.length > 0);
+  // Header names are case-INsensitive per HTTP; lowercase + de-dupe so the
+  // strip loop matches CloudFront's own casing and never double-lists a name.
+  const hh = [
+    ...new Set((input.cacheKeyHeaders ?? []).map((h) => h.toLowerCase())),
+  ].filter((h) => h.length > 0);
+
   const meta = {
     b: buildId,
     bp: basePath ?? '',
@@ -363,6 +393,9 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
     rc: routeChunks.length,
     dc: redirectChunks.length,
     hc: headerChunks.length,
+    // shared-route credential strip (see `ck`/`hh` note above); omitted empty.
+    ...(ck.length ? { ck } : {}),
+    ...(hh.length ? { hh } : {}),
   };
   const metaJson = JSON.stringify(meta);
   if (byteLen(metaJson) > 1024) {
@@ -510,11 +543,8 @@ function matchPattern(uri, pattern) {
     if (uri.indexOf(prefix) === 0) return { tail: uri.substring(prefix.length) };
     return null;
   }
-  // General glob with '*' anywhere (incl. mid-segment). A non-trailing '*'
-  // matches a run of any chars EXCEPT '/' (a SINGLE path segment), so
-  // '/api/*/data' matches '/api/foo/data' but NOT '/api/foo/bar/data'. A
-  // trailing '*' matches the rest, including '/'. Literal scan (no regex —
-  // CloudFront Functions JS forbids dynamic RegExp from strings reliably).
+  // Glob with '*' anywhere: a non-trailing '*' matches one segment (no '/'),
+  // a trailing '*' matches the rest. Literal scan (no dynamic RegExp).
   return globMatch(uri, pattern);
 }
 function globMatch(uri, pattern) {
@@ -598,6 +628,10 @@ function buildQueryString(request) {
     ? '?' + Object.keys(request.querystring).map(function(k){ var v = request.querystring[k]; return v.multiValue ? v.multiValue.map(function(mv){ return k + '=' + mv.value; }).join('&') : k + '=' + v.value; }).join('&')
     : '';
 }
+function stripCred(request, meta) {
+  var ck = meta.ck; if (ck) for (var i = 0; i < ck.length; i++) delete request.cookies[ck[i]];
+  var hh = meta.hh; if (hh) for (var j = 0; j < hh.length; j++) delete request.headers[hh[j]];
+}
 async function handler(event) {
   var request = event.request;
   var uri = request.uri;
@@ -608,6 +642,7 @@ async function handler(event) {
   // re-request /builds/<id>/<page> through this same behavior). Send straight
   // to S3 with no re-prefix / no redirect / no rewrite.
   if (uri.indexOf('/builds/') === 0) {
+    stripCred(request, meta);
     cf.selectRequestOriginById(meta.oS3);
     return request;
   }
@@ -702,6 +737,9 @@ async function handler(event) {
   }
   // Default: server if present, else static (S3).
   if (kind === null) { kind = meta.srv ? 'c' : 's'; }
+
+  // static/image routes share a cache key: drop credential cache-key entries.
+  if (kind !== 'c') { stripCred(request, meta); }
 
   // 4a. image-opt origin — strip basePath, then keep URI (no build-id prefix).
   // The image optimizer (Next /_next/image, Nuxt IPX /_ipx) parses the source

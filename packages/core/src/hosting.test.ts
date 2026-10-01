@@ -924,7 +924,9 @@ describe('Hosting', () => {
 
       const template = Template.fromStack(stack);
 
-      // The L3 construct should create an SsrCachePolicy with these values
+      // The L3 construct should create an SsrCachePolicy with these values.
+      // maxTtl is 1 year (31536000s): it clamps wild origin Cache-Control
+      // values to at most a year.
       template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
         CachePolicyConfig: Match.objectLike({
           MinTTL: 0,
@@ -978,6 +980,36 @@ describe('Hosting', () => {
         typeof cachePolicyId === 'object' && cachePolicyId !== null,
         'CachePolicyId should be a CDK reference (object), not a literal string',
       );
+    });
+
+    it('forwards ssrDefaultTtl + cacheKeyCookies to the SSR cache policy', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'SsrCacheKeyForwardStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        api: MOCK_API,
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyCookies: ['session'],
+      });
+
+      const template = Template.fromStack(stack);
+
+      // DefaultTTL comes through as 60, and the session cookie lands in the
+      // SSR cache-key cookie allowList alongside the reserved preview cookies.
+      template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
+        CachePolicyConfig: Match.objectLike({
+          DefaultTTL: 60,
+          ParametersInCacheKeyAndForwardedToOrigin: Match.objectLike({
+            CookiesConfig: Match.objectLike({
+              Cookies: Match.arrayWith(['session']),
+            }),
+          }),
+        }),
+      });
     });
   });
 
