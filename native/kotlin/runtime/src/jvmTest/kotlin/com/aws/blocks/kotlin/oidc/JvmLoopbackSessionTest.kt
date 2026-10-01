@@ -251,8 +251,28 @@ class JvmLoopbackSessionTest {
             }
             // Appended with & because the configured URL already carries a query.
             location shouldBe
-                "https://app.example.com/failed?ref=1&error=access_denied&error_description=User%20said%20no"
+                "https://app.example.com/failed?ref=1&error=access_denied&error_description=User+said+no"
             location shouldNotContain "state"
+            redirect.await()
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `error redirect keeps the fragment after the appended query`() = runBlocking<Unit> {
+        val session = session(errorPage = OidcLandingPage.Redirect("https://app.example.com/failed#done"))
+        try {
+            val redirect = async { session.awaitRedirect("https://idp.example.com/authorize") }
+            val location = withContext(Dispatchers.IO) {
+                val connection = getNoFollow("${session.relayTo}?error=nope&state=xyz")
+                try {
+                    connection.getHeaderField("Location")
+                } finally {
+                    connection.disconnect()
+                }
+            }
+            location shouldBe "https://app.example.com/failed?error=nope#done"
             redirect.await()
         } finally {
             session.close()

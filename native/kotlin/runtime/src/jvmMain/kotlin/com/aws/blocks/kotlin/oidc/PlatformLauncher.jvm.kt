@@ -2,10 +2,11 @@ package com.aws.blocks.kotlin.oidc
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import io.ktor.http.Parameters
+import io.ktor.http.URLBuilder
+import io.ktor.http.parseQueryString
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.URLDecoder
-import java.net.URLEncoder
 import java.util.concurrent.Executors
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
@@ -70,7 +71,7 @@ internal class JvmLoopbackSession(
 
     private fun handle(exchange: HttpExchange) {
         val rawQuery = exchange.requestURI.rawQuery
-        val params = parseQuery(rawQuery)
+        val params = parseQueryString(rawQuery ?: "")
 
         // Browsers request things like /favicon.ico, and any local process can reach this
         // port. Completing the wait is one-shot, so a request that cannot be the relay
@@ -94,7 +95,7 @@ internal class JvmLoopbackSession(
                 exchange,
                 options.errorPage,
                 OidcLoopbackPages.failure(params["error"], params["error_description"]),
-                extraQuery = errorQuery(params),
+                extraQuery = errorParameters(params),
             )
         }
         redirect.complete("$relayTo?$rawQuery")
@@ -104,12 +105,12 @@ internal class JvmLoopbackSession(
         exchange: HttpExchange,
         page: OidcLandingPage,
         builtIn: String,
-        extraQuery: List<Pair<String, String>> = emptyList(),
+        extraQuery: Parameters = Parameters.Empty,
     ) {
         when (page) {
             OidcLandingPage.BuiltIn -> respond(exchange, HTTP_OK, builtIn)
             is OidcLandingPage.Html -> respond(exchange, HTTP_OK, page.document)
-            is OidcLandingPage.Redirect -> sendRedirect(exchange, append(page.url, extraQuery))
+            is OidcLandingPage.Redirect -> sendRedirect(exchange, withQuery(page.url, extraQuery))
         }
     }
 
@@ -134,36 +135,16 @@ internal class JvmLoopbackSession(
      * The authorization code and `state` are deliberately absent: forwarding them would put
      * them in the landing page's access logs, its `Referer` header, and browser history.
      */
-    private fun errorQuery(params: Map<String, String>): List<Pair<String, String>> =
-        listOfNotNull(
-            params["error"]?.let { "error" to it },
-            params["error_description"]?.let { "error_description" to it },
-        )
-
-    /** Appends [extra] to [url], which may already carry a query string. */
-    private fun append(url: String, extra: List<Pair<String, String>>): String {
-        if (extra.isEmpty()) return url
-        val separator = if ('?' in url) "&" else "?"
-        return url + separator + extra.joinToString("&") { (name, value) ->
-            "$name=${encode(value)}"
-        }
+    private fun errorParameters(params: Parameters): Parameters = Parameters.build {
+        params["error"]?.let { append("error", it) }
+        params["error_description"]?.let { append("error_description", it) }
     }
 
-    private fun encode(value: String): String =
-        URLEncoder.encode(value, "UTF-8").replace("+", "%20")
-
-    private fun parseQuery(rawQuery: String?): Map<String, String> =
-        rawQuery?.split('&')
-            ?.mapNotNull { pair ->
-                val name = pair.substringBefore('=')
-                if (name.isEmpty()) {
-                    null
-                } else {
-                    name to URLDecoder.decode(pair.substringAfter('=', ""), "UTF-8")
-                }
-            }
-            ?.toMap()
-            ?: emptyMap()
+    /** Leaves [url] untouched when there is nothing to add, so the app's value is preserved. */
+    private fun withQuery(url: String, extra: Parameters): String {
+        if (extra.isEmpty()) return url
+        return URLBuilder(url).apply { parameters.appendAll(extra) }.buildString()
+    }
 
     private companion object {
         // The backend's relay allowlist permits loopback on any port, but matches the literal
