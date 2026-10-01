@@ -4,6 +4,8 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.URLDecoder
+import java.net.URLEncoder
 import java.util.concurrent.Executors
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
@@ -68,16 +70,46 @@ internal class JvmLoopbackSession(
 
     private fun handle(exchange: HttpExchange) {
         val rawQuery = exchange.requestURI.rawQuery
-        val params = queryParameterNames(rawQuery)
-        if ("state" in params && ("code" in params || "error" in params)) {
-            redirect.complete("$relayTo?$rawQuery")
-            respond(exchange, HTTP_OK, COMPLETE_PAGE)
+        val params = parseQuery(rawQuery)
+
+        // Browsers request things like /favicon.ico, and any local process can reach this
+        // port. Completing the wait is one-shot, so a request that cannot be the relay
+        // redirect must not end it and strand the real one: the relay always sends `state`
+        // alongside `code` or `error`, and the caller checks its value. A configured landing
+        // page must not apply to such a request either.
+        val isRelayRedirect = "state" in params && ("code" in params || "error" in params)
+        if (!isRelayRedirect) {
+            // No body: nothing legitimate renders it, so there is nothing to style and no
+            // reason for an app to override it.
+            sendEmpty(exchange, HTTP_NOT_FOUND)
+            return
+        }
+
+        // Respond before completing: the caller's `finally` stops the server, and stop(0)
+        // closes connections that are still open.
+        if ("code" in params) {
+            serve(exchange, options.successPage, OidcLoopbackPages.success())
         } else {
-            // Browsers request things like /favicon.ico, and any local process can reach this
-            // port. Completing the wait is one-shot, so a request that cannot be the relay
-            // redirect must not end it and strand the real one: the relay always sends `state`
-            // alongside `code` or `error`, and the caller checks its value.
-            respond(exchange, HTTP_NOT_FOUND, NOT_FOUND_PAGE)
+            serve(
+                exchange,
+                options.errorPage,
+                OidcLoopbackPages.failure(params["error"], params["error_description"]),
+                extraQuery = errorQuery(params),
+            )
+        }
+        redirect.complete("$relayTo?$rawQuery")
+    }
+
+    private fun serve(
+        exchange: HttpExchange,
+        page: OidcLandingPage,
+        builtIn: String,
+        extraQuery: List<Pair<String, String>> = emptyList(),
+    ) {
+        when (page) {
+            OidcLandingPage.BuiltIn -> respond(exchange, HTTP_OK, builtIn)
+            is OidcLandingPage.Html -> respond(exchange, HTTP_OK, page.document)
+            is OidcLandingPage.Redirect -> sendRedirect(exchange, append(page.url, extraQuery))
         }
     }
 
@@ -88,11 +120,50 @@ internal class JvmLoopbackSession(
         exchange.responseBody.use { it.write(bytes) }
     }
 
-    private fun queryParameterNames(rawQuery: String?): Set<String> =
+    private fun sendRedirect(exchange: HttpExchange, url: String) {
+        exchange.responseHeaders.add("Location", url)
+        sendEmpty(exchange, HTTP_FOUND)
+    }
+
+    private fun sendEmpty(exchange: HttpExchange, status: Int) {
+        exchange.sendResponseHeaders(status, NO_BODY)
+        exchange.responseBody.close()
+    }
+
+    /**
+     * The authorization code and `state` are deliberately absent: forwarding them would put
+     * them in the landing page's access logs, its `Referer` header, and browser history.
+     */
+    private fun errorQuery(params: Map<String, String>): List<Pair<String, String>> =
+        listOfNotNull(
+            params["error"]?.let { "error" to it },
+            params["error_description"]?.let { "error_description" to it },
+        )
+
+    /** Appends [extra] to [url], which may already carry a query string. */
+    private fun append(url: String, extra: List<Pair<String, String>>): String {
+        if (extra.isEmpty()) return url
+        val separator = if ('?' in url) "&" else "?"
+        return url + separator + extra.joinToString("&") { (name, value) ->
+            "$name=${encode(value)}"
+        }
+    }
+
+    private fun encode(value: String): String =
+        URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
+    private fun parseQuery(rawQuery: String?): Map<String, String> =
         rawQuery?.split('&')
-            ?.mapNotNull { pair -> pair.substringBefore('=').takeIf { it.isNotEmpty() } }
-            ?.toSet()
-            ?: emptySet()
+            ?.mapNotNull { pair ->
+                val name = pair.substringBefore('=')
+                if (name.isEmpty()) {
+                    null
+                } else {
+                    name to URLDecoder.decode(pair.substringAfter('=', ""), "UTF-8")
+                }
+            }
+            ?.toMap()
+            ?: emptyMap()
 
     private companion object {
         // The backend's relay allowlist permits loopback on any port, but matches the literal
@@ -100,9 +171,8 @@ internal class JvmLoopbackSession(
         const val LOOPBACK_HOST = "127.0.0.1"
         const val CALLBACK_PATH = "/oidc/callback"
         const val HTTP_OK = 200
+        const val HTTP_FOUND = 302
         const val HTTP_NOT_FOUND = 404
-        const val COMPLETE_PAGE =
-            "<html><body><p>Sign-in complete. You can close this window.</p></body></html>"
-        const val NOT_FOUND_PAGE = "<html><body><p>Not found.</p></body></html>"
+        const val NO_BODY = -1L
     }
 }
