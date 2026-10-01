@@ -14,7 +14,7 @@ import {
 } from './paths.js';
 import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 import { validateBucketName } from './bucket-name.js';
-import { validateFileBucketOptions } from './validation.js';
+import { validateFileBucketOptions, assertValidKey } from './validation.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
 	FileContent, FileInfo, ExternalBucketRef,
@@ -242,6 +242,12 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async deleteBatch(paths: string[]): Promise<void> {
+		// Validate every key up front, before deleting any, so a batch mixing a
+		// valid and an invalid key deletes nothing — matching the AWS runtime,
+		// where assertValidKey runs over the whole batch before any S3 send.
+		// (Without this, the per-element `delete()` below would delete the valid
+		// keys preceding the first invalid one — a mock↔AWS divergence.)
+		for (const p of paths) this.validateKey(p);
 		for (const p of paths) {
 			await this.delete(p);
 		}
@@ -260,6 +266,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async getUrl(path: string, options?: GetUrlOptionsFor<O>): Promise<string> {
+		this.validateKey(path);
 		const expiresIn = (options as any)?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'GET', expiresIn, LOCAL_FILE_SECRET);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -285,6 +292,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async putUrl(path: string, options?: PutUrlOptions): Promise<string> {
+		this.validateKey(path);
 		const expiresIn = options?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -355,6 +363,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async createUploadHandle(path: string, options?: PutUrlOptions): Promise<FileUploadClient> {
+		this.validateKey(path);
 		const expiresIn = options?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -419,6 +428,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async listVersions(path: string): Promise<FileVersionInfo[]> {
+		this.validateKey(path);
 		const versionsDir = versionsDirFor(this.dataDir, path);
 		if (!existsSync(versionsDir)) return [];
 		const entries = readdirSync(versionsDir).filter(isVersionEntry);
@@ -461,6 +471,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async restoreVersion(path: string, versionId: string): Promise<void> {
+		this.validateKey(path);
 		const vPath = versionContentPath(this.dataDir, path, versionId);
 		if (!existsSync(vPath)) {
 			throw blocksError(FileBucketErrors.VersionNotFound, `Version "${versionId}" does not exist for "${path}"`);
@@ -482,6 +493,9 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	// ── Internal helpers ──────────────────────────────────────────────────
 
 	private validateKey(key: string): void {
+		// Portable, filesystem-independent key rules shared with the AWS runtime,
+		// so a key rejected here is rejected identically on AWS (and vice versa).
+		assertValidKey(key);
 		if (Buffer.byteLength(key, 'utf8') > MAX_KEY_BYTES) {
 			this.log.warn(`Key "${key}" exceeds S3's 1,024-byte limit`);
 		}
