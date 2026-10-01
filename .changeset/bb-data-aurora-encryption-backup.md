@@ -48,4 +48,8 @@ deleted; under `removalPolicy: 'snapshot'` it is snapshotted as it is replaced
 (though under production's `deletionProtection: true` the follow-up delete may fail
 and leave it in place, unverified on a real deploy). The only safe route is to
 snapshot the existing cluster, restore it with encryption enabled, then cut over.
-Review the diff and snapshot before deploying.
+Review the diff and snapshot before deploying. The replacement is symmetric:
+turning encryption back off — removing the flag (or `storageEncryptionKeyArn`) from
+a project that already deployed encrypted, e.g. deleting the cdk.json line or a
+merge dropping it — also changes `StorageEncrypted` and so likewise replaces the
+cluster (back to unencrypted), with the same new-empty-cluster / no-schema outcome.

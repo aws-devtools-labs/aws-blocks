@@ -55,18 +55,19 @@ export interface AuroraInfraConfig {
    */
   storageEncryptionKey?: kms.IKey;
   /**
-   * Whether to encrypt the cluster storage at rest. Tri-state:
+   * Whether to encrypt the cluster storage at rest. Two states, by design:
    * - `true` → emit `storageEncrypted: true` (opt in).
    * - `undefined` → leave the property **unset** so an existing, implicitly
    *   unencrypted cluster is not forced into a destructive replacement by a
    *   template change.
    *
-   * Never pass an explicit `false`: CloudFormation renders `StorageEncrypted:
-   * false`, itself a template change that would replace an existing cluster. The
-   * CDK layer resolves this from the `@aws-blocks/bb-data:encryptStorageByDefault`
+   * The type is `?: true` (not `boolean`) so an explicit `false` is
+   * **unrepresentable** rather than merely discouraged: `StorageEncrypted: false`
+   * would itself be a template change that replaces an existing cluster. The CDK
+   * layer resolves this from the `@aws-blocks/bb-data:encryptStorageByDefault`
    * context flag; a supplied `storageEncryptionKey` forces encryption on.
    */
-  storageEncrypted?: boolean;
+  storageEncrypted?: true;
   /**
    * Retention period for the cluster's automated backups (which also drives the
    * point-in-time-recovery window). @default `cdk.Duration.days(15)` — matches

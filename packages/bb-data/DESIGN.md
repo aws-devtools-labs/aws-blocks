@@ -138,9 +138,13 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
   production's `deletionProtection: true` the follow-up delete may fail and leave
   it in place (this cleanup path is unverified on a real deploy). Adding or
   changing the key also replaces the generated credentials secret (new logical id,
-  new generated password). The only safe route is to snapshot the existing
-  cluster, restore it with encryption enabled, then cut over. Review the diff and
-  snapshot first.
+  new generated password). The replacement is symmetric: removing the flag (or
+  `storageEncryptionKeyArn`) from a project that already deployed encrypted —
+  deleting the `cdk.json` line, a merge dropping it — also changes
+  `StorageEncrypted` and so **likewise replaces the cluster** (back to
+  unencrypted), with the same new-empty-cluster / no-schema outcome. The only safe
+  route is to snapshot the existing cluster, restore it with encryption enabled,
+  then cut over. Review the diff and snapshot first.
 
 ## Schema Migrations (External Databases)
 

@@ -187,7 +187,15 @@ export class Database extends BuildingBlockScope {
     // the property unset (undefined) so an existing, implicitly-unencrypted
     // cluster keeps its current template and is not replaced — and warn, pointing
     // at the snapshot → restore-with-encryption → cut-over migration steps.
-    const encryptByDefault = this.node.tryGetContext('@aws-blocks/bb-data:encryptStorageByDefault') === true;
+    // Accept both the JSON boolean `true` (cdk.json / setContext) and the string
+    // 'true' (a `--context @aws-blocks/bb-data:encryptStorageByDefault=true` CLI
+    // override, which arrives as a string), matching the `sandboxMode` precedent in
+    // core's stack-metadata.ts. Only these two count as on: everything else —
+    // including the string 'false' and undefined — is off, so a `--context ...=false`
+    // override is never read as enabled and a cdk.json boolean `true` is never
+    // silently flipped off by a string `--context ...=true` override.
+    const ctx = this.node.tryGetContext('@aws-blocks/bb-data:encryptStorageByDefault');
+    const encryptByDefault = ctx === true || ctx === 'true';
     const hasCmk = options?.storageEncryptionKeyArn !== undefined;
     const storageEncrypted = encryptByDefault || hasCmk ? true : undefined;
     if (!encryptByDefault && !hasCmk) {

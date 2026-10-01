@@ -294,6 +294,14 @@ try {
 >   delete of the old cluster may fail and leave it in place; this cleanup path is
 >   unverified on a real deploy.
 >
+> **The replacement is symmetric.** Turning encryption back **off** — removing the
+> flag (or `storageEncryptionKeyArn`) from a project that already deployed
+> encrypted, whether by deleting the `cdk.json` line or by a merge that drops it —
+> also changes the `StorageEncrypted` property, so it **likewise replaces the
+> cluster** (back to unencrypted) with the same new-empty-cluster / no-schema
+> outcome described above. Review the diff and snapshot before removing the flag
+> too, not only before adding it.
+>
 > The only safe route is to carry the data across yourself: **snapshot** the
 > existing cluster, **restore** that snapshot into a new cluster with encryption
 > enabled, then cut over to it. Review the CloudFormation diff and take a snapshot
