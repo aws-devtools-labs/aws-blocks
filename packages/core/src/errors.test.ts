@@ -34,10 +34,13 @@ describe('ApiError constructor', () => {
 
   it('stamps the non-enumerable cross-copy brand so a foreign-copy ApiError is wire-recognizable', () => {
     const e = new ApiError('boom', 500);
-    // Branded, but the brand must never surface in JSON / log dumps.
+    // The brand is stamped...
     assert.strictEqual((e as { [BLOCKS_ERROR_BRAND]?: true })[BLOCKS_ERROR_BRAND], true);
-    assert.ok(!Object.keys(e).some(k => k.toLowerCase().includes('brand')));
-    assert.ok(!JSON.stringify({ ...e }).toLowerCase().includes('wiresafe'));
+    // ...but must be NON-ENUMERABLE so it never surfaces in JSON / log dumps.
+    // Object.keys / spread never expose symbol keys regardless of enumerability,
+    // so pin the descriptor directly (that is what actually catches a regression).
+    assert.strictEqual(Object.getOwnPropertyDescriptor(e, BLOCKS_ERROR_BRAND)?.enumerable, false);
+    assert.strictEqual(Object.getOwnPropertySymbols({ ...e }).length, 0);
   });
 });
 
