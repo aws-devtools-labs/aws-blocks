@@ -46,6 +46,21 @@ data class GeneratorResult(
     val warnings: List<String>,
 )
 
+private data class TransferableBinding(val type: ClassName, val isGeneric: Boolean)
+
+/**
+ * The concrete runtime type each known tag maps to; isGeneric wraps the first type argument
+ * (RealtimeChannel<T>). The tag set and type resolution derive from this.
+ */
+private val knownTransferableBindings = mapOf(
+    "realtime/channel" to TransferableBinding(ClassNames.realtimeChannel, isGeneric = true),
+    "file-bucket/download" to TransferableBinding(ClassNames.fileDownloadHandle, isGeneric = false),
+    "file-bucket/upload" to TransferableBinding(ClassNames.fileUploadHandle, isGeneric = false),
+    "oidc/client" to TransferableBinding(ClassNames.oidcClient, isGeneric = false),
+)
+
+private val knownTransferableTags: Set<String> = knownTransferableBindings.keys
+
 class KotlinCodeGenerator(
     private val packageName: String,
     private val internalVisibility: Boolean = false,
@@ -120,6 +135,20 @@ class KotlinCodeGenerator(
 
         // Emit per-API-group files (interface + impl)
         files.addAll(apiFiles)
+
+        for (namespace in model.apiNamespaces) {
+            for (operation in namespace.operations) {
+                val result = operation.result.type
+                if (isUnboundDirectResult(result)) {
+                    warnings.add(
+                        formatUnboundTransferable(
+                            "${namespace.name}.${operation.name}",
+                            result as ResolvedType.Transferable,
+                        )
+                    )
+                }
+            }
+        }
 
         return GeneratorResult(files, warnings)
     }
@@ -1160,12 +1189,16 @@ class KotlinCodeGenerator(
             funBuilder.addParameter(paramBuilder.build())
         }
 
-        val returnType = resolveResolvedType(operation.result.type, index, opContext)
+        val returnType = if (isUnboundDirectResult(operation.result.type)) {
+            ClassNames.unknownTransferable
+        } else {
+            resolveResolvedType(operation.result.type, index, opContext)
+        }
         if (returnType != Unit::class.asTypeName()) {
             funBuilder.returns(returnType)
         }
 
-        generateImplMethodBody(funBuilder, operation, namespace, index, opContext)
+        generateImplMethodBody(funBuilder, operation, namespace, index, opContext, returnType)
 
         return funBuilder.build()
     }
@@ -1192,6 +1225,7 @@ class KotlinCodeGenerator(
         namespace: String,
         index: TypeIndex,
         opContext: OperationTypeContext?,
+        returnType: TypeName,
     ) {
         val hasOptionalParams = operation.parameters.any { !it.required }
         val dottedMethod = "${namespace}.${operation.name}"
@@ -1224,9 +1258,17 @@ class KotlinCodeGenerator(
             )
         }
 
-        val returnType = resolveResolvedType(operation.result.type, index, opContext)
         if (returnType == Unit::class.asTypeName()) {
             funBuilder.addStatement("client.execute(request)")
+        } else if (returnType == ClassNames.unknownTransferable) {
+            // An unbound tag here would otherwise fail generation; degrade to a checked carrier.
+            val tag = (operation.result.type as ResolvedType.Transferable).transferableName
+            funBuilder.addStatement("val result = client.execute(request)")
+            funBuilder.addStatement(
+                "return %T.fromJson(result, expectedTag = %L)",
+                ClassNames.unknownTransferable,
+                kotlinStringLiteral(tag),
+            )
         } else if (isTransferableType(operation.result.type)) {
             val transferableType = unwrapNullableTransferable(operation.result.type)!!
             funBuilder.addStatement("val result = client.execute(request)")
@@ -1376,20 +1418,15 @@ class KotlinCodeGenerator(
         opContext: OperationTypeContext? = null,
         qualified: Boolean = false,
     ): TypeName {
-        return when (type.transferableName) {
-            "realtime/channel" -> {
-                val realtimeChannel = ClassNames.realtimeChannel
-                if (type.typeArgs.isNotEmpty()) {
-                    realtimeChannel.parameterizedBy(type.typeArgs.map { resolveResolvedType(it, index, opContext, qualified) })
-                } else {
-                    realtimeChannel.parameterizedBy(JsonElement::class.asTypeName())
-                }
-            }
-            "file-bucket/download" -> ClassNames.fileDownloadHandle
-            "file-bucket/upload" -> ClassNames.fileUploadHandle
-            "oidc/client" -> ClassNames.oidcClient
-            else -> JsonElement::class.asTypeName()
+        val binding = knownTransferableBindings[type.transferableName]
+            ?: return JsonElement::class.asTypeName()
+        if (!binding.isGeneric) return binding.type
+        val typeArgs = if (type.typeArgs.isNotEmpty()) {
+            type.typeArgs.map { resolveResolvedType(it, index, opContext, qualified) }
+        } else {
+            listOf(JsonElement::class.asTypeName())
         }
+        return binding.type.parameterizedBy(typeArgs)
     }
 
     private fun isTransferableType(type: ResolvedType): Boolean = when (type) {
@@ -1402,6 +1439,45 @@ class KotlinCodeGenerator(
         is ResolvedType.Transferable -> type
         is ResolvedType.Nullable -> unwrapNullableTransferable(type.inner)
         else -> null
+    }
+
+    private fun isUnboundDirectResult(type: ResolvedType): Boolean =
+        type is ResolvedType.Transferable && type.transferableName !in knownTransferableTags
+
+    private fun transferableTypeArgModelName(type: ResolvedType): String? = when (type) {
+        is ResolvedType.Record -> type.name
+        is ResolvedType.Enum -> type.name
+        is ResolvedType.Union -> type.name
+        is ResolvedType.TypeReference -> type.name
+        is ResolvedType.ListType -> transferableTypeArgModelName(type.elementType)
+        is ResolvedType.MapType -> transferableTypeArgModelName(type.valueType)
+        is ResolvedType.Nullable -> transferableTypeArgModelName(type.inner)
+        else -> null
+    }
+
+    /** Names the operation, tag, platform, and generated type-arg models - never descriptor values. */
+    private fun formatUnboundTransferable(operation: String, transferable: ResolvedType.Transferable): String {
+        val models = transferable.typeArgs
+            .mapNotNull { transferableTypeArgModelName(it) }
+        val typeArgClause = when (models.size) {
+            0 -> "no generated type-argument models"
+            1 -> "type argument ${models[0]}"
+            else -> "type arguments ${models.joinToString(", ")}"
+        }
+        val safeTag = transferable.transferableName.replace("\n", "\\n").replace("\r", "\\r")
+        return "AWSBLOCKS-NATIVE-001: $operation returns unbound transferable " +
+            "'$safeTag' on kotlin; generated UnknownTransferable with $typeArgClause."
+    }
+
+    /** Kotlin literal for [value]; %S would emit a trimMargin raw string that drops the CR from a CRLF tag. */
+    private fun kotlinStringLiteral(value: String): String {
+        val escaped = value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("$", "\\$")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+        return "\"$escaped\""
     }
 
     private fun addTransferableSerializerAnnotation(
@@ -1460,13 +1536,7 @@ class KotlinCodeGenerator(
         }
 
         private fun allocateName(transferableName: String, typeArgument: TypeName?): String {
-            val base = when (transferableName) {
-                "realtime/channel" -> "RealtimeChannel"
-                "file-bucket/download" -> "FileDownloadHandle"
-                "file-bucket/upload" -> "FileUploadHandle"
-                "oidc/client" -> "OidcClient"
-                else -> "Unknown"
-            }
+            val base = knownTransferableBindings[transferableName]?.type?.simpleName ?: "Unknown"
             val suffix = typeArgument?.let(::typeNameSegment).orEmpty()
             val candidate = "${base}${suffix}Serializer"
             if (allocatedNames.add(candidate)) return candidate

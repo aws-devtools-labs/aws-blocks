@@ -23,6 +23,7 @@ import type {
 } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { assertValidKey } from './validation.js';
 
 // Re-export public types
 import { FileBucketErrors } from './errors.js';
@@ -77,6 +78,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	async put(path: string, body: Buffer | string, options?: PutOptions): Promise<void> {
+		assertValidKey(path);
 		await this.s3.send(new PutObjectCommand({
 			Bucket: getSdkIdentifiers(this).bucketName,
 			Key: path,
@@ -88,6 +90,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	async get(path: string, options?: GetOptionsFor<O>): Promise<FileContent | null> {
+		assertValidKey(path);
 		const versionId = (options as { versionId?: string } | undefined)?.versionId;
 		try {
 			const result = await this.s3.send(new GetObjectCommand({
@@ -121,6 +124,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	async delete(path: string, options?: DeleteOptionsFor<O>): Promise<void> {
+		assertValidKey(path);
 		const versionId = (options as { versionId?: string } | undefined)?.versionId;
 		try {
 			await this.s3.send(new DeleteObjectCommand({
@@ -146,6 +150,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	async deleteBatch(paths: string[]): Promise<void> {
+		for (const path of paths) assertValidKey(path);
 		const CHUNK_SIZE = 1000;
 		for (let i = 0; i < paths.length; i += CHUNK_SIZE) {
 			const chunk = paths.slice(i, i + CHUNK_SIZE);
@@ -157,6 +162,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	async getUrl(path: string, options?: GetUrlOptionsFor<O>): Promise<string> {
+		assertValidKey(path);
 		const opts = options as any;
 		return getSignedUrl(this.s3, new GetObjectCommand({
 			Bucket: getSdkIdentifiers(this).bucketName, Key: path,
@@ -167,6 +173,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	async putUrl(path: string, options?: PutUrlOptions): Promise<string> {
+		assertValidKey(path);
 		return getSignedUrl(this.s3, new PutObjectCommand({
 			Bucket: getSdkIdentifiers(this).bucketName, Key: path, ContentType: options?.contentType,
 		}), { expiresIn: options?.expiresIn ?? 3600 });
@@ -214,6 +221,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	async listVersions(path: string): Promise<FileVersionInfo[]> {
+		assertValidKey(path);
 		const versions: FileVersionInfo[] = [];
 		let keyMarker: string | undefined;
 		let versionIdMarker: string | undefined;
@@ -239,6 +247,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	async restoreVersion(path: string, versionId: string): Promise<void> {
+		assertValidKey(path);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
 		try {
 			await this.s3.send(new CopyObjectCommand({
