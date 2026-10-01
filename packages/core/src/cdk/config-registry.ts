@@ -4,7 +4,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
-import type { Construct } from 'constructs';
+import { Construct } from 'constructs';
 import type { Compute } from './compute/compute.js';
 
 const REGISTRY_KEY = Symbol.for('BLOCKS_CONFIG_REGISTRY');
@@ -79,23 +79,11 @@ export function getConfigLocation(scope: Construct): { bucketName: string; key: 
  * Falls back to the stack when no owner is registered (isolated unit tests). Returns a concrete
  * `s3.Bucket` so callers don't need a non-null assertion.
  *
- * Bucket configuration — this bucket holds `blocks-config.json`, which feeds `process.env` (incl.
- * `CORS_HOSTING_ORIGINS`) for every compute in the stack, so it is configured with these controls:
- * - **TLS enforced** (`enforceSSL`): CDK attaches a bucket policy denying `aws:SecureTransport=false`,
- *   so requests use HTTPS. Matches every other bucket in the repo (bb-file-bucket etc.).
- * - **Versioned**: a prior version of `blocks-config.json` is recoverable after an overwrite, and it activates the
- *   noncurrent-version expiration lifecycle rule (inert while versioning was off). Noncurrent versions
- *   expire after 1 day to bound version-storage cost.
- * - **Server access logging**: reads/writes are delivered to a dedicated, locked-down log bucket
- *   (`serverAccessLogsBucket`), so access to the config object is attributable. The log bucket is kept
- *   separate from the config bucket so log delivery can't loop back onto the audited data; its own logs
- *   expire after 90 days.
- * - **DESTROY / autoDeleteObjects are DELIBERATE, not preset-driven**: the only object here is
- *   `blocks-config.json`, a derived artifact that `BlocksConfigDeployment` (BucketDeployment, in
- *   {@link finalizeConfigRegistry}) regenerates from the CDK app and re-uploads on every deploy. It has
- *   no source of truth on the bucket, so destroying it with the stack — even under the production
- *   preset — leaves no orphaned bucket and loses nothing recoverable. Kept DESTROY on purpose, not an
- *   overlooked default.
+ * This bucket holds `blocks-config.json`, which feeds `process.env` (incl. `CORS_HOSTING_ORIGINS`) for
+ * every compute in the stack, so it enforces TLS, is versioned (a prior config is recoverable and the
+ * noncurrent-version expiry rule becomes effective), and ships S3 server access logs to a dedicated,
+ * locked-down log bucket. The per-bucket removal and retention posture is documented inline at the
+ * props below.
  */
 function ensureConfigBucket(scope: Construct): s3.Bucket {
 	const stack = cdk.Stack.of(scope);
@@ -105,22 +93,31 @@ function ensureConfigBucket(scope: Construct): s3.Bucket {
 
 		// Dedicated, locked-down bucket that receives the config bucket's S3 server access logs, so any
 		// access to blocks-config.json is attributable. Kept separate from the config bucket (rather
-		// than self-logging) so log delivery can't loop back onto the audited data — mirrors the
-		// bb-file-bucket access-log-bucket approach. Same DESTROY/autoDelete posture as the config
-		// bucket (both hold only regenerated/derived data); its own logs expire after 90 days.
-		const logBucket = new s3.Bucket(owner, 'BlocksConfigLogsBucket', {
+		// than self-logging) so log delivery can't loop back onto the audited data. Mirrors the
+		// access-log-bucket pattern in packages/hosting/src/constructs/storage_construct.ts. DESTROY/
+		// autoDelete keeps teardown consistent with every other bucket in the repo, so a torn-down
+		// (sandbox-first) stack leaves no orphaned log bucket; its own logs expire after 90 days.
+		//
+		// Scoped under a child construct that enables the `serverAccessLogsUseBucketPolicy` feature flag
+		// so CDK grants log delivery via a bucket policy. Without it CDK takes the legacy path and
+		// re-enables S3 ACLs on the log bucket (AccessControl: LogDeliveryWrite / ObjectOwnership:
+		// ObjectWriter); that flag is unset in shipped cdk.json. storage_construct.ts instead keeps ACLs
+		// on via BUCKET_OWNER_PREFERRED because CloudFront log delivery needs them — this bucket has no
+		// such constraint, so the bucket-policy path (ACLs off entirely) is preferred.
+		const logScope = new Construct(owner, 'ConfigLogDelivery');
+		logScope.node.setContext('@aws-cdk/aws-s3:serverAccessLogsUseBucketPolicy', true);
+		const logBucket = new s3.Bucket(logScope, 'BlocksConfigLogsBucket', {
 			blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
 			encryption: s3.BucketEncryption.S3_MANAGED,
 			enforceSSL: true,
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 			autoDeleteObjects: true,
-			// The 90-day access-log retention here and the config bucket's 1-day noncurrent-version
-			// expiry below are fixed literals for this framework-internal bucket, intentionally NOT
-			// driven by the stack `logRetention` default: ensureConfigBucket is a free function with no
-			// access to stack defaults. (bb-file-bucket derives its access-log expiry from
-			// defaults.logRetention; this internal bucket keeps fixed values on purpose.)
+			// Fixed 90-day access-log retention — intentionally NOT driven by the stack `logRetention`
+			// default (ensureConfigBucket is a free function with no access to stack defaults).
+			// storage_construct.ts derives the analogous value from logRetentionDays; this
+			// framework-internal bucket keeps a fixed literal.
 			lifecycleRules: [
-				{ id: 'expire-access-logs', expiration: cdk.Duration.days(90) },
+				{ id: 'ExpireAccessLogs', expiration: cdk.Duration.days(90) },
 			],
 		});
 

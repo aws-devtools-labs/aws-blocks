@@ -166,17 +166,21 @@ test('the config bucket enforces TLS, enables versioning, and delivers server ac
 	// A dedicated access-log bucket is provisioned alongside the config bucket.
 	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + dedicated access-log bucket');
 
-	// (a) Versioning enabled + (c) the config bucket ships access logs to the log bucket under a prefix.
+	// (a) Versioning enabled + (c) the config bucket ships access logs to the dedicated log bucket
+	// (not to itself) under a prefix.
 	t.hasResourceProperties('AWS::S3::Bucket', {
 		VersioningConfiguration: { Status: 'Enabled' },
 		LoggingConfiguration: {
-			DestinationBucketName: Match.anyValue(),
+			DestinationBucketName: { Ref: Match.stringLikeRegexp('BlocksConfigLogsBucket') },
 			LogFilePrefix: 'access-logs/',
 		},
 	});
 
-	// (b) enforceSSL generates a bucket policy denying non-TLS access (aws:SecureTransport=false).
+	// (b) enforceSSL generates a bucket policy denying non-TLS access (aws:SecureTransport=false),
+	// pinned to the CONFIG bucket specifically — the log bucket also enforces SSL, so an unpinned
+	// matcher would still pass if the config bucket's enforceSSL were dropped.
 	t.hasResourceProperties('AWS::S3::BucketPolicy', {
+		Bucket: { Ref: Match.stringLikeRegexp('^BlocksConfigBucket') },
 		PolicyDocument: {
 			Statement: Match.arrayWith([
 				Match.objectLike({
@@ -186,4 +190,49 @@ test('the config bucket enforces TLS, enables versioning, and delivers server ac
 			]),
 		},
 	});
+
+	// (d) The log bucket's own posture: BLOCK_ALL public access, S3-managed encryption, and the
+	// 90-day expiry rule — all pinned to the same resource via the ExpireAccessLogs rule id so this
+	// asserts the log bucket, not the config bucket.
+	t.hasResourceProperties('AWS::S3::Bucket', {
+		PublicAccessBlockConfiguration: {
+			BlockPublicAcls: true,
+			BlockPublicPolicy: true,
+			IgnorePublicAcls: true,
+			RestrictPublicBuckets: true,
+		},
+		BucketEncryption: {
+			ServerSideEncryptionConfiguration: Match.arrayWith([
+				Match.objectLike({ ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }),
+			]),
+		},
+		LifecycleConfiguration: {
+			Rules: Match.arrayWith([
+				Match.objectLike({ Id: 'ExpireAccessLogs', ExpirationInDays: 90, Status: 'Enabled' }),
+			]),
+		},
+	});
+
+	// (e) The log bucket must stay ACL-free: with the serverAccessLogsUseBucketPolicy flag, CDK grants
+	// log delivery via a bucket policy, not by re-enabling S3 ACLs. Pin that the log bucket (the one
+	// carrying the ExpireAccessLogs rule) has neither the legacy AccessControl: LogDeliveryWrite nor
+	// ObjectOwnership: ObjectWriter, so a flag regression is caught.
+	const buckets = t.findResources('AWS::S3::Bucket');
+	const logBucketEntry = Object.entries(buckets).find(([, res]) =>
+		(res.Properties?.LifecycleConfiguration?.Rules ?? []).some(
+			(r: { Id?: string }) => r.Id === 'ExpireAccessLogs',
+		),
+	);
+	assert.ok(logBucketEntry, 'access-log bucket present');
+	const logBucketProps = logBucketEntry[1].Properties ?? {};
+	assert.notStrictEqual(
+		logBucketProps.AccessControl,
+		'LogDeliveryWrite',
+		'log bucket must not re-enable ACLs via AccessControl: LogDeliveryWrite',
+	);
+	assert.strictEqual(
+		logBucketProps.OwnershipControls,
+		undefined,
+		'log bucket must not set ObjectWriter ownership controls',
+	);
 });
