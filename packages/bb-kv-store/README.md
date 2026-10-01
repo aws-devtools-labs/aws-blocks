@@ -33,6 +33,8 @@ const store = new KVStore(scope, id, options?)
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 | `removalPolicy` | `'destroy' \| 'retain'` | Removal behavior for the underlying DynamoDB table. When omitted, the stack-wide `defaults` (from `BlocksPresets.sandbox`/`production`, chosen at `BlocksStack.create`) apply — `production` retains data on `cdk destroy`, `sandbox` destroys it. Pass `'destroy'`/`'retain'` to override for this one store. The table's deletion protection also follows the stack `defaults`. Ignored by the mock and browser runtimes. |
 | `ttl` | `boolean` | Enable DynamoDB Time-to-Live so items written with an expiry are deleted automatically. Defaults to `false`. See [Expiring Items](#expiring-items-ttl). |
+| `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | DynamoDB Point-in-Time Recovery (continuous backups). `true` enables the default 35-day window; `{ retentionDays: n }` enables PITR and pins the window (`1`–`35`); `false` disables it. When omitted, the stack-wide `defaults` apply (on under `production`, off under `sandbox`). Ignored by the mock and browser runtimes. |
+| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. `'aws-managed'` (default) uses the `aws/dynamodb` key; `'customer-managed'` provisions a dedicated CMK per table; pass `KVStore.fromKmsKey(arn)` to reuse an existing CMK across stores. Ignored by the mock and browser runtimes. |
 
 ### Expiring Items (TTL)
 
