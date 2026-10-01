@@ -1955,8 +1955,8 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     >;
     const statements = keyPolicy['Statement'] as Array<Record<string, unknown>>;
 
-    // Find the CloudFront decrypt statement
-    const cfDecryptStatement = statements.find((stmt) => {
+    // Find the CloudFront decrypt statement(s) on the key.
+    const cfDecryptStatements = statements.filter((stmt) => {
       const actions = stmt.Action;
       const principal = stmt.Principal as Record<string, unknown> | undefined;
       const service = principal?.Service;
@@ -1971,9 +1971,24 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     });
 
     assert.ok(
-      cfDecryptStatement,
+      cfDecryptStatements.length > 0,
       'KMS key policy must grant kms:Decrypt to cloudfront.amazonaws.com',
     );
+
+    // Every CloudFront decrypt grant on the key is conditioned on AWS:SourceArn matching a
+    // CloudFront distribution ARN in this account — none applies unconditionally.
+    for (const stmt of cfDecryptStatements) {
+      const conditions = (stmt.Condition ?? {}) as Record<string, Record<string, unknown>>;
+      const sourceArn = Object.values(conditions)
+        .map((op) => op['AWS:SourceArn'] ?? op['aws:SourceArn'])
+        .find((v) => v !== undefined);
+      const sourceArnJson = JSON.stringify(sourceArn);
+      assert.ok(sourceArn, `CloudFront KMS decrypt grant must carry AWS:SourceArn: ${JSON.stringify(stmt)}`);
+      assert.ok(
+        sourceArnJson.includes(':cloudfront::') && sourceArnJson.includes('AWS::AccountId'),
+        `AWS:SourceArn must be an account-scoped CloudFront distribution ARN: ${sourceArnJson}`,
+      );
+    }
   });
 
   void it('does NOT create KMS key when encryption is S3_MANAGED (default)', () => {
