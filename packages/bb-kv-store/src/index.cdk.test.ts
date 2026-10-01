@@ -320,3 +320,59 @@ test('CDK: two stores sharing one fromKmsKey ref provision zero KMS keys', () =>
   template.resourceCountIs('AWS::KMS::Key', 0);
   template.resourceCountIs('AWS::DynamoDB::Table', 2);
 });
+
+// ── Auto-created CMK removal policy follows the table ─────────────────────────
+// A dedicated CMK (`encryption: 'customer-managed'`, no imported key) defaults
+// to RETAIN. Without aligning it to the table, a sandbox DESTROY table tears
+// down but leaks its key. The invariant is one-directional: the key is only
+// DESTROY when the table is DESTROY, never less durable than the table.
+
+test('CDK: auto-created CMK follows the table removal policy — DESTROY under sandbox', () => {
+  const { stack, parent } = setup(BlocksPresets.sandbox);
+  new KVStore(parent, 'sessions', { encryption: 'customer-managed' });
+  const template = Template.fromStack(stack);
+  template.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' });
+});
+
+test('CDK: auto-created CMK follows the table removal policy — RETAIN under production', () => {
+  const { stack, parent } = setup(BlocksPresets.production);
+  new KVStore(parent, 'sessions', { encryption: 'customer-managed' });
+  const template = Template.fromStack(stack);
+  template.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' });
+});
+
+// ── retentionDays bounds (table-driven) ──────────────────────────────────────
+// The existing window test only uses 60, so mutants that widen the range
+// (> 36, < 0) or drop the Number.isInteger check survive. Pin both boundaries
+// (1, 35 accepted) and the three rejection shapes (0, 36, 7.5): a rejected
+// value warns and drops back to the default window, but PITR stays enabled.
+
+for (const days of [1, 35]) {
+  test(`CDK: retentionDays ${days} is accepted — pins the window with no warning`, () => {
+    const { stack, parent } = setup();
+    new KVStore(parent, 'sessions', { pointInTimeRecovery: { retentionDays: days } });
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      PointInTimeRecoverySpecification: {
+        PointInTimeRecoveryEnabled: true,
+        RecoveryPeriodInDays: days,
+      },
+    });
+    Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('retentionDays must be an integer'));
+  });
+}
+
+for (const days of [0, 36, 7.5]) {
+  test(`CDK: retentionDays ${days} is rejected — warns and drops to the default window (PITR still on)`, () => {
+    const { stack, parent } = setup();
+    new KVStore(parent, 'sessions', { pointInTimeRecovery: { retentionDays: days } });
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      PointInTimeRecoverySpecification: {
+        PointInTimeRecoveryEnabled: true,
+        RecoveryPeriodInDays: Match.absent(),
+      },
+    });
+    Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('retentionDays must be an integer'));
+  });
+}

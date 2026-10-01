@@ -167,6 +167,18 @@ export class KVStore extends BuildingBlockScope {
 				// key lets CDK provision a dedicated one.
 				encryptionKey,
 			});
+
+			// An auto-created CMK (`CUSTOMER_MANAGED` with no imported key) defaults
+			// to `RemovalPolicy.RETAIN`, so a sandbox table marked DESTROY would
+			// tear down but leave its dedicated key behind. Align the minted key's
+			// removal policy with the table's resolved policy so the key is never
+			// less durable than the table — it's only destroyed when the table is
+			// (sandbox DESTROY → DESTROY; production RETAIN stays RETAIN). An
+			// imported key (`encryptionKey` set via `fromKmsKey`) is owned by the
+			// caller and left untouched.
+			if (encryption === TableEncryption.CUSTOMER_MANAGED && !encryptionKey) {
+				this.table.encryptionKey?.applyRemovalPolicy(removalPolicy);
+			}
 		}
 
 		this.table.grantReadWriteData(this.executionRole);
