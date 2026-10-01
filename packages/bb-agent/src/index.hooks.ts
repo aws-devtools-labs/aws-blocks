@@ -116,7 +116,8 @@ export interface UseChatOptions {
 	 * Optional consumer-supplied callback to re-mint a fresh channel descriptor when the
 	 * Realtime transport reconnects. useChat only holds the channelId (== conversationId)
 	 * plus your `subscribe` adapter; the channel descriptor is minted INSIDE that adapter
-	 * (via `api.agentGetChannel`), which useChat cannot reach — so it cannot self-mint.
+	 * (via your raw-descriptor server method — see the Contract below), which useChat cannot
+	 * reach — so it cannot self-mint.
 	 * Provide this and useChat binds it to the CURRENT channel at the subscribe call site
 	 * and forwards the bound zero-arg form to the subscription (as `refresh`) so long turns
 	 * survive the channel (~1h) / connect (~2h) token TTLs: a reconnect mints fresh tokens
