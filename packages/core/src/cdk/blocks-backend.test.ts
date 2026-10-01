@@ -14,6 +14,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
+import { AUDIT_WARNING, AUDIT_WARNING_ACK_TAG } from './audit-warning-matcher.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
@@ -475,14 +476,10 @@ describe('VPC placement', () => {
 });
 
 describe('production access-logging audit-gap synth warning', () => {
-	// One matcher freezes all three parts of the public contract together: the
-	// message substring, the opt-in remedy, and the warning id that addWarningV2
-	// appends as `[ack: blocks:apigateway:access-logging-disabled]` (the id a
-	// caller passes to `acknowledgeWarning`). `[\s\S]*` lets the three appear in
-	// order anywhere across the full annotation string.
-	const AUDIT_WARNING = Match.stringLikeRegexp(
-		'access logging is disabled[\\s\\S]*accessLogging: true[\\s\\S]*blocks:apigateway:access-logging-disabled',
-	);
+	// Matchers are shared with blocks-stack.test.ts (see audit-warning-matcher.ts)
+	// so both synth paths assert the same contract: AUDIT_WARNING pins the message,
+	// the opt-in remedy, and the id (anchored on the `[ack: …]` tag addWarningV2
+	// appends); AUDIT_WARNING_ACK_TAG matches that tag alone for the negative cases.
 
 	test('durable posture with accessLogging off warns at synth (message, remedy, and id pinned)', async () => {
 		const app = new cdk.App();
@@ -540,7 +537,7 @@ describe('production access-logging audit-gap synth warning', () => {
 			defaultComputeFactory: stubComputeFactory,
 		});
 
-		Annotations.fromStack(parent).hasNoWarning('*', AUDIT_WARNING);
+		Annotations.fromStack(parent).hasNoWarning('*', AUDIT_WARNING_ACK_TAG);
 	});
 
 	test('sandbox posture (DESTROY) does NOT warn (disposable stack, not a durable audit gap)', async () => {
@@ -554,6 +551,20 @@ describe('production access-logging audit-gap synth warning', () => {
 			defaultComputeFactory: stubComputeFactory,
 		});
 
-		Annotations.fromStack(parent).hasNoWarning('*', AUDIT_WARNING);
+		Annotations.fromStack(parent).hasNoWarning('*', AUDIT_WARNING_ACK_TAG);
+	});
+
+	test('acknowledging the warning after create() on the returned backend suppresses it', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditAckAfterCreateStack');
+
+		// The working acknowledge form documented on BlocksDefaults.accessLogging:
+		// ack on the stack/backend RETURNED by create(), after it resolves (acking
+		// on the App before create() would not suppress it). Covers the ack path,
+		// which no other test exercises.
+		const backend = await makeBackend(parent, 'Blocks', sideEffectBackendPath);
+		cdk.Annotations.of(backend).acknowledgeWarning('blocks:apigateway:access-logging-disabled');
+
+		Annotations.fromStack(parent).hasNoWarning('*', AUDIT_WARNING_ACK_TAG);
 	});
 });
