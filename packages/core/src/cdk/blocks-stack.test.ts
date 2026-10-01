@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
+import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -236,5 +237,24 @@ describe('assertCdkConditionActive', () => {
 			process.env.NODE_OPTIONS = origNodeOptions;
 			process.execArgv = origExecArgv;
 		}
+	});
+});
+
+describe('production access-logging audit-gap synth warning (BlocksStack path)', () => {
+	// setupBlocksInfra runs the warning on the scope it is passed. BlocksStack
+	// (index.ts) passes itself, so the annotation lands on the stack node — a
+	// different node than the BlocksBackend construct path. This covers the path a
+	// real create-blocks-app takes (`BlocksStack.create` with a durable posture).
+	const AUDIT_WARNING = Match.stringLikeRegexp(
+		'access logging is disabled[\\s\\S]*accessLogging: true[\\s\\S]*blocks:apigateway:access-logging-disabled',
+	);
+
+	test('BlocksStack with a durable posture and accessLogging off warns at synth', async () => {
+		const app = new cdk.App();
+
+		// makeStack uses BlocksPresets.production (durable, accessLogging: false).
+		const stack = await makeStack(app, 'AuditWarnStackLevel', sideEffectBackendPath);
+
+		Annotations.fromStack(stack).hasWarning('*', AUDIT_WARNING);
 	});
 });

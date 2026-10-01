@@ -14,8 +14,8 @@ import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
-import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
+import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
 
@@ -92,30 +92,33 @@ export interface CoreBlocksBackendProps extends BlocksBackendProps {
  * request-level audit trail is worth surfacing.
  *
  * Production posture is detected from the resolved defaults rather than by
- * identity to a preset object (which any per-field override would break): a
- * durable stack RETAINs its stateful resources and guards them with deletion
- * protection. That combination with `accessLogging === false` is the audit gap
- * we warn about; the sandbox posture (DESTROY + protection off) and any explicit
- * `accessLogging: true` override are correctly excluded. Warning only — never
- * throws — and fires at most once per BlocksStack/BlocksBackend (so multiple
- * backends in one stack each warn for their own posture).
+ * identity to a preset object (which any per-field override would break): the
+ * trigger is a durable removal policy (any removal policy other than DESTROY)
+ * with access logging off. That combination is the audit gap we warn about, and
+ * keying on durability alone also covers postures the old RETAIN + deletion
+ * protection check missed — a durable stack that turns deletion protection off
+ * (`{ ...BlocksPresets.production, deletionProtection: false }`), and the
+ * SNAPSHOT and RETAIN_ON_UPDATE_OR_DELETE removal policies. The sandbox posture
+ * (DESTROY) and any explicit `accessLogging: true` override are correctly
+ * excluded. Warning only — never throws — and fires at most once per
+ * BlocksStack/BlocksBackend (so multiple backends in one stack each warn for
+ * their own posture).
  */
 function warnIfProductionAccessLoggingDisabled(scope: Construct, defaults: BlocksDefaults): void {
-	const isProductionPosture =
-		defaults.accessLogging === false &&
-		defaults.removalPolicy === cdk.RemovalPolicy.RETAIN &&
-		defaults.deletionProtection === true;
-	if (!isProductionPosture) return;
+	const isDurableAuditGap = defaults.removalPolicy !== cdk.RemovalPolicy.DESTROY && defaults.accessLogging === false;
+	if (!isDurableAuditGap) return;
 
 	cdk.Annotations.of(scope).addWarningV2(
 		'blocks:apigateway:access-logging-disabled',
-		'This stack has a production durability posture (RETAIN + deletion protection) but API Gateway access logging is disabled, so this stack has ' +
-			'no request-level audit trail. It is off by default because enabling it provisions the ' +
-			'account/region-level API Gateway CloudWatch Logs role — an AWS-side singleton that a ' +
-			'second Blocks stack in the same account+region can repoint on deploy or leave broken on ' +
-			'teardown (see ensureApiGatewayAccount). Once you have confirmed a single Blocks stack owns ' +
-			'that role in the region, opt in with: ' +
-			'`defaults: { ...BlocksPresets.production, accessLogging: true }`.',
+		'This deployment has a durable removal policy (its stateful resources are not destroyed on ' +
+			'teardown) but API Gateway access logging is disabled, so it has no request-level audit ' +
+			'trail. It is off by default because enabling it provisions the account/region-level API ' +
+			'Gateway CloudWatch Logs role — an AWS-side singleton that a second Blocks stack in the same ' +
+			'account+region can repoint on deploy or leave broken on teardown (see ensureApiGatewayAccount). ' +
+			'Once you have confirmed a single Blocks stack owns that role in the region, opt in by setting ' +
+			"`accessLogging: true` in this backend's `defaults`. If leaving it off is deliberate (for " +
+			'example a multi-stack deployment where another stack owns access logging), acknowledge this ' +
+			"warning with `Annotations.of(scope).acknowledgeWarning('blocks:apigateway:access-logging-disabled')`.",
 	);
 }
 

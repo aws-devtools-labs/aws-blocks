@@ -98,11 +98,15 @@ export interface BlocksDefaults {
 	 * Enabling it is therefore safe for **one Blocks stack per region** — see
 	 * `ensureApiGatewayAccount` for the full multi-stack teardown caveat.
 	 *
-	 * Because a durable production deployment then has no request-level audit
-	 * trail, a **synth-time warning** is emitted under a production posture (see
-	 * `BlocksPresets.production`) while this is off, so the tradeoff is visible at
-	 * `cdk synth`. It is a warning only — synth does not fail — and clears once
-	 * you opt in with the override above.
+	 * Because a durable deployment then has no request-level audit trail, a
+	 * **synth-time warning** is emitted whenever the resolved `defaults` combine a
+	 * durable removal policy (any {@link removalPolicy} other than
+	 * `RemovalPolicy.DESTROY`) with access logging off, so the tradeoff is visible
+	 * at `cdk synth`. It is a warning only — synth does not fail — and clears once
+	 * you opt in with the override above. If leaving it off is a deliberate choice
+	 * (for example a multi-stack deployment where another stack owns access
+	 * logging), acknowledge the warning with
+	 * `Annotations.of(scope).acknowledgeWarning('blocks:apigateway:access-logging-disabled')`.
 	 */
 	accessLogging: boolean;
 

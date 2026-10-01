@@ -475,22 +475,58 @@ describe('VPC placement', () => {
 });
 
 describe('production access-logging audit-gap synth warning', () => {
-	const AUDIT_WARNING = Match.stringLikeRegexp('access logging is disabled');
+	// One matcher freezes all three parts of the public contract together: the
+	// message substring, the opt-in remedy, and the warning id that addWarningV2
+	// appends as `[ack: blocks:apigateway:access-logging-disabled]` (the id a
+	// caller passes to `acknowledgeWarning`). `[\s\S]*` lets the three appear in
+	// order anywhere across the full annotation string.
+	const AUDIT_WARNING = Match.stringLikeRegexp(
+		'access logging is disabled[\\s\\S]*accessLogging: true[\\s\\S]*blocks:apigateway:access-logging-disabled',
+	);
 
-	test('production posture with accessLogging off warns at synth (no request-level audit trail)', async () => {
+	test('durable posture with accessLogging off warns at synth (message, remedy, and id pinned)', async () => {
 		const app = new cdk.App();
 		const parent = new cdk.Stack(app, 'AuditWarnProdStack');
 
-		// BlocksPresets.production has accessLogging: false (opt-in), so the audit
-		// gap warning must fire.
+		// BlocksPresets.production is durable (RETAIN) with accessLogging: false
+		// (opt-in), so the audit-gap warning must fire. The single matcher asserts
+		// the message, the `accessLogging: true` remedy, and the warning id together.
 		await makeBackend(parent, 'Blocks', sideEffectBackendPath);
 
 		Annotations.fromStack(parent).hasWarning('*', AUDIT_WARNING);
+	});
 
-		// Also assert the opt-in remedy is present so a future refactor that drops
-		// the `accessLogging: true` guidance is caught. `:` is literal in the regex
-		// and the space matches the emitted message verbatim.
-		Annotations.fromStack(parent).hasWarning('*', Match.stringLikeRegexp('accessLogging: true'));
+	test('durable posture with deletionProtection off still warns (keyed on durability, not the delete guard)', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditWarnNoDeleteGuardStack');
+
+		// The documented customization `{ ...production, deletionProtection: false }`
+		// is still a durable (RETAIN) stack, so it is still an audit gap and must
+		// warn — the predicate keys on the removal policy, not deletion protection.
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: { ...BlocksPresets.production, deletionProtection: false },
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		Annotations.fromStack(parent).hasWarning('*', AUDIT_WARNING);
+	});
+
+	test('SNAPSHOT removal policy with accessLogging off warns (durable, not DESTROY)', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditWarnSnapshotStack');
+
+		// SNAPSHOT retains data on teardown — durable, so the audit gap applies even
+		// though it is neither RETAIN nor a named preset.
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: { ...BlocksPresets.production, removalPolicy: cdk.RemovalPolicy.SNAPSHOT },
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		Annotations.fromStack(parent).hasWarning('*', AUDIT_WARNING);
 	});
 
 	test('production posture with accessLogging overridden to true does NOT warn', async () => {
@@ -507,7 +543,7 @@ describe('production access-logging audit-gap synth warning', () => {
 		Annotations.fromStack(parent).hasNoWarning('*', AUDIT_WARNING);
 	});
 
-	test('sandbox posture does NOT warn (disposable stack, not a production audit gap)', async () => {
+	test('sandbox posture (DESTROY) does NOT warn (disposable stack, not a durable audit gap)', async () => {
 		const app = new cdk.App();
 		const parent = new cdk.Stack(app, 'AuditNoWarnSandboxStack');
 
