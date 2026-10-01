@@ -5,7 +5,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { Scope } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
-import { createChat } from './index.chat.js';
+import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk } from './types.js';
@@ -3121,6 +3121,43 @@ describe('createChat', () => {
 		);
 		chat.destroy();
 		await flush();
+	});
+
+	// Finding 4155697642: the realtimeTransport subscribeArg gate must treat `refresh` as a
+	// trigger for the OPTIONS-OBJECT form. The useChat/createChat tests above cover forwarding
+	// THROUGH the client, but nothing drives realtimeTransport itself — so a regression that
+	// dropped `|| opts?.refresh` from the gate (sending a refresh-only subscription as a BARE
+	// handler, which the hydrated channel treats as a plain handler, silently losing refresh)
+	// stayed green. Drive the transport DIRECTLY and pin the gate: a refresh-ONLY opts must
+	// still reach io.subscribe as an options object.
+	test('realtimeTransport forwards an OPTIONS OBJECT (not a bare handler) for a refresh-ONLY subscription', async () => {
+		let captured: Parameters<Parameters<typeof realtimeTransport>[0]['subscribe']>[1] | undefined;
+		const transport = realtimeTransport({
+			subscribe: async (_channelId, handlerOrOptions) => {
+				captured = handlerOrOptions;
+				return { unsubscribe() {}, established: Promise.resolve() };
+			},
+			sendMessage: async () => {},
+			resume: async () => {},
+		});
+
+		const refresh = async (): Promise<RealtimeChannelDescriptor> => ({ __blocks: 'realtime/channel', channel: 'conv-1' });
+		// refresh-ONLY opts: NO onReconnect, NO onDisconnect — refresh alone must still select
+		// the options-object arm of the gate.
+		const stream = transport.subscribe('conv-1', { refresh });
+		await stream.established;
+
+		assert.ok(captured, 'io.subscribe should have been called');
+		if (typeof captured === 'function') {
+			assert.fail('a refresh-only subscription must forward an OPTIONS OBJECT, not a bare handler (the subscribeArg gate dropped refresh)');
+		}
+		// `captured` is narrowed to the options-object arm (cast-free: assert.fail returns never).
+		assert.strictEqual(captured.refresh, refresh, 'the SAME refresh fn must be forwarded into the options object');
+		assert.strictEqual(typeof captured.onMessage, 'function', 'the push handler must be forwarded as onMessage');
+		assert.strictEqual(captured.onReconnect, undefined, 'no onReconnect supplied → none forwarded');
+		assert.strictEqual(captured.onDisconnect, undefined, 'no onDisconnect supplied → none forwarded');
+
+		stream.unsubscribe();
 	});
 });
 

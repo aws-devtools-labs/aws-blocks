@@ -834,6 +834,54 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 		);
 	});
 
+	// Finding 4155697648: prove the refresh → fresh-token → server-accepts → onReconnect path
+	// END-TO-END, not merely that the resubscribe frame carried the fresh token. A fake
+	// stale-vs-fresh server answers the resubscribe PER TOKEN: it rejects the OLD (stale)
+	// stored channel token with `error` and accepts ONLY the FRESH token refresh() minted with
+	// `subscribe_success`. onReconnect can fire only if the resubscribe carried the fresh token
+	// the server accepts — a replayed stale token would hit the `error` branch and leave
+	// onReconnect un-fired.
+	it('reconnect recovers through a server that rejects the STALE token and accepts the FRESH one (onReconnect fires)', async () => {
+		const refresh = mock.fn(async () => ({
+			__blocks: 'realtime/channel' as const,
+			channel: CHANNEL,
+			wsUrl: FRESH_WS_URL,
+			connectToken: FRESH_CONNECT_TOKEN,
+			token: FRESH_CHANNEL_TOKEN,
+		}));
+		let reconnected = 0;
+		const client = hydrateClient();
+		client.subscribe({ onMessage: () => {}, onReconnect: () => { reconnected++; }, refresh });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop → reconnect re-mints via refresh() before opening the socket.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		const second = FakeWebSocket.instances[1];
+		assert.ok(second, 'a reconnect socket should be constructed after refresh resolves');
+		second.emitOpen();
+
+		// Fake stale-vs-fresh server: inspect the token the resubscribe actually carried and
+		// answer the way the backend would — `error` for any stale token, and `subscribe_success`
+		// ONLY for the fresh token refresh() minted.
+		const resub = second.framesFor('subscribe')[0];
+		assert.ok(resub, 'the reconnect must send a resubscribe frame');
+		if (resub.token === FRESH_CHANNEL_TOKEN) {
+			second.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+		} else {
+			second.emitMessage({ type: 'error', channel: CHANNEL, message: 'token expired' });
+		}
+
+		// The channel recovered via the fresh token the server accepted — the end-to-end proof.
+		// (A replayed stale token would have been rejected and left this at 0.)
+		assert.strictEqual(reconnected, 1, 'onReconnect fires because the server accepted the fresh token');
+	});
+
 	// Back-compat: with no refresh fn, a reconnect replays the stored wsUrl +
 	// token exactly as before, and stays synchronous (no microtask flush needed).
 	it('reconnect without refresh replays the stored token (back-compat)', () => {
