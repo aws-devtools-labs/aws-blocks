@@ -66,6 +66,14 @@ class OidcLandingPageTest {
     }
 
     @Test
+    fun `redirect rejects a malformed url with the parser's reason`() {
+        val error = shouldThrow<IllegalArgumentException> {
+            OidcLandingPage.Redirect("https://[::1/signed-in")
+        }
+        error.message!! shouldContain "not a valid URL"
+    }
+
+    @Test
     fun `redirect ignores userinfo when finding the host`() {
         val error = shouldThrow<IllegalArgumentException> {
             OidcLandingPage.Redirect("http://localhost@app.example.com/signed-in")

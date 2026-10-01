@@ -1,5 +1,8 @@
 package com.aws.blocks.kotlin.oidc
 
+import java.net.URI
+import java.net.URISyntaxException
+
 /**
  * What the browser shows once a sign-in attempt finishes.
  *
@@ -42,42 +45,42 @@ sealed interface OidcLandingPage {
     }
 }
 
-private const val SCHEME_SEPARATOR = "://"
+// URI.getHost keeps the brackets on an IPv6 literal.
 private val LOOPBACK_HOSTS = setOf("localhost", "127.0.0.1", "[::1]")
 
 private fun validateRedirectUrl(url: String) {
+    // Checked before parsing, because a stray space is a likely typo and deserves a better
+    // message than the parser's "Illegal character at index n".
     require(url.isNotBlank()) { "OidcLandingPage.Redirect url must not be blank" }
     require(url.none { it.isWhitespace() }) {
         "OidcLandingPage.Redirect url must not contain whitespace: \"$url\""
     }
 
-    val separator = url.indexOf(SCHEME_SEPARATOR)
-    require(separator > 0) {
+    val uri = try {
+        URI(url)
+    } catch (cause: URISyntaxException) {
+        throw IllegalArgumentException(
+            "OidcLandingPage.Redirect url is not a valid URL: \"$url\" (${cause.reason})",
+            cause,
+        )
+    }
+
+    // URI resolves userinfo and the IPv6 brackets itself, so `host` is the real host and not
+    // whatever precedes an `@`.
+    val scheme = uri.scheme?.lowercase()
+    require(scheme != null) {
         "OidcLandingPage.Redirect url is missing a scheme: \"$url\". Expected something " +
             "like \"https://app.example.com/signed-in\"."
     }
-
-    val scheme = url.substring(0, separator).lowercase()
     require(scheme == "http" || scheme == "https") {
         "OidcLandingPage.Redirect url uses the \"$scheme\" scheme: \"$url\". Only http and " +
             "https can be served in a Location header."
     }
 
-    val host = hostOf(url.substring(separator + SCHEME_SEPARATOR.length))
-    require(host.isNotEmpty()) { "OidcLandingPage.Redirect url has no host: \"$url\"" }
+    val host = uri.host?.lowercase()
+    require(!host.isNullOrEmpty()) { "OidcLandingPage.Redirect url has no host: \"$url\"" }
     require(scheme == "https" || host in LOOPBACK_HOSTS) {
         "OidcLandingPage.Redirect url uses http with a non-loopback host: \"$url\". Use " +
             "https, or a loopback host such as \"http://localhost:3000\" for development."
     }
-}
-
-/** Extracts the host from everything after `://`, dropping userinfo, port, and path. */
-private fun hostOf(afterScheme: String): String {
-    val authority = afterScheme.takeWhile { it != '/' && it != '?' && it != '#' }
-    val hostAndPort = authority.substringAfterLast('@')
-    if (!hostAndPort.startsWith('[')) {
-        return hostAndPort.substringBefore(':').lowercase()
-    }
-    val closing = hostAndPort.indexOf(']')
-    return if (closing < 0) "" else hostAndPort.substring(0, closing + 1).lowercase()
 }
