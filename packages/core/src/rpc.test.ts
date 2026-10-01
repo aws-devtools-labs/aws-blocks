@@ -188,9 +188,14 @@ describe('errorResponseFromCatch does not leak backend internals', () => {
 
   it('brand is non-enumerable — it never appears in JSON.stringify or the wire body', () => {
     const err = blocksError('ValidationFailedException', 'bad input');
-    // The brand symbol must not surface in any serialization.
-    assert.ok(!Object.keys(err).some(k => k.toLowerCase().includes('brand')));
-    assert.ok(!JSON.stringify({ ...err }).toLowerCase().includes('wiresafe'));
+    const BRAND = Symbol.for('aws-blocks.wireSafeError');
+    // Pin the property descriptor directly: Object.keys / JSON.stringify never
+    // expose symbol keys regardless of enumerability, so they alone cannot catch
+    // a regression that flips the brand to enumerable. The descriptor can.
+    assert.strictEqual(Object.getOwnPropertyDescriptor(err, BRAND)?.enumerable, false);
+    // A spread copies enumerable symbol keys, so an enumerable brand would leak here.
+    assert.strictEqual(Object.getOwnPropertySymbols({ ...err }).length, 0);
+    // And the real wire body must never carry the brand symbol or its description.
     const wire = errorResponseFromCatch(err, 1);
     assert.ok(!wire.toLowerCase().includes('wiresafe'));
     assert.ok(!wire.includes('Symbol('));

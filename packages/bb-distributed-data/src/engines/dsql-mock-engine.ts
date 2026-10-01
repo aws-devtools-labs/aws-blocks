@@ -9,7 +9,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { existsSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { initializePgliteWithRetry, type DatabaseEngine, type TransactionHandle } from '@aws-blocks/data-common';
-import { DistributedDatabaseErrors, PG_SERIALIZATION_FAILURE, translateDsqlError } from '../errors.js';
+import { DistributedDatabaseErrors, DDL_NOT_ALLOWED_MESSAGE, PG_SERIALIZATION_FAILURE, translateDsqlError } from '../errors.js';
 import { brandBlocksError } from '@aws-blocks/core';
 import { validateStatement, classifyStatement, TransactionTracker } from '../validation.js';
 
@@ -35,10 +35,7 @@ interface MockTxHandle { active: boolean; tracker: TransactionTracker; }
 function preprocessSqlForDsqlMock(sql: string, { allowDdl = false } = {}): string {
   validateStatement(sql);
   if (!allowDdl && classifyStatement(sql) === 'ddl') {
-    const err = new Error(
-      'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime. ' +
-      'Use migration files instead — the migration Lambda has dsql:DbConnectAdmin for DDL.',
-    );
+    const err = new Error(DDL_NOT_ALLOWED_MESSAGE);
     err.name = DistributedDatabaseErrors.Permission;
     // Branded so the name crosses the RPC wire and isBlocksError(e,
     // DistributedDatabaseErrors.Permission) keeps matching on the client. The

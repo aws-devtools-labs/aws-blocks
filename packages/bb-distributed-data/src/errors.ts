@@ -92,18 +92,31 @@ export function uniqueConstraintConflict(cause: Error): ApiError {
 }
 
 /**
+ * Stable, BB-authored message for the DDL-denial (`Permission`) path. The mock's
+ * DDL guard ({@link DistributedDatabaseErrors.Permission}) is the ONLY producer
+ * of this error — the deployed path falls through to `QueryFailed` (see
+ * {@link translateDsqlError}) — so this lives here as the single source and the
+ * mock engine imports it, rather than keeping a drift-prone second copy.
+ */
+export const DDL_NOT_ALLOWED_MESSAGE =
+  'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime. ' +
+  'Use migration files instead — the migration Lambda has dsql:DbConnectAdmin for DDL.';
+
+/**
  * Stable, BB-authored client-facing messages per DistributedDatabaseErrors name.
  * The raw DSQL/pg driver text is never sent — kept only as `cause` for
  * server-side diagnostics. A branded error's `name` AND `message` cross the wire
  * (D-003), so a re-tag path gives the error a stable message here rather than
  * forwarding the driver's.
+ *
+ * Only the two names {@link translateDsqlError} actually re-tags are listed:
+ * `Permission` is deliberately absent, because after the 42501 reversal nothing
+ * re-tags to it (the deployed path falls through to `QueryFailed`); its message
+ * lives in {@link DDL_NOT_ALLOWED_MESSAGE} for the mock's DDL guard.
  */
 const RE_TAG_MESSAGES: Record<string, string> = {
   [DistributedDatabaseErrors.QueryFailed]: 'The database query failed',
   [DistributedDatabaseErrors.ConnectionFailed]: 'The database connection failed',
-  [DistributedDatabaseErrors.Permission]:
-    'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime. ' +
-    'Use migration files instead — the migration Lambda has dsql:DbConnectAdmin for DDL.',
 };
 
 /**

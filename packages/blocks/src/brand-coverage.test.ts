@@ -29,6 +29,13 @@
  *     cannot prove every `.name =` site is individually branded), but it catches a
  *     file that mints BB error names with NO wire-safe path at all.
  *
+ *     Tier 2 is PER-FILE, NOT per-site: adding a NEW unbranded `throw` to a file
+ *     that already contains a branded producer stays green, because the file still
+ *     carries a wire-safe marker. The same holds for a new local-helper
+ *     `err.name = name` pattern. A per-site check (and the `blocksError` copy
+ *     dedup that would shrink the surface it must police) is deferred to #658 — do
+ *     not read this guard as proving every throw site is individually branded.
+ *
  * It is intentionally a TEXT scan, not a runtime import: it must catch a
  * never-instantiated class-field error, and must not need every BB's runtime deps
  * installed. Genuinely-intentional unbranded producers are named in ALLOWLIST with
