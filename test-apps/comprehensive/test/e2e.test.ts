@@ -16,6 +16,7 @@ import { distributedTableSecureDefaultsTests } from './distributed-table-secure-
 import { realtimeTests } from './realtime.test.js';
 import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
+import { corsPreflightTests } from './cors-preflight.test.js';
 import { authCognitoTests } from './auth-cognito.test.js';
 import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
 import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
@@ -239,6 +240,9 @@ basicAuthTests(() => api);
 
 // AuthBasic cookie-attribute convergence tests (separate file)
 authCookieAttrsTests(() => api);
+
+// CORS preflight allow-list tests (separate file)
+corsPreflightTests(() => api);
 
 // AuthCognito tests (separate file)
 authCognitoTests(() => api);

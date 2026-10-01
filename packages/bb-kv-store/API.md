@@ -21,6 +21,14 @@ export interface ConditionalWriteOptions<T = unknown> {
     ifValueEquals?: T;
 }
 
+// @public
+export interface ExternalKmsKeyRef {
+    // (undocumented)
+    readonly __brand: 'ExternalKmsKeyRef';
+    // (undocumented)
+    readonly keyArn: string;
+}
+
 // @public (undocumented)
 export interface ExternalTableRef {
     // (undocumented)
@@ -36,6 +44,8 @@ export class KVStore<T = string> extends Scope {
     readonly bbName = "KVStore";
     delete(key: string, conditions?: ConditionalDeleteOptions<T>): Promise<void>;
     static fromExisting(tableName: string): ExternalTableRef;
+    // (undocumented)
+    static fromKmsKey(keyArn: string): ExternalKmsKeyRef;
     get(key: string): Promise<T | null>;
     // @internal
     protected log: ChildLogger;
@@ -56,7 +66,11 @@ export const KVStoreErrors: {
 // @public (undocumented)
 export interface KVStoreOptions<T = string> {
     deletionProtection?: boolean;
+    encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
     logger?: ChildLogger;
+    pointInTimeRecovery?: boolean | {
+        retentionDays: number;
+    };
     removalPolicy?: 'destroy' | 'retain';
     schema?: StandardSchemaV1<T>;
     table?: ExternalTableRef;

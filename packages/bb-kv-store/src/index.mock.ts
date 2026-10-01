@@ -22,10 +22,11 @@ export type {
 	PutOptions,
 	KVStoreOptions,
 	ExternalTableRef,
+	ExternalKmsKeyRef,
 	ScanOptions,
 } from './types.js';
 
-import type { ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ScanOptions } from './types.js';
+import type { ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef, ScanOptions } from './types.js';
 import { KVStoreErrors } from './errors.js';
 import { isExpired, nowEpochSeconds, resolveTtlEpochSeconds } from './ttl.js';
 
@@ -261,6 +262,10 @@ export class KVStore<T = string> extends Scope {
 	 */
 	static fromExisting(tableName: string): ExternalTableRef {
 		return { __brand: 'ExternalTableRef' as const, tableName };
+	}
+
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
 	}
 
 	// ── Disk persistence ──────────────────────────────────────────────────

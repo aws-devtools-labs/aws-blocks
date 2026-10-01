@@ -24,7 +24,6 @@ import {
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Rule, RuleTargetInput, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction as LambdaFunctionTarget } from 'aws-cdk-lib/aws-events-targets';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import type { IKey } from 'aws-cdk-lib/aws-kms';
 import { type Alias, Code, type FunctionUrl, type IVersion, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
@@ -1379,17 +1378,11 @@ export class HostingConstruct extends Construct {
       }
     }
 
-    // ---- 9b. KMS decrypt grant for CloudFront OAC ----
-    const kmsKey = props.storage?.encryptionKey ?? storage.bucket.encryptionKey;
-    if (props.storage?.encryption === 'KMS' && kmsKey) {
-      kmsKey.addToResourcePolicy(
-        new iam.PolicyStatement({
-          actions: ['kms:Decrypt'],
-          resources: ['*'],
-          principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
-        }),
-      );
-    }
+    // ---- 9b. KMS decrypt for CloudFront OAC ----
+    // No explicit key-policy statement is added here: `S3BucketOrigin.withOriginAccessControl`
+    // (cdn_construct.ts) grants `kms:Decrypt` on the bucket's key — including a BYO
+    // `storage.encryptionKey`, which is set as the bucket's encryption key — conditioned on
+    // `AWS:SourceArn` matching this account's CloudFront distributions.
 
     // ---- 10. DNS records ----
     if (props.domain && dnsConstructs.length > 0) {
