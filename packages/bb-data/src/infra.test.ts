@@ -48,8 +48,19 @@ test('CDK: default capacity is 0.5-2 ACUs', () => {
 
 // --- Storage encryption, backups, and log exports ---
 
-test('CDK: cluster storage is encrypted by default (AWS-managed key)', () => {
+test('CDK: no storageEncrypted/CMK leaves StorageEncrypted unset (upgrade-safe, no replacement)', () => {
+  // With neither an explicit storageEncrypted nor a CMK, materialize must NOT
+  // emit a StorageEncrypted property at all (and never an explicit `false`), so an
+  // existing, implicitly-unencrypted cluster is not forced into a destructive
+  // replacement by a template change.
   const template = synthTemplate({ databaseName: 'mydb' });
+  const clusters = template.findResources('AWS::RDS::DBCluster');
+  const props = Object.values(clusters)[0].Properties;
+  assert.ok(!('StorageEncrypted' in props), 'StorageEncrypted must be absent, not false');
+});
+
+test('CDK: storageEncrypted:true emits StorageEncrypted:true (opt-in path)', () => {
+  const template = synthTemplate({ databaseName: 'mydb', storageEncrypted: true });
   template.hasResourceProperties('AWS::RDS::DBCluster', {
     StorageEncrypted: true,
   });
@@ -87,6 +98,11 @@ test('CDK: storageEncryptionKey option sets a customer-managed KmsKeyId on the c
     // Assert the cluster references THIS key (resolves to
     // { 'Fn::GetAtt': ['DbKey...', 'Arn'] }), not just "some" KmsKeyId —
     // Match.anyValue() would pass even if the wrong key were wired in.
+    KmsKeyId: stack.resolve(key.keyArn),
+  });
+  // The same CMK must also encrypt the auto-generated credentials secret — and
+  // supplying a key alone forces StorageEncrypted on with no context flag.
+  template.hasResourceProperties('AWS::SecretsManager::Secret', {
     KmsKeyId: stack.resolve(key.keyArn),
   });
 });

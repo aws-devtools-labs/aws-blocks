@@ -88,7 +88,7 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 | Resource | Purpose |
 |----------|---------|
-| Aurora Serverless v2 cluster | PostgreSQL database. Storage **encrypted at rest** (`storageEncrypted: true`) with the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
+| Aurora Serverless v2 cluster | PostgreSQL database. Storage encryption at rest is **opt-in**: emitted (`storageEncrypted: true`) only when the `@aws-blocks/bb-data:encryptStorageByDefault` context flag is set (new `create-blocks-app` projects set it) or a `storageEncryptionKeyArn` is supplied; otherwise the `StorageEncrypted` property is left unset so existing clusters are not replaced. Uses the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
 | VPC + private subnets | Network isolation |
 | RDS Proxy | Connection pooling |
 | Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
@@ -103,10 +103,18 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
 
 ### Security posture (Aurora)
 
-- **Encryption at rest** is always enabled and set explicitly (not left to the
-  implicit RDS default) so it is visible in synth output. A customer-managed KMS
-  key is optional; when supplied it encrypts both the storage volume and the
-  auto-generated credentials secret.
+- **Encryption at rest** is **opt-in**, gated so new projects are secure by
+  default without replacing an existing cluster. The CDK layer emits
+  `storageEncrypted: true` only when the `@aws-blocks/bb-data:encryptStorageByDefault`
+  context flag is set (the `create-blocks-app` templates set it) or a
+  customer-managed key is supplied; otherwise it leaves the `StorageEncrypted`
+  property unset — CloudFormation renders no key, and an explicit `false` is never
+  emitted, because either would be a template change that forces a destructive
+  replacement of an existing, implicitly-unencrypted cluster. A synth warning
+  (`@aws-blocks/bb-data:StorageEncryptionOptIn`) fires when neither is set. A
+  customer-managed KMS key, when supplied, encrypts both the storage volume and
+  the auto-generated credentials secret and forces encryption on regardless of the
+  flag.
 - **`iamAuthentication` is intentionally NOT enabled.** The cluster is reached
   exclusively over the RDS Data API (HTTPS + Secrets Manager credentials), never a
   direct DB socket, so database-level IAM authentication does not apply to this
@@ -118,12 +126,21 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
 - **Upgrade note (destructive replacement):** RDS cannot encrypt an
   already-provisioned, unencrypted cluster in place, so enabling storage
   encryption (or changing the key) makes CloudFormation create a **new, empty**
-  encrypted cluster and repoint the stack. There is no in-place path. Under
-  production (RETAIN) the old cluster is orphaned/unreferenced and the app comes
-  back against the empty cluster with the migration CustomResource re-running
-  (schema only, no data); under sandbox (DESTROY) the old cluster and its data are
-  deleted. The only safe route is to snapshot the existing cluster, restore it
-  with encryption enabled, then cut over. Review the diff and snapshot first.
+  encrypted cluster and repoint the stack. There is no in-place path. The
+  migration CustomResource does **not** re-run on a cluster swap — its only
+  CloudFormation properties are the service token and the migrations hash, and
+  neither changes when the cluster is replaced, so CloudFormation never invokes
+  it; the replacement cluster comes up with **no schema**, and migrations run only
+  when a migration file changes (which changes the migrations hash). Under
+  production (RETAIN) the old cluster is orphaned/unreferenced; under sandbox
+  (DESTROY) the old cluster and its data are deleted; under `removalPolicy:
+  'snapshot'` the old cluster is snapshotted as it is replaced, though under
+  production's `deletionProtection: true` the follow-up delete may fail and leave
+  it in place (this cleanup path is unverified on a real deploy). Adding or
+  changing the key also replaces the generated credentials secret (new logical id,
+  new generated password). The only safe route is to snapshot the existing
+  cluster, restore it with encryption enabled, then cut over. Review the diff and
+  snapshot first.
 
 ## Schema Migrations (External Databases)
 

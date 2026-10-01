@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { test } from 'node:test';
+import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match, Annotations } from 'aws-cdk-lib/assertions';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -126,11 +127,14 @@ class StubBlocksStack extends cdk.Stack {
   }
 }
 
-function setupDatabaseStack(defaults: BlocksDefaults = BlocksPresets.production): {
+function setupDatabaseStack(
+  defaults: BlocksDefaults = BlocksPresets.production,
+  context?: Record<string, unknown>,
+): {
   stack: StubBlocksStack;
   parent: Scope;
 } {
-  const app = new cdk.App();
+  const app = new cdk.App({ context });
   const stack = new StubBlocksStack(app, 'TestStack');
   stack.defaults = defaults;
   const parent = new Scope('app');
@@ -148,8 +152,57 @@ test('Database: storageEncryptionKeyArn sets the cluster KmsKeyId to that ARN', 
     StorageEncrypted: true,
     KmsKeyId: keyArn,
   });
+  // The same imported key encrypts the credentials secret (literal ARN), and a
+  // CMK forces StorageEncrypted on with no encryptStorageByDefault flag set.
+  template.hasResourceProperties('AWS::SecretsManager::Secret', {
+    KmsKeyId: keyArn,
+  });
   // Importing by ARN must not provision a new KMS key.
   template.resourceCountIs('AWS::KMS::Key', 0);
+});
+
+test('Database: no encryptStorageByDefault flag and no CMK leaves StorageEncrypted unset (+ opt-in warning)', () => {
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'main', {});
+  const template = Template.fromStack(stack);
+  // Upgrade-safe: an existing implicitly-unencrypted cluster must not be forced
+  // into a replacement, so no StorageEncrypted property is emitted (not `false`).
+  const clusters = template.findResources('AWS::RDS::DBCluster');
+  const props = Object.values(clusters)[0].Properties;
+  assert.ok(!('StorageEncrypted' in props), 'StorageEncrypted must be absent, not false');
+  // ...and the opt-in warning fires, pointing at how to enable it.
+  Annotations.fromStack(stack).hasWarning(
+    '*',
+    Match.stringLikeRegexp('storage-at-rest encryption is not enabled'),
+  );
+});
+
+test('Database: encryptStorageByDefault context flag emits StorageEncrypted:true (new-project path)', () => {
+  const { stack, parent } = setupDatabaseStack(BlocksPresets.production, {
+    '@aws-blocks/bb-data:encryptStorageByDefault': true,
+  });
+  new Database(parent, 'main', {});
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    StorageEncrypted: true,
+  });
+});
+
+test('Database: fromExisting() with provisioning-only options warns they are ignored', () => {
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'ext', {
+    connection: {
+      host: 'arn:aws:rds:us-east-1:111122223333:cluster:ext-cluster',
+      database: 'extdb',
+      secretArn: 'arn:aws:secretsmanager:us-east-1:111122223333:secret:ext-secret-aB1cD2',
+    },
+    storageEncryptionKeyArn: 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56',
+    pointInTimeRecovery: { retentionDays: 7 },
+  });
+  Annotations.fromStack(stack).hasWarning(
+    '*',
+    Match.stringLikeRegexp('fromExisting\\(\\)'),
+  );
 });
 
 test('Database: pointInTimeRecovery { retentionDays: 30 } sets BackupRetentionPeriod to 30', () => {
@@ -198,6 +251,36 @@ test('Database: an out-of-range retentionDays warns at synth and falls back to t
     BackupRetentionPeriod: 15,
   });
   // ...and the warning actually fires (warn-rather-than-throw).
+  Annotations.fromStack(stack).hasWarning(
+    '*',
+    Match.stringLikeRegexp('retentionDays must be an integer between 1 and 35'),
+  );
+});
+
+test('Database: retentionDays below the minimum (0) warns and falls back to 15', () => {
+  // Pins the lower bound: 0 is < 1, so it must warn + fall back. This fails if the
+  // guard is loosened from `days < 1` to `days < 0`.
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'main', { pointInTimeRecovery: { retentionDays: 0 } });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    BackupRetentionPeriod: 15,
+  });
+  Annotations.fromStack(stack).hasWarning(
+    '*',
+    Match.stringLikeRegexp('retentionDays must be an integer between 1 and 35'),
+  );
+});
+
+test('Database: a non-integer retentionDays (1.5) warns and falls back to 15', () => {
+  // Pins the integer check: 1.5 is in [1, 35] but not an integer, so it must warn
+  // + fall back rather than emit a fractional BackupRetentionPeriod.
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'main', { pointInTimeRecovery: { retentionDays: 1.5 } });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    BackupRetentionPeriod: 15,
+  });
   Annotations.fromStack(stack).hasWarning(
     '*',
     Match.stringLikeRegexp('retentionDays must be an integer between 1 and 35'),

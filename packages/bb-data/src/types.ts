@@ -82,6 +82,15 @@ export interface DatabaseOptions {
    *   the principal reading it needs `kms:Decrypt` on the key. `secret.grantRead`
    *   adds the identity-side permission; the key policy must still allow it.
    * - The key must be in the **same account and region** as the cluster.
+   *
+   * **Why this is a flat ARN** (rather than the `encryption:
+   * 'aws-managed' | 'customer-managed' | fromKmsKey(arn)` shape used by
+   * `bb-distributed-table` / `bb-kv-store`): `Database` resolves to a runtime
+   * entry point that must not import `aws-cdk-lib`, so it cannot expose the
+   * CDK-helper `fromKmsKey()` form, and the Data-API access model means there is
+   * no per-table managed-key choice to model — storage is either AWS-managed
+   * (default) or the one customer-managed key named here. Unifying the option
+   * shape across the data blocks is tracked as a follow-up.
    */
   storageEncryptionKeyArn?: string;
   /**

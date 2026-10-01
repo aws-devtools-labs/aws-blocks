@@ -8,7 +8,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import { materialize, grantExternalDataApi } from './infra.js';
-import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX } from './constants.js';
+import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX, DEFAULT_BACKUP_RETENTION_DAYS } from './constants.js';
 import type { DatabaseOptions, ExternalDatabaseRef, SubnetSelection } from './types.js';
 
 /**
@@ -88,6 +88,22 @@ export class Database extends BuildingBlockScope {
       const conn = options.connection;
       const envName = this.fullId.replace(ENV_NAME_SANITIZE_PATTERN, '_');
 
+      // Provisioning-only options don't apply to an external database — we never
+      // emit an Aurora cluster to attach them to. Surface that at synth so a
+      // `storageEncryptionKeyArn` or `pointInTimeRecovery` on what looks like a
+      // managed database isn't a silent no-op (mirrors DT's
+      // bb-distributed-table:IgnoredOptionsForExistingTable).
+      const ignoredForExisting = (['pointInTimeRecovery', 'storageEncryptionKeyArn'] as const).filter(
+        (key) => options[key] !== undefined,
+      );
+      if (ignoredForExisting.length > 0) {
+        cdk.Annotations.of(this).addWarningV2(
+          '@aws-blocks/bb-data:IgnoredOptionsForExistingDatabase',
+          `Ignoring ${ignoredForExisting.join(', ')} because this database is wrapped via fromExisting() — ` +
+            `the existing database owns its own durability/encryption configuration.`,
+        );
+      }
+
       if ('host' in conn) {
         // Data API mode (Aurora)
         registerConfig(this, `${ENV_VAR_PREFIX}_${envName}_CLUSTER_ARN`, conn.host);
@@ -130,7 +146,7 @@ export class Database extends BuildingBlockScope {
     //   false            → 1 day  (clamp — see below)
     //   true             → the enabled default window
     //   { retentionDays } → that window, after range validation (1–35)
-    const AURORA_ENABLED_BACKUP_DAYS = 15;
+    const AURORA_ENABLED_BACKUP_DAYS = DEFAULT_BACKUP_RETENTION_DAYS;
     const pitrSetting = options?.pointInTimeRecovery ?? this.defaults.pointInTimeRecovery;
     let backupRetentionDays: number;
     if (typeof pitrSetting === 'object' && pitrSetting !== null) {
@@ -162,6 +178,30 @@ export class Database extends BuildingBlockScope {
       backupRetentionDays = AURORA_ENABLED_BACKUP_DAYS;
     }
 
+    // Storage encryption: secure-by-default for NEW projects without forcing a
+    // destructive replacement on EXISTING ones. Emit `storageEncrypted: true`
+    // only when the project has opted in via the
+    // `@aws-blocks/bb-data:encryptStorageByDefault` context flag (set in the
+    // create-blocks-app cdk.json templates, so new apps are encrypted by default)
+    // OR a customer-managed `storageEncryptionKeyArn` is supplied. Otherwise leave
+    // the property unset (undefined) so an existing, implicitly-unencrypted
+    // cluster keeps its current template and is not replaced — and warn, pointing
+    // at the snapshot → restore-with-encryption → cut-over migration steps.
+    const encryptByDefault = this.node.tryGetContext('@aws-blocks/bb-data:encryptStorageByDefault') === true;
+    const hasCmk = options?.storageEncryptionKeyArn !== undefined;
+    const storageEncrypted = encryptByDefault || hasCmk ? true : undefined;
+    if (!encryptByDefault && !hasCmk) {
+      cdk.Annotations.of(this).addWarningV2(
+        '@aws-blocks/bb-data:StorageEncryptionOptIn',
+        `Aurora storage-at-rest encryption is not enabled for Database "${this.fullId}". ` +
+          `Set the context flag "@aws-blocks/bb-data:encryptStorageByDefault": true in cdk.json ` +
+          `(new create-blocks-app projects set it already), or pass storageEncryptionKeyArn, to enable it. ` +
+          `Enabling it on an already-provisioned cluster requires a destructive replacement ` +
+          `(snapshot → restore-with-encryption → cut over), so it is left opt-in. ` +
+          `See the README "Enabling encryption on an existing unencrypted cluster" note.`,
+      );
+    }
+
     const infra = materialize(this, this.fullId, {
       minCapacity: options?.minCapacity,
       maxCapacity: options?.maxCapacity,
@@ -177,6 +217,7 @@ export class Database extends BuildingBlockScope {
       // cdk.Duration backup window.
       // A single Database provisions exactly one cluster, so the fixed
       // 'db-storage-key' construct id for the imported key is unique in this scope.
+      storageEncrypted,
       storageEncryptionKey: options?.storageEncryptionKeyArn
         ? kms.Key.fromKeyArn(this, 'db-storage-key', options.storageEncryptionKeyArn)
         : undefined,

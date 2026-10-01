@@ -237,10 +237,16 @@ try {
 ## What It Provisions (AWS)
 
 - **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs. Storage
-  is **encrypted at rest by default** using the account's AWS-managed `aws/rds`
-  key; pass a `storageEncryptionKeyArn` (the ARN of a customer-managed KMS key) to
-  use a customer-managed key instead (it also encrypts the generated credentials
-  secret). The key is **imported** (Blocks can't modify its policy), so its policy
+  encryption at rest is **opt-in via a context flag** so new projects are secure by
+  default without replacing an existing cluster. New `create-blocks-app` projects
+  set `"@aws-blocks/bb-data:encryptStorageByDefault": true` in `cdk.json`, which
+  turns on encryption with the account's AWS-managed `aws/rds` key. Passing a
+  `storageEncryptionKeyArn` (the ARN of a customer-managed KMS key) also turns
+  encryption on regardless of the flag and uses that key instead (it also encrypts
+  the generated credentials secret). When neither the flag nor a key is set, the
+  cluster is synthesized without the `StorageEncrypted` property (an existing,
+  unencrypted cluster is left untouched) and a synth warning explains how to opt
+  in. The key is **imported** (Blocks can't modify its policy), so its policy
   must already grant the deploying principal `kms:CreateGrant` + `kms:DescribeKey`
   (RDS uses a grant to encrypt the storage volume) and grant `kms:Decrypt` to the
   principal that reads the credentials secret over the Data API. The key must be in
@@ -276,14 +282,26 @@ try {
 > What happens to the old cluster and its data depends on the removal policy:
 > - **Production (RETAIN):** the old cluster is left behind, orphaned and no
 >   longer referenced by the stack. The app comes back pointed at the new **empty**
->   cluster, and the migration CustomResource re-runs against it (schema only — no
->   data). Your data still exists on the orphaned cluster but is not restored.
+>   cluster. The migration CustomResource does **not** re-run on a cluster swap —
+>   its only CloudFormation properties are the service token and the migrations
+>   hash, and neither changes when the cluster is replaced, so CloudFormation never
+>   invokes it. The replacement cluster therefore comes up with **no schema**;
+>   migrations run only when a migration file changes (which changes the migrations
+>   hash). Your data still exists on the orphaned cluster but is not restored.
 > - **Sandbox (DESTROY):** the old cluster and all of its data are **deleted**.
+> - **Snapshot (`removalPolicy: 'snapshot'`):** the old cluster is snapshotted as
+>   it is replaced. Under production's `deletionProtection: true`, the follow-up
+>   delete of the old cluster may fail and leave it in place; this cleanup path is
+>   unverified on a real deploy.
 >
 > The only safe route is to carry the data across yourself: **snapshot** the
 > existing cluster, **restore** that snapshot into a new cluster with encryption
 > enabled, then cut over to it. Review the CloudFormation diff and take a snapshot
-> before deploying this change to any cluster whose data you need.
+> before deploying this change to any cluster whose data you need. Adding or
+> changing the KMS key also replaces the cluster's generated credentials secret (a
+> new logical id, hence a new generated password), so record the existing
+> credentials — or reset the master password on the old cluster — if you still
+> need access to the orphaned cluster.
 
 ## Local Development
 
@@ -305,8 +323,10 @@ interface DatabaseOptions {
   postgresVersion?: string;
   /**
    * ARN of a customer-managed KMS key for the cluster's storage-at-rest encryption
-   * (also encrypts the auto-generated credentials secret). When omitted, storage is
-   * still encrypted with the account's AWS-managed `aws/rds` key. The key is
+   * (also encrypts the auto-generated credentials secret). Supplying it turns
+   * storage encryption on regardless of the `@aws-blocks/bb-data:encryptStorageByDefault`
+   * context flag. When omitted, encryption follows that flag — on with the
+   * account's AWS-managed `aws/rds` key when set, otherwise left unset. The key is
    * imported, so its policy must already grant the deploying principal
    * `kms:CreateGrant` + `kms:DescribeKey` and grant `kms:Decrypt` to the principal
    * reading the credentials secret; it must be in the same account + region.
