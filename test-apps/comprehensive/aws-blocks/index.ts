@@ -1179,6 +1179,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async authCAdminListGroupsForUser(username: string) {
     return await authC.admin.listGroupsForUser(username);
   },
+  async authCAdminRemoveFromGroup(username: string, group: string) {
+    await authC.admin.removeUserFromGroup(username, group as Parameters<typeof authC.admin.removeUserFromGroup>[1]);
+    return { success: true };
+  },
   async authCAdminDisableUser(username: string) {
     await authC.admin.disableUser(username);
     return { success: true };

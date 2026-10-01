@@ -198,16 +198,34 @@ export type HostingConstructProps = {
       countries: string[];
     };
     /**
-     * Default TTL for SSR/compute cache behaviors when the origin response
-     * does not include a `Cache-Control` header. Set this to enable
-     * CloudFront edge caching of SSR responses and improve hit ratio.
+     * Default TTL for SSR/compute cache behaviors when the origin sends no
+     * `Cache-Control` header. Enables CloudFront edge caching of SSR
+     * responses; the origin can override via `s-maxage`/`no-store`. Synth
+     * fails closed if this resolves to `> 0` and neither {@link cacheKeyCookies}
+     * nor {@link cacheKeyHeaders} is set.
      *
-     * When set, SSR responses without an explicit `Cache-Control` header
-     * are cached at the edge for this duration. The origin can always
-     * override via `s-maxage` or `no-store`.
+     * @see HostingProps.cdn.ssrDefaultTtl for the full note on cache-key
+     * credentials and the fail-closed guard.
      * @default Duration.seconds(0) — no caching unless origin opts in
      */
     ssrDefaultTtl?: Duration;
+    /**
+     * Cookie names to include in the SSR cache key. Set your session cookie
+     * name(s) here so authenticated SSR responses are cached per-session
+     * rather than shared across users. Required (together with or instead of
+     * `cacheKeyHeaders`) to safely enable `ssrDefaultTtl`.
+     * CloudFront allows at most 10 cookies in the cache key (2 are reserved
+     * for Next.js preview mode).
+     */
+    cacheKeyCookies?: string[];
+    /**
+     * Header names to include in the SSR cache key (e.g. `'authorization'`).
+     * Use to vary cached SSR responses by credential-bearing headers.
+     * `'accept-encoding'` is not allowed (handled automatically). Required
+     * (together with or instead of `cacheKeyCookies`) to safely enable
+     * `ssrDefaultTtl`.
+     */
+    cacheKeyHeaders?: string[];
     /**
      * Bring-your-own ResponseHeadersPolicy. When provided, the construct
      * skips creating its own policy — use this to share a single policy
@@ -1147,6 +1165,8 @@ export class HostingConstruct extends Construct {
       geoRestriction: props.cdn?.geoRestriction,
       skewProtection: props.skewProtection ?? { enabled: true },
       ssrDefaultTtl: props.cdn?.ssrDefaultTtl,
+      cacheKeyCookies: props.cdn?.cacheKeyCookies,
+      cacheKeyHeaders: props.cdn?.cacheKeyHeaders,
       webAclArn: effectiveWebAclArn ?? props.cdn?.webAclArn,
       quotas: props.cdn?.quotas,
       customErrorPages: props.errorPages

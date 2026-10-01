@@ -14,6 +14,79 @@ export const DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS = 90;
 const MUTATING_CORS_METHODS: ReadonlyArray<CorsRule['allowedMethods'][number]> = ['PUT', 'POST', 'DELETE'];
 
 /**
+ * Build a `ValidationFailed`-named error the same way `mock-utils.ts`'s local
+ * `blocksError` helper does, so a rejected key surfaces the same `.name` and
+ * name-prefixed `.message` regardless of which layer rejected it. Kept as a
+ * small local helper (rather than importing core's `blocksError`) to keep this
+ * module dependency-light — it has no other runtime imports.
+ */
+function validationError(message: string): Error {
+	const err = new Error(`ValidationFailed: ${message}`);
+	err.name = 'ValidationFailed';
+	return err;
+}
+
+/**
+ * Validate an object key against the rules that must hold on EVERY runtime, so
+ * a key rejected in local dev is rejected identically on AWS (and vice versa).
+ *
+ * This is the portable half of key validation: it depends only on the key
+ * string, with no filesystem or SDK access, so it is safe to run in both the
+ * mock and the AWS runtime. (The mock additionally runs a filesystem realpath /
+ * symlink guard via `assertContainedPath`, which is inherently local-only and
+ * stays mock-only — this function does not replace it.)
+ *
+ * Rejects a key that:
+ * - is empty or not a string — there is no meaningful object to address;
+ * - contains a NUL byte or any other ASCII control character (`\x00`–`\x1f` or
+ *   `\x7f`) — control bytes in a key are almost always a bug or an injected
+ *   value and have no legitimate use in an S3 key;
+ * - has a leading `/` (absolute-style key) — S3 keys are not absolute paths, and
+ *   a leading slash produces a surprising empty-first-segment key;
+ * - contains an empty path segment — an interior `a//b` or a trailing `a/`. The
+ *   mock collapses these via `path.join` while S3 treats them as distinct
+ *   literal keys, so permitting them would reintroduce a mock↔S3 divergence;
+ * - contains a `..` (or `.`) path SEGMENT — checked per `/`-delimited segment,
+ *   not by substring, so a normal filename such as `my..file.txt` is accepted
+ *   while a path traversal segment like `a/../b` is rejected.
+ *
+ * The motivation is dev/prod parity: any key worth rejecting in local dev is
+ * worth rejecting on AWS, so that a developer never sees a rejection locally
+ * that silently does not occur in the deployed path.
+ *
+ * @param key - The object key to validate.
+ * @throws {Error} With name `ValidationFailed` if the key violates any rule.
+ */
+export function assertValidKey(key: string): void {
+	if (typeof key !== 'string' || key.length === 0) {
+		throw validationError('Invalid key: must be a non-empty string');
+	}
+	for (let i = 0; i < key.length; i++) {
+		const code = key.charCodeAt(i);
+		if (code <= 0x1f || code === 0x7f) {
+			throw validationError('Invalid key: contains control characters');
+		}
+	}
+	if (key.startsWith('/')) {
+		throw validationError('Invalid key: leading slash not allowed');
+	}
+	for (const segment of key.split('/')) {
+		if (segment === '..' || segment === '.') {
+			throw validationError('Invalid key: contains a path traversal segment');
+		}
+		// Reject an empty segment (adjacent slashes `a//b` or a trailing slash
+		// `a/`). The mock maps keys onto the filesystem via `path.join`, which
+		// collapses `a//b` to `a/b` and strips a trailing slash, while S3 treats
+		// each as a distinct literal key — so permitting them would reintroduce a
+		// mock↔S3 divergence. (A leading empty segment is reported above as a
+		// leading slash; this covers interior and trailing ones.)
+		if (segment === '') {
+			throw validationError('Invalid key: contains an empty path segment');
+		}
+	}
+}
+
+/**
  * Validate the synchronous FileBucket option combinations that the CDK rejects
  * at synth, so the local mock fails fast on exactly what `cdk synth`/deploy
  * would reject (mock↔CDK parity — see bb-app-setting's validation.ts for the

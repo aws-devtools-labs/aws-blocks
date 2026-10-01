@@ -2064,7 +2064,12 @@ void describe('HostingConstruct — KMS Key Policy', () => {
 
       new HostingConstruct(stack, 'Hosting', {
         manifest: ssrManifest(staticDir, bundleDir),
-        cdn: { ssrDefaultTtl: Duration.seconds(60) },
+        // ssrDefaultTtl > 0 requires a cache-key credential (fail-closed
+        // guard, CWE-524/525) so cacheable SSR responses are keyed per user.
+        cdn: {
+          ssrDefaultTtl: Duration.seconds(60),
+          cacheKeyCookies: ['session'],
+        },
       });
 
       const template = Template.fromStack(stack);

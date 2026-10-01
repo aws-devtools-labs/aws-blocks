@@ -3,7 +3,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 
-import { parseCorsPatterns, _resetCorsPatterns, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
+import { parseCorsPatterns, escapeOriginToPattern, getCorsPatterns, isOriginAllowed, _resetCorsPatterns, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 import { createLambdaHandler } from './lambda-handler.js';
 import { clearRouteRegistry } from './raw-route.js';
 
@@ -56,6 +56,124 @@ describe('parseCorsPatterns', () => {
     assert.strictEqual(patterns.length, 1);
     assert.ok(patterns[0].test('https://anything.example.org'));
     assert.ok(patterns[0].test('http://localhost:9999'));
+  });
+
+  it('leaves the documented .* wildcard escape hatch intact end-to-end', () => {
+    const patterns = parseCorsPatterns('.*');
+    assert.ok(patterns[0].test('https://d123.cloudfront.net'));
+    assert.ok(patterns[0].test('https://anything.example.org'));
+  });
+
+  it('appends $ to a start-only-anchored pattern (enforces the end anchor)', () => {
+    const patterns = parseCorsPatterns('^https://app\\.example\\.com');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('https://app.example.com'));
+    assert.ok(!patterns[0].test('https://app.example.com.extra'));
+  });
+
+  it('end-anchors every branch of a top-level | alternation (both branches end in $)', () => {
+    const patterns = parseCorsPatterns('^https://a\\.com|https://b\\.com$');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('https://a.com'));
+    assert.ok(patterns[0].test('https://b.com'));
+    // Whole-expression anchoring: a longer first-branch origin does not match.
+    assert.ok(!patterns[0].test('https://a.com.other'));
+  });
+
+  it('end-anchors both branches of a | alternation with no leading ^', () => {
+    const patterns = parseCorsPatterns('https://a\\.com|https://b\\.com');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('https://a.com'));
+    assert.ok(patterns[0].test('https://b.com'));
+    assert.ok(!patterns[0].test('https://a.com.other'));
+  });
+
+  it('start-anchors both branches of a | alternation (first branch not a prefix match)', () => {
+    const patterns = parseCorsPatterns('^https://a\\.com|b\\.com');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('https://a.com'));
+    assert.ok(patterns[0].test('b.com'));
+    // The second branch is start-anchored too, so a longer-prefixed host does not match.
+    assert.ok(!patterns[0].test('https://xb.com'));
+  });
+
+  it('leaves a fully-anchored pattern unchanged (no double-anchor)', () => {
+    const patterns = parseCorsPatterns('^https?://localhost(:\\d+)?$');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('http://localhost:3000'));
+    assert.ok(!patterns[0].test('http://localhost:3000.other'));
+  });
+
+  it('treats a trailing escaped dollar as literal and appends a real end anchor', () => {
+    const patterns = parseCorsPatterns('^https://foo\\$');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('https://foo$'));
+    assert.ok(!patterns[0].test('https://foo$bar'));
+  });
+});
+
+// ── escapeOriginToPattern unit tests ─────────────────────────────────────────
+
+describe('escapeOriginToPattern', () => {
+  it('escapes a literal origin so its dots are not wildcards', () => {
+    const pattern = escapeOriginToPattern('https://d123.cloudfront.net');
+    const patterns = parseCorsPatterns(pattern);
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('https://d123.cloudfront.net'));
+    assert.ok(!patterns[0].test('https://d123xcloudfrontxnet'));
+  });
+
+  it('returns an already-anchored pattern that is not double-anchored by parseCorsPatterns', () => {
+    const pattern = escapeOriginToPattern('https://d123.cloudfront.net');
+    assert.ok(pattern.startsWith('^'));
+    assert.ok(pattern.endsWith('$'));
+    // Feeding it back through parseCorsPatterns must still match the exact origin
+    // and, proving the anchors are not broken by the outer wrap, reject a suffix.
+    const patterns = parseCorsPatterns(pattern);
+    assert.ok(patterns[0].test('https://d123.cloudfront.net'));
+    assert.ok(!patterns[0].test('https://d123.cloudfront.net.other'));
+  });
+});
+
+// ── getCorsPatterns channel separation ───────────────────────────────────────
+
+describe('getCorsPatterns — channel separation', () => {
+  beforeEach(() => {
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
+  });
+
+  it('compiles CORS_ALLOWED_ORIGINS as regex and CORS_HOSTING_ORIGINS as escaped literal', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://app\\.example\\.com'; // regex channel
+    process.env.CORS_HOSTING_ORIGINS = 'https://d123.cloudfront.net'; // literal channel (raw)
+    _resetCorsPatterns();
+
+    assert.strictEqual(isOriginAllowed('https://app.example.com'), true);
+    assert.strictEqual(isOriginAllowed('https://d123.cloudfront.net'), true);
+    // The hosting literal is escaped, so a dot-substituted variant must not match.
+    assert.strictEqual(isOriginAllowed('https://d123xcloudfrontxnet'), false);
+  });
+
+  it('keeps the regex channel intact: CORS_ALLOWED_ORIGINS=.* alone allows anything', () => {
+    process.env.CORS_ALLOWED_ORIGINS = '.*';
+    _resetCorsPatterns();
+
+    assert.strictEqual(isOriginAllowed('https://anything.test'), true);
+  });
+
+  it('splits multiple CORS_HOSTING_ORIGINS entries and trims surrounding whitespace', () => {
+    process.env.CORS_HOSTING_ORIGINS = ' https://d1.cloudfront.net , https://d2.cloudfront.net ';
+    _resetCorsPatterns();
+
+    assert.strictEqual(isOriginAllowed('https://d1.cloudfront.net'), true);
+    assert.strictEqual(isOriginAllowed('https://d2.cloudfront.net'), true);
+    // Each entry is escaped, so a dot-substituted variant is rejected.
+    assert.strictEqual(isOriginAllowed('https://d1xcloudfront.net'), false);
+  });
+
+  it('returns null when neither source is configured', () => {
+    assert.strictEqual(getCorsPatterns(), null);
   });
 });
 
@@ -308,12 +426,14 @@ describe('createLambdaHandler — CORS wildcard pattern (.*)', () => {
   });
 });
 
-// ── CORS hosting origin merge ───────────────────────────────────────────────
+// ── CORS hosting origin (literal channel) ───────────────────────────────────
 
-describe('createLambdaHandler — CORS hosting origin merge', () => {
+describe('createLambdaHandler — CORS hosting origin (literal channel)', () => {
   beforeEach(() => {
     process.env.CORS_ALLOWED_ORIGINS = '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$';
-    process.env.CORS_HOSTING_ORIGINS = 'https://d111111abcdef8\\.cloudfront\\.net';
+    // Raw, unescaped resolved origin — CORS_HOSTING_ORIGINS is the literal
+    // channel, escaped at runtime by getCorsPatterns() (not pre-escaped).
+    process.env.CORS_HOSTING_ORIGINS = 'https://d111111abcdef8.cloudfront.net';
     _resetCorsPatterns();
     clearRouteRegistry();
   });
@@ -354,6 +474,15 @@ describe('createLambdaHandler — CORS hosting origin merge', () => {
     }));
     assert.strictEqual(result.statusCode, 200);
     assert.strictEqual(result.headers['access-control-allow-origin'], 'https://d111111abcdef8.cloudfront.net');
+  });
+
+  it('escapes the literal origin dots (a dot-substituted variant is rejected 403)', async () => {
+    // Proves CORS_HOSTING_ORIGINS is compiled as an escaped literal, not a regex:
+    // the dots must match literally, so this single-char variant does NOT match.
+    const result = await invoke(echoBackend, makeEvent({
+      headers: { 'Content-Type': 'application/json', origin: 'https://d111111abcdef8xcloudfront.net' },
+    }));
+    assert.strictEqual(result.statusCode, 403);
   });
 
   it('rejects origins not matching either source', async () => {

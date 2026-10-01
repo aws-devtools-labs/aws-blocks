@@ -36,6 +36,13 @@ new Hosting(blocksStack, 'Hosting', {
   framework: 'nextjs',
   api: blocksStack,
   buildCache: { enabled: true },
+  // SSR cache-key credentials: include the app's session cookie
+  // in the CloudFront SSR cache key so cacheable per-user responses are keyed
+  // per session. Exercised over the wire by the
+  // /cache-isolation route + test/e2e.test.ts "SSR cache isolation" suite.
+  // (No app-wide ssrDefaultTtl: only routes that opt in via `s-maxage` cache,
+  // keeping the other e2e routes uncached.)
+  cacheKeyCookies: ['bb_session'],
   compute: {
     memorySize: 1024,
     timeout: cdk.Duration.seconds(30),
