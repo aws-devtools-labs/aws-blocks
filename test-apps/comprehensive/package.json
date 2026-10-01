@@ -45,17 +45,17 @@
     "@aws-blocks/bb-tracer": "*",
     "@aws-blocks/blocks": "*",
     "@aws-blocks/core": "*",
-    "zod": "^4.3.0"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@aws-sdk/client-cloudformation": "^3.0.0",
-    "@aws-sdk/client-cognito-identity-provider": "^3.0.0",
-    "@types/node": "^20.0.0",
-    "aws-cdk-lib": "^2.257.0",
-    "concurrently": "^8.2.0",
-    "constructs": "^10.6.0",
-    "tsx": "^4.7.0",
-    "typescript": "^5.3.0",
+    "@aws-sdk/client-cloudformation": "^3.1144.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.1144.0",
+    "@types/node": "^20.19.43",
+    "aws-cdk-lib": "^2.272.0",
+    "concurrently": "^8.2.2",
+    "constructs": "^10.8.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
     "vite": "^6.4.3"
   }
 }
