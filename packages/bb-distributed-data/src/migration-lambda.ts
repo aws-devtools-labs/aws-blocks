@@ -31,8 +31,11 @@ const MAX_DELAY_MS = 15000;
 /**
  * Retry with exponential backoff for transient connection errors.
  * DSQL clusters may take a moment to accept connections after creation.
+ *
+ * Exported for testing: a non-transient error must rethrow after one call, and
+ * a transient one must retry — see `migration-lambda.test.ts`.
  */
-async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+export async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       return await fn();
@@ -57,8 +60,12 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
  * `code`/`message` this predicate keys on live on `cause` after re-tagging, not on
  * the surface error — reading only the surface would silently stop classifying
  * these transient failures as retryable.
+ *
+ * Exported for testing — see `migration-lambda.test.ts`, which feeds it errors
+ * as `translateDsqlError` actually throws them (the raw driver `code`/`message`
+ * on `cause`).
  */
-function isTransientConnectionError(e: unknown): boolean {
+export function isTransientConnectionError(e: unknown): boolean {
   const matches = (err: unknown): boolean => {
     if (typeof err !== 'object' || err === null) return false;
     const code = 'code' in err && typeof err.code === 'string' ? err.code : undefined;
