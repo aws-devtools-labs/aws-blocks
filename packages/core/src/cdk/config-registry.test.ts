@@ -15,6 +15,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
+import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
 import { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
@@ -70,6 +71,31 @@ function stackWithCompute(id: string): {
 	});
 	const compute = new TestCompute(stack, 'Compute');
 	return { stack, role, computes: [compute] };
+}
+
+// A cdk.Stack that also exposes `.defaults`, standing in for a real BlocksStack/BlocksBackend.
+// ensureConfigBucket resolves the log bucket's removal + retention posture from the owning
+// stack/backend's `.defaults` (globalThis.CURRENT_BLOCKS_STACK, else the stack). A subclass carrying
+// the field exercises that path without a cast and keeps the root-level logical IDs the assertions
+// below anchor on.
+class PresetStack extends cdk.Stack {
+	readonly defaults: BlocksDefaults;
+	constructor(scope: Construct, id: string, defaults: BlocksDefaults) {
+		super(scope, id);
+		this.defaults = defaults;
+	}
+}
+
+function synthWithPreset(preset: 'sandbox' | 'production'): Template {
+	const app = new cdk.App();
+	const stack = new PresetStack(app, `Preset${preset}`, BlocksPresets[preset]);
+	const role = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+		assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+	});
+	const compute = new TestCompute(stack, 'Compute');
+	registerConfig(stack, 'BLOCKS_SOMETHING', 'value');
+	finalizeConfigRegistry(stack, role, [compute]);
+	return Template.fromStack(stack);
 }
 
 test('finalize uploads + wires the computes even with zero entries when a bucket was created', () => {
@@ -191,9 +217,12 @@ test('the config bucket enforces TLS, enables versioning, and delivers server ac
 		},
 	});
 
-	// (d) The log bucket's own posture: BLOCK_ALL public access, S3-managed encryption, and the
-	// 90-day expiry rule — all pinned to the same resource via the ExpireAccessLogs rule id so this
-	// asserts the log bucket, not the config bucket.
+	// (d) The log bucket's own posture: BLOCK_ALL public access, S3-managed encryption, and an
+	// ExpireAccessLogs lifecycle rule — all pinned to the same resource via the rule id so this
+	// asserts the log bucket, not the config bucket. The expiry DAY COUNT and teardown policy are now
+	// resolved from the stack defaults, so they're asserted per-preset below; here we pin only the
+	// preset-independent lock-down. stackWithCompute registers no BlocksStack/Backend, so the posture
+	// falls back to the production preset.
 	t.hasResourceProperties('AWS::S3::Bucket', {
 		PublicAccessBlockConfiguration: {
 			BlockPublicAcls: true,
@@ -208,7 +237,22 @@ test('the config bucket enforces TLS, enables versioning, and delivers server ac
 		},
 		LifecycleConfiguration: {
 			Rules: Match.arrayWith([
-				Match.objectLike({ Id: 'ExpireAccessLogs', ExpirationInDays: 90, Status: 'Enabled' }),
+				Match.objectLike({ Id: 'ExpireAccessLogs', Status: 'Enabled' }),
+			]),
+		},
+	});
+
+	// (b2) enforceSSL on the LOG bucket generates its OWN Deny-non-TLS bucket policy, pinned to the log
+	// bucket (Ref ^ConfigLogDelivery). Without this, dropping the log bucket's enforceSSL would still
+	// pass the config-bucket SSL assertion above.
+	t.hasResourceProperties('AWS::S3::BucketPolicy', {
+		Bucket: { Ref: Match.stringLikeRegexp('^ConfigLogDelivery') },
+		PolicyDocument: {
+			Statement: Match.arrayWith([
+				Match.objectLike({
+					Effect: 'Deny',
+					Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+				}),
 			]),
 		},
 	});
@@ -235,4 +279,71 @@ test('the config bucket enforces TLS, enables versioning, and delivers server ac
 		undefined,
 		'log bucket must not set ObjectWriter ownership controls',
 	);
+});
+
+test('log bucket inherits the sandbox preset posture: DESTROY + autoDelete + 7-day expiry', () => {
+	const t = synthWithPreset('sandbox');
+
+	// Teardown + retention follow the sandbox preset: the log bucket is torn down with the stack and
+	// its logs expire after sandbox `logRetention` (ONE_WEEK === 7 days). Pinned to the log bucket via
+	// the ExpireAccessLogs rule id (the config bucket carries ExpireNoncurrentVersions, not this).
+	t.hasResource('AWS::S3::Bucket', {
+		DeletionPolicy: 'Delete',
+		Properties: Match.objectLike({
+			LifecycleConfiguration: {
+				Rules: Match.arrayWith([
+					Match.objectLike({ Id: 'ExpireAccessLogs', ExpirationInDays: 7, Status: 'Enabled' }),
+				]),
+			},
+		}),
+	});
+	// autoDeleteObjects is on for BOTH the config bucket (always DESTROY) and the log bucket under
+	// sandbox ⇒ two Custom::S3AutoDeleteObjects resources.
+	t.resourceCountIs('Custom::S3AutoDeleteObjects', 2);
+});
+
+test('log bucket inherits the production preset posture: RETAIN + no autoDelete + 365-day expiry', () => {
+	const t = synthWithPreset('production');
+
+	// Access logs are a durable audit artifact under production: the log bucket is RETAIN (not torn
+	// down with the stack) and its logs expire after production `logRetention` (ONE_YEAR === 365 days).
+	t.hasResource('AWS::S3::Bucket', {
+		DeletionPolicy: 'Retain',
+		Properties: Match.objectLike({
+			LifecycleConfiguration: {
+				Rules: Match.arrayWith([
+					Match.objectLike({ Id: 'ExpireAccessLogs', ExpirationInDays: 365, Status: 'Enabled' }),
+				]),
+			},
+		}),
+	});
+	// Only the config bucket (always DESTROY) auto-deletes; the RETAIN log bucket must NOT ⇒ exactly
+	// one Custom::S3AutoDeleteObjects resource. This is what guards the "don't wipe production access
+	// logs on teardown" guarantee.
+	t.resourceCountIs('Custom::S3AutoDeleteObjects', 1);
+
+	// The log bucket keeps its lock-down under RETAIN: BLOCK_ALL public access and its own Deny-non-TLS
+	// bucket policy still hold.
+	t.hasResourceProperties('AWS::S3::Bucket', {
+		PublicAccessBlockConfiguration: {
+			BlockPublicAcls: true,
+			BlockPublicPolicy: true,
+			IgnorePublicAcls: true,
+			RestrictPublicBuckets: true,
+		},
+		LifecycleConfiguration: {
+			Rules: Match.arrayWith([Match.objectLike({ Id: 'ExpireAccessLogs', Status: 'Enabled' })]),
+		},
+	});
+	t.hasResourceProperties('AWS::S3::BucketPolicy', {
+		Bucket: { Ref: Match.stringLikeRegexp('^ConfigLogDelivery') },
+		PolicyDocument: {
+			Statement: Match.arrayWith([
+				Match.objectLike({
+					Effect: 'Deny',
+					Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+				}),
+			]),
+		},
+	});
 });
