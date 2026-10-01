@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { Scope } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
 import { createChat } from './index.chat.js';
-import type { ChatTransport, ChunkStream } from './transport.js';
+import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk } from './types.js';
 import { CannedProvider } from './providers/canned.js';
@@ -1941,12 +1941,13 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
-	test('useChat forwards a consumer-supplied refresh to the subscription options', async () => {
+	test('useChat forwards a consumer-supplied, channel-aware refresh bound to the current channel', async () => {
 		// The consumer owns api.agentGetChannel, so it supplies the actual mint; useChat only
-		// forwards it. A fresh descriptor is what the transport uses to re-mint tokens on reconnect.
+		// binds it to the current channelId and forwards the zero-arg bound form. A fresh
+		// descriptor is what the transport uses to re-mint tokens on reconnect.
 		const descriptor: ChatChannelDescriptor = { __blocks: 'realtime/channel', channel: 'conv-1' };
-		let refreshCalls = 0;
-		const mockRefresh = async (): Promise<ChatChannelDescriptor> => { refreshCalls++; return descriptor; };
+		const askedFor: string[] = [];
+		const mockRefresh = async (channelId: string): Promise<ChatChannelDescriptor> => { askedFor.push(channelId); return descriptor; };
 		const { cap, subscribe } = subscribeCapture();
 
 		const chat = useChat({
@@ -1959,15 +1960,51 @@ describe('useChat', () => {
 			refresh: mockRefresh,
 		});
 
-		// Sending triggers ensureSubscribed, which builds subscribeArg with refresh attached.
+		// Sending triggers ensureSubscribed('conv-1'), which binds refresh to that channel.
 		await chat.sendMessage('hello');
 
-		assert.strictEqual(typeof cap.refresh, 'function', 'refresh should be forwarded to the subscription options');
-		assert.strictEqual(cap.refresh, mockRefresh, 'the exact consumer-supplied fn is forwarded verbatim');
-		// Invoking the forwarded fn calls the consumer mint and yields its descriptor.
+		assert.strictEqual(typeof cap.refresh, 'function', 'a (bound, zero-arg) refresh should be forwarded to the subscription options');
+		// Invoking the forwarded zero-arg fn calls the consumer mint WITH the bound channelId.
 		const result = await cap.refresh!();
-		assert.strictEqual(refreshCalls, 1, 'the forwarded refresh invokes the consumer mint');
+		assert.deepStrictEqual(askedFor, ['conv-1'], 'the forwarded refresh asks the consumer mint for the CURRENT channel');
 		assert.strictEqual(result, descriptor, 'and returns the freshly-minted descriptor');
+		chat.destroy();
+	});
+
+	// BLOCKING B1: the refresh must track the CURRENT channel, not one captured at
+	// construction. loadConversation switches the channel; the forwarded refresh must
+	// then re-mint for the NEW channel.
+	test('useChat rebinds the channel-aware refresh when the channel changes (loadConversation)', async () => {
+		const askedFor: string[] = [];
+		const mockRefresh = async (channelId: string): Promise<ChatChannelDescriptor> => {
+			askedFor.push(channelId);
+			return { __blocks: 'realtime/channel', channel: channelId };
+		};
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'a' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			refresh: mockRefresh,
+		});
+
+		// First conversation 'a': ensureSubscribed('a') binds refresh to channel 'a'.
+		await chat.loadConversation('a');
+		await cap.refresh!();
+		assert.deepStrictEqual(askedFor, ['a'], 'refresh binds to the first channel');
+
+		// Switch to conversation 'b': ensureSubscribed('b') rebinds refresh to channel 'b'.
+		await chat.loadConversation('b');
+		await cap.refresh!();
+		assert.deepStrictEqual(
+			askedFor,
+			['a', 'b'],
+			'after switching, the forwarded refresh asks for channel b — NOT the first conversation',
+		);
 		chat.destroy();
 	});
 });
@@ -3026,6 +3063,61 @@ describe('createChat', () => {
 		assert.ok(
 			chat.getMessages().some((m) => m.role === 'assistant' && m.content === 'the server-side final answer'),
 			'loadConversation recovers the persisted server-side final answer',
+		);
+		chat.destroy();
+		await flush();
+	});
+
+	// BLOCKING B1: the refresh forwarded to the transport must be bound to the turn's
+	// resolved channel, which changes across loadConversation — not a channel captured
+	// once at construction.
+	test('createChat binds the channel-aware refresh to the turn channel (switches with the conversation)', async () => {
+		const askedFor: string[] = [];
+		const refresh = async (channelId: string): Promise<RealtimeChannelDescriptor> => {
+			askedFor.push(channelId);
+			return { __blocks: 'realtime/channel', channel: channelId };
+		};
+		// Capture the zero-arg refresh createChat forwards to transport.subscribe(channelId, opts).
+		let captured: (() => Promise<RealtimeChannelDescriptor>) | undefined;
+		const transport: ChatTransport = {
+			subscribe(_channelId, opts): ChunkStream {
+				captured = opts?.refresh;
+				return {
+					established: Promise.resolve(),
+					unsubscribe() {},
+					async *[Symbol.asyncIterator]() {},
+				};
+			},
+			async run(turn) {
+				return { channelId: turn.channelId };
+			},
+		};
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'a' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			refresh,
+		});
+
+		// First turn lazily creates conversation 'a' and binds refresh to channel 'a'.
+		await chat.sendMessage('first');
+		await new Promise((r) => setTimeout(r, 10));
+		assert.strictEqual(typeof captured, 'function', 'createChat forwards a bound zero-arg refresh to the transport');
+		await captured!();
+		assert.deepStrictEqual(askedFor, ['a'], 'the forwarded refresh asks for the first turn channel');
+
+		// Switch to conversation 'b', then send — startTurn rebinds refresh to channel 'b'.
+		await chat.loadConversation('b');
+		await chat.sendMessage('second');
+		await new Promise((r) => setTimeout(r, 10));
+		await captured!();
+		assert.deepStrictEqual(
+			askedFor,
+			['a', 'b'],
+			'after loadConversation(b), the forwarded refresh is asked for channel b — NOT the first conversation',
 		);
 		chat.destroy();
 		await flush();

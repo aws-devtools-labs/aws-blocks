@@ -1026,6 +1026,156 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 			'a persistently rejecting refresh must not construct any reconnect socket',
 		);
 	});
+
+	// ── PR #503 BLOCKING B2: per-channel refreshers ───────────────────────────
+	// `refresh` is per-channel, not per-connection. The pool is keyed by wsUrl and
+	// ALL channels of a Realtime instance multiplex onto one connection, so a
+	// single last-writer-wins fn would re-mint only one channel's token and leave
+	// its siblings replaying a stale one (rejected after ~1h). Each channel keeps
+	// its OWN refresher; a reconnect re-mints EVERY live channel in parallel.
+
+	const CHANNEL_A = 'my-app-rt/chat/room-A';
+	const CHANNEL_B = 'my-app-rt/chat/room-B';
+
+	type FreshFor = {
+		__blocks: 'realtime/channel';
+		channel: string;
+		wsUrl: string;
+		connectToken: string;
+		token: string;
+	};
+	// Build a refresh fn that re-mints `channel` with `freshToken` and the shared,
+	// instance-scoped connect token (mintConnectToken(this.fullId) is the same for
+	// every channel of one Realtime instance).
+	const freshRefresh = (channel: string, freshToken: string) =>
+		mock.fn(
+			async (): Promise<FreshFor> => ({
+				__blocks: 'realtime/channel',
+				channel,
+				wsUrl: WS_URL,
+				connectToken: FRESH_CONNECT_TOKEN,
+				token: freshToken,
+			}),
+		);
+	// Pull the resubscribe token a socket sent for a given channel.
+	const resubTokenFor = (socket: FakeWebSocket, channel: string): unknown =>
+		socket.framesFor('subscribe').find((f) => f.channel === channel)?.token;
+
+	// Scenario 2 (both live): A and B both subscribed, each with its OWN refresh.
+	// A reconnect must re-mint BOTH — neither replays a stale token.
+	it('reconnect re-mints EVERY live channel with its own refresh (neither replays a stale token)', async () => {
+		const refreshA = freshRefresh(CHANNEL_A, 'fresh-token-A');
+		const refreshB = freshRefresh(CHANNEL_B, 'fresh-token-B');
+		const clientA = hydrateClientFor(CHANNEL_A, 'stale-token-A');
+		const clientB = hydrateClientFor(CHANNEL_B, 'stale-token-B');
+		clientA.subscribe({ onMessage: () => {}, refresh: refreshA });
+		clientB.subscribe({ onMessage: () => {}, refresh: refreshB });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL_A });
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL_B });
+
+		// Drop → reconnect runs BOTH refreshers before reopening.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refreshA.mock.callCount(), 1, 'channel A re-mints on reconnect');
+		assert.strictEqual(refreshB.mock.callCount(), 1, 'channel B re-mints on reconnect');
+
+		const second = FakeWebSocket.instances[1];
+		assert.ok(second, 'reconnect socket should open once both refreshes resolve');
+		assert.ok(second.url.includes(encodeURIComponent(FRESH_CONNECT_TOKEN)), 'reconnect carries the fresh instance-scoped connect token');
+		second.emitOpen();
+		assert.strictEqual(resubTokenFor(second, CHANNEL_A), 'fresh-token-A', 'A resubscribes with its OWN fresh token (not stale, not B\'s)');
+		assert.strictEqual(resubTokenFor(second, CHANNEL_B), 'fresh-token-B', 'B resubscribes with its OWN fresh token (not stale, not A\'s)');
+	});
+
+	// Scenario 1 (dead channel): A + B both have a refresh; B unsubscribes before
+	// the reconnect. B's refresher must be dropped (not run for the dead channel),
+	// and A must still re-mint its OWN fresh token — not replay its stale one.
+	it('a channel unsubscribed before a reconnect is not refreshed; the survivor re-mints its own token', async () => {
+		const refreshA = freshRefresh(CHANNEL_A, 'fresh-token-A');
+		const refreshB = freshRefresh(CHANNEL_B, 'fresh-token-B');
+		const clientA = hydrateClientFor(CHANNEL_A, 'stale-token-A');
+		const clientB = hydrateClientFor(CHANNEL_B, 'stale-token-B');
+		clientA.subscribe({ onMessage: () => {}, refresh: refreshA });
+		const subB = clientB.subscribe({ onMessage: () => {}, refresh: refreshB });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL_A });
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL_B });
+
+		// B's last (only) handler unsubscribes — channel B is gone from this connection.
+		subB.unsubscribe();
+
+		// Drop → reconnect. Only A is still subscribed.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refreshA.mock.callCount(), 1, 'the surviving channel A re-mints');
+		assert.strictEqual(refreshB.mock.callCount(), 0, 'the unsubscribed channel B must NOT be refreshed (dead channel)');
+
+		const second = FakeWebSocket.instances[1];
+		assert.ok(second, 'reconnect socket should open');
+		second.emitOpen();
+		const resubs = second.framesFor('subscribe');
+		assert.strictEqual(resubs.length, 1, 'only the surviving channel A resubscribes');
+		assert.strictEqual(resubs[0].channel, CHANNEL_A);
+		assert.strictEqual(resubs[0].token, 'fresh-token-A', 'A re-mints its OWN fresh token — it is NOT left replaying its stale token');
+	});
+
+	// ── PR #503 BLOCKING B3: .catch / failure-path pool-ownership guard ───────
+	// A refresh that settles on a torn-down conn must not scheduleReconnect it: that
+	// path tears a subscriber-less conn down via connections.delete(wsUrl), which
+	// would evict whatever LIVE connection has since taken over the same wsUrl key.
+	// Repro: drop, refresh pending, unsub A (old conn removed), sub B (new conn,
+	// same wsUrl), refresh rejects → must NOT evict B; a later sub C reuses B.
+	it('a refresh settling on a torn-down conn does not evict the live connection on the same wsUrl', async () => {
+		type Fresh = { __blocks: 'realtime/channel'; channel: string; wsUrl: string; connectToken: string; token: string };
+		let rejectRefresh: () => void = () => {};
+		const refresh = mock.fn(
+			() => new Promise<Fresh>((_res, rej) => { rejectRefresh = () => rej(new Error('mint failed')); }),
+		);
+		const clientA = hydrateClient();
+		const subA = clientA.subscribe({ onMessage: () => {}, refresh });
+
+		const s0 = FakeWebSocket.instances[0];
+		s0.emitOpen();
+		s0.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop → the reconnect awaits refresh(); hold it pending so no socket opens yet.
+		s0.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		assert.strictEqual(FakeWebSocket.instances.length, 1, 'no socket opens while refresh is pending');
+
+		// Unsubscribe A: the OLD conn is removed from the pool and torn down.
+		subA.unsubscribe();
+
+		// Subscribe B on the SAME wsUrl: a fresh conn takes over the wsUrl key (socket #2).
+		const clientB = hydrateClient();
+		clientB.subscribe({ onMessage: () => {} });
+		assert.strictEqual(FakeWebSocket.instances.length, 2, 'B opens a fresh socket on the same wsUrl');
+		FakeWebSocket.instances[1].emitOpen();
+
+		// A's refresh now rejects. The guarded continuation must no-op on the torn-down
+		// conn and NOT scheduleReconnect it (which would delete B from the pool).
+		rejectRefresh();
+		await new Promise((r) => setImmediate(r));
+
+		// B is still the pooled owner of the wsUrl: a later subscribe REUSES it, opening
+		// NO third socket. (In the unguarded bug, B was evicted and C opened a 3rd socket.)
+		const clientC = hydrateClient();
+		clientC.subscribe({ onMessage: () => {} });
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			2,
+			'C must reuse B\'s still-pooled connection — the torn-down conn must not have evicted it',
+		);
+	});
 });
 
 describe('Mock (local-dev) middleware: token refresh on reconnect', () => {
@@ -1184,5 +1334,137 @@ describe('Mock (local-dev) middleware: token refresh on reconnect', () => {
 			1,
 			'openMockSocket must not run after reset — no zombie socket or resurrected pool entry',
 		);
+	});
+
+	// ── PR #503 BLOCKING B2 (mock mirror): per-channel refreshers ─────────────
+	// The mock multiplexes several channels on one wsUrl connection just like AWS,
+	// so it mirrors the per-channel-refreshers model: each channel keeps its own
+	// refresher, a reconnect re-mints every live channel, and an unsubscribed
+	// channel is not refreshed.
+
+	const MOCK_CHANNEL_A = 'my-app-rt/chat/room-A';
+	const MOCK_CHANNEL_B = 'my-app-rt/chat/room-B';
+
+	type MockFresh = { __blocks: 'realtime/channel'; channel: string; wsUrl: string; token: string };
+	const mockFreshRefresh = (channel: string, freshToken: string) =>
+		mock.fn(
+			async (): Promise<MockFresh> => ({ __blocks: 'realtime/channel', channel, wsUrl: WS_URL, token: freshToken }),
+		);
+	const mockHydrateFor = (channel: string, token: string): RealtimeChannelClient => {
+		const client = mockHydrate({ __blocks: 'realtime/channel', channel, wsUrl: WS_URL, token });
+		assert.ok(isChannelClient(client), 'mock hydrate should return a channel client');
+		return client;
+	};
+	const resubTokenFor = (socket: FakeWebSocket, channel: string): unknown =>
+		socket.framesFor('subscribe').find((f) => f.channel === channel)?.token;
+
+	// Scenario 2 (both live): both channels re-mint their own fresh token on reconnect.
+	it('mock reconnect re-mints EVERY live channel with its own refresh (neither replays a stale token)', async () => {
+		const refreshA = mockFreshRefresh(MOCK_CHANNEL_A, 'fresh-A');
+		const refreshB = mockFreshRefresh(MOCK_CHANNEL_B, 'fresh-B');
+		mockHydrateFor(MOCK_CHANNEL_A, 'stale-A').subscribe({ onMessage: () => {}, refresh: refreshA });
+		mockHydrateFor(MOCK_CHANNEL_B, 'stale-B').subscribe({ onMessage: () => {}, refresh: refreshB });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: MOCK_CHANNEL_A });
+		first.emitMessage({ type: 'subscribe_success', channel: MOCK_CHANNEL_B });
+
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refreshA.mock.callCount(), 1, 'channel A re-mints on the mock reconnect');
+		assert.strictEqual(refreshB.mock.callCount(), 1, 'channel B re-mints on the mock reconnect');
+
+		const second = FakeWebSocket.instances[1];
+		assert.ok(second, 'mock should reopen once both refreshes resolve');
+		second.emitOpen();
+		assert.strictEqual(resubTokenFor(second, MOCK_CHANNEL_A), 'fresh-A', 'A resubscribes with its OWN fresh token');
+		assert.strictEqual(resubTokenFor(second, MOCK_CHANNEL_B), 'fresh-B', 'B resubscribes with its OWN fresh token');
+	});
+
+	// Scenario 1 (dead channel): B unsubscribes before the reconnect; its refresher
+	// is dropped (not run), and A still re-mints its own fresh token.
+	it('mock does not refresh a channel unsubscribed before the reconnect; the survivor re-mints its own token', async () => {
+		const refreshA = mockFreshRefresh(MOCK_CHANNEL_A, 'fresh-A');
+		const refreshB = mockFreshRefresh(MOCK_CHANNEL_B, 'fresh-B');
+		mockHydrateFor(MOCK_CHANNEL_A, 'stale-A').subscribe({ onMessage: () => {}, refresh: refreshA });
+		const subB = mockHydrateFor(MOCK_CHANNEL_B, 'stale-B').subscribe({ onMessage: () => {}, refresh: refreshB });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: MOCK_CHANNEL_A });
+		first.emitMessage({ type: 'subscribe_success', channel: MOCK_CHANNEL_B });
+
+		subB.unsubscribe();
+
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refreshA.mock.callCount(), 1, 'the surviving channel A re-mints');
+		assert.strictEqual(refreshB.mock.callCount(), 0, 'the unsubscribed channel B must NOT be refreshed (dead channel)');
+
+		const second = FakeWebSocket.instances[1];
+		assert.ok(second, 'mock should reopen');
+		second.emitOpen();
+		const resubs = second.framesFor('subscribe');
+		assert.strictEqual(resubs.length, 1, 'only the surviving channel A resubscribes');
+		assert.strictEqual(resubs[0].channel, MOCK_CHANNEL_A);
+		assert.strictEqual(resubs[0].token, 'fresh-A', 'A re-mints its OWN fresh token — not its stale one');
+	});
+
+	// ── PR #503 BLOCKING B3 (mock mirror): refresh-failure pool-ownership guard ──
+	// A refresh that settles on a torn-down conn must not fire disconnect('error')
+	// or scheduleReconnect against whatever LIVE conn has since taken over the same
+	// wsUrl key. The mock keeps a conn pooled across unsubscribe, so the key can only
+	// be re-owned by a different conn via __resetConnectionsForTest + a new subscribe —
+	// the mock analogue of the AWS "unsub A → sub B on the same wsUrl" eviction repro.
+	// Without the identity guard the stale refresh would bump the live conn's
+	// reconnectAttempts, arm a reconnect (3rd socket) and fan a spurious error at it.
+	it('a refresh settling on a torn-down conn does not corrupt the live connection on the same wsUrl (mock)', async () => {
+		type MockFresh = { __blocks: 'realtime/channel'; channel: string; wsUrl: string; token: string };
+		let rejectRefresh: () => void = () => {};
+		const refresh = mock.fn(
+			() => new Promise<MockFresh>((_res, rej) => { rejectRefresh = () => rej(new Error('mint failed')); }),
+		);
+		const clientA = mockHydrate({ __blocks: 'realtime/channel', channel: CHANNEL, wsUrl: WS_URL, token: 'stale-A' });
+		assert.ok(isChannelClient(clientA), 'mock hydrate should return a channel client');
+		clientA.subscribe({ onMessage: () => {}, refresh });
+
+		const s0 = FakeWebSocket.instances[0];
+		s0.emitOpen();
+		s0.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop → the mock reconnect awaits refresh(); hold it pending so no socket opens yet.
+		s0.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		assert.strictEqual(refresh.mock.callCount(), 1, 'mock reconnect should await refresh()');
+		assert.strictEqual(FakeWebSocket.instances.length, 1, 'no socket opens while refresh is pending');
+
+		// Reset clears the pool and tears conn A down; A's pending refresh is now stale.
+		mockReset();
+
+		// A fresh conn B takes over the SAME wsUrl key (socket #2).
+		const clientB = mockHydrate({ __blocks: 'realtime/channel', channel: CHANNEL, wsUrl: WS_URL, token: 'token-B' });
+		assert.ok(isChannelClient(clientB), 'mock hydrate should return a channel client');
+		let bDisconnects = 0;
+		clientB.subscribe({ onMessage: () => {}, onDisconnect: () => { bDisconnects++; } });
+		assert.strictEqual(FakeWebSocket.instances.length, 2, 'B opens a fresh socket on the same wsUrl');
+		FakeWebSocket.instances[1].emitOpen();
+
+		// A's refresh now rejects. The guarded continuation must no-op on the torn-down
+		// conn and NOT fire disconnect('error') or scheduleReconnect against live conn B.
+		rejectRefresh();
+		await new Promise((r) => setImmediate(r));
+		mock.timers.tick(60_000);
+
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			2,
+			'the stale refresh must not open a 3rd socket by scheduling a reconnect on the live conn',
+		);
+		assert.strictEqual(bDisconnects, 0, 'the stale refresh must not fire a spurious disconnect on the live conn');
 	});
 });

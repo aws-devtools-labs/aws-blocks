@@ -87,10 +87,11 @@ export interface ChatSubscribeOptions {
 	/**
 	 * Called before each reconnect to obtain a freshly-minted channel descriptor (new
 	 * connect + channel token) so the subscription can outlive the token TTLs (channel
-	 * ~1h / connect ~2h). Mirrors bb-realtime's `SubscribeOptions.refresh`. useChat
-	 * forwards {@link UseChatOptions.refresh} here verbatim; the transport calls it on
-	 * reconnect only (never on the initial subscribe) and simply does not use it when
-	 * undefined.
+	 * ~1h / connect ~2h). Mirrors bb-realtime's `SubscribeOptions.refresh` and stays
+	 * zero-arg because the channel is fixed per subscription here. useChat binds
+	 * {@link UseChatOptions.refresh} to the resolved channelId and forwards the bound
+	 * zero-arg form here; the transport calls it on reconnect only (never on the initial
+	 * subscribe) and simply does not use it when undefined.
 	 */
 	refresh?: () => Promise<ChatChannelDescriptor>;
 }
@@ -121,15 +122,18 @@ export interface UseChatOptions {
 	 * Realtime transport reconnects. useChat only holds the channelId (== conversationId)
 	 * plus your `subscribe` adapter; the channel descriptor is minted INSIDE that adapter
 	 * (via `api.agentGetChannel`), which useChat cannot reach — so it cannot self-mint.
-	 * Provide this and useChat forwards it to the subscription (as `refresh`) so long turns
+	 * Provide this and useChat binds it to the CURRENT channel at the subscribe call site
+	 * and forwards the bound zero-arg form to the subscription (as `refresh`) so long turns
 	 * survive the channel (~1h) / connect (~2h) token TTLs: a reconnect mints fresh tokens
-	 * instead of replaying expired ones. This MUST resolve to the RAW channel descriptor
-	 * (the wire object with `__blocks`/token fields), NOT a hydrated channel client — so
-	 * point it at a raw-descriptor server method, e.g.
-	 * `async () => ({ ...(await api.agentGetRawDescriptor(conversationId)), __blocks: 'realtime/channel' })`.
+	 * instead of replaying expired ones. Receives the resolved `channelId` so it re-mints for
+	 * the channel actually in use (which changes across loadConversation), not one captured
+	 * once at construction. This MUST resolve to the RAW channel descriptor (the wire object
+	 * with `__blocks`/token fields), NOT a hydrated channel client — so point it at a
+	 * raw-descriptor server method, e.g.
+	 * `async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' })`.
 	 * When omitted, a reconnect replays the original tokens (fine for short turns).
 	 */
-	refresh?: () => Promise<ChatChannelDescriptor>;
+	refresh?: (channelId: string) => Promise<ChatChannelDescriptor>;
 	/** Called whenever the message list changes. */
 	onMessagesChange?: (messages: ChatMessage[]) => void;
 	/** Called whenever loading state changes. */
@@ -210,9 +214,10 @@ const RECONNECT_FAILSAFE_MS = 660_000;
  *     return result.channel.subscribe(sub);
  *   },
  *   // Re-mint a fresh channel descriptor on reconnect so long turns outlive the channel
- *   // (~1h) / connect (~2h) token TTLs. useChat forwards this to the subscription as sub.refresh.
+ *   // (~1h) / connect (~2h) token TTLs. useChat binds this to the current channelId and
+ *   // forwards the bound zero-arg form to the subscription as sub.refresh.
  *   // Must resolve to the RAW descriptor (wire object with token fields), not a hydrated channel.
- *   refresh: async () => ({ ...(await api.agentGetRawDescriptor(conversationId)), __blocks: 'realtime/channel' }),
+ *   refresh: async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' }),
  *   onMessagesChange: (msgs) => renderMessages(msgs),
  *   onLoadingChange: (loading) => updateSpinner(loading),
  * });
@@ -543,9 +548,12 @@ export function useChat(options: UseChatOptions): ChatInstance {
 				// no longer leave the spinner stuck.
 				if (reason !== 'client' && loading) { armFailsafe(); }
 			},
-			// Forward the consumer-supplied re-mint callback (if any). When undefined the
+			// Bind the consumer-supplied re-mint callback to THIS channelId (where the channel
+			// is known) and forward the zero-arg bound form. The channel changes across
+			// loadConversation / first-send createConversation, so binding here — not at
+			// construction — re-mints for the channel actually in use. When undefined the
 			// transport simply replays the original tokens on reconnect (back-compat).
-			refresh: options.refresh,
+			refresh: options.refresh ? () => options.refresh!(channelId) : undefined,
 		};
 
 		const sub = await options.subscribe(channelId, subscribeArg);

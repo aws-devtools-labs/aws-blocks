@@ -45,13 +45,16 @@ const connections = new Map<string, {
 	/** Registered onReconnect callbacks (called after a reconnect resubscribes). */
 	reconnectHandlers: Set<() => void>;
 	/**
-	 * Optional token-refresh fn, set from `SubscribeOptions.refresh`. Called
-	 * before each reconnect (never on the initial connect) to re-mint a fresh
-	 * channel descriptor so the subscription outlives the channel-token TTL
-	 * (~1h). Mirrors aws-middleware; the local dev server validates the channel
-	 * token on (re)subscribe, so the fresh token is applied to `channelTokens`.
+	 * Per-channel token-refresh fns, set from `SubscribeOptions.refresh`. Keyed by
+	 * channel because the local dev server multiplexes several channels on one
+	 * connection, each with its OWN refresh fn. Called before each reconnect (never
+	 * on the initial connect) to re-mint a fresh channel descriptor so every live
+	 * subscription outlives the channel-token TTL (~1h). Mirrors aws-middleware's
+	 * per-channel refreshers; the fresh token is applied to `channelTokens` on
+	 * reconnect. Set in `subscribeTo` when a channel provides a refresh; DELETED when
+	 * that channel's last handler unsubscribes (or its resubscribe is rejected).
 	 */
-	refresh?: () => Promise<RealtimeChannelDescriptor>;
+	refreshers: Map<string, () => Promise<RealtimeChannelDescriptor>>;
 	/** Pending reconnect timer, tracked so it can be cleared on teardown. */
 	reconnectTimer?: ReturnType<typeof setTimeout>;
 	/**
@@ -82,6 +85,7 @@ function getOrCreateConnection(wsUrl: string) {
 			pendingEstablished: new Map(),
 			disconnectHandlers: new Set(),
 			reconnectHandlers: new Set(),
+			refreshers: new Map(),
 			tornDown: false,
 		};
 		connections.set(wsUrl, conn);
@@ -94,37 +98,51 @@ function doConnect(wsUrl: string, isReconnect = false) {
 	// Refresh-before-open on reconnect: mirror aws-middleware. The local dev
 	// server validates the channel token on (re)subscribe, so a reconnect after
 	// the channel-token TTL (~1h) must resubscribe with a freshly-minted token.
-	// Re-mint via the server-provided `refresh()` and apply it to channelTokens
-	// BEFORE opening the socket, so the resubscribe frame carries the fresh
-	// token. Never called on the initial connect. If refresh throws, don't crash:
-	// surface onDisconnect('error') and fall back to backoff.
-	if (isReconnect && conn.refresh) {
-		const refresh = conn.refresh;
-		refresh()
-			.then((fresh) => {
-				// GUARD (BLOCKING): re-fetch the pooled connection. A teardown
-				// (unsubscribe of the last handler, or __resetConnectionsForTest) can
-				// land while refresh() is in flight. If the connection is gone, torn
-				// down, or has no subscribers, do NOT reopen: openMockSocket →
-				// getOrCreateConnection would otherwise resurrect a fresh pooled entry
-				// (tornDown unset) and re-arm timers, keeping the event loop alive and
-				// hanging `node --test` — the exact leak PR1's teardown guard fixed.
+	// Each live channel has its OWN refresher (the connection multiplexes several
+	// channels), so re-mint EVERY still-subscribed channel in parallel and apply
+	// the fresh tokens to channelTokens BEFORE opening the socket, so each
+	// resubscribe frame carries its fresh token. Never called on the initial
+	// connect. A channel whose refresh rejects (or resolves malformed) falls back
+	// to its stored token; only when EVERY channel fails do we surface
+	// onDisconnect('error') and back off.
+	const channelsToRefresh = isReconnect
+		? [...conn.subscriptions.keys()].filter((ch) => conn.refreshers.has(ch))
+		: [];
+	if (channelsToRefresh.length > 0) {
+		Promise.allSettled(channelsToRefresh.map((ch) => conn.refreshers.get(ch)!()))
+			.then((results) => {
+				// GUARD (BLOCKING): re-fetch the pooled connection and verify THIS conn
+				// still owns the wsUrl key by IDENTITY (mirrors aws-middleware's
+				// `connections.get(conn.wsUrl) !== conn`). A teardown (unsubscribe of the
+				// last handler, or __resetConnectionsForTest) can land while the refreshes
+				// are in flight, and the key may since have been taken over by a DIFFERENT
+				// live conn (e.g. a reset followed by a new subscribe). If the connection
+				// is gone, is no longer the pooled owner, has been torn down, or has no
+				// subscribers, do NOT proceed: reopening would resurrect a fresh pooled
+				// entry (tornDown unset) and re-arm timers — the exact leak PR1's teardown
+				// guard fixed — and the all-failed path below must not fire disconnect or
+				// scheduleReconnect against a live conn this stale refresh has no claim to.
 				const c = connections.get(wsUrl);
-				if (!c || c.tornDown || c.subscriptions.size === 0) { return; }
-				if (!(isRealtimeDescriptor(fresh) && typeof fresh.token === 'string')) {
-					// Malformed refresh result — mirror aws-middleware's applyFreshDescriptor-false path:
-					// surface the drop and back off rather than reopening + resubscribing with the STALE
-					// token (which would mask the production error path — T4).
+				if (!c || c !== conn || c.tornDown || c.subscriptions.size === 0) { return; }
+				// Apply every FULFILLED, well-formed descriptor's token. A channel whose
+				// refresh rejected or resolved malformed (fails the isRealtimeDescriptor /
+				// string-token guard) keeps its stored token as a fallback.
+				let anyApplied = false;
+				for (const result of results) {
+					if (result.status === 'fulfilled' && isRealtimeDescriptor(result.value) && typeof result.value.token === 'string') {
+						c.channelTokens.set(result.value.channel, result.value.token);
+						anyApplied = true;
+					}
+				}
+				if (!anyApplied) {
+					// EVERY channel's refresh failed — mirror aws-middleware's all-failed path:
+					// surface the drop and back off rather than reopening + resubscribing with the
+					// STALE tokens (which would mask the production error path — T4).
 					c.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
 					scheduleReconnect(wsUrl);
 					return;
 				}
-				c.channelTokens.set(fresh.channel, fresh.token);
 				openMockSocket(wsUrl, isReconnect);
-			})
-			.catch(() => {
-				conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
-				scheduleReconnect(wsUrl);
 			});
 		return;
 	}
@@ -188,6 +206,8 @@ function openMockSocket(wsUrl: string, isReconnect = false) {
 					// Remove the subscription entry since it was rejected
 					conn.subscriptions.delete(data.channel);
 					conn.channelTokens.delete(data.channel);
+					// A rejected channel is gone — drop its refresher too.
+					conn.refreshers.delete(data.channel);
 				} else if (data.type === 'message' && data.channel) {
 					const handlers = conn.subscriptions.get(data.channel);
 					if (handlers) {
@@ -242,6 +262,9 @@ function scheduleReconnect(wsUrl: string) {
 	if (conn.reconnectAttempts >= MAX_RECONNECT) return;
 	conn.reconnectAttempts++;
 	const delay = Math.min(1000 * 2 ** (conn.reconnectAttempts - 1), MAX_DELAY_MS);
+	// Clear any timer still armed from a previous schedule before arming a new one,
+	// so a stale setTimeout can never fire a duplicate reconnect (mirrors aws-middleware).
+	if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); }
 	conn.reconnectTimer = setTimeout(() => doConnect(wsUrl, true), delay);
 }
 
@@ -266,6 +289,7 @@ export function __resetConnectionsForTest(): void {
 		conn.channelTokens.clear();
 		conn.disconnectHandlers.clear();
 		conn.reconnectHandlers.clear();
+		conn.refreshers.clear();
 		if (conn.ws) {
 			conn.ws.onmessage = null;
 			conn.ws.onerror = null;
@@ -291,10 +315,11 @@ function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, to
 	ensureConnected(wsUrl);
 	if (onDisconnect) conn.disconnectHandlers.add(onDisconnect);
 	if (onReconnect) conn.reconnectHandlers.add(onReconnect);
-	// Store the token-refresh fn (connection-level; last writer wins) so a
-	// reconnect can re-mint a fresh channel token before reopening. Only set when
-	// provided so a subscriber without `refresh` never clears one another set.
-	if (refresh) conn.refresh = refresh;
+	// Store the token-refresh fn PER-CHANNEL so a reconnect can re-mint a fresh
+	// channel token for every live channel before reopening (not just the last
+	// writer). Only set when provided so a subscriber without `refresh` never
+	// registers one for its channel.
+	if (refresh) conn.refreshers.set(channel, refresh);
 
 	let establishedResolve: () => void;
 	let establishedReject: (err: Error) => void;
@@ -334,6 +359,9 @@ function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, to
 				if (handlers.size === 0) {
 					conn.subscriptions.delete(channel);
 					conn.channelTokens.delete(channel);
+					// Last handler for this channel is gone — drop its refresher so a
+					// later reconnect does not re-mint a token for a dead channel.
+					conn.refreshers.delete(channel);
 					if (conn.isConnected && conn.ws?.readyState === WebSocket.OPEN) {
 						conn.ws!.send(JSON.stringify({ action: 'unsubscribe', channel }));
 					}

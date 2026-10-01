@@ -87,15 +87,19 @@ export interface CreateChatOptions {
 	/**
 	 * Optional callback that re-mints a fresh channel descriptor (new connect + channel
 	 * token) so a long turn's subscription outlives the token TTLs (channel ~1h / connect
-	 * ~2h). Pure pass-through: createChat holds NO refresh state — it forwards this to the
-	 * transport, and the Realtime channel invokes it before EACH reconnect (never on the
-	 * initial subscribe). Must resolve to the RAW channel descriptor (the wire object with
-	 * `__blocks`/token fields), NOT a hydrated channel client — e.g.
-	 * `async () => ({ ...(await api.agentGetRawDescriptor(conversationId)), __blocks: 'realtime/channel' })`.
+	 * ~2h). Pure pass-through: createChat holds NO refresh state — it binds this to the
+	 * CURRENT channel at the subscribe call site and forwards the bound zero-arg form to
+	 * the transport, and the Realtime channel invokes it before EACH reconnect (never on
+	 * the initial subscribe). Receives the resolved `channelId` so it re-mints for the
+	 * channel actually in use — which changes across lazy createConversation, loadConversation,
+	 * and newConversation — rather than a channel captured once at construction. Must resolve
+	 * to the RAW channel descriptor (the wire object with `__blocks`/token fields), NOT a
+	 * hydrated channel client — e.g.
+	 * `async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' })`.
 	 * When omitted, a reconnect replays the original tokens (fine for short turns), so
 	 * existing callers are unaffected.
 	 */
-	refresh?: () => Promise<RealtimeChannelDescriptor>;
+	refresh?: (channelId: string) => Promise<RealtimeChannelDescriptor>;
 	/** Called whenever the message list changes. */
 	onMessagesChange?: (messages: ChatMessage[]) => void;
 	/** Called whenever loading state changes. */
@@ -574,9 +578,11 @@ export function createChat(options: CreateChatOptions): ChatController {
 			},
 			// Pure pass-through: the transport/channel invokes this before each reconnect to
 			// re-mint fresh tokens so long turns outlive the channel (~1h) / connect (~2h)
-			// TTLs. createChat holds no refresh state; undefined leaves reconnect replaying
-			// the original tokens.
-			refresh: options.refresh,
+			// TTLs. createChat holds no refresh state; it binds the consumer's channel-aware
+			// callback to THIS turn's resolved channelId (closed over here, where the channel
+			// is known) and forwards the zero-arg bound form. undefined leaves reconnect
+			// replaying the original tokens.
+			refresh: options.refresh ? () => options.refresh!(channelId) : undefined,
 		});
 		activeStream = stream;
 		await stream.established;

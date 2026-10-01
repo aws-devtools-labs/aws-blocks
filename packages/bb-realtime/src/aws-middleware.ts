@@ -73,14 +73,19 @@ interface Connection {
 	/** Per-channel onReconnect callbacks — keyed by channel so only a channel that actually re-confirmed fires its own onReconnect. */
 	reconnectHandlers: Map<string, Set<() => void>>;
 	/**
-	 * Optional connection-level token-refresh fn, set from `SubscribeOptions.refresh`.
-	 * Called before each reconnect (never on the initial open) to re-mint a fresh
-	 * channel descriptor so the subscription outlives the connect (~2h) / channel
-	 * (~1h) token TTLs. A single connection-level fn (last writer wins across
-	 * multiplexed subscribers) — kept deliberately simple; the fresh descriptor's
-	 * per-channel token is applied to `channelTokens` on reconnect.
+	 * Per-channel token-refresh fns, set from `SubscribeOptions.refresh`. Keyed by
+	 * channel because the pool is keyed by `wsUrl` and ALL conversations of a
+	 * Realtime instance multiplex onto one connection, each with its OWN refresh
+	 * fn. Called before each reconnect (never on the initial open) to re-mint fresh
+	 * channel descriptors so every live subscription outlives the connect (~2h) /
+	 * channel (~1h) token TTLs. A single connection-level fn (last writer wins)
+	 * would re-mint only one channel's token and leave the others replaying a stale
+	 * one, so each channel's refresher is applied independently on reconnect. Set in
+	 * `subscribeTo` when a channel provides a refresh; DELETED when that channel's
+	 * last handler unsubscribes (or its resubscribe is rejected), so a dead channel
+	 * is never refreshed on a later reconnect.
 	 */
-	refresh?: () => Promise<RealtimeChannelDescriptor>;
+	refreshers: Map<string, () => Promise<RealtimeChannelDescriptor>>;
 	/** Consecutive reconnect attempts since the last successful open. */
 	reconnectAttempts: number;
 	/** Pending reconnect timer, tracked so it can be cleared on teardown. */
@@ -101,7 +106,8 @@ interface Connection {
 	intentionalClose: boolean;
 	/**
 	 * Set on a deliberate teardown (last-channel unsubscribe, terminal close,
-	 * give-up at the retry cap, or `__resetConnectionsForTest`). A torn-down
+	 * give-up at the retry cap, the all-stale resubscribe teardown in
+	 * `settleResubscribe`, or `__resetConnectionsForTest`). A torn-down
 	 * connection must never reopen: the awaited `refresh()` continuation in
 	 * `openSocket` checks this so a teardown landing mid-refresh cannot reopen a
 	 * zombie socket or leak a keep-alive interval. Mirrors mock-middleware.ts.
@@ -129,6 +135,7 @@ function getOrCreateConnection(wsUrl: string, connectToken: string): Connection 
 		keepAliveTimer: null,
 		disconnectHandlers: new Map(),
 		reconnectHandlers: new Map(),
+		refreshers: new Map(),
 		reconnectAttempts: 0,
 		reconnectTimer: null,
 		resubscribePending: null,
@@ -179,45 +186,73 @@ function applyFreshDescriptor(conn: Connection, fresh: RealtimeChannelDescriptor
 /**
  * Open (or re-open) the shared WebSocket for a connection. On the initial open
  * (`isReconnect = false`) this is synchronous — it constructs the socket
- * immediately, unchanged. On a reconnect it first re-mints tokens if a
- * `refresh` fn is present, THEN constructs the socket.
+ * immediately, unchanged. On a reconnect it first re-mints tokens if any live
+ * channel has a `refresh` fn, THEN constructs the socket.
  *
  * Refresh-before-open ordering rationale: the connect token lives in the socket
  * URL and is validated at `$connect`, and the channel token is validated at
  * subscribe — both expire (connect ~2h, channel ~1h). A reconnect that replayed
  * the original tokens would fail once they lapse (403 at `$connect`, or a
- * subscribe rejection). So `refresh()` MUST resolve BEFORE `new WebSocket(...)`,
+ * subscribe rejection). So the refreshers MUST resolve BEFORE `new WebSocket(...)`,
  * so the socket opens with the fresh connect token in its URL and resubscribes
- * with the fresh channel token. If `refresh` throws, do not crash: surface via
- * the existing onDisconnect('error') path and fall back to `scheduleReconnect`
- * backoff. Likewise, if `refresh` RESOLVES but with a malformed descriptor
- * (applyFreshDescriptor returns false), do not reopen with the stale tokens —
- * take the same onDisconnect('error') + backoff path. With no `refresh` fn,
- * replay the stored wsUrl + token exactly as before (back-compat).
+ * with the fresh channel tokens. Each subscribed channel has its OWN refresher
+ * (the connection multiplexes several channels), so every live channel is
+ * re-minted in parallel via `Promise.allSettled`; a channel whose refresh throws
+ * or resolves a malformed descriptor falls back to its stored token. Only when
+ * EVERY channel's refresh fails is the whole reconnect treated as a failure:
+ * surface onDisconnect('error') and fall back to `scheduleReconnect` backoff so a
+ * later attempt can re-mint. With no channel refresher at all, replay the stored
+ * wsUrl + tokens exactly as before (back-compat).
  */
 function openSocket(conn: Connection, isReconnect: boolean): void {
-	if (isReconnect && conn.refresh) {
-		const refresh = conn.refresh;
-		refresh()
-			.then((fresh) => {
+	// Per-channel refresh on reconnect: gather the refreshers for channels STILL
+	// subscribed. The connection multiplexes several channels, each with its OWN
+	// refresh fn, so a reconnect must re-mint EVERY live channel's token — not just
+	// one (a single last-writer-wins fn would leave the other channels replaying a
+	// stale token the server rejects after ~1h). A channel whose last handler
+	// unsubscribed has already had its refresher deleted, so a dead channel is
+	// never refreshed here.
+	const channelsToRefresh = isReconnect
+		? [...conn.subscriptions.keys()].filter((channel) => conn.refreshers.has(channel))
+		: [];
+	if (channelsToRefresh.length > 0) {
+		// Run every live channel's refresh in parallel. allSettled never rejects: a
+		// channel whose refresh REJECTS (or resolves a malformed descriptor) simply
+		// falls back to its stored token below, so one bad channel cannot sink the
+		// others.
+		Promise.allSettled(channelsToRefresh.map((channel) => conn.refreshers.get(channel)!()))
+			.then((results) => {
 				// GUARD (BLOCKING): a teardown (unsubscribe of the last channel,
 				// terminal close, give-up at the cap, or __resetConnectionsForTest)
-				// can land while refresh() is in flight. If it did, do NOT reopen a
-				// zombie socket or leak a keep-alive interval. A connection is live
-				// only if it is still the pooled owner of its key, has not been
-				// flagged tornDown, and still has subscribers. Check BEFORE
-				// applyFreshDescriptor because that call may re-key the pool (and
-				// would otherwise resurrect a reset connection under a fresh key).
+				// can land while the refreshes are in flight. If it did, do NOT reopen
+				// a zombie socket or leak a keep-alive interval. A connection is live
+				// only if it is still the pooled owner of its key, has not been flagged
+				// tornDown, and still has subscribers. Check BEFORE applyFreshDescriptor
+				// because that call may re-key the pool (and would otherwise resurrect a
+				// reset connection under a fresh key). This single guard also protects
+				// the refresh-FAILURE scheduleReconnect below, so a torn-down conn can
+				// never schedule a reconnect that evicts whatever now owns its wsUrl key.
 				if (conn.tornDown || connections.get(conn.wsUrl) !== conn || conn.subscriptions.size === 0) { return; }
-				// If the freshly-minted descriptor is MALFORMED (fails the
-				// isRealtimeDescriptor guard — e.g. missing connect/channel token),
-				// applyFreshDescriptor leaves the stored tokens untouched and returns
-				// false. Do NOT fall through to constructSocket: that would reopen with
-				// the STALE tokens the refresh was meant to replace, which fail at
-				// $connect / subscribe once expired. Treat it exactly like a refresh
-				// failure — surface onDisconnect('error') and fall back to backoff so a
-				// later attempt can re-mint (mirrors the .catch below).
-				if (!applyFreshDescriptor(conn, fresh)) {
+				// Apply every FULFILLED, well-formed descriptor. applyFreshDescriptor
+				// updates the instance-scoped connect token (same value from any
+				// channel — mintConnectToken(this.fullId)) plus that channel's own
+				// token; a channel whose refresh REJECTED or resolved MALFORMED
+				// (applyFreshDescriptor returns false) is left with its stored token as
+				// a fallback. `anyApplied` tracks whether at least one channel re-minted.
+				let anyApplied = false;
+				for (const result of results) {
+					if (result.status === 'fulfilled' && applyFreshDescriptor(conn, result.value)) {
+						anyApplied = true;
+					}
+				}
+				// Treat the whole reconnect as a refresh FAILURE only if EVERY channel's
+				// refresh failed (rejected or malformed). A single fresh descriptor is
+				// enough to reopen — the connect token it carries is instance-scoped, and
+				// the other channels fall back to their stored tokens. Reopening with ALL
+				// tokens stale would fail at $connect / subscribe once expired, so instead
+				// surface onDisconnect('error') and fall back to backoff so a later attempt
+				// can re-mint (mirrors the no-fresh-descriptor failure path).
+				if (!anyApplied) {
 					for (const hs of conn.disconnectHandlers.values()) { hs.forEach(h => { try { h('error'); } catch {} }); }
 					scheduleReconnect(conn);
 					return;
@@ -227,17 +262,11 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 				// connection down. Only construct the socket if still live + pooled.
 				if (conn.tornDown || connections.get(conn.wsUrl) !== conn || conn.subscriptions.size === 0) { return; }
 				constructSocket(conn, true);
-			})
-			.catch(() => {
-				// Refresh failed — do NOT crash. Surface through the existing
-				// disconnect plumbing (reason 'error') so callers learn the reconnect
-				// stalled, then fall back to exponential-backoff retry so a later
-				// attempt can re-mint and reopen.
-				for (const hs of conn.disconnectHandlers.values()) { hs.forEach(h => { try { h('error'); } catch {} }); }
-				scheduleReconnect(conn);
 			});
 		return;
 	}
+	// No channel has a refresher (or this is the initial open): replay the stored
+	// wsUrl + tokens exactly as before (back-compat), synchronously.
 	constructSocket(conn, isReconnect);
 }
 
@@ -312,6 +341,10 @@ function constructSocket(conn: Connection, isReconnect: boolean): void {
 				if (conn.keepAliveTimer) { clearInterval(conn.keepAliveTimer); conn.keepAliveTimer = null; }
 				if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
 				conn.intentionalClose = true; // deliberate teardown of a now-subscriber-less connection
+				// 5th deliberate-teardown path (see the `tornDown` docstring): mark torn
+				// down so a refresh() continuation still in flight from a prior reconnect
+				// cannot reopen this now subscriber-less connection.
+				conn.tornDown = true;
 				conn.connected = false;
 				if (conn.ws) {
 					conn.ws.onmessage = null;
@@ -319,7 +352,11 @@ function constructSocket(conn: Connection, isReconnect: boolean): void {
 					conn.ws.onclose = null;
 					try { conn.ws.close(); } catch {}
 				}
-				connections.delete(conn.wsUrl);
+				// Delete-by-identity (BLOCKING): only drop the pool entry if THIS conn
+				// still owns its wsUrl key, so a stale conn never evicts whatever live
+				// connection has since taken over the same key. Mirrors unsubscribe (which
+				// deletes by identity) and both scheduleReconnect teardown branches.
+				if (connections.get(conn.wsUrl) === conn) { connections.delete(conn.wsUrl); }
 			}
 		}
 	};
@@ -389,6 +426,9 @@ function constructSocket(conn: Connection, isReconnect: boolean): void {
 				conn.channelTokens.delete(msg.channel);
 				conn.disconnectHandlers.delete(msg.channel);
 				conn.reconnectHandlers.delete(msg.channel);
+				// A rejected channel is gone — drop its refresher too, so a later
+				// reconnect never re-mints a token for a channel no longer subscribed.
+				conn.refreshers.delete(msg.channel);
 				// Drain the failed channel from the resubscribe set (settle as NOT
 				// succeeded, so this channel gets NO onReconnect) so the channels that
 				// DID succeed can still settle instead of wedging.
@@ -487,7 +527,11 @@ function scheduleReconnect(conn: Connection): void {
 		// continuation still in flight no-ops instead of reopening this dead conn).
 		conn.intentionalClose = true;
 		conn.tornDown = true;
-		connections.delete(conn.wsUrl);
+		// Delete-by-identity (BLOCKING): only drop the pool entry if THIS conn still
+		// owns its wsUrl key. A torn-down/stale conn reaching here (e.g. a late
+		// refresh-failure continuation) must never evict whatever live connection has
+		// since taken over the same wsUrl key.
+		if (connections.get(conn.wsUrl) === conn) { connections.delete(conn.wsUrl); }
 		return;
 	}
 	if (conn.reconnectAttempts >= MAX_RECONNECT) {
@@ -518,7 +562,9 @@ function scheduleReconnect(conn: Connection): void {
 		// awaiting cannot reopen after we have given up and dropped the pool entry.
 		conn.intentionalClose = true;
 		conn.tornDown = true;
-		connections.delete(conn.wsUrl);
+		// Delete-by-identity (BLOCKING): same rationale as the subscriber-less branch
+		// above — a stale conn must never evict a live owner of its wsUrl key.
+		if (connections.get(conn.wsUrl) === conn) { connections.delete(conn.wsUrl); }
 		return;
 	}
 	conn.reconnectAttempts++;
@@ -550,6 +596,7 @@ export function __resetConnectionsForTest(): void {
 		conn.channelTokens.clear();
 		conn.disconnectHandlers.clear();
 		conn.reconnectHandlers.clear();
+		conn.refreshers.clear();
 		conn.resubscribePending = null;
 		if (conn.ws) {
 			// Detach handlers first so the close does not schedule a reconnect.
@@ -590,10 +637,11 @@ function subscribeTo(
 		if (!conn.reconnectHandlers.has(channel)) { conn.reconnectHandlers.set(channel, new Set()); }
 		conn.reconnectHandlers.get(channel)!.add(onReconnect);
 	}
-	// Store the token-refresh fn (connection-level; last writer wins) so a
-	// reconnect can re-mint fresh tokens before reopening. Only set when provided
-	// so a subscriber without `refresh` never clears one another subscriber set.
-	if (refresh) conn.refresh = refresh;
+	// Store the token-refresh fn PER-CHANNEL so a reconnect can re-mint fresh tokens
+	// for every live channel before reopening (not just the last writer). Only set
+	// when provided, so a subscriber without `refresh` never registers one for its
+	// channel and the no-refresh back-compat path is preserved.
+	if (refresh) conn.refreshers.set(channel, refresh);
 
 	let establishedResolve: () => void;
 	let establishedReject: (err: Error) => void;
@@ -631,6 +679,9 @@ function subscribeTo(
 				if (handlers.size === 0) {
 					conn.subscriptions.delete(channel);
 					conn.channelTokens.delete(channel);
+					// Last handler for this channel is gone — drop its refresher so a
+					// later reconnect does not re-mint a token for a dead channel.
+					conn.refreshers.delete(channel);
 					if (conn.connected && conn.ws?.readyState === WebSocket.OPEN) {
 						conn.ws.send(JSON.stringify({ action: 'unsubscribe', channel }));
 					}
