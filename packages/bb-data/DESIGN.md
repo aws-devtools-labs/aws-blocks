@@ -93,8 +93,9 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 | RDS Proxy | Connection pooling |
 | Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
 | Secrets Manager secret | Auto-generated credentials; encrypted with `storageEncryptionKeyArn` when one is supplied |
-| Automated backups | Retained 15 days by default (`backupRetentionDays` override); also the PITR window |
+| Automated backups | On by default, retained 15 days; `pointInTimeRecovery` controls the window (`true` → 15 days, `{ retentionDays: n }` → 1–35 days, `false` → clamps to the 1-day minimum since Aurora cannot disable backups); also the PITR window |
 | CloudWatch log export | PostgreSQL engine log exported to CloudWatch Logs; retention follows `defaults.logRetention` when set, else the account default |
+| LogRetention custom resource | Setting the engine log group's retention adds a CDK `LogRetention` custom resource — a per-stack singleton Lambda + IAM role — because RDS owns the engine log group name via a token id, so CDK can't create the `LogGroup` directly. Intended/unavoidable for this knob |
 | Migration Lambda + CustomResource | Runs .sql files on deploy (retries with exponential backoff, 1s → 30s × 8, while the cluster is unreachable — a new cluster's writer coming up, or a scale-to-zero cluster resuming from auto-pause) |
 | IAM grants | `rds-data:*`, `secretsmanager:GetSecretValue` |
 
@@ -114,9 +115,15 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
   Rotation requires a rotation Lambda wired into the cluster VPC — a larger change
   than this hardening pass. Supplying a `storageEncryptionKeyArn` does encrypt the
   generated secret today.
-- **Upgrade note:** enabling storage encryption on an already-provisioned,
-  unencrypted cluster requires a replacement; existing stacks will show a
-  CloudFormation diff after upgrading.
+- **Upgrade note (destructive replacement):** RDS cannot encrypt an
+  already-provisioned, unencrypted cluster in place, so enabling storage
+  encryption (or changing the key) makes CloudFormation create a **new, empty**
+  encrypted cluster and repoint the stack. There is no in-place path. Under
+  production (RETAIN) the old cluster is orphaned/unreferenced and the app comes
+  back against the empty cluster with the migration CustomResource re-running
+  (schema only, no data); under sandbox (DESTROY) the old cluster and its data are
+  deleted. The only safe route is to snapshot the existing cluster, restore it
+  with encryption enabled, then cut over. Review the diff and snapshot first.
 
 ## Schema Migrations (External Databases)
 

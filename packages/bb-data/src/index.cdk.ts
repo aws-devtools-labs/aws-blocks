@@ -121,6 +121,47 @@ export class Database extends BuildingBlockScope {
     // materialize() (protected unless DESTROY).
     const defaultRemovalPolicy = this.defaults.removalPolicy;
 
+    // Aurora backup retention IS the point-in-time-recovery window, so resolve it
+    // from the per-block `pointInTimeRecovery` option, else the stack-wide
+    // `defaults.pointInTimeRecovery` (production on, sandbox off) — the same knob
+    // every other Blocks block reads (see core/src/cdk/blocks-defaults.ts). Map
+    // the resolved setting to the cluster's `backup.retention` (a day count the
+    // materialize() layer wraps in a cdk.Duration):
+    //   false            → 1 day  (clamp — see below)
+    //   true             → the enabled default window
+    //   { retentionDays } → that window, after range validation (1–35)
+    const AURORA_ENABLED_BACKUP_DAYS = 15;
+    const pitrSetting = options?.pointInTimeRecovery ?? this.defaults.pointInTimeRecovery;
+    let backupRetentionDays: number;
+    if (typeof pitrSetting === 'object' && pitrSetting !== null) {
+      // `{ retentionDays: n }` — enable backups and pin the window. Aurora
+      // requires an integer 1–35; warn and fall back to the enabled default on an
+      // out-of-range value rather than failing the deploy (mirrors DT's
+      // bb-distributed-table:InvalidPitrDays handling).
+      const days = pitrSetting.retentionDays;
+      if (!Number.isInteger(days) || days < 1 || days > 35) {
+        cdk.Annotations.of(this).addWarningV2(
+          '@aws-blocks/bb-data:InvalidPitrDays',
+          `pointInTimeRecovery.retentionDays must be an integer between 1 and 35 (got ${String(days)}) — ` +
+            `falling back to the ${AURORA_ENABLED_BACKUP_DAYS}-day default.`,
+        );
+        backupRetentionDays = AURORA_ENABLED_BACKUP_DAYS;
+      } else {
+        backupRetentionDays = days;
+      }
+    } else if (pitrSetting === false) {
+      // Aurora CANNOT disable automated backups — the cluster minimum retention
+      // is 1 day (`BackupRetentionPeriod: 0` is rejected at CreateDBCluster). So a
+      // `false` setting clamps to the 1-day minimum rather than turning backups
+      // off. This "clamp to the service's supported range" is explicitly allowed
+      // by the `defaults.pointInTimeRecovery` contract (see blocks-defaults.ts),
+      // which notes DynamoDB's own 1–35 clamp for the same reason.
+      backupRetentionDays = 1;
+    } else {
+      // `true` (or the production default) — enable with the standard 15-day window.
+      backupRetentionDays = AURORA_ENABLED_BACKUP_DAYS;
+    }
+
     const infra = materialize(this, this.fullId, {
       minCapacity: options?.minCapacity,
       maxCapacity: options?.maxCapacity,
@@ -132,14 +173,14 @@ export class Database extends BuildingBlockScope {
       deletionProtection: this.defaults.deletionProtection,
       postgresVersion: options?.postgresVersion,
       // Resolve the CDK-free public options into the CDK types AuroraInfraConfig
-      // expects: a key ARN becomes a kms.IKey, a day count becomes a cdk.Duration.
+      // expects: a key ARN becomes a kms.IKey, the PITR setting becomes a
+      // cdk.Duration backup window.
       // A single Database provisions exactly one cluster, so the fixed
       // 'db-storage-key' construct id for the imported key is unique in this scope.
       storageEncryptionKey: options?.storageEncryptionKeyArn
         ? kms.Key.fromKeyArn(this, 'db-storage-key', options.storageEncryptionKeyArn)
         : undefined,
-      backupRetention:
-        options?.backupRetentionDays !== undefined ? cdk.Duration.days(options.backupRetentionDays) : undefined,
+      backupRetention: cdk.Duration.days(backupRetentionDays),
       vpcContext: getVpcContext(this),
       clusterSubnets: resolveClusterSubnets(this, options?.subnets),
       // Migration Lambda log retention follows the stack-wide default.

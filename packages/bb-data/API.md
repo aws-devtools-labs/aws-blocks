@@ -88,13 +88,15 @@ export const DatabaseErrors: {
 
 // @public (undocumented)
 export interface DatabaseOptions {
-    backupRetentionDays?: number;
     connection?: ExternalDatabaseRef;
     databaseName?: string;
     logger?: ChildLogger;
     maxCapacity?: number;
     migrationsPath?: string;
     minCapacity?: number;
+    pointInTimeRecovery?: boolean | {
+        retentionDays: number;
+    };
     postgresVersion?: string;
     removalPolicy?: 'destroy' | 'retain' | 'snapshot';
     rlsPolicy?: 'enforce';

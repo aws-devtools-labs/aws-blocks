@@ -72,15 +72,39 @@ export interface DatabaseOptions {
    * reason as `subnets`: the `Database` constructor resolves to a runtime entry
    * point that must not import `aws-cdk-lib`. The CDK layer rehydrates the ARN
    * into a `kms.IKey` (via `kms.Key.fromKeyArn`) and passes it to the cluster.
+   *
+   * **Requirements for the key you pass.** The key is *imported* — Blocks binds
+   * to it by ARN and does not (cannot) modify its key policy — so the key's
+   * policy must already permit the principals that use it:
+   * - The **deploying principal** needs `kms:CreateGrant` and `kms:DescribeKey`
+   *   on the key: RDS uses a grant to encrypt the cluster's storage volume with it.
+   * - The runtime path reads the credentials secret over the RDS Data API, so
+   *   the principal reading it needs `kms:Decrypt` on the key. `secret.grantRead`
+   *   adds the identity-side permission; the key policy must still allow it.
+   * - The key must be in the **same account and region** as the cluster.
    */
   storageEncryptionKeyArn?: string;
   /**
-   * Retention window, in days, for the cluster's automated backups. This is also
-   * the point-in-time-recovery (PITR) window. The CDK layer converts this number
-   * into a `cdk.Duration` before applying it to the cluster.
-   * @default 15
+   * Automated-backup retention for the Aurora cluster, which is also its
+   * point-in-time-recovery (PITR) window — Aurora keeps continuous backups
+   * within this window and restores from it.
+   *
+   * A single knob, since the recovery window only means anything when backups
+   * are on:
+   * - `true` — enable backups with the standard 15-day window.
+   * - `false` — Aurora **cannot** turn automated backups off (the cluster
+   *   minimum is 1 day), so this clamps to the 1-day minimum rather than
+   *   disabling them.
+   * - `{ retentionDays: n }` — enable backups and pin the window. Aurora
+   *   requires an integer **1–35**; an out-of-range value warns at synth and
+   *   falls back to the 15-day default.
+   *
+   * When omitted, the stack-wide default applies (`defaults.pointInTimeRecovery`
+   * from `BlocksPresets` — on under `production`, off under `sandbox`; a `false`
+   * default lands on the 1-day minimum per the clamp above). A per-block value
+   * always wins. The CDK layer resolves this into the cluster's backup retention.
    */
-  backupRetentionDays?: number;
+  pointInTimeRecovery?: boolean | { retentionDays: number };
 }
 
 /**

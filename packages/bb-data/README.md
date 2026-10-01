@@ -240,10 +240,18 @@ try {
   is **encrypted at rest by default** using the account's AWS-managed `aws/rds`
   key; pass a `storageEncryptionKeyArn` (the ARN of a customer-managed KMS key) to
   use a customer-managed key instead (it also encrypts the generated credentials
-  secret).
-- **Automated backups** — retained **15 days** by default (override via
-  `backupRetentionDays`, a number of days), which is also the point-in-time-recovery
-  window.
+  secret). The key is **imported** (Blocks can't modify its policy), so its policy
+  must already grant the deploying principal `kms:CreateGrant` + `kms:DescribeKey`
+  (RDS uses a grant to encrypt the storage volume) and grant `kms:Decrypt` to the
+  principal that reads the credentials secret over the Data API. The key must be in
+  the **same account and region** as the cluster.
+- **Automated backups** — on by default, retained **15 days**, which is also the
+  point-in-time-recovery window. Controlled by the single `pointInTimeRecovery`
+  option (mirrors every other Blocks block): `true` enables the 15-day window,
+  `{ retentionDays: n }` pins a 1–35-day window, and `false` clamps to the 1-day
+  minimum (Aurora cannot turn automated backups off). When omitted it follows the
+  stack-wide `defaults.pointInTimeRecovery` (on under `production`, off under
+  `sandbox` — which lands on the 1-day minimum).
 - **CloudWatch log export** — the PostgreSQL engine log is exported to CloudWatch
   Logs. Log-group retention follows the stack-wide `defaults.logRetention` when
   set; otherwise it uses the account default.
@@ -260,9 +268,22 @@ try {
 > IAM authentication (`iamAuthentication`) is therefore intentionally left off — it
 > does not apply to the Data API access path.
 >
-> **Enabling encryption on an existing cluster:** turning on storage encryption for
-> an already-provisioned, unencrypted cluster requires a replacement. On existing
-> stacks, expect a CloudFormation diff on the cluster properties after upgrading.
+> **Enabling encryption on an existing unencrypted cluster requires a
+> replacement — and a replacement is destructive.** RDS cannot encrypt an
+> already-provisioned unencrypted cluster in place, so turning storage encryption
+> on (or changing the KMS key) makes CloudFormation create a **new, empty**
+> encrypted cluster and repoint the stack at it. There is **no in-place path**.
+> What happens to the old cluster and its data depends on the removal policy:
+> - **Production (RETAIN):** the old cluster is left behind, orphaned and no
+>   longer referenced by the stack. The app comes back pointed at the new **empty**
+>   cluster, and the migration CustomResource re-runs against it (schema only — no
+>   data). Your data still exists on the orphaned cluster but is not restored.
+> - **Sandbox (DESTROY):** the old cluster and all of its data are **deleted**.
+>
+> The only safe route is to carry the data across yourself: **snapshot** the
+> existing cluster, **restore** that snapshot into a new cluster with encryption
+> enabled, then cut over to it. Review the CloudFormation diff and take a snapshot
+> before deploying this change to any cluster whose data you need.
 
 ## Local Development
 
@@ -282,10 +303,22 @@ interface DatabaseOptions {
   schema?: TableSchema;
   /** Aurora PostgreSQL engine version, e.g. '16.13'. Override the Aurora engine version. @default '16.13' */
   postgresVersion?: string;
-  /** ARN of a customer-managed KMS key for the cluster's storage-at-rest encryption (also encrypts the auto-generated credentials secret). When omitted, storage is still encrypted with the account's AWS-managed `aws/rds` key. */
+  /**
+   * ARN of a customer-managed KMS key for the cluster's storage-at-rest encryption
+   * (also encrypts the auto-generated credentials secret). When omitted, storage is
+   * still encrypted with the account's AWS-managed `aws/rds` key. The key is
+   * imported, so its policy must already grant the deploying principal
+   * `kms:CreateGrant` + `kms:DescribeKey` and grant `kms:Decrypt` to the principal
+   * reading the credentials secret; it must be in the same account + region.
+   */
   storageEncryptionKeyArn?: string;
-  /** Retention window, in days, for the cluster's automated backups; also the point-in-time-recovery (PITR) window. @default 15 */
-  backupRetentionDays?: number;
+  /**
+   * Automated-backup retention, which is also the point-in-time-recovery (PITR)
+   * window. `true` enables the 15-day window; `{ retentionDays: n }` pins a
+   * 1–35-day window; `false` clamps to the 1-day minimum (Aurora cannot disable
+   * automated backups). When omitted, follows `defaults.pointInTimeRecovery`.
+   */
+  pointInTimeRecovery?: boolean | { retentionDays: number };
 }
 ```
 

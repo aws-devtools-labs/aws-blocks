@@ -74,9 +74,13 @@ export interface AuroraInfraConfig {
    */
   clusterSubnets?: ec2.SubnetSelection;
   /**
-   * CloudWatch retention for the migration Lambda's log group. Populated from
-   * the stack-wide `defaults.logRetention`; when omitted the log group uses the
-   * CDK `LogGroup` default retention.
+   * CloudWatch retention applied to the log groups this stack owns. Populated
+   * from the stack-wide `defaults.logRetention`; when omitted the groups use the
+   * CDK/CloudWatch default retention. Two consumers read it:
+   * - the migration Lambda's log group (created explicitly below), and
+   * - the cluster's PostgreSQL **engine** log group, via the cluster's
+   *   `cloudwatchLogsRetention` prop (see the note there about the LogRetention
+   *   custom resource).
    */
   logRetention?: cdk.aws_logs.RetentionDays;
 }
@@ -240,6 +244,18 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     // stack-wide `defaults.logRetention` when provided (the same knob every other
     // Blocks-managed log group reads); when omitted, CloudWatch keeps the log
     // group at the account default retention.
+    //
+    // Setting `cloudwatchLogsRetention` makes CDK add a `LogRetention` custom
+    // resource (a per-stack singleton Lambda + IAM role) to apply the retention,
+    // because RDS owns the engine log group's name via a token id, so CDK can't
+    // create the LogGroup directly. This extra Lambda is intended — see DESIGN.md.
+    //
+    // Known gap (deliberate, not implemented here): unlike the migration Lambda's
+    // log group above (removalPolicy DESTROY), this engine log group is NOT
+    // deleted when the cluster is destroyed — the LogRetention custom resource
+    // only sets retention, it does not own the group's lifecycle — so it is left
+    // orphaned on destroy. Acknowledged as a known gap; deleting it would mean
+    // adopting the RDS-named group into a managed LogGroup, a larger change.
     cloudwatchLogsExports: ['postgresql'],
     cloudwatchLogsRetention: options.logRetention,
     // iamAuthentication is intentionally NOT enabled: the cluster is reached

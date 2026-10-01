@@ -84,8 +84,10 @@ test('CDK: storageEncryptionKey option sets a customer-managed KmsKeyId on the c
   const template = Template.fromStack(stack);
   template.hasResourceProperties('AWS::RDS::DBCluster', {
     StorageEncrypted: true,
-    // The cluster references the CMK rather than the AWS-managed aws/rds key.
-    KmsKeyId: Match.anyValue(),
+    // Assert the cluster references THIS key (resolves to
+    // { 'Fn::GetAtt': ['DbKey...', 'Arn'] }), not just "some" KmsKeyId —
+    // Match.anyValue() would pass even if the wrong key were wired in.
+    KmsKeyId: stack.resolve(key.keyArn),
   });
 });
 
