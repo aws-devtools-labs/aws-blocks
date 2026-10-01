@@ -15,7 +15,8 @@
  */
 
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
-import type { AgentStreamChunk } from './types.js';
+import type { AgentStreamChunk, JSONValue } from './types.js';
+import type { ApprovalMetadata, ChatMessage } from './index.chat.js';
 
 export type { AgentStreamChunk } from './types.js';
 /** Re-exported so customers can type conversation `metadata` (and other JSON payloads) on the client. */
@@ -36,13 +37,16 @@ export type {
 	TurnRequest,
 } from './index.chat.js';
 
-/** A message in the conversation (for UI rendering). */
-export interface ChatMessage {
-	id: string;
-	role: 'user' | 'assistant' | 'approval';
-	content: string;
-	metadata?: Record<string, any>;
-}
+/**
+ * A message in the conversation (for UI rendering).
+ *
+ * Re-exported from the canonical definition so `/client` consumers get the SAME
+ * discriminated union createChat uses: narrowing on `role === 'approval'` types
+ * `metadata` as {@link ApprovalMetadata}, so `m.metadata?.approved` is typed with
+ * no cast. (Previously `/client` shipped a flat duplicate whose `metadata` was
+ * `Record<string, any>`, silently shadowing the union — this re-export removes that.)
+ */
+export type { ChatMessage, ApprovalMetadata } from './index.chat.js';
 
 /** Handler invoked for each streaming chunk delivered over the Realtime channel. */
 export type ChatChunkHandler = (chunk: AgentStreamChunk) => void;
@@ -146,6 +150,35 @@ function nextId(): string {
  * 11 minutes sits just above the 10-min idle timeout with margin for the reconnect.
  */
 const RECONNECT_FAILSAFE_MS = 660_000;
+
+/**
+ * Coerce an arbitrary value into a {@link JSONValue} for audit metadata. A value that
+ * is already JSON-round-trippable is kept as-is; anything else (a function, a symbol,
+ * a cyclic object) becomes its string form, so metadata stays a clean JSONValue.
+ * Mirrors the helper in index.chat.ts so an approval message's `input` (typed
+ * `unknown` on InterruptResponse) satisfies ApprovalMetadata's `input?: JSONValue`.
+ */
+function toJSONValue(value: unknown): JSONValue {
+	try {
+		const parsed: JSONValue = JSON.parse(JSON.stringify(value));
+		return parsed;
+	} catch {
+		return String(value);
+	}
+}
+
+/**
+ * Narrow an `unknown` message metadata value (customers pass their backend shape
+ * straight through) into a JSON record for rendering. A plain object is round-tripped
+ * to a clean {@link JSONValue} record; a non-object (null, string, array, undefined)
+ * yields `undefined`. Mirrors the narrow createChat does so the customer never writes
+ * a per-call adapter.
+ */
+function asJSONRecord(value: unknown): Record<string, JSONValue> | undefined {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+	const json = toJSONValue(value);
+	return typeof json === 'object' && json !== null && !Array.isArray(json) ? json : undefined;
+}
 
 /**
  * Create a chat instance for managing agent conversations.
@@ -574,9 +607,16 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			// stuck or orphan an empty assistant bubble (the failure mode this method's rejection
 			// path already handles).
 			if (!options.api.resume) throw new Error('respondToInterrupt requires api.resume to be configured');
-			// Add approval messages to chat immediately
+			// Add approval messages to chat immediately. Build metadata as a typed
+			// ApprovalMetadata (no cast) — `input` is `unknown` on InterruptResponse, so
+			// coerce it to JSONValue the same way createChat does.
 			for (const r of responses) {
-				messages = [...messages, { id: nextId(), role: 'approval' as const, content: r.approved ? 'Approved' : 'Denied', metadata: { approved: r.approved, trust: r.trust, toolName: r.toolName, input: r.input } }];
+				const metadata: ApprovalMetadata = {};
+				if (r.approved !== undefined) metadata.approved = r.approved;
+				if (r.trust !== undefined) metadata.trust = r.trust;
+				if (r.toolName !== undefined) metadata.toolName = r.toolName;
+				if (r.input !== undefined) metadata.input = toJSONValue(r.input);
+				messages = [...messages, { id: nextId(), role: 'approval' as const, content: r.approved ? 'Approved' : 'Denied', metadata }];
 			}
 			// Reuse existing empty assistant placeholder or create one
 			const existingEmpty = messages.find(m => m.role === 'assistant' && !m.content);
@@ -617,14 +657,28 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			// 2. THEN load history from DB
 			// TODO: buffer chunks received between subscribe and history load, then deduplicate/merge
 			const { messages: history } = await options.api.getConversation(id);
-			messages = history
-				.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'approval')
-				.map(m => ({
-					id: nextId(),
-					role: m.role as 'user' | 'assistant' | 'approval',
-					content: m.content,
-					metadata: m.metadata,
-				}));
+			messages = history.flatMap<ChatMessage>(m => {
+				// metadata arrives as `unknown` (customers pass their backend shape
+				// straight through — no adapter). Narrow it HERE, once, so the customer
+				// never writes this: a plain object becomes the JSON record, anything
+				// else is dropped.
+				const record = asJSONRecord(m.metadata);
+				if (m.role === 'user' || m.role === 'assistant') {
+					return [{ id: nextId(), role: m.role, content: m.content, metadata: record }];
+				}
+				if (m.role === 'approval') {
+					// Project the narrowed record into the typed ApprovalMetadata shape:
+					// read the known keys, keep the JSON-safe types.
+					const meta: ApprovalMetadata = {};
+					const src = record ?? {};
+					if (typeof src.approved === 'boolean') meta.approved = src.approved;
+					if (typeof src.trust === 'boolean') meta.trust = src.trust;
+					if (typeof src.toolName === 'string') meta.toolName = src.toolName;
+					if (src.input !== undefined) meta.input = src.input;
+					return [{ id: nextId(), role: 'approval', content: m.content, metadata: meta }];
+				}
+				return [];
+			});
 			options.onMessagesChange?.(messages);
 
 			// Check for pending interrupts (e.g., user left mid-approval)
