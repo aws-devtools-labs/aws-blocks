@@ -171,7 +171,11 @@ export interface KVStoreOptions<T = string> {
 	 * - `'customer-managed'`: provisions a **dedicated** customer-managed KMS
 	 *   key (CMK) for this table, giving you full control over rotation and key
 	 *   policy. Incurs standard KMS key + request charges — and note this mints
-	 *   a **separate key per table**, so a dozen tables means a dozen keys.
+	 *   a **separate key per table**, so a dozen tables means a dozen keys. The
+	 *   dedicated key is retained on stack teardown (not auto-deleted), so each
+	 *   torn-down stack leaves its key behind (its monthly key charge plus
+	 *   rotation); a bring-your-own key via {@link KVStore.fromKmsKey} avoids
+	 *   this per-stack key sprawl.
 	 * - a {@link ExternalKmsKeyRef} from {@link KVStore.fromKmsKey}:
 	 *   uses an **existing** CMK you already own, so several tables can share one
 	 *   key (and one monthly charge) instead of each provisioning its own.

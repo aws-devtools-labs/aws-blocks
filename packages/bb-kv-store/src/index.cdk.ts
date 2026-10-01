@@ -32,8 +32,15 @@ export class KVStore extends BuildingBlockScope {
 	 * key per table. Pass the result as the `encryption` option so several
 	 * stores can share one key (and one monthly charge).
 	 *
-	 * @param keyArn - ARN of a KMS key you already own. The deploying principal
-	 *   and the DynamoDB service must have the usual grants on it.
+	 * @param keyArn - ARN of a KMS key you already own. Because this is an
+	 *   imported key, Blocks can only attach IAM-side grants to this stack's
+	 *   execution role; it cannot edit the key's own key policy. For the table
+	 *   to read and write through the key, that key policy must already allow
+	 *   this stack's execution role — either by naming it directly or by
+	 *   delegating to account IAM (a statement granting `kms:*` to the account
+	 *   root). The key must also live in the same account and region as the
+	 *   table. A key policy that does neither surfaces only as an AccessDenied
+	 *   when the table is first used at runtime, with no signal at deploy time.
 	 */
 	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
 		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
@@ -47,10 +54,11 @@ export class KVStore extends BuildingBlockScope {
 			// and grant the runtime Lambda read/write access.
 			//
 			// Durability/encryption options don't apply to an existing table (we
-			// never emit a `Table` resource to attach them to). Surface that at
-			// synth so a `pointInTimeRecovery: true` on what looks like a fresh
-			// table isn't a silent no-op.
-			const ignoredForExisting = (['pointInTimeRecovery', 'encryption'] as const)
+			// never emit a `Table` resource to attach them to). All five of these
+			// are read only in the else branch below, so each is a silent no-op
+			// here. Surface that at synth so a `pointInTimeRecovery: true` on what
+			// looks like a fresh table isn't a silent no-op.
+			const ignoredForExisting = (['pointInTimeRecovery', 'encryption', 'removalPolicy', 'deletionProtection', 'ttl'] as const)
 				.filter((key) => options[key] !== undefined);
 			if (ignoredForExisting.length > 0) {
 				Annotations.of(this).addWarningV2(

@@ -12,9 +12,9 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { Template, Match } from 'aws-cdk-lib/assertions';
+import { Template, Match, Annotations } from 'aws-cdk-lib/assertions';
 import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
-import { KVStore } from './index.cdk.js';
+import { KVStore, type KVStoreOptions } from './index.cdk.js';
 
 // Minimal BlocksStack-shaped parent. The production code path uses BlocksStack,
 // which exposes the shared `executionRole` (blocks grant to it) plus `handler`,
@@ -222,4 +222,101 @@ test('CDK: fromKmsKey encrypts with an existing key and provisions no new KMS ke
   template.hasResourceProperties('AWS::DynamoDB::Table', {
     SSESpecification: { SSEEnabled: true, SSEType: 'KMS', KMSMasterKeyId: keyArn },
   });
+});
+
+// Item 1: pin the default (aws-managed) SSE shape. The PR flips the default
+// from the AWS-owned key (no SSESpecification emitted) to AWS_MANAGED, which
+// emits SSEEnabled:true with no SSEType (the aws/dynamodb key) — an in-place
+// SSE change on an already-deployed table. Mirrors bb-distributed-table.
+
+test('CDK: default KVStore emits aws-managed SSE (SSEEnabled, no SSEType)', () => {
+  const { stack, parent } = setup();
+  new KVStore(parent, 'sessions');
+  const template = Template.fromStack(stack);
+  // AWS_MANAGED emits SSEEnabled:true with no SSEType (the aws/dynamodb key).
+  // Contrast with the AWS-owned default, which emits no SSESpecification at all,
+  // and customer-managed, which adds SSEType:'KMS' + a KMSMasterKeyId.
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    SSESpecification: { SSEEnabled: true, SSEType: Match.absent() },
+  });
+});
+
+// ── PITR opt-out / override / out-of-range (parallel to bb-distributed-table) ──
+
+test('CDK: pointInTimeRecovery: false disables PITR', () => {
+  const { stack, parent } = setup();
+  // Production default is PITR on; the `??` resolution keeps an explicit
+  // `false` (only null/undefined fall through to the stack default), so this
+  // pins the opt-out path.
+  new KVStore(parent, 'sessions', { pointInTimeRecovery: false });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    PointInTimeRecoverySpecification: Match.absent(),
+  });
+});
+
+test('CDK: options.pointInTimeRecovery overrides the stack defaults (on under sandbox)', () => {
+  const { stack, parent } = setup(BlocksPresets.sandbox);
+  // Sandbox default is PITR off; the per-block `true` must win. (The existing
+  // { retentionDays: 7 } test runs under the production preset, where PITR is
+  // already on, so it never exercises the override.)
+  new KVStore(parent, 'sessions', { pointInTimeRecovery: true });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+  });
+});
+
+test('CDK: an out-of-range retentionDays falls back to the default window (still enabled)', () => {
+  const { stack, parent } = setup();
+  new KVStore(parent, 'sessions', { pointInTimeRecovery: { retentionDays: 60 } });
+  const template = Template.fromStack(stack);
+  // PITR stays on; the invalid window is dropped so DynamoDB keeps its 35-day
+  // default (no RecoveryPeriodInDays emitted).
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    PointInTimeRecoverySpecification: {
+      PointInTimeRecoveryEnabled: true,
+      RecoveryPeriodInDays: Match.absent(),
+    },
+  });
+});
+
+// ── Synth-time warnings actually fire (not just the fallback values) ─────────
+
+test('CDK: an unrecognized encryption value warns at synth', () => {
+  const { stack, parent } = setup();
+  // The typed `encryption` union can't express an unrecognized value, so build
+  // it at runtime via Object.assign (no cast) to exercise the UnknownEncryption
+  // synth guard.
+  const options: KVStoreOptions<unknown> = {};
+  Object.assign(options, { encryption: 'kms' });
+  new KVStore(parent, 'sessions', options);
+  Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('Unrecognized encryption'));
+});
+
+test('CDK: an out-of-range retentionDays warns at synth', () => {
+  const { stack, parent } = setup();
+  new KVStore(parent, 'sessions', { pointInTimeRecovery: { retentionDays: 60 } });
+  Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('retentionDays must be an integer'));
+});
+
+test('CDK: durability options passed alongside fromExisting warn at synth', () => {
+  const { stack, parent } = setup();
+  new KVStore(parent, 'sessions', {
+    table: KVStore.fromExisting('preexisting-table-123'),
+    pointInTimeRecovery: { retentionDays: 14 },
+    encryption: 'customer-managed',
+  });
+  Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('wrapped via fromExisting'));
+});
+
+test('CDK: two stores sharing one fromKmsKey ref provision zero KMS keys', () => {
+  const { stack, parent } = setup();
+  const sharedKey = KVStore.fromKmsKey('arn:aws:kms:us-east-1:111122223333:key/shared-1');
+  new KVStore(parent, 'orders', { encryption: sharedKey });
+  new KVStore(parent, 'events', { encryption: sharedKey });
+  const template = Template.fromStack(stack);
+  // Bringing one existing key across two stores must NOT mint any new key.
+  template.resourceCountIs('AWS::KMS::Key', 0);
+  template.resourceCountIs('AWS::DynamoDB::Table', 2);
 });
