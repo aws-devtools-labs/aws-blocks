@@ -594,6 +594,13 @@ const dbCredentialsSecret = new Secret(scope, 'secret-db-credentials', {
   removalPolicy: 'destroy',
 });
 
+// Secret with an explicit well-known name (for CI/CD-driven management via the
+// aws CLI). Scoped by stack identity so parallel deploys don't collide.
+const namedSecret = new Secret(scope, 'secret-named', {
+  name: `${scope.fullId}/webhook-signing-key`,
+  removalPolicy: 'destroy',
+});
+
 // CronJob - Scheduled task execution
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
 const cronResults = new KVStore(scope, 'cron-results', {});
@@ -2175,6 +2182,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // Exercises schema validation on put. `value` is deliberately untyped here
     // because the test passes an intentionally-wrong shape; the BB rejects it.
     await dbCredentialsSecret.put(value as { host: string; port: number });
+    return { success: true };
+  },
+
+  async secretGetNamed() {
+    return { value: await namedSecret.get() };
+  },
+
+  async secretPutNamed(value: string) {
+    await namedSecret.put(value);
     return { success: true };
   },
   // CronJob Tests

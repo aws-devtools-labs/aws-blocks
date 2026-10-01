@@ -25,6 +25,26 @@ function blocksError(name: string, message: string): Error {
 	return err;
 }
 
+// Secrets share the same local store as AppSetting — `.bb-data/settings.json`,
+// a flat `{ key: value }` map at the project root — so the `/aws-blocks/settings`
+// route surfaces settings AND secrets in one place, locally and when deployed.
+// Locally everything in `.bb-data` is plaintext regardless (dev-only); deployed,
+// secrets live KMS-encrypted in Secrets Manager.
+function readSettings(scope: Scope): Record<string, unknown> {
+	const fp = join(getMockDataDir(scope, { root: true }), 'settings.json');
+	if (!existsSync(fp)) return {};
+	try {
+		return JSON.parse(readFileSync(fp, 'utf8'));
+	} catch {
+		return {};
+	}
+}
+
+function writeSettings(scope: Scope, data: Record<string, unknown>): void {
+	const fp = join(getMockDataDir(scope, { root: true }), 'settings.json');
+	writeFileSync(fp, JSON.stringify(data, null, 2));
+}
+
 async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): Promise<T> {
 	const result = schema['~standard'].validate(value);
 	const resolved = result instanceof Promise ? await result : result;
@@ -32,6 +52,15 @@ async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): P
 		throw blocksError(SecretErrors.ValidationFailed, resolved.issues[0].message);
 	}
 	return (resolved as { value: T }).value;
+}
+
+/** Parse a legacy raw-string value, throwing ValidationFailed on malformed JSON. */
+function safeJsonParse(raw: string): unknown {
+	try {
+		return JSON.parse(raw);
+	} catch {
+		throw blocksError(SecretErrors.ValidationFailed, 'Stored secret value is not valid JSON');
+	}
 }
 
 // The local mock persists secret values as plaintext on disk (.bb-data). Warn
@@ -89,7 +118,8 @@ let plaintextWarningLogged = false;
  * ```
  */
 export class Secret<T = string> extends Scope {
-	private filePath: string;
+	/** The key this secret is stored under in `.bb-data/settings.json` — the explicit `name`, else the instance `fullId`. */
+	private storeKey: string;
 	private schema?: StandardSchemaV1<T>;
 	private external?: ExternalSecretRef;
 
@@ -102,17 +132,21 @@ export class Secret<T = string> extends Scope {
 		this.external = options?.secret;
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 
-		// The mock keys storage by fullId regardless of whether the secret is
-		// stack-managed or external — there is no real Secrets Manager to talk to
-		// locally, so `fromExisting()` behaves like a normal (unseeded) secret.
-		this.filePath = join(getMockDataDir(this), 'secret');
+		// Key the local store by the explicit name when provided, else the fullId —
+		// the same identity used for the Secrets Manager secret name in the CDK
+		// layer, so the local key and the deployed name line up. `fromExisting`
+		// references an external secret; locally it behaves like a normal (unseeded)
+		// secret keyed by its fullId.
+		this.storeKey = options?.name ?? this.fullId;
 		registerSdkIdentifiers(this.fullId, {
-			secretName: this.external ? this.external.secretArn : `mock-${this.fullId}`.substring(0, 255),
+			secretName: this.external
+				? this.external.secretArn
+				: (options?.name ?? `mock-${this.fullId}`).substring(0, 255),
 		});
 
 		if (!plaintextWarningLogged) {
 			this.log.warn(
-				'Secret: the local mock stores secret values as plaintext on disk (.bb-data). Do not use real credentials in local development.',
+				'Secret: the local mock stores secret values as plaintext in .bb-data/settings.json. Do not use real credentials in local development.',
 			);
 			plaintextWarningLogged = true;
 		}
@@ -138,27 +172,26 @@ export class Secret<T = string> extends Scope {
 	 * ```
 	 */
 	async get(): Promise<T | null> {
-		if (!existsSync(this.filePath)) return null;
-		const raw = readFileSync(this.filePath, 'utf8');
+		const settings = readSettings(this);
+		if (!(this.storeKey in settings)) return null;
+		const stored = settings[this.storeKey];
 
 		if (this.schema) {
-			let parsed: unknown;
-			try {
-				parsed = JSON.parse(raw);
-			} catch {
-				throw blocksError(SecretErrors.ValidationFailed, 'Stored secret value is not valid JSON');
-			}
+			// With a schema the stored value is the already-parsed JSON value
+			// (put() stores it structurally in settings.json). Validate it directly;
+			// a legacy raw string is parsed first for forward-compat.
+			const parsed = typeof stored === 'string' ? safeJsonParse(stored) : stored;
 			return await validateSchema(this.schema, parsed);
 		}
 
-		return raw as unknown as T;
+		return stored as unknown as T;
 	}
 
 	/**
 	 * Update the secret value.
 	 *
 	 * Without a schema, accepts a string. With a schema, accepts `T`, validates
-	 * it, and serializes to JSON before storing.
+	 * it, and stores the structured value.
 	 *
 	 * @param value - The new secret value.
 	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the value fails validation.
@@ -169,14 +202,12 @@ export class Secret<T = string> extends Scope {
 	 * ```
 	 */
 	async put(value: T): Promise<void> {
-		let serialized: string;
 		if (this.schema) {
 			await validateSchema(this.schema, value);
-			serialized = JSON.stringify(value);
-		} else {
-			serialized = value as unknown as string;
 		}
-		writeFileSync(this.filePath, serialized);
+		const settings = readSettings(this);
+		settings[this.storeKey] = value;
+		writeSettings(this, settings);
 	}
 
 	/**

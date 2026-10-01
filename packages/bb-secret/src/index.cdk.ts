@@ -3,6 +3,7 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import * as cdk from 'aws-cdk-lib';
 import { RemovalPolicy } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -48,7 +49,9 @@ export class Secret extends BuildingBlockScope {
 
 		if (options?.secret) {
 			// `fromExisting`: bind to the pre-existing secret by ARN; do not
-			// provision, seed, or delete it — only grant runtime access.
+			// provision, seed, delete, OR tag it — it is owned outside this stack
+			// (often shared across many deployments), so stamping it with this
+			// stack's resource-group tag would be mutating a resource we don't own.
 			this.secret = secretsmanager.Secret.fromSecretCompleteArn(this, 'secret', options.secret.secretArn);
 		} else {
 			const removalPolicy =
@@ -59,9 +62,21 @@ export class Secret extends BuildingBlockScope {
 						: this.defaults.removalPolicy;
 
 			this.secret = new secretsmanager.Secret(this, 'secret', {
-				secretName: this.fullId.substring(0, 255),
+				// Use the caller's explicit, well-known name when provided (so a
+				// team/CI pipeline can target it with `aws secretsmanager …`); else
+				// derive a unique name from the scope tree.
+				secretName: (options?.name ?? this.fullId).substring(0, 255),
 				removalPolicy,
 			});
+
+			// Tag the BB-created secret so it joins the stack's `-settings` resource
+			// group alongside AppSetting parameters (the group matches
+			// `aws-blocks-stack=<stackName>`). Walk to the non-nested parent stack,
+			// mirroring AppSetting. Only stack-managed secrets are tagged —
+			// `fromExisting` secrets are intentionally excluded above.
+			let tagStack = cdk.Stack.of(this);
+			while (tagStack.nestedStackParent) tagStack = tagStack.nestedStackParent;
+			cdk.Tags.of(this.secret).add('aws-blocks-stack', tagStack.stackName);
 		}
 
 		// Grant the shared execution role read + write on this specific secret

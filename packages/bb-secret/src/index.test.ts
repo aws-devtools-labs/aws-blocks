@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, test } from 'node:test';
 import { isBlocksError, Scope } from '@aws-blocks/core';
@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { Secret, SecretErrors } from './index.mock.js';
 
 // Reset mock data between tests so state does not leak. The mock persists to
-// `.bb-data/{fullId}/secret` under the current working directory.
+// the shared `.bb-data/settings.json` under the current working directory.
 const BB_DATA = join(process.cwd(), '.bb-data');
 
 function freshScope(): Scope {
@@ -107,6 +107,46 @@ describe('Secret (mock)', () => {
 			});
 			await secret.put('legacy-value');
 			assert.strictEqual(await secret.get(), 'legacy-value');
+		});
+	});
+
+	describe('local storage (shared settings.json)', () => {
+		const SETTINGS = join(BB_DATA, 'settings.json');
+
+		test('values are stored in the shared .bb-data/settings.json', async () => {
+			const secret = new Secret(freshScope(), 'api-key');
+			await secret.put('v1');
+			assert.ok(existsSync(SETTINGS), 'settings.json should exist after put()');
+			const parsed = JSON.parse(readFileSync(SETTINGS, 'utf8'));
+			// Keyed by the instance fullId when no explicit name is given.
+			assert.strictEqual(parsed['test-app-api-key'], 'v1');
+		});
+
+		test('secrets live alongside the shape AppSetting uses ({ key: value })', async () => {
+			const scope = freshScope();
+			await new Secret(scope, 'alpha').put('a');
+			await new Secret(scope, 'beta').put('b');
+			const parsed = JSON.parse(readFileSync(SETTINGS, 'utf8'));
+			assert.deepStrictEqual(parsed, { 'test-app-alpha': 'a', 'test-app-beta': 'b' });
+		});
+	});
+
+	describe('name option', () => {
+		const SETTINGS = join(BB_DATA, 'settings.json');
+
+		test('an explicit name keys the local store by that name', async () => {
+			const secret = new Secret(freshScope(), 'stripe', { name: 'my-app/stripe-key' });
+			await secret.put('sk_live_x');
+			const parsed = JSON.parse(readFileSync(SETTINGS, 'utf8'));
+			assert.strictEqual(parsed['my-app/stripe-key'], 'sk_live_x');
+			// NOT keyed by fullId when a name is provided.
+			assert.ok(!('test-app-stripe' in parsed));
+		});
+
+		test('two instances sharing a name share the value', async () => {
+			await new Secret(freshScope(), 'a', { name: 'shared/key' }).put('one');
+			const reopened = new Secret(freshScope(), 'b', { name: 'shared/key' });
+			assert.strictEqual(await reopened.get(), 'one');
 		});
 	});
 });

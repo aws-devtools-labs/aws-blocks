@@ -14,8 +14,8 @@ import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
-import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
+import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
 
@@ -154,7 +154,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 		resourceQuery: {
 			type: 'TAG_FILTERS_1_0',
 			query: {
-				resourceTypeFilters: ['AWS::SSM::Parameter'],
+				resourceTypeFilters: ['AWS::SSM::Parameter', 'AWS::SecretsManager::Secret'],
 				tagFilters: [{ key: 'aws-blocks-stack', values: [rootStack.stackName] }],
 			},
 		},

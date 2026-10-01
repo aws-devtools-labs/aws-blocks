@@ -38,6 +38,7 @@ export const SecretErrors: {
 // @public
 export interface SecretOptions<T = string> {
     logger?: ChildLogger;
+    name?: string;
     removalPolicy?: 'destroy' | 'retain';
     schema?: StandardSchemaV1<T>;
     secret?: ExternalSecretRef;

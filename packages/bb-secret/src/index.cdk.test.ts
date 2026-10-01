@@ -113,3 +113,36 @@ test('CDK: calling a runtime data method throws an actionable synth-time error',
 		);
 	}
 });
+
+test('CDK: default secret name is derived from the scope tree (fullId)', () => {
+	const { stack, parent } = setup();
+	new Secret(parent, 'stripe-key');
+	Template.fromStack(stack).hasResourceProperties('AWS::SecretsManager::Secret', {
+		Name: 'TestStack-app-stripe-key',
+	});
+});
+
+test('CDK: explicit name option sets the Secrets Manager secret name', () => {
+	const { stack, parent } = setup();
+	new Secret(parent, 'stripe-key', { name: 'my-app/stripe' });
+	Template.fromStack(stack).hasResourceProperties('AWS::SecretsManager::Secret', {
+		Name: 'my-app/stripe',
+	});
+});
+
+test('CDK: BB-created secret is tagged aws-blocks-stack (joins the settings resource group)', () => {
+	const { stack, parent } = setup(BlocksPresets.production, 'MyStack');
+	new Secret(parent, 'stripe-key');
+	Template.fromStack(stack).hasResourceProperties('AWS::SecretsManager::Secret', {
+		Tags: Match.arrayWith([{ Key: 'aws-blocks-stack', Value: 'MyStack' }]),
+	});
+});
+
+test('CDK: fromExisting secret is NOT tagged (owned outside this stack)', () => {
+	const { stack, parent } = setup();
+	new Secret(parent, 'legacy-key', {
+		secret: Secret.fromExisting('arn:aws:secretsmanager:us-east-1:123456789012:secret:legacy-AbCdEf'),
+	});
+	// No secret resource is created at all, so there is nothing to tag.
+	Template.fromStack(stack).resourceCountIs('AWS::SecretsManager::Secret', 0);
+});

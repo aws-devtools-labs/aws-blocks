@@ -41,5 +41,12 @@ export function secretTests(getApi: () => typeof apiType) {
         /ValidationFailedException/,
       );
     });
+
+    test('Secret - named secret put then get round-trips', async () => {
+      const api = getApi();
+      await api.secretPutNamed('whsec_abc123');
+      const { value } = await api.secretGetNamed();
+      assert.strictEqual(value, 'whsec_abc123');
+    });
   });
 }

@@ -17,6 +17,21 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
  */
 export interface SecretOptions<T = string> {
 	/**
+	 * AWS Secrets Manager secret name. Optional — when omitted, the name is
+	 * derived from the scope tree as the instance's `fullId`, guaranteeing
+	 * uniqueness within the stack.
+	 *
+	 * Provide an explicit, well-known name when a team or CI/CD pipeline needs a
+	 * stable, predictable target to set/rotate the value out-of-band (e.g.
+	 * `aws secretsmanager put-secret-value --secret-id <name>`). When you set an
+	 * explicit name, **you** are responsible for ensuring it is unique across all
+	 * stacks deployed to the same AWS account and region.
+	 *
+	 * Ignored when wrapping an existing secret via {@link Secret.fromExisting}
+	 * (the referenced secret already has its own name/ARN).
+	 */
+	name?: string;
+	/**
 	 * Runtime validation schema for the secret value. Accepts any
 	 * StandardSchemaV1 implementation (Zod, Valibot, ArkType). When provided, the
 	 * type parameter `T` is inferred from the schema, the stored value is treated
