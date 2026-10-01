@@ -782,10 +782,24 @@ export class HostingConstruct extends Construct {
         });
         // `buildId` in the properties makes the custom resource re-run on
         // every new build (new prerendered tag set), not just on create.
-        new CustomResource(this, 'IsrTagTableSeed', {
+        const initSeed = new CustomResource(this, 'IsrTagTableSeed', {
           serviceToken: initProvider.serviceToken,
           properties: { buildId },
         });
+        // Retain the seed custom resource on stack DELETE so it is dropped
+        // without a delete-time provider invoke. This is the same teardown-wedge
+        // guard applied to the Custom::CDKBucketDeployment CRs below: a
+        // provider-backed CR whose delete invoke can hang will wedge the whole
+        // stack in DELETE_FAILED. Observed on long-lived e2e stacks whose seed CR
+        // sat DELETE_IN_PROGRESS until the 30-min custom-resource timeout while
+        // every other stack resource had already reached DELETE_COMPLETE.
+        // Safe to retain: the seed only writes build-time tag->path rows into
+        // the cache table, and that table is RemovalPolicy.DESTROY (above), so it
+        // is destroyed with the stack regardless -- skipping the delete invoke
+        // orphans no live resource. (RETAIN here only tells CFN to skip the
+        // Delete and forget the logical CR; the backing provider Lambda is a
+        // normal stack resource and still deletes with the stack.)
+        initSeed.applyRemovalPolicy(RemovalPolicy.RETAIN);
       }
     }
 
