@@ -9,14 +9,6 @@
 import { HttpRequest } from '@smithy/protocol-http';
 import type { BuildMiddleware, MiddlewareStack } from '@smithy/types';
 
-/**
- * Header name carrying the native-client token on the RPC hop. A custom header,
- * not `User-Agent`, because browsers forbid scripts from setting `User-Agent`.
- *
- * @internal Read by the Lambda handler; not public API.
- */
-export const CLIENT_USER_AGENT_HEADER = 'x-blocks-user-agent';
-
 const MIDDLEWARE_NAME = 'blocksClientUserAgent';
 
 /** Bounds what the grammar runs against; the emitted token has its own cap. */
