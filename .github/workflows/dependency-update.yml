@@ -44,15 +44,6 @@ jobs:
       - name: Install and build
         run: |
           npm install
-          # Auto-remediate advisories the bump may have introduced (same GitHub
-          # Advisory data the `dependency-review` PR gate blocks on), so most
-          # vulnerable transitives are patched here instead of needing a manual
-          # `overrides` pin. No `--force`: we only take in-range (non-breaking)
-          # fixes unattended; anything needing a major bump or a bundled-dep
-          # override is left for a human. `|| true` so a partial/again-flagged
-          # fix never fails the job — the dependency-review gate on the PR is the
-          # authoritative check, and the build/e2e below verify whatever changed.
-          npm audit fix || true
           npm run build
 
       - name: Verify with local e2e
