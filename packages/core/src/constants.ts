@@ -44,9 +44,10 @@ export const BLOCKS_AUTH_PREFIX = '/aws-blocks/auth';
 export const BLOCKS_SANDBOX_PREFIX = '/.blocks-sandbox';
 
 /**
- * Custom because browsers forbid scripts from setting `User-Agent`, and
- * non-safelisted, so the CORS preflight must name it.
+ * Header name carrying the native-client token on the RPC hop. A custom header,
+ * not `User-Agent`, because browsers forbid scripts from setting `User-Agent`;
+ * also non-safelisted, so the CORS preflight must name it.
  *
- * @internal Not public API.
+ * @internal Read by the Lambda handler and both CORS preflight responders; not public API.
  */
 export const CLIENT_USER_AGENT_HEADER = 'x-blocks-user-agent';
