@@ -885,11 +885,25 @@ function invalidCallback(msg: string): Error {
 	return blocksError('InvalidCallbackException', `invalid OIDC callback: ${msg}`);
 }
 
-function idpError(msg: string, cause?: unknown): Error {
+/**
+ * Build a branded `IdpErrorException` with a stable, BB-authored message and the
+ * raw underlying error (openid-client / fetch failure) kept only on a
+ * non-enumerable `cause`. The raw text — which can carry IdP endpoints, tokens,
+ * or provider detail — never reaches the message that crosses the RPC wire.
+ * Exported for the per-helper wire-sanitization test.
+ */
+export function idpError(msg: string, cause?: unknown): Error {
 	return withCause(blocksError('IdpErrorException', `IdP error: ${msg}`), cause);
 }
 
-function providerNotConfigured(msg: string, cause?: unknown): Error {
+/**
+ * Build a branded `ProviderNotConfiguredException` with a stable, BB-authored
+ * message and the raw underlying error (typically an AppSetting/SSM resolver
+ * failure, which can carry SSM ARNs and account ids) kept only on a
+ * non-enumerable `cause`. The raw text never reaches the wire message.
+ * Exported for the per-helper wire-sanitization test.
+ */
+export function providerNotConfigured(msg: string, cause?: unknown): Error {
 	return withCause(blocksError('ProviderNotConfiguredException', `provider not configured: ${msg}`), cause);
 }
 
