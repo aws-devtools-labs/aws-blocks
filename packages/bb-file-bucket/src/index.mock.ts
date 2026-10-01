@@ -242,6 +242,12 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async deleteBatch(paths: string[]): Promise<void> {
+		// Validate every key up front, before deleting any, so a batch mixing a
+		// valid and an invalid key deletes nothing — matching the AWS runtime,
+		// where assertValidKey runs over the whole batch before any S3 send.
+		// (Without this, the per-element `delete()` below would delete the valid
+		// keys preceding the first invalid one — a mock↔AWS divergence.)
+		for (const p of paths) this.validateKey(p);
 		for (const p of paths) {
 			await this.delete(p);
 		}

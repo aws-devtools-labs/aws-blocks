@@ -20,6 +20,8 @@ describe('assertValidKey rejects invalid keys with a ValidationFailed error', ()
 		'ctrl\x01char',
 		'.',
 		'a/./b',
+		'a//b', // interior empty segment — collapses on the mock, distinct on S3
+		'a/', // trailing slash — same divergence
 	]) {
 		test(`rejects ${JSON.stringify(key)}`, () => {
 			assert.throws(

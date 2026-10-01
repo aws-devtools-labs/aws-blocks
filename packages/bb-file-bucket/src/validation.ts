@@ -43,6 +43,9 @@ function validationError(message: string): Error {
  *   value and have no legitimate use in an S3 key;
  * - has a leading `/` (absolute-style key) — S3 keys are not absolute paths, and
  *   a leading slash produces a surprising empty-first-segment key;
+ * - contains an empty path segment — an interior `a//b` or a trailing `a/`. The
+ *   mock collapses these via `path.join` while S3 treats them as distinct
+ *   literal keys, so permitting them would reintroduce a mock↔S3 divergence;
  * - contains a `..` (or `.`) path SEGMENT — checked per `/`-delimited segment,
  *   not by substring, so a normal filename such as `my..file.txt` is accepted
  *   while a path traversal segment like `a/../b` is rejected.
@@ -70,6 +73,15 @@ export function assertValidKey(key: string): void {
 	for (const segment of key.split('/')) {
 		if (segment === '..' || segment === '.') {
 			throw validationError('Invalid key: contains a path traversal segment');
+		}
+		// Reject an empty segment (adjacent slashes `a//b` or a trailing slash
+		// `a/`). The mock maps keys onto the filesystem via `path.join`, which
+		// collapses `a//b` to `a/b` and strips a trailing slash, while S3 treats
+		// each as a distinct literal key — so permitting them would reintroduce a
+		// mock↔S3 divergence. (A leading empty segment is reported above as a
+		// leading slash; this covers interior and trailing ones.)
+		if (segment === '') {
+			throw validationError('Invalid key: contains an empty path segment');
 		}
 	}
 }
