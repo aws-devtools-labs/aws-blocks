@@ -80,4 +80,29 @@ describe('OIDC error helpers do not leak the raw cause over the wire', () => {
 		assert.strictEqual(prov.cause, undefined);
 		assert.strictEqual(prov.message, 'provider not configured: google');
 	});
+
+	// The OAuth2 token/userinfo and refresh-grant failure sites pass the raw IdP
+	// HTTP response body as `cause` and keep a BB-authored, STATUS-ONLY message.
+	// The numeric HTTP status is safe on the wire; the response body (which can
+	// embed account/endpoint detail) must not be interpolated into the message.
+	const RAW_HTTP_BODY =
+		'{"error":"invalid_client","error_description":"client 1234567890.apps.googleusercontent.com at https://idp.internal/token is not authorized"}';
+
+	test('token-endpoint failure keeps the raw response body off the wire message', () => {
+		const err = idpError('token endpoint rejected the code exchange (HTTP 400)', new Error(RAW_HTTP_BODY));
+		assert.strictEqual(err.message, 'IdP error: token endpoint rejected the code exchange (HTTP 400)');
+		assertNoLeak(err, 'IdpErrorException', RAW_HTTP_BODY);
+	});
+
+	test('userinfo failure keeps the raw response body off the wire message', () => {
+		const err = idpError('userinfo endpoint request failed (HTTP 401)', new Error(RAW_HTTP_BODY));
+		assert.strictEqual(err.message, 'IdP error: userinfo endpoint request failed (HTTP 401)');
+		assertNoLeak(err, 'IdpErrorException', RAW_HTTP_BODY);
+	});
+
+	test('refresh-grant failure keeps the raw response body off the wire message', () => {
+		const err = idpError('refresh_token grant failed (HTTP 400)', new Error(RAW_HTTP_BODY));
+		assert.strictEqual(err.message, 'IdP error: refresh_token grant failed (HTTP 400)');
+		assertNoLeak(err, 'IdpErrorException', RAW_HTTP_BODY);
+	});
 });

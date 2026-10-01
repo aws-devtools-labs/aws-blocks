@@ -684,7 +684,10 @@ export class OidcClientEngine implements AuthEngine {
 			body: tokenBody,
 		});
 		if (!tokenResp.ok) {
-			throw idpError(`token endpoint ${tokenResp.status} ${await tokenResp.text().catch(() => '')}`);
+			throw idpError(
+				`token endpoint rejected the code exchange (HTTP ${tokenResp.status})`,
+				new Error(await tokenResp.text().catch(() => '')),
+			);
 		}
 		const tokenJson = (await tokenResp.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
 		if (!tokenJson.access_token) throw idpError('token response missing access_token');
@@ -693,7 +696,10 @@ export class OidcClientEngine implements AuthEngine {
 			headers: { Authorization: `Bearer ${tokenJson.access_token}` },
 		});
 		if (!userInfoResp.ok) {
-			throw idpError(`userinfo ${userInfoResp.status} ${await userInfoResp.text().catch(() => '')}`);
+			throw idpError(
+				`userinfo endpoint request failed (HTTP ${userInfoResp.status})`,
+				new Error(await userInfoResp.text().catch(() => '')),
+			);
 		}
 		const raw = await userInfoResp.json();
 		const mapped = applyMapClaims(provider, raw);
@@ -768,7 +774,7 @@ export class OidcClientEngine implements AuthEngine {
 		});
 		if (!resp.ok) {
 			const text = await resp.text().catch(() => '');
-			throw idpError(`refresh_token grant failed: ${resp.status} ${text}`);
+			throw idpError(`refresh_token grant failed (HTTP ${resp.status})`, new Error(text));
 		}
 		const json = (await resp.json()) as {
 			access_token?: string;
