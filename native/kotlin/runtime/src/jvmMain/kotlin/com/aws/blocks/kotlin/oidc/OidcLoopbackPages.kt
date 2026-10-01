@@ -1,5 +1,7 @@
 package com.aws.blocks.kotlin.oidc
 
+import io.ktor.util.escapeHTML
+
 /**
  * The pages the loopback server serves when an app supplies none of its own.
  *
@@ -29,7 +31,7 @@ internal object OidcLoopbackPages {
             .joinToString(" — ")
         // The detail comes from the identity provider, so it is escaped and set apart from
         // our own copy rather than run together with it.
-        val prefix = if (detail.isEmpty()) "" else "<p class=\"detail\">${escapeHtml(detail)}</p>"
+        val prefix = if (detail.isEmpty()) "" else "<p class=\"detail\">${detail.escapeHTML()}</p>"
         return page(
             title = "Sign-in failed",
             glyph = ALERT,
@@ -122,18 +124,4 @@ internal object OidcLoopbackPages {
             paths.replace("<", "%3C").replace(">", "%3E").replace("\"", "'") +
             "%3C/svg%3E"
 
-}
-
-/** Escapes text for insertion into HTML character data or a quoted attribute value. */
-internal fun escapeHtml(value: String): String = buildString(value.length) {
-    for (char in value) {
-        when (char) {
-            '&' -> append("&amp;")
-            '<' -> append("&lt;")
-            '>' -> append("&gt;")
-            '"' -> append("&quot;")
-            '\'' -> append("&#39;")
-            else -> append(char)
-        }
-    }
 }
