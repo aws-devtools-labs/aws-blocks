@@ -10,7 +10,7 @@
  * @see https://www.jsonrpc.org/specification
  */
 
-import { ApiError, DEFAULT_API_ERROR_NAME, isWireSafeError } from './errors.js';
+import { ApiError, DEFAULT_API_ERROR_NAME, isApiErrorLike, isWireSafeError } from './errors.js';
 
 /**
  * The `.name` a plain `new Error(...)` carries. A throw whose name is still this
@@ -232,7 +232,12 @@ export function successResponse(result: unknown, id: string | number | null): st
  * response contract and is not shaped by the JSON-RPC serializer.
  */
 export function errorResponseFromCatch(error: unknown, id: string | number | null): string {
-  if (error instanceof ApiError) {
+  // Branch 1 matches an ApiError by SHAPE (`isApiErrorLike`), not a bare
+  // `instanceof ApiError`, so an ApiError built by a separately bundled copy of
+  // core (a duplicated `@aws-blocks/core` under a dependency) is still recognized
+  // and its HTTP status / name / retriable survive — a plain `instanceof` would
+  // miss it and collapse a deliberate 409 into a nameless 500 (branch 3).
+  if (isApiErrorLike(error)) {
     const data: Record<string, unknown> = {};
     if (error.name && error.name !== DEFAULT_API_ERROR_NAME) data.name = error.name;
     if (error.retriable) data.retriable = true;

@@ -61,6 +61,14 @@ export class ApiError extends Error {
 		this.name = options?.name ?? DEFAULT_API_ERROR_NAME;
 		this.status = status;
 		this.retriable = options?.retriable ?? false;
+		// Stamp the cross-copy brand so the RPC serializer can recognize this as a
+		// wire-safe BB error even when it was constructed by a SEPARATELY bundled
+		// copy of core (a BB compiled with its own core instance), where a plain
+		// `instanceof ApiError` check fails. `brandBlocksError` keys the brand on
+		// `Symbol.for(...)`, which is stable across bundles. An `ApiError`'s
+		// `message` is always BB-authored (never raw driver/SDK text), so branding
+		// it never leaks (see `brandBlocksError`).
+		brandBlocksError(this);
 	}
 }
 
@@ -102,6 +110,34 @@ export const BLOCKS_ERROR_BRAND = Symbol.for('aws-blocks.wireSafeError');
  */
 export function isWireSafeError(e: unknown): e is Error {
 	return e instanceof ApiError || (e instanceof Error && (e as { [BLOCKS_ERROR_BRAND]?: true })[BLOCKS_ERROR_BRAND] === true);
+}
+
+/**
+ * True when `e` is an {@link ApiError} — including one constructed by a
+ * SEPARATELY bundled copy of core, where `e instanceof ApiError` is false
+ * because the two copies define distinct classes.
+ *
+ * A duplicated `@aws-blocks/core` is common in a real install: npm nests a
+ * private copy under a dependency whenever versions do not dedupe, so an
+ * `ApiError` built in one copy (e.g. `bb-distributed-table`'s) reaches the RPC
+ * serializer running in another copy (`blocks`'s). A plain `instanceof` check
+ * then wrongly rejects it, collapsing a deliberate 409 into a nameless 500.
+ *
+ * The detection is a strict superset of `instanceof ApiError`, not a loose
+ * duck-type: it requires BOTH the cross-copy-stable `BLOCKS_ERROR_BRAND` (which
+ * the `ApiError` constructor stamps) AND a numeric `status`. The brand alone is
+ * carried by every `blocksError()` plain-Error too; the numeric `status` is what
+ * distinguishes an `ApiError` (which owns an HTTP status) from a branded plain
+ * `Error` (which does not), so a branded plain-Error is NOT misread as an
+ * ApiError and still takes the status-500 branch.
+ */
+export function isApiErrorLike(e: unknown): e is Error & { status: number; retriable?: boolean } {
+	return (
+		e instanceof ApiError ||
+		(e instanceof Error &&
+			(e as { [BLOCKS_ERROR_BRAND]?: true })[BLOCKS_ERROR_BRAND] === true &&
+			typeof (e as { status?: unknown }).status === 'number')
+	);
 }
 
 /**

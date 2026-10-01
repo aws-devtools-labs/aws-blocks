@@ -330,6 +330,28 @@ describe('ApiError status ↔ JSON-RPC error code', () => {
     assert.strictEqual(parsed.error.data, undefined);
   });
 
+  it('encodes an ApiError built by a SEPARATELY bundled copy of core with its status, name and retriable intact', () => {
+    // Reproduces the real failure: a duplicated `@aws-blocks/core` nests a private
+    // copy under a dependency (e.g. bb-distributed-table), so the ApiError thrown
+    // there is NOT `instanceof` the ApiError class this serializer imports. A plain
+    // `instanceof` check misses it and collapses the deliberate 409 into a nameless
+    // 500 (the api-only OCC e2e symptom). Simulate the foreign-copy ApiError with a
+    // plain Error that carries the same cross-copy brand + numeric status the
+    // ApiError constructor stamps, without being an instance of THIS copy's class.
+    const foreign = Object.assign(new Error('Stale write rejected'), {
+      name: 'ConditionalCheckFailedException',
+      status: 409,
+      retriable: true,
+    });
+    Object.defineProperty(foreign, Symbol.for('aws-blocks.wireSafeError'), { value: true, enumerable: false });
+    assert.ok(!(foreign instanceof ApiError)); // precondition: not our class
+    const parsed = JSON.parse(errorResponseFromCatch(foreign, 1));
+    assert.strictEqual(parsed.error.code, 409);
+    assert.strictEqual(parsed.error.message, 'Stale write rejected');
+    assert.strictEqual(parsed.error.data.name, 'ConditionalCheckFailedException');
+    assert.strictEqual(parsed.error.data.retriable, true);
+  });
+
   it('round-trips status, name and retriable back into an ApiError on the client', () => {
     const wire = JSON.parse(errorResponseFromCatch(
       new ApiError('Username already taken', 409, { name: 'ConditionalCheckFailedException', retriable: true }),
