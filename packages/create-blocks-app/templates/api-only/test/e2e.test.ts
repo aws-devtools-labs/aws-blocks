@@ -117,40 +117,14 @@ test('items: optimistic-lock conflict rejects a stale write', async () => {
 
   // Second writer still thinks the item is at version 1 (stale). The
   // ifFieldEquals: { version: 1 } precondition no longer holds, so the write is
-  // rejected. The expected rejection is a ConditionalCheckFailed conflict
-  // (HTTP 409) — assert on that below.
-  //
-  // We capture the error in a plain try/catch rather than asserting it inside
-  // assert.rejects's predicate: assert.rejects throws a fresh AssertionError
-  // when a predicate returns false, hiding the real error object (so a failure
-  // would only ever report an opaque "[ApiError]" with no name to debug). The
-  // invariant this test actually guards is "a stale compare-and-swap MUST NOT
-  // land, and the first writer's value MUST stand" — so we assert the write was
-  // rejected, prefer the ConditionalCheckFailed name, and confirm the stored
-  // state is unchanged. Under the shared e2e account's load a conditional write
-  // can occasionally be rejected by the backend with a different transient
-  // conflict error (still a wire-safe 409-class BB error, never a success)
-  // before the conditional check resolves; that is tolerated ONLY because the
-  // post-condition below proves the stale write did not take effect.
-  let staleError: unknown;
-  let staleAccepted = false;
-  try {
-    await api.setQuantity(item.itemId, 99, 1);
-    staleAccepted = true;
-  } catch (e) {
-    staleError = e;
-  }
-  assert.ok(!staleAccepted, 'a stale-version write should be rejected, not accepted');
-
-  assert.ok(
-    isBlocksError(staleError, CONDITIONAL_CHECK_FAILED) || isBlocksError(staleError),
-    `a stale-version write should raise a wire-safe conflict error (expected ${CONDITIONAL_CHECK_FAILED}), got: ${
-      staleError instanceof Error ? staleError.name : typeof staleError
-    }`,
+  // rejected with a ConditionalCheckFailed conflict (HTTP 409).
+  await assert.rejects(
+    api.setQuantity(item.itemId, 99, 1),
+    (e: unknown) => isBlocksError(e, CONDITIONAL_CHECK_FAILED),
+    'a stale-version write should raise ConditionalCheckFailed',
   );
 
-  // The invariant that matters regardless of which conflict error surfaced: the
-  // stale write did not land; the first writer's update stands at version 2.
+  // The stale write did not land; the first writer's update stands.
   const current = await api.getItem(item.itemId);
   assert.strictEqual(current.quantity, 2);
   assert.strictEqual(current.version, 2);
