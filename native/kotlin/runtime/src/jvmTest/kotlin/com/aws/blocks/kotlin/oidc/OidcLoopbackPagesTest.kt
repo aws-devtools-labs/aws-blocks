@@ -28,6 +28,22 @@ class OidcLoopbackPagesTest {
     }
 
     @Test
+    fun `each page's tab icon draws the same glyph as the page itself`() {
+        val check = "m8 12 3 3 5-6"
+        val alert = "M12 16h.01"
+
+        val success = OidcLoopbackPages.success()
+        success shouldContain "d=\"$check\"" // in the card
+        success shouldContain "d='$check'" // in the tab icon
+        success shouldNotContain alert
+
+        val failure = OidcLoopbackPages.failure(null, null)
+        failure shouldContain "d=\"$alert\""
+        failure shouldContain "d='$alert'"
+        failure shouldNotContain check
+    }
+
+    @Test
     fun `no page fetches anything over the network`() {
         for (page in listOf(
             OidcLoopbackPages.success(),

@@ -10,6 +10,12 @@ package com.aws.blocks.kotlin.oidc
  */
 internal object OidcLoopbackPages {
 
+    private const val CHECK_PATHS =
+        "<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"m8 12 3 3 5-6\"/>"
+
+    private const val ALERT_PATHS =
+        "<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 8v4\"/><path d=\"M12 16h.01\"/>"
+
     fun success(): String = page(
         title = "Signed in",
         glyph = CHECK,
@@ -33,14 +39,14 @@ internal object OidcLoopbackPages {
     }
 
     /** [body] is inserted as markup, so every caller escapes its own interpolations. */
-    private fun page(title: String, glyph: String, heading: String, body: String): String = """
+    private fun page(title: String, glyph: Glyph, heading: String, body: String): String = """
         <!DOCTYPE html>
         <html lang="en">
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>$title</title>
-        <link rel="icon" href="$FAVICON">
+        <link rel="icon" href="${glyph.favicon}">
         <style>
         :root { color-scheme: light dark; }
         body {
@@ -72,7 +78,7 @@ internal object OidcLoopbackPages {
         </head>
         <body>
         <div class="card">
-        $glyph
+        ${glyph.inline}
         <h1>$heading</h1>
         $body
         </div>
@@ -81,29 +87,41 @@ internal object OidcLoopbackPages {
     """.trimIndent()
 
     /**
-     * A padlock, percent-encoded rather than base64 so it stays readable here. A favicon
-     * renders outside the document and inherits nothing, so the stroke is a literal colour
-     * chosen to read against both light and dark tab bars.
+     * The in-page SVG and the tab icon for one page, paired so the two cannot drift apart.
+     *
+     * A favicon renders outside the document and inherits nothing, so [favicon] carries a
+     * literal colour. It is a brighter variant of the in-page stroke: the in-page colour is
+     * tuned for a white or near-black card, while the tab icon has to stay legible against
+     * both a light and a dark tab bar. [favicon] is percent-encoded rather than base64 so it
+     * stays readable here, and uses a heavier stroke because it renders at about 16px.
      */
-    private const val FAVICON = "data:image/svg+xml," +
-        "%3Csvg xmlns='http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg' viewBox='0 0 24 24' " +
-        "fill='none' stroke='%238b949e' stroke-width='2' stroke-linecap='round'%3E" +
-        "%3Crect x='4' y='10' width='16' height='10' rx='2'/%3E" +
-        "%3Cpath d='M8 10V7a4 4 0 0 1 8 0v3'/%3E%3C/svg%3E"
+    private class Glyph(val inline: String, val favicon: String)
 
-    // The namespace colon is a character reference so the literal string "http://" never
-    // reaches the page; the browser resolves it to the correct namespace either way.
-    private const val SVG_OPEN =
+    private val CHECK = Glyph(
+        inline = svg(stroke = "#1a7f37", paths = CHECK_PATHS),
+        favicon = favicon(stroke = "2da44e", paths = CHECK_PATHS),
+    )
+
+    private val ALERT = Glyph(
+        inline = svg(stroke = "#9a6700", paths = ALERT_PATHS),
+        favicon = favicon(stroke = "bf8700", paths = ALERT_PATHS),
+    )
+
+    private fun svg(stroke: String, paths: String): String =
+        // The namespace colon is a character reference so the literal string "http://" never
+        // reaches the page; the browser resolves it to the correct namespace either way.
         "<svg xmlns=\"http&#58;//www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" " +
-            "stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\""
+            "stroke=\"$stroke\" stroke-width=\"2\" stroke-linecap=\"round\" " +
+            "stroke-linejoin=\"round\" aria-hidden=\"true\">" + paths + "</svg>"
 
-    private const val CHECK =
-        "$SVG_OPEN stroke=\"#1a7f37\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>" +
-            "<path d=\"m8 12 3 3 5-6\"/></svg>"
+    private fun favicon(stroke: String, paths: String): String =
+        "data:image/svg+xml," +
+            "%3Csvg xmlns='http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg' viewBox='0 0 24 24' " +
+            "fill='none' stroke='%23$stroke' stroke-width='2.5' stroke-linecap='round' " +
+            "stroke-linejoin='round'%3E" +
+            paths.replace("<", "%3C").replace(">", "%3E").replace("\"", "'") +
+            "%3C/svg%3E"
 
-    private const val ALERT =
-        "$SVG_OPEN stroke=\"#9a6700\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>" +
-            "<path d=\"M12 8v4\"/><path d=\"M12 16h.01\"/></svg>"
 }
 
 /** Escapes text for insertion into HTML character data or a quoted attribute value. */
