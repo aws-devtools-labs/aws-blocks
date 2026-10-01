@@ -65,9 +65,10 @@ export class ApiError extends Error {
 		// wire-safe BB error even when it was constructed by a SEPARATELY bundled
 		// copy of core (a BB compiled with its own core instance), where a plain
 		// `instanceof ApiError` check fails. `brandBlocksError` keys the brand on
-		// `Symbol.for(...)`, which is stable across bundles. An `ApiError`'s
-		// `message` is always BB-authored (never raw driver/SDK text), so branding
-		// it never leaks (see `brandBlocksError`).
+		// `Symbol.for(...)`, which is stable across bundles. The brand makes an
+		// `ApiError`'s `message` wire-visible, so BB code MUST construct `ApiError`
+		// with its own authored text, never raw driver/SDK/IdP text; the Cognito
+		// `asApiError` path is the known exception, tracked as a follow-up.
 		brandBlocksError(this);
 	}
 }
