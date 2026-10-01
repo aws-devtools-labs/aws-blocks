@@ -2,114 +2,53 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Generate a changeset for the weekly dependency bump.
+ * Write a changeset for the weekly dependency bump so the `Require changeset`
+ * gate passes. Emits a `patch` entry for every published `@aws-blocks/*`
+ * package whose package.json changed vs the base ref (a dep bump is
+ * non-breaking → patch), plus the umbrella `@aws-blocks/blocks` whenever a
+ * sibling it re-exports is in the set (its packed content moves with them).
+ * Writes nothing when only test-apps/templates/private tooling changed.
  *
- * The weekly dependency-update workflow bumps dependency versions across the
- * monorepo. When that touches a *published* `@aws-blocks/*` package's
- * package.json, the `Require changeset` CI gate (scripts/changeset-guard.ts
- * verify-coverage) demands a changeset entry for it — otherwise the package's
- * files change but `changeset version` never bumps it, and publish later fails
- * with EINTEGRITY. The weekly PR had no changeset, so it failed that gate.
- *
- * This writes `.changeset/dependency-bump-<date>.md` with a `patch` entry for
- * every published package whose package.json changed vs the base ref, matching
- * the guard's own detection (packages/<x> whose name starts with @aws-blocks/).
- * A dependency bump is non-breaking, so `patch` is correct (never `minor`/
- * `major`). If any changed package is one the umbrella `@aws-blocks/blocks`
- * re-exports, the umbrella is bumped too (verify-umbrella), since its packed
- * content moves with its siblings.
- *
- * No changed published packages → no changeset is written (the guard passes on
- * its own: "No publishable packages were changed"). This happens when a weekly
- * run only touches test-apps/templates/private tooling.
- *
- * Usage: node --experimental-strip-types scripts/generate-dependency-changeset.ts <base-ref>
- *   base-ref defaults to origin/main; the workflow passes the PR base branch.
+ * Usage: node --experimental-strip-types scripts/generate-dependency-changeset.ts [base-ref]
  */
-
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const PACKAGES_DIR = join(ROOT, "packages");
-const CHANGESET_DIR = join(ROOT, ".changeset");
-const SCOPE = "@aws-blocks/";
-const UMBRELLA_PKG = "@aws-blocks/blocks";
-
+const UMBRELLA = "@aws-blocks/blocks";
 const baseRef = process.argv[2] ?? "origin/main";
 
-/** package.json files changed vs the base ref, as repo-relative paths. */
-function changedPackageJsonFiles(): string[] {
-	const mergeBase = execFileSync("git", ["merge-base", baseRef, "HEAD"], {
-		cwd: ROOT,
-		encoding: "utf-8",
-	}).trim();
-	return execFileSync("git", ["diff", "--name-only", mergeBase], {
-		cwd: ROOT,
-		encoding: "utf-8",
-	})
-		.trim()
+const pkgName = (dir: string): string | null => {
+	try {
+		const p = JSON.parse(readFileSync(join(ROOT, "packages", dir, "package.json"), "utf-8"));
+		return !p.private && typeof p.name === "string" && p.name.startsWith("@aws-blocks/") ? p.name : null;
+	} catch {
+		return null; // deleted or unreadable
+	}
+};
+
+const mergeBase = execFileSync("git", ["merge-base", baseRef, "HEAD"], { cwd: ROOT, encoding: "utf-8" }).trim();
+const changed = new Set(
+	execFileSync("git", ["diff", "--name-only", mergeBase], { cwd: ROOT, encoding: "utf-8" })
 		.split("\n")
-		.filter((f) => /^packages\/[^/]+\/package\.json$/.test(f));
+		.map((f) => f.match(/^packages\/([^/]+)\/package\.json$/)?.[1])
+		.filter((d): d is string => Boolean(d))
+		.map(pkgName)
+		.filter((n): n is string => Boolean(n)),
+);
+
+if (changed.size === 0) {
+	console.log("No published packages changed; no changeset needed.");
+	process.exit(0);
 }
 
-/** Published @aws-blocks/* package names whose package.json changed. */
-function changedPublishedPackages(): Set<string> {
-	const names = new Set<string>();
-	for (const file of changedPackageJsonFiles()) {
-		const dir = file.replace(/\/package\.json$/, "");
-		const pkgJsonPath = join(ROOT, dir, "package.json");
-		if (!existsSync(pkgJsonPath)) continue; // deleted package
-		const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as { name?: string; private?: boolean };
-		// Skip private packages: they are never published, so a changeset entry
-		// for them would fail validate-structure's workspace-name check only if
-		// absent from workspaces, but more importantly they don't need a release.
-		if (pkg.private === true) continue;
-		if (typeof pkg.name === "string" && pkg.name.startsWith(SCOPE)) names.add(pkg.name);
-	}
-	return names;
-}
+// The umbrella must bump alongside any sibling it re-exports (verify-umbrella).
+const umbrellaDeps = JSON.parse(readFileSync(join(ROOT, "packages/blocks/package.json"), "utf-8")).dependencies ?? {};
+if ([...changed].some((p) => p in umbrellaDeps && p !== UMBRELLA)) changed.add(UMBRELLA);
 
-/** The @aws-blocks/* packages the umbrella re-exports (its own dependencies). */
-function umbrellaSiblings(): Set<string> {
-	const pkgJson = JSON.parse(readFileSync(join(PACKAGES_DIR, "blocks", "package.json"), "utf-8")) as {
-		dependencies?: Record<string, string>;
-	};
-	return new Set(
-		Object.keys(pkgJson.dependencies ?? {}).filter((n) => n.startsWith(SCOPE) && n !== UMBRELLA_PKG),
-	);
-}
-
-function main(): void {
-	const changed = changedPublishedPackages();
-
-	if (changed.size === 0) {
-		console.log("No published packages changed; no changeset needed.");
-		return;
-	}
-
-	// If any changed package is an umbrella sibling, the umbrella must be bumped
-	// alongside it (verify-umbrella), or the release aborts.
-	const siblings = umbrellaSiblings();
-	if ([...changed].some((pkg) => siblings.has(pkg))) {
-		changed.add(UMBRELLA_PKG);
-	}
-
-	const date = new Date().toISOString().slice(0, 10);
-	// A dependency bump is non-breaking → patch (never minor/major, which
-	// block-major would also reject for major).
-	const frontmatter = [...changed].sort().map((pkg) => `"${pkg}": patch`).join("\n");
-	const body = `chore: weekly dependency bump (${date})
-
-Routine dependency version bumps across the monorepo via \`npm-check-updates\`.
-No API changes.`;
-	const content = `---\n${frontmatter}\n---\n\n${body}\n`;
-
-	const outPath = join(CHANGESET_DIR, `dependency-bump-${date}.md`);
-	writeFileSync(outPath, content);
-	console.log(`Wrote ${outPath} covering ${changed.size} package(s):`);
-	for (const pkg of [...changed].sort()) console.log(`  • ${pkg}`);
-}
-
-main();
+const date = new Date().toISOString().slice(0, 10);
+const frontmatter = [...changed].sort().map((p) => `"${p}": patch`).join("\n");
+const out = join(ROOT, ".changeset", `dependency-bump-${date}.md`);
+writeFileSync(out, `---\n${frontmatter}\n---\n\nchore: weekly dependency bump (${date})\n`);
+console.log(`Wrote ${out} covering ${changed.size} package(s): ${[...changed].sort().join(", ")}`);
