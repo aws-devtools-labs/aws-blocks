@@ -712,6 +712,27 @@ void describe('HostingConstruct — Cache/ISR', () => {
         }),
       }),
     );
+
+    // The seed custom resource must carry DeletionPolicy: Retain. On stack
+    // delete CFN reaps the provider framework Lambda before it sends this
+    // custom resource its Delete; without Retain that delete invoke targets an
+    // already-gone function and hangs to the 30-min timeout -> DELETE_FAILED.
+    // Retain makes CFN drop the resource without a delete invoke, which is
+    // safe because the OpenNext dynamodb-provider remove() path is a no-op.
+    // Match by properties (serviceToken + buildId) to pin the ISR seed
+    // resource specifically, not the DNS/other custom resources in the stack.
+    const seedResources = template.findResources(
+      'AWS::CloudFormation::CustomResource',
+      {
+        Properties: Match.objectLike({ buildId: Match.anyValue() }),
+        DeletionPolicy: 'Retain',
+      },
+    );
+    assert.strictEqual(
+      Object.keys(seedResources).length,
+      1,
+      'ISR tag-table seed custom resource must carry DeletionPolicy: Retain',
+    );
   });
 
   void it('does not seed cache when seedDirectory / initFunction are absent', () => {

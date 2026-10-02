@@ -50,6 +50,7 @@ export type {
 	RealtimeOptions,
 	SubscribeOptions,
 	DisconnectReason,
+	RealtimeChannelDescriptor,
 } from './types.js';
 
 // ── Connection record type ──────────────────────────────────────────────────

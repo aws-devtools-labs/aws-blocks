@@ -5,8 +5,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { Scope } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
-import { createChat } from './index.chat.js';
-import type { ChatTransport, ChunkStream } from './transport.js';
+import { createChat, realtimeTransport } from './index.chat.js';
+import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk } from './types.js';
 import { CannedProvider } from './providers/canned.js';
@@ -1189,7 +1189,7 @@ describe('model-factory', () => {
 // ── useChat ──────────────────────────────────────────────────────────────────
 
 import { useChat } from './index.hooks.js';
-import type { ChatMessage, UseChatOptions, ChatChunkHandler, ChatSubscribeOptions } from './index.hooks.js';
+import type { ChatMessage, UseChatOptions, ChatChunkHandler, ChatSubscribeOptions, ChatChannelDescriptor } from './index.hooks.js';
 
 /** Flush pending microtasks so an async onReconnect handler settles before assertions. */
 function flush(): Promise<void> {
@@ -1216,12 +1216,14 @@ function subscribeCapture() {
 		handler?: (chunk: AgentStreamChunk) => void;
 		reconnect?: () => void;
 		disconnect?: (reason: DisconnectReason) => void;
+		refresh?: () => Promise<ChatChannelDescriptor>;
 	} = {};
 	const subscribe: UseChatOptions['subscribe'] = async (_channelId, handlerOrOptions) => {
 		if (hasSubscribeOptions(handlerOrOptions)) {
 			cap.handler = handlerOrOptions.onMessage;
 			cap.reconnect = handlerOrOptions.onReconnect;
 			cap.disconnect = handlerOrOptions.onDisconnect;
+			cap.refresh = handlerOrOptions.refresh;
 		} else {
 			cap.handler = handlerOrOptions;
 		}
@@ -1970,6 +1972,73 @@ describe('useChat', () => {
 			assert.strictEqual(approval!.metadata?.trust, false, 'trust projected');
 			assert.ok(!('extra' in (approval!.metadata ?? {})), 'unknown key dropped by the projection');
 		}
+		chat.destroy();
+	});
+
+	test('useChat forwards a consumer-supplied, channel-aware refresh bound to the current channel', async () => {
+		// The consumer owns api.agentGetChannel, so it supplies the actual mint; useChat only
+		// binds it to the current channelId and forwards the zero-arg bound form. A fresh
+		// descriptor is what the transport uses to re-mint tokens on reconnect.
+		const descriptor: ChatChannelDescriptor = { __blocks: 'realtime/channel', channel: 'conv-1' };
+		const askedFor: string[] = [];
+		const mockRefresh = async (channelId: string): Promise<ChatChannelDescriptor> => { askedFor.push(channelId); return descriptor; };
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			refresh: mockRefresh,
+		});
+
+		// Sending triggers ensureSubscribed('conv-1'), which binds refresh to that channel.
+		await chat.sendMessage('hello');
+
+		assert.strictEqual(typeof cap.refresh, 'function', 'a (bound, zero-arg) refresh should be forwarded to the subscription options');
+		// Invoking the forwarded zero-arg fn calls the consumer mint WITH the bound channelId.
+		const result = await cap.refresh!();
+		assert.deepStrictEqual(askedFor, ['conv-1'], 'the forwarded refresh asks the consumer mint for the CURRENT channel');
+		assert.strictEqual(result, descriptor, 'and returns the freshly-minted descriptor');
+		chat.destroy();
+	});
+
+	// BLOCKING B1: the refresh must track the CURRENT channel, not one captured at
+	// construction. loadConversation switches the channel; the forwarded refresh must
+	// then re-mint for the NEW channel.
+	test('useChat rebinds the channel-aware refresh when the channel changes (loadConversation)', async () => {
+		const askedFor: string[] = [];
+		const mockRefresh = async (channelId: string): Promise<ChatChannelDescriptor> => {
+			askedFor.push(channelId);
+			return { __blocks: 'realtime/channel', channel: channelId };
+		};
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'a' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			refresh: mockRefresh,
+		});
+
+		// First conversation 'a': ensureSubscribed('a') binds refresh to channel 'a'.
+		await chat.loadConversation('a');
+		await cap.refresh!();
+		assert.deepStrictEqual(askedFor, ['a'], 'refresh binds to the first channel');
+
+		// Switch to conversation 'b': ensureSubscribed('b') rebinds refresh to channel 'b'.
+		await chat.loadConversation('b');
+		await cap.refresh!();
+		assert.deepStrictEqual(
+			askedFor,
+			['a', 'b'],
+			'after switching, the forwarded refresh asks for channel b — NOT the first conversation',
+		);
 		chat.destroy();
 	});
 });
@@ -3031,6 +3100,98 @@ describe('createChat', () => {
 		);
 		chat.destroy();
 		await flush();
+	});
+
+	// BLOCKING B1: the refresh forwarded to the transport must be bound to the turn's
+	// resolved channel, which changes across loadConversation — not a channel captured
+	// once at construction.
+	test('createChat binds the channel-aware refresh to the turn channel (switches with the conversation)', async () => {
+		const askedFor: string[] = [];
+		const refresh = async (channelId: string): Promise<RealtimeChannelDescriptor> => {
+			askedFor.push(channelId);
+			return { __blocks: 'realtime/channel', channel: channelId };
+		};
+		// Capture the zero-arg refresh createChat forwards to transport.subscribe(channelId, opts).
+		let captured: (() => Promise<RealtimeChannelDescriptor>) | undefined;
+		const transport: ChatTransport = {
+			subscribe(_channelId, opts): ChunkStream {
+				captured = opts?.refresh;
+				return {
+					established: Promise.resolve(),
+					unsubscribe() {},
+					async *[Symbol.asyncIterator]() {},
+				};
+			},
+			async run(turn) {
+				return { channelId: turn.channelId };
+			},
+		};
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'a' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			refresh,
+		});
+
+		// First turn lazily creates conversation 'a' and binds refresh to channel 'a'.
+		await chat.sendMessage('first');
+		await new Promise((r) => setTimeout(r, 10));
+		assert.strictEqual(typeof captured, 'function', 'createChat forwards a bound zero-arg refresh to the transport');
+		await captured!();
+		assert.deepStrictEqual(askedFor, ['a'], 'the forwarded refresh asks for the first turn channel');
+
+		// Switch to conversation 'b', then send — startTurn rebinds refresh to channel 'b'.
+		await chat.loadConversation('b');
+		await chat.sendMessage('second');
+		await new Promise((r) => setTimeout(r, 10));
+		await captured!();
+		assert.deepStrictEqual(
+			askedFor,
+			['a', 'b'],
+			'after loadConversation(b), the forwarded refresh is asked for channel b — NOT the first conversation',
+		);
+		chat.destroy();
+		await flush();
+	});
+
+	// Finding 4155697642: the realtimeTransport subscribeArg gate must treat `refresh` as a
+	// trigger for the OPTIONS-OBJECT form. The useChat/createChat tests above cover forwarding
+	// THROUGH the client, but nothing drives realtimeTransport itself — so a regression that
+	// dropped `|| opts?.refresh` from the gate (sending a refresh-only subscription as a BARE
+	// handler, which the hydrated channel treats as a plain handler, silently losing refresh)
+	// stayed green. Drive the transport DIRECTLY and pin the gate: a refresh-ONLY opts must
+	// still reach io.subscribe as an options object.
+	test('realtimeTransport forwards an OPTIONS OBJECT (not a bare handler) for a refresh-ONLY subscription', async () => {
+		let captured: Parameters<Parameters<typeof realtimeTransport>[0]['subscribe']>[1] | undefined;
+		const transport = realtimeTransport({
+			subscribe: async (_channelId, handlerOrOptions) => {
+				captured = handlerOrOptions;
+				return { unsubscribe() {}, established: Promise.resolve() };
+			},
+			sendMessage: async () => {},
+			resume: async () => {},
+		});
+
+		const refresh = async (): Promise<RealtimeChannelDescriptor> => ({ __blocks: 'realtime/channel', channel: 'conv-1' });
+		// refresh-ONLY opts: NO onReconnect, NO onDisconnect — refresh alone must still select
+		// the options-object arm of the gate.
+		const stream = transport.subscribe('conv-1', { refresh });
+		await stream.established;
+
+		assert.ok(captured, 'io.subscribe should have been called');
+		if (typeof captured === 'function') {
+			assert.fail('a refresh-only subscription must forward an OPTIONS OBJECT, not a bare handler (the subscribeArg gate dropped refresh)');
+		}
+		// `captured` is narrowed to the options-object arm (cast-free: assert.fail returns never).
+		assert.strictEqual(captured.refresh, refresh, 'the SAME refresh fn must be forwarded into the options object');
+		assert.strictEqual(typeof captured.onMessage, 'function', 'the push handler must be forwarded as onMessage');
+		assert.strictEqual(captured.onReconnect, undefined, 'no onReconnect supplied → none forwarded');
+		assert.strictEqual(captured.onDisconnect, undefined, 'no onDisconnect supplied → none forwarded');
+
+		stream.unsubscribe();
 	});
 });
 
