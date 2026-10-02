@@ -17,6 +17,12 @@ export interface DsqlEngineConfig {
   poolSize?: number;
   /** PostgreSQL role name to connect as (mapped from IAM via `AWS IAM GRANT`). */
   role: string;
+  /**
+   * Postgres `application_name` connection parameter. Shows in `pg_stat_activity`
+   * on the server. Used by the AWS runtime layer to propagate the BB user-agent
+   * chain (e.g. `"aws-blocks/0.2.6 bb/DistributedDatabase/0.1.0"`).
+   */
+  applicationName?: string;
 }
 
 export class DsqlEngine implements DatabaseEngine {
@@ -33,6 +39,7 @@ export class DsqlEngine implements DatabaseEngine {
       ssl: true,
       max: config.poolSize ?? DEFAULT_POOL_SIZE,
       password: config.getAuthToken,
+      ...(config.applicationName ? { application_name: config.applicationName } : {}),
     });
   }
 

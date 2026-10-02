@@ -29,6 +29,14 @@ export interface PgClientEngineConfig {
   poolSize?: number;
   /** Milliseconds to wait for a connection before erroring. Unset = wait indefinitely. */
   connectionTimeoutMillis?: number;
+  /**
+   * Postgres `application_name` connection parameter. Shows in `pg_stat_activity`
+   * on the server and in provider dashboards (Supabase, Neon, etc.).
+   *
+   * Used by the AWS runtime layer to propagate the BB user-agent chain
+   * (e.g. `"aws-blocks/0.2.6 bb/Database/0.2.6"`).
+   */
+  applicationName?: string;
 }
 
 /**
@@ -129,6 +137,7 @@ export class PgClientEngine implements DatabaseEngine {
       connectionString,
       max: config.poolSize ?? 5,
       ssl: { minVersion: 'TLSv1.2', ...baseSsl },
+      ...(config.applicationName ? { application_name: config.applicationName } : {}),
       ...(config.connectionTimeoutMillis !== undefined && {
         connectionTimeoutMillis: config.connectionTimeoutMillis,
       }),

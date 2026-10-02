@@ -190,6 +190,7 @@ export class Scope {
     readonly bbName?: string;
     readonly bbVersion?: string;
     protected buildUserAgentChain(): [string, string][];
+    protected formatUserAgentString(maxBytes?: number): string;
     // (undocumented)
     get fullId(): string;
     // @internal
