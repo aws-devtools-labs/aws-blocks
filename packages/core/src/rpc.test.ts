@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { decodeRpcResponse, errorResponseFromCatch, parseRpcRequest, RpcErrorCode, MAX_RPC_BODY_BYTES } from './rpc.js';
+import { decodeRpcResponse, errorResponseFromCatch, parseRpcRequest, rawRouteErrorFromCatch, RpcErrorCode, MAX_RPC_BODY_BYTES } from './rpc.js';
 import { ApiError, isBlocksError, blocksError, brandBlocksError } from './errors.js';
 
 describe('-32600 Invalid Request error shape', () => {
@@ -241,6 +241,49 @@ describe('errorResponseFromCatch does not leak backend internals', () => {
     // cause is server-side only — never serialized.
     assert.ok(!JSON.stringify(parsed).includes('relation'));
     assert.ok(!JSON.stringify(parsed).includes('cause'));
+  });
+});
+
+describe('rawRouteErrorFromCatch does not leak backend internals', () => {
+  it('collapses an uncaught raw SDK exception to a generic 500 with no name', () => {
+    class DynamoDBServiceException extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = 'DynamoDBServiceException';
+      }
+    }
+    const raw = new DynamoDBServiceException('arn:aws:dynamodb:us-east-1:123456789012:table/secret not authorized');
+
+    const { status, body } = rawRouteErrorFromCatch(raw);
+    const parsed = JSON.parse(body);
+    assert.strictEqual(status, 500);
+    assert.deepStrictEqual(parsed, { error: 'Internal error' });
+    assert.ok(!body.includes('DynamoDBServiceException'));
+    assert.ok(!body.includes('not authorized'));
+    assert.ok(!JSON.stringify(parsed).includes('123456789012'));
+  });
+
+  it('collapses a non-Error throw to a generic 500', () => {
+    const { status, body } = rawRouteErrorFromCatch('raw string failure');
+    assert.strictEqual(status, 500);
+    assert.deepStrictEqual(JSON.parse(body), { error: 'Internal error' });
+  });
+
+  it('keeps the name and message of a branded Building Block error', () => {
+    const raw = blocksError('BatchSubmitFailedException', 'Batch contains 150 payloads, exceeds the 100 limit');
+    const { status, body } = rawRouteErrorFromCatch(raw);
+    assert.strictEqual(status, 500);
+    assert.deepStrictEqual(JSON.parse(body), {
+      error: 'BatchSubmitFailedException: Batch contains 150 payloads, exceeds the 100 limit',
+      name: 'BatchSubmitFailedException',
+    });
+  });
+
+  it('keeps the status, name and message of an ApiError', () => {
+    const err = new ApiError('Username already taken', 409, { name: 'ConditionalCheckFailedException' });
+    const { status, body } = rawRouteErrorFromCatch(err);
+    assert.strictEqual(status, 409);
+    assert.deepStrictEqual(JSON.parse(body), { error: 'Username already taken', name: 'ConditionalCheckFailedException' });
   });
 });
 

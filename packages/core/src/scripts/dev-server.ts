@@ -10,7 +10,6 @@ import { createConnection, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
-import { ApiError } from '../errors.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, CLIENT_USER_AGENT_HEADER } from '../constants.js';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
@@ -21,6 +20,7 @@ import {
   successResponse,
   errorResponseFromCatch,
   methodNotFoundResponse,
+  rawRouteErrorFromCatch,
 } from '../rpc.js';
 import { redactToJson } from '../redact.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
@@ -1315,12 +1315,11 @@ function handleApiRequest(
 
         res.writeHead(responseStatus, headerObj);
         res.end(responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '');
-      } catch (error: any) {
-        const status = error instanceof ApiError ? error.status : 500;
-        const errBody: Record<string, any> = { error: error.message };
-        if (error.name && error.name !== 'Error') errBody.name = error.name;
+      } catch (error: unknown) {
+        console.error('RawRoute Error:', error);
+        const { status, body: errBody } = rawRouteErrorFromCatch(error);
         res.writeHead(status, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(errBody));
+        res.end(errBody);
       }
     });
     return;
