@@ -54,3 +54,13 @@ allow_ghsas:
   - "GHSA-6j4f-fj2g-mc7p" # parseCommaParts recursion, patched 5.0.10
   - "GHSA-qhr7-859c-m2p7" # nested brace-group recursion, patched 5.0.11
   - "GHSA-q2hr-2g5m-vwhr" # quadratic expansion, patched 5.0.12
+  # nuxt — the ONE internal e2e test app (test-apps/hosting-ssr-nuxt) is pinned
+  # <4.5.0, which is the vulnerable range for these (all patched in 4.5.1). We
+  # hold the pin because 4.5 pulls lightningcss (MPL-2.0); unpinning to the
+  # patched 4.5.1 is blocked on confirming MPL-2.0 deps are allowed. Not in any
+  # template or published package. Drop these (and the pin) once MPL-2.0 is
+  # approved and nuxt can move to >= 4.5.1.
+  - "GHSA-9473-5f9j-94wq" # Nuxt server island RCE (template injection), patched 4.5.1
+  - "GHSA-hxcr-hm88-mpq6" # Nuxt island v-for OOM DoS, patched 4.5.1
+  - "GHSA-9pgf-384g-p7mv" # Nuxt island body CPU-exhaustion DoS, patched 4.5.1
+  - "GHSA-48hr-524c-v5w3" # Nuxt unauthorized component instantiation, patched 4.5.1
