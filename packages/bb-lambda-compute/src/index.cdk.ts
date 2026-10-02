@@ -57,6 +57,11 @@ export class LambdaCompute extends Compute {
 	/** The RPC endpoint URL (`{gateway}/aws-blocks/api`). */
 	readonly apiUrl: string;
 	/**
+	 * This compute's origin base: `https://{restApiId}.execute-api.{region}.{urlSuffix}/{stage}`.
+	 * See {@link Compute.endpoint} — no RPC suffix, no trailing slash.
+	 */
+	override readonly endpoint: string;
+	/**
 	 * The handler's CloudWatch log group. Logs are always captured here; the
 	 * retention comes from this compute's `logRetention` prop, falling back to the
 	 * stack-wide `defaults.logRetention`. Named `logGroup` (not `handlerLogGroup`)
@@ -194,6 +199,17 @@ export class LambdaCompute extends Compute {
 		this.apiGateway.root.addProxy({ defaultIntegration: integration, anyMethod: true });
 
 		this.apiUrl = `${this.apiGateway.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
+
+		// Origin base for routing: scheme + host + stage, no RPC suffix, no trailing
+		// slash. Composed directly from the API's parts rather than trimmed from
+		// `apiGateway.url`, because `url` is `urlForPath('/')` — it always carries a
+		// trailing slash AND it is a CloudFormation token, so a `replace(/\/$/, '')`
+		// would edit the placeholder text, not the resolved value. This composition
+		// mirrors how CDK builds `url` internally and needs no `Fn::Split`.
+		const stack = cdk.Stack.of(this);
+		this.endpoint =
+			`https://${this.apiGateway.restApiId}.execute-api.${stack.region}.${stack.urlSuffix}/` +
+			this.apiGateway.deploymentStage.stageName;
 	}
 
 	setEnv(key: string, value: string): void {
