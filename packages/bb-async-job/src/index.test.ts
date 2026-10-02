@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { AsyncJob, AsyncJobErrors } from './index.mock.js';
+import { validateDelaySeconds } from './validation.js';
 
 // Helper: wait for async job processing to complete
 async function waitForJobs(ms = 100) {
@@ -379,6 +380,45 @@ test('AsyncJob - delayed job appears in _queue.delayed before processing', async
 
 	assert.strictEqual(job._queue.delayed.length, 1, 'job should be in delayed queue');
 	assert.ok(job._queue.delayed[0].delayedUntil, 'delayedUntil should be set');
+});
+
+test('AsyncJob - accepts delaySeconds at the SQS range boundaries', () => {
+	assert.doesNotThrow(() => validateDelaySeconds(0));
+	assert.doesNotThrow(() => validateDelaySeconds(900));
+});
+
+test('AsyncJob - submit rejects invalid delaySeconds before queueing work', async () => {
+	let handlerRan = false;
+	const job = new AsyncJob(null as any, 'test', {
+		handler: async () => { handlerRan = true; },
+	});
+
+	for (const delaySeconds of [-1, 1.5, NaN, Infinity, 901]) {
+		await assert.rejects(
+			() => job.submit({ x: 1 }, { delaySeconds }),
+			(err: Error) => err.name === AsyncJobErrors.ValidationFailed,
+		);
+	}
+
+	await waitForJobs();
+	assert.strictEqual(handlerRan, false);
+	assert.strictEqual(job._queue.totalSubmitted, 0);
+});
+
+test('AsyncJob - submitBatch rejects invalid delaySeconds before queueing any work', async () => {
+	let handlerRuns = 0;
+	const job = new AsyncJob(null as any, 'test', {
+		handler: async () => { handlerRuns++; },
+	});
+
+	await assert.rejects(
+		() => job.submitBatch([{ x: 1 }, { x: 2 }], { delaySeconds: -1 }),
+		(err: Error) => err.name === AsyncJobErrors.ValidationFailed,
+	);
+
+	await waitForJobs();
+	assert.strictEqual(handlerRuns, 0);
+	assert.strictEqual(job._queue.totalSubmitted, 0);
 });
 
 // ---------------------------------------------------------------------------
