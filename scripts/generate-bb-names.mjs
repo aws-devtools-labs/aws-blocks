@@ -3,7 +3,8 @@
  * Generates official-bb-names.generated.ts for @aws-blocks/core.
  *
  * Reads the vendorize map from packages/blocks/package.json and extracts all
- * Building Block names into a deduplicated Set exported as OFFICIAL_BB_NAMES.
+ * Building Block names (plus NON_VENDORIZED_BB_NAMES) into a deduplicated Set
+ * exported as OFFICIAL_BB_NAMES.
  *
  * Usage:
  *   node scripts/generate-bb-names.mjs
@@ -33,10 +34,14 @@ const BB_NAME_OVERRIDES = {
 	'AuthOIDC': 'AuthOidc',
 };
 
+// Official telemetry names omitted from vendorization because they have no customer-facing export.
+const NON_VENDORIZED_BB_NAMES = ['LambdaCompute'];
+
 // Flatten all arrays, apply overrides, and deduplicate
-const allNames = [...new Set(
-	Object.values(vendorize).flat().map(name => BB_NAME_OVERRIDES[name] ?? name)
-)].sort();
+const allNames = [...new Set([
+	...Object.values(vendorize).flat().map(name => BB_NAME_OVERRIDES[name] ?? name),
+	...NON_VENDORIZED_BB_NAMES,
+])].sort();
 
 const outputPath = join(repoRoot, 'packages', 'core', 'src', 'common', 'official-bb-names.generated.ts');
 

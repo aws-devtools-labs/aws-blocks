@@ -7,6 +7,13 @@ export * from '@aws-blocks/core';
 // Override core's untyped getSdkIdentifiers with typed overloads
 export { getSdkIdentifiers } from './sdk-identifiers.js';
 
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
+
+// Every umbrella app deploys the Lambda default compute, but it is only built at
+// CDK synth, which telemetry never sees. Registering its inert runtime handle
+// once on import lets CLI telemetry (which imports the backend) report it.
+new LambdaCompute({ id: 'blocks' }, 'DefaultCompute');
+
 // ─── Building Block Re-exports ───────────────────────────────────────────────
 //
 // Each export below includes a brief summary of what the Building Block does
