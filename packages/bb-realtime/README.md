@@ -257,7 +257,7 @@ RealtimeErrors.ConnectionFailed  // WebSocket connection or subscribe rejected
 - **Subscribe before you publish.** Realtime is fire-and-forget with no message buffering (local dev and AWS alike): a subscriber only receives messages published *after* its subscription registers (await `sub.established`). If a server-side publisher (e.g. an AsyncJob or Agent stream) may fire before the client subscribes, the client must subscribe first, then trigger the publisher, and backfill any earlier messages from a durable source (DB/history).
 - **Publish through the API**, not the channel handle — keeps authorization logic in one place.
 - **Use channels for dynamic scoping** — `room-123`, `user-456`, `game-abc`. One namespace, many channels.
-- **Keep payloads small** — large messages increase latency and cost. Max 32 KB per published message (including wire envelope).
+- **Keep payloads small** — large messages increase latency and cost. Max 128 KiB (131,072 bytes) per published message (including wire envelope).
 - **One `Realtime` instance per domain** — use multiple namespaces within it for different message types (cursors, chat, presence).
 - **Unsubscribe when done** — especially in components that mount/unmount. Leaked subscriptions hold the WebSocket open.
 - **Delivery is best-effort** — `publish()` sends to all connected subscribers in parallel. If delivery to an individual connection fails, the failure is logged and the rest continue. Stale connections are cleaned up automatically. This is similar to UDP: fire-and-forget per connection.
@@ -325,7 +325,7 @@ The AWS SDK retries throttled requests automatically (3 retries with exponential
 | Limit | Value | Enforced | Notes |
 |---|---|---|---|
 | Channel path (full) | 1024 bytes | Yes — both local and AWS | DynamoDB sort key limit. Includes `{fullId}/{namespace}/` prefix. |
-| Message size (published) | 32 KB | Yes — both local and AWS | API Gateway WebSocket frame limit. Includes wire envelope. |
+| Message size (published) | 128 KiB (131,072 bytes) | Yes — both local and AWS | API Gateway WebSocket *logical message* limit (frames are reassembled; the 32 KB quota is a per-frame limit, not a per-message one). Includes wire envelope. |
 | Max connection duration | 2 hours | No — API Gateway hard limit | Transparent reconnect; use `refresh` to outlive it |
 | Idle timeout | 10 minutes | No — API Gateway hard limit | Client middleware sends keep-alive pings |
 | Account-level API TPS | 10,000/sec | No — API Gateway hard limit | Shared across all API Gateway usage; raisable |
@@ -348,7 +348,7 @@ Channel names are scoped by the Realtime instance and namespace: `{fullId}/{name
 
 **Hard limits:**
 - The full channel path (including `{fullId}/{namespace}/` prefix) must fit within a DynamoDB sort key (1024 bytes). This is enforced at runtime in both local dev and AWS — exceeding it throws `ValidationFailedException`.
-- Published messages (including the wire envelope with channel path) must fit within a single API Gateway WebSocket frame (32 KB). This is also enforced at runtime in both environments.
+- Published messages (including the wire envelope with channel path) must fit within API Gateway's 128 KiB logical WebSocket message limit. API Gateway's separate 32 KB quota is a *frame* limit — the service reassembles fragmented frames, so it is not the per-message cap. This is enforced at runtime in both environments.
 - There is no enforced character limit on the user-facing channel name, but excessively long names increase DynamoDB item sizes (affecting read/write costs) and WebSocket message sizes (affecting delivery latency and billing, since messages are metered in 32 KB increments).
 
 The previous AppSync Events implementation had a 5-segment × 50-character channel name limit. That restriction no longer applies.
