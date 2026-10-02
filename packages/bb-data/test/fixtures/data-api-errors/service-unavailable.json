@@ -1,0 +1,6 @@
+{
+  "name": "ServiceUnavailableException",
+  "message": "Service is unavailable. Please try again later.",
+  "expected": "ConnectionFailed",
+  "provenance": "transcribed from data-api-engine.test.ts (SDK-exception-name classification path, no SQLState)"
+}
