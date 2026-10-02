@@ -71,9 +71,9 @@ function TodoApp() {
           <option value={2}>🟡 Medium</option>
           <option value={3}>🟢 Low</option>
         </select>
-        <button onClick={addTodo}>Add</button>
+        <button className="bb-button bb-button-primary" onClick={addTodo}>Add</button>
       </div>
-      <div style={{ marginBottom: 12, fontSize: '0.85em', color: '#666' }}>
+      <div style={{ marginBottom: 12, fontSize: '0.85em', color: 'var(--bb-color-text-muted, #666)' }}>
         Sort:{' '}
         <button onClick={() => setSortBy(undefined)} style={{ fontWeight: !sortBy ? 'bold' : 'normal' }}>Default</button>{' '}
         <button onClick={() => setSortBy('priority')} style={{ fontWeight: sortBy === 'priority' ? 'bold' : 'normal' }}>Priority</button>{' '}
@@ -93,7 +93,7 @@ function TodoApp() {
           </li>
         ))}
       </ul>
-      <p style={{ color: '#888', fontSize: '0.85em' }}>{todos.filter(t => !t.completed).length} remaining</p>
+      <p style={{ color: 'var(--bb-color-text-muted, #888)', fontSize: '0.85em' }}>{todos.filter(t => !t.completed).length} remaining</p>
     </div>
   );
 }
@@ -116,7 +116,7 @@ export function App() {
     <div>
       <div ref={menuRef} />
       <h1>Blocks App</h1>
-      <p style={{ color: '#666', fontSize: '0.9em', lineHeight: 1.5, marginBottom: 24 }}>
+      <p style={{ color: 'var(--bb-color-text-muted, #666)', fontSize: '0.9em', lineHeight: 1.5, marginBottom: 24 }}>
         This starter app demonstrates:
         {' '}<strong>authentication</strong> with cross-tab coordination,
         {' '}<strong>real-time sync</strong> across browser tabs,
