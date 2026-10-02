@@ -24,7 +24,8 @@
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
-    "nuxt": "^4.0.0",
+    "//nuxt": "Pinned <4.5.0: nuxt 4.5 bumps its bundled Vite to 8, which pulls lightningcss (MPL-2.0). Remove the cap once MPL-2.0 use is approved internally.",
+    "nuxt": ">=4.0.0 <4.5.0",
     "vue": "^3.5.0"
   },
   "devDependencies": {
