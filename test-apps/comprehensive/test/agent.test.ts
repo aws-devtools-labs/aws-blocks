@@ -711,12 +711,14 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.strictEqual(second.getConversationId(), conversationId, 'conversationId is set after load');
         const approval = loaded.find(m => m.role === 'approval');
         assert.ok(approval, 'approval message should be present in loaded history');
-        // Asserts the persisted decision survives loadConversation's projection and is
-        // readable as `metadata.approved`. (Note: the `/client` ChatMessage is currently
-        // the flat interface from index.hooks.ts, so this is a value round-trip check,
-        // not a compile-time discriminated-union narrowing proof — see the ChatMessage
-        // de-dup follow-up.)
-        assert.strictEqual(approval?.metadata?.approved, true, 'approval metadata.approved round-trips as true');
+        // `/client` now re-exports the discriminated-union ChatMessage, so narrowing on
+        // role === 'approval' types `metadata` as ApprovalMetadata — reading `.approved`
+        // here needs no cast. This both proves the persisted decision survives
+        // loadConversation's projection AND exercises the compile-time union.
+        assert.ok(approval!.role === 'approval', 'loaded message narrows to the approval variant');
+        if (approval!.role === 'approval') {
+          assert.strictEqual(approval!.metadata?.approved, true, 'approval metadata.approved round-trips as true');
+        }
         second.destroy();
       });
 

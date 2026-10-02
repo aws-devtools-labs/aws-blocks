@@ -1941,6 +1941,40 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
+	test('loadConversation projects an approval message into typed ApprovalMetadata (union, no cast)', async () => {
+		const { subscribe } = subscribeCapture();
+		let rendered: ChatMessage[] = [];
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Customer forwards raw backend metadata (unknown). The approval row carries an
+				// extra key that must be dropped by the narrow; a plain object is kept.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hi' },
+					{ role: 'approval', content: 'Approved', metadata: { approved: true, toolName: 'kv.put', trust: false, extra: 'drop-me' } },
+				] }),
+			},
+			subscribe,
+			onMessagesChange: (m) => { rendered = m; },
+		});
+
+		await chat.loadConversation('conv-1');
+		await flush();
+
+		const approval = rendered.find(m => m.role === 'approval');
+		assert.ok(approval, 'approval message should be rehydrated');
+		// ChatMessage is the discriminated union re-exported from ./index.chat — narrowing on
+		// role === 'approval' types `metadata` as ApprovalMetadata, so these reads need no cast.
+		if (approval!.role === 'approval') {
+			assert.strictEqual(approval!.metadata?.approved, true, 'approved projected');
+			assert.strictEqual(approval!.metadata?.toolName, 'kv.put', 'toolName projected');
+			assert.strictEqual(approval!.metadata?.trust, false, 'trust projected');
+			assert.ok(!('extra' in (approval!.metadata ?? {})), 'unknown key dropped by the projection');
+		}
+		chat.destroy();
+	});
+
 	test('useChat forwards a consumer-supplied, channel-aware refresh bound to the current channel', async () => {
 		// The consumer owns api.agentGetChannel, so it supplies the actual mint; useChat only
 		// binds it to the current channelId and forwards the zero-arg bound form. A fresh
