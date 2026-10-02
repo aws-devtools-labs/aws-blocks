@@ -143,7 +143,10 @@ class OidcClientTest {
         var closeCount = 0
             private set
 
-        override suspend fun openSession(configuredRelayTo: String): OidcRedirectSession =
+        override suspend fun openSession(
+            configuredRelayTo: String,
+            options: OidcSignInOptions,
+        ): OidcRedirectSession =
             object : OidcRedirectSession {
                 override val relayTo: String = sessionRelayTo
                 override suspend fun awaitRedirect(authorizeUrl: String): String =

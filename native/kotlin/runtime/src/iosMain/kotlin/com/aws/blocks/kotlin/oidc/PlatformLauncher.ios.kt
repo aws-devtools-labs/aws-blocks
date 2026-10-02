@@ -23,7 +23,10 @@ import kotlin.coroutines.resumeWithException
 internal actual fun createPlatformLauncher(): OidcPlatformLauncher = IosOidcLauncher()
 
 internal class IosOidcLauncher : OidcPlatformLauncher {
-    override suspend fun openSession(configuredRelayTo: String): OidcRedirectSession {
+    override suspend fun openSession(
+        configuredRelayTo: String,
+        options: OidcSignInOptions,
+    ): OidcRedirectSession {
         if (configuredRelayTo.isEmpty()) {
             error(
                 "OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block " +

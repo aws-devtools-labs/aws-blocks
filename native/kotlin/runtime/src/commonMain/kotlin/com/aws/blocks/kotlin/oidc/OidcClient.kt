@@ -39,7 +39,10 @@ class OidcClient internal constructor(
     // Blocks backend does not append padding
     private val base64 = Base64.UrlSafe.withPadding(Base64.PaddingOption.PRESENT_OPTIONAL)
 
-    suspend fun signIn(provider: String): OidcUser {
+    suspend fun signIn(
+        provider: String,
+        options: OidcSignInOptions = OidcSignInOptions(),
+    ): OidcUser {
         if (provider !in config.providers) {
             throw OidcUnknownProviderException(provider)
         }
@@ -50,7 +53,7 @@ class OidcClient internal constructor(
 
         // The session owns the relay target: a loopback launcher binds a socket to learn its
         // own port, which has to happen before the authorize-params request carries it.
-        val session = platformLauncher.openSession(config.relayTo)
+        val session = platformLauncher.openSession(config.relayTo, options)
         try {
             // Step 1: POST to /auth/authorize-params/<provider> to get the signed state envelope.
             val params = fetchAuthorizeParams(provider, csrf, session.relayTo)

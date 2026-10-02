@@ -7,6 +7,7 @@ import com.aws.blocks.kotlin.InternalBlocksApi
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcPlatformLauncher
 import com.aws.blocks.kotlin.oidc.OidcRedirectSession
+import com.aws.blocks.kotlin.oidc.OidcSignInOptions
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotBeBlank
 import io.ktor.client.HttpClient
@@ -22,7 +23,10 @@ import kotlinx.coroutines.test.runTest
  */
 private class RedirectFollowingLauncher : OidcPlatformLauncher {
 
-    override suspend fun openSession(configuredRelayTo: String): OidcRedirectSession =
+    override suspend fun openSession(
+        configuredRelayTo: String,
+        options: OidcSignInOptions,
+    ): OidcRedirectSession =
         object : OidcRedirectSession {
             override val relayTo: String = configuredRelayTo
 
