@@ -162,7 +162,7 @@ The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResou
 
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
-| No connection pooling | Connection exhaustion only surfaces in AWS | Sandbox testing |
+| No Data API request limits | Mock has no per-request throttling; the AWS Data API enforces request-rate/size limits | Sandbox testing |
 | No VPC isolation | Network access control not enforced locally | Infrastructure concern |
 | PGlite is single-connection | No concurrent transaction behavior | Document; load test in sandbox |
 | No cold start penalty | Aurora 0-ACU cold start not simulated | Latency is a production concern |
