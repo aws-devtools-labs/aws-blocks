@@ -1,6 +1,7 @@
 ---
 "@aws-blocks/bb-data": minor
 "@aws-blocks/blocks": minor
+"@aws-blocks/create-blocks-app": minor
 ---
 
 fix(bb-data): enable Aurora storage encryption, backup retention, and log export
@@ -26,6 +27,12 @@ Hardens the Aurora Serverless v2 cluster synthesized by `Database`:
   Logs, with retention following the stack-wide `defaults.logRetention`.
 - `iamAuthentication` remains intentionally off (access is exclusively via the RDS
   Data API), and automatic secret rotation is documented as a follow-up.
+
+`@aws-blocks/create-blocks-app` scaffolds this default into new projects: every
+template's `cdk.json` now sets the `@aws-blocks/bb-data:encryptStorageByDefault`
+context flag, and the Amplify overlay sets the same flag via `setContext`. As a
+result, a `Database` created in a newly scaffolded project encrypts its storage at
+rest by default.
 
 **Breaking for existing stacks (0.x minor = breaking channel):** the
 backup-retention and CloudWatch log-export changes alter synthesized cluster

@@ -90,7 +90,6 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 |----------|---------|
 | Aurora Serverless v2 cluster | PostgreSQL database. Storage encryption at rest is **opt-in**: emitted (`storageEncrypted: true`) only when the `@aws-blocks/bb-data:encryptStorageByDefault` context flag is set (new `create-blocks-app` projects set it) or a `storageEncryptionKeyArn` is supplied; otherwise the `StorageEncrypted` property is left unset so existing clusters are not replaced. Uses the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
 | VPC + private subnets | Network isolation |
-| RDS Proxy | Connection pooling |
 | Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
 | Secrets Manager secret | Auto-generated credentials; encrypted with `storageEncryptionKeyArn` when one is supplied |
 | Automated backups | On by default, retained 15 days; `pointInTimeRecovery` controls the window (`true` → 15 days, `{ retentionDays: n }` → 1–35 days, `false` → clamps to the 1-day minimum since Aurora cannot disable backups); also the PITR window |
@@ -167,7 +166,6 @@ The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResou
 | No VPC isolation | Network access control not enforced locally | Infrastructure concern |
 | PGlite is single-connection | No concurrent transaction behavior | Document; load test in sandbox |
 | No cold start penalty | Aurora 0-ACU cold start not simulated | Latency is a production concern |
-| No RDS Proxy behavior | Connection pinning, failover not simulated | Transparent to app code |
 | TLS cert verification default (`fromExisting` connection string) | Mock defaults to `rejectUnauthorized: false` (local/self-signed DBs); AWS runtime defaults to verifying (`PgClientEngine` → `rejectUnauthorized: true`) | Intentional. Pass `ssl` to override either layer; the `db pull`-generated wiring sets `ssl: resolveDbSsl()` for both, so the generated path is consistent. A hand-written `fromExisting({ connectionString })` with no `ssl` passes locally but verifies in AWS (pin a provider CA via `ssl.ca`). The mock warns once when `ssl` is omitted so this dev/prod gap surfaces locally. |
 | External migration *apply* | n/a — build/deploy lifecycle step, not a runtime method | No mock needed (intentional; see Schema Migrations above) |
 

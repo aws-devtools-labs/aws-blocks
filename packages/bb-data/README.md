@@ -262,7 +262,6 @@ try {
   Logs. Log-group retention follows the stack-wide `defaults.logRetention` when
   set; otherwise it uses the account default.
 - **VPC** — Private subnets (isolated, no NAT)
-- **RDS Proxy** — Connection pooling
 - **Secrets Manager** — Auto-generated credentials. Automatic rotation is not yet
   wired up (a rotation Lambda in the cluster VPC is a planned follow-up); the
   secret is encrypted with your `storageEncryptionKeyArn` when one is supplied.
@@ -367,7 +366,7 @@ interface DatabaseOptions {
 ## Performance
 
 - **Query latency:** 10-50ms (warm), ~500ms cold start from 0 ACUs
-- **Throughput:** Thousands of concurrent connections via RDS Proxy
+- **Throughput:** Requests go over the RDS Data API (HTTPS) rather than pooled database connections, so there is no connection-pool ceiling or RDS Proxy; concurrency is bounded by the Data API request limits and the cluster's ACU scaling.
 - **Storage:** Up to 128 TiB, auto-scales in 10 GiB increments
 - **Cost:** ~$0.12/ACU-hour + ~$0.10/GB-month storage
 - **Durability:** 6 copies across 3 AZs, 99.99% availability
