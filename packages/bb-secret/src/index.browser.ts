@@ -7,7 +7,7 @@ import { SecretErrors } from './errors.js';
 import type { ExternalSecretRef } from './types.js';
 
 export { SecretErrors } from './errors.js';
-export type { ExternalSecretRef, SecretOptions } from './types.js';
+export type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
 
 function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);

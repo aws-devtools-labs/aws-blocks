@@ -64,21 +64,48 @@ error instead of a cryptic `X is not a function`.
 
 ## Runtime (AWS)
 
-`index.aws.ts` resolves the secret ARN in its constructor — from the
-`ExternalSecretRef` when wrapping an existing secret, otherwise from the config
-key `BLOCKS_SECRET_ARN_<ID>` that the CDK layer registered — and calls
-`registerSdkIdentifiers(this.fullId, { secretArn })`. It resolves the ARN at
-**call time** with `getSdkIdentifiers(this)`.
+`index.aws.ts` captures the construct `id` and any `ExternalSecretRef` in its
+constructor and resolves the secret ARN at **call time** via `resolveSecretArn()`
+— from the `ExternalSecretRef` when wrapping an existing secret, otherwise from
+the config key `BLOCKS_SECRET_ARN_<ID>` the CDK layer registered. Deferring to
+call time keeps the constructor side-effect-free w.r.t. config, so instantiating
+a Secret during CDK synth / client-spec generation (where the Lambda config env
+is absent) never throws.
 
-- `get()` → `GetSecretValueCommand`. Returns `null` when `SecretString` is
-  absent **or** the secret does not exist (`ResourceNotFoundException`). A `get`
-  never throws for "not found" — that is normal control flow.
+- `get(options?)` → `GetSecretValueCommand`. The `options.version` selector maps
+  to the SDK version params: `'current'`/omitted → `AWSCURRENT`; `'previous'` →
+  `VersionStage: 'AWSPREVIOUS'`; a `SecretVersion` → its `VersionId`. Returns
+  `null` when `SecretString` is absent **or** the secret/version does not exist
+  (`ResourceNotFoundException`). A `get` never throws for "not found" — normal
+  control flow.
 - `put()` → `PutSecretValueCommand`. A `ResourceNotFoundException` maps to
   `SecretErrors.SecretNotFound` (a violated precondition — the secret must exist
-  to hold a value).
+  to hold a value). Secrets Manager advances the `AWSCURRENT`/`AWSPREVIOUS`
+  labels automatically on each put, so the prior value becomes `'previous'`.
+- `listVersions()` → `ListSecretVersionIdsCommand` (paginated, `IncludeDeprecated:
+  false`), mapped to `SecretVersionInfo[]` (versionId + staging labels + created
+  date — never values) and sorted newest-first.
 
 The client is built with `buildUserAgentChain()` + `installClientUserAgent()`
 so calls carry the framework user-agent, matching the other AWS BBs.
+
+## Version retrieval & extensibility
+
+The read surface is designed to grow without breaking:
+
+- `get(options?: { version?: 'current' | 'previous' | SecretVersion })` — an
+  options object, so new fields are additive.
+- `SecretVersion` is the minimal handle (`{ versionId }`) `get()` consumes;
+  `SecretVersionInfo extends SecretVersion` (adds `stages`, `createdDate`) is
+  what `listVersions()` produces. The consumer takes the base, the producer emits
+  the richer subtype — so a `listVersions()` item passes straight to `get()`.
+- A raw `versionId` is never a string input; it only ever travels inside a
+  `SecretVersion` obtained from `listVersions()`, so callers can't fabricate ids.
+
+Deeper access (reading by arbitrary id outside the retained window, custom
+staging labels, full history) is intentionally **not** proxied — use the AWS SDK
+against `secret.secretArn`. If a real need appears, add optional fields to
+`SecretReadOptions` and/or widen `SecretVersionInfo` — both non-breaking.
 
 ## Schema handling
 
@@ -103,6 +130,7 @@ consumer's choice (`zod` is a `devDependency` here, used only by tests).
 | ARN source | none (keyed by `name`/`fullId`) | `BLOCKS_SECRET_ARN_<ID>` config, or `fromExisting` ARN |
 | Missing value | key absent → `null` | `SecretString` absent / `ResourceNotFound` → `null` |
 | `put` on missing secret | always writes the entry | may throw `SecretNotFound` if the secret resource is gone |
+| Version history | current + previous, in a `.bb-data/secret-versions.json` sidecar (synthetic version ids) | full retained history in Secrets Manager (real version ids + staging labels) |
 | Security | **plaintext, insecure — dev only** | KMS-encrypted at rest |
 
 Sharing `settings.json` is deliberate: it makes the single `/aws-blocks/settings`
@@ -122,8 +150,18 @@ it never carries the value.
 
 ## Non-goals (v1)
 
-Automatic rotation, secret versioning/staging labels, listing/enumeration,
-binary secret values, customer-managed KMS keys, cross-region replication
-(`replicaRegions`), and copying one secret's value into another (`copyExisting`
-is not a CDK concept — use `fromExisting` to reference, not duplicate). These can
-be added later without breaking the current surface.
+- **Automatic rotation.** Managed rotation is credential-type-specific (AWS only
+  ships hosted rotators for database engines), so a generic `Secret` doesn't
+  expose a rotation flag. Rotate by setting a new value (`put()`/console/CLI) —
+  the prior value stays readable via `get({ version: 'previous' })` — and for a
+  custom schedule drive `put()` from a `CronJob`.
+- **Deeper version access.** `get({ version })` + `listVersions()` cover
+  current/previous and browsing retained versions; reading by an arbitrary id
+  outside that, custom staging labels, or manipulating versions is left to the
+  AWS SDK against `secret.secretArn` (and can be added as additive
+  `SecretReadOptions` fields later).
+- Binary secret values, customer-managed KMS keys, cross-region replication
+  (`replicaRegions`), and copying one secret into another (`copyExisting` is not
+  a CDK concept — use `fromExisting` to reference, not duplicate).
+
+All of the above can be added later without breaking the current surface.

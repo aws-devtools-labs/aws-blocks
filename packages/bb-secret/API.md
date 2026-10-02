@@ -22,7 +22,8 @@ export class Secret<T = string> extends Scope {
     // (undocumented)
     readonly bbName = "Secret";
     static fromExisting(secretArn: string): ExternalSecretRef;
-    get(): Promise<T | null>;
+    get(options?: SecretReadOptions): Promise<T | null>;
+    listVersions(): Promise<SecretVersionInfo[]>;
     // @internal
     protected log: ChildLogger;
     put(value: T): Promise<void>;
@@ -42,6 +43,22 @@ export interface SecretOptions<T = string> {
     removalPolicy?: 'destroy' | 'retain';
     schema?: StandardSchemaV1<T>;
     secret?: ExternalSecretRef;
+}
+
+// @public
+export interface SecretReadOptions {
+    version?: 'current' | 'previous' | SecretVersion;
+}
+
+// @public
+export interface SecretVersion {
+    readonly versionId: string;
+}
+
+// @public
+export interface SecretVersionInfo extends SecretVersion {
+    readonly createdDate: Date;
+    readonly stages: string[];
 }
 
 // (No @packageDocumentation comment for this package)

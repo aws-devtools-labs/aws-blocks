@@ -7,18 +7,19 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { installClientUserAgent, Scope } from '@aws-blocks/core';
 import {
 	GetSecretValueCommand,
+	ListSecretVersionIdsCommand,
 	PutSecretValueCommand,
 	ResourceNotFoundException,
 	SecretsManagerClient,
 } from '@aws-sdk/client-secrets-manager';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { SecretErrors } from './errors.js';
-import type { ExternalSecretRef, SecretOptions } from './types.js';
+import type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 // Re-export public types and errors (canonical source)
 export { SecretErrors } from './errors.js';
-export type { ExternalSecretRef, SecretOptions } from './types.js';
+export type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,20 @@ async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): P
 	return (resolved as { value: T }).value;
 }
 
+/**
+ * Map a {@link SecretReadOptions.version} selector to the SDK's GetSecretValue
+ * version params. `'current'`/undefined → none (AWSCURRENT); `'previous'` →
+ * `VersionStage: 'AWSPREVIOUS'`; a {@link SecretVersion} → its `VersionId`.
+ */
+function versionSelector(version?: 'current' | 'previous' | SecretVersion): {
+	VersionStage?: string;
+	VersionId?: string;
+} {
+	if (version === undefined || version === 'current') return {};
+	if (version === 'previous') return { VersionStage: 'AWSPREVIOUS' };
+	return { VersionId: version.versionId };
+}
+
 // ── Secret (AWS runtime) ────────────────────────────────────────────────────
 
 /**
@@ -46,7 +61,7 @@ async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): P
  * instances for multiple secrets. Unlike `AppSetting` (SSM Parameter Store),
  * `Secret` is always backed by AWS Secrets Manager — use it for high-value
  * credentials that benefit from Secrets Manager's dedicated access controls and
- * (future) rotation support.
+ * version history.
  *
  * **When to use:** Third-party API keys, OAuth client secrets, database
  * connection strings, webhook signing keys, encryption keys.
@@ -62,8 +77,10 @@ async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): P
  * - Use a schema when the secret is structured JSON (e.g. a set of related keys)
  *   to get type safety and validation.
  *
- * **Cost:** AWS Secrets Manager charges per secret per month plus per API call.
- * See the AWS Secrets Manager pricing page for current rates.
+ * **Rotation:** rotate by setting a new value (`put()`, the console, or the AWS
+ * CLI); the prior value stays readable via `get({ version: 'previous' })` for a
+ * grace window. Automatic rotation is credential-type-specific and out of scope
+ * — for custom schedules, drive `put()` from a `CronJob`.
  *
  * The underlying secret ARN is resolved from the config registry that the CDK
  * layer populates (or directly from the `ExternalSecretRef` when wrapping an
@@ -133,27 +150,40 @@ export class Secret<T = string> extends Scope {
 	/**
 	 * Read the secret value.
 	 *
+	 * By default reads the current value. Pass `{ version }` to read a different
+	 * version — `'previous'` for the value before the last change (a rotation
+	 * grace window), or a {@link SecretVersion} obtained from {@link listVersions}.
+	 *
 	 * Without a schema, returns the raw stored string. With a schema, parses the
 	 * stored JSON and validates it, returning the typed value `T`.
 	 *
-	 * Returns `null` when the secret has no value yet or does not exist — reads
-	 * never throw for a missing value, so callers can use `null` for normal
-	 * control flow rather than try/catch.
+	 * Returns `null` when the requested version has no value or does not exist —
+	 * reads never throw for a missing value, so callers can use `null` for normal
+	 * control flow. In particular `{ version: 'previous' }` returns `null` until
+	 * the secret has been changed at least once.
 	 *
-	 * @returns The secret value, or `null` if it has not been set or does not exist.
+	 * @param options - Optional read options; `version` selects which version.
+	 * @returns The secret value, or `null` if that version has not been set or does not exist.
 	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the stored value is not valid JSON, or fails validation.
 	 *
 	 * @example
 	 * ```typescript
 	 * const key = await stripeKey.get();
 	 * if (key === null) throw new Error('Stripe key not configured');
+	 *
+	 * // Rotation grace window — accept tokens signed by the previous key too.
+	 * const prev = await signingKey.get({ version: 'previous' }); // string | null
 	 * ```
 	 */
-	async get(): Promise<T | null> {
+	async get(options?: SecretReadOptions): Promise<T | null> {
 		const secretArn = this.resolveSecretArn();
+		// Map the version selector to the SDK's VersionStage / VersionId params.
+		// 'current' (default) → omit (AWSCURRENT); 'previous' → AWSPREVIOUS stage;
+		// a SecretVersion → its versionId.
+		const selector = versionSelector(options?.version);
 		let raw: string;
 		try {
-			const result = await this.client.send(new GetSecretValueCommand({ SecretId: secretArn }));
+			const result = await this.client.send(new GetSecretValueCommand({ SecretId: secretArn, ...selector }));
 			if (result.SecretString === undefined || result.SecretString === null) return null;
 			raw = result.SecretString;
 		} catch (err: unknown) {
@@ -172,6 +202,40 @@ export class Secret<T = string> extends Scope {
 		}
 
 		return raw as unknown as T;
+	}
+
+	/**
+	 * List the stored versions of this secret, newest first — metadata only, never
+	 * the values. Pass a returned {@link SecretVersionInfo} to `get({ version })`
+	 * to read that version's value.
+	 *
+	 * @returns The retained versions, newest first (`stages` includes `'AWSCURRENT'` / `'AWSPREVIOUS'`).
+	 */
+	async listVersions(): Promise<SecretVersionInfo[]> {
+		const secretArn = this.resolveSecretArn();
+		const out: SecretVersionInfo[] = [];
+		let nextToken: string | undefined;
+		do {
+			const result = await this.client.send(
+				new ListSecretVersionIdsCommand({
+					SecretId: secretArn,
+					IncludeDeprecated: false,
+					NextToken: nextToken,
+				}),
+			);
+			for (const v of result.Versions ?? []) {
+				if (!v.VersionId) continue;
+				out.push({
+					versionId: v.VersionId,
+					stages: v.VersionStages ?? [],
+					createdDate: v.CreatedDate ?? new Date(0),
+				});
+			}
+			nextToken = result.NextToken;
+		} while (nextToken);
+		// Newest first (Secrets Manager does not guarantee order).
+		out.sort((a, b) => b.createdDate.getTime() - a.createdDate.getTime());
+		return out;
 	}
 
 	/**

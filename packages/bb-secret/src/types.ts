@@ -79,3 +79,49 @@ export interface ExternalSecretRef {
 	/** The ARN of the existing Secrets Manager secret. */
 	readonly secretArn: string;
 }
+
+/**
+ * The minimal handle identifying a specific stored version of a secret —
+ * everything `get({ version })` needs to fetch it, and nothing more.
+ *
+ * You never construct one by hand or type a raw version id: obtain a
+ * {@link SecretVersionInfo} from {@link Secret.listVersions} and pass it to
+ * {@link Secret.get}, or use the `'current'` / `'previous'` shorthands.
+ */
+export interface SecretVersion {
+	/** Opaque version identifier. Meaningful only as a handle back to `get()`. */
+	readonly versionId: string;
+}
+
+/**
+ * A version as returned by {@link Secret.listVersions} — a {@link SecretVersion}
+ * handle plus the discovery metadata needed to choose among versions. Because it
+ * extends {@link SecretVersion}, a value returned by `listVersions()` can be
+ * passed straight to `get({ version })`.
+ */
+export interface SecretVersionInfo extends SecretVersion {
+	/**
+	 * Staging labels attached to this version. AWS maintains `['AWSCURRENT']` for
+	 * the live value and `['AWSPREVIOUS']` for the value before the last change;
+	 * a version with no label (superseded, awaiting pruning) has `[]`.
+	 */
+	readonly stages: string[];
+	/** When this version was created. */
+	readonly createdDate: Date;
+}
+
+/**
+ * Options for {@link Secret.get}.
+ */
+export interface SecretReadOptions {
+	/**
+	 * Which version to read:
+	 * - `'current'` (default) — the live value.
+	 * - `'previous'` — the value before the most recent change. Useful for a
+	 *   rotation grace window (e.g. still validate tokens signed by the prior
+	 *   signing key). Returns `null` if the secret has never been changed.
+	 * - a {@link SecretVersion} from {@link Secret.listVersions} — a specific
+	 *   historical version.
+	 */
+	version?: 'current' | 'previous' | SecretVersion;
+}

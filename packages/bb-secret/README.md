@@ -18,8 +18,9 @@ const secret = new Secret(scope, id, options?)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `get()` | `Promise<T \| null>` | Read the value. Returns `null` when the secret has not been set or does not exist. |
-| `put(value)` | `Promise<void>` | Set or update the value at runtime. |
+| `get(options?)` | `Promise<T \| null>` | Read the value. `null` when unset/missing. `options.version` selects `'current'` (default), `'previous'`, or a `SecretVersion` from `listVersions()`. |
+| `put(value)` | `Promise<void>` | Set or update the value at runtime. The prior value becomes the `'previous'` version. |
+| `listVersions()` | `Promise<SecretVersionInfo[]>` | List retained versions (metadata only, newest first — never values). |
 | `Secret.fromExisting(arn)` | `ExternalSecretRef` | Reference an existing Secrets Manager secret (static). Pass to `options.secret`. |
 
 ### Options
@@ -178,15 +179,40 @@ Without an explicit `name`, the secret name is derived from the scope tree; find
 
 > There is intentionally **no** way to seed a secret's value from source code or an environment variable through the constructor — a literal in source would land in git and the template, and env-seeding is kept out of the declaration (consistent with how hosting `secret()` separates *declare* from *set*). Set values out-of-band via the console or CLI.
 
+## Reading an earlier version (rotation grace window)
+
+Each change keeps the prior value available as the **previous** version. This is useful during a key rollout: validate against both the new and the old value for a grace period.
+
+```typescript
+const current  = await signingKey.get();                       // live value
+const previous = await signingKey.get({ version: 'previous' }); // value before the last change, or null
+// verify(token, current) || (previous !== null && verify(token, previous))
+```
+
+`get({ version: 'previous' })` returns `null` until the secret has been changed at least once. To browse the retained versions (metadata only — never values), use `listVersions()` and pass a returned item straight back to `get()`:
+
+```typescript
+const versions = await signingKey.listVersions();
+// [{ versionId, stages: ['AWSCURRENT'], createdDate }, { versionId, stages: ['AWSPREVIOUS'], createdDate }]
+const value = await signingKey.get({ version: versions[1] });  // read a specific version
+```
+
+For anything deeper than the current/previous pair (full history, custom staging labels), use the AWS SDK directly against `secret.secretArn` — the BB covers the common path and leaves the raw resource reachable.
+
 ## Scaling & cost (AWS)
 
-- Backed by AWS Secrets Manager. Billed per secret per month plus per API call — see the [AWS Secrets Manager pricing page](https://aws.amazon.com/secrets-manager/pricing/) for current rates.
-- The construct grants the shared execution role `secretsmanager:GetSecretValue` and `secretsmanager:PutSecretValue` scoped to the single secret (not a wildcard), plus the KMS grants Secrets Manager attaches for the encryption key.
-- BB-created secrets are tagged `aws-blocks-stack=<stackName>` so they appear in the stack's *settings* resource group; `fromExisting` secrets are not tagged (they are owned outside the stack).
-- Removal policy follows the stack-wide `defaults` (production retains, sandbox destroys); override per-instance with `removalPolicy`.
+- **Billing:** $0.40 per secret per month (prorated hourly) + $0.05 per 10,000 API calls. No free tier.
+- **Latency:** low-tens-of-ms per API call; the runtime caches the fetched value per cold start, so steady-state reads hit the cache, not the API.
+- **Throughput:** GetSecretValue scales to thousands of requests/sec per account (default quotas, raisable). Reads are the hot path; `put()` is rare.
+- **Value size limit:** 64 KB per secret value.
+- **Version history:** current + previous are always retained; AWS keeps additional versions until there are >100 unlabeled (never removing any created in the last 24h).
+- **Encryption:** KMS at rest, using the default `aws/secretsmanager` key.
+- **IAM:** the construct grants the shared execution role `secretsmanager:GetSecretValue` + `PutSecretValue` scoped to the single secret (not a wildcard), plus the KMS grants Secrets Manager attaches.
+- **Deletion:** recoverable by default (30-day recovery window); `--force-delete-without-recovery` to delete immediately.
+- Removal policy follows the stack-wide `defaults` (production retains, sandbox destroys); override per-instance with `removalPolicy`. BB-created secrets are tagged `aws-blocks-stack=<stackName>` (join the settings resource group); `fromExisting` secrets are not tagged.
 
 ## Local development
 
-The mock stores secret values as **plaintext** in the shared `.bb-data/settings.json` (the same file `AppSetting` uses, keyed by the secret's `name` or `fullId`) and logs a one-time warning. This is why the local `/aws-blocks/settings` route surfaces secrets alongside settings. It is **not** secure — never use real credentials in local development. Wipe with `rm -rf .bb-data`.
+The mock stores the current value as **plaintext** in the shared `.bb-data/settings.json` (the same file `AppSetting` uses, keyed by the secret's `name` or `fullId`) and logs a one-time warning. This is why the local `/aws-blocks/settings` route surfaces secrets alongside settings. The previous value (for `get({ version: 'previous' })` / `listVersions()`) is kept in a small `.bb-data/secret-versions.json` sidecar — current + previous only; deeper history is an AWS-only capability. It is **not** secure — never use real credentials in local development. Wipe with `rm -rf .bb-data`.
 
 `Secret` runs server-side only. Importing and instantiating it in browser/client code throws `SecretErrors.NotSupported` — a secret read in the browser would expose it to the client.

@@ -11,7 +11,7 @@ import type { ExternalSecretRef, SecretOptions } from './types.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { SecretErrors } from './errors.js';
-export type { ExternalSecretRef, SecretOptions } from './types.js';
+export type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
 
 /**
  * CDK construct for a single application secret backed by AWS Secrets Manager.
@@ -102,6 +102,9 @@ export class Secret extends BuildingBlockScope {
 	}
 	put(..._args: unknown[]): never {
 		return synthGuard('Secret', 'put');
+	}
+	listVersions(..._args: unknown[]): never {
+		return synthGuard('Secret', 'listVersions');
 	}
 }
 

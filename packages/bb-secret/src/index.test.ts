@@ -149,4 +149,66 @@ describe('Secret (mock)', () => {
 			assert.strictEqual(await reopened.get(), 'one');
 		});
 	});
+
+	describe('version retrieval', () => {
+		test('get({ version: "previous" }) is null until the value changes', async () => {
+			const secret = new Secret(freshScope(), 'signing-key');
+			assert.strictEqual(await secret.get({ version: 'previous' }), null);
+			await secret.put('v1');
+			// Only one version so far — still no previous.
+			assert.strictEqual(await secret.get({ version: 'previous' }), null);
+		});
+
+		test('after a change, current and previous reflect the last two values', async () => {
+			const secret = new Secret(freshScope(), 'signing-key');
+			await secret.put('v1');
+			await secret.put('v2');
+			assert.strictEqual(await secret.get(), 'v2');
+			assert.strictEqual(await secret.get({ version: 'current' }), 'v2');
+			assert.strictEqual(await secret.get({ version: 'previous' }), 'v1');
+		});
+
+		test('only current + previous are retained (2-deep)', async () => {
+			const secret = new Secret(freshScope(), 'signing-key');
+			await secret.put('v1');
+			await secret.put('v2');
+			await secret.put('v3');
+			assert.strictEqual(await secret.get(), 'v3');
+			assert.strictEqual(await secret.get({ version: 'previous' }), 'v2');
+			const versions = await secret.listVersions();
+			assert.strictEqual(versions.length, 2);
+		});
+
+		test('listVersions returns metadata newest-first with AWSCURRENT/AWSPREVIOUS stages', async () => {
+			const secret = new Secret(freshScope(), 'signing-key');
+			await secret.put('v1');
+			await secret.put('v2');
+			const versions = await secret.listVersions();
+			assert.deepStrictEqual(
+				versions.map((v) => v.stages),
+				[['AWSCURRENT'], ['AWSPREVIOUS']],
+			);
+			for (const v of versions) {
+				assert.ok(typeof v.versionId === 'string' && v.versionId.length > 0);
+				assert.ok(v.createdDate instanceof Date);
+			}
+			// SecretVersionInfo items never carry the value.
+			assert.ok(!('value' in versions[0]));
+		});
+
+		test('get accepts a SecretVersion handle from listVersions', async () => {
+			const secret = new Secret(freshScope(), 'signing-key');
+			await secret.put('v1');
+			await secret.put('v2');
+			const versions = await secret.listVersions();
+			// versions[1] is AWSPREVIOUS → value v1; pass the handle straight back to get().
+			assert.strictEqual(await secret.get({ version: versions[1] }), 'v1');
+			assert.strictEqual(await secret.get({ version: versions[0] }), 'v2');
+		});
+
+		test('listVersions is empty before any value is set', async () => {
+			const secret = new Secret(freshScope(), 'signing-key');
+			assert.deepStrictEqual(await secret.listVersions(), []);
+		});
+	});
 });

@@ -2193,6 +2193,16 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     await namedSecret.put(value);
     return { success: true };
   },
+
+  async secretGetApiKeyPrevious() {
+    return { value: await apiKeySecret.get({ version: 'previous' }) };
+  },
+
+  async secretListApiKeyVersions() {
+    const versions = await apiKeySecret.listVersions();
+    // Return client-safe metadata (versionId + stages count), never values.
+    return versions.map((v) => ({ versionId: v.versionId, stages: v.stages }));
+  },
   // CronJob Tests
   // ------------------------------------------------------------------------
 

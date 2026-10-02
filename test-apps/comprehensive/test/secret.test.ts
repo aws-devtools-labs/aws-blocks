@@ -48,5 +48,26 @@ export function secretTests(getApi: () => typeof apiType) {
       const { value } = await api.secretGetNamed();
       assert.strictEqual(value, 'whsec_abc123');
     });
+
+    test('Secret - previous version is readable after a change (grace window)', async () => {
+      const api = getApi();
+      await api.secretPutApiKey('sk-old');
+      await api.secretPutApiKey('sk-new');
+      const current = (await api.secretGetApiKey()).value;
+      const previous = (await api.secretGetApiKeyPrevious()).value;
+      assert.strictEqual(current, 'sk-new');
+      assert.strictEqual(previous, 'sk-old');
+    });
+
+    test('Secret - listVersions returns current + previous with stage labels', async () => {
+      const api = getApi();
+      await api.secretPutApiKey('sk-1');
+      await api.secretPutApiKey('sk-2');
+      const versions = await api.secretListApiKeyVersions();
+      assert.ok(versions.length >= 2);
+      // Newest-first: first is current, includes a previous.
+      assert.ok(versions.some((v) => v.stages.includes('AWSCURRENT')));
+      assert.ok(versions.some((v) => v.stages.includes('AWSPREVIOUS')));
+    });
   });
 }

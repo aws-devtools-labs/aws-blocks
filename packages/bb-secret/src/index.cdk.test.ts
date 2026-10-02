@@ -105,7 +105,7 @@ test('CDK: grants the execution role GetSecretValue + PutSecretValue', () => {
 test('CDK: calling a runtime data method throws an actionable synth-time error', () => {
 	const { parent } = setup();
 	const secret = new Secret(parent, 'stripe-key') as unknown as Record<string, (k: string) => never>;
-	for (const method of ['get', 'put']) {
+	for (const method of ['get', 'put', 'listVersions']) {
 		assert.throws(
 			() => secret[method]('v'),
 			/cannot be called during CDK synth/,
