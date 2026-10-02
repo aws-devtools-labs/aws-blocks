@@ -118,6 +118,15 @@ function normalizeUnsupportedCron(expr: string): string | null {
 	const hasMarker = /[LW#]/i.test(dom) || /[LW#]/i.test(dow);
 	const hasYear = year !== '*' && year !== '?';
 	if (!hasMarker && !hasYear) return null;
+	if (hasYear) {
+		// Only classify well-formed year restrictions as unsupported, not invalid.
+		if (!year.split(',').every((part) => /^(?:\*|\d+(?:-\d+)?)(?:\/\d+)?$/.test(part))) return null;
+		try {
+			expandField(year, 1970, 2199, expr);
+		} catch {
+			return null;
+		}
+	}
 	// Replace only the unsupported bits with valid placeholders; leave the rest so
 	// a bad minute/hour/month/range still fails the re-parse.
 	if (/[LW#]/i.test(dom)) dom = '1'; // valid day-of-month
@@ -184,6 +193,8 @@ function parseCronFields(body: string, original: string): CronFields {
 	const parts = body.trim().split(/\s+/);
 	// AWS cron: minute hour day-of-month month day-of-week year
 	if (parts.length !== 6) throw scheduleError(original);
+	// A restricted year cannot be discarded: let the mock wrapper classify it.
+	if (parts[5] !== '*' && parts[5] !== '?') throw scheduleError(original);
 
 	return {
 		minute: expandField(parts[0], 0, 59, original),
@@ -192,7 +203,6 @@ function parseCronFields(body: string, original: string): CronFields {
 		month: expandField(parts[3], 1, 12, original),
 		dayOfWeek: parts[4] === '?' ? [] : expandDow(parts[4], original),
 	};
-	// parts[5] is year — ignored in mock
 }
 
 function expandField(field: string, min: number, max: number, original: string): number[] {
