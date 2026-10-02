@@ -30,7 +30,7 @@ test.before(async () => {
   console.log(`Testing ${baseUrl}...`);
 
   if (!process.env.TEST_URL && !await isServerReady()) {
-    server = spawn('npm', ['run', 'dev'], {
+    server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
@@ -48,15 +48,13 @@ test.after(() => {
   }
 });
 
-test('home page loads', async (t) => {
+test('home page loads', async () => {
   const res = await fetch(baseUrl);
   assert.strictEqual(res.status, 200, 'Home page should return 200');
+});
 
-  const html = await res.text();
-  // The starter page ships this title. Replace this check with your own
-  // once you customize the page.
-  if (!html.includes('Blocks + Next.js')) {
-    t.skip('starter page changed - replace with an assertion for your own content');
-    return;
-  }
+test('app: server serves its Blocks config', async () => {
+  const configUrl = `${baseUrl.replace(/\/$/, '')}/.blocks-sandbox/config.json`;
+  const response = await fetch(configUrl);
+  assert.ok(response.ok, `expected ${configUrl} to respond ok`);
 });
