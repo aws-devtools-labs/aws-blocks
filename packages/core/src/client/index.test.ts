@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { execSync } from 'node:child_process';
-import { writeFileSync, unlinkSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, unlinkSync, mkdtempSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLIENT_MODULE = join(__dirname, '..', 'client', 'index.js');
 
-function runScript(scriptBody: string, env: Record<string, string>): string {
+function runScript(scriptBody: string, env: Record<string, string>, cwd?: string): string {
   const tmp = mkdtempSync(join(tmpdir(), 'blocks-client-test-'));
   const scriptPath = join(tmp, 'test.mjs');
   // Use absolute path to import the client module
@@ -30,6 +30,7 @@ function runScript(scriptBody: string, env: Record<string, string>): string {
     return execSync(`node ${scriptPath}`, {
       encoding: 'utf-8',
       env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env },
+      cwd,
       timeout: 10000,
     }).trim();
   } finally {
@@ -114,5 +115,51 @@ try {
 }
 `, { BLOCKS_API_URL: '/aws-blocks/api' });
     assert.ok(result.includes('PASS'), `Expected PASS, got: ${result}`);
+  });
+});
+
+/**
+ * The client entry is bundled for browsers and React Native. Expo's Metro
+ * honors `webpackIgnore` and leaves a dynamic `import()` in the bundle, which
+ * Hermes cannot compile — so the client must never contain a dynamic import of
+ * a Node builtin, even behind a runtime `process.versions.node` guard.
+ */
+describe('Client bundle safety (React Native / Hermes)', () => {
+  const NODE_DYNAMIC_IMPORT = /\bimport\s*\(\s*(?:\/\*[\s\S]*?\*\/\s*)*['"`]node:/;
+
+  function listJs(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) return listJs(full);
+      return entry.name.endsWith('.js') && !entry.name.endsWith('.test.js') ? [full] : [];
+    });
+  }
+
+  it('dist/client contains no dynamic import() of node: builtins', () => {
+    const files = listJs(dirname(CLIENT_MODULE));
+    assert.ok(files.length > 0, 'expected compiled client files');
+    const offenders = files.filter((file) => NODE_DYNAMIC_IMPORT.test(readFileSync(file, 'utf-8')));
+    assert.deepStrictEqual(offenders, [], `dynamic import() of a node: builtin breaks Hermes: ${offenders.join(', ')}`);
+  });
+
+  it('still reads .blocks-sandbox/config.json from the working directory under Node', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'blocks-client-cwd-'));
+    mkdirSync(join(projectDir, '.blocks-sandbox'));
+    writeFileSync(
+      join(projectDir, '.blocks-sandbox', 'config.json'),
+      JSON.stringify({ apiUrl: 'https://from-config-file.example.com/aws-blocks' }),
+    );
+    const result = runScript(`
+globalThis.fetch = async (url) => {
+  console.log('FETCH:' + String(url));
+  throw new Error('stop');
+};
+const api = ApiNamespaceClient('test');
+try { await api.hello(); } catch {}
+`, {}, projectDir);
+    assert.ok(
+      result.includes('FETCH:https://from-config-file.example.com/aws-blocks'),
+      `Expected the request to use the config.json apiUrl, got: ${result}`,
+    );
   });
 });
