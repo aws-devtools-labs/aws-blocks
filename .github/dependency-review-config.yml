@@ -47,10 +47,13 @@ allow_dependencies_licenses:
 # per entry (or per contiguous group) explaining why it's exempt and when to
 # drop it — keep it short.
 allow_ghsas:
-  # brace-expansion DoS — flagged only against the copy bundled inside
-  # aws-cdk-lib (inBundle, un-overridable; non-bundled copies are pinned to the
-  # patched 5.0.12). Build/deploy-time only. Drop when aws-cdk-lib bundles
-  # brace-expansion >= 5.0.12 — aws/aws-cdk#37133.
+  # brace-expansion DoS — low real-world risk here (build/deploy-time glob
+  # expansion, no untrusted input). We do NOT pin it: a root override that
+  # collapses majors broke consumers that default-import the older major
+  # (OpenNext's bundled minimatch does `import expand from 'brace-expansion'`,
+  # which 5.x's ESM has no default export for). So the tree resolves as on main
+  # and these advisories are waved here instead. Revisit if a real runtime path
+  # ever consumes brace-expansion on untrusted input.
   - "GHSA-6j4f-fj2g-mc7p" # parseCommaParts recursion, patched 5.0.10
   - "GHSA-qhr7-859c-m2p7" # nested brace-group recursion, patched 5.0.11
   - "GHSA-q2hr-2g5m-vwhr" # quadratic expansion, patched 5.0.12
