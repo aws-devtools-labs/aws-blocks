@@ -35,6 +35,10 @@
       "types": "./dist/ui.d.ts",
       "default": "./dist/ui.js"
     },
+    "./theme": {
+      "types": "./dist/theme.d.ts",
+      "default": "./dist/theme.js"
+    },
     "./cookies": {
       "types": "./dist/cookies.d.ts",
       "default": "./dist/cookies.js"
