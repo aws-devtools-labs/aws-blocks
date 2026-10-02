@@ -15,6 +15,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
+import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
 import { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
@@ -72,6 +73,31 @@ function stackWithCompute(id: string): {
 	return { stack, role, computes: [compute] };
 }
 
+// A cdk.Stack that also exposes `.defaults`, standing in for a real BlocksStack/BlocksBackend.
+// ensureConfigBucket resolves the log bucket's removal + retention posture from the owning
+// stack/backend's `.defaults` (globalThis.CURRENT_BLOCKS_STACK, else the stack). A subclass carrying
+// the field exercises that path without a cast and keeps the root-level logical IDs the assertions
+// below anchor on.
+class PresetStack extends cdk.Stack {
+	readonly defaults: BlocksDefaults;
+	constructor(scope: Construct, id: string, defaults: BlocksDefaults) {
+		super(scope, id);
+		this.defaults = defaults;
+	}
+}
+
+function synthWithPreset(preset: 'sandbox' | 'production'): Template {
+	const app = new cdk.App();
+	const stack = new PresetStack(app, `Preset${preset}`, BlocksPresets[preset]);
+	const role = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+		assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+	});
+	const compute = new TestCompute(stack, 'Compute');
+	registerConfig(stack, 'BLOCKS_SOMETHING', 'value');
+	finalizeConfigRegistry(stack, role, [compute]);
+	return Template.fromStack(stack);
+}
+
 test('finalize uploads + wires the computes even with zero entries when a bucket was created', () => {
 	const { stack, role, computes } = stackWithCompute('EmptyWithBucket');
 	// Simulate a co-located BB that creates the bucket but registers no config of its own.
@@ -79,7 +105,7 @@ test('finalize uploads + wires the computes even with zero entries when a bucket
 	finalizeConfigRegistry(stack, role, computes);
 
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 1, 'one config bucket');
+	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + its access-log bucket');
 	t.resourceCountIs('Custom::CDKBucketDeployment', 1); // the (empty) blocks-config.json is uploaded
 	t.hasResourceProperties('AWS::Lambda::Function', {
 		Environment: { Variables: Match.objectLike({ BLOCKS_CONFIG_KEY: 'blocks-config.json' }) },
@@ -111,7 +137,7 @@ test('finalize uploads + wires the computes when config was registered (bucket a
 	finalizeConfigRegistry(stack, role, computes);
 
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 1, 'one config bucket');
+	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + its access-log bucket');
 	t.resourceCountIs('Custom::CDKBucketDeployment', 1);
 	t.hasResourceProperties('AWS::Lambda::Function', {
 		Environment: { Variables: Match.objectLike({ BLOCKS_CONFIG_KEY: 'blocks-config.json' }) },
@@ -131,10 +157,18 @@ test('the config bucket is created under the owning stack/backend, not the (deep
 
 	const t = Template.fromStack(stack);
 	const bucketIds = Object.keys(t.findResources('AWS::S3::Bucket'));
-	assert.strictEqual(bucketIds.length, 1, 'exactly one config bucket');
+	assert.strictEqual(bucketIds.length, 2, 'config bucket + its access-log bucket');
 	// Logical IDs encode the construct path — under the owner it's `EmbeddedBlocksConfigBucket…`,
-	// at the stack root it would be `BlocksConfigBucket…`. Pin that it follows the owner.
-	assert.ok(bucketIds[0].startsWith('Embedded'), `bucket should be nested under the owner, got ${bucketIds[0]}`);
+	// at the stack root it would be `BlocksConfigBucket…`. Pin that both follow the owner, and that
+	// the config bucket specifically is nested under it.
+	assert.ok(
+		bucketIds.every(id => id.startsWith('Embedded')),
+		`buckets should be nested under the owner, got ${bucketIds.join(', ')}`,
+	);
+	assert.ok(
+		bucketIds.some(id => id.startsWith('EmbeddedBlocksConfigBucket')),
+		`config bucket should be nested under the owner, got ${bucketIds.join(', ')}`,
+	);
 });
 
 test('getConfigLocation creates exactly one bucket across repeated calls (idempotent)', () => {
@@ -145,5 +179,171 @@ test('getConfigLocation creates exactly one bucket across repeated calls (idempo
 	assert.strictEqual(a.key, b.key, 'same config key');
 	assert.strictEqual(a.bucketName, b.bucketName, 'same bucket');
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 1, 'exactly one bucket');
+	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + its access-log bucket (created once)');
+});
+
+test('the config bucket enforces TLS, enables versioning, and delivers server access logs', () => {
+	const { stack, role, computes } = stackWithCompute('SecurePosture');
+	registerConfig(stack, 'BLOCKS_SOMETHING', 'value');
+	finalizeConfigRegistry(stack, role, computes);
+
+	const t = Template.fromStack(stack);
+
+	// A dedicated access-log bucket is provisioned alongside the config bucket.
+	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + dedicated access-log bucket');
+
+	// (a) Versioning enabled + (c) the config bucket ships access logs to the dedicated log bucket
+	// (not to itself) under a prefix.
+	t.hasResourceProperties('AWS::S3::Bucket', {
+		VersioningConfiguration: { Status: 'Enabled' },
+		LoggingConfiguration: {
+			DestinationBucketName: { Ref: Match.stringLikeRegexp('BlocksConfigLogsBucket') },
+			LogFilePrefix: 'access-logs/',
+		},
+	});
+
+	// (b) enforceSSL generates a bucket policy denying non-TLS access (aws:SecureTransport=false),
+	// pinned to the CONFIG bucket specifically — the log bucket also enforces SSL, so an unpinned
+	// matcher would still pass if the config bucket's enforceSSL were dropped.
+	t.hasResourceProperties('AWS::S3::BucketPolicy', {
+		Bucket: { Ref: Match.stringLikeRegexp('^BlocksConfigBucket') },
+		PolicyDocument: {
+			Statement: Match.arrayWith([
+				Match.objectLike({
+					Effect: 'Deny',
+					Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+				}),
+			]),
+		},
+	});
+
+	// (d) The log bucket's own posture: BLOCK_ALL public access, S3-managed encryption, and an
+	// ExpireAccessLogs lifecycle rule — all pinned to the same resource via the rule id so this
+	// asserts the log bucket, not the config bucket. The expiry DAY COUNT and teardown policy are now
+	// resolved from the stack defaults, so they're asserted per-preset below; here we pin only the
+	// preset-independent lock-down. stackWithCompute registers no BlocksStack/Backend, so the posture
+	// falls back to the production preset.
+	t.hasResourceProperties('AWS::S3::Bucket', {
+		PublicAccessBlockConfiguration: {
+			BlockPublicAcls: true,
+			BlockPublicPolicy: true,
+			IgnorePublicAcls: true,
+			RestrictPublicBuckets: true,
+		},
+		BucketEncryption: {
+			ServerSideEncryptionConfiguration: Match.arrayWith([
+				Match.objectLike({ ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }),
+			]),
+		},
+		LifecycleConfiguration: {
+			Rules: Match.arrayWith([
+				Match.objectLike({ Id: 'ExpireAccessLogs', Status: 'Enabled' }),
+			]),
+		},
+	});
+
+	// (b2) enforceSSL on the LOG bucket generates its OWN Deny-non-TLS bucket policy, pinned to the log
+	// bucket (Ref ^ConfigLogDelivery). Without this, dropping the log bucket's enforceSSL would still
+	// pass the config-bucket SSL assertion above.
+	t.hasResourceProperties('AWS::S3::BucketPolicy', {
+		Bucket: { Ref: Match.stringLikeRegexp('^ConfigLogDelivery') },
+		PolicyDocument: {
+			Statement: Match.arrayWith([
+				Match.objectLike({
+					Effect: 'Deny',
+					Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+				}),
+			]),
+		},
+	});
+
+	// (e) The log bucket must stay ACL-free: with the serverAccessLogsUseBucketPolicy flag, CDK grants
+	// log delivery via a bucket policy, not by re-enabling S3 ACLs. Pin that the log bucket (the one
+	// carrying the ExpireAccessLogs rule) has neither the legacy AccessControl: LogDeliveryWrite nor
+	// ObjectOwnership: ObjectWriter, so a flag regression is caught.
+	const buckets = t.findResources('AWS::S3::Bucket');
+	const logBucketEntry = Object.entries(buckets).find(([, res]) =>
+		(res.Properties?.LifecycleConfiguration?.Rules ?? []).some(
+			(r: { Id?: string }) => r.Id === 'ExpireAccessLogs',
+		),
+	);
+	assert.ok(logBucketEntry, 'access-log bucket present');
+	const logBucketProps = logBucketEntry[1].Properties ?? {};
+	assert.notStrictEqual(
+		logBucketProps.AccessControl,
+		'LogDeliveryWrite',
+		'log bucket must not re-enable ACLs via AccessControl: LogDeliveryWrite',
+	);
+	assert.strictEqual(
+		logBucketProps.OwnershipControls,
+		undefined,
+		'log bucket must not set ObjectWriter ownership controls',
+	);
+});
+
+test('log bucket inherits the sandbox preset posture: DESTROY + autoDelete + 7-day expiry', () => {
+	const t = synthWithPreset('sandbox');
+
+	// Teardown + retention follow the sandbox preset: the log bucket is torn down with the stack and
+	// its logs expire after sandbox `logRetention` (ONE_WEEK === 7 days). Pinned to the log bucket via
+	// the ExpireAccessLogs rule id (the config bucket carries ExpireNoncurrentVersions, not this).
+	t.hasResource('AWS::S3::Bucket', {
+		DeletionPolicy: 'Delete',
+		Properties: Match.objectLike({
+			LifecycleConfiguration: {
+				Rules: Match.arrayWith([
+					Match.objectLike({ Id: 'ExpireAccessLogs', ExpirationInDays: 7, Status: 'Enabled' }),
+				]),
+			},
+		}),
+	});
+	// autoDeleteObjects is on for BOTH the config bucket (always DESTROY) and the log bucket under
+	// sandbox ⇒ two Custom::S3AutoDeleteObjects resources.
+	t.resourceCountIs('Custom::S3AutoDeleteObjects', 2);
+});
+
+test('log bucket inherits the production preset posture: RETAIN + no autoDelete + 365-day expiry', () => {
+	const t = synthWithPreset('production');
+
+	// Access logs are a durable audit artifact under production: the log bucket is RETAIN (not torn
+	// down with the stack) and its logs expire after production `logRetention` (ONE_YEAR === 365 days).
+	t.hasResource('AWS::S3::Bucket', {
+		DeletionPolicy: 'Retain',
+		Properties: Match.objectLike({
+			LifecycleConfiguration: {
+				Rules: Match.arrayWith([
+					Match.objectLike({ Id: 'ExpireAccessLogs', ExpirationInDays: 365, Status: 'Enabled' }),
+				]),
+			},
+		}),
+	});
+	// Only the config bucket (always DESTROY) auto-deletes; the RETAIN log bucket must NOT ⇒ exactly
+	// one Custom::S3AutoDeleteObjects resource. This is what guards the "don't wipe production access
+	// logs on teardown" guarantee.
+	t.resourceCountIs('Custom::S3AutoDeleteObjects', 1);
+
+	// The log bucket keeps its lock-down under RETAIN: BLOCK_ALL public access and its own Deny-non-TLS
+	// bucket policy still hold.
+	t.hasResourceProperties('AWS::S3::Bucket', {
+		PublicAccessBlockConfiguration: {
+			BlockPublicAcls: true,
+			BlockPublicPolicy: true,
+			IgnorePublicAcls: true,
+			RestrictPublicBuckets: true,
+		},
+		LifecycleConfiguration: {
+			Rules: Match.arrayWith([Match.objectLike({ Id: 'ExpireAccessLogs', Status: 'Enabled' })]),
+		},
+	});
+	t.hasResourceProperties('AWS::S3::BucketPolicy', {
+		Bucket: { Ref: Match.stringLikeRegexp('^ConfigLogDelivery') },
+		PolicyDocument: {
+			Statement: Match.arrayWith([
+				Match.objectLike({
+					Effect: 'Deny',
+					Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+				}),
+			]),
+		},
+	});
 });
