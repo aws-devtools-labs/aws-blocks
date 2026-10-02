@@ -209,4 +209,25 @@ describe('toCognitoApiError (wire-safe SDK error translation)', () => {
 			assert.notStrictEqual(err.message, 'Authentication request failed', `${name} has no dedicated message`);
 		}
 	});
+
+	test('no own-enumerable field of the raw SDK error is copied onto the ApiError', () => {
+		// A real Cognito SDK exception carries extra own-enumerable fields
+		// ($metadata, $fault, Code, ...) that can embed identifying text. The
+		// contract is that the raw error lives ONLY on the non-enumerable cause,
+		// so none of those raw-specific keys should appear on the ApiError even
+		// if the construction later changes to a field-spreading shape. `name` is
+		// excluded: it is the deliberately-preserved BB-level field (D-003 allows
+		// the name over the wire), not raw SDK text.
+		const raw = Object.assign(cognitoError(AuthCognitoErrors.NotAuthorized, rawText), {
+			$metadata: { httpStatusCode: 401, requestId: 'req-123456789012' },
+			$fault: 'client',
+			Code: 'NotAuthorizedException',
+		});
+		const err = toCognitoApiError(raw);
+		const rawOnlyKeys = Object.keys(raw).filter((k) => k !== 'name');
+		for (const key of rawOnlyKeys) {
+			assert.ok(!Object.keys(err).includes(key), `raw SDK field '${key}' was copied onto the ApiError`);
+		}
+		assert.ok(!JSON.stringify(err).includes('req-123456789012'));
+	});
 });
