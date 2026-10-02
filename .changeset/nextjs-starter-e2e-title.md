@@ -2,4 +2,4 @@
 "@aws-blocks/create-blocks-app": patch
 ---
 
-Make the Next.js starter E2E test tolerate replacing the starter page while retaining the dev-server readiness check.
+Keep the Next.js starter E2E independent of the sample page title by checking the home page response and Blocks config endpoint.

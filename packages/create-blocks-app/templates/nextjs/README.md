@@ -25,7 +25,7 @@ Open http://localhost:3000 after `npm run dev`.
 | `src/app/client.tsx` | Client Component — calls the API from the browser |
 | `src/app/layout.tsx` | Root layout |
 | `src/app/error.tsx` | Error boundary |
-| `test/e2e.test.ts` | Boots the dev server and asserts the page renders |
+| `test/e2e.test.ts` | Boots the dev server and checks the home page and Blocks config responses |
 
 ## What's Included
 
@@ -41,7 +41,7 @@ Open http://localhost:3000 after `npm run dev`.
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Next.js dev server with mock storage |
-| `npm run test:e2e` | Boot the dev server and test the rendered page |
+| `npm run test:e2e` | Boot the dev server and check the home page and Blocks config responses |
 | `npm run typecheck` | TypeScript type checking |
 | `npm run build` | `next build` (standalone output) |
 | `npm run start` | Serve the production build locally |
@@ -49,6 +49,11 @@ Open http://localhost:3000 after `npm run dev`.
 | `npm run deploy` | Full production deploy |
 | `npm run sandbox:destroy` | Tear down sandbox resources |
 | `npm run destroy` | Tear down the production stack |
+
+The starter E2E checks do not depend on the sample page title or API methods.
+Add assertions for your own content and behavior as you customize the app.
+To test an already-running app, set `TEST_URL` to its base URL; it must serve
+both the home page and `/.blocks-sandbox/config.json`.
 
 ## Stack naming
 
