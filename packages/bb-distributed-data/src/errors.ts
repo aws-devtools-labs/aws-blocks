@@ -13,6 +13,8 @@ export const DistributedDatabaseErrors = {
   UniqueConstraintViolation: 'UniqueConstraintViolationException',
   SerializationFailure: 'SerializationFailureException',
   TransactionRowLimitExceeded: 'TransactionRowLimitExceededException',
+  /** `db.shape()` was called with invalid options, or a shape request failed validation. */
+  ShapeInvalid: 'ShapeInvalidException',
 } as const;
 
 /**

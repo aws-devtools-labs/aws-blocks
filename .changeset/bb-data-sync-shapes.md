@@ -34,8 +34,10 @@ todos.subscribe((rows) => render(rows));
 - The API method that returns a shape is the authorization point. It signs the
   table, row filter, and columns into an expiring token; the client cannot change
   them. When the token expires, the client calls the same method again.
-- `currentTxid(tx)` returns the id of a write transaction, and
-  `shape.waitForTxid(txid)` resolves when that write has synced back.
+- Your own writes are in the shape when the API call returns: after
+  `await api.addTodo('Buy milk')`, `todos.rows` has the new row. The database sends
+  the write's transaction id with the response, and the client waits for it in the
+  open shapes on the written table (capped at 1 second).
 - On AWS, `sync` enables logical replication on the Aurora cluster and runs the
   [Electric](https://electric.ax) sync service on Fargate. The app Lambda reaches it
   through an IAM-authorized HTTP API. The stack builds the pinned Electric release

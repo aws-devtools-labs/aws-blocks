@@ -1,19 +1,38 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useShape } from '@aws-blocks/blocks/react';
 import { api, authApi } from 'sync-todos-aws-blocks';
 import type { Todo } from 'sync-todos-aws-blocks';
 
 /** The hydrated shape type, inferred from the backend method. No codegen. */
 type TodosShape = Awaited<ReturnType<typeof api.todos>>;
 
-const NO_ROWS: readonly Todo[] = [];
-const noSubscribe = () => () => {};
+declare global {
+  interface Window {
+    /** The live shape, for the benchmark in test/sync.test.ts. */
+    __syncTodosShape?: TodosShape;
+    /** The API client, for the feature tests in test/features.test.ts. */
+    __syncTodosApi?: typeof api;
+  }
+}
 
-/** Re-render on every change to the shape's local rows. */
-function useRows(shape: TodosShape | null): readonly Todo[] {
-  return useSyncExternalStore(shape ? shape.subscribe : noSubscribe, shape ? shape.getSnapshot : () => NO_ROWS);
+/**
+ * The `count` rows with the highest `position`, newest first. One pass over
+ * the rows (O(n · count) worst case, O(n) typical) instead of sorting them all
+ * on every change.
+ */
+function newest(rows: readonly Todo[], count: number): Todo[] {
+  const top: Todo[] = [];
+  for (const row of rows) {
+    if (top.length === count && row.position <= top[count - 1].position) continue;
+    let i = top.length;
+    while (i > 0 && top[i - 1].position < row.position) i--;
+    top.splice(i, 0, row);
+    if (top.length > count) top.pop();
+  }
+  return top;
 }
 
 /** Time `count` random local lookups. Returns microseconds per lookup. */
@@ -57,38 +76,28 @@ function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
 }
 
 function Todos() {
-  const [shape, setShape] = useState<TodosShape | null>(null);
-  const [error, setError] = useState('');
+  // The live shape: rows re-render on every change; closed on unmount.
+  const { rows, shape, isLoading, error: shapeError } = useShape(() => api.todos(), []);
+  const error = shapeError?.message ?? '';
+  const upToDate = !isLoading && !shapeError;
   const [title, setTitle] = useState('');
   const [roundTripMs, setRoundTripMs] = useState<number | null>(null);
   const [lookupUs, setLookupUs] = useState<number | null>(null);
-  const rows = useRows(shape);
-  const [upToDate, setUpToDate] = useState(false);
 
   useEffect(() => {
-    let current: TodosShape | null = null;
-    api
-      .todos()
-      .then(async (todos) => {
-        current = todos;
-        setShape(todos);
-        await todos.ready;
-        setUpToDate(true);
-      })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
-    return () => current?.close();
-  }, []);
+    if (shape) window.__syncTodosShape = shape;
+    window.__syncTodosApi = api;
+  }, [shape]);
 
-  /** Run a write, then wait until it has synced into the local copy. */
-  const write = async (run: () => Promise<{ txid: string }>) => {
+  /** Run a write. When the call resolves, the write is already in the local copy. */
+  const write = async (run: () => Promise<unknown>) => {
     if (!shape) return;
     const start = performance.now();
-    const { txid } = await run();
-    await shape.waitForTxid(txid);
+    await run();
     setRoundTripMs(Math.round(performance.now() - start));
   };
 
-  const sorted = [...rows].sort((a, b) => b.position - a.position).slice(0, 100);
+  const sorted = useMemo(() => newest(rows, 100), [rows]);
 
   return (
     <div>

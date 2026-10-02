@@ -10,6 +10,9 @@ import { DatabaseBase } from '@aws-blocks/data-common';
 import { DatabaseEngine } from '@aws-blocks/data-common';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
+import { Shape } from '@aws-blocks/data-common';
+import { ShapeDescriptor } from '@aws-blocks/data-common';
+import { ShapeOptions } from '@aws-blocks/data-common';
 import { sql } from '@aws-blocks/data-common';
 import { SqlQuery } from '@aws-blocks/data-common';
 import { Transaction } from '@aws-blocks/data-common';
@@ -51,9 +54,6 @@ export interface CrudOptions<M extends Record<string, TableTypeMeta>> {
     // (undocumented)
     tables: (keyof M & string)[];
 }
-
-// @public
-export function currentTxid(tx: Transaction): Promise<string>;
 
 // @public
 export class Database extends Scope {
@@ -112,6 +112,7 @@ export interface ElectricServiceOptions {
     cpu?: number;
     image?: string;
     memoryMiB?: number;
+    version?: string;
 }
 
 // @public
@@ -209,37 +210,11 @@ export class RLSEnabledDatabase extends DatabaseBase {
     withRLS(context: RLSContext): RLSEnabledDatabase;
 }
 
-// @public
-export interface Shape<T> {
-    close(): void;
-    get(key: string | number | bigint): T | undefined;
-    getSnapshot(): readonly T[];
-    readonly isUpToDate: boolean;
-    readonly ready: Promise<void>;
-    readonly rows: readonly T[];
-    subscribe(listener: (rows: readonly T[]) => void): () => void;
-    toJSON(): ShapeDescriptor;
-    waitForTxid(txid: string): Promise<void>;
-}
+export { Shape }
 
-// @public
-export interface ShapeDescriptor {
-    // (undocumented)
-    __blocks: 'data/shape';
-    expiresAt: number;
-    key: string;
-    path: string;
-    token: string;
-}
+export { ShapeDescriptor }
 
-// @public
-export interface ShapeOptions<T> {
-    columns?: (keyof T & string)[];
-    key?: keyof T & string;
-    table: string;
-    ttlSeconds?: number;
-    where?: SqlQuery;
-}
+export { ShapeOptions }
 
 export { sql }
 

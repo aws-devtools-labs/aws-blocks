@@ -136,8 +136,8 @@ export type {
 	SyncOptions,
 	Transaction,
 } from '@aws-blocks/bb-data';
-export { Database, DatabaseErrors, currentTxid, fromExisting, sql } from '@aws-blocks/bb-data';
-export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
+export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
+export type { DistributedDatabaseOptions, DistributedSyncOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
 export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 export type {
 	DeleteOptions as DTDeleteOptions,

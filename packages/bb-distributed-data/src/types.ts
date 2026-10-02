@@ -17,6 +17,32 @@ export interface DistributedDatabaseOptions {
   removalPolicy?: 'destroy' | 'retain';
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
+  /**
+   * Enable live sync: `db.shape()` returns a local copy of a table's rows that
+   * the browser keeps up to date. On AWS, Aurora DSQL change data capture
+   * streams changes to a Kinesis data stream that the app Lambda consumes.
+   * See "Live Sync" in the README.
+   */
+  sync?: DistributedSyncOptions;
+}
+
+/**
+ * Configuration for `DistributedDatabase({ sync })`.
+ */
+export interface DistributedSyncOptions {
+  /**
+   * Tables that `db.shape()` may stream. Use unquoted Postgres identifiers,
+   * optionally schema-qualified (`'todos'`, `'app.todos'`). Each table needs a
+   * single-column primary key.
+   */
+  tables: string[];
+  /**
+   * Shards of the Kinesis data stream that receives change data capture
+   * records (AWS only). One shard accepts 1,000 records per second and costs
+   * about $11 per month when idle; DSQL retries when the stream throttles.
+   * @default 1
+   */
+  shards?: number;
 }
 
 /**

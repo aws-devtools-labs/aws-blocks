@@ -16,3 +16,6 @@ export { splitStatements, runMigrations, loadMigrationsFromDir, DOLLAR_QUOTE_TAG
 export { createKyselyAdapter } from './kysely-adapter.js';
 export { initializePgliteWithRetry, isPgliteUnreachableTrap } from './pglite-init.js';
 export type { PgliteLike, PgliteInitRetryOptions } from './pglite-init.js';
+export type { Shape, ShapeBell, ShapeDescriptor, ShapeOptions, SyncHint, FieldCondition, SnapshotFilter, SnapshotOrder, SnapshotQuery } from './sync/types.js';
+export { SYNC_HINT } from './sync/types.js';
+export { classifyWrite } from './sync/writes.js';

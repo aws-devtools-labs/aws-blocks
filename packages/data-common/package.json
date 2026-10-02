@@ -28,6 +28,22 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./sync": {
+      "types": "./dist/sync/index.d.ts",
+      "default": "./dist/sync/index.js"
+    },
+    "./sync-shared": {
+      "types": "./dist/sync/shared.d.ts",
+      "default": "./dist/sync/shared.js"
+    },
+    "./sync-client": {
+      "types": "./dist/sync/client.d.ts",
+      "default": "./dist/sync/client.js"
+    },
+    "./react": {
+      "types": "./dist/sync/react.d.ts",
+      "default": "./dist/sync/react.js"
     }
   },
   "scripts": {
@@ -36,10 +52,21 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0"
   },
   "dependencies": {
     "@aws-blocks/bb-logger": "^0.2.0",
+    "@aws-blocks/core": "^0.5.0",
     "kysely": "^0.28.12"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }

@@ -17,8 +17,23 @@ import * as cr from 'aws-cdk-lib/custom-resources';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { RawRoute } from '@aws-blocks/core/cdk';
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import { Realtime } from '@aws-blocks/bb-realtime';
+import { shapePath, validateSyncOptions } from '@aws-blocks/data-common/sync';
 import type { DistributedDatabaseOptions } from './types.js';
-import { LAMBDA_MIGRATIONS_DIR, MIGRATION_LAMBDA_TIMEOUT_MINUTES, ENV_SANITIZE, sanitizeDbRoleName } from './constants.js';
+import {
+  LAMBDA_MIGRATIONS_DIR,
+  MIGRATION_LAMBDA_TIMEOUT_MINUTES,
+  ENV_SANITIZE,
+  SYNC_BELL_ID,
+  SYNC_TOKEN_SECRET_ID,
+  sanitizeDbRoleName,
+} from './constants.js';
+import { materializeSync } from './sync-infra.js';
+import { bellSchema } from './sync/bell-schema.js';
+import { createRouteTable } from './sync/routes.js';
 
 export class DistributedDatabase extends BuildingBlockScope {
   constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
@@ -129,6 +144,40 @@ export class DistributedDatabase extends BuildingBlockScope {
 
     // Ensure migrations run after cluster is created
     migrationCR.node.addDependency(cluster);
+
+    if (options?.sync) {
+      validateSyncOptions(this.fullId, options.sync, 'DistributedDatabase');
+      const shards = options.sync.shards ?? 1;
+      if (!Number.isInteger(shards) || shards < 1) {
+        throw new Error(`DistributedDatabase "${this.fullId}": sync.shards must be a positive integer.`);
+      }
+      // The CDC records are consumed by the block's own Lambda (it rings the
+      // shape bells), so sync needs a Lambda compute.
+      const compute = this.compute;
+      if (!LambdaCompute.isLambdaCompute(compute)) {
+        throw new Error(`DistributedDatabase "${this.fullId}": sync currently supports only a Lambda compute.`);
+      }
+      const sync = materializeSync(this, {
+        fullId: this.fullId,
+        cluster,
+        consumer: compute.fn,
+        shards,
+        logRetention: this.defaults.logRetention,
+      });
+      // Tables must exist before CDC starts, so a fresh stack's first records are for real tables.
+      sync.cdcStream.node.addDependency(migrationCR);
+      // Same child ids as the runtime: the bell channel and the token secret.
+      new Realtime(this, SYNC_BELL_ID, { namespaces: { bell: Realtime.namespace(bellSchema) } });
+      new AppSetting(this, SYNC_TOKEN_SECRET_ID, { secret: true });
+      // The bell route index (equality routing), read and written by the app Lambda.
+      createRouteTable(this);
+      // Register the shape endpoint at synth too, so Hosting routes it to the API.
+      new RawRoute(this, 'sync-shape', { method: 'POST', path: shapePath(this), handler: async () => {} });
+    }
+  }
+
+  shape(..._args: unknown[]): never {
+    return synthGuard('DistributedDatabase', 'shape');
   }
 
   /**
@@ -156,4 +205,5 @@ function hashMigrationsDir(dir: string): string {
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
 export { DistributedDatabaseErrors } from './errors.js';
-export type { DistributedDatabaseOptions } from './types.js';
+export type { DistributedDatabaseOptions, DistributedSyncOptions, TransactionOptions } from './types.js';
+export type { Shape, ShapeDescriptor, ShapeOptions } from '@aws-blocks/data-common/sync';

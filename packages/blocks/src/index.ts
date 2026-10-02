@@ -247,8 +247,8 @@ export type {
  * Package: `@aws-blocks/bb-data`
  * Full docs: `README.md` in the package directory above.
  */
-export { Database, DatabaseErrors, currentTxid, fromExisting, sql } from '@aws-blocks/bb-data';
-export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
+export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
+export type { DistributedDatabaseOptions, DistributedSyncOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
 /**
  * **Serverless SQL database backed by Aurora DSQL.**
  *
@@ -257,6 +257,7 @@ export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks
  * subset — no foreign keys, RLS, triggers, or views. Transactions use
  * optimistic concurrency control (OCC) and may conflict at commit.
  * For full PostgreSQL with FK/RLS/triggers, use `Database`.
+ * Supports live sync (`sync` + `db.shape()`) over DSQL change data capture.
  *
  * Package: `@aws-blocks/bb-distributed-data`
  * Full docs: `README.md` in the package directory above.

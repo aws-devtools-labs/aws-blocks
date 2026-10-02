@@ -50,9 +50,11 @@ describe('aws-blocks.vendorize map', () => {
       // is the internal default compute — CDK-only and not customer-instantiable
       // — so it has no public symbol to vendorize. `hosting` is the CDK hosting
       // library whose value API is re-exported through core/blocks — infra, not a BB.
+      // `data-common` is the shared SQL/sync layer (re-exported for `./react`).
       if (
         dep.endsWith('/core') ||
         dep.endsWith('/auth-common') ||
+        dep.endsWith('/data-common') ||
         dep.endsWith('/bb-lambda-compute') ||
         dep.endsWith('/hosting')
       )

@@ -13,7 +13,7 @@
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { SignatureV4 } from '@smithy/signature-v4';
 import type { BlocksContext } from '@aws-blocks/core';
-import { CLIENT_PROTOCOL_PARAMS, ELECTRIC_EXPOSED_HEADERS, claimsToElectricParams } from './shape-claims.js';
+import { CLIENT_PROTOCOL_PARAMS, ELECTRIC_EXPOSED_HEADERS, claimsToElectricParams, electricSubsetParams } from './shape-claims.js';
 import type { ShapeClaims } from './shape-claims.js';
 
 /** Keep under the 28 s HTTP deadline guard; Electric long-polls for 20 s. */
@@ -60,6 +60,10 @@ export async function forwardToElectric(
     const value = incoming.get(name);
     if (value !== null) params.set(name, value);
   }
+  // A snapshot request: compile the client's structured query here, so only
+  // server-built SQL reaches Electric. Throws ShapeInvalid for a bad query.
+  const subset = electricSubsetParams(claims, incoming);
+  for (const [name, value] of subset ?? []) params.set(name, value);
   params.set('secret', config.secret);
   params.sort();
   upstream.search = params.toString();

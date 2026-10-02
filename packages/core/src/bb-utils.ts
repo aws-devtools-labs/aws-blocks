@@ -14,3 +14,7 @@ export { constantTimeEquals } from './common/crypto.js';
 // Defined in the config module (it owns the config-key contract), re-exported
 // here so BB authors get it alongside the other BB utilities.
 export { sanitizeConfigKey } from './common/config.js';
+// RPC response hints: out-of-band facts for a Building Block's client middleware.
+export { addResponseHint, runWithResponseHints } from './response-hints.js';
+export { RESPONSE_HINTS_HEADER, decodeResponseHints } from './response-hints-codec.js';
+export type { ResponseHints } from './response-hints-codec.js';

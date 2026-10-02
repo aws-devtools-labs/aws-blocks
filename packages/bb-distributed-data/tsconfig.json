@@ -13,6 +13,21 @@
     },
     {
       "path": "../bb-logger"
+    },
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../bb-app-setting"
+    },
+    {
+      "path": "../bb-lambda-compute"
+    },
+    {
+      "path": "../bb-realtime"
+    },
+    {
+      "path": "../bb-distributed-table"
     }
   ]
 }

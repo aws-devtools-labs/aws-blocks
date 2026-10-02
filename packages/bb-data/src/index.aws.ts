@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { RawRoute, Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { ApiError, RawRoute, Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import type { ScopeParent } from '@aws-blocks/core';
 import { DataApiEngine } from './engines/data-api-engine.js';
@@ -24,7 +24,9 @@ import {
   verifyToken,
 } from './sync/shape-claims.js';
 import { forwardToElectric } from './sync/aws-proxy.js';
+import { DatabaseErrors } from './errors.js';
 import { LiveShape } from './sync/live-shape.js';
+import { TxidHints } from './sync/write-hints.js';
 import type { Transaction, SqlQuery } from '@aws-blocks/data-common';
 import type { TableSchema, CrudOptions, CrudMethods, TableTypeMeta } from './crud/types.js';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -48,6 +50,8 @@ export class Database extends Scope {
   private _basePromise: Promise<RLSEnabledDatabase> | null = null;
   private options?: DatabaseOptions;
   private syncSecret: Promise<string> | null = null;
+  /** Read-your-writes hints for writes to synced tables (sync only). */
+  private readonly txidHints: TxidHints | null = null;
   private secretsClient: SecretsManagerClient | null = null;
 
   /** @internal Logger for internal operations. Defaults to error-level when not provided. */
@@ -67,6 +71,7 @@ export class Database extends Scope {
       validateSyncOptions(this.fullId, options.sync);
       this.registerShapeRoute(envName);
       this.registerClientMiddleware('@aws-blocks/bb-data/sync-client');
+      this.txidHints = new TxidHints(this, options.sync.tables);
     }
   }
 
@@ -112,7 +117,13 @@ export class Database extends Scope {
         }
         const electricUrl = process.env[`${ENV_VAR_PREFIX}_${envName}_SYNC_URL`];
         if (!electricUrl) throw new Error(`${ENV_VAR_PREFIX}_${envName}_SYNC_URL is not set`);
-        await forwardToElectric(context, verdict.claims, { electricUrl, secret });
+        try {
+          await forwardToElectric(context, verdict.claims, { electricUrl, secret });
+        } catch (e: unknown) {
+          if (!(e instanceof ApiError)) throw e;
+          context.response.status = e.status;
+          context.response.send({ error: e.message, name: DatabaseErrors.ShapeInvalid });
+        }
       },
     });
   }
@@ -177,24 +188,30 @@ export class Database extends Scope {
     return new DataApiEngine({ resourceArn, secretArn: resolvedSecretArn, database, customUserAgent: this.buildUserAgentChain() });
   }
 
+  // With sync, writes to synced tables run in a transaction whose id goes to
+  // the API response, so open shapes have the write when the call resolves.
+
   async query<T>(query: SqlQuery): Promise<T[]> {
+    if (this.txidHints?.writes(query)) return this.transaction((tx) => tx.query<T>(query));
     const base = await this.resolveBase();
     return base.query<T>(query);
   }
 
   async queryOne<T>(query: SqlQuery): Promise<T | null> {
+    if (this.txidHints?.writes(query)) return this.transaction((tx) => tx.queryOne<T>(query));
     const base = await this.resolveBase();
     return base.queryOne<T>(query);
   }
 
   async execute(query: SqlQuery): Promise<{ rowCount: number }> {
+    if (this.txidHints?.writes(query)) return this.transaction((tx) => tx.execute(query));
     const base = await this.resolveBase();
     return base.execute(query);
   }
 
   async transaction<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> {
     const base = await this.resolveBase();
-    return base.transaction<T>(fn);
+    return this.txidHints ? this.txidHints.transaction(base, fn) : base.transaction<T>(fn);
   }
 
   /** Return an RLS-scoped database instance. */
@@ -292,7 +309,6 @@ export { RLSEnabledDatabase } from './database.js';
 export { DatabaseErrors } from './errors.js';
 export { createKyselyAdapter, sql } from '@aws-blocks/data-common';
 export { PgClientEngine } from './engines/pg-client-engine.js';
-export { currentTxid } from './sync/txid.js';
 export type { PgClientEngineConfig } from './engines/pg-client-engine.js';
 export type { SqlQuery } from '@aws-blocks/data-common';
 export type { RLSContext } from './rls.js';

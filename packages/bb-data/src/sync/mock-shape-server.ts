@@ -8,7 +8,7 @@
  * changes with row triggers into a changelog table instead, and serves the
  * subset of the protocol that `@electric-sql/client` uses for a live shape:
  *
- * - `offset=-1`: the initial rows, then `up-to-date`
+ * - `offset=-1`: the initial rows, `snapshot-end` (the snapshot they were read at), then `up-to-date`
  * - `offset=X&handle=H`: changes after X, then `up-to-date`
  * - `live=true`: hold the request up to {@link LIVE_TIMEOUT_MS} until a change arrives
  * - unknown handle: `409` + `must-refetch`, so the client resyncs from scratch
@@ -19,6 +19,9 @@
  * filter for the changed keys, so rows that move into or out of the filter
  * become inserts or deletes, as they do on AWS.
  *
+ * Positions (`lsn` on changes, `global_last_seen_lsn` on up-to-date) are
+ * changelog sequence numbers rather than WAL positions; they order the same way.
+ *
  * Differences from AWS (documented in DESIGN.md): updates carry the full row
  * (Electric sends only changed columns), the log is held in memory (a dev
  * server restart makes clients resync), and SSE live mode is not supported.
@@ -27,6 +30,7 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseEngine } from '@aws-blocks/data-common';
 import type { ShapeClaims } from './shape-claims.js';
+import { compileSnapshotQuery } from '@aws-blocks/data-common/sync';
 
 /** How long a live request waits for a change before returning `up-to-date`. */
 export const LIVE_TIMEOUT_MS = 20_000;
@@ -104,8 +108,15 @@ export class MockShapeServer {
   /** Serve one shape request whose token has already been verified. */
   async serve(claims: ShapeClaims, query: URLSearchParams, signal?: AbortSignal): Promise<ShapeResponse> {
     const engine = await this.getEngine();
-    const definitionKey = JSON.stringify([claims.t, claims.w ?? '', claims.p ?? [], claims.c ?? [], claims.k]);
+    const definitionKey = JSON.stringify([claims.t, claims.w ?? '', claims.p ?? [], claims.c ?? [], claims.k, claims.m ?? '', claims.q ?? []]);
     const offsetParam = query.get('offset') ?? '-1';
+
+    // A snapshot request (changes-only shapes): the rows of the shape that match
+    // the client's query, compiled on the server like on AWS.
+    if (query.get('subset__where') !== null) {
+      const state = await this.getOrCreate(engine, definitionKey, claims);
+      return this.serveSubset(engine, state, query);
+    }
 
     if (offsetParam === '-1') {
       const state = await this.getOrCreate(engine, definitionKey, claims);
@@ -155,7 +166,12 @@ export class MockShapeServer {
     return {
       status: 200,
       headers,
-      body: [...entries.map((entry) => entry.message), { headers: { control: 'up-to-date' } }],
+      // up-to-date carries the position the log is caught up to.
+      // The mock's positions are changelog sequence numbers.
+      body: [
+        ...entries.map((entry) => entry.message),
+        { headers: { control: 'up-to-date', global_last_seen_lsn: String(state.lastSeq) } },
+      ],
     };
   }
 
@@ -168,6 +184,7 @@ export class MockShapeServer {
     if (existing) return existing;
 
     const primaryKey = await this.installCapture(engine, claims.t);
+    for (const table of claims.d ?? []) await this.installCapture(engine, table);
     if (primaryKey !== claims.k) {
       throw new Error(
         `Shape key "${claims.k}" is not the primary key of "${claims.t}" (found "${primaryKey}"). ` +
@@ -184,6 +201,9 @@ export class MockShapeServer {
       `SELECT COALESCE(MAX(seq), 0) AS seq FROM ${CHANGES_TABLE}`,
     );
     const baseSeq = Number(seq);
+    // End the initial rows with the snapshot they were read at,
+    // so clients can tell which transactions they include.
+    const [{ snapshot }] = await engine.query<{ snapshot: string }>('SELECT pg_current_snapshot()::text AS snapshot');
     const rows = await this.selectRows(engine, claims, columns);
 
     const handle = `${createHash('sha256').update(definitionKey).digest('hex').slice(0, 12)}-${Date.now()}`;
@@ -202,45 +222,71 @@ export class MockShapeServer {
     rows.forEach((row, i) => {
       const key = String(row[claims.k]);
       state.keys.add(key);
+      // Changes-only shapes start empty: rows arrive through snapshots and changes.
+      if (claims.m === 'c') return;
       state.log.push({
         offset: [baseSeq, i],
         message: { key: this.messageKey(claims.t, key), value: row, headers: { operation: 'insert' } },
       });
+    });
+    const [xmin, xmax, xip] = snapshot.split(':');
+    if (claims.m !== 'c') state.log.push({
+      offset: [baseSeq, rows.length],
+      message: {
+        headers: { control: 'snapshot-end', xmin, xmax, xip_list: xip ? xip.split(',').filter(Boolean) : [] },
+      },
     });
     this.shapes.set(definitionKey, state);
     this.byHandle.set(handle, state);
     return state;
   }
 
-  /** Fold changelog rows newer than `state.lastSeq` into the shape's log. */
+  /**
+   * Fold changelog rows newer than `state.lastSeq` into the shape's log. A
+   * change to a table the filter reads in a subquery (`claims.d`) can move any
+   * row in or out, so it re-checks the whole shape.
+   */
   private catchUp(engine: DatabaseEngine, state: ShapeState): Promise<void> {
     const run = state.lock.then(async () => {
-      const changes = await engine.query<{ seq: string | number; pk: string; txid: string | number }>(
-        `SELECT seq, pk, txid FROM ${CHANGES_TABLE} WHERE tbl = $1 AND seq > $2 ORDER BY seq`,
-        [state.claims.t, state.lastSeq],
+      const tables = [state.claims.t, ...(state.claims.d ?? [])];
+      const changes = await engine.query<{ seq: string | number; tbl: string; pk: string; txid: string | number }>(
+        `SELECT seq, tbl, pk, txid FROM ${CHANGES_TABLE}
+          WHERE tbl IN (SELECT jsonb_array_elements_text($1::jsonb)) AND seq > $2 ORDER BY seq`,
+        [JSON.stringify(tables), state.lastSeq],
       );
       if (changes.length === 0) return;
 
       const seq = Number(changes[changes.length - 1].seq);
-      const changedKeys = [...new Set(changes.map((change) => change.pk))];
       const txids = [...new Set(changes.map((change) => Number(change.txid)))];
-      const current = await this.selectRows(engine, state.claims, state.columns, changedKeys);
+      const dependencyChanged = changes.some((change) => change.tbl !== state.claims.t);
+      const changedKeys = dependencyChanged
+        ? null
+        : [...new Set(changes.filter((change) => change.tbl === state.claims.t).map((change) => change.pk))];
+      const current = await this.selectRows(engine, state.claims, state.columns, changedKeys ?? undefined);
       const currentByKey = new Map(current.map((row) => [String(row[state.claims.k]), row]));
+      const candidates = changedKeys ?? [...new Set([...state.keys, ...currentByKey.keys()])];
+      const rootKeys = new Set(changes.filter((change) => change.tbl === state.claims.t).map((change) => change.pk));
 
       let minor = 0;
-      for (const key of changedKeys) {
+      for (const key of candidates) {
         const row = currentByKey.get(key);
         let message: Record<string, unknown> | null = null;
         if (row) {
-          const operation = state.keys.has(key) ? 'update' : 'insert';
+          const wasIn = state.keys.has(key);
+          // On a dependency change, rows already in the shape and not written themselves are unchanged.
+          if (wasIn && !rootKeys.has(key) && changedKeys === null) continue;
           state.keys.add(key);
-          message = { key: this.messageKey(state.claims.t, key), value: row, headers: { operation, txids } };
+          message = {
+            key: this.messageKey(state.claims.t, key),
+            value: row,
+            headers: { operation: wasIn ? 'update' : 'insert', txids, lsn: String(seq) },
+          };
         } else if (state.keys.has(key)) {
           state.keys.delete(key);
           message = {
             key: this.messageKey(state.claims.t, key),
             value: { [state.claims.k]: key },
-            headers: { operation: 'delete', txids },
+            headers: { operation: 'delete', txids, lsn: String(seq) },
           };
         }
         if (message) state.log.push({ offset: [seq, minor++], message });
@@ -249,6 +295,49 @@ export class MockShapeServer {
     });
     state.lock = run.catch(() => {});
     return run;
+  }
+
+  /** Answer a snapshot request: `{ metadata, data }`, with the snapshot it was read at. */
+  private async serveSubset(engine: DatabaseEngine, state: ShapeState, query: URLSearchParams): Promise<ShapeResponse> {
+    const { claims } = state;
+    let packed: unknown;
+    try {
+      packed = JSON.parse(query.get('subset__where') ?? '');
+    } catch {
+      packed = undefined;
+    }
+    const base = claims.p ?? [];
+    const compiled = compileSnapshotQuery(packed, claims.q ?? claims.c ?? state.columns, undefined, base.length + 1, claims.k, quoteTable(claims.t));
+    const filters = [claims.w ? `(${claims.w})` : '', compiled.where ?? ''].filter(Boolean);
+    const select = state.columns.map((column) => `${quoteIdent(column)}::text AS ${quoteIdent(column)}`).join(', ');
+    const sqlText =
+      `SELECT ${select} FROM ${quoteTable(claims.t)}` +
+      (filters.length > 0 ? ` WHERE ${filters.join(' AND ')}` : '') +
+      (compiled.orderBy ? ` ORDER BY ${compiled.orderBy}` : '') +
+      (compiled.limit !== null ? ` LIMIT ${compiled.limit}` : '') +
+      (compiled.offset !== null ? ` OFFSET ${compiled.offset}` : '');
+    const [{ snapshot }] = await engine.query<{ snapshot: string }>('SELECT pg_current_snapshot()::text AS snapshot');
+    const [{ seq }] = await engine.query<{ seq: string | number }>(`SELECT COALESCE(MAX(seq), 0) AS seq FROM ${CHANGES_TABLE}`);
+    const rows = await engine.query<Record<string, string | null>>(sqlText, [...base, ...compiled.params]);
+    const [xmin, xmax, xip] = snapshot.split(':');
+    return {
+      status: 200,
+      headers: { 'electric-schema': JSON.stringify(state.schema) },
+      body: {
+        metadata: {
+          snapshot_mark: Math.floor(Math.random() * 2 ** 31),
+          database_lsn: String(seq),
+          xmin,
+          xmax,
+          xip_list: xip ? xip.split(',').filter(Boolean) : [],
+        },
+        data: rows.map((row) => ({
+          key: this.messageKey(claims.t, String(row[claims.k])),
+          value: row,
+          headers: { operation: 'insert' },
+        })),
+      },
+    };
   }
 
   /** Rows of the shape as Postgres text values, optionally limited to `keys`. */

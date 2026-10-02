@@ -37,19 +37,29 @@
       "aws-runtime": "./dist/index.aws.js",
       "types": "./dist/index.mock.d.ts",
       "default": "./dist/index.mock.js"
+    },
+    "./sync-client": {
+      "types": "./dist/sync/client.d.ts",
+      "default": "./dist/sync/client.js"
     }
   },
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs DistributedDatabase",
     "build": "tsc --build",
-    "test": "node --test 'dist/**/*.test.js'"
+    "test": "node --test 'dist/**/*.test.js' && node --conditions=cdk --test dist/sync-infra.cdk.spec.js"
   },
   "dependencies": {
+    "@aws-blocks/bb-app-setting": "^0.3.0",
+    "@aws-blocks/bb-distributed-table": "^0.2.0",
+    "@aws-blocks/bb-lambda-compute": "^0.5.0",
+    "@aws-blocks/bb-logger": "^0.2.0",
+    "@aws-blocks/bb-realtime": "^0.2.1",
     "@aws-blocks/core": "^0.5.0",
     "@aws-blocks/data-common": "^0.1.5",
-    "@aws-blocks/bb-logger": "^0.2.0",
+    "@aws-sdk/client-dsql": "^3.1145.0",
     "@aws-sdk/dsql-signer": "^3.700.0",
     "@electric-sql/pglite": "^0.5.8",
+    "@standard-schema/spec": "^1.1.0",
     "pg": "^8.13.0"
   },
   "devDependencies": {

@@ -7,6 +7,8 @@ import { defineConfig, devices } from '@playwright/test';
 // sandbox: `npm run sandbox` — deploys Aurora + Electric, then serves the
 //          frontend locally with API calls proxied to AWS. The first deploy
 //          takes ~15 minutes (Aurora cluster + Fargate service).
+// SYNC_TODOS_ENGINE=dsql runs the same tests on DistributedDatabase (Aurora
+// DSQL + CDC); the dev server and sandbox inherit the variable.
 const sandbox = process.env.BLOCKS_TEST_ENV === 'sandbox';
 
 export default defineConfig({

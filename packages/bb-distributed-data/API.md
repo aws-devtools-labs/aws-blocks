@@ -9,6 +9,9 @@ import { createKyselyAdapter } from '@aws-blocks/data-common';
 import { DatabaseEngine } from '@aws-blocks/data-common';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
+import { Shape } from '@aws-blocks/data-common/sync';
+import { ShapeDescriptor } from '@aws-blocks/data-common/sync';
+import { ShapeOptions } from '@aws-blocks/data-common/sync';
 import { sql } from '@aws-blocks/data-common';
 import { SqlQuery } from '@aws-blocks/data-common';
 import { Transaction } from '@aws-blocks/data-common';
@@ -30,6 +33,7 @@ export class DistributedDatabase extends Scope {
     query<T>(query: SqlQuery): Promise<T[]>;
     // (undocumented)
     queryOne<T>(query: SqlQuery): Promise<T | null>;
+    shape<T>(options: ShapeOptions<T>): Promise<Shape<T>>;
     transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T>;
 }
 
@@ -41,6 +45,7 @@ export const DistributedDatabaseErrors: {
     readonly UniqueConstraintViolation: "UniqueConstraintViolationException";
     readonly SerializationFailure: "SerializationFailureException";
     readonly TransactionRowLimitExceeded: "TransactionRowLimitExceededException";
+    readonly ShapeInvalid: "ShapeInvalidException";
 };
 
 // @public (undocumented)
@@ -48,7 +53,20 @@ export interface DistributedDatabaseOptions {
     logger?: ChildLogger;
     migrationsPath?: string;
     removalPolicy?: 'destroy' | 'retain';
+    sync?: DistributedSyncOptions;
 }
+
+// @public
+export interface DistributedSyncOptions {
+    shards?: number;
+    tables: string[];
+}
+
+export { Shape }
+
+export { ShapeDescriptor }
+
+export { ShapeOptions }
 
 export { sql }
 

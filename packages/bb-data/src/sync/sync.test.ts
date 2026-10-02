@@ -17,7 +17,10 @@ import { Scope, matchRoute } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import { isBlocksError } from '@aws-blocks/core';
 import { sql } from '@aws-blocks/data-common';
-import { Database, DatabaseErrors, currentTxid } from '../index.mock.js';
+import { Database, DatabaseErrors } from '../index.mock.js';
+import { decodeResponseHints, runWithResponseHints } from '@aws-blocks/core/bb-utils';
+import { settle } from '@aws-blocks/data-common/sync-client';
+import { SETTLE_TIMEOUT_MS } from './live-shape.js';
 import type { Shape } from '../types.js';
 import { LiveShape } from './live-shape.js';
 import { buildClaims, signClaims, verifyToken, deriveTokenKey, claimsToElectricParams, shapePath } from './shape-claims.js';
@@ -97,6 +100,13 @@ describe('mock shape server', () => {
      );`,
   );
   const db = new Database(scope, 'db', { migrationsPath: migrations, sync: { tables: ['todos'] } });
+  const boardMigrations = mkdtempSync(join(tmpdir(), 'bb-data-boards-'));
+  writeFileSync(
+    join(boardMigrations, '001_boards.sql'),
+    `CREATE TABLE members (id TEXT PRIMARY KEY, board_id TEXT NOT NULL, user_id TEXT NOT NULL);
+     CREATE TABLE cards (id TEXT PRIMARY KEY, board_id TEXT NOT NULL, title TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0, created_by TEXT);`,
+  );
+  const boards = new Database(scope, 'boards', { migrationsPath: boardMigrations, sync: { tables: ['cards', 'members'] } });
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
     const matched = matchRoute(req.method ?? 'GET', url.pathname);
@@ -173,8 +183,11 @@ describe('mock shape server', () => {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     await (await db.getEngine()).destroy();
+    await (await boards.getEngine()).destroy();
     rmSync(`.bb-data/${db.fullId}`, { recursive: true, force: true });
+    rmSync(`.bb-data/${boards.fullId}`, { recursive: true, force: true });
     rmSync(migrations, { recursive: true, force: true });
+    rmSync(boardMigrations, { recursive: true, force: true });
   });
 
   test('syncs the initial rows that match the filter, with parsed types', async () => {
@@ -214,15 +227,65 @@ describe('mock shape server', () => {
     assert.deepStrictEqual(shape.rows, [{ id: 'b', title: 'still other' }]);
   });
 
-  test('resolves waitForTxid when the write syncs', async () => {
+  /** Run `fn` as an API call does: collect its response hints, then settle open shapes as the client does. */
+  const asApiCall = async <T>(fn: () => Promise<T>) => {
+    const { result, header } = await runWithResponseHints(fn);
+    const hints = decodeResponseHints(header);
+    const started = Date.now();
+    await settle(hints);
+    return { result, hints, settledMs: Date.now() - started };
+  };
+
+  test('a write in an API call reports its txid; the shape has the row when the call resolves', async () => {
     const shape = await open(await db.shape<Todo>({ table: 'todos', where: sql`owner_id = ${'u3'}` }));
     await shape.ready;
-    const txid = await db.transaction(async (tx) => {
-      await tx.execute(sql`INSERT INTO todos (id, owner_id, title) VALUES ('d', 'u3', 'mine')`);
-      return currentTxid(tx);
-    });
-    await shape.waitForTxid(txid);
+    const { hints } = await asApiCall(() =>
+      db.transaction(async (tx) => {
+        await tx.execute(sql`INSERT INTO todos (id, owner_id, title) VALUES ('d', 'u3', 'mine')`);
+      }),
+    );
+    const [hint] = hints.values['data/sync'] as { txids: string[]; tables: string[] }[];
+    assert.strictEqual(hint.txids.length, 1);
+    assert.deepStrictEqual(hint.tables, ['todos']);
     assert.strictEqual(shape.get('d')?.title, 'mine');
+  });
+
+  test('a write outside a transaction is tracked too; a read reports nothing', async () => {
+    const shape = await open(await db.shape<Todo>({ table: 'todos', where: sql`owner_id = ${'u3'}` }));
+    await shape.ready;
+    await asApiCall(() => db.execute(sql`UPDATE todos SET title = 'mine!' WHERE id = 'd'`));
+    assert.strictEqual(shape.get('d')?.title, 'mine!');
+    const read = await asApiCall(() => db.query(sql`SELECT * FROM todos`));
+    assert.deepStrictEqual(read.hints.values, {});
+  });
+
+  test('with several shapes open, a write in one does not stall on the others', async () => {
+    const mine = await open(await db.shape<Todo>({ table: 'todos', where: sql`owner_id = ${'u5'}` }));
+    const other = await open(await db.shape<Todo>({ table: 'todos', where: sql`owner_id = ${'u6'}` }));
+    await Promise.all([mine.ready, other.ready]);
+    const { settledMs } = await asApiCall(() => db.execute(sql`INSERT INTO todos (id, owner_id, title) VALUES ('g', 'u5', 'mine')`));
+    assert.strictEqual(mine.get('g')?.title, 'mine');
+    assert.ok(settledMs < SETTLE_TIMEOUT_MS / 2, `settled in ${settledMs} ms`);
+  });
+
+  test('a write no open shape sees gives up after the timeout', async () => {
+    const shape = await open(await db.shape<Todo>({ table: 'todos', where: sql`owner_id = ${'u3'}` }));
+    await shape.ready;
+    const { settledMs } = await asApiCall(() => db.execute(sql`INSERT INTO todos (id, owner_id, title) VALUES ('e', 'u4', 'theirs')`));
+    assert.ok(settledMs >= SETTLE_TIMEOUT_MS - 50 && settledMs < SETTLE_TIMEOUT_MS + 1000, `settled in ${settledMs} ms`);
+    assert.strictEqual(shape.get('e'), undefined);
+  });
+
+  test('a shape opened after the write sees it in its snapshot', async () => {
+    const { hints } = await runWithResponseHints(() => db.execute(sql`INSERT INTO todos (id, owner_id, title) VALUES ('f', 'u3', 'later')`)).then(
+      ({ header }) => ({ hints: decodeResponseHints(header) }),
+    );
+    const shape = await open(await db.shape<Todo>({ table: 'todos', where: sql`owner_id = ${'u3'}` }));
+    await shape.ready;
+    const started = Date.now();
+    await settle(hints);
+    assert.ok(Date.now() - started < 200, 'visible in the snapshot: no wait');
+    assert.strictEqual(shape.get('f')?.title, 'later');
   });
 
   test('rejects requests without a valid token', async () => {
@@ -249,4 +312,81 @@ describe('mock shape server', () => {
     await assert.rejects(shape.ready, /server-side handle/);
     assert.deepStrictEqual(JSON.parse(JSON.stringify(shape)).__blocks, 'data/shape');
   });
+
+  interface Card {
+    id: string;
+    board_id: string;
+    title: string;
+    position: number;
+    created_by: string | null;
+  }
+
+  test('subquery filters: rows move in and out when the other table changes', async () => {
+    await boards.execute(sql`INSERT INTO cards (id, board_id, title) VALUES ('c1', 'b1', 'one'), ('c2', 'b2', 'two')`);
+    const shape = await open(
+      await boards.shape<Card>({ table: 'cards', where: sql`board_id IN (SELECT board_id FROM members WHERE user_id = ${'alice'})` }),
+    );
+    await shape.ready;
+    assert.deepStrictEqual(shape.rows, []);
+    await boards.execute(sql`INSERT INTO members (id, board_id, user_id) VALUES ('m1', 'b1', 'alice')`);
+    await until(shape, (rows) => rows.some((row) => row.id === 'c1'));
+    await boards.execute(sql`DELETE FROM members WHERE id = 'm1'`);
+    await until(shape, (rows) => rows.length === 0);
+  });
+
+  test('a filter reading an unsynced table is rejected', async () => {
+    await assert.rejects(
+      db.shape({ table: 'todos', where: sql`owner_id IN (SELECT user_id FROM admins)` }),
+      (e: unknown) => isBlocksError(e, DatabaseErrors.ShapeInvalid),
+    );
+  });
+
+  test('changes-only shapes: start empty, load pages with requestSnapshot, then stay live', async () => {
+    await boards.transaction(async (tx) => {
+      await tx.execute(sql`
+        INSERT INTO cards (id, board_id, title, position)
+        SELECT 'p' || g, 'paged', 'Card ' || g, g FROM generate_series(1, 30) AS g
+      `);
+    });
+    const shape = await open(
+      await boards.shape<Card>({ table: 'cards', where: sql`board_id = ${'paged'}`, mode: 'changes_only', queryableColumns: ['title', 'position'] }),
+    );
+    await shape.ready;
+    assert.deepStrictEqual(shape.rows, []);
+    const page = await shape.requestSnapshot({ orderBy: [{ field: 'position', direction: 'desc' }], limit: 5 });
+    assert.deepStrictEqual(
+      page.map((row) => row.position),
+      [30, 29, 28, 27, 26],
+    );
+    await until(shape, (rows) => rows.length === 5);
+    const search = await shape.requestSnapshot({ where: { title: { like: 'Card 1%' } }, orderBy: [{ field: 'position' }] });
+    assert.strictEqual(search.length, 11);
+    await until(shape, (rows) => rows.length === 16);
+
+    await boards.execute(sql`UPDATE cards SET title = 'Top' WHERE id = 'p30'`);
+    await until(shape, () => shape.get('p30')?.title === 'Top');
+    await boards.execute(sql`INSERT INTO cards (id, board_id, title, position) VALUES ('p31', 'paged', 'New', 31)`);
+    await until(shape, () => shape.get('p31') !== undefined);
+    await assert.rejects(shape.requestSnapshot({ where: { board_id: 'other' } as never }), (e: unknown) => e instanceof Error);
+  });
+
+  test('column mapping: rows use camelCase fields', async () => {
+    interface CamelCard {
+      id: string;
+      boardId: string;
+      createdBy: string | null;
+    }
+    await boards.execute(sql`INSERT INTO cards (id, board_id, title, created_by) VALUES ('m-1', 'mapped', 'Mapped', 'alice')`);
+    const shape = await open(
+      await boards.shape<CamelCard>({
+        table: 'cards',
+        where: sql`board_id = ${'mapped'}`,
+        columns: ['id', 'boardId', 'createdBy'],
+        columnMapping: 'snakeCamel',
+      }),
+    );
+    await shape.ready;
+    assert.deepStrictEqual(shape.get('m-1'), { id: 'm-1', boardId: 'mapped', createdBy: 'alice' });
+  });
+
 });

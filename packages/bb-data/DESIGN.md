@@ -103,12 +103,63 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
 `Database({ sync })` + `db.shape()` stream rows to the client. The wire protocol is
 [Electric](https://electric.ax)'s HTTP shape protocol. The client reads it with
 `@electric-sql/client` behind AWS Blocks' own `Shape<T>` interface (`src/sync/live-shape.ts`),
-so the sync engine can change without changes to app code.
+so the sync engine can change without changes to app code. `DistributedDatabase`
+uses this: it implements the same `Shape<T>` on Aurora DSQL with a reconcile
+protocol and CDC (see `bb-distributed-data/DESIGN.md`). The engine-agnostic parts
+(the `Shape` types, shape tokens, the `ShapeStore` base class, the client middleware,
+and the response-hint routing) live in `@aws-blocks/data-common`; `src/sync/shape-claims.ts`
+re-exports them and adds the Electric query mapping.
+
+### Read-your-writes
+
+When an API method writes to a synced table (through `db.query()`, `db.execute()`,
+or `db.transaction()`), the write runs in a transaction that reads
+`pg_current_xact_id()` before commit. After commit, the database adds a `data/sync`
+RPC response hint with the shape path, the tables, and the txid. The client
+middleware awaits, for every open shape on that table, evidence of the write:
+the txid in a change message's `txids`, or the txid visible
+in a `snapshot-end` snapshot (`isVisibleInSnapshot`). A shape the write doesn't
+touch never sees the txid, so once any shape has seen it at commit LSN L (Electric
+puts `lsn` on change messages), the others count as synced when they are caught up
+to L: a change with `lsn` ≥ L or an `up-to-date` with `global_last_seen_lsn` ≥ L.
+A shape behind L refreshes once (`forceDisconnectAndRefresh()`, a non-live request
+that ends with `up-to-date` at Electric's current LSN). If no open shape has the
+write, the wait ends after 1 second and the call resolves anyway.
+
+The writer does not send an LSN: it cannot read its own commit LSN
+(`pg_current_wal_lsn()` after commit is past it; inside the transaction it is
+before it). So only a shape that saw the txid can tell the others the LSN to reach.
+
+### Progressive loading, subqueries, mapping
+
+- **Changes-only shapes** (`mode: 'changes_only'`) pass `log=changes_only` to
+  Electric (from the token, not the client) and load rows with the Electric
+  client's own `requestSnapshot`, so its snapshot tracker drops live changes a
+  snapshot already includes. The client sends its structured `SnapshotQuery` as
+  JSON in `subset__where`; the shape endpoint compiles it (`compileSnapshotQuery`:
+  queryable columns only, bound values) into Electric's `subset__where`,
+  `subset__params`, `subset__order_by`, `subset__limit`, and `subset__offset`, and
+  sets `queryable_columns` from the token (always including the key). No client
+  SQL reaches the sync service. A `limit` without an order sorts by the key, so
+  pages are stable.
+- **Subqueries** in `where` are Electric's: it tracks the other tables and moves
+  rows in and out. Those tables must be in `sync.tables` (they must be in the
+  publication); `buildClaims` checks. Electric reports a move-out not as a delete
+  per row but as a `move-out` event with tag patterns, against the `tags` it puts
+  on each row's change messages (`removed_tags`, and `active_conditions` for
+  filters in disjunctive normal form). `LiveShape` keeps the tags (`move-tags.ts`,
+  see that file for the rules) and deletes the rows
+  whose tags no longer hold; `move-in` re-activates conditions. The mock sends
+  plain deletes instead.
+- **Column mapping** (`columnMapping: 'snakeCamel'`) maps row keys in `LiveShape`;
+  snapshot query fields are mapped to columns before sending. The Electric client's
+  own `columnMapper` is not used, because it would rewrite the packed query.
+- After a `must-refetch`, a changes-only shape replays its snapshot queries.
 
 ### Authorization: gatekeeper tokens
 
 The API method that returns a shape is the only authorization point. `db.shape()`
-signs a token (`src/sync/shape-claims.ts`) with the table, row filter (`$n`
+signs a token (`@aws-blocks/data-common/sync`, re-exported by `src/sync/shape-claims.ts`) with the table, row filter (`$n`
 placeholders), filter parameters, columns, key, owning Database, and expiry. The
 shape endpoint verifies the HMAC-SHA256 signature and the expiry, then takes the
 shape definition **only** from the token. From the client it accepts only Electric
@@ -191,7 +242,10 @@ emulates the shape protocol instead:
 | Shape log | In memory; a dev-server restart makes clients resync (409 → refetch) | On Electric's disk; a deploy makes clients resync | Same client behavior |
 | Live mode | Long poll, 100 ms change detection | Long poll, change pushed by replication | Mock latency is slightly higher |
 | Token key | Fixed local key | Derived from the Electric secret | Local tokens grant access only to the local dev server |
-| `txids` on messages | All transaction ids in the catch-up batch | The row's transaction | `waitForTxid` resolves the same way |
+| `txids` on messages | All transaction ids in the catch-up batch | The row's transaction | Read-your-writes resolves the same way |
+| `lsn` / `global_last_seen_lsn` | Changelog sequence numbers | Commit WAL positions | Same order; used only to compare positions |
+| Subquery dependencies | A change to a dependency table re-checks the whole shape | Electric moves only the affected rows | Same rows in the end |
+| Snapshot (`subset`) responses | Compiled the same way, run on PGlite | Run by Electric | Same `{ metadata, data }` shape |
 | Primary key check | Error on the first request if `key` is not the single-column PK | Not checked; Electric needs a PK | Mock catches it earlier |
 
 ## Schema Migrations (External Databases)

@@ -4,6 +4,8 @@
 export type BlocksContext = any;
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = any;
 import { encodeRpcRequest, decodeRpcResponse } from '../rpc.js';
+import { RESPONSE_HINTS_HEADER, decodeResponseHints } from '../response-hints-codec.js';
+import type { ResponseHints } from '../response-hints-codec.js';
 
 const IS_SSR = typeof window === 'undefined';
 
@@ -196,7 +198,17 @@ export interface BlocksMiddleware {
    * expired token by calling the originating method again).
    */
   onResponse?: (data: unknown, request: BlocksRequest) => unknown;
+  /**
+   * Runs after `onResponse`, before the API call resolves, and is awaited.
+   * Receives the response hints the server attached (see `addResponseHint` in
+   * `@aws-blocks/core/bb-utils`), so a Building Block can finish client-side
+   * work the call implies first, e.g. sync the rows a write changed into open
+   * shapes. Keep it short: the caller is waiting.
+   */
+  onSettled?: (data: unknown, request: BlocksRequest, hints: ResponseHints) => void | Promise<void>;
 }
+
+export type { ResponseHints } from '../response-hints-codec.js';
 
 const middlewares: BlocksMiddleware[] = [];
 
@@ -240,6 +252,12 @@ function processResponse(data: unknown, request: BlocksRequest): unknown {
     }
   }
   return data;
+}
+
+async function settleResponse(data: unknown, request: BlocksRequest, hints: ResponseHints): Promise<void> {
+  for (const mw of middlewares) {
+    if (mw.onSettled) await mw.onSettled(data, request, hints);
+  }
 }
 
 /**
@@ -325,7 +343,9 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
         
         const rpcBody = await response.json();
         const result = decodeRpcResponse(rpcBody); // throws ApiError on RPC error
-        return processResponse(result, request);
+        const data = processResponse(result, request);
+        await settleResponse(data, request, decodeResponseHints(response.headers.get(RESPONSE_HINTS_HEADER)));
+        return data;
       };
     }
   });

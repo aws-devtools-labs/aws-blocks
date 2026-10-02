@@ -3,6 +3,8 @@
 
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { runWithResponseHints } from './response-hints.js';
+import { RESPONSE_HINTS_HEADER } from './response-hints-codec.js';
 import { ApiError } from './errors.js';
 import { BLOCKS_RPC_PREFIX, CLIENT_USER_AGENT_HEADER } from './constants.js';
 import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
@@ -617,7 +619,11 @@ function createHandler(backend: any) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId) };
       }
 
-      const result = await apiMethods[method](...args);
+      const { result, header: hints } = await runWithResponseHints(() => Promise.resolve(apiMethods[method](...args)));
+      if (hints) {
+        responseHeaders.set(RESPONSE_HINTS_HEADER, hints);
+        responseHeaders.set('Access-Control-Expose-Headers', RESPONSE_HINTS_HEADER);
+      }
 
       return {
         statusCode: responseStatus,

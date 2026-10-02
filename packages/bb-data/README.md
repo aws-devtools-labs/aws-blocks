@@ -153,7 +153,7 @@ applies inserts, updates, and deletes as they happen. Reads are local and
 synchronous, so they never wait on the network.
 
 ```typescript
-import { ApiNamespace, Database, currentTxid, sql } from '@aws-blocks/blocks';
+import { ApiNamespace, Database, sql } from '@aws-blocks/blocks';
 
 const db = new Database(scope, 'main', {
   migrationsPath: './aws-blocks/migrations',
@@ -167,13 +167,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return db.shape<Todo>({ table: 'todos', where: sql`owner_id = ${user.userId}` });
   },
 
-  // Writes: ordinary methods. Return the transaction id so the client can wait for it.
+  // Writes: ordinary methods. When the call returns, open shapes have the write.
   async addTodo(title: string) {
     const user = await auth.requireAuth(context);
-    return db.transaction(async (tx) => {
-      await tx.execute(sql`INSERT INTO todos (id, owner_id, title) VALUES (${crypto.randomUUID()}, ${user.userId}, ${title})`);
-      return { txid: await currentTxid(tx) };
-    });
+    await db.execute(sql`INSERT INTO todos (id, owner_id, title) VALUES (${crypto.randomUUID()}, ${user.userId}, ${title})`);
   },
 }));
 ```
@@ -187,8 +184,7 @@ await todos.ready;                        // initial rows have arrived
 todos.subscribe((rows) => render(rows));  // after every change
 todos.get('todo-1');                      // local lookup by primary key
 
-const { txid } = await api.addTodo('Buy milk');
-await todos.waitForTxid(txid);            // the write is now in `todos.rows`
+await api.addTodo('Buy milk');            // resolves with the row already in `todos.rows`
 
 // React: useSyncExternalStore(todos.subscribe, todos.getSnapshot)
 ```
@@ -201,14 +197,82 @@ await todos.waitForTxid(txid);            // the write is now in `todos.rows`
 | `isUpToDate` | `true` once the local copy has caught up. |
 | `subscribe(listener)` | Call `listener(rows)` after each change. Returns an unsubscribe function. |
 | `getSnapshot()` | The current `rows` array (for `useSyncExternalStore`). |
-| `waitForTxid(txid)` | Resolves when the write made in transaction `txid` has synced into this shape. |
+| `requestSnapshot(query)` | `'changes_only'` shapes: load the rows that match `query`; they stay live. Resolves with the loaded rows. |
 | `close()` | Stop syncing. |
 
 `db.shape()` options: `table` (must be in `sync.tables`), `where` (an `sql` tagged
-template; values are bound parameters), `columns` (must include the key), `key`
-(primary-key column, default `'id'`), and `ttlSeconds` (default 3600).
+template; values are bound parameters; may use subqueries), `columns` (must include
+the key), `key` (primary-key column, default `'id'`), `ttlSeconds` (default 3600),
+`mode` (`'full'` or `'changes_only'`), `queryableColumns`, and `columnMapping`.
 
-Syncing starts on the first `ready`, `subscribe()`, or `waitForTxid()`.
+Syncing starts on the first `ready` or `subscribe()`.
+
+**Your own writes.** An API call that writes to a synced table resolves only after
+the open shapes on that table have the write, so code after `await api.addTodo(...)`
+sees the new row in `shape.rows`. The database reads the write's transaction id
+before commit and sends it with the response; the client waits until each open
+shape on the written table has that transaction: the transaction appears in its
+changes or in a snapshot it received, or (for a shape the write doesn't touch) the
+shape is caught up past it. The
+wait is capped at 1 second: if no open shape contains the write, the call resolves
+then. Writes through `db.query()`, `db.execute()`, and `db.transaction()` are
+covered; writes through `db.crud()` and `db.withRLS()` are not, and reach shapes
+through the stream as usual.
+
+**React.** `useShape` opens a shape, re-renders on every change, and closes it when
+its dependencies change or the component unmounts:
+
+```tsx
+import { useShape } from '@aws-blocks/blocks/react';
+
+const { rows, shape, isLoading, error } = useShape(() => api.boardCards(boardId), [boardId]);
+```
+
+**Filters that read other tables.** A `where` may use subqueries. Rows move in and out
+of the shape when the other table changes, not only when the row itself does. Every
+table the filter reads must be in `sync.tables`.
+
+```typescript
+db.shape<Card>({
+  table: 'cards',
+  where: sql`board_id IN (SELECT board_id FROM members WHERE user_id = ${user.userId})`,
+});
+// Adding the user to `members` brings that board's cards into the shape.
+```
+
+**Large shapes: load what you need.** With `mode: 'changes_only'`, a shape starts empty.
+Load rows with `requestSnapshot()` (pagination, search, "load more"); loaded rows stay
+live, and every change to the shape arrives from then on. A snapshot query is
+structured, never SQL, and is always combined with the shape's own `where`, so it can
+only narrow the rows the API method authorized. Fields must be in `queryableColumns`
+(default: the shape's columns).
+
+```typescript
+// Backend
+return db.shape<Message>({
+  table: 'messages',
+  where: sql`channel_id = ${channelId}`,
+  mode: 'changes_only',
+  queryableColumns: ['sent_at', 'text'],
+});
+
+// Frontend
+const latest = await messages.requestSnapshot({ orderBy: [{ field: 'sent_at', direction: 'desc' }], limit: 50 });
+const older = await messages.requestSnapshot({ where: { sent_at: { lt: latest.at(-1)!.sent_at } }, orderBy: [{ field: 'sent_at', direction: 'desc' }], limit: 50 });
+const hits = await messages.requestSnapshot({ where: { text: { ilike: '%invoice%' } }, limit: 20 });
+```
+
+Operators: a value (equality), `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `like`,
+`ilike`, `isNull`, and `or: [...]`. `limit` is at most 10,000; a `limit` without
+`orderBy` sorts by the key. Loaded queries are replayed when the shape has to resync.
+
+**camelCase fields.** `columnMapping: 'snakeCamel'` maps `owner_id` to `ownerId` in rows.
+`columns`, `key`, `queryableColumns`, and snapshot queries then use field names;
+`where` stays SQL.
+
+**Schema changes.** After a migration changes a synced table, open shapes drop their
+rows and load them again in the new form, and changes-only shapes replay their
+snapshot queries.
 
 **Security.** Every shape is authorized by the API method that returns it. That
 method signs the table, row filter, and columns into an expiring token. The client

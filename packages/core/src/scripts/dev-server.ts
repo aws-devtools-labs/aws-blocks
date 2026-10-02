@@ -9,6 +9,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
+import { runWithResponseHints } from '../response-hints.js';
+import { RESPONSE_HINTS_HEADER } from '../response-hints-codec.js';
 import { writeClientCode } from './generate-client.js';
 import { ApiError } from '../errors.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, CLIENT_USER_AGENT_HEADER } from '../constants.js';
@@ -1232,7 +1234,11 @@ function handleApiRequest(
           return;
         }
 
-        const result = await apiMethods[rpcMethod](...args);
+        const { result, header: hints } = await runWithResponseHints(() => Promise.resolve(apiMethods[rpcMethod](...args)));
+        if (hints) {
+          responseHeaders.set(RESPONSE_HINTS_HEADER, hints);
+          responseHeaders.set('Access-Control-Expose-Headers', RESPONSE_HINTS_HEADER);
+        }
 
         const headerObj: Record<string, string | string[]> = {};
         for (const [key, value] of responseHeaders.entries()) {

@@ -7,6 +7,12 @@
 import { Kysely } from 'kysely';
 
 // @public
+export function classifyWrite(sql: string, tables: string[]): {
+    table: string;
+    plain: boolean;
+} | null;
+
+// @public
 export function createKyselyAdapter<T>(db: {
     getEngine(): DatabaseEngine | Promise<DatabaseEngine>;
 }): Kysely<T>;
@@ -44,6 +50,20 @@ export interface DatabaseEngine {
 // @public
 export const DOLLAR_QUOTE_TAG_RE: RegExp;
 
+// @public
+export type FieldCondition<V> = V | {
+    eq?: V;
+    ne?: V;
+    lt?: V;
+    lte?: V;
+    gt?: V;
+    gte?: V;
+    in?: readonly V[];
+    like?: string;
+    ilike?: string;
+    isNull?: boolean;
+};
+
 // Warning: (ae-internal-missing-underscore) The name "initializePgliteWithRetry" should be prefixed with an underscore because the declaration is marked as @internal
 //
 // @internal
@@ -79,6 +99,83 @@ export interface PgliteLike {
 export const runMigrations: (engine: DatabaseEngine, migrations: Record<string, string>) => Promise<string[]>;
 
 // @public
+export interface Shape<T> {
+    close(): void;
+    get(key: string | number | bigint): T | undefined;
+    getSnapshot(): readonly T[];
+    readonly isUpToDate: boolean;
+    readonly ready: Promise<void>;
+    requestSnapshot(query: SnapshotQuery<T>): Promise<readonly T[]>;
+    readonly rows: readonly T[];
+    subscribe(listener: (rows: readonly T[]) => void): () => void;
+    toJSON(): ShapeDescriptor;
+}
+
+// @public
+export interface ShapeBell {
+    channel: string;
+    connectToken: string;
+    token: string;
+    wsUrl: string;
+}
+
+// @public
+export interface ShapeDescriptor {
+    // (undocumented)
+    __blocks: 'data/shape';
+    bell?: ShapeBell;
+    columnMapping?: 'snakeCamel';
+    dependencyBells?: ShapeBell[];
+    expiresAt: number;
+    key: string;
+    mode?: 'changes_only';
+    path: string;
+    protocol?: 'electric' | 'reconcile';
+    table?: string;
+    token: string;
+}
+
+// @public
+export interface ShapeOptions<T> {
+    columnMapping?: 'snakeCamel';
+    columns?: (keyof T & string)[];
+    key?: keyof T & string;
+    mode?: 'full' | 'changes_only';
+    queryableColumns?: (keyof T & string)[];
+    table: string;
+    ttlSeconds?: number;
+    where?: SqlQuery;
+}
+
+// @public
+export type SnapshotFilter<T> = {
+    [K in keyof T]?: FieldCondition<T[K]>;
+} & {
+    or?: readonly SnapshotFilter<T>[];
+};
+
+// @public
+export interface SnapshotOrder<T> {
+    // (undocumented)
+    direction?: 'asc' | 'desc';
+    // (undocumented)
+    field: keyof T & string;
+    // (undocumented)
+    nulls?: 'first' | 'last';
+}
+
+// @public
+export interface SnapshotQuery<T> {
+    limit?: number;
+    // (undocumented)
+    offset?: number;
+    // (undocumented)
+    orderBy?: readonly SnapshotOrder<T>[];
+    // (undocumented)
+    where?: SnapshotFilter<T>;
+}
+
+// @public
 export const splitStatements: (sql: string) => string[];
 
 // @public
@@ -92,6 +189,20 @@ export interface SqlQuery {
     readonly params: readonly unknown[];
     // (undocumented)
     readonly sql: string;
+}
+
+// @public
+export const SYNC_HINT = "data/sync";
+
+// Warning: (ae-internal-missing-underscore) The name "SyncHint" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal
+export interface SyncHint {
+    full?: true;
+    keys?: string[];
+    path: string;
+    tables?: string[];
+    txids?: string[];
 }
 
 // @public

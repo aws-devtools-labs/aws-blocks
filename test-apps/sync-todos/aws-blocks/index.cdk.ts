@@ -21,6 +21,9 @@ export const blocksStack = await BlocksStack.create(app, getStackName({ sandbox:
   defaults: BlocksPresets.sandbox,
 });
 
+// The backend picks its engine from this variable at synth and at runtime.
+blocksStack.handler.addEnvironment('SYNC_TODOS_ENGINE', process.env.SYNC_TODOS_ENGINE === 'dsql' ? 'dsql' : 'aurora');
+
 if (sandboxMode) {
   // The local frontend and the API Gateway API are on different sites.
   blocksStack.handler.addEnvironment('BLOCKS_SANDBOX', 'true');

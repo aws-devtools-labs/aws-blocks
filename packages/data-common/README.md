@@ -10,3 +10,9 @@ Provides:
 - `createKyselyAdapter()` (Kysely backed by any DatabaseEngine)
 - `runMigrations()` / `loadMigrationsFromDir()` (generic migration runner)
 - `Transaction` / `SqlDatabase` interfaces
+- `classifyWrite()` (which synced table a SQL statement writes, for read-your-writes)
+- Live sync (`db.shape()`), shared by `Database` and `DistributedDatabase`:
+  - `Shape` / `ShapeOptions` / `ShapeDescriptor` types
+  - `./sync` (Node): shape validation and signed tokens
+  - `./sync-shared` (browser-safe, no side effects): `ShapeStore`, the base class of every client shape
+  - `./sync-client` (browser): the response middleware that hydrates shapes (each block registers its protocol with `registerShapeProtocol()`) and hands `data/sync` response hints to open shapes before an API call resolves (read-your-writes)

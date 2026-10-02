@@ -5,19 +5,23 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Sample app for Database sync (db.shape): a local-first todo list with live updates.",
+  "description": "Sample app for database sync (db.shape): a local-first todo list with live updates. Runs on Database or DistributedDatabase.",
   "workspaces": [
     "aws-blocks"
   ],
   "scripts": {
     "dev": "tsx aws-blocks/scripts/server.ts",
+    "dev:dsql": "SYNC_TODOS_ENGINE=dsql tsx aws-blocks/scripts/server.ts",
     "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
+    "sandbox:dsql": "SYNC_TODOS_ENGINE=dsql tsx aws-blocks/scripts/sandbox.ts",
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "echo 'E2e tests run via npm run test:e2e:local / test:e2e:sandbox'",
     "test:e2e:local": "BLOCKS_TEST_ENV=local npx playwright test",
-    "test:e2e:sandbox": "BLOCKS_TEST_ENV=sandbox npx playwright test"
+    "test:e2e:local:dsql": "SYNC_TODOS_ENGINE=dsql BLOCKS_TEST_ENV=local npx playwright test",
+    "test:e2e:sandbox": "BLOCKS_TEST_ENV=sandbox npx playwright test",
+    "test:e2e:sandbox:dsql": "SYNC_TODOS_ENGINE=dsql BLOCKS_TEST_ENV=sandbox npx playwright test"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",

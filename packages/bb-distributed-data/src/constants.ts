@@ -57,3 +57,27 @@ export const sanitizeDbRoleName = (id: string): string => {
   const hash = createHash('sha256').update(id).digest('hex').slice(0, 12);
   return `${DB_ROLE_PREFIX}${hash}`;
 };
+
+/**
+ * Name of the Kinesis data stream that receives a database's CDC records.
+ * The CDK layer creates it and the runtime matches incoming records by it, so
+ * both derive it from `fullId` the same way. Kinesis allows 128 characters.
+ */
+export const cdcStreamName = (fullId: string): string => {
+  const name = `${fullId.replace(/[^a-zA-Z0-9_.-]/g, '-')}-cdc`;
+  if (name.length <= 128) return name;
+  const hash = createHash('sha256').update(fullId).digest('hex').slice(0, 12);
+  return `${name.slice(0, 111)}-${hash}-cdc`;
+};
+
+/** Child id of the Realtime block that carries shape bells. */
+export const SYNC_BELL_ID = 'sync-bell';
+
+/** Child id of the DistributedTable that indexes bell routes (equality routing). */
+export const SYNC_ROUTES_ID = 'sync-routes';
+
+/** Child id of the AppSetting that holds the shape-token signing secret. */
+export const SYNC_TOKEN_SECRET_ID = 'sync-token-secret';
+
+/** Bell channel for a synced table (`app.todos` → `app-todos`). */
+export const bellChannel = (table: string): string => table.replace('.', '-');

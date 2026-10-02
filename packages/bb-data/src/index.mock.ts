@@ -23,6 +23,7 @@ import {
 } from './sync/shape-claims.js';
 import { MockShapeServer } from './sync/mock-shape-server.js';
 import { LiveShape } from './sync/live-shape.js';
+import { TxidHints } from './sync/write-hints.js';
 import { DatabaseErrors } from './errors.js';
 import type { Transaction, SqlQuery } from '@aws-blocks/data-common';
 import type { TableSchema, CrudOptions, CrudMethods, TableTypeMeta } from './crud/types.js';
@@ -53,6 +54,8 @@ export class Database extends Scope {
   private migrationsRun: Promise<void> | null = null;
   private schema?: TableSchema;
   private readonly syncOptions?: DatabaseOptions['sync'];
+  /** Read-your-writes hints for writes to synced tables (sync only). */
+  private readonly txidHints: TxidHints | null = null;
 
   /** @internal Logger for internal operations. Defaults to error-level when not provided. */
   protected log: ChildLogger;
@@ -121,6 +124,7 @@ export class Database extends Scope {
         );
       }
       this.syncOptions = options.sync;
+      this.txidHints = new TxidHints(this, options.sync.tables);
       this.registerShapeRoute(new MockShapeServer(() => this.getEngine()));
       this.registerClientMiddleware('@aws-blocks/bb-data/sync-client');
     }
@@ -164,20 +168,30 @@ export class Database extends Scope {
     if (this.migrationsRun) await this.migrationsRun;
   }
 
+  // With sync, writes to synced tables run in a transaction whose id goes to
+  // the API response, so open shapes have the write when the call resolves.
+
   query<T>(query: SqlQuery): Promise<T[]> {
+    const hints = this.txidHints;
+    if (hints?.writes(query)) return this.transaction((tx) => tx.query<T>(query));
     return this.ensureMigrations().then(() => this.base.query<T>(query));
   }
 
   queryOne<T>(query: SqlQuery): Promise<T | null> {
+    const hints = this.txidHints;
+    if (hints?.writes(query)) return this.transaction((tx) => tx.queryOne<T>(query));
     return this.ensureMigrations().then(() => this.base.queryOne<T>(query));
   }
 
   execute(query: SqlQuery): Promise<{ rowCount: number }> {
+    const hints = this.txidHints;
+    if (hints?.writes(query)) return this.transaction((tx) => tx.execute(query));
     return this.ensureMigrations().then(() => this.base.execute(query));
   }
 
   transaction<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> {
-    return this.ensureMigrations().then(() => this.base.transaction<T>(fn));
+    const hints = this.txidHints;
+    return this.ensureMigrations().then(() => (hints ? hints.transaction(this.base, fn) : this.base.transaction<T>(fn)));
   }
 
   /** Return an RLS-scoped database instance. */
@@ -272,7 +286,6 @@ export { RLSEnabledDatabase } from './database.js';
 export { DatabaseErrors } from './errors.js';
 export { createKyselyAdapter, sql } from '@aws-blocks/data-common';
 export { PgClientEngine } from './engines/pg-client-engine.js';
-export { currentTxid } from './sync/txid.js';
 export type { PgClientEngineConfig } from './engines/pg-client-engine.js';
 export type { SqlQuery } from '@aws-blocks/data-common';
 export type { RLSContext } from './rls.js';

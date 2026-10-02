@@ -116,3 +116,29 @@ try {
     assert.ok(result.includes('PASS'), `Expected PASS, got: ${result}`);
   });
 });
+
+describe('Client response hints', () => {
+  it('awaits onSettled with the decoded hints before the call resolves', () => {
+    const result = runScript(`
+import { registerMiddleware } from '${`file://${CLIENT_MODULE}`}';
+const hints = Buffer.from(JSON.stringify({ v: { 'data/sync': [{ path: '/p' }] } })).toString('base64url');
+globalThis.fetch = async () => new Response(JSON.stringify({ jsonrpc: '2.0', result: 'ok', id: 1 }), {
+  headers: { 'content-type': 'application/json', 'x-blocks-hints': hints },
+});
+let settled = null;
+registerMiddleware({
+  async onSettled(data, request, received) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    settled = { data, method: request.method, received };
+  },
+});
+const value = await ApiNamespaceClient('api', { url: 'https://example.com/aws-blocks/api' }).write();
+console.log(JSON.stringify({ value, settled }));
+`, {});
+    const parsed = JSON.parse(result.split('\n').pop() ?? '{}');
+    assert.deepStrictEqual(parsed, {
+      value: 'ok',
+      settled: { data: 'ok', method: 'write', received: { values: { 'data/sync': [{ path: '/p' }] }, overflow: [] } },
+    });
+  });
+});

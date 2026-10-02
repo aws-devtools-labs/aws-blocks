@@ -110,6 +110,53 @@ export class DsqlMockEngine implements DatabaseEngine {
   simulateConflict(): void { this.shouldConflict = true; }
 
   /**
+   * @internal Mock stand-in for Aurora DSQL CDC: record the primary key of
+   * every row written to `table` (row trigger into `_blocks_sync_cdc`).
+   * Runs on PGlite directly, past the DSQL validation layer, because real DSQL
+   * has no triggers; app SQL still cannot create them.
+   */
+  async captureChanges(table: string, primaryKey: string): Promise<void> {
+    await this.ensureReady();
+    // Like a CDC record: the operation, and the row (`after`) for inserts and
+    // updates, only the key (`before`) for deletes.
+    await this.db.exec(
+      `CREATE TABLE IF NOT EXISTS _blocks_sync_cdc (seq bigserial PRIMARY KEY, tbl text NOT NULL, op text NOT NULL, img jsonb NOT NULL);
+       CREATE OR REPLACE FUNCTION _blocks_sync_capture() RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         IF TG_OP = 'DELETE' THEN
+           INSERT INTO _blocks_sync_cdc (tbl, op, img) VALUES (TG_ARGV[0], 'd', jsonb_build_object(TG_ARGV[1], to_jsonb(OLD) -> TG_ARGV[1]));
+         ELSE
+           INSERT INTO _blocks_sync_cdc (tbl, op, img) VALUES (TG_ARGV[0], CASE WHEN TG_OP = 'INSERT' THEN 'c' ELSE 'u' END, to_jsonb(NEW));
+         END IF;
+         RETURN NULL;
+       END $$;`,
+    );
+    const quoted = table.split('.').map((part) => `"${part}"`).join('.');
+    const trigger = `"_blocks_sync_${table.replace('.', '_')}"`;
+    // Names are validated identifiers (sync.tables, information_schema).
+    await this.db.exec(
+      `CREATE OR REPLACE TRIGGER ${trigger} AFTER INSERT OR UPDATE OR DELETE ON ${quoted}
+         FOR EACH ROW EXECUTE FUNCTION _blocks_sync_capture('${table}', '${primaryKey}')`,
+    );
+  }
+
+  /** @internal Take (and clear) the changes recorded by {@link captureChanges}, by table, in order. */
+  async takeChanges(): Promise<Map<string, { op: 'c' | 'u' | 'd'; row: Record<string, unknown> }[]>> {
+    await this.ensureReady();
+    const { rows } = await this.db.query<{ tbl: string; op: 'c' | 'u' | 'd'; img: Record<string, unknown> }>(
+      'DELETE FROM _blocks_sync_cdc RETURNING seq, tbl, op, img',
+    );
+    rows.sort((a, b) => Number((a as { seq?: number }).seq) - Number((b as { seq?: number }).seq));
+    const changes = new Map<string, { op: 'c' | 'u' | 'd'; row: Record<string, unknown> }[]>();
+    for (const { tbl, op, img } of rows) {
+      const list = changes.get(tbl) ?? [];
+      list.push({ op, row: img });
+      changes.set(tbl, list);
+    }
+    return changes;
+  }
+
+  /**
    * Temporarily allow DDL statements (used by the migration runner).
    * In normal app usage, DDL is rejected to match production behavior.
    */

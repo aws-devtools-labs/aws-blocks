@@ -65,7 +65,6 @@ import { CronJob } from '@aws-blocks/bb-cron-job';
 import { CronJobErrors } from '@aws-blocks/bb-cron-job';
 import { CronJobEvent } from '@aws-blocks/bb-cron-job';
 import { CronJobOptions } from '@aws-blocks/bb-cron-job';
-import { currentTxid } from '@aws-blocks/bb-data';
 import { customOauth2 } from '@aws-blocks/bb-auth-oidc';
 import { customOidc } from '@aws-blocks/bb-auth-oidc';
 import { Dashboard } from '@aws-blocks/bb-dashboard';
@@ -80,6 +79,7 @@ import { DisconnectReason } from '@aws-blocks/bb-realtime';
 import { DistributedDatabase } from '@aws-blocks/bb-distributed-data';
 import { DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 import { DistributedDatabaseOptions } from '@aws-blocks/bb-distributed-data';
+import { DistributedSyncOptions } from '@aws-blocks/bb-distributed-data';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableOptions } from '@aws-blocks/bb-distributed-table';
@@ -310,8 +310,6 @@ export { CronJobEvent }
 
 export { CronJobOptions }
 
-export { currentTxid }
-
 export { customOauth2 }
 
 export { customOidc }
@@ -339,6 +337,8 @@ export { DistributedDatabase }
 export { DistributedDatabaseErrors }
 
 export { DistributedDatabaseOptions }
+
+export { DistributedSyncOptions }
 
 export { DistributedTable }
 
