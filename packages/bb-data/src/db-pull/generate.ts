@@ -167,8 +167,8 @@ export function generateIndexFile(tables: TableInfo[], opts: { projectRef?: stri
   const rlsLine = hasRls ? `  rlsPolicy: 'enforce',\n` : '';
 
   // Parameter name resolution differs by phase:
-  //  - At deploy/synth, BLOCKS_STAGE is set and process.cwd() is the project root
-  //    (cdk runs there), so compute the stack-scoped name
+  //  - At deploy/synth, BLOCKS_STAGE is set; use the CDK project's root context
+  //    when present (falling back to process.cwd()) to compute the stack-scoped name
   //    (/<stackName>-db-url) from the committed .blocks/config.json — the SAME
   //    `getStackName` + `dbConnectionParameterName` the deploy script's
   //    `ensureSecrets` uses to WRITE the value, so written name == read name. The
@@ -181,17 +181,19 @@ export function generateIndexFile(tables: TableInfo[], opts: { projectRef?: stri
   //    already stamped — loadConfigToProcessEnv() places BLOCKS_SSM_PARAM_DB_URL
   //    in process.env before this module imports, so the ?? fallback never runs
   //    at runtime.
-  // TODO: Thread `projectRoot` CDK context into the generated wiring instead
-  // of relying on process.cwd(). Currently works only because deploy orchestrators
-  // set cwd === --context projectRoot. Direct `cdk` invocation from another dir
-  // with --context projectRoot=X would diverge stack name vs db param name.
   const paramBlock =
     `// At Lambda runtime, the parameter name is stamped by CDK into process.env.\n` +
     `// At synth/deploy, BLOCKS_STAGE is set and we compute it from committed config.\n` +
     `// At local dev, neither is set — the mock reads from .env.local, so the name is unused.\n` +
     `let dbParameterName = process.env.BLOCKS_SSM_PARAM_DB_URL;\n` +
     `if (!dbParameterName && process.env.BLOCKS_STAGE) {\n` +
-    `  dbParameterName = dbConnectionParameterName(getStackName({ sandbox: process.env.BLOCKS_STAGE !== 'production' }));\n` +
+    `  const projectRoot = (scope as unknown as {\n` +
+    `    node?: { tryGetContext(key: string): unknown };\n` +
+    `  }).node?.tryGetContext('projectRoot');\n` +
+    `  dbParameterName = dbConnectionParameterName(getStackName({\n` +
+    `    sandbox: process.env.BLOCKS_STAGE !== 'production',\n` +
+    `    projectRoot: typeof projectRoot === 'string' ? projectRoot : undefined,\n` +
+    `  }));\n` +
     `}\n` +
     `const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: dbParameterName ?? 'local', secret: true });\n\n`;
 

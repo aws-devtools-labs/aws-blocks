@@ -15,7 +15,13 @@ const scope = new Scope('supabase');
 // At local dev, neither is set — the mock reads from .env.local, so the name is unused.
 let dbParameterName = process.env.BLOCKS_SSM_PARAM_DB_URL;
 if (!dbParameterName && process.env.BLOCKS_STAGE) {
-  dbParameterName = dbConnectionParameterName(getStackName({ sandbox: process.env.BLOCKS_STAGE !== 'production' }));
+  const projectRoot = (scope as unknown as {
+    node?: { tryGetContext(key: string): unknown };
+  }).node?.tryGetContext('projectRoot');
+  dbParameterName = dbConnectionParameterName(getStackName({
+    sandbox: process.env.BLOCKS_STAGE !== 'production',
+    projectRoot: typeof projectRoot === 'string' ? projectRoot : undefined,
+  }));
 }
 const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: dbParameterName ?? 'local', secret: true });
 
