@@ -341,6 +341,28 @@ if [ -f "$PW_RESULTS_JSON" ]; then
 else
   echo "::warning::Playwright produced no ${PW_RESULTS_JSON} (probably never ran); defaults retained"
 fi
+
+# POST-PLAYWRIGHT LIVENESS CAPTURE (diagnostic): discovery confirmed the server up (APP_BASE_URL set,
+# dev_server_started=true), but a backend that DIES AFTER discovery makes every test fail with
+# ERR_CONNECTION_REFUSED and is scored composite 0 — indistinguishable, in the logs, from a bad app.
+# The dead-server dev.log dump above only runs on the discovery-FAILED path, so a post-discovery death
+# leaves no server log. Re-probe `/` now and, if it no longer answers, dump the dev.log tail + pid
+# state so the crash line (e.g. a delayed PGlite/DB trap or OOM) is captured. Best-effort, never aborts.
+post_code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "$APP_BASE_URL" 2>/dev/null) || post_code=000
+if [ "$post_code" = "000" ] || [ "$post_code" -ge 500 ]; then
+  echo "::warning::server was up at discovery but is unreachable AFTER Playwright (${APP_BASE_URL} -> HTTP ${post_code}) — backend likely died mid-run"
+  dev_pid_post="$(cat "${CELL_TMP}/dev.pid" 2>/dev/null || true)"
+  if [ -n "${dev_pid_post:-}" ] && kill -0 "$dev_pid_post" 2>/dev/null; then
+    echo "[post-pw] dev pid ${dev_pid_post}: ALIVE but not serving"
+  else
+    echo "[post-pw] dev pid ${dev_pid_post:-?}: DEAD (process exited)"
+  fi
+  if [ -f "${CELL_TMP}/dev.log" ]; then
+    echo "[post-pw] tail -100 ${CELL_TMP}/dev.log:"; tail -100 "${CELL_TMP}/dev.log" 2>/dev/null || true
+  else
+    echo "[post-pw] ${CELL_TMP}/dev.log missing"
+  fi
+fi
 else
   echo "::warning::dev server never came up (dead-server/backend-crash) — skipped Playwright to avoid masking it as invalid-URL test failures; tests stay at pessimistic defaults"
 fi
