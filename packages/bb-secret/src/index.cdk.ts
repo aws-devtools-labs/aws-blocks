@@ -6,6 +6,7 @@ import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core
 import * as cdk from 'aws-cdk-lib';
 import { RemovalPolicy } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type { ExternalSecretRef, SecretOptions } from './types.js';
 
@@ -84,6 +85,14 @@ export class Secret extends BuildingBlockScope {
 		// PutSecretValue (plus the KMS grants Secrets Manager attaches).
 		this.secret.grantRead(this.executionRole);
 		this.secret.grantWrite(this.executionRole);
+		// `listVersions()` calls ListSecretVersionIds, which grantRead does NOT
+		// include — add it explicitly, scoped to this secret's ARN.
+		this.executionRole.addToPrincipalPolicy(
+			new iam.PolicyStatement({
+				actions: ['secretsmanager:ListSecretVersionIds'],
+				resources: [this.secret.secretArn],
+			}),
+		);
 
 		this.secretArn = this.secret.secretArn;
 
