@@ -217,6 +217,8 @@ export interface ScopeOptions {
     bbName?: string;
     // (undocumented)
     bbVersion?: string;
+    // @internal
+    frameworkScope?: boolean;
     // (undocumented)
     parent?: ScopeParent;
 }

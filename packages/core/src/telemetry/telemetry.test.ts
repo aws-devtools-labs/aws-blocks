@@ -1234,6 +1234,20 @@ class CustomTestBB extends Scope {
   }
 }
 
+/** Test subclass with NO bbName — a custom Building Block authored without BB metadata. */
+class NamelessCustomBB extends Scope {
+  constructor(parent: ScopeParent, id: string) {
+    super(id, { parent });
+  }
+}
+
+/** Test subclass that opts out of counting via the internal frameworkScope flag (as RawRoute does). */
+class FrameworkScopeBB extends Scope {
+  constructor(parent: ScopeParent, id: string) {
+    super(id, { parent, frameworkScope: true });
+  }
+}
+
 describe('Scope.getRegisteredBlocks', () => {
   afterEach(() => {
     Scope._resetRegistry();
@@ -1318,6 +1332,46 @@ describe('Scope.getRegisteredBlocks', () => {
   it('plain Scope (no bbName) does not appear in registry', () => {
     const parent = { id: 'test-app' };
     new Scope('plain-scope', { parent });
+
+    const result = Scope.getRegisteredBlocks();
+    assert.deepStrictEqual(result, { blocks: [], totalCount: 0, customBlocksCount: 0 });
+  });
+
+  it('nameless custom BB (Scope subclass without bbName) is counted as custom', () => {
+    const parent = { id: 'test-app' };
+    new NamelessCustomBB(parent, 'custom-1');
+
+    const result = Scope.getRegisteredBlocks();
+    assert.deepStrictEqual(result.blocks, []);
+    assert.strictEqual(result.totalCount, 1);
+    assert.strictEqual(result.customBlocksCount, 1);
+  });
+
+  it('multiple nameless custom BBs each count toward the custom total', () => {
+    const parent = { id: 'test-app' };
+    new NamelessCustomBB(parent, 'custom-1');
+    new NamelessCustomBB(parent, 'custom-2');
+
+    const result = Scope.getRegisteredBlocks();
+    assert.strictEqual(result.totalCount, 2);
+    assert.strictEqual(result.customBlocksCount, 2);
+  });
+
+  it('named and nameless custom BBs are both counted', () => {
+    const parent = { id: 'test-app' };
+    new OfficialTestBB(parent, 'store-1'); // official → blocks[]
+    new CustomTestBB(parent, 'named-custom'); // named custom → customBlocksCount
+    new NamelessCustomBB(parent, 'nameless-custom'); // nameless custom → customBlocksCount
+
+    const result = Scope.getRegisteredBlocks();
+    assert.deepStrictEqual(result.blocks, [{ name: 'KVStore', version: '1.0.0' }]);
+    assert.strictEqual(result.totalCount, 3);
+    assert.strictEqual(result.customBlocksCount, 2);
+  });
+
+  it('framework scopes (frameworkScope, e.g. RawRoute) are not counted as custom', () => {
+    const parent = { id: 'test-app' };
+    new FrameworkScopeBB(parent, 'raw-route');
 
     const result = Scope.getRegisteredBlocks();
     assert.deepStrictEqual(result, { blocks: [], totalCount: 0, customBlocksCount: 0 });
