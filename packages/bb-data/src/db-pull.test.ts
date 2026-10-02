@@ -286,6 +286,12 @@ describe('generateMigrationGuide', () => {
     assert.ok(!output.includes('supabase.auth'));
   });
 
+  test('gives the non-secret OAuth client ID an initial AppSetting value', () => {
+    const output = generateMigrationGuide(TABLES, new Map());
+    assert.ok(output.includes("value: 'replace-with-your-google-client-id'"));
+    assert.ok(output.includes('OAuth client IDs identify an application; they are not credentials.'));
+  });
+
   test('generates camelCase method names in query mapping', () => {
     const output = generateMigrationGuide(TABLES, new Map());
     assert.ok(output.includes('listMigrationTestTodos'));
