@@ -1,7 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { RawRoute, Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import type { ScopeParent } from '@aws-blocks/core';
 import { DataApiEngine } from './engines/data-api-engine.js';
 import { PgClientEngine } from './engines/pg-client-engine.js';
@@ -9,7 +10,21 @@ import { RLSEnabledDatabase } from './database.js';
 import { createCrudHandlers } from './crud/index.js';
 import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX } from './constants.js';
 import { BB_NAME, BB_VERSION } from './version.js';
-import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
+import type { DatabaseOptions, ExternalDatabaseRef, Shape, ShapeOptions } from './types.js';
+import {
+  ELECTRIC_EXPOSED_HEADERS,
+  TOKEN_PARAM,
+  buildClaims,
+  deriveTokenKey,
+  rejectionResponse,
+  shapePath,
+  signClaims,
+  toDescriptor,
+  validateSyncOptions,
+  verifyToken,
+} from './sync/shape-claims.js';
+import { forwardToElectric } from './sync/aws-proxy.js';
+import { LiveShape } from './sync/live-shape.js';
 import type { Transaction, SqlQuery } from '@aws-blocks/data-common';
 import type { TableSchema, CrudOptions, CrudMethods, TableTypeMeta } from './crud/types.js';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -32,6 +47,8 @@ export class Database extends Scope {
   private _base: RLSEnabledDatabase | null = null;
   private _basePromise: Promise<RLSEnabledDatabase> | null = null;
   private options?: DatabaseOptions;
+  private syncSecret: Promise<string> | null = null;
+  private secretsClient: SecretsManagerClient | null = null;
 
   /** @internal Logger for internal operations. Defaults to error-level when not provided. */
   protected log: ChildLogger;
@@ -45,6 +62,59 @@ export class Database extends Scope {
     const secretArn = process.env[`${ENV_VAR_PREFIX}_${envName}_SECRET_ARN`] ?? '';
     const databaseName = process.env[`${ENV_VAR_PREFIX}_${envName}_DATABASE`] || envName;
     registerSdkIdentifiers(this.fullId, { clusterArn, secretArn, databaseName });
+
+    if (options?.sync) {
+      validateSyncOptions(this.fullId, options.sync);
+      this.registerShapeRoute(envName);
+      this.registerClientMiddleware('@aws-blocks/bb-data/sync-client');
+    }
+  }
+
+  /**
+   * Read the sync service secret (Secrets Manager), once per container. It is
+   * both Electric's API secret and the root of the shape-token signing key.
+   */
+  private getSyncSecret(envName: string): Promise<string> {
+    if (!this.syncSecret) {
+      const secretId = process.env[`${ENV_VAR_PREFIX}_${envName}_SYNC_SECRET_ARN`];
+      if (!secretId) {
+        return Promise.reject(
+          new Error(`Database "${this.fullId}" has sync enabled but ${ENV_VAR_PREFIX}_${envName}_SYNC_SECRET_ARN is not set.`),
+        );
+      }
+      this.secretsClient ??= new SecretsManagerClient({ customUserAgent: this.buildUserAgentChain() });
+      this.syncSecret = this.secretsClient.send(new GetSecretValueCommand({ SecretId: secretId })).then((out) => {
+        if (!out.SecretString) throw new Error('The sync service secret is empty');
+        return out.SecretString;
+      });
+      // Don't cache a failure (e.g. a throttled call): the next request retries.
+      this.syncSecret.catch(() => {
+        this.syncSecret = null;
+      });
+    }
+    return this.syncSecret;
+  }
+
+  /** The shape endpoint: verify the token, then forward to the Electric service. */
+  private registerShapeRoute(envName: string): void {
+    new RawRoute(this, 'sync-shape', {
+      method: 'GET',
+      path: shapePath(this),
+      handler: async (context) => {
+        context.response.headers.set('Access-Control-Expose-Headers', ELECTRIC_EXPOSED_HEADERS);
+        const secret = await this.getSyncSecret(envName);
+        const verdict = verifyToken(context.request.url.searchParams.get(TOKEN_PARAM), deriveTokenKey(secret), this.fullId);
+        if (!verdict.ok) {
+          const rejection = rejectionResponse(verdict.reason);
+          context.response.status = rejection.status;
+          context.response.send(rejection.body);
+          return;
+        }
+        const electricUrl = process.env[`${ENV_VAR_PREFIX}_${envName}_SYNC_URL`];
+        if (!electricUrl) throw new Error(`${ENV_VAR_PREFIX}_${envName}_SYNC_URL is not set`);
+        await forwardToElectric(context, verdict.claims, { electricUrl, secret });
+      },
+    });
   }
 
   /** @internal Resolve the underlying RLSEnabledDatabase (async due to SSM SecureString fetch). */
@@ -145,6 +215,29 @@ export class Database extends Scope {
     return createAsyncCrudProxy(() => this.resolveBase(), this.options.schema, options) as any;
   }
 
+  /**
+   * Issue a live shape: the rows of `table` that match `where`, synced to the
+   * client. Return the result from an `ApiNamespace` method; the client gets a
+   * {@link Shape} that keeps a local copy of the rows and applies changes as
+   * they happen. Requires `sync` in the Database options.
+   *
+   * Authorize before you call this: the shape grants read access to exactly the
+   * rows and columns you describe here, for `ttlSeconds`. The client cannot
+   * change the table, filter, or columns. When the shape expires, the client
+   * calls your API method again, which re-runs your checks.
+   *
+   * @param options - Table, row filter (`sql` tag), columns, key, and lifetime
+   * @returns A shape handle that serializes to the client
+   * @throws {DatabaseErrors.ShapeInvalid} If sync is not enabled, the table is not
+   *   in `sync.tables`, a name is invalid, or a filter parameter has an unsupported type
+   */
+  async shape<T>(options: ShapeOptions<T>): Promise<Shape<T>> {
+    const claims = buildClaims(this.fullId, this.options?.sync, options);
+    const envName = this.fullId.replace(ENV_NAME_SANITIZE_PATTERN, '_');
+    const key = deriveTokenKey(await this.getSyncSecret(envName));
+    return new LiveShape<T>(toDescriptor(shapePath(this), claims, signClaims(claims, key)));
+  }
+
   /** @internal Get the underlying DatabaseEngine. Used by createKyselyAdapter(). */
   async getEngine() {
     const base = await this.resolveBase();
@@ -199,9 +292,20 @@ export { RLSEnabledDatabase } from './database.js';
 export { DatabaseErrors } from './errors.js';
 export { createKyselyAdapter, sql } from '@aws-blocks/data-common';
 export { PgClientEngine } from './engines/pg-client-engine.js';
+export { currentTxid } from './sync/txid.js';
 export type { PgClientEngineConfig } from './engines/pg-client-engine.js';
 export type { SqlQuery } from '@aws-blocks/data-common';
 export type { RLSContext } from './rls.js';
-export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions, SubnetSelection } from './types.js';
+export type {
+  DatabaseOptions,
+  ElectricServiceOptions,
+  ExternalDatabaseRef,
+  ExternalSslOptions,
+  Shape,
+  ShapeDescriptor,
+  ShapeOptions,
+  SubnetSelection,
+  SyncOptions,
+} from './types.js';
 export type { Transaction } from '@aws-blocks/data-common';
 export type { TableSchema, TableMetaEntry, CrudOptions, CrudMethods, QueryOpts, TableTypeMeta, CrudAuthResult } from './crud/types.js';

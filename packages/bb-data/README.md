@@ -145,6 +145,105 @@ const crud = db.crud({
 //   crud.listPosts(), crud.getPost(id), ...
 ```
 
+## Live Sync (local-first reads)
+
+Stream rows to the browser and keep them in sync. The client holds a local copy of
+the rows that match a **shape** (a table, a row filter, and optional columns) and
+applies inserts, updates, and deletes as they happen. Reads are local and
+synchronous, so they never wait on the network.
+
+```typescript
+import { ApiNamespace, Database, currentTxid, sql } from '@aws-blocks/blocks';
+
+const db = new Database(scope, 'main', {
+  migrationsPath: './aws-blocks/migrations',
+  sync: { tables: ['todos'] },
+});
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  // Reads: return a shape. Authorize first; the shape grants exactly these rows.
+  async todos() {
+    const user = await auth.requireAuth(context);
+    return db.shape<Todo>({ table: 'todos', where: sql`owner_id = ${user.userId}` });
+  },
+
+  // Writes: ordinary methods. Return the transaction id so the client can wait for it.
+  async addTodo(title: string) {
+    const user = await auth.requireAuth(context);
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO todos (id, owner_id, title) VALUES (${crypto.randomUUID()}, ${user.userId}, ${title})`);
+      return { txid: await currentTxid(tx) };
+    });
+  },
+}));
+```
+
+```typescript
+// Frontend
+import { api } from 'aws-blocks';
+
+const todos = await api.todos();          // Shape<Todo>
+await todos.ready;                        // initial rows have arrived
+todos.subscribe((rows) => render(rows));  // after every change
+todos.get('todo-1');                      // local lookup by primary key
+
+const { txid } = await api.addTodo('Buy milk');
+await todos.waitForTxid(txid);            // the write is now in `todos.rows`
+
+// React: useSyncExternalStore(todos.subscribe, todos.getSnapshot)
+```
+
+| `Shape<T>` member | Description |
+|---|---|
+| `rows` | Current rows. Replaced, not mutated, on each change. |
+| `get(key)` | Row by primary key, or `undefined`. Local and synchronous. |
+| `ready` | Resolves when the initial rows have arrived. Rejects if the shape cannot sync. |
+| `isUpToDate` | `true` once the local copy has caught up. |
+| `subscribe(listener)` | Call `listener(rows)` after each change. Returns an unsubscribe function. |
+| `getSnapshot()` | The current `rows` array (for `useSyncExternalStore`). |
+| `waitForTxid(txid)` | Resolves when the write made in transaction `txid` has synced into this shape. |
+| `close()` | Stop syncing. |
+
+`db.shape()` options: `table` (must be in `sync.tables`), `where` (an `sql` tagged
+template; values are bound parameters), `columns` (must include the key), `key`
+(primary-key column, default `'id'`), and `ttlSeconds` (default 3600).
+
+Syncing starts on the first `ready`, `subscribe()`, or `waitForTxid()`.
+
+**Security.** Every shape is authorized by the API method that returns it. That
+method signs the table, row filter, and columns into an expiring token. The client
+cannot change them, so a user receives only the rows your filter allows. When the
+token expires, the client calls the same API method again, which re-runs your
+checks. Sign-out does not revoke a shape that is already open: reload the page on
+sign-out.
+
+**Value types.** Values arrive in their Postgres text form and are parsed for common
+types: `int2`/`int4`/`float4`/`float8` become `number`, `int8` becomes `bigint`,
+`bool` becomes `boolean`, and `json`/`jsonb` become parsed JSON. Other types
+(`numeric`, `timestamptz`, `uuid`, …) arrive as `string`. Declare `T` to match.
+
+**Requirements and limits.**
+- Each synced table needs a single-column primary key.
+- Not supported with `fromExisting()` yet.
+- Not supported with `minCapacity: 0`. Aurora does not auto-pause while logical
+  replication is enabled, so the cluster always runs at least `minCapacity` ACUs.
+- If you add `sync` to a cluster that is already deployed, reboot its writer once
+  after the deploy. `rds.logical_replication` is a static parameter. A new cluster
+  picks it up when it is created.
+- In a sandbox, changing `sync.electric` (version, image, or sizing) on a deployed
+  stack replaces the Electric task definition, which sandbox deploys (CloudFormation
+  Express Mode, no rollback) cannot do. Run `npm run sandbox:destroy` and deploy
+  again. Production deploys are not affected.
+
+**How it runs.**
+- **Local dev:** an in-process emulator of the [Electric](https://electric.ax) HTTP
+  shape protocol, on top of PGlite. Row triggers capture changes. No extra setup.
+- **AWS:** logical replication on the Aurora cluster, and the Electric sync service on
+  Fargate. The browser calls the shape endpoint on your API. The endpoint checks the
+  token and forwards the request to Electric through an IAM-authorized HTTP API.
+  Electric connects as a dedicated `electric` role that can read only the synced
+  tables. See [DESIGN.md](./DESIGN.md#live-sync).
+
 ## Connecting to an Existing Database
 
 ```typescript
@@ -234,6 +333,21 @@ try {
 }
 ```
 
+`db.shape()` throws `DatabaseErrors.ShapeInvalid` (HTTP 400) when sync is not
+enabled, the table is not in `sync.tables`, a column or key name is invalid, or a
+filter parameter has an unsupported type:
+
+```typescript
+try {
+  return await db.shape<Todo>({ table: 'todos', where: sql`owner_id = ${userId}` });
+} catch (e: unknown) {
+  if (isBlocksError(e, DatabaseErrors.ShapeInvalid)) {
+    // Fix the shape definition; this is a programming error, not a runtime condition
+  }
+  throw e;
+}
+```
+
 ## What It Provisions (AWS)
 
 - **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs
@@ -242,6 +356,16 @@ try {
 - **Secrets Manager** — Auto-generated credentials, auto-rotated
 - **Migration Lambda** — Runs `.sql` files on deploy via CustomResource
 - **IAM** — `rds-data:*` and `secretsmanager:GetSecretValue` granted to the app Lambda
+
+With `sync`, also:
+
+- **Cluster parameter group** — `rds.logical_replication = 1`
+- **Electric sync service** — one Arm Fargate task, registered in Cloud Map
+- **Electric image build** — a CodeBuild project builds the pinned Electric release from its GitHub source tag into a stack-owned ECR repository. It runs on the first deploy and when the version changes (about 5 minutes), and uses base images from the ECR Public mirror, so it needs no registry credentials and no local Docker. Set `sync.electric.image` to run a prebuilt image instead.
+- **Networking** — with the default standalone VPC, a small VPC for Electric (public subnets, no NAT) peered to the database VPC; with `defaults.vpc`, Electric runs in that VPC's private-with-egress subnets. The cluster accepts port 5432 only from Electric.
+- **HTTP API** — IAM-authorized, reached over a VPC link; only the app Lambda can call it
+- **Secrets Manager** — the `electric` role password and the Electric API secret
+- **Setup custom resource** — creates the `electric` role, grants `SELECT` on the synced tables, sets `REPLICA IDENTITY FULL`, and creates the `electric_publication_default` publication
 
 ## Local Development
 
@@ -261,6 +385,8 @@ interface DatabaseOptions {
   schema?: TableSchema;
   /** Aurora PostgreSQL engine version, e.g. '16.13'. Override the Aurora engine version. @default '16.13' */
   postgresVersion?: string;
+  /** Tables `db.shape()` may stream, plus Electric sizing. See "Live Sync" above. */
+  sync?: { tables: string[]; electric?: { version?: string; image?: string; cpu?: number; memoryMiB?: number } };
 }
 ```
 

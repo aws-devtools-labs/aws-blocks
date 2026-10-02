@@ -227,7 +227,15 @@ export type {
  * Full docs: `README.md` in the package directory above.
  */
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
-export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
+export type {
+	DatabaseOptions,
+	ExternalDatabaseRef,
+	Shape,
+	ShapeOptions,
+	SqlQuery,
+	SyncOptions,
+	Transaction,
+} from '@aws-blocks/bb-data';
 /**
  * **SQL database with Kysely query builder backed by Aurora Serverless v2.**
  *
@@ -239,7 +247,7 @@ export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from
  * Package: `@aws-blocks/bb-data`
  * Full docs: `README.md` in the package directory above.
  */
-export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
+export { Database, DatabaseErrors, currentTxid, fromExisting, sql } from '@aws-blocks/bb-data';
 export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
 /**
  * **Serverless SQL database backed by Aurora DSQL.**

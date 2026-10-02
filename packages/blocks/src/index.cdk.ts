@@ -127,8 +127,16 @@ export type {
 	MetricsSource,
 } from '@aws-blocks/bb-dashboard';
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
-export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
-export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
+export type {
+	DatabaseOptions,
+	ExternalDatabaseRef,
+	Shape,
+	ShapeOptions,
+	SqlQuery,
+	SyncOptions,
+	Transaction,
+} from '@aws-blocks/bb-data';
+export { Database, DatabaseErrors, currentTxid, fromExisting, sql } from '@aws-blocks/bb-data';
 export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
 export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 export type {

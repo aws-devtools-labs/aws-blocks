@@ -18,6 +18,8 @@
     "bb-test-native-bindings",
     "bb-test-hosting-spa",
     "bb-test-hosting-ssr",
+    "bb-test-sync-todos",
+    "sync-todos-aws-blocks",
     "bb-test-hosting-ssr-nuxt",
     "bb-test-vpc-smoke",
     "db-pull-typecheck",

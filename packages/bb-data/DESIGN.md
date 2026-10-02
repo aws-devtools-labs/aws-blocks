@@ -98,6 +98,102 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 Removal policy: DESTROY in sandbox, RETAIN in production.
 
+## Live Sync
+
+`Database({ sync })` + `db.shape()` stream rows to the client. The wire protocol is
+[Electric](https://electric.ax)'s HTTP shape protocol. The client reads it with
+`@electric-sql/client` behind AWS Blocks' own `Shape<T>` interface (`src/sync/live-shape.ts`),
+so the sync engine can change without changes to app code.
+
+### Authorization: gatekeeper tokens
+
+The API method that returns a shape is the only authorization point. `db.shape()`
+signs a token (`src/sync/shape-claims.ts`) with the table, row filter (`$n`
+placeholders), filter parameters, columns, key, owning Database, and expiry. The
+shape endpoint verifies the HMAC-SHA256 signature and the expiry, then takes the
+shape definition **only** from the token. From the client it accepts only Electric
+protocol parameters (`offset`, `handle`, `live`, `cursor`, `cache-buster`,
+`expired_handle`). On AWS the signing key
+is derived from the Electric API secret: `HMAC(secret, "aws-blocks/data/shape-token/v1")`.
+
+The token travels as a query parameter (`token`), not a header, so shape requests
+are CORS "simple" requests and cache keys include the token. On a 401 or 403, the
+hydrated `Shape` calls the API method that produced it again (client middleware
+receives the originating request) and retries with the new token.
+
+The endpoint path is `/aws-blocks/sync/{scope ids}/v1/shape`. It is built from scope
+ids **without** the stack name, so the mock and AWS register the same path. The
+sandbox dev server needs this to proxy the route.
+
+### AWS
+
+```
+browser → API Gateway → app Lambda (verify token) ──SigV4──▶ HTTP API (IAM auth)
+                                                          → VPC link → Cloud Map → Electric (Fargate)
+                                                                                     → Aurora :5432 (logical replication)
+```
+
+- **Replication.** A cluster parameter group sets `rds.logical_replication = 1`.
+  It is a static parameter: a new cluster has it at creation, and an existing
+  cluster needs a writer reboot. Synth prints a reminder.
+- **Least privilege.** A custom resource (`src/sync-setup-lambda.ts`, Data API, admin
+  secret) runs after migrations. It creates the `electric` login role (password in
+  Secrets Manager, alphanumeric), grants `rds_replication`, `CONNECT`, schema
+  `USAGE`, and `SELECT` on the synced tables only, sets `REPLICA IDENTITY FULL`, and
+  creates or updates `electric_publication_default` with exactly `sync.tables`. Electric
+  runs with `ELECTRIC_MANUAL_TABLE_PUBLISHING=true`, so it never owns tables.
+- **Networking.** The app Lambda stays outside the VPC; it reaches Electric over the
+  HTTP API, which accepts only SigV4 requests from the app's execution role.
+  - Standalone database VPC (isolated, no NAT): Electric gets its own `10.254.0.0/24`
+    VPC with public subnets, so the task pulls its image without a NAT gateway. The
+    VPC is peered to the database VPC. The database VPC gains only two routes and a
+    5432 ingress rule from that CIDR. Its subnets are never changed, so adding
+    `sync` to an existing database cannot replace them.
+  - Shared VPC (`defaults.vpc`): Electric runs in the private-with-egress subnets,
+    and the cluster allows 5432 from Electric's security group.
+  - The task allows inbound traffic only from the VPC link's security group.
+- **Image.** By default the stack builds the pinned release in the deploying account
+  (`src/sync-image.ts`). A CodeBuild project (Arm, privileged) builds from the
+  GitHub source tag with base images from the ECR Public mirror of the Docker official
+  `elixir` images, and pushes to a stack-owned ECR repository. A custom resource
+  starts the build and polls it, so the service is created only after the image
+  exists. The tag is `{version}-{hash of the Dockerfile}`, and the build skips the
+  push when the tag already exists, so a deploy rebuilds only when either changes.
+  The Dockerfile follows upstream's step order: `config.exs` reads
+  `Electric.MixProject`, so it is added only after dependencies compile.
+  `sync.electric.image` skips the build.
+- **Service.** One task (`minHealthyPercent: 0`, `maxHealthyPercent: 100`): there is
+  one replication slot, so the old task stops before the new one starts. Shape logs
+  live on Fargate ephemeral storage, which is a cache that Electric rebuilds from
+  Postgres after a deploy.
+- **Proxy limits.** The app Lambda buffers each response. Live requests are long
+  polls (Electric holds them for up to 20 s, which fits the 28 s HTTP deadline).
+  SSE live mode is not used.
+
+### Local (mock)
+
+PGlite cannot be a logical-replication source. `src/sync/mock-shape-server.ts`
+emulates the shape protocol instead:
+
+- On the first shape of a table, it installs an `AFTER INSERT OR UPDATE OR DELETE`
+  row trigger that appends `(table, primary key, txid)` to `_blocks_sync_changes`.
+- Each distinct shape (table, filter, columns) has one in-memory log, as in Electric.
+  To catch up, it reads changelog rows after the shape's position and re-runs the
+  filter for just the changed keys. A key that starts or stops matching becomes an
+  insert or a delete, so rows that move into or out of the filter behave as on AWS.
+- Live requests poll the changelog every 100 ms for up to 20 s.
+
+### Mock vs AWS (sync)
+
+| Behavior | Mock | AWS | Impact |
+|---|---|---|---|
+| Update messages | Full row | Changed columns + key (`replica=default`) | None for `Shape<T>`; it merges updates |
+| Shape log | In memory; a dev-server restart makes clients resync (409 → refetch) | On Electric's disk; a deploy makes clients resync | Same client behavior |
+| Live mode | Long poll, 100 ms change detection | Long poll, change pushed by replication | Mock latency is slightly higher |
+| Token key | Fixed local key | Derived from the Electric secret | Local tokens grant access only to the local dev server |
+| `txids` on messages | All transaction ids in the catch-up batch | The row's transaction | `waitForTxid` resolves the same way |
+| Primary key check | Error on the first request if `key` is not the single-column PK | Not checked; Electric needs a PK | Mock catches it earlier |
+
 ## Schema Migrations (External Databases)
 
 The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResource** (Aurora is unreachable from the deploy host). **External** connection-string databases (managed PostgreSQL, via `fromExisting()`) are publicly reachable, so their migrations run **host-side** as a pre-`cdk deploy` lifecycle step — reusing the same engine-agnostic `runMigrations` + `PgClientEngine` (no new runner). Code: `src/migrations/external-migrations.ts`, `src/migrations/baseline.ts`, and the lifecycle step in `@aws-blocks/core` (`scripts/external-migrations-step.ts`).

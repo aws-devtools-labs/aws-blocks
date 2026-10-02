@@ -5,6 +5,7 @@
  * Configuration options for the Database Building Block.
  */
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { SqlQuery } from '@aws-blocks/data-common';
 export interface DatabaseOptions {
   /** Minimum Aurora capacity units. Applied by the CDK layer (see infra.ts). */
   minCapacity?: number;
@@ -61,6 +62,164 @@ export interface DatabaseOptions {
    * and the tier by a string. The CDK layer resolves these against the VPC.
    */
   subnets?: SubnetSelection;
+  /**
+   * Stream rows from these tables to clients with `db.shape()`. The client keeps
+   * a local copy of each shape and gets live updates as rows change.
+   *
+   * On AWS this enables logical replication on the Aurora cluster and runs an
+   * [Electric](https://electric.ax) sync service on Fargate. Locally it runs an
+   * in-process emulator of the same HTTP protocol on top of PGlite.
+   *
+   * Constraints:
+   * - Not supported with `connection` (`fromExisting()`) yet.
+   * - Not supported with `minCapacity: 0`: Aurora does not auto-pause while
+   *   logical replication is enabled, so scale-to-zero cannot take effect.
+   * - Each table needs a single-column primary key.
+   *
+   * @example
+   * const db = new Database(scope, 'main', {
+   *   migrationsPath: './aws-blocks/migrations',
+   *   sync: { tables: ['todos'] },
+   * });
+   */
+  sync?: SyncOptions;
+}
+
+/**
+ * Configuration for `Database({ sync })`.
+ */
+export interface SyncOptions {
+  /**
+   * Tables that `db.shape()` may stream. Only these tables are added to the
+   * replication publication and readable by the sync service. Use unquoted
+   * Postgres identifiers, optionally schema-qualified (`'todos'`, `'app.todos'`).
+   */
+  tables: string[];
+  /** Sizing and version of the Electric sync service (AWS only). */
+  electric?: ElectricServiceOptions;
+}
+
+/**
+ * Sizing and version of the Electric sync service that `sync` runs on AWS.
+ */
+export interface ElectricServiceOptions {
+  /**
+   * Electric release to run. The stack builds this release from Electric's
+   * source tag in your account (CodeBuild → a stack-owned ECR repository) on
+   * the first deploy and whenever the version changes; the first build takes
+   * about 15 minutes. Ignored when `image` is set.
+   * @default '1.8.1'
+   */
+  version?: string;
+  /**
+   * A prebuilt Electric image (linux/amd64) to run instead of building one,
+   * for example from your own registry. When set, no build runs.
+   */
+  image?: string;
+  /** Fargate vCPU units. @default 512 */
+  cpu?: number;
+  /** Fargate memory in MiB. @default 1024 */
+  memoryMiB?: number;
+}
+
+/**
+ * Options for `db.shape()`. A shape is a table, an optional row filter, and an
+ * optional column list. The server fixes all three when it issues the shape;
+ * the client cannot change them.
+ */
+export interface ShapeOptions<T> {
+  /** The table to stream. Must be listed in `sync.tables`. */
+  table: string;
+  /**
+   * Row filter, written with the `sql` tag. Values become bound parameters, so
+   * user input is never concatenated into the filter.
+   *
+   * @example sql`owner_id = ${user.userId} AND done = ${false}`
+   */
+  where?: SqlQuery;
+  /** Columns to stream. Must include `key`. Defaults to all columns. */
+  columns?: (keyof T & string)[];
+  /**
+   * The table's primary-key column. `Shape.get()` looks rows up by this column.
+   * @default 'id'
+   */
+  key?: keyof T & string;
+  /**
+   * How long the client may use this shape before it must ask the server for a
+   * new one. The client refreshes automatically by calling the same API method
+   * again, which re-runs your authorization check.
+   * @default 3600
+   */
+  ttlSeconds?: number;
+}
+
+/**
+ * Wire form of a {@link Shape}. Produced by `Shape.toJSON()` when an API
+ * method returns a shape, and hydrated back into a live `Shape` on the client.
+ */
+export interface ShapeDescriptor {
+  __blocks: 'data/shape';
+  /** Path of the shape endpoint, relative to the backend origin. */
+  path: string;
+  /** Signed, expiring token that fixes the table, filter, and columns. */
+  token: string;
+  /** Primary-key column name. */
+  key: string;
+  /** Token expiry, in epoch milliseconds. */
+  expiresAt: number;
+}
+
+/**
+ * A live, local copy of the rows that match a shape.
+ *
+ * Return a shape from an `ApiNamespace` method; the client receives a hydrated
+ * `Shape` that syncs in the background. Reads (`rows`, `get()`) are local and
+ * synchronous: they never wait on the network.
+ *
+ * Row values arrive in their Postgres text form and are parsed for common
+ * types: `int2`/`int4`/`float4`/`float8` → `number`, `int8` → `bigint`,
+ * `bool` → `boolean`, `json`/`jsonb` → parsed JSON. Other types (`numeric`,
+ * `timestamptz`, `uuid`, …) arrive as `string`. Declare `T` to match.
+ *
+ * @example
+ * // Backend
+ * async todos() {
+ *   const user = await auth.requireAuth(context);
+ *   return db.shape<Todo>({ table: 'todos', where: sql`owner_id = ${user.userId}` });
+ * }
+ *
+ * // Frontend
+ * const todos = await api.todos();
+ * await todos.ready;
+ * todos.subscribe((rows) => render(rows));
+ * const one = todos.get('todo-1'); // local lookup, no network
+ */
+export interface Shape<T> {
+  /** Current rows. Replaced (not mutated) on every change. */
+  readonly rows: readonly T[];
+  /** Look up a row by primary key. Local and synchronous. */
+  get(key: string | number | bigint): T | undefined;
+  /** Resolves once the initial rows have arrived. Starts syncing if needed. */
+  readonly ready: Promise<void>;
+  /** `true` once the local copy has caught up with the server. */
+  readonly isUpToDate: boolean;
+  /**
+   * Call `listener` after every change. Starts syncing if needed. Returns an
+   * unsubscribe function. Compatible with React's `useSyncExternalStore`
+   * together with {@link Shape.getSnapshot}.
+   */
+  subscribe(listener: (rows: readonly T[]) => void): () => void;
+  /** The current `rows` array. Stable between changes. */
+  getSnapshot(): readonly T[];
+  /**
+   * Resolve when a write made in transaction `txid` has synced into this
+   * shape. Use the value from `currentTxid(tx)` returned by your write method.
+   */
+  waitForTxid(txid: string): Promise<void>;
+  /** Stop syncing and release the connection. */
+  close(): void;
+  /** Transferable serialization. Called automatically by `JSON.stringify`. */
+  toJSON(): ShapeDescriptor;
 }
 
 /**

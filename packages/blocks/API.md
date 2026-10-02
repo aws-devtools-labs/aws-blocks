@@ -65,6 +65,7 @@ import { CronJob } from '@aws-blocks/bb-cron-job';
 import { CronJobErrors } from '@aws-blocks/bb-cron-job';
 import { CronJobEvent } from '@aws-blocks/bb-cron-job';
 import { CronJobOptions } from '@aws-blocks/bb-cron-job';
+import { currentTxid } from '@aws-blocks/bb-data';
 import { customOauth2 } from '@aws-blocks/bb-auth-oidc';
 import { customOidc } from '@aws-blocks/bb-auth-oidc';
 import { Dashboard } from '@aws-blocks/bb-dashboard';
@@ -155,6 +156,8 @@ import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
 import { SetPasswordOptions } from '@aws-blocks/bb-auth-cognito';
+import { Shape } from '@aws-blocks/bb-data';
+import { ShapeOptions } from '@aws-blocks/bb-data';
 import { SignInNextStep } from '@aws-blocks/bb-auth-cognito';
 import { SignInOptions } from '@aws-blocks/bb-auth-cognito';
 import { SignInResult } from '@aws-blocks/bb-auth-cognito';
@@ -167,6 +170,7 @@ import { StreamOptions } from '@aws-blocks/bb-agent';
 import { stubIdp } from '@aws-blocks/bb-auth-oidc';
 import { SubmitOptions } from '@aws-blocks/bb-async-job';
 import { SubscribeOptions } from '@aws-blocks/bb-realtime';
+import { SyncOptions } from '@aws-blocks/bb-data';
 import { TableKey } from '@aws-blocks/bb-distributed-table';
 import { TableKeyConfig } from '@aws-blocks/bb-distributed-table';
 import { TokenUsage } from '@aws-blocks/bb-agent';
@@ -305,6 +309,8 @@ export { CronJobErrors }
 export { CronJobEvent }
 
 export { CronJobOptions }
+
+export { currentTxid }
 
 export { customOauth2 }
 
@@ -574,6 +580,10 @@ export { SendResult }
 
 export { SetPasswordOptions }
 
+export { Shape }
+
+export { ShapeOptions }
+
 export { SignInNextStep }
 
 export { SignInOptions }
@@ -597,6 +607,8 @@ export { stubIdp }
 export { SubmitOptions }
 
 export { SubscribeOptions }
+
+export { SyncOptions }
 
 export { TableKey }
 

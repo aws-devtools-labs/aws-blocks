@@ -65,6 +65,14 @@ export interface AuroraInfraConfig {
    * CDK `LogGroup` default retention.
    */
   logRetention?: cdk.aws_logs.RetentionDays;
+  /**
+   * Turn on logical replication (`rds.logical_replication = 1`) through a
+   * cluster parameter group. Required by `sync`.
+   *
+   * A static parameter: it takes effect on a new cluster immediately, but an
+   * existing cluster needs a writer reboot after the deploy.
+   */
+  logicalReplication?: boolean;
 }
 
 /**
@@ -92,6 +100,18 @@ export interface AuroraInfraOutputs {
    * infra.grantDataApi(lambdaFunction);
    */
   grantDataApi: (grantee: iam.IGrantable) => void;
+  /** VPC the cluster runs in (standalone or shared). */
+  vpc: ec2.IVpc;
+  /** Subnets the cluster is placed in. */
+  clusterSubnets: ec2.SubnetSelection;
+  /** The cluster's security group (no ingress by default). */
+  securityGroup: ec2.SecurityGroup;
+  /** The cluster's admin credentials secret. */
+  secret: cdk.aws_secretsmanager.ISecret;
+  /** The migrations custom resource, when `migrationsPath` was given. */
+  migrationResource?: cdk.CustomResource;
+  /** The writer instance's CloudFormation resource, for ordering dependents. */
+  writerResource?: cdk.CfnResource;
 }
 
 /**
@@ -185,10 +205,21 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     engineVersion = rds.AuroraPostgresEngineVersion.of(options.postgresVersion, majorVersion);
   }
 
+  const engine = rds.DatabaseClusterEngine.auroraPostgres({
+    version: engineVersion,
+  });
+
   const cluster = new rds.DatabaseCluster(scope, `${name}Cluster`, {
-    engine: rds.DatabaseClusterEngine.auroraPostgres({
-      version: engineVersion,
-    }),
+    engine,
+    ...(options.logicalReplication
+      ? {
+          parameterGroup: new rds.ParameterGroup(scope, `${name}ClusterParams`, {
+            engine,
+            description: `Logical replication for ${name} (sync)`,
+            parameters: { 'rds.logical_replication': '1' },
+          }),
+        }
+      : {}),
     serverlessV2MinCapacity: minCapacity,
     serverlessV2MaxCapacity: maxCapacity,
     writer: rds.ClusterInstance.serverlessV2(`${name}Writer`),
@@ -239,7 +270,12 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
   new cdk.CfnOutput(scope, `${name}ClusterArn`, { value: cluster.clusterArn });
   new cdk.CfnOutput(scope, `${name}SecretArn`, { value: secret.secretArn });
 
+  const cfnWriter = cluster.node.findAll().find((c) => (c as any).cfnResourceType === 'AWS::RDS::DBInstance') as
+    | cdk.CfnResource
+    | undefined;
+
   // Run migrations on deploy if migrationsPath is provided
+  let migrationCR: cdk.CustomResource | undefined;
   if (options.migrationsPath) {
     const migrationsHash = hashMigrationsDir(options.migrationsPath);
     const migrationFn = new lambda.NodejsFunction(scope, `${name}MigrationFn`, {
@@ -276,7 +312,7 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
       onEventHandler: migrationFn,
     });
 
-    const migrationCR = new cdk.CustomResource(scope, `${name}MigrationCR`, {
+    migrationCR = new cdk.CustomResource(scope, `${name}MigrationCR`, {
       serviceToken: provider.serviceToken,
       properties: { migrationsHash },
     });
@@ -287,9 +323,6 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     // Use node.defaultChild to get the underlying CfnResource, then
     // CfnResource.addDependency for a proper CFN-level DependsOn.
     const cfnMigrationCR = migrationCR.node.defaultChild as cdk.CfnResource;
-    const cfnWriter = cluster.node.findAll().find((c) => (c as any).cfnResourceType === 'AWS::RDS::DBInstance') as
-      | cdk.CfnResource
-      | undefined;
     if (cfnMigrationCR && cfnWriter) {
       cfnMigrationCR.addDependency(cfnWriter);
     }
@@ -302,6 +335,12 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     databaseName,
     envVars,
     grantDataApi,
+    vpc,
+    clusterSubnets,
+    securityGroup,
+    secret,
+    migrationResource: migrationCR,
+    writerResource: cfnWriter,
   };
 }
 

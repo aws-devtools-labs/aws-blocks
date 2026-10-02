@@ -53,6 +53,9 @@ export interface CrudOptions<M extends Record<string, TableTypeMeta>> {
 }
 
 // @public
+export function currentTxid(tx: Transaction): Promise<string>;
+
+// @public
 export class Database extends Scope {
     constructor(scope: ScopeParent, id: string, options?: DatabaseOptions);
     crud<M extends Record<string, TableTypeMeta>>(options: CrudOptions<M>): CrudMethods<M, (typeof options)['tables'][number]>;
@@ -68,6 +71,7 @@ export class Database extends Scope {
     query<T>(query: SqlQuery): Promise<T[]>;
     // (undocumented)
     queryOne<T>(query: SqlQuery): Promise<T | null>;
+    shape<T>(options: ShapeOptions<T>): Promise<Shape<T>>;
     // (undocumented)
     transaction<T>(fn: (tx: Transaction) => Promise<T>): Promise<T>;
     withRLS(context: {
@@ -84,6 +88,7 @@ export const DatabaseErrors: {
     readonly TransactionFailed: "TransactionFailedException";
     readonly UniqueConstraintViolation: "UniqueConstraintViolationException";
     readonly SerializationFailure: "SerializationFailureException";
+    readonly ShapeInvalid: "ShapeInvalidException";
 };
 
 // @public (undocumented)
@@ -99,6 +104,14 @@ export interface DatabaseOptions {
     rlsPolicy?: 'enforce';
     schema?: TableSchema;
     subnets?: SubnetSelection;
+    sync?: SyncOptions;
+}
+
+// @public
+export interface ElectricServiceOptions {
+    cpu?: number;
+    image?: string;
+    memoryMiB?: number;
 }
 
 // @public
@@ -196,6 +209,38 @@ export class RLSEnabledDatabase extends DatabaseBase {
     withRLS(context: RLSContext): RLSEnabledDatabase;
 }
 
+// @public
+export interface Shape<T> {
+    close(): void;
+    get(key: string | number | bigint): T | undefined;
+    getSnapshot(): readonly T[];
+    readonly isUpToDate: boolean;
+    readonly ready: Promise<void>;
+    readonly rows: readonly T[];
+    subscribe(listener: (rows: readonly T[]) => void): () => void;
+    toJSON(): ShapeDescriptor;
+    waitForTxid(txid: string): Promise<void>;
+}
+
+// @public
+export interface ShapeDescriptor {
+    // (undocumented)
+    __blocks: 'data/shape';
+    expiresAt: number;
+    key: string;
+    path: string;
+    token: string;
+}
+
+// @public
+export interface ShapeOptions<T> {
+    columns?: (keyof T & string)[];
+    key?: keyof T & string;
+    table: string;
+    ttlSeconds?: number;
+    where?: SqlQuery;
+}
+
 export { sql }
 
 export { SqlQuery }
@@ -207,6 +252,12 @@ export interface SubnetSelection {
     subnetGroupName?: string;
     subnetIds?: string[];
     subnetType?: 'isolated' | 'private-with-egress' | 'public';
+}
+
+// @public
+export interface SyncOptions {
+    electric?: ElectricServiceOptions;
+    tables: string[];
 }
 
 // @public

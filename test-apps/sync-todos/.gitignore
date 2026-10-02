@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.blocks-sandbox/
+.bb-data/
+test-results/
+playwright-report/
+cdk.out/

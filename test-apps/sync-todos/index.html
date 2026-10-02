@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sync Todos</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+      button { padding: 0.4rem 0.8rem; cursor: pointer; border: 1px solid #bbb; border-radius: 4px; background: #fff; }
+      input[type='text'], input[type='password'] { padding: 0.4rem; border: 1px solid #bbb; border-radius: 4px; }
+      .row { display: flex; gap: 0.5rem; align-items: center; margin: 0.5rem 0; flex-wrap: wrap; }
+      .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin: 1rem 0; }
+      .stat { background: #f5f5f5; border-radius: 6px; padding: 0.6rem; }
+      .stat b { display: block; font-size: 1.2rem; }
+      ul { list-style: none; padding: 0; }
+      li { display: flex; gap: 0.5rem; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid #eee; }
+      li.done span { text-decoration: line-through; color: #888; }
+      li span { flex: 1; }
+      .muted { color: #777; font-size: 0.9rem; }
+      .error { color: #b00; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

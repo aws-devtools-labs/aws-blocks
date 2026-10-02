@@ -15,6 +15,13 @@ export const DatabaseErrors = {
   TransactionFailed: 'TransactionFailedException',
   UniqueConstraintViolation: 'UniqueConstraintViolationException',
   SerializationFailure: 'SerializationFailureException',
+  /**
+   * A `db.shape()` request is invalid: sync is not enabled, the table is not in
+   * `sync.tables`, a column or key name is invalid, or a filter parameter has an
+   * unsupported type. Also the name on 401/403 responses from the shape endpoint
+   * when a shape token is expired or invalid. Serialized as HTTP 400.
+   */
+  ShapeInvalid: 'ShapeInvalidException',
 } as const;
 
 /**

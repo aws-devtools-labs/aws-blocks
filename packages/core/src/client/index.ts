@@ -28,7 +28,16 @@ type AsyncAPI<T extends Record<string, (...args: any[]) => any>> = {
 let API_URL: string | null = null;
 let apiUrlPromise: Promise<string> | null = null;
 
-async function getApiUrl(): Promise<string> {
+/**
+ * Resolve the backend API URL (the RPC endpoint, e.g. `https://…/aws-blocks/api`
+ * or the relative `/aws-blocks/api`) using the same discovery the API client
+ * uses: `BLOCKS_API_URL` in SSR, otherwise the deployed `config.json`.
+ *
+ * Exposed for Building Block client middleware that needs to reach a sibling
+ * route of the same backend (e.g. a `RawRoute` streaming endpoint) from a
+ * hydrated Transferable. The result is cached after the first success.
+ */
+export async function getApiUrl(): Promise<string> {
   if (API_URL) return API_URL;
   if (apiUrlPromise) return apiUrlPromise;
   apiUrlPromise = resolveApiUrl().catch((err) => {
@@ -179,8 +188,14 @@ export interface BlocksRequest {
 export interface BlocksMiddleware {
   /** Transform the request before it's sent. Modify the request in place or return a new one. Can be async. */
   onRequest?: (request: BlocksRequest) => BlocksRequest | void | Promise<BlocksRequest | void>;
-  /** Transform the response data after it's received. Used to hydrate __blocks descriptors. */
-  onResponse?: (data: unknown) => unknown;
+  /**
+   * Transform the response data after it's received. Used to hydrate __blocks descriptors.
+   *
+   * Receives the request that produced the response as a second argument, so a
+   * hydrated object can re-issue the same call later (e.g. to refresh an
+   * expired token by calling the originating method again).
+   */
+  onResponse?: (data: unknown, request: BlocksRequest) => unknown;
 }
 
 const middlewares: BlocksMiddleware[] = [];
@@ -218,10 +233,10 @@ async function processRequest(request: BlocksRequest): Promise<BlocksRequest> {
   return request;
 }
 
-function processResponse(data: unknown): unknown {
+function processResponse(data: unknown, request: BlocksRequest): unknown {
   for (const mw of middlewares) {
     if (mw.onResponse) {
-      data = mw.onResponse(data);
+      data = mw.onResponse(data, request);
     }
   }
   return data;
@@ -310,7 +325,7 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
         
         const rpcBody = await response.json();
         const result = decodeRpcResponse(rpcBody); // throws ApiError on RPC error
-        return processResponse(result);
+        return processResponse(result, request);
       };
     }
   });

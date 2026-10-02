@@ -1,12 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { BuildingBlockScope, getVpcContext, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, RawRoute, getVpcContext, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { materialize, grantExternalDataApi } from './infra.js';
+import { materializeSync } from './sync-infra.js';
+import { shapePath, validateSyncOptions } from './sync/shape-claims.js';
 import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX } from './constants.js';
 import type { DatabaseOptions, ExternalDatabaseRef, SubnetSelection } from './types.js';
 
@@ -82,6 +84,19 @@ export class Database extends BuildingBlockScope {
       },
     });
 
+    if (options?.sync) {
+      validateSyncOptions(this.fullId, options.sync);
+      if (options.connection) {
+        throw new Error(`Database "${this.fullId}": sync is not supported with fromExisting() yet.`);
+      }
+      if (options.minCapacity === 0) {
+        throw new Error(
+          `Database "${this.fullId}": sync requires minCapacity > 0. Aurora does not auto-pause while ` +
+            'logical replication is enabled, so scale-to-zero cannot take effect.',
+        );
+      }
+    }
+
     if (options?.connection) {
       // External database — skip provisioning, just grant permissions and inject env vars
       const conn = options.connection;
@@ -134,6 +149,7 @@ export class Database extends BuildingBlockScope {
       clusterSubnets: resolveClusterSubnets(this, options?.subnets),
       // Migration Lambda log retention follows the stack-wide default.
       logRetention: this.defaults.logRetention,
+      logicalReplication: options?.sync !== undefined,
     });
 
     // Inject config so DataApiEngine can read them at runtime
@@ -143,6 +159,27 @@ export class Database extends BuildingBlockScope {
 
     // Grant Data API permissions to the shared execution role
     infra.grantDataApi(this.executionRole);
+
+    if (options?.sync) {
+      const sync = materializeSync(this, {
+        name: this.fullId,
+        databaseName,
+        tables: options.sync.tables,
+        electric: options.sync.electric,
+        aurora: infra,
+        vpcContext: getVpcContext(this),
+        logRetention: this.defaults.logRetention,
+      });
+      for (const [key, value] of Object.entries(sync.envVars)) registerConfig(this, key, value);
+      sync.grantRuntime(this.executionRole);
+      // Register the shape endpoint at synth too, so Hosting routes it to the API.
+      new RawRoute(this, 'sync-shape', { method: 'GET', path: shapePath(this), handler: async () => {} });
+    }
+  }
+
+  /** Runtime-only. Shapes are issued by the app Lambda at request time. */
+  shape(..._args: unknown[]): never {
+    return synthGuard('Database', 'shape');
   }
 
   /**
@@ -167,4 +204,14 @@ export { fromExisting } from './from-existing.js';
 export { DatabaseErrors } from './errors.js';
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
-export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';
+export { currentTxid } from './sync/txid.js';
+export type {
+  DatabaseOptions,
+  ElectricServiceOptions,
+  ExternalDatabaseRef,
+  ExternalSslOptions,
+  Shape,
+  ShapeDescriptor,
+  ShapeOptions,
+  SyncOptions,
+} from './types.js';

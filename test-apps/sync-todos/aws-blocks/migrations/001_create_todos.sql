@@ -1,0 +1,10 @@
+CREATE TABLE todos (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  done BOOLEAN NOT NULL DEFAULT false,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX todos_owner_idx ON todos (owner_id);
