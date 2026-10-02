@@ -81,7 +81,7 @@ export {
 	runContainer,
 	runJobWorker,
 } from './container-runtime.js';
-export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
+export { ApiError, blocksError, brandBlocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError, isWireSafeError } from './errors.js';
 export {
 	type BlocksStackApi,
 	type ComputeConfig,

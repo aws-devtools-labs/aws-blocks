@@ -39,10 +39,10 @@ import {
 import * as cdk from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import type * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
-import * as sqs from 'aws-cdk-lib/aws-sqs';
+import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { buildContainerHealthWidgets, buildContainerLoggingWidgets, buildContainerTracingWidgets } from './observability.js';

@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope, KVStore, AuthBasic, DistributedTable } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, KVStore, AuthBasic, DistributedTable } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
@@ -145,7 +145,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     
     const existing = await todos.get({ userId: user.username, todoId });
-    if (!existing) throw new Error('Todo not found');
+    if (!existing) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
     
     await todos.put({ ...existing, ...updates });
     return { success: true };

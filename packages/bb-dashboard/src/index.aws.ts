@@ -9,9 +9,10 @@
  * CDK layer at deploy time.
  */
 import type { ScopeParent } from '@aws-blocks/core';
-import { registerSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import { BB_DASHBOARD_URL_ENV, mountDashboardRoute } from './routes.js';
 import type { DashboardOptions } from './types.js';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 export { DashboardErrors } from './errors.js';
 export type {
@@ -27,18 +28,23 @@ export type {
  * Registers a redirect route to the CloudWatch Dashboard console URL.
  * The actual dashboard infrastructure is created by the CDK layer (`index.cdk.ts`).
  */
-export class Dashboard {
+export class Dashboard extends Scope {
 	/** CloudWatch Dashboard URL read from the environment variable. */
 	readonly url: string | null;
 
 	/** The configured dashboard name. */
 	readonly dashboardName: string;
 
-	/** Scope-qualified identifier for SDK registry. */
-	readonly fullId: string;
+	readonly #fullId: string;
+
+	/** Scope-qualified identifier for SDK registry (snapshot at construction, as before extending Scope). */
+	override get fullId(): string {
+		return this.#fullId;
+	}
 
 	constructor(scope: ScopeParent, id: string, options?: DashboardOptions) {
-		this.fullId =
+		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+		this.#fullId =
 			'fullId' in scope && scope.fullId
 				? `${scope.fullId}-${id}`
 				: 'id' in scope && scope.id

@@ -10,7 +10,15 @@
  * @see https://www.jsonrpc.org/specification
  */
 
-import { ApiError } from './errors.js';
+import { ApiError, DEFAULT_API_ERROR_NAME, isApiErrorLike, isWireSafeError } from './errors.js';
+
+/**
+ * The `.name` a plain `new Error(...)` carries. A throw whose name is still this
+ * default is treated as an unhandled internal error (generic 500, no name);
+ * a Building Block error thrown via `blocksError()` overrides it with a BB
+ * constant, which is what lets its name cross the wire (D-003).
+ */
+const DEFAULT_ERROR_NAME = 'Error';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -197,17 +205,60 @@ export function successResponse(result: unknown, id: string | number | null): st
 /**
  * Encode an error as a JSON-RPC 2.0 response string.
  *
- * For `ApiError` instances the HTTP status becomes the error code (positive
- * integers never collide with the reserved -32xxx range). Generic errors
- * use code 500.
+ * Three cases, in order:
+ *
+ * 1. `ApiError` — a deliberate, wire-safe shape. Its HTTP status becomes the
+ *    error code (positive integers never collide with the reserved -32xxx
+ *    range), and its BB-level `name`/`retriable` flags cross the wire.
+ * 2. A wire-safe Building Block error — a plain `Error` thrown via
+ *    `blocksError()`, which stamps a non-enumerable brand identifying it as an
+ *    intentional BB error (e.g. `ValidationFailedException`). Per D-003 both the
+ *    `name` AND the `message` cross the wire: `isBlocksError()` keeps matching on
+ *    the client, and the BB-authored message (e.g. "Batch contains 150 payloads,
+ *    exceeds the 100 limit") reaches the caller instead of a generic string. This
+ *    rests on the invariant that a branded message never embeds raw driver text
+ *    (see `brandBlocksError`). The brand — not a non-generic `.name` — is the
+ *    signal, so a raw driver/SDK exception whose class name happens to be
+ *    non-generic (`PostgresError`) is NOT treated as wire-safe.
+ * 3. Anything else — a driver/SDK exception, a bare `Error`, or a non-`Error`
+ *    throw — collapses to a nameless generic 500 so raw exception class names
+ *    and messages never leak.
+ *
+ * Callers log the full error server-side in every case.
+ *
+ * Scope: this governs the RPC wire path only. The RawRoute escape hatch
+ * (`handleRawRoute` in `lambda-handler.ts` / `dev-server.ts`) intentionally
+ * forwards `error.message`/`error.name` verbatim — a raw route owns its own
+ * response contract and is not shaped by the JSON-RPC serializer.
  */
 export function errorResponseFromCatch(error: unknown, id: string | number | null): string {
-  const code = error instanceof ApiError ? error.status : 500;
-  const message = error instanceof Error ? error.message : String(error);
-  const data: Record<string, unknown> = {};
-  if (error instanceof Error && error.name && error.name !== 'Error') data.name = error.name;
-  if (error instanceof ApiError && error.retriable) data.retriable = true;
-  return errorResponse(code, message, id, Object.keys(data).length > 0 ? data : undefined);
+  // Branch 1 matches an ApiError by SHAPE (`isApiErrorLike`), not a bare
+  // `instanceof ApiError`, so an ApiError built by a separately bundled copy of
+  // core (a duplicated `@aws-blocks/core` under a dependency) is still recognized
+  // and its HTTP status / name / retriable survive — a plain `instanceof` would
+  // miss it and collapse a deliberate 409 into a nameless 500 (branch 3).
+  if (isApiErrorLike(error)) {
+    const data: Record<string, unknown> = {};
+    if (error.name && error.name !== DEFAULT_API_ERROR_NAME) data.name = error.name;
+    if (error.retriable) data.retriable = true;
+    return errorResponse(error.status, error.message, id, Object.keys(data).length > 0 ? data : undefined);
+  }
+  // A named Building Block error thrown via blocksError() carries the wire-safe
+  // brand: forward BOTH its BB `name` AND its `message` over the wire (D-003: the
+  // wire carries `name` alongside `message`). A branded error's message is
+  // BB-authored on purpose — e.g. "Batch contains 150 payloads, exceeds the 100
+  // limit" — and dropping it to a generic string is a DX regression, so it is
+  // preserved. The invariant this relies on: a branded error's message must never
+  // embed raw driver/SDK text (see brandBlocksError). The brand — not a
+  // non-generic `.name` — is the signal, so raw driver/SDK exceptions
+  // (PostgresError, …) are NOT branded and still collapse to a nameless 500 with a
+  // generic message, so their class name and raw text never leak.
+  // (Every ApiError is wire-safe too, but branch 1 already returned for those, so
+  // this arm only ever sees the branded plain-Error case.)
+  if (isWireSafeError(error) && error.name && error.name !== DEFAULT_ERROR_NAME) {
+    return errorResponse(500, error.message, id, { name: error.name });
+  }
+  return errorResponse(500, 'Internal error', id);
 }
 
 /** Encode a "method not found" error. */

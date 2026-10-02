@@ -280,6 +280,7 @@ export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-d
 export type {
 	DeleteOptions as DTDeleteOptions,
 	DistributedTableOptions,
+	ExternalKmsKeyRef as DTExternalKmsKeyRef,
 	PutOptions as DTPutOptions,
 	QueryOptions as DTQueryOptions,
 	ReadValidationMode,
@@ -363,6 +364,7 @@ export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-bas
 export type {
 	ConditionalDeleteOptions,
 	ConditionalWriteOptions,
+	ExternalKmsKeyRef,
 	ExternalTableRef,
 	KVStoreOptions,
 	PutOptions as KVPutOptions,

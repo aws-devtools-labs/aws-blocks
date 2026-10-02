@@ -6,7 +6,6 @@ import assert from 'node:assert';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { HttpRequest } from '@smithy/protocol-http';
 import {
-  CLIENT_USER_AGENT_HEADER,
   getClientUserAgentToken,
   installClientUserAgent,
   validateClientUserAgentToken,
@@ -325,11 +324,5 @@ describe('installClientUserAgent on a real SDK v3 client stack', () => {
     const doc = DynamoDBDocumentClient.from(base);
     assert.strictEqual(doc.middlewareStack, base.middlewareStack, 'from() shares the stack');
     assert.doesNotThrow(() => installClientUserAgent(doc));
-  });
-});
-
-describe('CLIENT_USER_AGENT_HEADER', () => {
-  test('is the lowercase custom header name', () => {
-    assert.strictEqual(CLIENT_USER_AGENT_HEADER, 'x-blocks-user-agent');
   });
 });

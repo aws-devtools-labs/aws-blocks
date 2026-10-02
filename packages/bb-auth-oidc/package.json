@@ -51,7 +51,7 @@
     "build": "tsc --build && npm run build:lambda",
     "build:lambda": "esbuild src/idp-registration-lambda.ts --bundle --platform=node --target=node22 --outfile=dist/idp-registration-lambda/index.js --format=cjs --external:@aws-sdk/*",
     "pretest": "npm run build:lambda",
-    "test": "node --test --test-concurrency=1 dist/**/*.test.js"
+    "test": "node --test --test-concurrency=1 'dist/**/*.test.js'"
   },
   "dependencies": {
     "@aws-blocks/auth-common": "^0.1.8",
