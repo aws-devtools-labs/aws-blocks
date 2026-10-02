@@ -60,7 +60,24 @@ if (key === null) throw new Error('Stripe key not configured');
 
 ## Examples
 
-### Opaque string secret
+### Auto-generated signing key (the app creates the value)
+
+Declare it and never set a value — Secrets Manager creates a random one on first deploy. Good for a JWT/session signing key or HMAC key, where the app generates the secret and nobody needs to read it.
+
+```typescript
+const signingKey = new Secret(scope, 'session-signing-key');
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async issueToken(userId: string) {
+    const key = await signingKey.get(); // random value, created on deploy
+    // sign(userId, key)...
+  },
+}));
+```
+
+### Manually-configured credential (you set an externally-issued value)
+
+A third-party key (Stripe, an OAuth client secret) is **not** auto-generated — you set it out-of-band after deploy. The declaration is the same; the difference is that someone provides the value.
 
 ```typescript
 const stripeKey = new Secret(scope, 'stripe-api-key');
@@ -74,7 +91,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
-Set the value once (from an admin path, a deploy script, or the AWS console). At runtime:
+Set the value once — via the settings console route, a deploy script, or the AWS CLI (see "Managing secret values"). At runtime you can also update it:
 
 ```typescript
 await stripeKey.put('sk_live_...');
