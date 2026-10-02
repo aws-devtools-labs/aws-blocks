@@ -1,6 +1,7 @@
 ---
 "@aws-blocks/core": minor
 "@aws-blocks/blocks": patch
+"@aws-blocks/create-blocks-app": patch
 "@aws-blocks/bb-agent": patch
 "@aws-blocks/bb-app-setting": patch
 "@aws-blocks/bb-async-job": patch

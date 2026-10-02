@@ -4,8 +4,13 @@
 import { DatabaseBase } from '@aws-blocks/data-common';
 import type { DatabaseEngine, TransactionHandle, Transaction, SqlQuery } from '@aws-blocks/data-common';
 import { unwrapQuery } from '@aws-blocks/data-common';
-import { DatabaseErrors, reTagged } from './errors.js';
+import { DatabaseErrors, isKnownDatabaseErrorName, reTagged } from './errors.js';
 import { setRLSContext, type RLSContext } from './rls.js';
+
+/** Read a diagnostic field (e.g. pg `code`/`severity`) off an unknown caught value. */
+function readErrorField(err: unknown, key: string): unknown {
+  return typeof err === 'object' && err !== null && key in err ? Reflect.get(err, key) : undefined;
+}
 
 /**
  * Transaction implementation that routes calls through a DatabaseEngine
@@ -96,7 +101,7 @@ export class RLSEnabledDatabase extends DatabaseBase {
       // branded BB error — re-throw it as-is. Otherwise re-tag to TransactionFailed
       // as a branded error with a stable message (raw error kept as cause) so the
       // name crosses the wire without leaking driver text (D-003).
-      if (Object.values(DatabaseErrors).includes(error.name as any)) throw error;
+      if (isKnownDatabaseErrorName(error.name)) throw error;
       throw reTagged(DatabaseErrors.TransactionFailed, error);
     }
   }
@@ -172,15 +177,17 @@ class RLSScopedDatabase extends RLSEnabledDatabase {
       try {
         await this.engine.rollbackTransaction(handle);
       } catch (rollbackErr) {
-        const err = rollbackErr as any;
-        console.error('[Database] Rollback failed after transaction error', { code: err.code, severity: err.severity });
+        console.error('[Database] Rollback failed after transaction error', {
+          code: readErrorField(rollbackErr, 'code'),
+          severity: readErrorField(rollbackErr, 'severity'),
+        });
       }
       const error = e instanceof Error ? e : new Error(String(e));
       // A known DatabaseErrors name means an engine translator already produced a
       // branded BB error — re-throw it as-is. Otherwise re-tag to TransactionFailed
       // as a branded error with a stable message (raw error kept as cause) so the
       // name crosses the wire without leaking driver text (D-003).
-      if (Object.values(DatabaseErrors).includes(error.name as any)) throw error;
+      if (isKnownDatabaseErrorName(error.name)) throw error;
       throw reTagged(DatabaseErrors.TransactionFailed, error);
     }
   }

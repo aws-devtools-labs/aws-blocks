@@ -7,9 +7,11 @@
  * Exercises the full user-facing surface: DistributedDatabase class with migrations,
  * CRUD, transactions, OCC retry, and DSQL validation guardrails.
  *
- * Runs against the mock engine (PGlite) locally. The same test scenarios
- * would apply against a real DSQL cluster — swap the import condition to
- * 'aws-runtime' and provide DSQL_ENDPOINT / AWS_REGION env vars.
+ * Runs ONLY against the mock engine (PGlite) — every import resolves to
+ * `./index.mock.js`, so nothing here exercises the deployed aws-runtime path.
+ * Most scenarios mirror real DSQL, but error classification can diverge (e.g.
+ * DDL rejection surfaces as DsqlPermissionException in the mock), so treat
+ * these as mock-contract assertions, not deployed-DSQL coverage.
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -340,10 +342,13 @@ describe('DistributedDatabase — public API with migrations', () => {
       );
     });
 
-    // DDL is rejected outright in the app runtime (parity with prod
-    // dsql:DbConnect, which is DML-only), so any CREATE inside a normal
+    // MOCK-ONLY coverage: this suite imports `./index.mock.js`, so it runs
+    // against the mock engine. The mock rejects all DDL in the app runtime to
+    // model prod's DML-only dsql:DbConnect role, so any CREATE inside a normal
     // transaction surfaces as DsqlPermissionException before the DDL/DML mixing
-    // rule is ever evaluated.
+    // rule is evaluated. Deployed DSQL can diverge here (its SQLSTATE 42501 also
+    // covers unsupported-DDL rejections, which are not re-tagged to Permission),
+    // so this asserts the mock contract, not the deployed aws-runtime path.
     it('rejects DDL + DML in same transaction', async () => {
       await assert.rejects(
         () => db.transaction(async (tx: Transaction) => {

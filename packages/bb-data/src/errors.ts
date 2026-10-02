@@ -67,6 +67,16 @@ export function uniqueConstraintConflict(cause: Error): ApiError {
 const knownErrors = new Set<string>(Object.values(DatabaseErrors));
 
 /**
+ * Whether `name` is one of the `DatabaseErrors` names — i.e. an engine
+ * translator already produced a branded BB error that should be re-thrown as-is
+ * rather than re-tagged. Takes a plain `string` so callers need no cast to test
+ * an arbitrary `error.name` against the literal-typed name set.
+ */
+export function isKnownDatabaseErrorName(name: string): boolean {
+  return knownErrors.has(name);
+}
+
+/**
  * Data API exception names that mean "the cluster is not accepting statements yet"
  * rather than "the statement is wrong": a service-side transient, or a
  * `minCapacity: 0` cluster resuming from auto-pause.
