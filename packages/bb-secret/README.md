@@ -148,32 +148,19 @@ const stripeKey = new Secret(scope, 'stripe-key', { name: 'my-app/stripe-key' })
 
 ```bash
 # Set / rotate — value over stdin, never argv or shell history.
-printf '%s' "$STRIPE_KEY" | aws secretsmanager put-secret-value \
-  --secret-id my-app/stripe-key --secret-string file:///dev/stdin --region us-east-1
+printf '%s' "$STRIPE_KEY" \
+  | aws secretsmanager put-secret-value \
+      --secret-id my-app/stripe-key \
+      --secret-string file:///dev/stdin \
+      --region us-east-1
 
 # Inspect (metadata only; the value requires explicit get-secret-value perms).
 aws secretsmanager describe-secret --secret-id my-app/stripe-key
 ```
 
+The Blocks app **creates** the secret (empty/random) when you deploy, so the value is set against a secret that already exists — run the CLI once the secret exists. The exact sequencing in your pipeline is up to you. Re-running `put-secret-value` overwrites (rotation); the next cold start reads the new value. Write to the **same region** the app deploys to, or reads see an unset secret.
+
 Without an explicit `name`, the secret name is derived from the scope tree; find it in the settings resource group, the console, or `aws secretsmanager list-secrets`.
-
-### CI/CD example
-
-The value lives in the CI secret store, is piped to the AWS CLI, and never touches the repo or the template:
-
-```yaml
-# GitHub Actions
-- name: Provision the Stripe key
-  run: |
-    printf '%s' "$STRIPE_KEY" | aws secretsmanager put-secret-value \
-      --secret-id my-app/stripe-key --secret-string file:///dev/stdin --region "$AWS_REGION"
-  env:
-    STRIPE_KEY: ${{ secrets.STRIPE_KEY }}
-    AWS_REGION: us-east-1
-- run: npx cdk deploy   # the construct references the name; the value never enters CFN
-```
-
-Re-running `put-secret-value` overwrites (rotation); the next cold start reads the new value. Write to the **same region** the app deploys to, or the deploy sees an unset secret.
 
 ### Rotating & removing
 
