@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { brandBlocksError } from '@aws-blocks/core';
 import { AppSettingErrors } from './errors.js';
 import type { InternalAppSettingOptions } from './types.js';
 
@@ -16,7 +17,7 @@ import type { InternalAppSettingOptions } from './types.js';
 function blocksError(name: string, message: string): Error {
 	const err = new Error(message);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }
 
 /**

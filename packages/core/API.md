@@ -62,6 +62,9 @@ export type BlocksContext = {
 export function blocksError(name: string, message: string): Error;
 
 // @public
+export function brandBlocksError<T extends Error>(err: T): T;
+
+// @public
 export interface BuildingBlockMeta {
     readonly bbName: string;
     readonly bbVersion: string;
@@ -121,6 +124,9 @@ export { isConfig }
 export { isManagedValue }
 
 export { isSecret }
+
+// @public
+export function isWireSafeError(e: unknown): e is Error;
 
 // @public
 export function loadConfigToProcessEnv(): Promise<void>;

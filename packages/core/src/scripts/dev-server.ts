@@ -1257,6 +1257,10 @@ function handleApiRequest(
         const errPayload = errorResponseFromCatch(error, rpcId);
         if (!process.env.BLOCKS_DEV_QUIET) {
           console.log('[rpc-err]', `${apiNamespace}.${rpcMethod}`, error?.name ?? 'Error', '-', error?.message);
+          // A re-tagged/branded error carries a stable BB message; the raw driver/SDK
+          // text lives on `cause` (server-side only). Surface it here so a SQL typo or
+          // connection error shows useful text in the local terminal.
+          if (error?.cause) console.log('  cause:', error.cause);
           if (error?.stack) console.log(error.stack);
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });

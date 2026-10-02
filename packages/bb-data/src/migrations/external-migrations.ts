@@ -284,14 +284,25 @@ export async function runExternalMigrations(
       await acquireAdvisoryLock(engine, ns, key, opts.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS);
     } catch (e: any) {
       // A connection failure here almost always means the host is unreachable.
-      if (
-        e?.name === DatabaseErrors.ConnectionFailed ||
-        /timeout|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH/i.test(e?.message ?? '')
-      ) {
+      // Check the error AND its `cause`: a socket-level ECONNREFUSED/ETIMEDOUT is
+      // re-tagged by the engine into a branded QueryFailed with a stable BB message
+      // and the raw driver error moved to `cause`, so the `name`/`message` this
+      // guidance keys on (and the raw text for the "Original:" suffix) live on the
+      // cause after re-tagging, not on the surface error.
+      const cause = e instanceof Error && e.cause instanceof Error ? e.cause : undefined;
+      const looksUnreachable = (err: unknown): boolean => {
+        if (typeof err !== 'object' || err === null) return false;
+        const name = 'name' in err && typeof err.name === 'string' ? err.name : undefined;
+        const message = 'message' in err && typeof err.message === 'string' ? err.message : undefined;
+        return name === DatabaseErrors.ConnectionFailed || /timeout|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH/i.test(message ?? '');
+      };
+      if (looksUnreachable(e) || looksUnreachable(cause)) {
+        // Prefer the raw driver text (on `cause`) for the diagnostic suffix.
+        const original = cause?.message ?? e?.message ?? e;
         const err = new Error(
           `Cannot reach the database on port 5432 to apply migrations. ` +
             `Common causes: IPv6-only direct host, Supabase Network Restrictions blocking your ` +
-            `deploy/CI host IP, or a corporate firewall. Original: ${e?.message ?? e}`,
+            `deploy/CI host IP, or a corporate firewall. Original: ${original}`,
         );
         err.name = DatabaseErrors.ConnectionFailed;
         throw err;

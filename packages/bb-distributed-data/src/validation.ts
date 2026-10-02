@@ -8,6 +8,7 @@
  * @see https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html
  */
 
+import { brandBlocksError } from '@aws-blocks/core';
 import { TRANSACTION_ROW_LIMIT } from './errors.js';
 import { splitStatements, DOLLAR_QUOTE_TAG_RE } from '@aws-blocks/data-common';
 
@@ -103,7 +104,7 @@ export function validateStatement(sql: string): void {
       if (rule.severity === 'error') {
         const err = new Error(rule.message);
         err.name = 'DsqlValidationError';
-        throw err;
+        throw brandBlocksError(err);
       }
       console.warn(`[bb-distributed-data] ${rule.message}`);
     }

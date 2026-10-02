@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { brandBlocksError } from '@aws-blocks/core';
+
 /**
  * Typed error constants for AuthOIDC. Use with `isBlocksError()` in catch blocks.
  *
@@ -50,5 +52,10 @@ export class InvalidRelayError extends Error {
 		super(`relayTo rejected: ${reason}`);
 		this.reason = reason;
 		this.allowedOrigins = allowedOrigins;
+		// Brand so the name crosses the RPC wire if this ever escapes to the
+		// serializer (isBlocksError keeps matching on the client). The message is
+		// BB-authored — `reason` is an internal enum, not raw driver text — so
+		// forwarding it is safe (D-003). Matches the InterruptError pattern.
+		brandBlocksError(this);
 	}
 }

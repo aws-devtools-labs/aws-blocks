@@ -14,6 +14,7 @@
  */
 
 import { registerMiddleware } from '@aws-blocks/core/client';
+import { brandBlocksError } from '@aws-blocks/core';
 import type { RealtimeChannelDescriptor, RealtimeSubscription, SubscribeOptions, DisconnectReason } from './types.js';
 
 /** Callback for receiving realtime messages. */
@@ -451,6 +452,11 @@ function constructSocket(conn: Connection, isReconnect: boolean): void {
 				if (pending) {
 					const err = new Error(msg.message || 'Subscription rejected');
 					err.name = 'ConnectionFailedException';
+					// Client-side rejection: consumers match on `err.name` via
+					// isBlocksError, so the wire-safe brand is inert here (it only
+					// matters at the server RPC serializer). Kept for consistency with
+					// the server throw sites, and harmless — the name is what carries.
+					brandBlocksError(err);
 					pending.forEach(p => { p.reject(err); });
 					conn.pendingEstablished.delete(msg.channel);
 				}
@@ -538,6 +544,7 @@ function constructSocket(conn: Connection, isReconnect: boolean): void {
 			conn.disconnectHandlers.clear();
 			const err = new Error('WebSocket closed');
 			err.name = 'ConnectionFailedException';
+			brandBlocksError(err);
 			for (const pending of conn.pendingEstablished.values()) {
 				pending.forEach(p => { p.reject(err); });
 			}
@@ -591,6 +598,7 @@ function scheduleReconnect(conn: Connection): void {
 		// later subscribe() rebuilds a fresh connection from scratch.
 		const err = new Error('WebSocket reconnect failed after maximum attempts');
 		err.name = 'ConnectionFailedException';
+		brandBlocksError(err);
 		for (const pending of conn.pendingEstablished.values()) {
 			pending.forEach(p => { p.reject(err); });
 		}

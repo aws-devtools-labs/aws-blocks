@@ -4,6 +4,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
+import { isBlocksError } from '@aws-blocks/core';
+import { AgentErrors } from '@aws-blocks/bb-agent';
 import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
 import type { AgentStreamChunk, ChatMessage, CreateChatOptions } from '@aws-blocks/bb-agent/client';
 import type { RealtimeSubscription } from '@aws-blocks/bb-realtime';
@@ -427,7 +429,7 @@ export function agentTests(getApi: () => typeof apiType) {
         const api = getApi();
         await assert.rejects(
           () => api.agentInferenceOnlyGetConversation('test'),
-          (err: any) => err.message.includes('persistence'),
+          (err: unknown) => isBlocksError(err, AgentErrors.PersistenceRequired),
         );
       });
 
@@ -435,7 +437,7 @@ export function agentTests(getApi: () => typeof apiType) {
         const api = getApi();
         await assert.rejects(
           () => api.agentInferenceOnlyDeleteConversation('test'),
-          (err: any) => err.message.includes('persistence'),
+          (err: unknown) => isBlocksError(err, AgentErrors.PersistenceRequired),
         );
       });
 
