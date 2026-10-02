@@ -462,3 +462,56 @@ describe('LambdaCompute observability', () => {
 		assert.ok(json[0].properties.filters.query.includes('AWS::Lambda::Function'));
 	});
 });
+
+// A stable `/aws-blocks/api/{namespace}` ingress is mounted per recorded
+// namespace, under the `/aws-blocks/api` endpoint (which keeps serving).
+describe('LambdaCompute per-namespace ingress path', () => {
+	test('mountNamespaceRoutes adds an /aws-blocks/api/{namespace} resource per recorded namespace', () => {
+		const { stack, parent } = setup('LambdaComputeNsRoutes');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.namespaces.push('orders', 'auth');
+		compute.mountNamespaceRoutes();
+
+		const template = Template.fromStack(stack);
+		for (const part of ['aws-blocks', 'api', 'orders', 'auth']) {
+			template.hasResourceProperties('AWS::ApiGateway::Resource', { PathPart: part });
+		}
+	});
+
+	test('mountNamespaceRoutes is a no-op when no namespaces are recorded', () => {
+		// Two identically-built stacks: one mounts (with zero recorded
+		// namespaces), one never mounts. Their gateway resource counts must
+		// match — the mount added nothing.
+		const baseline = setup('LambdaComputeNoNsBaseline');
+		new LambdaCompute(baseline.parent, 'extra');
+		const baselineCount = Object.keys(
+			Template.fromStack(baseline.stack).findResources('AWS::ApiGateway::Resource'),
+		).length;
+
+		const mounted = setup('LambdaComputeNoNsRoutes');
+		const compute = new LambdaCompute(mounted.parent, 'extra');
+		compute.mountNamespaceRoutes();
+		const mountedCount = Object.keys(
+			Template.fromStack(mounted.stack).findResources('AWS::ApiGateway::Resource'),
+		).length;
+
+		assert.strictEqual(mountedCount, baselineCount, 'no gateway resource is created without namespaces');
+	});
+
+	test('mountNamespaceRoutes is idempotent across repeated finalize passes', () => {
+		const { stack, parent } = setup('LambdaComputeNsIdempotent');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.namespaces.push('orders');
+		compute.mountNamespaceRoutes();
+		compute.mountNamespaceRoutes();
+
+		// The namespace segment is unique to the mount, so exactly one must
+		// exist no matter how many finalize passes run.
+		const nsResources = Template.fromStack(stack).findResources('AWS::ApiGateway::Resource', {
+			Properties: { PathPart: 'orders' },
+		});
+		assert.strictEqual(Object.keys(nsResources).length, 1, 'namespace resource is not duplicated');
+	});
+});

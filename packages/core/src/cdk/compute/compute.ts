@@ -67,6 +67,18 @@ export abstract class Compute extends Scope {
 	abstract setEnv(key: string, value: string): void;
 
 	/**
+	 * Mount a stable per-namespace ingress path (`/aws-blocks/api/{namespace}`)
+	 * for each of this compute's {@link namespaces}. Called by the framework at
+	 * synth finalize — after every `ApiNamespace` has recorded itself on its
+	 * compute — so routing infrastructure has a deterministic per-namespace path
+	 * to target the compute that owns the namespace.
+	 *
+	 * The base implementation is a no-op (a compute with no HTTP ingress has
+	 * nothing to mount); HTTP-fronted computes (e.g. `LambdaCompute`) override it.
+	 */
+	mountNamespaceRoutes(): void {}
+
+	/**
 	 * Enable distributed tracing on this compute: mark it traced (so the Dashboard
 	 * renders its traces section) and turn on the compute's active tracing via
 	 * {@link applyTracing}. Idempotent — the framework calls this on **every**
