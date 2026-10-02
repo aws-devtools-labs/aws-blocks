@@ -2,7 +2,7 @@
 
 A fuller example app on AWS Blocks. It wires together several Building Blocks in
 one place so you can see how they fit: `AuthBasic` for sign-in, a `KVStore` for
-loose key/value data, and a `DistributedTable` for a priority-sorted, per-user
+loose key/value data, and a `DistributedTable` for a sortable, per-user
 todo list. Vite + vanilla DOM frontend, no framework.
 
 > Created with `npx @aws-blocks/create-blocks-app my-app --template demo`
