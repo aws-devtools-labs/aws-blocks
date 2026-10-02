@@ -102,10 +102,16 @@ async function resolveApiUrl(): Promise<string> {
     }
   }
 
-  // 3. Node.js: read config file from filesystem
-  if (typeof process !== 'undefined' && process.versions?.node) {
+  // 3. Node.js: read config file from filesystem.
+  // `process.getBuiltinModule` (Node >= 20.16 / 22.3) loads `fs` synchronously
+  // without a dynamic `import()`. This module is also the browser / React
+  // Native entry: a static `node:fs` import breaks those bundles, and a dynamic
+  // `import()` left in place by a bundler (Expo's Metro honors `webpackIgnore`)
+  // fails to compile under Hermes, even though this branch never runs there.
+  const getBuiltinModule = typeof process !== 'undefined' ? process.getBuiltinModule : undefined;
+  if (typeof getBuiltinModule === 'function' && process.versions?.node) {
     try {
-      const fs = await import(/* webpackIgnore: true */ 'node:fs');
+      const fs = getBuiltinModule.call(process, 'node:fs') as typeof import('node:fs');
       const config = JSON.parse(fs.readFileSync('.blocks-sandbox/config.json', 'utf-8'));
       const validated = validateAndCache(config.apiUrl, 'config.json file');
       console.log('[Blocks] Using API (config.json file):', validated);
