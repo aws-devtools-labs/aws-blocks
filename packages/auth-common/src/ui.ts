@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { AuthState, AuthAction, AuthUser } from './index.js';
+import type { AuthAction, AuthState, AuthUser } from './index.js';
 import { injectTheme } from './theme.js';
 
 export { injectTheme, THEME_CSS, THEME_STYLE_ID } from './theme.js';
@@ -151,7 +151,8 @@ async function ensureState(api: AuthStateApi): Promise<AuthState> {
 	const cache = getCache(api);
 	if (cache.state) return cache.state;
 	if (cache.hydrating) return cache.hydrating;
-	cache.hydrating = api.getAuthState()
+	cache.hydrating = api
+		.getAuthState()
 		.then((s) => {
 			cache.state = s;
 			cache.hydrating = null;
@@ -180,7 +181,9 @@ function updateState(api: AuthStateApi, state: AuthState): void {
 function subscribe(api: AuthStateApi, listener: (state: AuthState) => void): () => void {
 	const cache = getCache(api);
 	cache.listeners.add(listener);
-	return () => { cache.listeners.delete(listener); };
+	return () => {
+		cache.listeners.delete(listener);
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -232,10 +235,7 @@ function sameAuthUser(a: AuthUser | null, b: AuthUser | null): boolean {
  *
  * @returns An unsubscribe function.
  */
-export function onAuthChange(
-	api: AuthStateApi,
-	callback: (user: AuthUser | null) => void | Promise<void>,
-): () => void {
+export function onAuthChange(api: AuthStateApi, callback: (user: AuthUser | null) => void | Promise<void>): () => void {
 	// Listen for broadcast events (cross-tab + same-window)
 	const channelHandler = (event: MessageEvent) => {
 		if (event.data?.type === 'auth-change') callback(event.data.user);
@@ -415,10 +415,7 @@ export interface AuthActionOverride {
 	 * styling, hint copy, and field hiding from sibling props are
 	 * ignored.
 	 */
-	render?: (
-		action: AuthAction,
-		helpers: { submit: (values: Record<string, string>) => Promise<void> },
-	) => Node;
+	render?: (action: AuthAction, helpers: { submit: (values: Record<string, string>) => Promise<void> }) => Node;
 }
 
 export interface AuthenticatorOptions {
@@ -514,27 +511,27 @@ export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions)
 		// accepted" to "signed in" without a manual click. The Continue
 		// button is rendered briefly under the hood but the transient
 		// state isn't long enough to be visible.
-		if (
-			state.actions.length === 1
-			&& state.actions[0]?.name === 'autoSignIn'
-		) {
+		if (state.actions.length === 1 && state.actions[0]?.name === 'autoSignIn') {
 			const action = state.actions[0];
 			const autoFields: Record<string, string> = {};
 			for (const f of action.fields) {
 				if (f.defaultValue !== undefined) autoFields[f.name] = f.defaultValue;
 			}
-			void api.setAuthState({ action: 'autoSignIn', ...autoFields } as AuthActionInput).then((next) => {
-				updateState(api, next);
-				broadcastAuthChange(next.user ?? null);
-			}).catch((e: any) => {
-				// autoSignIn failed (cookie expired, network blip, etc.) —
-				// surface the error and leave the user at the manual fallback.
-				rerender({
-					state: 'signedOut',
-					actions: [],
-					error: e?.message ?? 'Auto sign-in failed. Please sign in manually.',
+			void api
+				.setAuthState({ action: 'autoSignIn', ...autoFields } as AuthActionInput)
+				.then((next) => {
+					updateState(api, next);
+					broadcastAuthChange(next.user ?? null);
+				})
+				.catch((e: any) => {
+					// autoSignIn failed (cookie expired, network blip, etc.) —
+					// surface the error and leave the user at the manual fallback.
+					rerender({
+						state: 'signedOut',
+						actions: [],
+						error: e?.message ?? 'Auto sign-in failed. Please sign in manually.',
+					});
 				});
-			});
 		}
 	}
 
@@ -605,9 +602,7 @@ function renderState(
 		// action per state (signUp's confirmSignUp, confirmSignIn's
 		// per-step shape) and customers want to title-case that step.
 		const firstAction = visibleActions[0];
-		const actionHeading = firstAction
-			? options.actions?.[firstAction.name]?.heading
-			: undefined;
+		const actionHeading = firstAction ? options.actions?.[firstAction.name]?.heading : undefined;
 		const stateHeading = options.headings?.[state.state];
 		const heading = document.createElement('h3');
 		heading.setAttribute('data-testid', 'authenticator-heading');
@@ -632,9 +627,7 @@ function renderState(
 		if (actionOverride?.render) {
 			const submit = async (values: Record<string, string>) => {
 				try {
-					const newState = await api.setAuthState(
-						{ action: action.name, ...values } as AuthActionInput,
-					);
+					const newState = await api.setAuthState({ action: action.name, ...values } as AuthActionInput);
 					if (newState.retriable === true) {
 						onNewState({ ...state, error: newState.error || 'An error occurred' });
 						return;
@@ -747,8 +740,8 @@ function renderInternalAction(
 			continue;
 		}
 
-		const inputType = fOverride?.type
-			?? (field.type === 'email' ? 'email' : field.type === 'password' ? 'password' : 'text');
+		const inputType =
+			fOverride?.type ?? (field.type === 'email' ? 'email' : field.type === 'password' ? 'password' : 'text');
 		const label = fOverride?.label ?? field.label;
 		const placeholder = fOverride?.placeholder ?? label;
 
@@ -794,9 +787,10 @@ function renderInternalAction(
 		// try again.
 		if (action.capability === 'webauthn-get' || action.capability === 'webauthn-create') {
 			try {
-				const optsJson = action.capability === 'webauthn-get'
-					? values.credentialRequestOptions
-					: values.credentialCreationOptions;
+				const optsJson =
+					action.capability === 'webauthn-get'
+						? values.credentialRequestOptions
+						: values.credentialCreationOptions;
 				if (!optsJson) {
 					throw new Error('Missing WebAuthn options');
 				}
@@ -816,9 +810,7 @@ function renderInternalAction(
 			// submitting, so we widen at this one call site. Direct callers
 			// who know their action name get full discrimination via
 			// `AuthActionInput`'s per-variant shape.
-			const newState = await api.setAuthState(
-				{ action: action.name, ...values } as AuthActionInput,
-			);
+			const newState = await api.setAuthState({ action: action.name, ...values } as AuthActionInput);
 			// Retriable errors surface as a signedOut state with `retriable: true`
 			// and an `error` message. The server sets this flag when the
 			// underlying auth session is still usable (wrong MFA code,
@@ -899,25 +891,22 @@ function renderInternalAction(
  *
  * @internal
  */
-async function runWebAuthn(
-	capability: 'webauthn-get' | 'webauthn-create',
-	optionsJson: string,
-): Promise<string> {
+async function runWebAuthn(capability: 'webauthn-get' | 'webauthn-create', optionsJson: string): Promise<string> {
 	if (typeof navigator === 'undefined' || !navigator.credentials) {
 		throw new Error('This browser does not support WebAuthn');
 	}
 	const parsed = JSON.parse(optionsJson);
 	if (capability === 'webauthn-get') {
 		const publicKey =
-			(PublicKeyCredential as any)?.parseRequestOptionsFromJSON?.(parsed)
-			?? decodePublicKeyOptions(parsed, 'get');
+			(PublicKeyCredential as any)?.parseRequestOptionsFromJSON?.(parsed) ??
+			decodePublicKeyOptions(parsed, 'get');
 		const cred = await navigator.credentials.get({ publicKey });
 		if (!cred) throw new Error('No credential returned');
 		return encodeCredential(cred as PublicKeyCredential);
 	}
 	const publicKey =
-		(PublicKeyCredential as any)?.parseCreationOptionsFromJSON?.(parsed)
-		?? decodePublicKeyOptions(parsed, 'create');
+		(PublicKeyCredential as any)?.parseCreationOptionsFromJSON?.(parsed) ??
+		decodePublicKeyOptions(parsed, 'create');
 	const cred = await navigator.credentials.create({ publicKey });
 	if (!cred) throw new Error('No credential returned');
 	return encodeCredential(cred as PublicKeyCredential);
@@ -931,9 +920,7 @@ function encodeCredential(cred: PublicKeyCredential): string {
 	// Manual fallback. Walk the response shape and base64url-encode every
 	// ArrayBuffer field. We only handle the two response types
 	// `navigator.credentials.{get,create}` return.
-	const response = cred.response as
-		| AuthenticatorAttestationResponse
-		| AuthenticatorAssertionResponse;
+	const response = cred.response as AuthenticatorAttestationResponse | AuthenticatorAssertionResponse;
 	const out: Record<string, unknown> = {
 		id: cred.id,
 		rawId: bufToB64url(cred.rawId),
@@ -985,16 +972,18 @@ function decodePublicKeyOptions(json: any, kind: 'get' | 'create'): any {
 }
 
 function bufToB64url(buf: ArrayBuffer | ArrayBufferView): string {
-	const bytes = buf instanceof ArrayBuffer
-		? new Uint8Array(buf)
-		: new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+	const bytes =
+		buf instanceof ArrayBuffer ? new Uint8Array(buf) : new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 	let str = '';
 	for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
 	return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function b64urlToBuf(s: string): ArrayBuffer {
-	const padded = s.replace(/-/g, '+').replace(/_/g, '/').padEnd(s.length + ((4 - (s.length % 4)) % 4), '=');
+	const padded = s
+		.replace(/-/g, '+')
+		.replace(/_/g, '/')
+		.padEnd(s.length + ((4 - (s.length % 4)) % 4), '=');
 	const bin = atob(padded);
 	const out = new Uint8Array(bin.length);
 	for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
