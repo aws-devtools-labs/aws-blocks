@@ -31,8 +31,10 @@ jobs:
     steps:
       - name: Enforce main branch
         if: github.ref_name != 'main'
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          echo "::error::This workflow can only run from main (got '${{ github.ref_name }}')."
+          echo "::error::This workflow can only run from main (got '$REF_NAME')."
           exit 1
 
       - uses: actions/checkout@v7
