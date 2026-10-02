@@ -19,6 +19,7 @@
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
+  "sideEffects": false,
   "files": [
     "dist",
     "README.md",
@@ -28,8 +29,8 @@
   ],
   "exports": {
     ".": {
-      "browser": "./dist/index.browser.js",
       "types": "./dist/index.d.ts",
+      "browser": "./dist/index.browser.js",
       "default": "./dist/index.js"
     }
   },

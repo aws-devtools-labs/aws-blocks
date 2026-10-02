@@ -21,6 +21,7 @@
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
+  "sideEffects": false,
   "bin": {
     "blocks-generate-client": "./dist/generate-client-cli.js",
     "blocks-vendorize": "./dist/vendorize.js"
@@ -36,9 +37,9 @@
   ],
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "browser": "./dist/index.browser.js",
       "cdk": "./dist/index.cdk.js",
-      "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./cdk": {
