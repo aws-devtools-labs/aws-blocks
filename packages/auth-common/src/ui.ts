@@ -322,6 +322,7 @@ export function AuthenticatedContent(
 	fallback?: Node,
 ): HTMLElement {
 	const container = document.createElement('div');
+	injectTheme();
 	container.setAttribute('data-testid', 'authenticated-content');
 	onAuthChange(api, (user) => {
 		if (user) {
