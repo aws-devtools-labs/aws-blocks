@@ -43,30 +43,14 @@ allow_licenses:
 allow_dependencies_licenses:
   - "pkg:pub/flutter_secure_storage"
 
-# Advisories skipped during the vulnerability check.
-#
-# These three brace-expansion DoS advisories are flagged against a copy that is
-# BUNDLED inside aws-cdk-lib's published tarball (its vendored `minimatch`), at
-# node_modules/aws-cdk-lib/node_modules/brace-expansion with "inBundle": true.
-# A bundled dependency is physically shipped inside the parent package, so it is
-# NOT part of the resolvable dependency graph — our root
-# `overrides: { "brace-expansion": "5.0.12" }` cannot rewrite it, and neither can
-# `npm audit fix`. Only AWS refreshing the bundle in a future aws-cdk-lib release
-# resolves it. Tracked upstream at https://github.com/aws/aws-cdk/issues/37133.
-# AWS frames these as build/deploy-time only (not in any runtime/release
-# artifact), and the DoS requires untrusted glob input, which CDK synth does not
-# take — so the real-world impact is negligible.
-#
-# IMPORTANT — why this is NOT a blanket hole: allow_ghsas matches by advisory ID
-# globally, but every NON-bundled brace-expansion in the tree is forced to the
-# patched 5.0.12 by the root `overrides` pin (verified: the only vulnerable copy
-# left is the bundled cdk one). So in practice this only ever waves through the
-# single un-fixable bundled copy. If the `overrides` pin is ever removed, a
-# vulnerable non-bundled copy could reappear and this exemption would hide it —
-# so KEEP the brace-expansion override whenever this block exists.
-#
-# Remove this block once aws-cdk-lib bundles brace-expansion >= 5.0.12.
+# Advisory IDs skipped during the vulnerability check. Add a one-line reason
+# per entry (or per contiguous group) explaining why it's exempt and when to
+# drop it — keep it short.
 allow_ghsas:
-  - "GHSA-6j4f-fj2g-mc7p" # brace-expansion DoS (parseCommaParts), patched 5.0.10
-  - "GHSA-qhr7-859c-m2p7" # brace-expansion DoS (nested brace groups), patched 5.0.11
-  - "GHSA-q2hr-2g5m-vwhr" # brace-expansion quadratic expansion DoS, patched 5.0.12
+  # brace-expansion DoS — flagged only against the copy bundled inside
+  # aws-cdk-lib (inBundle, un-overridable; non-bundled copies are pinned to the
+  # patched 5.0.12). Build/deploy-time only. Drop when aws-cdk-lib bundles
+  # brace-expansion >= 5.0.12 — aws/aws-cdk#37133.
+  - "GHSA-6j4f-fj2g-mc7p" # parseCommaParts recursion, patched 5.0.10
+  - "GHSA-qhr7-859c-m2p7" # nested brace-group recursion, patched 5.0.11
+  - "GHSA-q2hr-2g5m-vwhr" # quadratic expansion, patched 5.0.12
