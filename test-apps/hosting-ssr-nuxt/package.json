@@ -22,9 +22,9 @@
     "test:e2e:sandbox": "npm run test:sandbox",
     "vendorize": "node ../../packages/blocks/dist/vendorize.js"
   },
+  "//nuxt-pin": "nuxt is pinned <4.5.0 below: nuxt 4.5 bumps its bundled Vite to 8, which pulls lightningcss (MPL-2.0). Remove the cap once MPL-2.0 use is approved internally.",
   "dependencies": {
     "@aws-blocks/blocks": "*",
-    "//nuxt": "Pinned <4.5.0: nuxt 4.5 bumps its bundled Vite to 8, which pulls lightningcss (MPL-2.0). Remove the cap once MPL-2.0 use is approved internally.",
     "nuxt": ">=4.0.0 <4.5.0",
     "vue": "^3.5.0"
   },
