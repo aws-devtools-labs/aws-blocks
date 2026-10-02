@@ -26,8 +26,9 @@ import { registerCompute } from './compute-registry.js';
  *
  * The abstract base lives in core (a framework primitive); concrete computes
  * live in their own packages (e.g. `LambdaCompute` in `@aws-blocks/bb-lambda-compute`).
- *
- * @internal Not exported from the package's public entry points.
+ * Exported from the public CDK entry (`@aws-blocks/core/cdk`) as the handle
+ * `ComputeProvider.provide()` returns; the concrete subclasses stay internal so
+ * this surface never names an AWS service.
  */
 export abstract class Compute extends Scope {
 	/**

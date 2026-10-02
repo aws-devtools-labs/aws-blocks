@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { Duration } from 'aws-cdk-lib';
 import type { Architecture } from 'aws-cdk-lib/aws-lambda';
 import type { RetentionDays } from 'aws-cdk-lib/aws-logs';
 
@@ -27,4 +28,26 @@ export interface LambdaComputeProps {
 	 * so today it only takes effect through the arm64 default.
 	 */
 	architecture?: Architecture;
+
+	/**
+	 * Maximum time a single invocation may run before Lambda stops it.
+	 * Defaults to Lambda's 15-minute ceiling.
+	 *
+	 * Lambda's own vocabulary on purpose: this compute takes the settings its
+	 * platform understands. Translating a workload's requirements into them is the
+	 * job of whoever declares the compute, not of the compute itself.
+	 *
+	 * Accepts either a `cdk.Duration` (e.g. `Duration.minutes(4)`) or a plain
+	 * number of seconds (e.g. `240`). Both are equivalent. The number form exists
+	 * so a caller can set a timeout without importing `aws-cdk-lib` — which is
+	 * what lets one CDK-free code path serve every condition.
+	 */
+	timeout?: Duration | number;
+
+	/**
+	 * Memory available to the function, in MiB. Defaults to 2048.
+	 *
+	 * On Lambda this also scales CPU proportionally.
+	 */
+	memorySize?: number;
 }

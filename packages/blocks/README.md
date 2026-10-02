@@ -107,6 +107,20 @@ onAuthChange(authApi, (user) => {
 });
 ```
 
+## Declaring a compute
+
+By default every API namespace and worker runs on one shared compute the framework sizes for you. When a workload needs more — a longer timeout, more memory — declare a compute by what it *needs*, not by which AWS service runs it:
+
+```typescript
+import { ComputeProvider } from '@aws-blocks/blocks';
+
+const reports = ComputeProvider.provide('reports', { timeoutSeconds: 60 * 4, memoryMb: 1024 });
+```
+
+`provide()` returns a compute handle you hold and (with the assignment surface that ships next) hand to an API namespace or worker. You never name the service that fulfils the request — today it resolves to a serverless (Lambda) compute, and when another fulfillment exists the same declaration resolves differently with no call-site change. A request that no compute can host fails immediately (naming the field, value, and ceiling) rather than deploying and then timing out. Constructing a compute directly (`new LambdaCompute(scope, id)`) remains fully supported for an app that wants to name its platform.
+
+> The surface that assigns a declared compute to a specific namespace or worker ships next; this release adds the declaration itself.
+
 ## Building Blocks
 
 Start from what you need:

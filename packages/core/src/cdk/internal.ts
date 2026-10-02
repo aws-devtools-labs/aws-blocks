@@ -6,19 +6,15 @@
  * intentionally NOT part of the public API (`@aws-blocks/core` /
  * `@aws-blocks/core/cdk`).
  *
- * The compute abstraction lives behind this path while it has no public,
- * customer-facing surface. Importing from here is a signal that you are inside
- * the framework or a test, not a customer.
- *
- * Planned removal: once a customer can assign a compute and have it actually
- * take effect — i.e. `this.compute` resolution and request routing to the
- * chosen compute both exist, plus a synth-time guard that rejects an assignment
- * with no route — these exports move to the public CDK entry point
- * (`@aws-blocks/core/cdk`, re-exported from `index.cdk.ts`) and this file is
- * deleted. It must NOT be made public before then: a compute a customer can
- * declare but that is silently ignored is a worse experience than not having
- * the feature. Until that flip, treat everything here as unstable — no
- * backward-compatibility guarantee.
+ * The compute *abstraction* itself (`Compute`) is now public — it is what
+ * `ComputeProvider.provide()` returns and what a workload is assigned to — and
+ * lives on `@aws-blocks/core/cdk`. It is re-exported here as well so the
+ * framework's own compute code can keep a single internal import site; new
+ * framework code may import it from either path. What is *only* here is the
+ * compute *plumbing*: how the default compute is built and how finalize steps
+ * enumerate the computes on a stack. Importing from here is a signal that you are
+ * inside the framework or a test, not a customer. Everything here is unstable —
+ * no backward-compatibility guarantee.
  *
  * @internal
  */
@@ -26,9 +22,12 @@
 // Reserved `/aws-blocks` path segment, needed by concrete computes (e.g.
 // LambdaCompute in @aws-blocks/bb-lambda-compute) to build their API route tree.
 export { BLOCKS_NAMESPACE } from '../constants.js';
-export type { ComputeDashboardSection } from './compute/compute.js';
+// Re-exported for framework code; the public home is `@aws-blocks/core/cdk`.
 export { Compute } from './compute/compute.js';
+export type { ComputeDashboardSection } from './compute/compute.js';
 // Enumerate the computes registered on a stack — the Dashboard BB's default
 // compute selection resolves through this at finalize.
 export { getComputes } from './compute/compute-registry.js';
+// How the umbrella (`@aws-blocks/blocks`) supplies the stack's default compute
+// without core importing a concrete compute class.
 export type { DefaultComputeFactory } from './compute/default-compute-factory.js';

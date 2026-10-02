@@ -28,6 +28,8 @@ export {
 	type BlocksThrottling,
 	BuildingBlockScope,
 	blocksNodejsBundling,
+	type Compute,
+	type ComputeDashboardSection,
 	type CoreBlocksBackendProps,
 	type CoreBlocksStackProps,
 	DEFAULT_NODE_RUNTIME,
