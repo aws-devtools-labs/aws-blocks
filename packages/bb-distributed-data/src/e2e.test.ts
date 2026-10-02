@@ -20,6 +20,7 @@ import { rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DistributedDatabase, sql, DistributedDatabaseErrors } from './index.mock.js';
 import type { Transaction } from './index.mock.js';
+import { DSQL_PERMISSION_ERROR_NAME } from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -355,7 +356,7 @@ describe('DistributedDatabase — public API with migrations', () => {
           await tx.execute(sql`INSERT INTO users (id, name, email) VALUES (${'x'}, ${'X'}, ${'x@t.com'})`);
           await tx.execute(sql`CREATE TABLE should_fail (id TEXT PRIMARY KEY)`);
         }),
-        { name: 'DsqlPermissionException' }
+        { name: DSQL_PERMISSION_ERROR_NAME }
       );
     });
 
@@ -365,7 +366,7 @@ describe('DistributedDatabase — public API with migrations', () => {
           await tx.execute(sql`CREATE TABLE t1 (id TEXT PRIMARY KEY)`);
           await tx.execute(sql`CREATE TABLE t2 (id TEXT PRIMARY KEY)`);
         }),
-        { name: 'DsqlPermissionException' }
+        { name: DSQL_PERMISSION_ERROR_NAME }
       );
     });
   });

@@ -41,7 +41,6 @@ export const DistributedDatabaseErrors: {
     readonly UniqueConstraintViolation: "UniqueConstraintViolationException";
     readonly SerializationFailure: "SerializationFailureException";
     readonly TransactionRowLimitExceeded: "TransactionRowLimitExceededException";
-    readonly Permission: "DsqlPermissionException";
 };
 
 // @public (undocumented)

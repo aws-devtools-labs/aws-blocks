@@ -10,6 +10,7 @@ import { ApiError, isWireSafeError } from '@aws-blocks/core';
 import {
   translateDsqlError,
   DistributedDatabaseErrors,
+  DSQL_PERMISSION_ERROR_NAME,
   PG_SERIALIZATION_FAILURE,
   PG_UNIQUE_VIOLATION,
   PG_CONNECTION_EXCEPTION_CLASS,
@@ -92,7 +93,7 @@ test('translateDsqlError: insufficient privilege (42501) → QueryFailed (not Pe
     () => translateDsqlError(err),
     (e: Error) => {
       assert.equal(e.name, DistributedDatabaseErrors.QueryFailed);
-      assert.notEqual(e.name, DistributedDatabaseErrors.Permission);
+      assert.notEqual(e.name, DSQL_PERMISSION_ERROR_NAME);
       assert.ok(isWireSafeError(e), 'expected the re-tagged error to be branded');
       assert.equal(e.message, `${DistributedDatabaseErrors.QueryFailed}: The database query failed`);
       assert.ok(!e.message.includes('foreign key'), 'raw driver text must not leak into the message');

@@ -13,21 +13,23 @@ export const DistributedDatabaseErrors = {
   UniqueConstraintViolation: 'UniqueConstraintViolationException',
   SerializationFailure: 'SerializationFailureException',
   TransactionRowLimitExceeded: 'TransactionRowLimitExceededException',
-  /**
-   * A DDL statement was attempted on the app-runtime connection, which is
-   * DML-only (parity with the production `dsql:DbConnect` IAM grant). Raised by
-   * the mock's DDL guard before execution, and matchable via
-   * `isBlocksError(e, DistributedDatabaseErrors.Permission)`.
-   *
-   * NOTE: this is a MOCK-path name only. On the deployed path DSQL rejects
-   * unsupported statements (DDL, foreign keys) with SQLSTATE 42501, which is
-   * indistinguishable from a genuine grant denial by code alone, so
-   * {@link translateDsqlError} does NOT re-tag 42501 to `Permission` — it lets
-   * it fall through to `QueryFailed` rather than mislabel unsupported DDL as a
-   * permission error.
-   */
-  Permission: 'DsqlPermissionException',
 } as const;
+
+/**
+ * Error name raised by the mock's DDL guard when a DDL statement is attempted on
+ * the app-runtime connection, which is DML-only (parity with the production
+ * `dsql:DbConnect` IAM grant).
+ *
+ * INTERNAL, mock-path only — deliberately NOT a member of the public
+ * {@link DistributedDatabaseErrors} and not re-exported from any entry point.
+ * On the deployed path DSQL rejects unsupported statements (DDL, foreign keys)
+ * with SQLSTATE 42501, which is indistinguishable from a genuine grant denial by
+ * code alone, so {@link translateDsqlError} lets it fall through to
+ * `QueryFailed`. A public matchable constant would match locally but never in a
+ * deployed app, so it stays off the public surface until a deployed producer
+ * exists.
+ */
+export const DSQL_PERMISSION_ERROR_NAME = 'DsqlPermissionException';
 
 /**
  * PostgreSQL error codes used for DSQL error translation.
@@ -92,8 +94,8 @@ export function uniqueConstraintConflict(cause: Error): ApiError {
 }
 
 /**
- * Stable, BB-authored message for the DDL-denial (`Permission`) path. The mock's
- * DDL guard ({@link DistributedDatabaseErrors.Permission}) is the ONLY producer
+ * Stable, BB-authored message for the DDL-denial path. The mock's DDL guard
+ * ({@link DSQL_PERMISSION_ERROR_NAME}) is the ONLY producer
  * of this error — the deployed path falls through to `QueryFailed` (see
  * {@link translateDsqlError}) — so this lives here as the single source and the
  * mock engine imports it, rather than keeping a drift-prone second copy.
@@ -110,8 +112,8 @@ export const DDL_NOT_ALLOWED_MESSAGE =
  * forwarding the driver's.
  *
  * Only the two names {@link translateDsqlError} actually re-tags are listed:
- * `Permission` is deliberately absent, because after the 42501 reversal nothing
- * re-tags to it (the deployed path falls through to `QueryFailed`); its message
+ * {@link DSQL_PERMISSION_ERROR_NAME} is deliberately absent, because after the
+ * 42501 reversal nothing re-tags to it (the deployed path falls through to `QueryFailed`); its message
  * lives in {@link DDL_NOT_ALLOWED_MESSAGE} for the mock's DDL guard.
  */
 const RE_TAG_MESSAGES: Record<string, string> = {
