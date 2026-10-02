@@ -413,6 +413,23 @@ export type {
  * Full docs: `README.md` in the package directory above.
  */
 export { Realtime } from '@aws-blocks/bb-realtime';
+export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-blocks/bb-secret';
+/**
+ * **Single application secret backed by AWS Secrets Manager.**
+ *
+ * Use for high-value credentials — third-party API keys, OAuth client secrets,
+ * database connection strings, webhook signing keys, encryption keys. Each
+ * instance maps to exactly one Secrets Manager secret with scoped read/write
+ * IAM grants. `get()` returns `null` when unset; `put()` sets the value at
+ * runtime. Supports an optional schema for typed JSON secrets, and
+ * `Secret.fromExisting(arn)` to wrap a secret owned outside the stack.
+ *
+ * For non-sensitive configuration, use `AppSetting` instead.
+ *
+ * Package: `@aws-blocks/bb-secret`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { Secret, SecretErrors } from '@aws-blocks/bb-secret';
 export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tracer';
 /**
  * **Distributed tracing backed by AWS X-Ray.**

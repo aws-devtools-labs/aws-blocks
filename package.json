@@ -12,6 +12,7 @@
     "packages/auth-common",
     "packages/data-common",
     "packages/bb-app-setting",
+    "packages/bb-secret",
     "packages/bb-data",
     "packages/bb-distributed-data",
     "packages/bb-auth-basic",

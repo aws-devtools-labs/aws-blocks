@@ -19,6 +19,7 @@
     { "path": "../bb-async-job" },
     { "path": "../bb-agent" },
     { "path": "../bb-app-setting" },
+    { "path": "../bb-secret" },
     { "path": "../bb-knowledge-base" },
     { "path": "../bb-cron-job" },
     { "path": "../bb-file-bucket" },

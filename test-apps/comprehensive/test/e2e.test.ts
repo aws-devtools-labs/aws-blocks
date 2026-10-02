@@ -29,6 +29,7 @@ import { agentTests } from './agent.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
 import { appSettingTests } from './app-setting.test.js';
+import { secretTests } from './secret.test.js';
 import { knowledgeBaseTests } from './knowledge-base.test.js';
 import { emailClientTests } from './email-client.test.js';
 import { rawRouteTests } from './raw-route.test.js';
@@ -231,6 +232,9 @@ dsqlTests(() => api);
 
 // AppSetting tests (separate file)
 appSettingTests(() => api);
+
+// Secret tests (separate file)
+secretTests(() => api);
 
 // Realtime tests (separate file)
 realtimeTests(() => api);

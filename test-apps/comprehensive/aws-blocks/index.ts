@@ -13,6 +13,7 @@ import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { isBlocksError } from '@aws-blocks/core';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Secret } from '@aws-blocks/bb-secret';
 import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -580,6 +581,24 @@ const numberSetting = new AppSetting<number>(scope, 'number-setting', {
 const secretSetting = new AppSetting(scope, 'secret-setting', {
   name: `${ssmPrefix}/api-key`,
   secret: true,
+});
+
+// Secret - Single high-value credential backed by AWS Secrets Manager
+// Opaque string secret (e.g. a third-party API key).
+const apiKeySecret = new Secret(scope, 'secret-api-key', { removalPolicy: 'destroy' });
+
+// Typed JSON secret with schema validation (e.g. a set of related credentials).
+const dbSecretSchema = z.object({ host: z.string(), port: z.number() });
+const dbCredentialsSecret = new Secret(scope, 'secret-db-credentials', {
+  schema: dbSecretSchema,
+  removalPolicy: 'destroy',
+});
+
+// Secret with an explicit well-known name (for CI/CD-driven management via the
+// aws CLI). Scoped by stack identity so parallel deploys don't collide.
+const namedSecret = new Secret(scope, 'secret-named', {
+  name: `${scope.fullId}/webhook-signing-key`,
+  removalPolicy: 'destroy',
 });
 
 // CronJob - Scheduled task execution
@@ -2156,6 +2175,54 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async settingPutSecret(value: string) {
     await secretSetting.put(value);
     return { success: true };
+  },
+
+  // ------------------------------------------------------------------------
+  // Secret Tests (AWS Secrets Manager)
+  // ------------------------------------------------------------------------
+
+  async secretGetApiKey() {
+    return { value: await apiKeySecret.get() };
+  },
+
+  async secretPutApiKey(value: string) {
+    await apiKeySecret.put(value);
+    return { success: true };
+  },
+
+  async secretGetDbCredentials() {
+    return { value: await dbCredentialsSecret.get() };
+  },
+
+  async secretPutDbCredentials(value: { host: string; port: number }) {
+    await dbCredentialsSecret.put(value);
+    return { success: true };
+  },
+
+  async secretPutDbCredentialsInvalid(value: unknown) {
+    // Exercises schema validation on put. `value` is deliberately untyped here
+    // because the test passes an intentionally-wrong shape; the BB rejects it.
+    await dbCredentialsSecret.put(value as { host: string; port: number });
+    return { success: true };
+  },
+
+  async secretGetNamed() {
+    return { value: await namedSecret.get() };
+  },
+
+  async secretPutNamed(value: string) {
+    await namedSecret.put(value);
+    return { success: true };
+  },
+
+  async secretGetApiKeyPrevious() {
+    return { value: await apiKeySecret.get({ version: 'previous' }) };
+  },
+
+  async secretListApiKeyVersions() {
+    const versions = await apiKeySecret.listVersions();
+    // Return client-safe metadata (versionId + stages count), never values.
+    return versions.map((v) => ({ versionId: v.versionId, stages: v.stages }));
   },
   // CronJob Tests
   // ------------------------------------------------------------------------

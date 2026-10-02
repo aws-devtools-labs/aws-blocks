@@ -116,7 +116,8 @@ Start from what you need:
   - Structured records with indexes and queries → `DistributedTable` (bb-distributed-table) — **default for most data**
   - Relational / SQL (joins, transactions) → see [Choosing a data block](#choosing-a-data-block) below
   - Files, blobs, uploads, static assets → `FileBucket` (bb-file-bucket)
-  - A single config value or secret → `AppSetting` (bb-app-setting)
+  - A single config value → `AppSetting` (bb-app-setting)
+  - A high-value credential (API key, OAuth secret, connection string) → `Secret` (bb-secret), backed by AWS Secrets Manager
 - **Authenticate users**
   - Username/password, prototypes/MVPs → `AuthBasic` (bb-auth-basic)
   - Cognito user pools, MFA, groups → `AuthCognito` (bb-auth-cognito)
@@ -176,6 +177,7 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | bb-logger | Structured logging with consistent JSON format, log levels, and contextual metadata. | — |
 | bb-metrics | Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Format). | — |
 | bb-realtime | Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB. | — |
+| bb-secret | A single application secret backed by AWS Secrets Manager. | — |
 | bb-tracer | Distributed tracing backed by AWS X-Ray. | — |
 | core | Core primitives for building full-stack applications with the AWS Blocks. | — |
 | hosting | Low-level CDK L3 constructs for deploying web applications on AWS | — |
@@ -235,7 +237,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 ## Security Considerations
 
 - Use `await auth.requireAuth(context)` in every method that shouldn't be public — ApiNamespace methods are **unauthenticated by default**
-- Use `new AppSetting(scope, id, { secret: true })` for API keys and credentials — never hardcode or use `.env` files
+- Use `new Secret(scope, id)` (AWS Secrets Manager) or `new AppSetting(scope, id, { secret: true })` (SSM SecureString) for API keys and credentials — never hardcode or use `.env` files
 - Always attach a schema to KVStore/AppSetting that accepts user data — the RPC layer validates structure but not business logic
 - Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
 - Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
