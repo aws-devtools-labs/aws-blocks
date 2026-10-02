@@ -5,8 +5,11 @@
  * Imports the typed backend API via `aws-blocks` (auto-generated proxy).
  */
 import { api, authApi } from 'aws-blocks';
-import { AccountMenuBar, AuthenticatedContent } from '@aws-blocks/blocks/ui';
+import { AccountMenuBar, AuthenticatedContent, injectTheme } from '@aws-blocks/blocks/ui';
 import { html, render } from 'lit-html';
+
+injectTheme();
+
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 // Show Account Menu bar that pops open authenticator when Sign In is clicked.
@@ -41,9 +44,9 @@ document.getElementById('app')!.appendChild(
             <option value="2" selected>🟡 Medium</option>
             <option value="3">🟢 Low</option>
           </select>
-          <button @click=${addTodo}>Add</button>
+          <button class="bb-button bb-button-primary" @click=${addTodo}>Add</button>
         </div>
-        <div style="margin-bottom:12px;font-size:0.85em;color:#666">
+        <div style="margin-bottom:12px;font-size:0.85em;color:var(--bb-color-text-muted,#666)">
           Sort:
           <button @click=${() => setSort(undefined)} style="font-weight:${!sortBy ? 'bold' : 'normal'}">Default</button>
           <button @click=${() => setSort('priority')} style="font-weight:${sortBy === 'priority' ? 'bold' : 'normal'}">Priority</button>
@@ -63,7 +66,7 @@ document.getElementById('app')!.appendChild(
             </li>
           `)}
         </ul>
-        <p style="color:#888;font-size:0.85em">${todos.filter(t => !t.completed).length} remaining</p>
+        <p style="color:var(--bb-color-text-muted,#888);font-size:0.85em">${todos.filter(t => !t.completed).length} remaining</p>
       `, container);
     }
 

@@ -1,6 +1,9 @@
 // Direct import from backend - types available in IDE, Proxy injected at runtime
 import { api, authApi } from 'aws-blocks';
-import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
+import { Authenticator, onAuthChange, injectTheme } from '@aws-blocks/blocks/ui';
+
+injectTheme();
+
 
 // For coding agents: Leave this comment in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for Building Block documentation
