@@ -26,9 +26,25 @@
 // Reserved `/aws-blocks` path segment, needed by concrete computes (e.g.
 // LambdaCompute in @aws-blocks/bb-lambda-compute) to build their API route tree.
 export { BLOCKS_NAMESPACE } from '../constants.js';
+export type {
+	ComputeHandle,
+	ComputeOptions,
+	ComputeType,
+	ContainerComputeOptions,
+	ContainerScaling,
+	ContainerSize,
+	ScalingSignal,
+	ServerlessComputeOptions,
+} from '../common/compute-capabilities.js';
+export { LAMBDA_MAX_TIMEOUT_SECONDS, resolvePerInstanceConcurrency } from '../common/compute-capabilities.js';
 export type { ComputeDashboardSection } from './compute/compute.js';
 export { Compute } from './compute/compute.js';
 // Enumerate the computes registered on a stack — the Dashboard BB's default
 // compute selection resolves through this at finalize.
 export { getComputes } from './compute/compute-registry.js';
 export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
+// VPC integration helpers a concrete container compute needs to hook into the
+// central lazy VPC: derive-or-reuse the shared VPC, initialize context, resolve
+// subnets, and declare its own requirement so the lazy VPC materializes.
+export { registerVpcRequirements } from './vpc-requirements-registry.js';
+export { anyRequirementNeedsVpc, getOrCreateVpc, getVpcContext, initializeVpc, isVpcInitialized } from './vpc.js';

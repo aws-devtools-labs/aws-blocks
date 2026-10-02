@@ -5,6 +5,7 @@
 ```ts
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ComputeHandle } from '@aws-blocks/core';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -29,6 +30,7 @@ export interface AsyncJobContext {
     jobId: string;
     receiveCount: number;
     sentAt: string;
+    signal?: AbortSignal;
 }
 
 // @public
@@ -47,11 +49,14 @@ export const AsyncJobErrors: {
 // @public
 export interface AsyncJobOptions<T> {
     batchSize?: number;
+    compute?: ComputeHandle;
     handler: (payload: T, context: AsyncJobContext) => Promise<void>;
     logger?: ChildLogger;
     maxBatchingWindowSeconds?: number;
+    maxConcurrencyPerCPU?: number;
     maxRetries?: number;
     schema?: StandardSchemaV1<T>;
+    timeoutSeconds?: number;
     trackStatus?: boolean;
 }
 

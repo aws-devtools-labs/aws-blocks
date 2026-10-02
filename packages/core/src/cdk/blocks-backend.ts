@@ -16,7 +16,7 @@ import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
-import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
+import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
 
 /**
@@ -347,10 +347,21 @@ export class BlocksBackend extends Construct {
 		// state is settled — so the dashboard is order-independent.
 		finalizeDashboards(backend);
 
+		// Per-compute finalize hook: wiring that needs the fully-imported backend
+		// (e.g. a container's queue-depth autoscaling, which must know every
+		// AsyncJob queue assigned to it).
+		for (const compute of getComputes(backend)) compute.finalize();
+
 		// Finalize VPC. Derived resource: use the customer's if provided, else
 		// lazily create one only if a Building Block requires it.
+		//
+		// A container compute may have already derived + initialized the shared VPC
+		// during the backend import (it needs the VPC at construction), so skip
+		// re-initializing when that happened but still run finalizeVpc for endpoints.
 		if (backend._vpcOptions) {
 			finalizeVpc(backend, backend._vpcOptions);
+		} else if (isVpcInitialized(backend)) {
+			finalizeVpc(backend, { network: getOrCreateVpc(backend) });
 		} else if (anyRequirementNeedsVpc(backend)) {
 			const derived = getOrCreateVpc(backend);
 			const options = { network: derived };

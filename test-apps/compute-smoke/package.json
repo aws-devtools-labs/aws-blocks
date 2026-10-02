@@ -1,0 +1,15 @@
+{
+  "name": "bb-test-compute-smoke",
+  "version": "0.1.0",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Smoke test verifying container-backed Compute + AsyncJob work in a VPC",
+  "scripts": {
+    "test": "echo 'Compute smoke tests run during e2e:sandbox:compute and e2e:production:compute'",
+    "test:e2e:local": "BLOCKS_TEST_ENV=local tsx -C browser test/compute-smoke.test.ts",
+    "test:e2e:sandbox": "BLOCKS_TEST_ENV=sandbox tsx -C browser test/compute-smoke.test.ts",
+    "test:e2e:production": "BLOCKS_TEST_ENV=production tsx -C browser test/compute-smoke.test.ts"
+  }
+}

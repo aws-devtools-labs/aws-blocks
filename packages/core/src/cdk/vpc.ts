@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Annotations } from 'aws-cdk-lib';
+import { Annotations, Stack } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type { Construct } from 'constructs';
 import { getVpcRequirements as getRegisteredVpcRequirements } from './vpc-requirements-registry.js';
@@ -57,6 +57,21 @@ export function getVpcContext(scope: Construct): VpcContext | undefined {
 	return undefined;
 }
 
+/**
+ * Whether VPC context has already been initialized anywhere at or above `scope`.
+ *
+ * A container compute must place its Fargate tasks in the shared VPC *during the
+ * backend import* — well before `create()`'s `finalizeVpc` step runs — so it
+ * initializes the VPC itself on first need (`getOrCreateVpc` + `initializeVpc`).
+ * This guard lets both that early path and the later finalize path check "already
+ * done?" so the security group and context are created exactly once, whichever
+ * runs first. Thin wrapper over {@link getVpcContext} for intent at call sites.
+ * @internal
+ */
+export function isVpcInitialized(scope: Construct): boolean {
+	return getVpcContext(scope) !== undefined;
+}
+
 const LAZY_VPC_KEY = Symbol.for('BLOCKS_LAZY_VPC');
 
 /**
@@ -89,10 +104,16 @@ export function anyRequirementNeedsVpc(scope: Construct): boolean {
  * @internal
  */
 export function getOrCreateVpc(scope: Construct): ec2.IVpc {
-	const holder = scope as any;
-	const existing = holder[LAZY_VPC_KEY] as ec2.IVpc | undefined;
+	// Key and construct on the owning STACK, not the passed scope, so every caller
+	// shares the one VPC. The finalize path passes the stack; a container compute
+	// passes itself (`this`) during the backend import — keying on `scope` would
+	// give each its own VPC (and a duplicate `BlocksVpc` construct id under a
+	// different tree path). cdk.Stack.of collapses both to the same holder.
+	const stack = Stack.of(scope);
+	const holder = stack as unknown as Record<symbol, ec2.IVpc | undefined>;
+	const existing = holder[LAZY_VPC_KEY];
 	if (existing) return existing;
-	const vpc = new ec2.Vpc(scope, 'BlocksVpc', { maxAzs: 2, natGateways: 1 });
+	const vpc = new ec2.Vpc(stack, 'BlocksVpc', { maxAzs: 2, natGateways: 1 });
 	holder[LAZY_VPC_KEY] = vpc;
 	return vpc;
 }
@@ -252,7 +273,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	const ctx = getVpcContext(scope);
 	const endpointSecurityGroup = new ec2.SecurityGroup(scope, 'BlocksVpcEndpointSg', {
 		vpc,
-		description: 'Blocks interface VPC endpoints — 443 from the Blocks Lambda only',
+		description: 'Blocks interface VPC endpoints - 443 from the Blocks Lambda only',
 		allowAllOutbound: true,
 	});
 	if (ctx) {
