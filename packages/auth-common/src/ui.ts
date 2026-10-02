@@ -1,7 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { AuthState, AuthAction, AuthUser } from './index.js';
+import type { AuthAction, AuthState, AuthUser } from './index.js';
+import { injectTheme } from './theme.js';
+
+export { injectTheme, THEME_CSS, THEME_STYLE_ID } from './theme.js';
 
 /**
  * Typed payload map for `setAuthState` — discriminated on the action
@@ -148,7 +151,8 @@ async function ensureState(api: AuthStateApi): Promise<AuthState> {
 	const cache = getCache(api);
 	if (cache.state) return cache.state;
 	if (cache.hydrating) return cache.hydrating;
-	cache.hydrating = api.getAuthState()
+	cache.hydrating = api
+		.getAuthState()
 		.then((s) => {
 			cache.state = s;
 			cache.hydrating = null;
@@ -177,7 +181,9 @@ function updateState(api: AuthStateApi, state: AuthState): void {
 function subscribe(api: AuthStateApi, listener: (state: AuthState) => void): () => void {
 	const cache = getCache(api);
 	cache.listeners.add(listener);
-	return () => { cache.listeners.delete(listener); };
+	return () => {
+		cache.listeners.delete(listener);
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -229,10 +235,7 @@ function sameAuthUser(a: AuthUser | null, b: AuthUser | null): boolean {
  *
  * @returns An unsubscribe function.
  */
-export function onAuthChange(
-	api: AuthStateApi,
-	callback: (user: AuthUser | null) => void | Promise<void>,
-): () => void {
+export function onAuthChange(api: AuthStateApi, callback: (user: AuthUser | null) => void | Promise<void>): () => void {
 	// Listen for broadcast events (cross-tab + same-window)
 	const channelHandler = (event: MessageEvent) => {
 		if (event.data?.type === 'auth-change') callback(event.data.user);
@@ -319,6 +322,7 @@ export function AuthenticatedContent(
 	fallback?: Node,
 ): HTMLElement {
 	const container = document.createElement('div');
+	injectTheme();
 	container.setAttribute('data-testid', 'authenticated-content');
 	onAuthChange(api, (user) => {
 		if (user) {
@@ -412,10 +416,7 @@ export interface AuthActionOverride {
 	 * styling, hint copy, and field hiding from sibling props are
 	 * ignored.
 	 */
-	render?: (
-		action: AuthAction,
-		helpers: { submit: (values: Record<string, string>) => Promise<void> },
-	) => Node;
+	render?: (action: AuthAction, helpers: { submit: (values: Record<string, string>) => Promise<void> }) => Node;
 }
 
 export interface AuthenticatorOptions {
@@ -497,7 +498,8 @@ export interface AuthenticatorOptions {
 export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions): HTMLElement {
 	const container = document.createElement('div');
 	container.setAttribute('data-testid', 'authenticator');
-	container.style.cssText = 'max-width: 400px; font-family: system-ui, sans-serif;';
+	injectTheme();
+	container.className = 'bb-authenticator';
 
 	const opts: AuthenticatorOptions = options ?? {};
 
@@ -510,27 +512,27 @@ export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions)
 		// accepted" to "signed in" without a manual click. The Continue
 		// button is rendered briefly under the hood but the transient
 		// state isn't long enough to be visible.
-		if (
-			state.actions.length === 1
-			&& state.actions[0]?.name === 'autoSignIn'
-		) {
+		if (state.actions.length === 1 && state.actions[0]?.name === 'autoSignIn') {
 			const action = state.actions[0];
 			const autoFields: Record<string, string> = {};
 			for (const f of action.fields) {
 				if (f.defaultValue !== undefined) autoFields[f.name] = f.defaultValue;
 			}
-			void api.setAuthState({ action: 'autoSignIn', ...autoFields } as AuthActionInput).then((next) => {
-				updateState(api, next);
-				broadcastAuthChange(next.user ?? null);
-			}).catch((e: any) => {
-				// autoSignIn failed (cookie expired, network blip, etc.) —
-				// surface the error and leave the user at the manual fallback.
-				rerender({
-					state: 'signedOut',
-					actions: [],
-					error: e?.message ?? 'Auto sign-in failed. Please sign in manually.',
+			void api
+				.setAuthState({ action: 'autoSignIn', ...autoFields } as AuthActionInput)
+				.then((next) => {
+					updateState(api, next);
+					broadcastAuthChange(next.user ?? null);
+				})
+				.catch((e: any) => {
+					// autoSignIn failed (cookie expired, network blip, etc.) —
+					// surface the error and leave the user at the manual fallback.
+					rerender({
+						state: 'signedOut',
+						actions: [],
+						error: e?.message ?? 'Auto sign-in failed. Please sign in manually.',
+					});
 				});
-			});
 		}
 	}
 
@@ -581,7 +583,7 @@ function renderState(
 	options: AuthenticatorOptions,
 ): Node {
 	const div = document.createElement('div');
-	div.style.cssText = 'border: 1px solid #ddd; padding: 20px; border-radius: 8px;';
+	div.className = 'bb-card';
 
 	// Apply hideActions before any per-action heading lookup so we don't
 	// render a heading whose only action got filtered out.
@@ -591,7 +593,7 @@ function renderState(
 	if (state.state === 'signedIn') {
 		const heading = document.createElement('h3');
 		heading.setAttribute('data-testid', 'authenticator-signed-in');
-		heading.style.cssText = 'margin-top: 0;';
+		heading.className = 'bb-heading';
 		heading.textContent = `Signed in as: ${state.user!.username}`;
 		div.appendChild(heading);
 	} else {
@@ -601,13 +603,11 @@ function renderState(
 		// action per state (signUp's confirmSignUp, confirmSignIn's
 		// per-step shape) and customers want to title-case that step.
 		const firstAction = visibleActions[0];
-		const actionHeading = firstAction
-			? options.actions?.[firstAction.name]?.heading
-			: undefined;
+		const actionHeading = firstAction ? options.actions?.[firstAction.name]?.heading : undefined;
 		const stateHeading = options.headings?.[state.state];
 		const heading = document.createElement('h3');
 		heading.setAttribute('data-testid', 'authenticator-heading');
-		heading.style.cssText = 'margin-top: 0;';
+		heading.className = 'bb-heading';
 		heading.textContent = actionHeading ?? stateHeading ?? 'Authentication';
 		div.appendChild(heading);
 	}
@@ -615,7 +615,7 @@ function renderState(
 	if (state.error) {
 		const err = document.createElement('div');
 		err.setAttribute('data-testid', 'authenticator-error');
-		err.style.cssText = 'color: red; font-size: 14px; margin-bottom: 12px;';
+		err.className = 'bb-error';
 		err.textContent = state.error;
 		div.appendChild(err);
 	}
@@ -628,9 +628,7 @@ function renderState(
 		if (actionOverride?.render) {
 			const submit = async (values: Record<string, string>) => {
 				try {
-					const newState = await api.setAuthState(
-						{ action: action.name, ...values } as AuthActionInput,
-					);
+					const newState = await api.setAuthState({ action: action.name, ...values } as AuthActionInput);
 					if (newState.retriable === true) {
 						onNewState({ ...state, error: newState.error || 'An error occurred' });
 						return;
@@ -667,7 +665,7 @@ function renderInternalAction(
 ): Node {
 	const wrapper = document.createElement('div');
 	wrapper.setAttribute('data-testid', `authenticator-action-${action.name}`);
-	wrapper.style.cssText = 'margin-bottom: 16px;';
+	wrapper.className = 'bb-field';
 
 	const inputs: Record<string, HTMLInputElement> = {};
 	const fieldOverrides = override?.fields ?? {};
@@ -743,8 +741,8 @@ function renderInternalAction(
 			continue;
 		}
 
-		const inputType = fOverride?.type
-			?? (field.type === 'email' ? 'email' : field.type === 'password' ? 'password' : 'text');
+		const inputType =
+			fOverride?.type ?? (field.type === 'email' ? 'email' : field.type === 'password' ? 'password' : 'text');
 		const label = fOverride?.label ?? field.label;
 		const placeholder = fOverride?.placeholder ?? label;
 
@@ -757,7 +755,7 @@ function renderInternalAction(
 		// but the override accepts an arbitrary string for forward-compat
 		// with future hint values. Cast at the assignment boundary.
 		if (fOverride?.autocomplete) input.autocomplete = fOverride.autocomplete as AutoFill;
-		input.style.cssText = 'width: 100%; padding: 8px; margin-bottom: 4px; box-sizing: border-box;';
+		input.className = 'bb-input';
 		if (field.defaultValue) input.value = field.defaultValue;
 		inputs[field.name] = input;
 		wrapper.appendChild(input);
@@ -765,7 +763,7 @@ function renderInternalAction(
 		if (fOverride?.hint) {
 			const hint = document.createElement('div');
 			hint.textContent = fOverride.hint;
-			hint.style.cssText = 'font-size: 12px; color: #666; margin: 0 0 8px 2px;';
+			hint.className = 'bb-hint';
 			wrapper.appendChild(hint);
 		}
 	}
@@ -773,7 +771,7 @@ function renderInternalAction(
 	const btn = document.createElement('button');
 	btn.setAttribute('data-testid', 'authenticator-submit');
 	btn.textContent = override?.submitLabel ?? action.label;
-	btn.style.cssText = 'padding: 8px 16px; cursor: pointer; margin-right: 8px;';
+	btn.className = 'bb-button bb-button-primary';
 
 	const submit = async () => {
 		const values: Record<string, string> = {};
@@ -790,9 +788,10 @@ function renderInternalAction(
 		// try again.
 		if (action.capability === 'webauthn-get' || action.capability === 'webauthn-create') {
 			try {
-				const optsJson = action.capability === 'webauthn-get'
-					? values.credentialRequestOptions
-					: values.credentialCreationOptions;
+				const optsJson =
+					action.capability === 'webauthn-get'
+						? values.credentialRequestOptions
+						: values.credentialCreationOptions;
 				if (!optsJson) {
 					throw new Error('Missing WebAuthn options');
 				}
@@ -812,9 +811,7 @@ function renderInternalAction(
 			// submitting, so we widen at this one call site. Direct callers
 			// who know their action name get full discrimination via
 			// `AuthActionInput`'s per-variant shape.
-			const newState = await api.setAuthState(
-				{ action: action.name, ...values } as AuthActionInput,
-			);
+			const newState = await api.setAuthState({ action: action.name, ...values } as AuthActionInput);
 			// Retriable errors surface as a signedOut state with `retriable: true`
 			// and an `error` message. The server sets this flag when the
 			// underlying auth session is still usable (wrong MFA code,
@@ -895,25 +892,22 @@ function renderInternalAction(
  *
  * @internal
  */
-async function runWebAuthn(
-	capability: 'webauthn-get' | 'webauthn-create',
-	optionsJson: string,
-): Promise<string> {
+async function runWebAuthn(capability: 'webauthn-get' | 'webauthn-create', optionsJson: string): Promise<string> {
 	if (typeof navigator === 'undefined' || !navigator.credentials) {
 		throw new Error('This browser does not support WebAuthn');
 	}
 	const parsed = JSON.parse(optionsJson);
 	if (capability === 'webauthn-get') {
 		const publicKey =
-			(PublicKeyCredential as any)?.parseRequestOptionsFromJSON?.(parsed)
-			?? decodePublicKeyOptions(parsed, 'get');
+			(PublicKeyCredential as any)?.parseRequestOptionsFromJSON?.(parsed) ??
+			decodePublicKeyOptions(parsed, 'get');
 		const cred = await navigator.credentials.get({ publicKey });
 		if (!cred) throw new Error('No credential returned');
 		return encodeCredential(cred as PublicKeyCredential);
 	}
 	const publicKey =
-		(PublicKeyCredential as any)?.parseCreationOptionsFromJSON?.(parsed)
-		?? decodePublicKeyOptions(parsed, 'create');
+		(PublicKeyCredential as any)?.parseCreationOptionsFromJSON?.(parsed) ??
+		decodePublicKeyOptions(parsed, 'create');
 	const cred = await navigator.credentials.create({ publicKey });
 	if (!cred) throw new Error('No credential returned');
 	return encodeCredential(cred as PublicKeyCredential);
@@ -927,9 +921,7 @@ function encodeCredential(cred: PublicKeyCredential): string {
 	// Manual fallback. Walk the response shape and base64url-encode every
 	// ArrayBuffer field. We only handle the two response types
 	// `navigator.credentials.{get,create}` return.
-	const response = cred.response as
-		| AuthenticatorAttestationResponse
-		| AuthenticatorAssertionResponse;
+	const response = cred.response as AuthenticatorAttestationResponse | AuthenticatorAssertionResponse;
 	const out: Record<string, unknown> = {
 		id: cred.id,
 		rawId: bufToB64url(cred.rawId),
@@ -981,16 +973,18 @@ function decodePublicKeyOptions(json: any, kind: 'get' | 'create'): any {
 }
 
 function bufToB64url(buf: ArrayBuffer | ArrayBufferView): string {
-	const bytes = buf instanceof ArrayBuffer
-		? new Uint8Array(buf)
-		: new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+	const bytes =
+		buf instanceof ArrayBuffer ? new Uint8Array(buf) : new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 	let str = '';
 	for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
 	return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function b64urlToBuf(s: string): ArrayBuffer {
-	const padded = s.replace(/-/g, '+').replace(/_/g, '/').padEnd(s.length + ((4 - (s.length % 4)) % 4), '=');
+	const padded = s
+		.replace(/-/g, '+')
+		.replace(/_/g, '/')
+		.padEnd(s.length + ((4 - (s.length % 4)) % 4), '=');
 	const bin = atob(padded);
 	const out = new Uint8Array(bin.length);
 	for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
@@ -1002,7 +996,7 @@ function renderExternalAction(action: AuthAction): Node {
 	form.setAttribute('data-testid', `authenticator-action-${action.name}`);
 	form.method = action.method ?? 'GET';
 	form.action = action.url!;
-	form.style.cssText = 'margin-bottom: 8px;';
+	form.className = 'bb-field';
 
 	for (const field of action.fields) {
 		const input = document.createElement('input');
@@ -1017,7 +1011,7 @@ function renderExternalAction(action: AuthAction): Node {
 	btn.setAttribute('data-testid', 'authenticator-submit');
 	btn.type = 'submit';
 	btn.textContent = action.label;
-	btn.style.cssText = 'padding: 8px 16px; cursor: pointer; width: 100%;';
+	btn.className = 'bb-button bb-button-primary bb-button-block';
 	form.appendChild(btn);
 
 	return form;
@@ -1049,21 +1043,22 @@ function renderExternalAction(action: AuthAction): Node {
 export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 	const container = document.createElement('div');
 	container.setAttribute('data-testid', 'account-menu');
+	injectTheme();
 
 	function render(user: AuthUser | null) {
 		const bar = document.createElement('div');
-		bar.style.cssText = 'display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 12px 20px; background: #f5f5f5; border-bottom: 1px solid #ddd; font-family: system-ui, sans-serif;';
+		bar.className = 'bb-menubar';
 
 		if (user) {
 			const username = document.createElement('span');
 			username.setAttribute('data-testid', 'account-menu-username');
 			username.textContent = `👤 ${user.username}`;
-			username.style.cssText = 'font-size: 14px;';
+			username.className = 'bb-menubar-username';
 
 			const signOutBtn = document.createElement('button');
 			signOutBtn.setAttribute('data-testid', 'account-menu-signout');
 			signOutBtn.textContent = 'Sign Out';
-			signOutBtn.style.cssText = 'padding: 8px 16px; cursor: pointer;';
+			signOutBtn.className = 'bb-button bb-button-secondary';
 			signOutBtn.addEventListener('click', async () => {
 				const newState = await api.setAuthState({ action: 'signOut' });
 				updateState(api, newState);
@@ -1076,20 +1071,20 @@ export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 			const signInBtn = document.createElement('button');
 			signInBtn.setAttribute('data-testid', 'account-menu-signin');
 			signInBtn.textContent = 'Sign In';
-			signInBtn.style.cssText = 'padding: 8px 16px; cursor: pointer;';
+			signInBtn.className = 'bb-button bb-button-primary';
 
 			signInBtn.addEventListener('click', () => {
 				const modal = document.createElement('div');
 				modal.setAttribute('data-testid', 'account-menu-modal');
-				modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;';
+				modal.className = 'bb-modal-backdrop';
 
 				const content = document.createElement('div');
-				content.style.cssText = 'background: white; border-radius: 8px; padding: 20px; max-width: 400px; position: relative;';
+				content.className = 'bb-modal-content';
 
 				const closeBtn = document.createElement('button');
 				closeBtn.setAttribute('data-testid', 'account-menu-modal-close');
 				closeBtn.textContent = '✕';
-				closeBtn.style.cssText = 'position: absolute; top: 8px; right: 8px; border: none; background: none; font-size: 20px; cursor: pointer; padding: 0; width: 24px; height: 24px;';
+				closeBtn.className = 'bb-modal-close';
 				closeBtn.addEventListener('click', () => modal.remove());
 
 				content.appendChild(closeBtn);
