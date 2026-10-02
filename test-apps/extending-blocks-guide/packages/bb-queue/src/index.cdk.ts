@@ -20,7 +20,7 @@ export class Queue extends Scope {
         : undefined,
     });
 
-    queue.grantSendMessages(this.handler);
+    queue.grantSendMessages(this.executionRole);
     this.handler.addEnvironment(`${envSafe(this.fullId)}_URL`, queue.queueUrl);
   }
 }

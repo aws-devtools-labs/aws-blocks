@@ -36,7 +36,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 // Pattern 1 fixture: an SQS queue we'll send to via raw SDK.
 const externalQueue = new sqs.Queue(blocksStack, 'external-queue');
-externalQueue.grantSendMessages(blocksStack.handler);
+externalQueue.grantSendMessages(blocksStack.executionRole);
 blocksStack.handler.addEnvironment('EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 
 // Pattern 2 fixtures: two DynamoDB tables that pretend to predate Blocks.
