@@ -26,11 +26,11 @@
  * `on*` callbacks.
  */
 
-import type { ChatTransport, ChunkStream } from './transport.js';
+import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { AgentStreamChunk, InterruptResponse, JSONValue } from './types.js';
 import { AgentErrors, blocksAgentError } from './errors.js';
 
-export type { ChatTransport, ChunkStream, TurnRequest } from './transport.js';
+export type { ChatTransport, ChunkStream, TurnRequest, RealtimeChannelDescriptor } from './transport.js';
 export { realtimeTransport } from './transport.js';
 export type { AgentStreamChunk } from './types.js';
 
@@ -84,6 +84,33 @@ export interface CreateChatOptions {
 	transport: ChatTransport;
 	/** Conversation CRUD. Unchanged across runtimes. */
 	api: ChatConversationApi;
+	/**
+	 * Optional callback that re-mints a fresh channel descriptor (new connect + channel
+	 * token) so a long turn's subscription outlives the token TTLs (channel ~1h / connect
+	 * ~2h). Pure pass-through: createChat holds NO refresh state — it binds this to the
+	 * CURRENT channel at the subscribe call site and forwards the bound zero-arg form to
+	 * the transport, and the Realtime channel invokes it before EACH reconnect (never on
+	 * the initial subscribe). Receives the resolved `channelId` so it re-mints for the
+	 * channel actually in use — which changes across lazy createConversation, loadConversation,
+	 * and newConversation — rather than a channel captured once at construction.
+	 *
+	 * **Contract.** This must resolve to the RAW channel descriptor (the wire object with
+	 * `__blocks`/token fields), NOT a hydrated channel client. To produce one:
+	 * 1. The app exposes a server method that returns the channel's `toJSON()` descriptor
+	 *    with the `__blocks` discriminant stripped, so the response middleware does not
+	 *    hydrate it on the way back to the client.
+	 * 2. This callback re-adds `__blocks: 'realtime/channel'` to the returned object so it
+	 *    is a valid descriptor the transport can reopen with.
+	 * 3. That server method re-issues a connect + channel token, so it MUST apply the SAME
+	 *    authorization as the method that issued the original channel — it is a
+	 *    credential-issuing endpoint and must be gated like the original.
+	 *
+	 * For example, with the test app's example server method `agentGetRawDescriptor`:
+	 * `async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' })`.
+	 * When omitted, a reconnect replays the original tokens (fine for short turns), so
+	 * existing callers are unaffected.
+	 */
+	refresh?: (channelId: string) => Promise<RealtimeChannelDescriptor>;
 	/** Called whenever the message list changes. */
 	onMessagesChange?: (messages: ChatMessage[]) => void;
 	/** Called whenever loading state changes. */
@@ -560,6 +587,13 @@ export function createChat(options: CreateChatOptions): ChatController {
 				// no longer leave the spinner stuck.
 				if (reason !== 'client' && loading) armFailsafe();
 			},
+			// Pure pass-through: the transport/channel invokes this before each reconnect to
+			// re-mint fresh tokens so long turns outlive the channel (~1h) / connect (~2h)
+			// TTLs. createChat holds no refresh state; it binds the consumer's channel-aware
+			// callback to THIS turn's resolved channelId (closed over here, where the channel
+			// is known) and forwards the zero-arg bound form. undefined leaves reconnect
+			// replaying the original tokens.
+			refresh: options.refresh ? () => options.refresh!(channelId) : undefined,
 		});
 		activeStream = stream;
 		await stream.established;

@@ -265,6 +265,47 @@ channel.subscribe({
 
 **Backfill responsibility:** The Realtime BB does not provide message history. Backfill is the application's responsibility — typically by re-querying the data source from `onReconnect`. This is intentional: message history requires persistence and ordering guarantees that belong in the application layer, not the pub/sub transport.
 
+### Transparent auto-reconnect
+
+The client transport does not require the application to reconnect manually. On an unexpected
+drop it reconnects with exponential backoff (capped at `MAX_RECONNECT` attempts, `MAX_DELAY_MS`
+ceiling), resubscribes every active channel replaying its stored token, and re-arms the
+~9-minute keep-alive ping. `onReconnect` fires once the resubscribe is confirmed. Terminal vs
+reconnecting is decided by intent (`intentionalClose` / `subscriptions.size === 0`), not the
+close code — a legitimate drop can arrive as a clean `1000`/`1005`. Only when retries are
+exhausted, or a resubscribe is rejected (stale token past its TTL, revoked channel), does the
+transport surface `onDisconnect('error')` as the manual-recovery fallback.
+
+### `refresh` — outliving token TTLs
+
+Auto-reconnect replays the *stored* tokens, which carry TTLs (connect ~2h, channel ~1h). A
+subscription that must outlive those TTLs (e.g. a multi-hour agent turn crossing the 1h/2h
+boundaries) supplies `SubscribeOptions.refresh`: `() => Promise<RealtimeChannelDescriptor>`.
+
+- **Refresh-before-open ordering:** on reconnect the transport `await`s `refresh()` *before*
+  constructing the new socket, so the fresh connect token lands in the socket URL
+  (`?token=…`) and the fresh channel token is applied before the resubscribe frame is sent.
+- **Why the whole descriptor:** `refresh` returns the full descriptor (fresh `wsUrl` + connect
+  token + channel token), not just a channel token — a partial refresh would still fail once
+  the connect token expires past 2h. Minting is server-side (auth-gated), so the transport
+  cannot self-mint; the consumer supplies the callback that re-invokes its own channel method.
+- **Malformed / teardown guards:** a `refresh()` that resolves to a non-descriptor takes the
+  `onDisconnect('error')` + backoff path rather than reopening with stale tokens; the awaited
+  continuation re-checks teardown/pool-ownership both before and after applying the descriptor,
+  so an `unsubscribe()` during a pending refresh cannot resurrect a zombie socket.
+- **Per-channel refresh:** `refresh` is registered per-channel — a connection multiplexing
+  several channels keeps each channel's own refresher. On reconnect every live channel
+  re-mints its own token in parallel (the instance-scoped connect token is taken from any one
+  of them), then resubscribes with its fresh channel token. A channel whose `refresh` fails
+  falls back to its stored channel token; if that stored token has already lapsed, the server
+  rejects that channel's resubscribe and the drop is **channel-scoped** —
+  `onDisconnect('error')` reaches only that channel's owners, not its cleanly-reconnected
+  siblings. A connection-wide `onDisconnect('error')` fan-out is reserved for the refresh- or
+  reconnect-FAILURE path (retries exhausted / give-up), not a single sibling's stale-token
+  rejection.
+
+Absent `refresh`, reconnect replays the stored tokens (correct for short/transient drops).
+
 ## Channel Name Limits
 
 The previous AppSync Events implementation enforced a 5-segment × 50-character channel name limit. With the move to API Gateway WebSocket + DynamoDB, that restriction no longer applies.
