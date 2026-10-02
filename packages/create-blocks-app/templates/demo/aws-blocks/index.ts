@@ -25,7 +25,7 @@ const auth = new AuthBasic(scope, 'auth', {
   crossDomain: process.env.BLOCKS_SANDBOX === 'true',
 });
 
-// DistributedTable: Use Zod schemas for type-safe tables with indexes
+// DistributedTable: Use Zod schemas for type-safe tables
 const todoSchema = z.object({
   userId: z.string(),
   todoId: z.string(),
@@ -51,20 +51,6 @@ const todos = new DistributedTable(scope, 'todos', {
   key: {
     partitionKey: 'userId',
     sortKey: 'todoId'
-  },
-  indexes: {
-    byPriority: {
-      partitionKey: 'userId',
-      sortKey: 'priority'
-    },
-    byTitle: {
-      partitionKey: 'userId',
-      sortKey: 'title'
-    },
-    byCreatedAt: {
-      partitionKey: 'userId',
-      sortKey: 'createdAt'
-    }
   }
 });
 
@@ -124,21 +110,17 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async listTodos(sortBy?: 'priority' | 'title' | 'createdAt'): Promise<Todo[]> {
     const user = await auth.requireAuth(context);
 
-    const indexMap = {
-      priority: 'byPriority',
-      title: 'byTitle',
-      createdAt: 'byCreatedAt'
-    } as const;
+    const list = await Array.fromAsync(
+      todos.query({ where: { userId: { equals: user.username } } })
+    );
 
-    // The default path queries the byCreatedAt GSI, which is eventually consistent:
-    // a todo just written by createTodo() may not appear in the immediately following call.
-    const iterator = todos.query({
-      index: sortBy ? indexMap[sortBy] : 'byCreatedAt',
-      where: { userId: { equals: user.username } }
-    });
-
+    // Sort in the API (not via a secondary index) — a per-user todo list is
+    // small, so an in-memory sort is simpler and avoids provisioning GSIs.
     // demo only: loads all todos into memory, no pagination. query() accepts a `limit` for real apps.
-    return await Array.fromAsync(iterator);
+    if (sortBy === 'priority') return list.sort((a, b) => a.priority - b.priority);
+    if (sortBy === 'title') return list.sort((a, b) => a.title.localeCompare(b.title));
+    // Default (and 'createdAt'): newest-last by creation time.
+    return list.sort((a, b) => a.createdAt - b.createdAt);
   },
 
   async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {

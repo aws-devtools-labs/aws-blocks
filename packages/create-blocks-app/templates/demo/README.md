@@ -31,10 +31,9 @@ Open http://localhost:3000 after `npm run dev`.
 - **AuthBasic** — sign up / sign in / sign out with JWT sessions.
 - **KVStore** — a public `getValue` / `setValue` pair plus a cookie round-trip
   demo (`setCookie` / `getCookie` / `deleteCookie`).
-- **DistributedTable** — per-user todos with three secondary indexes
-  (`byPriority`, `byTitle`, `byCreatedAt`), so `listTodos(sortBy)` can sort on
-  the server. Every todo method calls `auth.requireAuth(context)`, so data is
-  isolated per user.
+- **DistributedTable** — per-user todos; `listTodos(sortBy)` sorts the list in
+  the API (an in-memory sort, no secondary indexes to provision). Every todo
+  method calls `auth.requireAuth(context)`, so data is isolated per user.
 
 The API mixes **public** methods (no auth) and **protected** methods (gated by
 `requireAuth`) in one namespace, showing where the auth boundary sits.
