@@ -86,20 +86,6 @@ const todos = new DistributedTable(scope, 'todos', {
   key: {
     partitionKey: 'userSub',
     sortKey: 'todoId'
-  },
-  indexes: {
-    byPriority: {
-      partitionKey: 'userSub',
-      sortKey: 'priority'
-    },
-    byTitle: {
-      partitionKey: 'userSub',
-      sortKey: 'title'
-    },
-    byCreatedAt: {
-      partitionKey: 'userSub',
-      sortKey: 'createdAt'
-    }
   }
 });
 
@@ -162,18 +148,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async listTodos(sortBy?: 'priority' | 'title' | 'createdAt') {
     const user = await auth.requireAuth(context);
-    const indexMap = {
-      priority: 'byPriority',
-      title: 'byTitle',
-      createdAt: 'byCreatedAt',
-    } as const;
-    const iterator = todos.query({
-      index: sortBy ? indexMap[sortBy] : 'byCreatedAt',
-      where: { userSub: { equals: user.userSub } },
-    });
-    const out: Array<z.infer<typeof todoSchema>> = [];
-    for await (const t of iterator) out.push(t);
-    return out;
+    const list = await Array.fromAsync(
+      todos.query({ where: { userSub: { equals: user.userSub } } })
+    );
+    // Sort in the API (not via a secondary index) — a per-user todo list is
+    // small, so an in-memory sort is simpler and avoids provisioning GSIs.
+    if (sortBy === 'priority') return list.sort((a, b) => a.priority - b.priority);
+    if (sortBy === 'title') return list.sort((a, b) => a.title.localeCompare(b.title));
+    // Default (and 'createdAt'): newest-last by creation time.
+    return list.sort((a, b) => a.createdAt - b.createdAt);
   },
 
   async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {
