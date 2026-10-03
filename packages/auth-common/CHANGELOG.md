@@ -1,5 +1,31 @@
 # @aws-blocks/auth-common
 
+## 0.1.9
+
+### Patch Changes
+
+- 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
+- fac0e75: fix(auth-common): Enter submits the Authenticator form from any field, not just the last
+  
+  The rendered auth form isn't a native `<form>`, so submit-on-Enter is wired
+  explicitly — but the handler was bound only to the *last* visible input. In any
+  multi-field form, pressing Enter in an earlier field did nothing: the username in
+  a username+password sign-in, or the verification code in a code+newPassword
+  confirm-reset form. Enter now submits from every visible field, matching native
+  form behavior.
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/core@0.6.0
+
 ## 0.1.8
 
 ### Patch Changes

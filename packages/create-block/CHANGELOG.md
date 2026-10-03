@@ -1,5 +1,16 @@
 # @aws-blocks/create-block
 
+## 0.2.1
+
+### Patch Changes
+
+- d4b32f2: Add `README.md` and `DESIGN.md` to `@aws-blocks/create-block` and ship them in the published package (`files`), matching the first-party package convention.
+  
+  Tidy two `extract-ts-types` test nits (test/comment only, no runtime change): replace a redundant re-assert with a direct check of the documented lingering-bare-key behavior, and link the array/tuple & nested-destructuring boundary to its tracking issue (#552).
+- f04dbc4: Validate the derived npm scope and run the workspace build/test via `execFileSync` (argument array) instead of a shell string in the block scaffolder.
+  
+  The scope resolved from the customer workspace `package.json` `name` now passes the same allowlist as the `--scope` flag before it flows into the package name, and `verify()` invokes `npm run build`/`npm test` through an argv array rather than an interpolated shell command.
+
 ## 0.2.0
 
 ### Minor Changes
