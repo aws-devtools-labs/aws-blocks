@@ -1,0 +1,166 @@
+name: Publish Canary (npm)
+
+# Publishes a canary build of the selected branch to public npm under the
+# `canary-<branch>` dist-tag (version 0.0.0-canary.<branch>.<sha>.<ts>).
+# Never touches `latest` — stable releases live in publish-packages.yml.
+# The S3-registry canary lives in publish-canary.yml.
+#
+# Two jobs: `pack` builds, tests, and packs with no secrets. `publish` holds
+# NPM_TOKEN, runs no repo code (no checkout, no npm ci), verifies the packed
+# tarballs, and publishes them with provenance.
+#
+# NOTE: npm versions are permanent and public (unpublish only works for 72h).
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: publish-canary-npm
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  pack:
+    name: Build, test & pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      NODE_OPTIONS: '--test-reporter=spec'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: E2E Test Local
+        run: npm run test:e2e:local
+
+      - name: Pack canary
+        env:
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$BRANCH_NAME" =~ ^[a-zA-Z0-9/_.-]+$ ]]; then
+            echo "::error::Branch name contains unsafe characters"
+            exit 1
+          fi
+          npx tsx scripts/publish/publish.ts --canary "$BRANCH_NAME" --pack-only dist-npm
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: canary-npm-tarballs
+          path: dist-npm/
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish to npm
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: publish
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      # No checkout here, so no .nvmrc — keep in sync with it.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: canary-npm-tarballs
+          path: dist-npm
+
+      - name: Verify tarballs
+        working-directory: dist-npm
+        run: |
+          set -euo pipefail
+          DIST_TAG=$(jq -r .distTag publish-manifest.json)
+          if [[ ! "$DIST_TAG" =~ ^canary-[a-z0-9-]+$ ]]; then
+            echo "::error::Refusing dist-tag '$DIST_TAG' (must be canary-*)"
+            exit 1
+          fi
+          jq -c '.packages[]' publish-manifest.json | while read -r pkg; do
+            name=$(jq -r .name <<<"$pkg")
+            version=$(jq -r .version <<<"$pkg")
+            file=$(jq -r .file <<<"$pkg")
+            expected=$(jq -r .integrity <<<"$pkg")
+            if [[ ! "$name" =~ ^@aws-blocks/[a-z0-9-]+$ ]]; then
+              echo "::error::Unexpected package name '$name'"
+              exit 1
+            fi
+            if [[ ! "$version" =~ ^0\.0\.0-canary\. ]]; then
+              echo "::error::$name: refusing non-canary version '$version'"
+              exit 1
+            fi
+            if [[ ! "$file" =~ ^[a-z0-9.-]+\.tgz$ ]]; then
+              echo "::error::$name: unexpected tarball file name '$file'"
+              exit 1
+            fi
+            actual="sha512-$(openssl dgst -sha512 -binary "$file" | base64 -w0)"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "::error::$name: integrity mismatch for $file"
+              exit 1
+            fi
+          done
+          echo "DIST_TAG=$DIST_TAG" >> "$GITHUB_ENV"
+
+      - name: Publish
+        working-directory: dist-npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Manifest is in topological order, so dependencies publish first.
+          # Already-published versions are skipped, so a rerun after a partial failure is safe.
+          jq -c '.packages[]' publish-manifest.json | while read -r pkg; do
+            name=$(jq -r .name <<<"$pkg")
+            version=$(jq -r .version <<<"$pkg")
+            file=$(jq -r .file <<<"$pkg")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version already on npm, skipping"
+              continue
+            fi
+            npm publish "./$file" --tag "$DIST_TAG" --access public --provenance --ignore-scripts
+          done
+
+      - name: Summary
+        working-directory: dist-npm
+        run: |
+          {
+            echo "## Canary Published to npm 🐤"
+            echo ""
+            echo "**Dist tag:** \`$DIST_TAG\`"
+            echo ""
+            echo "### Packages"
+            jq -r '.packages[] | "- `\(.name)@\(.version)`"' publish-manifest.json
+            echo ""
+            echo "### Install"
+            echo '```bash'
+            echo "npm install @aws-blocks/blocks@$DIST_TAG"
+            echo '```'
+            echo ""
+            echo "### Create App"
+            echo '```bash'
+            echo "npm create @aws-blocks/blocks-app@$DIST_TAG -- --template demo"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

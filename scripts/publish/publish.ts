@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { readdir, readFile, unlink, writeFile, mkdir, stat, access, mkdtemp } from "node:fs/promises";
+import { readdir, readFile, unlink, writeFile, mkdir, stat, access, mkdtemp, copyFile } from "node:fs/promises";
 import { readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, relative, } from "node:path";
+import { basename, join, resolve, relative, } from "node:path";
 import { execSync } from "node:child_process";
 import { LocalPublisher } from "./publishers/local.ts";
 import type { PackageInfo, PackResult, Publisher } from "./publishers/types.ts";
@@ -178,11 +178,21 @@ function sanitizeBranchName(branch: string): string {
 interface ParsedArgs {
 	distTag: string;
 	canaryVersion: string | null;
+	/** `--pack-only <dir>`: write tarballs + manifest to `dir` for a later `npm publish`; no upload. */
+	packOnlyDir: string | null;
 }
 
 function parseArgs(): ParsedArgs {
 	const args = process.argv.slice(2);
 	const canaryIdx = args.indexOf("--canary");
+	const packOnlyIdx = args.indexOf("--pack-only");
+	const packOnlyDir = packOnlyIdx !== -1 && args[packOnlyIdx + 1] ? resolve(args[packOnlyIdx + 1]!) : null;
+
+	// Pack-only output is published to public npm, so it must never carry the `latest` dist-tag.
+	if (packOnlyDir && !(canaryIdx !== -1 && args[canaryIdx + 1])) {
+		console.error("\n❌ --pack-only requires --canary <branch>.\n");
+		process.exit(1);
+	}
 
 	if (canaryIdx !== -1 && args[canaryIdx + 1]) {
 		const safeBranch = sanitizeBranchName(args[canaryIdx + 1]);
@@ -191,17 +201,32 @@ function parseArgs(): ParsedArgs {
 		return {
 			distTag: `canary-${safeBranch}`,
 			canaryVersion: `0.0.0-canary.${safeBranch}.${shortSha}.${timestamp}`,
+			packOnlyDir,
 		};
 	}
 
-	return { distTag: "latest", canaryVersion: null };
+	return { distTag: "latest", canaryVersion: null, packOnlyDir: null };
 }
 
 // ── Publish orchestrator ───────────────────────────────────────────
 
-async function publish(publisher: Publisher, distTag: string, canaryVersion: string | null) {
+async function publish(publisher: Publisher | null, distTag: string, canaryVersion: string | null, packOnlyDir: string | null) {
 	console.log("Discovering packages...");
-	const packages = await discoverPackages();
+	let packages = await discoverPackages();
+
+	// npm rejects `private` packages, so drop them from pack-only output and make sure
+	// no public package depends on one (it would not install).
+	if (packOnlyDir) {
+		const privateNames = new Set(packages.filter((p) => p.packageJson.private === true).map((p) => p.name));
+		packages = packages.filter((p) => !privateNames.has(p.name));
+		for (const pkg of packages) {
+			const deps = { ...pkg.packageJson.dependencies, ...pkg.packageJson.peerDependencies };
+			const bad = Object.keys(deps).filter((d) => privateNames.has(d));
+			if (bad.length > 0) {
+				throw new Error(`${pkg.name} depends on private package(s): ${bad.join(", ")}`);
+			}
+		}
+	}
 	console.log(`Found ${packages.length} publishable packages: ${packages.map((p) => p.name).join(", ")}`);
 
 	const sorted = topoSort(packages);
@@ -300,6 +325,21 @@ async function publish(publisher: Publisher, distTag: string, canaryVersion: str
 			await writeFile(path, content);
 		}
 	}
+
+	if (packOnlyDir) {
+		await mkdir(packOnlyDir, { recursive: true });
+		const packed = [];
+		for (const r of results) {
+			const file = basename(r.tarballPath);
+			await copyFile(r.tarballPath, join(packOnlyDir, file));
+			packed.push({ name: r.packageName, version: r.version, file, integrity: r.integrity, shasum: r.shasum });
+		}
+		await cleanupTarballs(results);
+		console.log(`\n✓ Packed ${packed.length} package(s) to ${packOnlyDir}`);
+		// Topological order — publish in this order so dependencies exist first.
+		return { publishedAt: new Date().toISOString(), distTag, packages: packed };
+	}
+	if (!publisher) throw new Error("publisher is required unless --pack-only is set");
 
 	// Upload tarballs (atomic strategy)
 	// ── Version-exists guard ───────────────────────────────────
@@ -412,16 +452,19 @@ async function publish(publisher: Publisher, distTag: string, canaryVersion: str
 
 // ── CLI entry point ────────────────────────────────────────────────
 
-const { distTag, canaryVersion } = parseArgs();
+const { distTag, canaryVersion, packOnlyDir } = parseArgs();
 
 const bucket = process.env.S3_BUCKET;
 const cfDomain = process.env.CLOUDFRONT_DOMAIN;
 const cfDistId = process.env.CLOUDFRONT_DISTRIBUTION_ID;
 
-let publisher: Publisher;
+let publisher: Publisher | null;
 let mode: string;
 
-if (bucket && cfDomain && cfDistId) {
+if (packOnlyDir) {
+	publisher = null;
+	mode = "pack-only";
+} else if (bucket && cfDomain && cfDistId) {
 	const { S3Publisher } = await import("./publishers/s3.ts");
 	publisher = new S3Publisher(bucket, cfDomain, cfDistId);
 	mode = "s3";
@@ -430,12 +473,13 @@ if (bucket && cfDomain && cfDistId) {
 	mode = "local";
 }
 
-console.log(`AWS Blocks Publish — ${mode === "s3" ? "S3" : "dry-run (local)"} (dist-tag: ${distTag})\n`);
+const modeLabel = mode === "s3" ? "S3" : mode === "pack-only" ? "pack-only" : "dry-run (local)";
+console.log(`AWS Blocks Publish — ${modeLabel} (dist-tag: ${distTag})\n`);
 
-const manifest = await publish(publisher, distTag, canaryVersion);
+const manifest = await publish(publisher, distTag, canaryVersion, packOnlyDir);
 
 // Write manifest
-const manifestDir = mode === "s3" ? ROOT : join(ROOT, "dist-registry");
+const manifestDir = packOnlyDir ?? (mode === "s3" ? ROOT : join(ROOT, "dist-registry"));
 await mkdir(manifestDir, { recursive: true });
 const manifestPath = join(manifestDir, "publish-manifest.json");
 await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
