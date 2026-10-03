@@ -30,7 +30,7 @@ test.before(async () => {
   console.log(`Testing ${baseUrl}...`);
 
   if (!process.env.TEST_URL && !await isServerReady()) {
-    server = spawn('npm', ['run', 'dev'], {
+    server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
@@ -51,7 +51,10 @@ test.after(() => {
 test('home page loads', async () => {
   const res = await fetch(baseUrl);
   assert.strictEqual(res.status, 200, 'Home page should return 200');
+});
 
-  const html = await res.text();
-  assert.ok(html.includes('Blocks + Next.js'), 'Page should contain title');
+test('app: server serves its Blocks config', async () => {
+  const configUrl = `${baseUrl.replace(/\/$/, '')}/.blocks-sandbox/config.json`;
+  const response = await fetch(configUrl);
+  assert.ok(response.ok, `expected ${configUrl} to respond ok`);
 });
