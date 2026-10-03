@@ -13,6 +13,9 @@ name: Publish Canary (npm)
 
 on:
   workflow_dispatch:
+  # TEMPORARY: test trigger, remove before merge.
+  push:
+    branches: [ci/publish-canary-npm, esql-canary]
 
 concurrency:
   group: publish-canary-npm
