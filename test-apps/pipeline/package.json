@@ -12,11 +12,11 @@
     "@aws-blocks/blocks": "*",
     "@aws-blocks/core": "*",
     "@aws-blocks/pipeline": "*",
-    "aws-cdk-lib": "^2.257.0",
-    "constructs": "^10.6.0"
+    "aws-cdk-lib": "^2.272.0",
+    "constructs": "^10.8.1"
   },
   "devDependencies": {
-    "tsx": "^4.7.0",
-    "typescript": "^5.3.0"
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
   }
 }
