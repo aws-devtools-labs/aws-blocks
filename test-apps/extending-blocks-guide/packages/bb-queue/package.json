@@ -23,11 +23,11 @@
     "test": "echo 'No tests (custom BB exercised by parent harness mock + e2e)'"
   },
   "dependencies": {
-    "@aws-sdk/client-sqs": "^3.0.0"
+    "@aws-sdk/client-sqs": "^3.1144.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.3.0"
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
     "@aws-blocks/core": "*",
