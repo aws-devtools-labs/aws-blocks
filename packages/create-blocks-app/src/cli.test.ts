@@ -507,6 +507,50 @@ describe('create-blocks-app auto-detection', () => {
     assert.deepStrictEqual(missing, [], `Deployable templates missing "vendorize": ${missing.join(', ')}`);
   });
 
+  it('every deployable template can open its production console', () => {
+    // Regression guard: this drifted once already. The `sql` and `api-only`
+    // templates were added while the per-stage outputs change (D-017) was in
+    // review, so they shipped `sandbox:console` with no `console` — a scaffolded
+    // app could `npm run deploy` to production and then had no way to open that
+    // stack — and a `console.ts` that hardcoded an outputs path instead of
+    // selecting by stage. Keyed on `deploy` rather than `sandbox` because it is
+    // the production deploy that makes a production console meaningful; the
+    // amplify template has neither and is correctly out of scope (D-017 pt 9).
+    const templatesDir = join(__dirname, '..', 'templates');
+    const templates = readdirSync(templatesDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+    const missingScript: string[] = [];
+    const notStageBased: string[] = [];
+    for (const name of templates) {
+      const pkgPath = join(templatesDir, name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+      const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
+      if (!scripts.deploy) continue;
+      if (scripts.console !== 'tsx aws-blocks/scripts/console.ts --production') {
+        missingScript.push(name);
+      }
+      // The script alone is not enough: it must reach a console.ts that derives
+      // the stack from the stage, or `--production` is silently ignored and the
+      // sandbox stack opens instead.
+      const consolePath = join(templatesDir, name, 'aws-blocks', 'scripts', 'console.ts');
+      const source = existsSync(consolePath) ? readFileSync(consolePath, 'utf-8') : '';
+      if (!source.includes('parseStageArg')) {
+        notStageBased.push(name);
+      }
+    }
+    assert.deepStrictEqual(
+      missingScript,
+      [],
+      `Deployable templates missing the standard "console" script: ${missingScript.join(', ')}`,
+    );
+    assert.deepStrictEqual(
+      notStageBased,
+      [],
+      `Deployable templates whose console.ts does not select by stage: ${notStageBased.join(', ')}`,
+    );
+  });
+
   it('skips npm install when creating a fresh project with --skip-install', () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-fresh-skip-install-'));
     const targetDir = join(tmpDir, 'fresh-app');
