@@ -377,6 +377,69 @@ test('CDK: GSI manager Lambda log groups adopt defaults.logRetention', () => {
 	template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
 });
 
+// ── Create-time native GSIs (collapse the serialized-GSI fresh-deploy tail) ──
+// A fresh CreateTable must provision every configured index in one shot rather
+// than adding them one-at-a-time via the custom resource. The custom resource
+// is retained for redeploy-time index mutations on an existing table.
+
+test('CDK: configured indexes are declared natively on the table (fresh CreateTable provisions all at once)', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		indexes: {
+			byEmail: { partitionKey: 'email' },
+			byEmailCreated: { partitionKey: 'email', sortKey: 'createdAt' },
+		},
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		GlobalSecondaryIndexes: Match.arrayWith([
+			Match.objectLike({
+				IndexName: 'byEmail',
+				KeySchema: [{ AttributeName: 'email', KeyType: 'HASH' }],
+				Projection: { ProjectionType: 'ALL' },
+			}),
+			Match.objectLike({
+				IndexName: 'byEmailCreated',
+				KeySchema: [
+					{ AttributeName: 'email', KeyType: 'HASH' },
+					{ AttributeName: 'createdAt', KeyType: 'RANGE' },
+				],
+				Projection: { ProjectionType: 'ALL' },
+			}),
+		]),
+	});
+});
+
+test('CDK: the GSI custom resource is retained alongside native indexes (for redeploy mutations)', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		indexes: { byEmail: { partitionKey: 'email' } },
+	});
+	const template = Template.fromStack(stack);
+	// Native GSIs handle the fresh CreateTable; the custom resource stays to
+	// converge add/remove index mutations on an already-existing table (where
+	// DynamoDB's one-in-flight limit is unavoidable). On a fresh table it sees
+	// the natively-created index already present and no-ops.
+	template.resourceCountIs('AWS::CloudFormation::CustomResource', 1);
+});
+
+test('CDK: an index-less table declares no native GSIs (template unchanged for that case)', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		GlobalSecondaryIndexes: Match.absent(),
+	});
+	template.resourceCountIs('AWS::CloudFormation::CustomResource', 0);
+});
+
 test('CDK: DistributedTable.fromExisting does NOT provision a table (regression)', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {

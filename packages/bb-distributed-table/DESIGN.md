@@ -159,7 +159,7 @@ Creates a single DynamoDB table:
 
 - **Partition key:** Configurable name and type via `options.key.partitionKey`
 - **Sort key:** Configurable name and type via `options.key.sortKey` (optional)
-- **Global secondary indexes:** Managed by a custom resource (see below)
+- **Global secondary indexes:** Declared natively on the `AWS::DynamoDB::Table` for a fresh `CreateTable` (all configured GSIs provisioned at once), and reconciled by a custom resource for add/remove mutations on an already-existing table (see below)
 - **TTL:** Enabled via `TimeToLiveSpecification` when `options.ttl` is set
 - **Billing mode:** PAY_PER_REQUEST
 - **Table name:** Derived from `scope.fullId` (includes stack name for uniqueness)
@@ -170,7 +170,15 @@ Attribute types are inferred from the schema at synth time. The CDK layer probes
 
 ### GSI Management Custom Resource
 
-DynamoDB only allows one GSI change per `UpdateTable` call, and each change can take minutes to hours on large tables (DynamoDB must backfill the index). A standard CDK `Table` construct cannot express multi-GSI changes in a single deployment. DistributedTable uses a CloudFormation custom resource with the CDK `Provider` framework's async pattern to manage GSIs declaratively.
+GSIs are provisioned by two mechanisms that do not disagree:
+
+1. **Native at `CreateTable` (the fresh-deploy path).** Every configured GSI is declared directly on the `AWS::DynamoDB::Table` resource, so an empty new table goes ACTIVE with all its indexes in a single shot — DynamoDB allows any number of GSIs at table-creation time. This collapses the create-then-add-one-at-a-time tail that otherwise dominates a fresh deploy.
+
+2. **Custom resource (the existing-table mutation path, retained).** DynamoDB only allows one GSI change per `UpdateTable` call, and each change can take minutes to hours on large tables (DynamoDB must backfill the index). A standard CDK `Table` construct cannot express a *multi*-GSI change against a live table in a single deployment. DistributedTable keeps a CloudFormation custom resource (CDK `Provider` async pattern) to reconcile GSI add/remove mutations on an already-existing table declaratively.
+
+**Ownership boundary on a redeploy of an existing stack.** Because the indexes are declared on the Table resource, CloudFormation owns reconciling the Table's GSI set and drives a single-index mutation via its own `UpdateTable` (the one-create/delete-per-update limit applies there). The custom resource converges only the residual — a multi-index add/remove that exceeds what CloudFormation can express in one update. On a fresh table the reconciler no-ops (the GSIs CloudFormation just created natively already match desired); the two mechanisms use projection `ALL` so the native declaration and the reconciler never produce a different index shape. On a multi-index redeploy the ordering between CloudFormation's `UpdateTable` and the reconciler Lambda is not deterministic.
+
+A stack deployed before GSIs moved onto the Table resource has zero GSIs in its stored template while its live table physically has them, so its next redeploy would plan those indexes as creates and fail. Such a stack runs a one-time adoption migration (retain, remove, re-import the Table so CloudFormation adopts the existing indexes into stored state) before it can redeploy cleanly — see `MIGRATION-native-gsi.md`.
 
 **Architecture:**
 
