@@ -1,5 +1,8 @@
 name: Publish Canary
 
+# Publishes a canary build to the private S3/CloudFront registry.
+# For a public canary on npm, use publish-canary-npm.yml.
+
 on:
   workflow_dispatch:
 
