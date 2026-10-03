@@ -1,5 +1,276 @@
 # @aws-blocks/blocks
 
+## 0.7.0
+
+### Minor Changes
+
+- 20be3f0: fix(bb-kv-store): wire point-in-time recovery from the stack preset and add customer-managed encryption
+  
+  `KVStore` now honors `defaults.pointInTimeRecovery` (PITR on under `production`, off under `sandbox`) and accepts per-block `pointInTimeRecovery` and `encryption` options — mirroring `DistributedTable`. `encryption: 'customer-managed'` provisions a dedicated CMK, and `KVStore.fromKmsKey(arn)` reuses an existing key across stores. Previously `KVStore` ignored the preset, so production-preset consumers believed PITR was enabled when it was not.
+  
+  The default encryption now emits the AWS-managed `aws/dynamodb` KMS key (`SSESpecification: { SSEEnabled: true }`), where before no `SSESpecification` was emitted at all (the AWS-owned key). On an already-deployed table this is an in-place SSE change applied on upgrade, and the `aws/dynamodb` key bills per-request KMS charges that the AWS-owned key does not.
+  
+  **Behavior change on next production deploy of an existing app:** an existing `production`-preset `KVStore` table gains Point-in-Time Recovery in place on the next deploy (an in-place update, no table replacement); continuous backups are billed per GB-month of table size. Separately, passing `removalPolicy`, `deletionProtection`, or `ttl` alongside `fromExisting()` now warns at synth (previously only `pointInTimeRecovery` and `encryption` did), so a pipeline running `cdk synth --strict` will fail until those options are removed from the wrapped-table call.
+
+### Patch Changes
+
+- 8da1d1f: feat(bb-agent): compute-agnostic client streaming API — `createChat` + `realtimeTransport`
+  
+  Adds a redesigned client streaming surface that hides the runtime behind a single
+  transport seam, so the same frontend code works across runtimes:
+  
+  - `createChat({ transport, api })` — the client API. The common case is one call
+    (`chat.sendMessage('Hello')`); subscribe and run are fused so the
+    subscribe-before-send race can't surface. The flexible primitives `run()`
+    (produce) and `subscribe()` (consume) are exposed for fan-out, observer-only
+    attach, and decoupled produce/consume.
+  - `realtimeTransport(...)` — the Lambda + Realtime implementation of the
+    `ChatTransport` seam. Configure it once; call sites never name the runtime. A
+    future runtime supplies a different transport; nothing else on the client changes.
+  
+  Additive and non-breaking. The `stream()` / `getChannel()` / `resume()` server
+  methods are unchanged (the new transport is built on them). Only the `useChat`
+  client hook is now marked `@deprecated`, superseded by `createChat`.
+- 773cef2: fix(astro): allow an empty `dist/client` for pure-SSR builds
+  
+  A server/hybrid Astro app with no static assets — no `public/` files and no
+  prerendered pages — produces an empty `dist/client`. The adapter treated that as
+  a missing build output and threw `AstroBuildOutputMissingError`, blocking synth
+  and deploy. `dist/server/entry.mjs` is the real required artifact; an empty (or
+  absent) `dist/client` is valid, since CloudFront routes every request to the SSR
+  Lambda. The adapter now requires only the server entry and ensures `dist/client`
+  exists (creating it when absent, with a build-log breadcrumb) instead of failing.
+- ea5f91c: fix(bb-auth-basic): echo the username on the confirm-signup / confirm-reset forms
+  
+  AuthBasic's `confirmingSignUp` and `confirmingPasswordReset` states rendered
+  `username` as an empty, visible text field — so after signing up (or requesting a
+  reset) the user had to **retype** their username on the confirmation step, and a
+  mismatch silently broke the flow. The username is now echoed as a **hidden**
+  field prefilled with the value just entered (mirroring `bb-auth-cognito`), so the
+  confirm form carries it automatically. The `code` / `password` / `newPassword`
+  fields are unchanged.
+- 2e72825: fix(bb-auth-cognito): `requireRole` reads group membership live so admin group changes take effect without a re-login
+  
+  `requireRole` checked the signed-in user's `cognito:groups` **token claim**, which
+  is a snapshot from sign-in. After an admin ran `auth.admin.addUserToGroup(user,
+  'admins')`, that user's live session kept getting **403** until their token
+  refreshed or they re-logged in — the "admin surface is unreachable / `requireRole`
+  returns 403 for everyone" symptom. The mirror bug: `removeUserFromGroup` did **not**
+  revoke a live session, so a removed member kept access until their stale token
+  expired.
+  
+  `requireRole` now reads membership live at call time — AWS: `AdminListGroupsForUser`
+  (paginated); mock: in-process `state.groups` — mirroring how `fetchUserAttributes`
+  reads live rather than trusting the token. The returned `CognitoUser.groups`
+  reflects the live read. Grants and revocations now apply on the user's next
+  request, with no re-login.
+  
+  - Costs one extra Cognito call per guarded request. The cheaper identity reads
+    (`requireAuth` / `getCurrentUser` / `signIn`) still surface the cached
+    `cognito:groups` claim — use `requireRole` when you need live membership.
+  - `cognito-idp:AdminListGroupsForUser` is now granted to the execution role
+    unconditionally (it backs a client-facing guard), independent of the opt-in
+    `admin` surface. Every other `Admin*` action still requires opt-in.
+  - Added `admin.test.ts` cases covering the sign-in-then-mutate ordering in both
+    directions (grant is honored, revocation locks out); updated the CDK IAM
+    least-privilege test for the new baseline grant.
+- 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
+- 39628cb: fix(core): anchor and escape CORS allowlist origins
+  
+  CORS allowlist entries are compiled to regular expressions. Two matching gaps let a
+  plain-looking origin match more broadly than intended:
+  
+  - An entry beginning with `^` was used verbatim with no end anchor, so
+    `^https://app\.example\.com` also matched `https://app.example.com.extra`.
+    `parseCorsPatterns` now compiles every entry as `^(?:<entry>)$`, so the anchors
+    bind the whole expression — including every branch of a top-level `|` alternation,
+    not just the last.
+  - The framework-injected hosting origin (the CloudFront/custom domain) was compiled
+    into the regex allowlist as a raw string, so its `.` characters were treated as
+    regex metacharacters rather than literals. Hosting origins now travel in a separate
+    literal channel (`CORS_HOSTING_ORIGINS`): the origin is registered raw at synth (so
+    its CloudFormation token resolves to the real domain) and escaped literally at
+    runtime, so a domain like `d123.cloudfront.net` matches its dots literally.
+  
+  User-supplied `CORS_ALLOWED_ORIGINS` entries remain regex patterns (the `.*` escape
+  hatch and subdomain patterns are unchanged); literal dots in an origin should be
+  escaped (`https://app\.example\.com`), as the README documents.
+  
+  **Migration.** Automatic end-anchoring of `^`-prefixed entries is a tightening: an
+  entry like `^https://app\.example\.com` previously also matched
+  `https://app.example.com:8443`, and now does not. If you relied on that prefix
+  behavior, append an explicit suffix such as `(:\d+)?` or `.*` to the entry.
+  
+  `CORS_HOSTING_ORIGINS` must now be a **raw** origin (it is escaped once at runtime); a
+  pre-escaped value would be escaped a second time and stop matching.
+- d4b32f2: Add `README.md` and `DESIGN.md` to `@aws-blocks/create-block` and ship them in the published package (`files`), matching the first-party package convention.
+  
+  Tidy two `extract-ts-types` test nits (test/comment only, no runtime change): replace a redundant re-assert with a direct check of the documented lingering-bare-key behavior, and link the array/tuple & nested-destructuring boundary to its tracking issue (#552).
+- a649895: Emit a machine-readable completion signal on a successful `npm run deploy` **and** `npm run sandbox`.
+  
+  `deploy()` now prints one stable last line — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`) — so a caller (a coding agent, a CI step, a script) can detect "deploy finished + where it lives" by grepping one line instead of parsing streamed CloudFormation output or polling the stack for the URL. `sandbox()` prints the same line on its success path (backend-only — `BLOCKS_DEPLOYED api=<backend>`, since the sandbox serves the frontend locally), so a programmatic caller greps the identical token after either command. The existing human-readable `✅ Deployment complete!` / `📡 API URL` / `🌐 Frontend URL` lines are unchanged; the signal is additive. The formatting is extracted into a pure `formatDeploySignal()` helper with unit coverage, shared by both entry points. The scaffolded `AGENTS.md` documents the line so agents grep it rather than poll.
+  
+  For `npm run deploy` specifically (which streams a real CloudFormation deploy), the heartbeat now also names the resource currently converging — e.g. `waiting on HostingDistribution (AWS::CloudFront::Distribution)` — and surfaces a rolling-back resource as a warning rather than silently clearing it, and the frontend URL is surfaced early (on the in-progress path) so a deploy killed at a caller timeout has still reported where the app lives.
+- 251aed2: fix(bb-file-bucket): align unknown-`versionId` behavior between the mock and AWS
+  
+  On a versioned bucket, an unknown `versionId` diverged between runtimes. S3 does
+  **not** signal an unknown `versionId` as `NoSuchVersion` (verified against real
+  S3): an id it cannot resolve comes back as `InvalidArgument` ("Invalid version id
+  specified") on `GetObject`/`DeleteObject` and `InvalidRequest` on `CopyObject`;
+  `NoSuchVersion` is reserved for a well-formed id that no longer exists. The AWS
+  runtime now normalizes all of these so the observable contract matches the mock:
+  
+  - `get()` — returns `null` for an unknown `versionId` (matching the mock and
+    `get()`'s documented "null if it does not exist" contract), instead of throwing.
+  - `delete()` — is a silent no-op for an unknown `versionId` (matching the mock),
+    instead of throwing.
+  - `restoreVersion()` — throws a clean, matchable `FileBucketErrors.VersionNotFound`
+    (`NoSuchVersion`) via core's `blocksError` producer, so both `.name`
+    (`isBlocksError(e, FileBucketErrors.VersionNotFound)`) and the `.message` agree
+    across runtimes — instead of the raw S3 error, whose enumerable `$metadata`
+    (request IDs, ARNs) would leak to the client on serialization.
+  
+  The raw S3 codes are folded only when a `versionId` was actually supplied, so an
+  unrelated `InvalidArgument`/`InvalidRequest` still surfaces. Also adds the public
+  `FileBucketErrors.VersionNotFound` constant, and encodes the caller-supplied
+  `versionId` in `CopySource` (a value with `&`, `#`, `?`, or a space would
+  otherwise corrupt the `x-amz-copy-source` header).
+- 6b7fe4c: fix(hosting): retain the ISR tag-table seed custom resource on stack delete
+  
+  The `IsrTagTableSeed` custom resource is backed by a Lambda through a CDK
+  `Provider`. On stack delete CloudFormation tore the provider's framework Lambda
+  down before it sent the custom resource its `Delete`, so the delete invoke hit
+  an already-gone function, received no response, and hung to the 30-minute
+  custom-resource timeout -- failing the whole stack delete with `DELETE_FAILED`
+  and re-failing identically on every retry. The seed custom resource now carries
+  `RemovalPolicy.RETAIN`, so CloudFormation drops it on delete without a delete
+  invoke and the stack tears down cleanly. This is behavior-preserving: the
+  OpenNext `dynamodb-provider` `remove()` path is a no-op, and the seeded rows
+  live only in the ISR tag table, which is destroyed with the stack -- so
+  retaining the custom resource orphans nothing.
+- dae7a86: fix(hosting): warn when a compute resource pins an end-of-life Node.js runtime
+  
+  `resolveRuntime` still accepts an explicitly pinned `nodejs18.x` or `nodejs20.x`
+  (so an existing/deployed function isn't hard-broken at synth), but both are past
+  their AWS Lambda deprecation dates (Node 18: Apr 2025; Node 20: Apr 2026). It now
+  emits a CDK synth-time **deprecation warning** for those runtimes, pointing at
+  `nodejs22.x` / `nodejs24.x` (or omitting the runtime to use the default). A
+  supported runtime, or omitting it, warns nothing; the accepted set and the
+  hard error for unrecognized runtimes are unchanged.
+- 5454763: fix(bb-kv-store): align `delete()` conditional detection with the mock and `put()`
+  
+  The AWS `delete()` path detected the value-equality condition with
+  `'ifValueEquals' in conditions` (key presence), while the mock and AWS `put()`
+  use `!== undefined`. Two consequences, both mock↔AWS parity breaks:
+  
+  - `delete(key, { ifValueEquals: undefined })` was a silent no-op on the mock but,
+    on AWS, emitted `#value = :expected` with `:expected = JSON.stringify(undefined)`
+    (`undefined`) — a DynamoDB DocumentClient marshalling error instead of an
+    unconditional delete.
+  - The `if/else if` applied only `attribute_exists(#pk)` when both `ifExists` and
+    `ifValueEquals` were set, silently dropping the value check — so on AWS the
+    item was deleted regardless of its value, while the mock (correctly) required
+    both.
+  
+  `delete()` conditions are now composed conjunctively (`attribute_exists(#pk) AND
+  #value = :expected`) with `!== undefined` detection, matching the mock branch-for-
+  branch. Added `parity.test.ts` cases asserting the `DeleteCommand` shape for each
+  combination (value-only, exists-only, both, none, explicit `undefined` no-op, and
+  `null` as a real condition).
+- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
+  
+  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
+  
+  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
+  
+  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
+  
+  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
+  
+  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
+  
+  ## Breaking change (why `@aws-blocks/core` is a minor)
+  
+  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
+  
+  ```ts
+  // before — message collapses to "Internal error" on the client
+  throw new Error('Todo not found');
+  
+  // after — status, message, and name all reach the client
+  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  ```
+  
+  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+- 7b7a59f: fix(bb-cron-job,hosting): scope service-principal grants to the deploying account
+  
+  - **bb-cron-job**: the EventBridge Scheduler role's trust policy is now limited to
+    schedules in the stack's account and region (`aws:SourceAccount` and an `aws:SourceArn`
+    schedule-group pattern).
+  - **hosting**: removed a redundant CloudFront `kms:Decrypt` statement from the SSE-KMS key
+    policy. The Origin Access Control wiring already grants CloudFront decrypt on the bucket key,
+    conditioned on `AWS:SourceArn` matching the account's CloudFront distributions.
+- 465a002: fix(telemetry): use ci-info for CI detection so Taskcluster (`TASK_ID` + `RUN_ID`), Netlify, Vercel, and 40+ other CI providers are identified; also keep the previously checked `CODEBUILD_BUILD_ID`, `JENKINS_URL`, `BITBUCKET_BUILD_NUMBER` and `TASKCLUSTER_ROOT_URL` variables, and honor `CI=false`
+- e57da06: Report bbName/bbVersion in telemetry.
+- Updated dependencies [8da1d1f]
+- Updated dependencies [773cef2]
+- Updated dependencies [ea5f91c]
+- Updated dependencies [bd9a1b8]
+- Updated dependencies [2e72825]
+- Updated dependencies [4456fd7]
+- Updated dependencies [fac0e75]
+- Updated dependencies [3fac52c]
+- Updated dependencies [0e18d5b]
+- Updated dependencies [20be3f0]
+- Updated dependencies [5501cb6]
+- Updated dependencies [7c24547]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [1f8a412]
+- Updated dependencies [fa0406b]
+- Updated dependencies [251aed2]
+- Updated dependencies [6b7fe4c]
+- Updated dependencies [5515483]
+- Updated dependencies [dae7a86]
+- Updated dependencies [5454763]
+- Updated dependencies [757d4a9]
+- Updated dependencies [b0be240]
+- Updated dependencies [f1d2cd5]
+- Updated dependencies [de3c17c]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [7b7a59f]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+- Updated dependencies [e57da06]
+- Updated dependencies [de3c17c]
+- Updated dependencies [9608dce]
+  - @aws-blocks/bb-agent@0.5.0
+  - @aws-blocks/hosting@0.4.0
+  - @aws-blocks/bb-auth-basic@0.1.10
+  - @aws-blocks/bb-auth-cognito@0.1.11
+  - @aws-blocks/auth-common@0.1.9
+  - @aws-blocks/bb-auth-oidc@0.2.1
+  - @aws-blocks/bb-app-setting@0.3.1
+  - @aws-blocks/bb-kv-store@0.3.0
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-file-bucket@0.3.0
+  - @aws-blocks/bb-async-job@0.2.2
+  - @aws-blocks/bb-data@0.3.1
+  - @aws-blocks/bb-distributed-table@0.2.1
+  - @aws-blocks/bb-email-client@0.1.8
+  - @aws-blocks/bb-knowledge-base@0.2.5
+  - @aws-blocks/bb-realtime@0.3.0
+  - @aws-blocks/bb-distributed-data@0.2.1
+  - @aws-blocks/bb-cron-job@0.2.2
+  - @aws-blocks/bb-dashboard@0.2.1
+  - @aws-blocks/bb-metrics@0.1.8
+  - @aws-blocks/bb-lambda-compute@0.5.1
+  - @aws-blocks/bb-logger@0.2.1
+  - @aws-blocks/bb-tracer@0.2.1
+
 ## 0.6.0
 
 ### Minor Changes

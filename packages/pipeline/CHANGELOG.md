@@ -1,5 +1,17 @@
 # @aws-blocks/pipeline
 
+## 0.2.3
+
+### Patch Changes
+
+- Updated dependencies [773cef2]
+- Updated dependencies [5501cb6]
+- Updated dependencies [6b7fe4c]
+- Updated dependencies [5515483]
+- Updated dependencies [dae7a86]
+- Updated dependencies [7b7a59f]
+  - @aws-blocks/hosting@0.4.0
+
 ## 0.2.2
 
 ### Patch Changes

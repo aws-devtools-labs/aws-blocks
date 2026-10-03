@@ -1,5 +1,67 @@
 # @aws-blocks/bb-data
 
+## 0.3.1
+
+### Patch Changes
+
+- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
+  
+  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
+  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
+  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
+  and exports `installClientUserAgent`, an SDK middleware that appends the validated
+  token to the outgoing user agent. The 12 participating Building Blocks install it,
+  so native attribution rides the SDK user-agent chain AWS service telemetry already
+  counts. The Kotlin runtime already sends the header, so Kotlin
+  callers are attributed as soon as this ships; Swift and Dart follow.
+- b0be240: Upgrade PGlite from `^0.2.0` to `^0.5.8` to address the `_pg_initdb` WASM init crash seen on Node 22 / CI.
+  
+  On the CI runner (Node 22), PGlite's WASM `initdb` traps with `RuntimeError: unreachable` at `_pg_initdb`; the trapped instance is unrecoverable, so a Database or DistributedDatabase block whose init hits the trap fails to start. The `0.3.7` "wasm runtime exception" fix (electric-sql/pglite#753) did NOT resolve it — an upgrade to `0.3.16` was verified to still trap. PGlite `0.4.0` re-architected initdb into a separate module and `0.4.3` added an initial-memory-size control, so the plausible fix for an initdb-path trap is in the 0.4.x+ line, not 0.3.x. This moves to the current `0.5.8`.
+  
+  The query/transaction API surface the engines use (`new PGlite(dir)`, `query().rows`, `query().affectedRows`, `close()`, `BEGIN`/`COMMIT`/`ROLLBACK`) and the structural data-directory markers (`PG_VERSION`, `base`, `global`, `global/pg_control`) are unchanged on `0.5.8`, so no engine code changes are required. Note: a `.bb-data` directory created by `0.2` (embedded PG16) is **not** forward-compatible with `0.5.8` (embedded PG18) — `hasInitializedPgliteDataDir` keys on marker *presence*, not the `PG_VERSION` contents, so a stale PG16 dir is treated as initialized and the mismatch surfaces at first query with no auto-recovery. Local-dev only (CI starts clean and `.bb-data` is gitignored); a dev with an old dir must delete it and let `0.5.8` recreate it.
+  
+  Note: the trap does not reproduce locally (it is CI-runner-specific), so the crash fix is verified in CI by the `oidc-dsql-notes` / `sql-kb-catalog` dead_server rate; the API compatibility is verified locally.
+- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
+  
+  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
+  
+  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
+  
+  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
+  
+  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
+  
+  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
+  
+  ## Breaking change (why `@aws-blocks/core` is a minor)
+  
+  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
+  
+  ```ts
+  // before — message collapses to "Internal error" on the client
+  throw new Error('Todo not found');
+  
+  // after — status, message, and name all reach the client
+  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  ```
+  
+  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+- Updated dependencies [0e18d5b]
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/bb-app-setting@0.3.1
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-logger@0.2.1
+
 ## 0.3.0
 
 ### Minor Changes
