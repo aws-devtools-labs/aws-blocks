@@ -113,6 +113,13 @@ AsyncJobErrors.StatusNotTracked   // status method called without trackStatus: t
 
 In local dev mode, AsyncJob uses an in-process queue. Jobs process via `setTimeout` in the same Node.js process. Retries, DLQ behavior, and payload limits are enforced identically to AWS.
 
+Both runtimes serialize each payload to JSON before enqueueing it. After an awaited
+`submit()` or `submitBatch()` completes, changing the input object does not change
+the queued message. Each delivery, including retries, receives a fresh parse of
+that JSON, so a failed handler's mutations do not carry over to the next attempt.
+Use JSON-compatible payloads: for example, a `Date` arrives as an ISO string and
+properties whose value is `undefined` are omitted, just as in AWS.
+
 ## AWS Deployment
 
 Automatically provisions an SQS queue, dead-letter queue, and connects to the shared API Lambda. Failed jobs become visible for retry after 900 seconds (matching the Lambda timeout).
