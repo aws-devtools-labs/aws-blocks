@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { NumberValue } from '@aws-sdk/lib-dynamodb';
+import { Blob, File } from 'node:buffer';
 
 // ── Schemas ─────────────────────────────────────────────────────────────────
 
@@ -165,6 +167,14 @@ describe('DistributedTable', () => {
 			binaries: z.set(z.instanceof(Uint8Array)),
 			bytes: z.instanceof(Uint8Array),
 			buffer: z.instanceof(Buffer),
+			amount: z.instanceof(NumberValue),
+			amounts: z.set(z.instanceof(NumberValue)),
+			list: z.array(z.instanceof(NumberValue)),
+			map: z.map(z.string(), z.instanceof(NumberValue)),
+			arrayBuffer: z.instanceof(ArrayBuffer),
+			view: z.instanceof(DataView),
+			blob: z.instanceof(Blob),
+			file: z.instanceof(File),
 		});
 		type NativeItem = z.infer<typeof nativeSchema>;
 		const nativeItem = (): NativeItem => ({
@@ -174,6 +184,14 @@ describe('DistributedTable', () => {
 			binaries: new Set([new Uint8Array([3, 4])]),
 			bytes: new Uint8Array([1, 2]),
 			buffer: Buffer.from([5, 6]),
+			amount: NumberValue.from('9007199254740993123456789'),
+			amounts: new Set([NumberValue.from('42')]),
+			list: [NumberValue.from('43')],
+			map: new Map([['amount', NumberValue.from('44')]]),
+			arrayBuffer: new Uint8Array([7, 8]).buffer,
+			view: new DataView(new Uint8Array([0, 9, 10, 0]).buffer, 1, 2),
+			blob: new Blob(['saved'], { type: 'text/plain' }),
+			file: new File(['saved'], 'saved.txt', { type: 'text/plain', lastModified: 1000 }),
 		});
 		function mutateNativeItem(row: NativeItem) {
 			row.strings.add('unsaved');
@@ -181,6 +199,26 @@ describe('DistributedTable', () => {
 			for (const binary of row.binaries) binary[0] = 99;
 			row.bytes[0] = 99;
 			row.buffer[0] = 99;
+			row.amount.value = '99';
+			for (const amount of row.amounts) amount.value = '99';
+			row.list[0].value = '99';
+			for (const amount of row.map.values()) amount.value = '99';
+			new Uint8Array(row.arrayBuffer)[0] = 99;
+			row.view.setUint8(0, 99);
+		}
+		async function assertNativeItem(row: NativeItem | null) {
+			assert.ok(row);
+			assert.deepEqual(row, nativeItem());
+			assert.ok(Buffer.isBuffer(row.buffer));
+			assert.equal(row.amount.toString(), '9007199254740993123456789');
+			assert.deepEqual(row.amount.toAttributeValue(), { N: '9007199254740993123456789' });
+			assert.equal(row.view.byteOffset, 1);
+			assert.equal(row.view.byteLength, 2);
+			assert.equal(await row.blob.text(), 'saved');
+			assert.equal(await row.file.text(), 'saved');
+			assert.equal(row.file.name, 'saved.txt');
+			assert.equal(row.file.type, 'text/plain');
+			assert.equal(row.file.lastModified, 1000);
 		}
 		for (const write of ['put', 'putBatch'] as const) {
 			for (const readValidation of ['off', 'coerce', 'strict'] as const) {
@@ -200,10 +238,12 @@ describe('DistributedTable', () => {
 						else if (read === 'query') row = (await collect(table.query({ where: { id: { equals: 'one' } } })))[0];
 						else row = (await collect(table.scan()))[0];
 						assert.ok(row);
-						assert.deepEqual(row, nativeItem());
-						assert.ok(Buffer.isBuffer(row.buffer));
+						await assertNativeItem(row);
+						assert.notEqual(row.amount, input.amount);
+						assert.notEqual(row.blob, input.blob);
+						assert.notEqual(row.file, input.file);
 						mutateNativeItem(row);
-						assert.deepEqual(await table.get({ id: 'one' }), nativeItem());
+						await assertNativeItem(await table.get({ id: 'one' }));
 					});
 				}
 			}
@@ -221,6 +261,107 @@ describe('DistributedTable', () => {
 			assert.equal(readFileSync(path, 'utf8'), JSON.stringify([
 				['["one"]', nativeItem()], ['["two"]', { ...nativeItem(), id: 'two' }],
 			], null, 2));
+		});
+
+		test('snapshots preserve own __proto__ attributes without changing prototypes', async t => {
+			const table = new DistributedTable(testScope(), 'snapshots', {
+				schema: identitySchema, key: { partitionKey: 'id' }, readValidation: 'off',
+			});
+			t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+			const input = JSON.parse('{"id":"one","details":{"count":1},"tags":["saved"],"__proto__":{"count":1}}');
+			await table.put(input);
+			input.__proto__.count = 99;
+			const row = await table.get({ id: 'one' });
+			assert.ok(row);
+			assert.equal(Object.getPrototypeOf(row), Object.prototype);
+			assert.ok(Object.hasOwn(row, '__proto__'));
+			assert.deepEqual(Reflect.get(row, '__proto__'), { count: 1 });
+		});
+
+		test('snapshots materialize getter values without retaining their source', async t => {
+			const table = new DistributedTable(testScope(), 'snapshots', {
+				schema: identitySchema, key: { partitionKey: 'id' }, readValidation: 'off',
+			});
+			t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+			const details = { count: 1 };
+			await table.put({ id: 'one', get details() { return details; }, tags: ['saved'] });
+			details.count = 99;
+			assert.deepEqual(await table.get({ id: 'one' }), item());
+		});
+
+		for (const TypedArray of [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array,
+			Int32Array, Uint32Array, Float32Array, Float64Array]) {
+			test(`snapshots detach ${TypedArray.name} subarrays`, async t => {
+				const binarySchema = z.object({ id: z.string(), bytes: z.instanceof(TypedArray) });
+				const table = new DistributedTable(testScope(), 'snapshots', {
+					schema: binarySchema, key: { partitionKey: 'id' }, readValidation: 'strict',
+				});
+				t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+				const backing = new TypedArray([0, 1, 2, 0]);
+				await table.put({ id: 'one', bytes: backing.subarray(1, 3) });
+				backing[1] = 99;
+				const row = await table.get({ id: 'one' });
+				assert.ok(row);
+				assert.deepEqual(row.bytes, new TypedArray([1, 2]));
+				row.bytes[0] = 99;
+				assert.deepEqual((await table.get({ id: 'one' }))?.bytes, new TypedArray([1, 2]));
+			});
+		}
+
+		test('snapshots detach binary views backed by shared memory', async t => {
+			const binarySchema = z.object({
+				id: z.string(),
+				bytes: z.custom<Uint8Array<ArrayBufferLike>>(value => value instanceof Uint8Array),
+				view: z.custom<DataView<ArrayBufferLike>>(value => value instanceof DataView),
+			});
+			const table = new DistributedTable(testScope(), 'snapshots', {
+				schema: binarySchema, key: { partitionKey: 'id' }, readValidation: 'strict',
+			});
+			t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+			const buffer = new SharedArrayBuffer(4);
+			const bytes = new Uint8Array(buffer);
+			bytes.set([0, 1, 2, 0]);
+			await table.put({ id: 'one', bytes: bytes.subarray(1, 3), view: new DataView(buffer, 1, 2) });
+			bytes[1] = 99;
+			const row = await table.get({ id: 'one' });
+			assert.ok(row);
+			assert.deepEqual([...row.bytes], [1, 2]);
+			assert.equal(row.view.getUint8(0), 1);
+			row.bytes[0] = 98;
+			row.view.setUint8(0, 97);
+			const reread = await table.get({ id: 'one' });
+			assert.ok(reread);
+			assert.deepEqual([...reread.bytes], [1, 2]);
+			assert.equal(reread.view.getUint8(0), 1);
+		});
+
+		test('snapshots preserve null prototypes and own undefined values', async t => {
+			const table = new DistributedTable(testScope(), 'snapshots', {
+				schema: identitySchema, key: { partitionKey: 'id' }, readValidation: 'off',
+			});
+			t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+			const input = Object.assign(Object.create(null), item(), { optional: undefined, nullable: null });
+			await table.put(input);
+			input.details.count = 99;
+			const row = await table.get({ id: 'one' });
+			assert.ok(row);
+			assert.equal(Object.getPrototypeOf(row), null);
+			assert.equal(row.details.count, 1);
+			assert.ok(Object.hasOwn(row, 'optional'));
+			assert.equal(Reflect.get(row, 'optional'), undefined);
+			assert.equal(Reflect.get(row, 'nullable'), null);
+		});
+
+		test('snapshots do not change existing JSON write rejections', async t => {
+			const jsonSchema = z.object({ id: z.string(), value: z.unknown() });
+			const table = new DistributedTable(testScope(), 'snapshots', {
+				schema: jsonSchema, key: { partitionKey: 'id' },
+			});
+			t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+			for (const value of [1n, new BigInt64Array([1n]), new BigUint64Array([1n])]) {
+				await assert.rejects(() => table.put({ id: 'one', value }), TypeError);
+				assert.equal(await table.get({ id: 'one' }), null);
+			}
 		});
 
 		test('coerce raw fallback returns a detached item', async t => {
