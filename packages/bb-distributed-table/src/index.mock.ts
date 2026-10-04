@@ -7,7 +7,8 @@ import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { deserialize, serialize } from 'node:v8';
+import { File } from 'node:buffer';
+import { createCopier } from 'fast-copy';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 export { DistributedTableErrors } from './errors.js';
@@ -45,10 +46,31 @@ import { DistributedTableErrors, DistributedTableMessages, blocksError, conditio
 
 const MAX_ITEM_BYTES = 400 * 1024;
 
-function snapshotItem<T>(item: T): T {
-	// Unlike JSON or structuredClone, V8 cloning also preserves Buffer instances.
-	return deserialize(serialize(item)) as T;
-}
+const snapshotItem = createCopier({
+	methods: {
+		blob: value => new Blob([value], { type: value.type }),
+		dataView: value => new DataView(value.buffer.slice(0), value.byteOffset, value.byteLength),
+		object: (value, state) => {
+			// File needs native internal slots; other objects (including NumberValue) retain their prototype.
+			const isFile = value instanceof File;
+			const snapshot = isFile
+				? new File([value], value.name, { type: value.type, lastModified: value.lastModified })
+				: Object.create(state.prototype);
+			state.cache.set(value, snapshot);
+			// Do not copy Node's private File handle symbols. Materialize getters and avoid __proto__ setters.
+			const keys = isFile ? Object.keys(value) : Reflect.ownKeys(value);
+			for (const key of keys) {
+				if (Object.prototype.propertyIsEnumerable.call(value, key)) {
+					Object.defineProperty(snapshot, key, {
+						value: state.copier(Reflect.get(value, key), state),
+						enumerable: true, configurable: true, writable: true,
+					});
+				}
+			}
+			return snapshot;
+		},
+	},
+});
 
 async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): Promise<void> {
 	const result = schema['~standard'].validate(value);
