@@ -145,6 +145,270 @@ void main() {
         contains('FileDownloadHandle.fromJson(result as Map<String, dynamic>)'),
       );
     });
+
+    test(
+      'hydrates a nullable bound transferable to its optional concrete type',
+      () {
+        final output = gen.generate(
+          const CodegenModel(
+            title: 'test',
+            version: '1.0',
+            namespaces: [
+              Namespace(
+                name: 'api',
+                operations: [
+                  Operation(
+                    name: 'maybeChannel',
+                    fullName: 'api.maybeChannel',
+                    params: [],
+                    result: NullableType(
+                      TransferableType(
+                        blocksType: 'realtime/channel',
+                        typeArgs: [],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            types: {},
+          ),
+        );
+        expect(
+          output,
+          contains('Future<RealtimeChannel<dynamic>?> maybeChannel()'),
+        );
+        expect(
+          output,
+          contains(
+            'result == null ? null : RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => json)',
+          ),
+        );
+      },
+    );
+
+    test('hydrates a nullable bound file handle via its fromJson', () {
+      final output = gen.generate(
+        const CodegenModel(
+          title: 'test',
+          version: '1.0',
+          namespaces: [
+            Namespace(
+              name: 'api',
+              operations: [
+                Operation(
+                  name: 'maybeFile',
+                  fullName: 'api.maybeFile',
+                  params: [],
+                  result: NullableType(
+                    TransferableType(blocksType: 'file-bucket/download'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          types: {},
+        ),
+      );
+      expect(output, contains('Future<FileDownloadHandle?> maybeFile()'));
+      expect(
+        output,
+        contains(
+          'result == null ? null : FileDownloadHandle.fromJson(result as Map<String, dynamic>)',
+        ),
+      );
+    });
+
+    test('hydrates a nullable bound transferable with a type argument', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.op',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'oneOf': [
+                    {
+                      'x-blocks-transferable': 'realtime/channel',
+                      'x-blocks-type-args': [
+                        {r'$ref': '#/components/schemas/Telemetry'},
+                      ],
+                    },
+                    {'type': 'null'},
+                  ],
+                },
+              },
+            },
+          ],
+          'components': {
+            'schemas': {
+              'Telemetry': {
+                'type': 'object',
+                'properties': {
+                  'v': {'type': 'number'},
+                },
+                'required': ['v'],
+              },
+            },
+          },
+        }),
+      );
+      expect(output, contains('class Telemetry'));
+      expect(output, contains('Future<RealtimeChannel<Telemetry>?> op()'));
+      expect(
+        output,
+        contains(
+          'result == null ? null : RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => Telemetry.fromJson(json))',
+        ),
+      );
+    });
+
+    test('a nullable object channel type argument hydrates its object', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.ch',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {
+                      'oneOf': [
+                        {r'$ref': '#/components/schemas/Msg'},
+                        {'type': 'null'},
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+          'components': {
+            'schemas': {
+              'Msg': {
+                'type': 'object',
+                'properties': {
+                  'x': {'type': 'number'},
+                },
+                'required': ['x'],
+              },
+            },
+          },
+        }),
+      );
+      expect(output, contains('Future<RealtimeChannel<Msg?>> ch()'));
+      expect(
+        output,
+        contains(
+          'return RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => Msg.fromJson(json))',
+        ),
+      );
+    });
+
+    test('a dynamic channel type argument passes the value through', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.nullableDyn',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'oneOf': [
+                    {
+                      'x-blocks-transferable': 'realtime/channel',
+                      'x-blocks-type-args': [<String, dynamic>{}],
+                    },
+                    {'type': 'null'},
+                  ],
+                },
+              },
+            },
+            {
+              'name': 'api.directDyn',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'S',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [<String, dynamic>{}],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(output, isNot(contains('dynamic.fromJson')));
+      expect(
+        output,
+        contains(
+          'result == null ? null : RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => json)',
+        ),
+      );
+      expect(
+        output,
+        contains(
+          'return RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => json)',
+        ),
+      );
+    });
+
+    test('a concrete non-object channel message type stays raw', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.nullableStr',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'oneOf': [
+                    {
+                      'x-blocks-transferable': 'realtime/channel',
+                      'x-blocks-type-args': [
+                        {'type': 'string'},
+                      ],
+                    },
+                    {'type': 'null'},
+                  ],
+                },
+              },
+            },
+            {
+              'name': 'api.directStr',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'S',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {'type': 'string'},
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(output, isNot(contains('String.fromJson')));
+      expect(output, contains('return result == null ? null : result;'));
+      expect(output, contains('return result;'));
+    });
   });
 
   group('tuple generation', () {
@@ -479,6 +743,7 @@ void main() {
       );
       final output = _generateModel(model);
       expect(output, contains('Future<dynamic?> get'));
+      expect(output, contains('return result;'));
       expect(output, isNot(contains('UnknownTransferable')));
       expect(model.warnings, isEmpty);
     });

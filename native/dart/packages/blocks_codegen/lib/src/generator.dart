@@ -742,6 +742,21 @@ class DartCodeGenerator {
     };
   }
 
+  /// The channel message type to hydrate, or null to leave the value raw. Only
+  /// an object type (record/sealed, incl. via `$ref`, and nullable `T?`) is
+  /// decodable by the runtime's `Map`-only deserializer.
+  ResolvedType? _channelMessageType(
+    List<ResolvedType> typeArgs,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    if (typeArgs.isEmpty) return null;
+    final arg = typeArgs[0] is NullableType
+        ? (typeArgs[0] as NullableType).inner
+        : typeArgs[0];
+    final resolved = arg is SchemaReference ? allTypes[arg.name] : arg;
+    return resolved is RecordType || resolved is SealedClassType ? arg : null;
+  }
+
   // --- fromJson expression helpers ---
 
   String _fromJsonExpr(
@@ -1053,6 +1068,11 @@ class DartCodeGenerator {
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
       SealedClassType(name: final name) =>
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
+      // Without the guard an unbound tag emits a redundant `result == null ?
+      // null : result`; falling through keeps it byte-identical to base.
+      TransferableType(blocksType: final kt, typeArgs: final args)
+          when knownTransferableTags.contains(kt) =>
+        '$accessor == null ? null : ${_deserializeTransferable(accessor, kt, args, allTypes)}',
       _ => accessor,
     };
   }
@@ -1140,11 +1160,17 @@ class DartCodeGenerator {
     final cast = '$accessor as Map<String, dynamic>';
     return switch (blocksType) {
       'realtime/channel' => () {
-        if (typeArgs.isEmpty) {
+        final msg = _channelMessageType(typeArgs, allTypes);
+        if (msg != null) {
+          return 'RealtimeChannel.fromJson($cast, (json) => ${_dartTypeStr(msg, allTypes)}.fromJson(json))';
+        }
+        // `RealtimeChannel<dynamic>`, so an identity deserializer type-checks.
+        if (typeArgs.isEmpty ||
+            _dartTypeStr(typeArgs[0], allTypes) == 'dynamic') {
           return 'RealtimeChannel.fromJson($cast, (json) => json)';
         }
-        final argType = _dartTypeStr(typeArgs[0], allTypes);
-        return 'RealtimeChannel.fromJson($cast, (json) => $argType.fromJson(json))';
+        // No valid `(json) => T` deserializer for a non-object type; stay raw.
+        return accessor;
       }(),
       'file-bucket/download' => 'FileDownloadHandle.fromJson($cast)',
       'file-bucket/upload' => 'FileUploadHandle.fromJson($cast)',
