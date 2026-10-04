@@ -160,7 +160,9 @@ export class DistributedTable<
 	 * {@link applyReadValidation}.
 	 */
 	private reconcileRead(item: T | null): Promise<T | null> {
-		return applyReadValidation(this.readValidation, this.schema, item, this.log, { table: this.fullId });
+		// Validators may return or mutate their input, so detach before validation.
+		const snapshot = item === null ? null : JSON.parse(JSON.stringify(item)) as T;
+		return applyReadValidation(this.readValidation, this.schema, snapshot, this.log, { table: this.fullId });
 	}
 
 	async put(item: T, options?: PutOptions<T>): Promise<void> {
@@ -185,7 +187,7 @@ export class DistributedTable<
 		if (options?.ifFieldEquals) {
 			this.checkFieldEquals(keyStr, options.ifFieldEquals, retriable);
 		}
-		this.data.set(keyStr, item);
+		this.data.set(keyStr, JSON.parse(serialized) as T);
 		this.flushToDisk();
 	}
 
@@ -322,15 +324,17 @@ export class DistributedTable<
 	 *   sustained throttling. The local mock never throttles, so it does not throw this.
 	 */
 	async putBatch(items: T[]): Promise<void> {
+		const snapshots: [string, T][] = [];
 		for (const item of items) {
 			await validateSchema(this.schema, item);
 			const serialized = JSON.stringify(item);
 			if (Buffer.byteLength(serialized, 'utf8') > MAX_ITEM_BYTES) {
 				throw blocksError(DistributedTableErrors.ItemTooLarge, DistributedTableMessages.itemTooLarge(Buffer.byteLength(serialized, 'utf8')));
 			}
+			snapshots.push([this.serializeKey(item as any), JSON.parse(serialized) as T]);
 		}
-		for (const item of items) {
-			this.data.set(this.serializeKey(item as any), item);
+		for (const [key, snapshot] of snapshots) {
+			this.data.set(key, snapshot);
 		}
 		this.flushToDisk();
 	}
@@ -424,4 +428,3 @@ export class DistributedTable<
 import type { PartitionKeyCondition, SortKeyCondition as SKC, KeyCondition, QueryOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-

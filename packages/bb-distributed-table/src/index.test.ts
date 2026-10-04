@@ -6,6 +6,9 @@ import { strict as assert } from 'node:assert';
 import { DistributedTable, DistributedTableErrors } from './index.mock.js';
 import { ApiError, isBlocksError, Scope } from '@aws-blocks/core';
 import { z } from 'zod';
+import { readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 // ── Schemas ─────────────────────────────────────────────────────────────────
 
@@ -91,6 +94,141 @@ describe('DistributedTable', () => {
 			assert.equal((await table.get({ id: 'item1' }))?.value, 'test');
 			await table.delete({ id: 'item1' });
 			assert.equal(await table.get({ id: 'item1' }), null);
+		});
+	});
+
+	describe('mock snapshot isolation', () => {
+		const schema = z.object({
+			id: z.string(),
+			details: z.object({ count: z.number() }),
+			tags: z.array(z.string()),
+		});
+		type Item = z.infer<typeof schema>;
+		const item = (): Item => ({ id: 'one', details: { count: 1 }, tags: ['saved'] });
+
+		for (const write of ['put', 'putBatch'] as const) {
+			test(`${write} detaches the saved item from its input`, async t => {
+				const table = new DistributedTable(testScope(), 'snapshots', { schema, key: { partitionKey: 'id' } });
+				t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+				const input = item();
+				if (write === 'put') await table.put(input);
+				else await table.putBatch([input]);
+				input.id = 'changed';
+				input.details.count = 99;
+				input.tags.push('unsaved');
+				assert.deepEqual(await table.get({ id: 'one' }), item());
+				assert.equal(await table.get({ id: 'changed' }), null);
+				await table.delete({ id: 'one' }, { ifFieldEquals: { details: { count: 1 } } });
+			});
+		}
+
+		test('an unrelated write does not persist mutations to an earlier input', async t => {
+			const table = new DistributedTable(testScope(), 'snapshots', { schema, key: { partitionKey: 'id' } });
+			t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+			const input = item();
+			await table.put(input);
+			input.details.count = 99;
+			await table.put({ ...item(), id: 'two' });
+			const stored = JSON.parse(readFileSync(join('.bb-data', table.fullId, 'data.json'), 'utf8'));
+			assert.deepEqual(stored, [['["one"]', item()], ['["two"]', { ...item(), id: 'two' }]]);
+		});
+
+		// Standard Schema does not require validators to copy their input.
+		const identitySchema: StandardSchemaV1<Item> = {
+			'~standard': { version: 1, vendor: 'snapshot-test', validate: value => ({ value: value as Item }) },
+		};
+		for (const readValidation of ['off', 'coerce', 'strict'] as const) {
+			for (const read of ['get', 'getBatch', 'query', 'scan'] as const) {
+				test(`${read} returns a detached item with readValidation=${readValidation}`, async t => {
+					const table = new DistributedTable(testScope(), 'snapshots', {
+						schema: identitySchema, key: { partitionKey: 'id' }, readValidation,
+					});
+					t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+					await table.put(item());
+					let row: Item | null;
+					if (read === 'get') row = await table.get({ id: 'one' });
+					else if (read === 'getBatch') row = (await table.getBatch([{ id: 'one' }]))[0];
+					else if (read === 'query') row = (await collect(table.query({ where: { id: { equals: 'one' } } })))[0];
+					else row = (await collect(table.scan()))[0];
+					assert.ok(row);
+					row.details.count = 99;
+					row.tags.push('unsaved');
+					assert.deepEqual(await table.get({ id: 'one' }), item());
+				});
+			}
+		}
+
+		test('coerce raw fallback returns a detached item', async t => {
+			let rejectRead = false;
+			const driftedSchema: StandardSchemaV1<Item> = {
+				'~standard': {
+					version: 1, vendor: 'snapshot-test',
+					validate: value => rejectRead ? { issues: [{ message: 'schema changed' }] } : { value: value as Item },
+				},
+			};
+			const table = new DistributedTable(testScope(), 'snapshots', {
+				schema: driftedSchema, key: { partitionKey: 'id' },
+			});
+			t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+			await table.put(item());
+			rejectRead = true;
+			const row = await table.get({ id: 'one' });
+			assert.ok(row);
+			row.tags.push('unsaved');
+			assert.deepEqual(await table.get({ id: 'one' }), item());
+		});
+
+		test('a mutating read validator cannot change the stored item', async t => {
+			let mutateRead = false;
+			const mutatingSchema: StandardSchemaV1<Item> = {
+				'~standard': {
+					version: 1, vendor: 'snapshot-test',
+					validate: value => {
+						const row = value as Item;
+						if (mutateRead) row.tags.push('coerced');
+						return { value: row };
+					},
+				},
+			};
+			const table = new DistributedTable(testScope(), 'snapshots', {
+				schema: mutatingSchema, key: { partitionKey: 'id' },
+			});
+			t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+			await table.put(item());
+			mutateRead = true;
+			assert.deepEqual((await table.get({ id: 'one' }))?.tags, ['saved', 'coerced']);
+			mutateRead = false;
+			assert.deepEqual(await table.get({ id: 'one' }), item());
+		});
+
+		test('changes are persisted when the returned item is explicitly put', async t => {
+			const scope = testScope();
+			const options = { schema, key: { partitionKey: 'id' as const }, readValidation: 'off' as const };
+			const table = new DistributedTable(scope, 'snapshots', options);
+			t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+			await table.put(item());
+			const row = await table.get({ id: 'one' });
+			assert.ok(row);
+			row.details.count = 2;
+			row.tags.push('updated');
+			await table.put(row, { ifFieldEquals: { details: { count: 1 } } });
+			const reloaded = new DistributedTable(scope, 'snapshots', options);
+			assert.deepEqual(await reloaded.get({ id: 'one' }), row);
+		});
+
+		test('a failed batch validates all items before replacing stored snapshots', async t => {
+			const table = new DistributedTable(testScope(), 'snapshots', { schema, key: { partitionKey: 'id' } });
+			t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+			await table.put(item());
+			const path = join('.bb-data', table.fullId, 'data.json');
+			const before = readFileSync(path, 'utf8');
+			await assert.rejects(
+				() => table.putBatch([{ ...item(), details: { count: 2 } }, { ...item(), id: 'two', details: { count: NaN } }]),
+				(err: unknown) => isBlocksError(err, DistributedTableErrors.ValidationFailed),
+			);
+			assert.deepEqual(await table.get({ id: 'one' }), item());
+			assert.equal(await table.get({ id: 'two' }), null);
+			assert.equal(readFileSync(path, 'utf8'), before);
 		});
 	});
 
