@@ -927,6 +927,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     await table.put(...args);
     return { success: true };
   },
+
+  async tablePutThenMutate(item: Parameters<typeof table.put>[0]) {
+    await table.put(item);
+    item.data = 'changed without another put';
+    return table.get({ pk: item.pk, sk: item.sk });
+  },
   
   async tableGet(...args: Parameters<typeof table.get>) {
     return await table.get(...args);
