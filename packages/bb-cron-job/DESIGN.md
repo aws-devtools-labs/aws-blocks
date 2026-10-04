@@ -26,8 +26,8 @@ EventBridge Scheduler (AWS)
 
 Local Mock
     └── CronJob class (extends Scope)
-         ├── rate schedules: setInterval
-         ├── cron schedules: setTimeout → nextCronTime calculation
+         ├── rate schedules: setInterval (bounded setTimeout waits for long intervals)
+         ├── cron schedules: bounded setTimeout waits → nextCronTime calculation
          └── handler called with CronJobEvent<T>
 ```
 
@@ -129,8 +129,9 @@ No `fromExisting()` — wrapping an existing EventBridge schedule is not support
 
 ## Mock Implementation
 
-- **Rate schedules** — `setInterval` with the computed interval in milliseconds. Timer is `unref()`'d to avoid blocking process exit.
-- **Cron schedules** — `setTimeout` to the next fire time, computed via `nextCronTime()`. After each fire, the next timeout is scheduled recursively.
+- **Rate schedules** — `setInterval` with the computed interval in milliseconds when it is at most 2,147,483,647 ms (Node's timer limit). Longer intervals use successive bounded `setTimeout` waits and start the next interval after invoking the handler, without awaiting its completion.
+- **Cron schedules** — bounded `setTimeout` waits to the next fire time, computed via `nextCronTime()`. After each fire, the next fire time is calculated again.
+- **Long waits** — keep the target timestamp across intermediate waits and check it before invoking the handler. No timer exceeds Node's limit, which would otherwise cause Node to clamp the delay to 1 ms. Every timer is `unref()`'d to avoid blocking process exit.
 - **Timezone support** — `Intl.DateTimeFormat` with the specified timezone extracts local time components for cron matching.
 - **Console logging** — logs `[CronJob:{id}] triggered at {timestamp}` on each fire, and `[CronJob:{id}] registered (disabled)` when `enabled: false`.
 - **Error handling** — handler errors are caught and logged with a warning that AWS would retry.

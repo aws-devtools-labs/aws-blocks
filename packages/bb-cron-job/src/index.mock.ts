@@ -16,6 +16,9 @@ export type { CronJobEvent, CronJobOptions } from './types.js';
 
 import { parseScheduleForMock, validateTimezone, type CronFields, type RateSchedule, type CronSchedule } from './schedule.js';
 
+// Node clamps longer timer delays to 1 ms rather than waiting for the requested duration.
+const MAX_TIMER_DELAY = 2_147_483_647;
+
 /**
  * Scheduled task execution backed by EventBridge Scheduler and Lambda.
  *
@@ -85,24 +88,46 @@ export class CronJob<T = void> extends Scope {
 	private _start(): void {
 		if (this._schedule.type === 'rate') {
 			console.log(`[CronJob:${this.id}] scheduled: rate(${formatMs(this._schedule.intervalMs)})`);
-			this._timer = setInterval(() => this._fire(), this._schedule.intervalMs);
-			(this._timer as NodeJS.Timeout).unref();
+			if (this._schedule.intervalMs <= MAX_TIMER_DELAY) {
+				this._timer = setInterval(() => this._fire(), this._schedule.intervalMs);
+				(this._timer as NodeJS.Timeout).unref();
+			} else {
+				this._scheduleRateTick(this._schedule.intervalMs);
+			}
 		} else {
 			this._scheduleCronTick();
 		}
+	}
+
+	private _scheduleRateTick(intervalMs: number): void {
+		this._scheduleAt(Date.now() + intervalMs, () => {
+			this._fire();
+			this._scheduleRateTick(intervalMs);
+		});
 	}
 
 	private _scheduleCronTick(): void {
 		const now = new Date();
 		const sched = this._schedule as CronSchedule;
 		const next = nextCronTime(sched.fields, now, this._timezone);
-		const delayMs = next.getTime() - now.getTime();
 		const tzLabel = this._timezone ?? 'UTC';
 		console.log(`[CronJob:${this.id}] next fire: ${next.toISOString()} ${tzLabel}`);
-		this._timer = setTimeout(() => {
+		this._scheduleAt(next.getTime(), () => {
 			this._fire();
 			this._scheduleCronTick();
-		}, Math.max(delayMs, 1000));
+		});
+	}
+
+	private _scheduleAt(fireAt: number, onFire: () => void): void {
+		const delayMs = Math.max(1000, Math.min(fireAt - Date.now(), MAX_TIMER_DELAY));
+		this._timer = setTimeout(() => {
+			// Intermediate chunks (or an early wake-up) must not invoke the handler.
+			if (Date.now() < fireAt) {
+				this._scheduleAt(fireAt, onFire);
+			} else {
+				onFire();
+			}
+		}, delayMs);
 		(this._timer as NodeJS.Timeout).unref();
 	}
 
