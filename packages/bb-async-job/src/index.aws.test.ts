@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, isWireSafeError } from '@aws-blocks/core';
 import { AsyncJob, AsyncJobErrors, BatchSubmitFailedError } from './index.aws.js';
 
 /**
@@ -107,12 +107,12 @@ describe('AsyncJob (aws runtime): submitBatch partial failure', () => {
 		for (const delaySeconds of [-1, 1.5, NaN, Infinity, 901]) {
 			await assert.rejects(
 				() => job.submit({ n: 1 }, { delaySeconds }),
-				(err: Error) => err.name === AsyncJobErrors.ValidationFailed,
+				(err: Error) => err.name === AsyncJobErrors.ValidationFailed && isWireSafeError(err),
 			);
 		}
 		await assert.rejects(
 			() => job.submitBatch([{ n: 1 }, { n: 2 }], { delaySeconds: -1 }),
-			(err: Error) => err.name === AsyncJobErrors.ValidationFailed,
+			(err: Error) => err.name === AsyncJobErrors.ValidationFailed && isWireSafeError(err),
 		);
 		assert.strictEqual(sends, 0);
 	});

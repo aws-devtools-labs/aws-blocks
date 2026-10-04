@@ -72,6 +72,8 @@ Local Mock
 
 **Rationale:** Failing fast on the caller's side produces a precise typed error (`PayloadTooLarge`, `ValidationFailed`, `BatchEmpty`) instead of a generic SQS rejection, and avoids a network round-trip for input that cannot succeed. Validating the whole batch up front means one invalid delay or payload fails the call without half-submitting the batch. The mock applies identical checks so violations surface the same `error.name` in local dev.
 
+Delay validation errors are branded with `brandBlocksError`, like payload validation errors, so the intentional error name and message survive the RPC boundary. An unbranded named error is sanitized to a generic internal error by core.
+
 ### D-AJ-4a: `submitBatch` auto-chunks; a multi-chunk submit is not atomic
 
 **Decision:** `submitBatch` accepts up to {@link MAX_BATCH_PAYLOADS} (10,000) payloads. It packs them into `SendMessageBatch` requests bounded by both SQS per-request limits — at most 10 entries and at most 256 KB of aggregate message body — and sends those requests with bounded concurrency (at most {@link MAX_BATCH_CONCURRENCY} = 5 in flight). Each batch entry's `Id` is the payload's original index, so returned `MessageId`s (and failures) map straight back into input order. The original 10-item hard cap is replaced by this much higher soft cap: over the limit throws `BatchTooLarge` before any send, a guardrail against a single call fanning out to an unbounded number of SQS requests.

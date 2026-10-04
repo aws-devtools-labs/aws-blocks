@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { isWireSafeError } from '@aws-blocks/core';
 import { AsyncJob, AsyncJobErrors } from './index.mock.js';
 import { validateDelaySeconds } from './validation.js';
 
@@ -396,7 +397,7 @@ test('AsyncJob - submit rejects invalid delaySeconds before queueing work', asyn
 	for (const delaySeconds of [-1, 1.5, NaN, Infinity, 901]) {
 		await assert.rejects(
 			() => job.submit({ x: 1 }, { delaySeconds }),
-			(err: Error) => err.name === AsyncJobErrors.ValidationFailed,
+			(err: Error) => err.name === AsyncJobErrors.ValidationFailed && isWireSafeError(err),
 		);
 	}
 
@@ -413,7 +414,7 @@ test('AsyncJob - submitBatch rejects invalid delaySeconds before queueing any wo
 
 	await assert.rejects(
 		() => job.submitBatch([{ x: 1 }, { x: 2 }], { delaySeconds: -1 }),
-		(err: Error) => err.name === AsyncJobErrors.ValidationFailed,
+		(err: Error) => err.name === AsyncJobErrors.ValidationFailed && isWireSafeError(err),
 	);
 
 	await waitForJobs();

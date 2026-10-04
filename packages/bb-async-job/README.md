@@ -109,6 +109,10 @@ AsyncJobErrors.Timeout            // waitUntilComplete() gave up before the job 
 AsyncJobErrors.StatusNotTracked   // status method called without trackStatus: true
 ```
 
+Use `isBlocksError(error, AsyncJobErrors.ValidationFailed)` from `@aws-blocks/core`
+to recognize invalid payloads or delays, including when the submission is wrapped
+in an API method and called from the frontend.
+
 ## Local Development
 
 In local dev mode, AsyncJob uses an in-process queue. Jobs process via `setTimeout` in the same Node.js process. Retries, DLQ behavior, and payload limits are enforced identically to AWS.

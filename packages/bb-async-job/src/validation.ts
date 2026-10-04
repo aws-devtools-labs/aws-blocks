@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { brandBlocksError } from '@aws-blocks/core';
 import { AsyncJobErrors } from './errors.js';
 
 const MAX_DELAY_SECONDS = 900;
@@ -17,6 +18,6 @@ export function validateDelaySeconds(delaySeconds?: number): void {
 			`${AsyncJobErrors.ValidationFailed}: \`delaySeconds\` must be an integer from 0 to ${MAX_DELAY_SECONDS} (received ${String(delaySeconds)})`,
 		);
 		err.name = AsyncJobErrors.ValidationFailed;
-		throw err;
+		throw brandBlocksError(err);
 	}
 }
