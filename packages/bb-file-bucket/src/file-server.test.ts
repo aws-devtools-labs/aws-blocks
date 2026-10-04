@@ -347,6 +347,30 @@ describe('file-server: URL-encoded paths', () => {
 // ── Versioning integration ──────────────────────────────────────────────────
 
 describe('file-server: versioning', () => {
+	test('current download serves the previous version after deleting the latest version', async () => {
+		const bucket = new FileBucket(scope, 'fs-delete-current');
+		await bucket.put('doc.txt', 'old', { contentType: 'text/plain' });
+		await bucket.put('doc.txt', 'new content', { contentType: 'text/csv' });
+		const [latest] = await bucket.listVersions('doc.txt');
+		const url = (await bucket.getUrl('doc.txt')).replace(/localhost:\d+/, `localhost:${port}`);
+		await bucket.delete('doc.txt', { versionId: latest.versionId });
+		const res = await fetch(url);
+		assert.strictEqual(res.status, 200);
+		assert.strictEqual(res.headers.get('content-type'), 'text/plain');
+		assert.strictEqual(await res.text(), 'old');
+	});
+
+	test('current download returns 404 after permanently deleting all versions', async () => {
+		const bucket = new FileBucket(scope, 'fs-delete-all');
+		await bucket.put('doc.txt', 'only');
+		const [version] = await bucket.listVersions('doc.txt');
+		const url = (await bucket.getUrl('doc.txt')).replace(/localhost:\d+/, `localhost:${port}`);
+		await bucket.delete('doc.txt', { versionId: version.versionId });
+		const res = await fetch(url);
+		assert.strictEqual(res.status, 404);
+		await res.text();
+	});
+
 	test('PUT via presigned URL creates a new version', async () => {
 		const bucket = new FileBucket(scope, 'fs-ver1', { versioned: true });
 		await bucket.put('doc.txt', 'v1-api', { contentType: 'text/plain' });
