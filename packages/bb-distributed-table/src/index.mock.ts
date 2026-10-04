@@ -7,6 +7,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { deserialize, serialize } from 'node:v8';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 export { DistributedTableErrors } from './errors.js';
@@ -43,6 +44,11 @@ import { DistributedTableErrors, DistributedTableMessages, blocksError, conditio
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const MAX_ITEM_BYTES = 400 * 1024;
+
+function snapshotItem<T>(item: T): T {
+	// Unlike JSON or structuredClone, V8 cloning also preserves Buffer instances.
+	return deserialize(serialize(item)) as T;
+}
 
 async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): Promise<void> {
 	const result = schema['~standard'].validate(value);
@@ -161,7 +167,7 @@ export class DistributedTable<
 	 */
 	private reconcileRead(item: T | null): Promise<T | null> {
 		// Validators may return or mutate their input, so detach before validation.
-		const snapshot = item === null ? null : JSON.parse(JSON.stringify(item)) as T;
+		const snapshot = item === null ? null : snapshotItem(item);
 		return applyReadValidation(this.readValidation, this.schema, snapshot, this.log, { table: this.fullId });
 	}
 
@@ -187,7 +193,7 @@ export class DistributedTable<
 		if (options?.ifFieldEquals) {
 			this.checkFieldEquals(keyStr, options.ifFieldEquals, retriable);
 		}
-		this.data.set(keyStr, JSON.parse(serialized) as T);
+		this.data.set(keyStr, snapshotItem(item));
 		this.flushToDisk();
 	}
 
@@ -331,7 +337,7 @@ export class DistributedTable<
 			if (Buffer.byteLength(serialized, 'utf8') > MAX_ITEM_BYTES) {
 				throw blocksError(DistributedTableErrors.ItemTooLarge, DistributedTableMessages.itemTooLarge(Buffer.byteLength(serialized, 'utf8')));
 			}
-			snapshots.push([this.serializeKey(item as any), JSON.parse(serialized) as T]);
+			snapshots.push([this.serializeKey(item as any), snapshotItem(item)]);
 		}
 		for (const [key, snapshot] of snapshots) {
 			this.data.set(key, snapshot);

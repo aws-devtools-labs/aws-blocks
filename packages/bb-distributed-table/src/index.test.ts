@@ -158,6 +158,71 @@ describe('DistributedTable', () => {
 			}
 		}
 
+		const nativeSchema = z.object({
+			id: z.string(),
+			strings: z.set(z.string()),
+			numbers: z.set(z.number()),
+			binaries: z.set(z.instanceof(Uint8Array)),
+			bytes: z.instanceof(Uint8Array),
+			buffer: z.instanceof(Buffer),
+		});
+		type NativeItem = z.infer<typeof nativeSchema>;
+		const nativeItem = (): NativeItem => ({
+			id: 'one',
+			strings: new Set(['saved']),
+			numbers: new Set([1]),
+			binaries: new Set([new Uint8Array([3, 4])]),
+			bytes: new Uint8Array([1, 2]),
+			buffer: Buffer.from([5, 6]),
+		});
+		function mutateNativeItem(row: NativeItem) {
+			row.strings.add('unsaved');
+			row.numbers.add(99);
+			for (const binary of row.binaries) binary[0] = 99;
+			row.bytes[0] = 99;
+			row.buffer[0] = 99;
+		}
+		for (const write of ['put', 'putBatch'] as const) {
+			for (const readValidation of ['off', 'coerce', 'strict'] as const) {
+				for (const read of ['get', 'getBatch', 'query', 'scan'] as const) {
+					test(`${write} / ${read} preserves and detaches native DynamoDB values with readValidation=${readValidation}`, async t => {
+						const table = new DistributedTable(testScope(), 'snapshots', {
+							schema: nativeSchema, key: { partitionKey: 'id' }, readValidation,
+						});
+						t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+						const input = nativeItem();
+						if (write === 'put') await table.put(input);
+						else await table.putBatch([input]);
+						mutateNativeItem(input);
+						let row: NativeItem | null;
+						if (read === 'get') row = await table.get({ id: 'one' });
+						else if (read === 'getBatch') row = (await table.getBatch([{ id: 'one' }]))[0];
+						else if (read === 'query') row = (await collect(table.query({ where: { id: { equals: 'one' } } })))[0];
+						else row = (await collect(table.scan()))[0];
+						assert.ok(row);
+						assert.deepEqual(row, nativeItem());
+						assert.ok(Buffer.isBuffer(row.buffer));
+						mutateNativeItem(row);
+						assert.deepEqual(await table.get({ id: 'one' }), nativeItem());
+					});
+				}
+			}
+		}
+
+		test('native snapshots leave the existing JSON persistence format unchanged', async t => {
+			const table = new DistributedTable(testScope(), 'snapshots', { schema: nativeSchema, key: { partitionKey: 'id' } });
+			t.after(() => rmSync(join('.bb-data', table.fullId), { recursive: true, force: true }));
+			const input = nativeItem();
+			await table.put(input);
+			const path = join('.bb-data', table.fullId, 'data.json');
+			assert.equal(readFileSync(path, 'utf8'), JSON.stringify([['["one"]', nativeItem()]], null, 2));
+			mutateNativeItem(input);
+			await table.put({ ...nativeItem(), id: 'two' });
+			assert.equal(readFileSync(path, 'utf8'), JSON.stringify([
+				['["one"]', nativeItem()], ['["two"]', { ...nativeItem(), id: 'two' }],
+			], null, 2));
+		});
+
 		test('coerce raw fallback returns a detached item', async t => {
 			let rejectRead = false;
 			const driftedSchema: StandardSchemaV1<Item> = {

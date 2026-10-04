@@ -217,7 +217,7 @@ Items are stored as DynamoDB JSON (marshalled via `@aws-sdk/lib-dynamodb` Docume
 ## Mock Implementation
 
 - Data stored in `.bb-data/{scope.fullId}/data.json` via `getMockDataDir()` from core.
-- Writes snapshot the existing JSON representation rather than retaining caller-owned object references. Batch writes validate and snapshot every item before updating the store. Reads snapshot before schema reconciliation, so all read-validation modes (including raw fallback) and validators that mutate or return their input are isolated from stored data. This keeps the on-disk format unchanged and prevents an unrelated write from persisting unsaved mutations.
+- Writes snapshot items rather than retaining caller-owned object references. Batch writes validate and snapshot every item before updating the store. Reads snapshot before schema reconciliation, so all read-validation modes (including raw fallback) and validators that mutate or return their input are isolated from stored data. In-memory snapshots use Node's V8 serialization to preserve native sets, typed arrays, and `Buffer` (unlike JSON cloning, or `structuredClone` for `Buffer`). This prevents an unrelated write from persisting unsaved mutations. V8 serialization is used only for copying, not disk storage: the existing JSON format and its inability to preserve native sets/binary types across restarts are unchanged.
 - Data persists across dev server restarts. Customers can wipe with `rm -rf .bb-data`.
 - Index queries implemented via in-memory filtering over the full dataset.
 - Conditional write/delete failures throw with `error.name = 'ConditionalCheckFailedException'`.
