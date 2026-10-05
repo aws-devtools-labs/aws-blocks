@@ -1,8 +1,8 @@
 package com.example.app
 
+import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
-import com.aws.blocks.kotlin.BlocksServer
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Boolean
 import kotlin.Double
@@ -13,10 +13,8 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
 public class Api(
-  private val server: BlocksServer = Servers.local,
+  private val client: BlocksClient,
 ) {
-  private val client: BlocksClient = BlocksClient(server)
-
   public suspend fun getScores(): Map<String, Double> {
     val request = BlocksRequest(method = "api.getScores", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
@@ -43,3 +41,6 @@ public class Api(
     )
   }
 }
+
+public val Blocks.api: Api
+  get() = Api(client)
