@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/core": patch
+"@aws-blocks/blocks": patch
 ---
 
 Sanitize RawRoute uncaught exceptions so raw driver/SDK details no longer leak.
