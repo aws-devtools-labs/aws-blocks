@@ -474,16 +474,16 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				);
 			});
 
-			test('publish rejects message exceeding 32KB frame limit', async () => {
+			test('publish rejects message exceeding 128KiB message limit', async () => {
 				const api = getApi();
 				await assert.rejects(
 					() => api.realtimePublishOversizedPayload(),
 					(err: unknown) => {
 						const e = err as Error & { name: string };
 						return e.name === 'ValidationFailedException'
-							|| (e.message && e.message.includes('frame'));
+							|| (e.message && e.message.includes('128 KiB'));
 					},
-					'Should reject message exceeding WebSocket frame limit',
+					'Should reject message exceeding WebSocket logical message limit',
 				);
 			});
 		});

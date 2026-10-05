@@ -1523,8 +1523,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async realtimePublishOversizedPayload() {
-    // Message will exceed 32KB WebSocket frame limit
-    const bigData = { userId: 'u1', x: 0, y: 0, color: 'x'.repeat(33_000) };
+    // Message will exceed the 128 KiB WebSocket logical message limit
+    const bigData = { userId: 'u1', x: 0, y: 0, color: 'x'.repeat(132_000) };
     await realtime.publish('cursors', 'oversized', bigData);
     return { success: true };
   },

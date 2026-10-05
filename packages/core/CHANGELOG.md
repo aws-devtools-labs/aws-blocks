@@ -1,5 +1,180 @@
 # @aws-blocks/core
 
+## 0.6.0
+
+### Minor Changes
+
+- 5501cb6: Fix off-region CloudFront 5xx alarm and rework alarm subscription wiring (#481).
+  
+  **Breaking change** (a minor bump pre-1.0):
+  
+  - The `monitoring.snsTopicArn` prop is **removed**. Attach notifications
+    with the new `monitoring.subscriptions` list instead: `EmailSubscription`
+    and `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions` (endpoint
+    subscriptions only, for now). Each subscription is applied to **both**
+    hosting alarm topics, so you subscribe in one place and every alarm is
+    covered regardless of region.
+  - The `hosting.monitoringTopic` attribute is **removed**, replaced by
+    `hosting.monitoring` = `{ alarms, alarmTopics }` (all alarms and all
+    alarm topics across both regions).
+  
+  `AWS/CloudFront` metrics publish only in us-east-1 and a CloudWatch alarm
+  cannot watch a metric cross-region, so off-region the CloudFront 5xx alarm
+  never fired (it sat at `OK` under `treatMissingData: NOT_BREACHING`).
+  Off-region deployments now **always** place the CloudFront alarm in a
+  synthesized `<stackName>-CfMonitoring-<addr>` us-east-1 stack with its own
+  encrypted SNS topic; `monitoring.subscriptions` are applied to that topic
+  too. Off-region placement is always on; the only escape is when it is
+  genuinely impossible. When the region resolves but the account is
+  unresolved (a single-synth multi-account pipeline), the us-east-1 support
+  stack cannot be built, so the CloudFront alarm is skipped with a loud synth
+  warning and all other alarms are kept, rather than throwing. Set
+  `env: { account, region }` to enable CloudFront coverage.
+  
+  Migration: replace `monitoring: { snsTopicArn }` with
+  `monitoring: { subscriptions: [new subs.EmailSubscription('oncall@example.com')] }`
+  (or a `UrlSubscription`). Two escape paths cover what `subscriptions` no
+  longer does directly:
+  
+  - **Route alarms to an existing/central SNS topic:**
+    `hosting.monitoring.alarms.forEach(a => a.addAlarmAction(new cw_actions.SnsAction(myTopic)))`.
+  - **Resource-target (Lambda/SQS) subscriptions:** still valid on the
+    regional topic via `hosting.monitoring.alarmTopics[].addSubscription(...)`.
+    Only the automatic cross-region fan-out to the us-east-1 CloudFront topic
+    drops them (that would need an unresolvable cross-region reference).
+  
+  See `docs/DECISIONS.md` D-016 for the always-on and warn-and-skip rationale.
+  
+  `@aws-blocks/core` surfaces `monitoring.subscriptions` and the
+  `monitoring` attribute in place of `monitoringTopic`.
+- 39628cb: fix(core): anchor and escape CORS allowlist origins
+  
+  CORS allowlist entries are compiled to regular expressions. Two matching gaps let a
+  plain-looking origin match more broadly than intended:
+  
+  - An entry beginning with `^` was used verbatim with no end anchor, so
+    `^https://app\.example\.com` also matched `https://app.example.com.extra`.
+    `parseCorsPatterns` now compiles every entry as `^(?:<entry>)$`, so the anchors
+    bind the whole expression — including every branch of a top-level `|` alternation,
+    not just the last.
+  - The framework-injected hosting origin (the CloudFront/custom domain) was compiled
+    into the regex allowlist as a raw string, so its `.` characters were treated as
+    regex metacharacters rather than literals. Hosting origins now travel in a separate
+    literal channel (`CORS_HOSTING_ORIGINS`): the origin is registered raw at synth (so
+    its CloudFormation token resolves to the real domain) and escaped literally at
+    runtime, so a domain like `d123.cloudfront.net` matches its dots literally.
+  
+  User-supplied `CORS_ALLOWED_ORIGINS` entries remain regex patterns (the `.*` escape
+  hatch and subdomain patterns are unchanged); literal dots in an origin should be
+  escaped (`https://app\.example\.com`), as the README documents.
+  
+  **Migration.** Automatic end-anchoring of `^`-prefixed entries is a tightening: an
+  entry like `^https://app\.example\.com` previously also matched
+  `https://app.example.com:8443`, and now does not. If you relied on that prefix
+  behavior, append an explicit suffix such as `(:\d+)?` or `.*` to the entry.
+  
+  `CORS_HOSTING_ORIGINS` must now be a **raw** origin (it is escaped once at runtime); a
+  pre-escaped value would be escaped a second time and stop matching.
+- a649895: Emit a machine-readable completion signal on a successful `npm run deploy` **and** `npm run sandbox`.
+  
+  `deploy()` now prints one stable last line — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`) — so a caller (a coding agent, a CI step, a script) can detect "deploy finished + where it lives" by grepping one line instead of parsing streamed CloudFormation output or polling the stack for the URL. `sandbox()` prints the same line on its success path (backend-only — `BLOCKS_DEPLOYED api=<backend>`, since the sandbox serves the frontend locally), so a programmatic caller greps the identical token after either command. The existing human-readable `✅ Deployment complete!` / `📡 API URL` / `🌐 Frontend URL` lines are unchanged; the signal is additive. The formatting is extracted into a pure `formatDeploySignal()` helper with unit coverage, shared by both entry points. The scaffolded `AGENTS.md` documents the line so agents grep it rather than poll.
+  
+  For `npm run deploy` specifically (which streams a real CloudFormation deploy), the heartbeat now also names the resource currently converging — e.g. `waiting on HostingDistribution (AWS::CloudFront::Distribution)` — and surfaces a rolling-back resource as a warning rather than silently clearing it, and the frontend URL is surfaced early (on the in-progress path) so a deploy killed at a caller timeout has still reported where the app lives.
+- 5515483: fix(hosting): fail-closed SSR cache key + per-credential cache-key options
+  
+  Ensures cacheable SSR responses on compute deployments are keyed per credential, and adds the controls to include credentials in the SSR cache key.
+  
+  **BREAKING:** existing configs that set `cdn.ssrDefaultTtl > 0` now fail synth (`SsrCacheKeyCredentialsRequiredError`) until they include a credential in the SSR cache key. Enabling `ssrDefaultTtl > 0` makes SSR responses without an explicit `Cache-Control` header cacheable and shared at the CloudFront edge, keyed only on the Next.js router headers — not on `Authorization` or session cookies (CloudFront ignores `Vary`).
+  
+  Migration — pick one:
+  - Add `cacheKeyCookies: ['<your session cookie>']` and/or `cacheKeyHeaders: ['authorization']` so cached responses are keyed per credential; or
+  - Remove `ssrDefaultTtl` (and ensure personalized routes emit `Cache-Control: private`).
+  
+  - **Fail-closed guard on `cdn.ssrDefaultTtl`.** Synth throws unless `cacheKeyCookies` and/or `cacheKeyHeaders` is set, so credentials are in the cache key before per-credential responses can be cached. An unresolved-token TTL is treated as `> 0` (fail closed).
+  - **New `cdn.cacheKeyCookies` and `cdn.cacheKeyHeaders` options.** Add your session cookie name(s) and/or credential-bearing header(s) (e.g. `'authorization'`) to the SSR cache key so authenticated responses are cached per credential. `'accept-encoding'` is rejected (handled by the brotli/gzip flags), and at most 8 caller cookies are allowed (CloudFront's 10-cookie cap, 2 reserved for Next.js preview mode). The cookie/header caps are resolved via `QuotaBudget` (`quotas.cacheKeyCookies` / `quotas.cacheKeyHeaders`) so a granted quota increase raises them.
+  - **Shared-route cache key on compute deploys.** Compute deploys route every request through a single default cache behavior, so `cacheKeyCookies`/`cacheKeyHeaders` would key all routes per credential. The edge router now strips the configured cookies and `authorization` on static and image routes so shared assets keep a shared cache key, while SSR/compute routes stay keyed per credential.
+  - **Cache-key JSDoc** on `ssrDefaultTtl`, `cacheKeyCookies`, and `cacheKeyHeaders` documenting how credentials enter the cache key and safe usage.
+  - **`@aws-blocks/core`:** `Hosting` exposes `ssrDefaultTtl`, `cacheKeyCookies`, and `cacheKeyHeaders` as top-level props and forwards them to the CDN cache-key config.
+  
+  Note: any route that sets cookies via `Set-Cookie`, or otherwise varies per user without opting into the cache key, must emit `Cache-Control: private` so its response is not cached as a single shared entry at the edge.
+- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
+  
+  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
+  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
+  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
+  and exports `installClientUserAgent`, an SDK middleware that appends the validated
+  token to the outgoing user agent. The 12 participating Building Blocks install it,
+  so native attribution rides the SDK user-agent chain AWS service telemetry already
+  counts. The Kotlin runtime already sends the header, so Kotlin
+  callers are attributed as soon as this ships; Swift and Dart follow.
+- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
+  
+  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
+  
+  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
+  
+  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
+  
+  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
+  
+  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
+  
+  ## Breaking change (why `@aws-blocks/core` is a minor)
+  
+  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
+  
+  ```ts
+  // before — message collapses to "Internal error" on the client
+  throw new Error('Todo not found');
+  
+  // after — status, message, and name all reach the client
+  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  ```
+  
+  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+
+### Patch Changes
+
+- b58f248: fix(core): allow the client user-agent header on both CORS preflights
+  
+  The Lambda preflight allowed only `Content-Type, Authorization`, and the dev server
+  only `Content-Type`. Neither is CORS-safelisted, so a browser that sets
+  `x-blocks-user-agent`, or a bearer token, preflights the call, and the failing
+  preflight **blocked the whole request** rather than just dropping the header. Both of
+  core's preflight responders now allow the same three, derived from
+  `CLIENT_USER_AGENT_HEADER`, which moves to `constants.ts` so neither repeats the
+  literal. That also fixes bearer auth in local dev, which failed the preflight while
+  working deployed. Origin matching and `Access-Control-Allow-Credentials` are
+  unchanged.
+- d4b32f2: Add `README.md` and `DESIGN.md` to `@aws-blocks/create-block` and ship them in the published package (`files`), matching the first-party package convention.
+  
+  Tidy two `extract-ts-types` test nits (test/comment only, no runtime change): replace a redundant re-assert with a direct check of the documented lingering-bare-key behavior, and link the array/tuple & nested-destructuring boundary to its tracking issue (#552).
+- 27646ac: Tighten dev server singleton and retry handling for port contention follow-ups.
+- 9e02b82: fix(core): spec extraction attributes array/tuple & nested-destructured factory namespaces
+  
+  `extractMethodTypes` (the generate-spec type extractor) attributed a
+  factory-returned `ApiNamespace` to its namespace only for a top-level identifier
+  or a shallow object binding pattern. Array/tuple patterns (`const [ns] = factory()`)
+  and nested destructuring (`const { a: { b } } = factory()`) fell through to the
+  bare method key — fail-soft via the #498 fallback when there was no collision, but
+  a factory returning a tuple of namespaces that share a method name (e.g.
+  `const [a, b] = factory()` where both expose `create`) could hit the #445
+  cross-assignment class again.
+  
+  The second-pass indirect resolver now walks binding patterns recursively (object,
+  array/tuple, and any nesting), attributing every leaf identifier to the namespace
+  it binds via the checker's resolved type — so those shapes key qualified
+  (`ns.method`) like a directly-constructed namespace. Follow-up to #522 (#552).
+- 465a002: fix(telemetry): use ci-info for CI detection so Taskcluster (`TASK_ID` + `RUN_ID`), Netlify, Vercel, and 40+ other CI providers are identified; also keep the previously checked `CODEBUILD_BUILD_ID`, `JENKINS_URL`, `BITBUCKET_BUILD_NUMBER` and `TASKCLUSTER_ROOT_URL` variables, and honor `CI=false`
+- Updated dependencies [773cef2]
+- Updated dependencies [5501cb6]
+- Updated dependencies [6b7fe4c]
+- Updated dependencies [5515483]
+- Updated dependencies [dae7a86]
+- Updated dependencies [7b7a59f]
+  - @aws-blocks/hosting@0.4.0
+  - @aws-blocks/pipeline@0.2.3
+
 ## 0.5.0
 
 ### Minor Changes

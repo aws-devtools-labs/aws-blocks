@@ -30,8 +30,17 @@ export async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unkn
 /** DynamoDB sort key maximum size in bytes. */
 const MAX_CHANNEL_BYTES = 1024;
 
-/** API Gateway WebSocket frame maximum size in bytes. */
-const MAX_FRAME_BYTES = 32_768;
+/**
+ * API Gateway WebSocket maximum *logical message* size in bytes (128 KiB).
+ *
+ * API Gateway has two distinct WebSocket quotas: a 32 KiB maximum *frame* size
+ * and a 128 KiB maximum *message* size. The service reassembles fragmented
+ * frames into a single logical message, so the cap that applies to a published
+ * payload is 128 KiB — not 32 KiB. Do not "re-fix" this back to 32 KiB.
+ *
+ * https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html
+ */
+const MAX_MESSAGE_BYTES = 131_072;
 
 /**
  * Validate that a fully-qualified channel path fits within the DynamoDB
@@ -47,15 +56,15 @@ export function validateChannelPath(fullChannel: string): void {
 
 /**
  * Validate that a publish message fits within the API Gateway WebSocket
- * frame size limit (32 KB). The message includes the envelope
+ * logical message size limit (128 KiB). The message includes the envelope
  * (type + channel) so we check the full serialized payload.
  */
 export function validatePublishSize(fullChannel: string, data: unknown): void {
 	const message = JSON.stringify({ type: 'message', channel: fullChannel, data });
 	const byteLength = Buffer.byteLength(message, 'utf8');
-	if (byteLength > MAX_FRAME_BYTES) {
+	if (byteLength > MAX_MESSAGE_BYTES) {
 		throw blocksError(RealtimeErrors.ValidationFailed,
-			`Published message exceeds WebSocket frame limit (${byteLength}/${MAX_FRAME_BYTES} bytes)`);
+			`Published message exceeds WebSocket message limit of 128 KiB (${byteLength}/${MAX_MESSAGE_BYTES} bytes); send a smaller payload or split it across multiple publishes`);
 	}
 }
 

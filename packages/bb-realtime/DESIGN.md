@@ -167,7 +167,7 @@ Each `postToConnection` takes ~5-10ms with TCP keep-alive. The SDK retries trans
 **API Gateway limits:** `postToConnection` shares the account-level API Gateway TPS quota (~10K default, raisable). A single Lambda with 50 concurrent sockets is well within this. Multiple Lambdas publishing simultaneously could approach the limit — this is another reason to shard large fan-outs.
 
 **References:**
-- [API Gateway WebSocket quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html) — official limits (32 KB frame, 2hr connection, 500 new conn/sec, 10K TPS account-level)
+- [API Gateway WebSocket quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html) — official limits (32 KB frame **and a separate 128 KiB logical message maximum**, 2hr connection, 500 new conn/sec, 10K TPS account-level)
 - [SO: postToConnection 429 throttling](https://stackoverflow.com/questions/61159703) — confirms account-level throttle applies to management API calls
 
 ### Environment Variables
@@ -206,7 +206,7 @@ Channel path:             my-app-collab/chat/room-123
 | No connection duration limit locally | Mock WS stays open indefinitely | Document the 2-hour AWS limit in README |
 | Single-process only | No cross-process pub/sub | Local dev is single-process |
 | No message ordering guarantees | In-process delivery is synchronous (ordered); AWS may deliver out of order | Ordering is inherently non-deterministic |
-| ~~No size/length enforcement locally~~ | ~~Silent failures in AWS~~ | **Fixed** — channel path (1024B) and publish size (32KB) are now enforced in both environments |
+| ~~No size/length enforcement locally~~ | ~~Silent failures in AWS~~ | **Fixed** — channel path (1024B) and publish size (128 KiB logical message, not the 32 KB frame quota — API Gateway reassembles frames) are now enforced in both environments |
 | Mock fires `onReconnect` connection-wide once resubscribe frames are sent; AWS fires it per-channel only after that channel's resubscribe is server-CONFIRMED | A multi-channel local test can observe `onReconnect` for a channel the real server would have rejected with `onDisconnect('error')` — so multi-channel reconnect-rejection behavior differs between local dev and deployed | Sandbox-test multi-channel reconnect flows; treat `onReconnect` as "resubscribe attempted", not "channel guaranteed live", and backfill from the durable store |
 
 ## Serialization
@@ -317,11 +317,11 @@ Both the mock (local dev) and AWS runtimes enforce these limits at `publish()`, 
 | Limit | Value | Source | Validated at |
 |---|---|---|---|
 | Channel path (full) | 1024 bytes UTF-8 | DynamoDB sort key maximum | `publish`, `subscribe`, `getChannel` |
-| Published message size | 32,768 bytes | API Gateway WebSocket frame maximum | `publish` |
+| Published message size | 131,072 bytes | API Gateway WebSocket logical message maximum (128 KiB) | `publish` |
 
 **Channel path** is the fully-qualified string `{fullId}/{namespace}/{channel}` stored as the DynamoDB sort key. The validation uses `Buffer.byteLength(fullChannel, 'utf8')` so multi-byte characters (emoji, CJK, etc.) are counted correctly.
 
-**Published message size** is the serialized wire envelope: `JSON.stringify({ type: 'message', channel: fullChannel, data })`. This includes the channel path and the user's data payload. The 32 KB limit is the maximum single WebSocket frame that API Gateway will accept without closing the connection (code 1009).
+**Published message size** is the serialized wire envelope: `JSON.stringify({ type: 'message', channel: fullChannel, data })`. This includes the channel path and the user's data payload. API Gateway publishes **two distinct** WebSocket quotas: a 32 KB maximum *frame* size and a 128 KiB (131,072 byte) maximum *message* size. The service reassembles fragmented frames into one logical message, so the limit that applies to a published payload is **128 KiB** — the 32 KB frame quota is not the per-message cap. Do not "re-fix" this constant back to 32 KB. Exceeding 128 KiB is what causes API Gateway to reject the message (and close the connection with code 1009).
 
 ### Why Enforce in Both Environments
 
@@ -341,7 +341,7 @@ For a typical setup (`fullId` = `my-app-collab`, namespace = `cursors`):
 
 For publish size, the overhead is the JSON envelope wrapping the data:
 - Envelope: `{"type":"message","channel":"<fullChannel>","data":}` ≈ 40 + channel path length
-- Available for serialized data: ~32,700 bytes for typical channel paths
+- Available for serialized data: ~131,000 bytes for typical channel paths
 
 ### Binding Constraints
 
@@ -350,14 +350,15 @@ The full channel path (`{fullId}/{namespace}/{channel}`) is stored as a DynamoDB
 | Constraint | Limit | Impact |
 |---|---|---|
 | DynamoDB sort key | 1024 bytes | **Enforced** — hard limit on full channel path length |
-| API Gateway frame | 32 KB | **Enforced** — hard limit on published message size |
+| API Gateway message | 128 KiB (131,072 bytes) | **Enforced** — hard limit on published message size |
+| API Gateway frame | 32 KB | Not enforced — the service reassembles fragmented frames into one logical message |
 | DynamoDB partition key (GSI) | 2048 bytes | Not enforced — channel path hits SK limit first |
 | DynamoDB item size | 400 KB | Not a concern — items are ~200 bytes |
 | API Gateway billing | 32 KB increments | Long channel names marginally increase cost |
 
 ### Why We Recommend 256 Characters
 
-A 256-character user channel name, combined with a typical prefix (`myapp-rt/cursors/` = ~18 chars), stays well under the 1024-byte sort key limit while leaving room for future metadata. At 256 chars, the channel name adds ~0.8% to a 32 KB message — negligible for billing.
+A 256-character user channel name, combined with a typical prefix (`myapp-rt/cursors/` = ~18 chars), stays well under the 1024-byte sort key limit while leaving room for future metadata. At 256 chars, the channel name adds ~0.2% to a 128 KiB message — negligible for billing.
 
 Longer names are technically possible but offer no benefit. They increase DynamoDB read/write unit consumption (items are billed in 4 KB read / 1 KB write increments) and make WebSocket messages larger for no functional gain.
 
