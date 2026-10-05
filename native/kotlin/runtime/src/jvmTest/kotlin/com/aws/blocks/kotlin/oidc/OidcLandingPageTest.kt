@@ -82,6 +82,33 @@ class OidcLandingPageTest {
     }
 
     @Test
+    fun `redirect accepts every spelling of a loopback host over http`() {
+        OidcLandingPage.Redirect("http://127.0.0.2:3000/done")
+        OidcLandingPage.Redirect("http://[0:0:0:0:0:0:0:1]:3000/done")
+    }
+
+    @Test
+    fun `redirect rejects an out-of-range port`() {
+        val error = shouldThrow<IllegalArgumentException> {
+            OidcLandingPage.Redirect("https://app.example.com:99999/done")
+        }
+        error.message!! shouldContain "out-of-range port"
+    }
+
+    @Test
+    fun `redirect explains an unusable host rather than claiming there is none`() {
+        val error = shouldThrow<IllegalArgumentException> {
+            OidcLandingPage.Redirect("https://b\u00fccher.de/done")
+        }
+        error.message!! shouldContain "punycode"
+    }
+
+    @Test
+    fun `redirect accepts a punycoded internationalised domain`() {
+        OidcLandingPage.Redirect("https://xn--bcher-kva.de/done")
+    }
+
+    @Test
     fun `html rejects a blank document`() {
         val error = shouldThrow<IllegalArgumentException> { OidcLandingPage.Html("  ") }
         error.message!! shouldContain "document"

@@ -1,5 +1,6 @@
 package com.aws.blocks.kotlin.oidc
 
+import java.net.InetAddress
 import java.net.URI
 import java.net.URISyntaxException
 
@@ -35,6 +36,10 @@ sealed interface OidcLandingPage {
      * identity provider's `error_description`; use [Redirect] when that detail is wanted.
      * The document is not validated or rewritten, so anything it fetches from the network
      * may fail on a machine that can only reach the identity provider.
+     *
+     * It is served as the response to the callback itself, so the callback query stays in the
+     * address bar while the page is open and the markup can read the authorization code.
+     * [Redirect] sends the browser to a clean URL instead.
      */
     data class Html(val document: String) : OidcLandingPage {
         init {
@@ -45,8 +50,10 @@ sealed interface OidcLandingPage {
     }
 }
 
-// URI.getHost keeps the brackets on an IPv6 literal.
-private val LOOPBACK_HOSTS = setOf("localhost", "127.0.0.1", "[::1]")
+private const val MAX_PORT = 65535
+
+/** An IPv4 or bracketed IPv6 literal, which can be resolved without touching DNS. */
+private val IP_LITERAL = Regex("""^\[[0-9A-Fa-f:.]+]$|^[0-9.]+$""")
 
 private fun validateRedirectUrl(url: String) {
     // Checked before parsing, because a stray space is a likely typo and deserves a better
@@ -78,9 +85,39 @@ private fun validateRedirectUrl(url: String) {
     }
 
     val host = uri.host?.lowercase()
-    require(!host.isNullOrEmpty()) { "OidcLandingPage.Redirect url has no host: \"$url\"" }
-    require(scheme == "https" || host in LOOPBACK_HOSTS) {
+    require(!host.isNullOrEmpty()) {
+        if (uri.authority.isNullOrEmpty()) {
+            "OidcLandingPage.Redirect url has no host: \"$url\""
+        } else {
+            // URI rejects hostnames that are not strictly legal, such as one containing an
+            // underscore or a non-ASCII character.
+            "OidcLandingPage.Redirect url has an unusable host: \"${uri.authority}\". An " +
+                "internationalised domain has to be given in its punycode form (\"xn--…\")."
+        }
+    }
+
+    // URI parses the port as digits without range-checking it, and a URL carrying an
+    // out-of-range port cannot be followed or appended to later.
+    require(uri.port in -1..MAX_PORT) {
+        "OidcLandingPage.Redirect url has an out-of-range port: ${uri.port} in \"$url\""
+    }
+
+    require(scheme == "https" || isLoopback(host)) {
         "OidcLandingPage.Redirect url uses http with a non-loopback host: \"$url\". Use " +
             "https, or a loopback host such as \"http://localhost:3000\" for development."
     }
+}
+
+/**
+ * Whether [host] names this machine, covering every spelling of a loopback address rather
+ * than only `127.0.0.1` and `[::1]`.
+ *
+ * Only literals are resolved, so this never performs a DNS lookup.
+ */
+private fun isLoopback(host: String): Boolean {
+    if (host == "localhost") return true
+    if (!IP_LITERAL.matches(host)) return false
+    return runCatching {
+        InetAddress.getByName(host.removeSurrounding("[", "]")).isLoopbackAddress
+    }.getOrDefault(false)
 }

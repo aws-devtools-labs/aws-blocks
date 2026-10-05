@@ -110,9 +110,9 @@ internal object OidcLoopbackPages {
     )
 
     private fun svg(stroke: String, paths: String): String =
-        // The namespace colon is a character reference so the literal string "http://" never
-        // reaches the page; the browser resolves it to the correct namespace either way.
-        "<svg xmlns=\"http&#58;//www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" " +
+        // No xmlns: the HTML parser already puts an inline <svg> in the SVG namespace. The
+        // favicon data URI is a standalone document and does need one.
+        "<svg viewBox=\"0 0 24 24\" fill=\"none\" " +
             "stroke=\"$stroke\" stroke-width=\"2\" stroke-linecap=\"round\" " +
             "stroke-linejoin=\"round\" aria-hidden=\"true\">" + paths + "</svg>"
 

@@ -49,8 +49,13 @@ class OidcLoopbackPagesTest {
             OidcLoopbackPages.success(),
             OidcLoopbackPages.failure("access_denied", "nope"),
         )) {
-            page shouldNotContain "http://"
-            page shouldNotContain "https://www."
+            // Asserting on the mechanisms rather than on hostnames, so a stylesheet, script,
+            // image, or font added later is caught whatever it points at.
+            page shouldNotContain "src="
+            page shouldNotContain "url("
+            page shouldNotContain "@import"
+            page shouldNotContain "href=\"http"
+            page shouldNotContain "href=\"//"
         }
     }
 

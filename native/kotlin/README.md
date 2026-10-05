@@ -122,9 +122,15 @@ calls `signIn(provider)` with no options needs no platform code and gets the bui
 | `Redirect(url)` | A 302 to `url`. Requires `https`, except on a loopback host for local development. |
 | `Html(document)` | `document` served verbatim. Must be a complete HTML document. |
 
-On success the callback query is dropped, so the authorization code never reaches your landing
-page. On failure `error` and `error_description` are appended to a `Redirect` URL; an `Html`
-page receives nothing, so use `Redirect` if you need the provider's reason.
+A `Redirect` is sent a clean URL: the callback query is dropped on success, so the
+authorization code and `state` are not appended to it, and on failure only `error` and
+`error_description` are. An `Html` page receives nothing, so use `Redirect` if you need the
+provider's reason.
+
+`BuiltIn` and `Html` are served as the response to the callback itself, so the callback query
+stays in the address bar and in `document.location` while that page is open. Markup you supply
+through `Html` can therefore read the authorization code; prefer `Redirect` if the page runs
+anything you would not want to see it, such as third-party analytics.
 
 Android and iOS have no options to set — their in-app browser dismisses itself.
 

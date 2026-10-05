@@ -39,6 +39,24 @@ class OidcClient internal constructor(
     // Blocks backend does not append padding
     private val base64 = Base64.UrlSafe.withPadding(Base64.PaddingOption.PRESENT_OPTIONAL)
 
+    /**
+     * Signs the user in through [provider], opening the system browser and suspending until
+     * the flow finishes.
+     *
+     * ```kotlin
+     * val user = client.signIn("google")
+     * ```
+     *
+     * @param provider one of [providers]; anything else throws [OidcUnknownProviderException].
+     * @param options per-attempt settings. Only the JVM target has any, controlling what the
+     *   browser is shown once sign-in finishes; see `OidcSignInPlatformOptions` in `jvmMain`.
+     * @return the signed-in user, which also becomes the value of [authState].
+     * @throws OidcUnknownProviderException if [provider] is not one the backend configured.
+     * @throws OidcCancelledException if the user abandoned the flow, or it timed out.
+     * @throws OidcCallbackException if the identity provider reported an error, or the
+     *   callback's state or CSRF value did not match what was sent.
+     * @throws OidcExchangeException if the backend rejected the authorization code.
+     */
     suspend fun signIn(
         provider: String,
         options: OidcSignInOptions = OidcSignInOptions(),
