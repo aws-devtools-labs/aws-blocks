@@ -1276,14 +1276,21 @@ function handleApiRequest(
     let body = '';
     req.on('data', (chunk: string) => body += chunk);
     req.on('end', async () => {
+      // Hoisted above the try so the error catch below can reuse any headers
+      // the handler set on `ctx.response` before throwing (CORS, Set-Cookie,
+      // custom) — matching the production lambda-handler error path, which also
+      // re-emits `responseHeaders`. Declared inside the try, they would be out
+      // of catch scope and the error response would drop those headers in local
+      // dev while production kept them, hiding a CORS/cookie bug locally.
+      let responseStatus = 200;
+      const responseHeaders = new Headers({ 'Content-Type': 'application/json' });
+
       try {
         const headers = new Headers();
         Object.entries(req.headers).forEach(([k, v]) => {
           headers.set(k, Array.isArray(v) ? v[0] : v || '');
         });
 
-        let responseStatus = 200;
-        const responseHeaders = new Headers({ 'Content-Type': 'application/json' });
         let responseBody: any;
 
         const context = {
@@ -1315,10 +1322,29 @@ function handleApiRequest(
 
         res.writeHead(responseStatus, headerObj);
         res.end(responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '');
-      } catch (error: unknown) {
-        console.error('RawRoute Error:', error);
+      } catch (error: any) {
+        if (!process.env.BLOCKS_DEV_QUIET) {
+          console.error('RawRoute Error:', error?.name ?? 'Error', '-', error?.message);
+          // A branded error carries a stable BB message; the raw driver/SDK text
+          // lives on `cause` (server-side only). Surface it here, matching the RPC
+          // catch above, so a developer debugging a raw-route failure sees it.
+          if (error?.cause) console.error('  cause:', error.cause);
+          if (error?.stack) console.error(error.stack);
+        }
         const { status, body: errBody } = rawRouteErrorFromCatch(error);
-        res.writeHead(status, { 'Content-Type': 'application/json' });
+        // Reuse any headers the handler set on `ctx.response` before throwing
+        // (CORS, Set-Cookie, custom), the same way the success path and the
+        // production lambda-handler error path do. The sanitized error body is
+        // JSON, so Content-Type is forced to application/json on top.
+        const headerObj: Record<string, string | string[]> = {};
+        for (const [key, value] of responseHeaders.entries()) {
+          if (key === 'set-cookie') continue;
+          headerObj[key] = value;
+        }
+        const setCookies = responseHeaders.getSetCookie?.() ?? [];
+        if (setCookies.length > 0) headerObj['set-cookie'] = setCookies;
+        headerObj['content-type'] = 'application/json';
+        res.writeHead(status, headerObj);
         res.end(errBody);
       }
     });
