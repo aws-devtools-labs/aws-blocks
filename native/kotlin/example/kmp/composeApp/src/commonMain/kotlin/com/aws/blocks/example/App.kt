@@ -22,15 +22,17 @@ import com.aws.blocks.example.screens.RealtimeScreen
 import com.aws.blocks.example.screens.TodoScreen
 import com.aws.blocks.example.theme.AppTheme
 import blocks.testapp.AuthState
-import blocks.testapp.Servers
 import blocks.testapp.api
 import blocks.testapp.authApi
+import blocks.testapp.invoke
 
 @Composable
 fun App() {
-    // One entry point for the whole app: both APIs below run on the HTTP client it owns. They are
-    // remembered so that each recomposition hands the screens the same instance.
-    val blocks = remember { Blocks(Servers.local) }
+    // One entry point for the whole app: both APIs below run on the HTTP client it owns. The
+    // zero-argument form reaches the server the spec declares, so switching backends is a
+    // regeneration rather than an edit here. All three are remembered so that each recomposition
+    // hands the screens the same instances.
+    val blocks = remember { Blocks() }
     val auth = remember { blocks.authApi }
     val api = remember { blocks.api }
     DisposableEffect(blocks) {

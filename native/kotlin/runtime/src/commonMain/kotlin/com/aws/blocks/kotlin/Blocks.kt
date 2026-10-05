@@ -35,4 +35,10 @@ class Blocks(
     override fun close() {
         client.httpClient.close()
     }
+
+    /**
+     * Exists so generated code can add an `invoke` accessor for the server its spec declares,
+     * letting callers write `Blocks()` without naming one.
+     */
+    companion object
 }
