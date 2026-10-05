@@ -839,11 +839,6 @@ class KotlinCodeGenerator(
     private fun generateDefaultEntryPoint(defaultServerName: String): FunSpec =
         FunSpec
             .builder("invoke")
-            .addKdoc(
-                "Reaches the backend on [Servers.%N], the first server the spec declares.\n\n" +
-                    "Name another one with `Blocks(Servers.other)`.",
-                toCamelCase(defaultServerName),
-            )
             .addModifiers(apiModifiers)
             .addModifiers(KModifier.OPERATOR)
             .receiver(ClassNames.blocksCompanion)
