@@ -9,12 +9,14 @@ import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import type * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
 import {
+  DEFAULT_BACKUP_RETENTION_DAYS,
   DEFAULT_MAX_CAPACITY,
   DEFAULT_MIN_CAPACITY,
   ENV_NAME_SANITIZE_PATTERN,
@@ -45,6 +47,33 @@ export interface AuroraInfraConfig {
   /** Aurora PostgreSQL engine version, e.g. `'16.13'`. @default '16.13' */
   postgresVersion?: string;
   /**
+   * Customer-managed KMS key for encrypting the cluster storage at rest. When
+   * provided it is also used to encrypt the cluster's auto-generated credentials
+   * secret, and it forces storage encryption on regardless of `storageEncrypted`.
+   * When omitted, storage encryption follows `storageEncrypted` (which uses the
+   * account's AWS-managed `aws/rds` key when enabled).
+   */
+  storageEncryptionKey?: kms.IKey;
+  /**
+   * Whether to encrypt the cluster storage at rest. Two states, by design:
+   * - `true` → emit `storageEncrypted: true` (opt in).
+   * - `undefined` → leave the property **unset** so an existing, implicitly
+   *   unencrypted cluster is not forced into a destructive replacement by a
+   *   template change.
+   *
+   * The type is `?: true` (not `boolean`) so an explicit `false` is
+   * **unrepresentable** rather than merely discouraged: `StorageEncrypted: false`
+   * would itself be a template change that replaces an existing cluster. The CDK
+   * layer resolves this from the `@aws-blocks/bb-data:encryptStorageByDefault`
+   * context flag; a supplied `storageEncryptionKey` forces encryption on.
+   */
+  storageEncrypted?: true;
+  /**
+   * Retention period for the cluster's automated backups (which also drives the
+   * point-in-time-recovery window). @default `cdk.Duration.days(15)` — matches
+   * the SecureCDK baseline.
+   */
+  backupRetention?: cdk.Duration;
   /**
    * VPC context from the parent scope. When provided, Aurora is placed in the
    * shared VPC's isolated subnets instead of creating its own VPC.
@@ -60,9 +89,13 @@ export interface AuroraInfraConfig {
    */
   clusterSubnets?: ec2.SubnetSelection;
   /**
-   * CloudWatch retention for the migration Lambda's log group. Populated from
-   * the stack-wide `defaults.logRetention`; when omitted the log group uses the
-   * CDK `LogGroup` default retention.
+   * CloudWatch retention applied to the log groups this stack owns. Populated
+   * from the stack-wide `defaults.logRetention`; when omitted the groups use the
+   * CDK/CloudWatch default retention. Two consumers read it:
+   * - the migration Lambda's log group (created explicitly below), and
+   * - the cluster's PostgreSQL **engine** log group, via the cluster's
+   *   `cloudwatchLogsRetention` prop (see the note there about the LogRetention
+   *   custom resource).
    */
   logRetention?: cdk.aws_logs.RetentionDays;
 }
@@ -185,6 +218,21 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     engineVersion = rds.AuroraPostgresEngineVersion.of(options.postgresVersion, majorVersion);
   }
 
+  // Backup retention for the cluster's automated backups. Aurora keeps continuous
+  // backups within this window, which is also what point-in-time recovery restores
+  // from. Default to 15 days to match the SecureCDK baseline; callers may
+  // override via `backupRetention`.
+  const backupRetention = options.backupRetention ?? cdk.Duration.days(DEFAULT_BACKUP_RETENTION_DAYS);
+
+  // Resolve storage encryption to `true` or `undefined` — never an explicit
+  // `false`. CloudFormation renders `StorageEncrypted: false` for an explicit
+  // false, itself a template change that forces a cluster replacement on an
+  // existing (implicitly-unencrypted) deployment; leaving the property unset
+  // keeps those clusters untouched. A customer-managed key always forces
+  // encryption on; otherwise honor the caller-resolved opt-in (the CDK layer
+  // gates it behind the `@aws-blocks/bb-data:encryptStorageByDefault` flag).
+  const storageEncrypted = options.storageEncryptionKey || options.storageEncrypted ? true : undefined;
+
   const cluster = new rds.DatabaseCluster(scope, `${name}Cluster`, {
     engine: rds.DatabaseClusterEngine.auroraPostgres({
       version: engineVersion,
@@ -197,6 +245,55 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     securityGroups: [securityGroup],
     defaultDatabaseName: databaseName,
     enableDataApi: true,
+    // Storage encryption at rest. Resolved to `true` or left unset (never an
+    // explicit `false`): the CDK layer gates the opt-in behind the
+    // `@aws-blocks/bb-data:encryptStorageByDefault` context flag so NEW projects
+    // are encrypted by default while EXISTING, implicitly-unencrypted clusters
+    // are not forced into a destructive replacement by a template change. A
+    // customer-managed `storageEncryptionKey` always forces it on. When a key is
+    // given the cluster uses it; otherwise `true` uses the account's AWS-managed
+    // `aws/rds` key.
+    storageEncrypted,
+    storageEncryptionKey: options.storageEncryptionKey,
+    // When a CMK is supplied, also encrypt the auto-generated credentials secret
+    // with it. CDK cannot set an encryption key on the cluster's auto-generated
+    // secret without providing an explicit generated-secret credential, so we pin
+    // the exact master username the aurora-postgres engine defaults to
+    // ('postgres'). Note this is not a no-op swap of only the secret's KMS key:
+    // supplying (or changing) a CMK gives the generated secret a new logical id,
+    // so CloudFormation mints a fresh secret with a NEW generated password, and
+    // that generated secret carries DeletionPolicy:Delete even under production.
+    // Without a CMK, credentials stay undefined so the default AWS-managed secret
+    // encryption is unchanged.
+    credentials: options.storageEncryptionKey
+      ? rds.Credentials.fromGeneratedSecret('postgres', { encryptionKey: options.storageEncryptionKey })
+      : undefined,
+    // Retain automated backups (and the PITR window they provide).
+    backup: { retention: backupRetention },
+    // Export the PostgreSQL engine log to CloudWatch Logs. Retention follows the
+    // stack-wide `defaults.logRetention` when provided (the same knob every other
+    // Blocks-managed log group reads); when omitted, CloudWatch keeps the log
+    // group at the account default retention.
+    //
+    // Setting `cloudwatchLogsRetention` makes CDK add a `LogRetention` custom
+    // resource (a per-stack singleton Lambda + IAM role) to apply the retention,
+    // because RDS owns the engine log group's name via a token id, so CDK can't
+    // create the LogGroup directly. This extra Lambda is intended — see DESIGN.md.
+    //
+    // Known gap (deliberate, not implemented here): unlike the migration Lambda's
+    // log group above (removalPolicy DESTROY), this engine log group is NOT
+    // deleted when the cluster is destroyed — the LogRetention custom resource
+    // only sets retention, it does not own the group's lifecycle — so it is left
+    // orphaned on destroy. Acknowledged as a known gap; deleting it would mean
+    // adopting the RDS-named group into a managed LogGroup, a larger change.
+    cloudwatchLogsExports: ['postgresql'],
+    cloudwatchLogsRetention: options.logRetention,
+    // iamAuthentication is intentionally NOT enabled: the cluster is reached
+    // exclusively over the RDS Data API (HTTPS + Secrets Manager credentials),
+    // never a direct DB socket, so database-level IAM authentication does not
+    // apply here. Automatic secret rotation is likewise a deliberate follow-up:
+    // it requires a rotation Lambda wired into the cluster VPC, a larger change
+    // than this one.
     // Read independently from defaults (falling back to the removalPolicy-derived
     // value for direct materialize() callers that don't pass it).
     deletionProtection: options.deletionProtection ?? removalPolicy !== cdk.RemovalPolicy.DESTROY,

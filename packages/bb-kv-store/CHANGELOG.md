@@ -1,5 +1,88 @@
 # @aws-blocks/bb-kv-store
 
+## 0.3.0
+
+### Minor Changes
+
+- 20be3f0: fix(bb-kv-store): wire point-in-time recovery from the stack preset and add customer-managed encryption
+  
+  `KVStore` now honors `defaults.pointInTimeRecovery` (PITR on under `production`, off under `sandbox`) and accepts per-block `pointInTimeRecovery` and `encryption` options — mirroring `DistributedTable`. `encryption: 'customer-managed'` provisions a dedicated CMK, and `KVStore.fromKmsKey(arn)` reuses an existing key across stores. Previously `KVStore` ignored the preset, so production-preset consumers believed PITR was enabled when it was not.
+  
+  The default encryption now emits the AWS-managed `aws/dynamodb` KMS key (`SSESpecification: { SSEEnabled: true }`), where before no `SSESpecification` was emitted at all (the AWS-owned key). On an already-deployed table this is an in-place SSE change applied on upgrade, and the `aws/dynamodb` key bills per-request KMS charges that the AWS-owned key does not.
+  
+  **Behavior change on next production deploy of an existing app:** an existing `production`-preset `KVStore` table gains Point-in-Time Recovery in place on the next deploy (an in-place update, no table replacement); continuous backups are billed per GB-month of table size. Separately, passing `removalPolicy`, `deletionProtection`, or `ttl` alongside `fromExisting()` now warns at synth (previously only `pointInTimeRecovery` and `encryption` did), so a pipeline running `cdk synth --strict` will fail until those options are removed from the wrapped-table call.
+
+### Patch Changes
+
+- 5454763: fix(bb-kv-store): align `delete()` conditional detection with the mock and `put()`
+  
+  The AWS `delete()` path detected the value-equality condition with
+  `'ifValueEquals' in conditions` (key presence), while the mock and AWS `put()`
+  use `!== undefined`. Two consequences, both mock↔AWS parity breaks:
+  
+  - `delete(key, { ifValueEquals: undefined })` was a silent no-op on the mock but,
+    on AWS, emitted `#value = :expected` with `:expected = JSON.stringify(undefined)`
+    (`undefined`) — a DynamoDB DocumentClient marshalling error instead of an
+    unconditional delete.
+  - The `if/else if` applied only `attribute_exists(#pk)` when both `ifExists` and
+    `ifValueEquals` were set, silently dropping the value check — so on AWS the
+    item was deleted regardless of its value, while the mock (correctly) required
+    both.
+  
+  `delete()` conditions are now composed conjunctively (`attribute_exists(#pk) AND
+  #value = :expected`) with `!== undefined` detection, matching the mock branch-for-
+  branch. Added `parity.test.ts` cases asserting the `DeleteCommand` shape for each
+  combination (value-only, exists-only, both, none, explicit `undefined` no-op, and
+  `null` as a real condition).
+- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
+  
+  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
+  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
+  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
+  and exports `installClientUserAgent`, an SDK middleware that appends the validated
+  token to the outgoing user agent. The 12 participating Building Blocks install it,
+  so native attribution rides the SDK user-agent chain AWS service telemetry already
+  counts. The Kotlin runtime already sends the header, so Kotlin
+  callers are attributed as soon as this ships; Swift and Dart follow.
+- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
+  
+  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
+  
+  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
+  
+  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
+  
+  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
+  
+  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
+  
+  ## Breaking change (why `@aws-blocks/core` is a minor)
+  
+  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
+  
+  ```ts
+  // before — message collapses to "Internal error" on the client
+  throw new Error('Todo not found');
+  
+  // after — status, message, and name all reach the client
+  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  ```
+  
+  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-logger@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

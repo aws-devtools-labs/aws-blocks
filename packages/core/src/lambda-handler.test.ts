@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost, TransientConfigError } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry, getRegisteredRoutes } from './raw-route.js';
+import { ApiError, blocksError } from './errors.js';
 import { decodeRpcResponse } from './rpc.js';
 import { _resetConfigCache, _setS3Fetcher } from './common/config.js';
 import { HttpRequest } from '@smithy/protocol-http';
@@ -411,6 +412,104 @@ describe('createLambdaHandler — RawRoute body handling', () => {
     assert.strictEqual(result.statusCode, 200);
     assert.deepStrictEqual(capturedParams, Object.assign(Object.create(null), { id: 'abc-123' }));
     assert.ok(capturedBody !== null);
+  });
+});
+
+// ── RawRoute uncaught-exception sanitization ────────────────────────────────
+
+describe('createLambdaHandler — RawRoute uncaught exceptions', () => {
+  it('collapses an uncaught raw SDK exception to a generic 500 without leaking its name or message', async () => {
+    class ResourceNotFoundException extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = 'ResourceNotFoundException';
+      }
+    }
+    registerRoute({
+      method: 'GET',
+      path: '/raw/fails',
+      handler: async () => {
+        throw new ResourceNotFoundException('Requested resource not found: Table: internal-orders-prod');
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/fails', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 500);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Internal error' });
+    const serialized = JSON.stringify(result);
+    assert.ok(!serialized.includes('ResourceNotFoundException'));
+    assert.ok(!serialized.includes('internal-orders-prod'));
+  });
+
+  it('keeps the name and message of a branded Building Block error thrown from a raw route', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/bb-error',
+      handler: async () => {
+        throw blocksError('ValidationFailedException', 'email must be a valid address');
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/bb-error', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 500);
+    assert.deepStrictEqual(JSON.parse(result.body), {
+      error: 'ValidationFailedException: email must be a valid address',
+      name: 'ValidationFailedException',
+    });
+  });
+
+  it('keeps the status of an ApiError thrown from a raw route', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/api-error',
+      handler: async () => {
+        throw new ApiError('Forbidden', 403, { name: 'AccessDenied' });
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/api-error', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 403);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Forbidden', name: 'AccessDenied' });
+  });
+
+  it('leaves a deliberate ctx.response error write untouched', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/own-error',
+      handler: async (ctx) => {
+        ctx.response.status = 502;
+        ctx.response.send({ error: 'upstream said: ResourceNotFoundException' });
+      },
+    });
+
+    const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/own-error', body: null }));
+
+    assert.strictEqual(result.statusCode, 502);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'upstream said: ResourceNotFoundException' });
   });
 });
 

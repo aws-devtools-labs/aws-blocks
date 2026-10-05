@@ -226,22 +226,45 @@ export function successResponse(result: unknown, id: string | number | null): st
  *
  * Callers log the full error server-side in every case.
  *
- * Scope: this governs the RPC wire path only. The RawRoute escape hatch
- * (`handleRawRoute` in `lambda-handler.ts` / `dev-server.ts`) intentionally
- * forwards `error.message`/`error.name` verbatim — a raw route owns its own
- * response contract and is not shaped by the JSON-RPC serializer.
+ * The same decision (see {@link sanitizeCaughtError}) also shapes the RawRoute
+ * uncaught-exception response ({@link rawRouteErrorFromCatch}). A raw route
+ * still owns whatever it writes through `ctx.response` — only an exception that
+ * escapes the handler is sanitized.
  */
 export function errorResponseFromCatch(error: unknown, id: string | number | null): string {
+  const safe = sanitizeCaughtError(error);
+  const data: Record<string, unknown> = {};
+  if (safe.name) data.name = safe.name;
+  if (safe.retriable) data.retriable = true;
+  return errorResponse(safe.status, safe.message, id, Object.keys(data).length > 0 ? data : undefined);
+}
+
+/** The wire-safe view of a caught error: what may be shown to the client. */
+export interface SanitizedError {
+  status: number;
+  message: string;
+  /** Present only for a wire-safe error with a non-default name. */
+  name?: string;
+  retriable?: boolean;
+}
+
+/**
+ * Reduce a caught error to the fields that may cross the wire, applying the
+ * three cases documented on {@link errorResponseFromCatch}. Shared by the
+ * JSON-RPC serializer and the RawRoute uncaught-exception path so both make the
+ * same leak decision.
+ */
+export function sanitizeCaughtError(error: unknown): SanitizedError {
   // Branch 1 matches an ApiError by SHAPE (`isApiErrorLike`), not a bare
   // `instanceof ApiError`, so an ApiError built by a separately bundled copy of
   // core (a duplicated `@aws-blocks/core` under a dependency) is still recognized
   // and its HTTP status / name / retriable survive — a plain `instanceof` would
   // miss it and collapse a deliberate 409 into a nameless 500 (branch 3).
   if (isApiErrorLike(error)) {
-    const data: Record<string, unknown> = {};
-    if (error.name && error.name !== DEFAULT_API_ERROR_NAME) data.name = error.name;
-    if (error.retriable) data.retriable = true;
-    return errorResponse(error.status, error.message, id, Object.keys(data).length > 0 ? data : undefined);
+    const safe: SanitizedError = { status: error.status, message: error.message };
+    if (error.name && error.name !== DEFAULT_API_ERROR_NAME) safe.name = error.name;
+    if (error.retriable) safe.retriable = true;
+    return safe;
   }
   // A named Building Block error thrown via blocksError() carries the wire-safe
   // brand: forward BOTH its BB `name` AND its `message` over the wire (D-003: the
@@ -256,9 +279,24 @@ export function errorResponseFromCatch(error: unknown, id: string | number | nul
   // (Every ApiError is wire-safe too, but branch 1 already returned for those, so
   // this arm only ever sees the branded plain-Error case.)
   if (isWireSafeError(error) && error.name && error.name !== DEFAULT_ERROR_NAME) {
-    return errorResponse(500, error.message, id, { name: error.name });
+    return { status: 500, message: error.message, name: error.name };
   }
-  return errorResponse(500, 'Internal error', id);
+  return { status: 500, message: 'Internal error' };
+}
+
+/**
+ * Build the HTTP response for an exception that escaped a RawRoute handler.
+ *
+ * The body keeps the RawRoute error shape (`{ error, name? }`), but its content
+ * goes through {@link sanitizeCaughtError}: an `ApiError` or a branded Building
+ * Block error keeps its status/name/message, while a raw driver/SDK exception
+ * collapses to a nameless generic 500. Callers log the full error server-side.
+ */
+export function rawRouteErrorFromCatch(error: unknown): { status: number; body: string } {
+  const safe = sanitizeCaughtError(error);
+  const body: { error: string; name?: string } = { error: safe.message };
+  if (safe.name) body.name = safe.name;
+  return { status: safe.status, body: JSON.stringify(body) };
 }
 
 /** Encode a "method not found" error. */
