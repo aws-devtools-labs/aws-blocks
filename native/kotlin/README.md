@@ -68,9 +68,6 @@ On iOS, declare the same `relayTo` scheme in the app's `Info.plist` under `CFBun
 
 ## Using the Generated Code
 
-`Blocks` is the entry point. `Blocks()` reaches the server the spec declares, and each API in the
-spec is an extension property code generation adds for it.
-
 ```kotlin
 import com.aws.blocks.kotlin.Blocks
 import com.example.myapp.generated.Todo
@@ -89,21 +86,13 @@ val todos: List<Todo> = blocks.api.listTodos(sortBy = ListTodos.SortBy.Priority)
 // Update a todo
 blocks.api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = true))
 
-// A second namespace in the same spec, on the one HTTP client the instance owns
+// A second namespace in the same spec
 val user = blocks.authApi.getCurrentUser()
 ```
 
-`Blocks()` is generated, so it follows the spec's first server by name — regenerate against a
-different backend and the call site does not change. The `invoke` import is what brings it into
-scope; without it the compiler reports a missing `server` argument. To pin a specific server from a
-multi-server spec, name it: `Blocks(Servers.sandbox)`.
-
-One instance holds one HTTP client and connection pool for every API in the spec, so build one and
-hold it for as long as the backend is in use. It is an `AutoCloseable`: `close()` shuts the client
-down, and work scoped to a block can use `Blocks().use { ... }`.
-
-The API objects those properties return are stateless wrappers over that client, so reading one
-twice is as cheap as holding it — `blocks.api.listTodos()` on each call is fine.
+`Blocks()` follows the spec's first server, so regenerating against a different backend leaves the
+call site alone — the `invoke` import is what brings it into scope. Name a server to pin one:
+`Blocks(Servers.sandbox)`. `close()` shuts down the HTTP client the instance owns.
 
 When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. This covers a bare direct result only; an unbound tag wrapped in a nullable, list, or nested type still fails code generation.
 
