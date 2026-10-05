@@ -58,6 +58,10 @@ const value = await api.getValue('greeting'); // typed: string | null
 
 That's the whole model: **define blocks → export an API → import it on the frontend.** The transport (JSON-RPC over a single endpoint) is handled for you and is intentionally invisible.
 
+> **Where `'aws-blocks'` comes from:** the `aws-blocks/` directory is a local npm workspace package named `aws-blocks`. Its `package.json` maps `types` to `./index.ts` (your backend, for types) and `browser`/`import` to `./client.js` (a typed RPC client the dev server and build generate). The starter templates set this up; keep the package name `aws-blocks` and keep `aws-blocks` in the root `package.json` `workspaces`.
+
+To fail a method with an HTTP status, throw an `ApiError` (from `@aws-blocks/blocks`): `throw new ApiError('Not a member of this board', 403)`. The client receives an error with that message and `status`. Pass `{ name: 'BoardFullException' }` as a third argument to give it a name that `isBlocksError(e, 'BoardFullException')` matches on the client.
+
 ## Adding auth and data
 
 Blocks compose. Here's the same API gated behind authentication and backed by a queryable table:
@@ -204,7 +208,12 @@ The fastest loop is calling your API through its typed import in `test/e2e.test.
 ```typescript
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { installCookieJar } from '@aws-blocks/blocks/utils';
 import type { api as ApiType } from 'aws-blocks';
+
+// Node's fetch keeps no cookies: install a jar so sign-in sessions persist
+// and methods that call requireAuth work. Install it before importing the API.
+installCookieJar();
 
 let api: typeof ApiType;
 test.before(async () => { api = (await import('aws-blocks')).api; });

@@ -11,7 +11,7 @@ Full PostgreSQL database — provisions Aurora Serverless v2 by default, or conn
 ## Quick Start
 
 ```typescript
-import { Database, sql } from '@aws-blocks/bb-data';
+import { Database, sql } from '@aws-blocks/blocks';
 
 const db = new Database(scope, 'main', {
   migrationsPath: './aws-blocks/migrations',
@@ -70,7 +70,8 @@ Applied migrations are tracked in a `_migrations` table. Each file runs once.
 
 ## Kysely Query Builder
 
-For type-safe queries without raw SQL:
+For type-safe queries without raw SQL. The adapter is not re-exported by
+`@aws-blocks/blocks`: add `@aws-blocks/bb-data` to your dependencies to use it.
 
 ```typescript
 import { createKyselyAdapter } from '@aws-blocks/bb-data';
@@ -191,19 +192,21 @@ await api.addTodo('Buy milk');            // resolves with the row already in `t
 
 | `Shape<T>` member | Description |
 |---|---|
-| `rows` | Current rows. Replaced, not mutated, on each change. |
+| `rows` | Current rows, in arrival order (not sorted: sort them to display). Replaced, not mutated, on each change. |
 | `get(key)` | Row by primary key, or `undefined`. Local and synchronous. |
 | `ready` | Resolves when the initial rows have arrived. Rejects if the shape cannot sync. |
 | `isUpToDate` | `true` once the local copy has caught up. |
 | `subscribe(listener)` | Call `listener(rows)` after each change. Returns an unsubscribe function. |
 | `getSnapshot()` | The current `rows` array (for `useSyncExternalStore`). |
-| `requestSnapshot(query)` | `'changes_only'` shapes: load the rows that match `query`; they stay live. Resolves with the loaded rows. |
+| `requestSnapshot(query)` | `'changes_only'` shapes: load the rows that match `query`; they stay live. Resolves with the loaded rows, in the query's order. |
 | `close()` | Stop syncing. |
 
 `db.shape()` options: `table` (must be in `sync.tables`), `where` (an `sql` tagged
 template; values are bound parameters; may use subqueries), `columns` (must include
 the key), `key` (primary-key column, default `'id'`), `ttlSeconds` (default 3600),
 `mode` (`'full'` or `'changes_only'`), `queryableColumns`, and `columnMapping`.
+The row type `T` uses the field names the client sees: with `columnMapping: 'snakeCamel'`,
+declare `boardId`, not `board_id`.
 
 Syncing starts on the first `ready` or `subscribe()`.
 
@@ -215,9 +218,10 @@ shape on the written table has that transaction: the transaction appears in its
 changes or in a snapshot it received, or (for a shape the write doesn't touch) the
 shape is caught up past it. The
 wait is capped at 1 second: if no open shape contains the write, the call resolves
-then. Writes through `db.query()`, `db.execute()`, and `db.transaction()` are
-covered; writes through `db.crud()` and `db.withRLS()` are not, and reach shapes
-through the stream as usual.
+then. Writes through `db.query()`, `db.execute()`, and `db.transaction()` (every
+`tx.execute()` in it) are covered; writes through `db.crud()` and `db.withRLS()` are
+not, and reach shapes through the stream as usual. You do not need to do anything
+in the API method or on the client.
 
 **React.** `useShape` opens a shape, re-renders on every change, and closes it when
 its dependencies change or the component unmounts:
@@ -228,21 +232,55 @@ import { useShape } from '@aws-blocks/blocks/react';
 const { rows, shape, isLoading, error } = useShape(() => api.boardCards(boardId), [boardId]);
 ```
 
+| `useShape` result | Type | Description |
+|---|---|---|
+| `rows` | `readonly T[]` | The current rows, in arrival order. Empty until the shape has loaded. |
+| `shape` | `Shape<T> \| null` | The open shape, for `get()` and `requestSnapshot()`. `null` until the API call returns. |
+| `isLoading` | `boolean` | `true` until the initial rows have arrived. |
+| `error` | `Error \| null` | The error from the API call (for example a 401 from `requireAuth`) or from the initial sync. |
+
+`useShape` calls the API method once per change of `deps`. An API method that calls
+`requireAuth` fails with a 401 for a signed-out user, so render the component that
+calls `useShape` only when the user is signed in, and give it a `key` per user so
+that it opens a new shape after a different user signs in.
+
 **Filters that read other tables.** A `where` may use subqueries. Rows move in and out
 of the shape when the other table changes, not only when the row itself does. Every
 table the filter reads must be in `sync.tables`.
 
+Every table in `sync.tables` needs a single-column primary key, also a table that
+only a subquery reads. Give a join table a surrogate key:
+
+```sql
+-- migrations/001_create_members.sql
+CREATE TABLE members (
+  id TEXT PRIMARY KEY,           -- for example `${boardId}:${userId}`
+  board_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  UNIQUE (board_id, user_id)
+);
+```
+
 ```typescript
-db.shape<Card>({
+const db = new Database(scope, 'main', {
+  migrationsPath: './aws-blocks/migrations',
+  sync: { tables: ['cards', 'members'] },   // both tables: the shape's and the subquery's
+});
+
+// In an ApiNamespace method, after requireAuth:
+return db.shape<Card>({
   table: 'cards',
   where: sql`board_id IN (SELECT board_id FROM members WHERE user_id = ${user.userId})`,
 });
 // Adding the user to `members` brings that board's cards into the shape.
 ```
 
-**Large shapes: load what you need.** With `mode: 'changes_only'`, a shape starts empty.
+**Large shapes: load what you need.** With `mode: 'changes_only'`, a shape starts empty
+(for every client, also when other clients have the same shape open).
 Load rows with `requestSnapshot()` (pagination, search, "load more"); loaded rows stay
-live, and every change to the shape arrives from then on. A snapshot query is
+live. Every change to a row in the shape arrives from then on, also for rows that no
+snapshot loaded: a new row appears in `rows` without a request. So page "load more"
+from the oldest row you hold, and treat a page shorter than `limit` as the end. A snapshot query is
 structured, never SQL, and is always combined with the shape's own `where`, so it can
 only narrow the rows the API method authorized. Fields must be in `queryableColumns`
 (default: the shape's columns).
@@ -260,6 +298,35 @@ return db.shape<Message>({
 const latest = await messages.requestSnapshot({ orderBy: [{ field: 'sent_at', direction: 'desc' }], limit: 50 });
 const older = await messages.requestSnapshot({ where: { sent_at: { lt: latest.at(-1)!.sent_at } }, orderBy: [{ field: 'sent_at', direction: 'desc' }], limit: 50 });
 const hits = await messages.requestSnapshot({ where: { text: { ilike: '%invoice%' } }, limit: 20 });
+```
+
+In React:
+
+```tsx
+function Feed({ channelId }: { channelId: string }) {
+  const { rows, shape } = useShape(() => api.messages(channelId), [channelId]);
+  const [done, setDone] = useState(false);
+  const newest = [...rows].sort((a, b) => b.sent_at.localeCompare(a.sent_at));
+
+  const loadMore = async () => {
+    if (!shape) return;
+    const oldest = newest.at(-1);
+    const page = await shape.requestSnapshot({
+      ...(oldest ? { where: { sent_at: { lt: oldest.sent_at } } } : {}),
+      orderBy: [{ field: 'sent_at', direction: 'desc' }],
+      limit: 50,
+    });
+    if (page.length < 50) setDone(true);
+  };
+  useEffect(() => { if (shape) void loadMore(); }, [shape]); // the first page
+
+  return (
+    <>
+      {newest.map((m) => <p key={m.id}>{m.text}</p>)}
+      {!done && <button onClick={loadMore}>Load more</button>}
+    </>
+  );
+}
 ```
 
 Operators: a value (equality), `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `like`,
@@ -286,11 +353,23 @@ types: `int2`/`int4`/`float4`/`float8` become `number`, `int8` becomes `bigint`,
 `bool` becomes `boolean`, and `json`/`jsonb` become parsed JSON. Other types
 (`numeric`, `timestamptz`, `uuid`, …) arrive as `string`. Declare `T` to match.
 
+Timestamps arrive as Postgres text, not ISO 8601: `timestamptz` as
+`2026-10-05 08:08:10.572+00` (with the offset of the session time zone: UTC on AWS,
+your machine's zone in local dev) and `timestamp` as `2026-10-05 08:08:10.572`.
+Pass them back unchanged as snapshot-query values (`{ lt: row.sent_at }`): the
+database compares them as timestamps. String order is time order only when all
+values have the same offset, and some browsers do not parse this form with
+`new Date()`. To sort or do date math on the client, add a numeric column, for
+example `created_ms double precision DEFAULT (extract(epoch from now()) * 1000)`,
+which arrives as a `number`.
+
 **Requirements and limits.**
-- Each synced table needs a single-column primary key.
+- Each table in `sync.tables` needs a single-column primary key, also a table that
+  only a subquery reads.
 - Not supported with `fromExisting()` yet.
-- Not supported with `minCapacity: 0`. Aurora does not auto-pause while logical
-  replication is enabled, so the cluster always runs at least `minCapacity` ACUs.
+- Not supported with `minCapacity: 0` (synth fails). Aurora does not auto-pause while
+  logical replication is enabled, so the cluster always runs at least `minCapacity`
+  ACUs. The default `minCapacity` is 0.5, and `BlocksPresets` do not change it.
 - If you add `sync` to a cluster that is already deployed, reboot its writer once
   after the deploy. `rds.logical_replication` is a static parameter. A new cluster
   picks it up when it is created.
@@ -311,7 +390,7 @@ types: `int2`/`int4`/`float4`/`float8` become `number`, `int8` becomes `bigint`,
 ## Connecting to an Existing Database
 
 ```typescript
-import { Database, fromExisting } from '@aws-blocks/bb-data';
+import { Database, fromExisting } from '@aws-blocks/blocks';
 
 // Supabase, Neon, or any PostgreSQL-compatible database
 const db = new Database(scope, 'external', {
@@ -370,8 +449,7 @@ Once pulled, manage schema changes with version-controlled SQL migrations in `./
 ## Error Handling
 
 ```typescript
-import { DatabaseErrors } from '@aws-blocks/bb-data';
-import { isBlocksError } from '@aws-blocks/core';
+import { DatabaseErrors, isBlocksError } from '@aws-blocks/blocks';
 
 try {
   await db.execute(sql`INSERT INTO users (id, email) VALUES (${id}, ${email})`);
@@ -441,6 +519,10 @@ With `sync`, also:
 
 ```typescript
 interface DatabaseOptions {
+  /** Minimum Aurora capacity units. 0 lets the cluster auto-pause (not with `sync`). @default 0.5 */
+  minCapacity?: number;
+  /** Maximum Aurora capacity units. @default 2 */
+  maxCapacity?: number;
   /** Path to directory containing numbered .sql migration files. */
   migrationsPath?: string;
   /** Connect to an existing database instead of provisioning one. */
@@ -460,13 +542,19 @@ interface DatabaseOptions {
 {
   "exports": {
     ".": {
-      "cdk": "./dist/index.cdk.js",
+      "browser": "./dist/index.browser.js",
+      "cdk": { "types": "./dist/index.cdk.d.ts", "default": "./dist/index.cdk.js" },
       "aws-runtime": "./dist/index.aws.js",
+      "types": "./dist/index.mock.d.ts",
       "default": "./dist/index.mock.js"
-    }
+    },
+    "./sync-client": { "types": "./dist/sync/client.d.ts", "default": "./dist/sync/client.js" }
   }
 }
 ```
+
+`./sync-client` is the browser middleware that hydrates shapes. The generated client
+imports it when a `Database` has `sync`.
 
 ## Performance
 

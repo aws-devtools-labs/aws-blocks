@@ -368,6 +368,16 @@ describe('mock shape server', () => {
     await boards.execute(sql`INSERT INTO cards (id, board_id, title, position) VALUES ('p31', 'paged', 'New', 31)`);
     await until(shape, () => shape.get('p31') !== undefined);
     await assert.rejects(shape.requestSnapshot({ where: { board_id: 'other' } as never }), (e: unknown) => e instanceof Error);
+
+    // A second client of the same shape, opened after those changes, also starts empty.
+    const second = await open(
+      await boards.shape<Card>({ table: 'cards', where: sql`board_id = ${'paged'}`, mode: 'changes_only', queryableColumns: ['title', 'position'] }),
+    );
+    await second.ready;
+    assert.deepStrictEqual(second.rows, []);
+    await boards.execute(sql`INSERT INTO cards (id, board_id, title, position) VALUES ('p32', 'paged', 'Newer', 32)`);
+    await until(second, () => second.get('p32') !== undefined);
+    assert.strictEqual(second.rows.length, 1);
   });
 
   test('column mapping: rows use camelCase fields', async () => {

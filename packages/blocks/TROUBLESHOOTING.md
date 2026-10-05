@@ -95,7 +95,7 @@ pkill -f "tsx watch"
 
 ## Auth cookies not persisting
 
-Cookies are `HttpOnly; Secure; SameSite=None; Partitioned`. In local dev, the dev server handles this transparently. If testing with `curl`, you need to save and resend cookies:
+Session cookies are `HttpOnly; SameSite=Lax` (plus `Secure` off localhost) by default, and `SameSite=None; Secure; Partitioned` when the auth block has `crossDomain: true`. In local dev, the dev server handles this transparently. If testing with `curl`, you need to save and resend cookies:
 
 ```bash
 # Sign in and save cookies

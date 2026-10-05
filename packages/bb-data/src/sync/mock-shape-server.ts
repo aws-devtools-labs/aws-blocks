@@ -121,7 +121,9 @@ export class MockShapeServer {
     if (offsetParam === '-1') {
       const state = await this.getOrCreate(engine, definitionKey, claims);
       await this.catchUp(engine, state);
-      return this.respond(state, null, false);
+      // Changes-only shapes start empty for every client, also when the
+      // shape already has changes: start each new client at the log's end.
+      return this.respond(state, claims.m === 'c' ? this.latestOffset(state) : null, false);
     }
 
     const handle = query.get('handle');

@@ -11,7 +11,7 @@ Serverless SQL database backed by Amazon Aurora DSQL. Zero-ops, instant provisio
 ## Quick Start
 
 ```typescript
-import { DistributedDatabase, sql } from '@aws-blocks/bb-distributed-data';
+import { DistributedDatabase, sql } from '@aws-blocks/blocks';
 
 const db = new DistributedDatabase(scope, 'main', {
   migrationsPath: './aws-blocks/dsql-migrations',
@@ -140,14 +140,28 @@ await api.addTodo('Buy milk');            // resolves with the row already in `t
 
 `Shape<T>` has the same members as for `Database`: `rows`, `get(key)`, `ready`,
 `isUpToDate`, `subscribe(listener)`, `getSnapshot()`, `requestSnapshot(query)`, and
-`close()`. An API call that writes resolves only after open shapes have the write.
+`close()`. `rows` are in arrival order (not sorted: sort them to display), and
+`requestSnapshot()` resolves with the loaded rows in the query's order. An API call
+that writes resolves only after open shapes have the write; you do not need to do
+anything in the API method or on the client.
 `db.shape()` takes the same options: `table` (must be in `sync.tables`), `where` (an
 `sql` tagged template; values are bound parameters; may use subqueries), `columns`
 (must include the key), `key` (primary-key column, default `'id'`), `ttlSeconds`
-(default 3600), `mode`, `queryableColumns`, and `columnMapping`. Values are parsed the same way: `int2`/`int4`/`float4`/`float8`
+(default 3600), `mode`, `queryableColumns`, and `columnMapping`. The row type `T`
+uses the field names the client sees: with `columnMapping: 'snakeCamel'`, declare
+`boardId`, not `board_id`.
+
+Values are parsed the same way: `int2`/`int4`/`float4`/`float8`
 become `number`, `int8` becomes `bigint`, `bool` becomes `boolean`,
 `json`/`jsonb` become parsed JSON, one-dimensional arrays become arrays, and other
-types arrive as `string`.
+types arrive as `string`. Timestamps arrive as Postgres text, not ISO 8601:
+`timestamptz` as `2026-10-05 08:08:10.572+00` (Aurora DSQL uses UTC; local dev uses
+your machine's zone) and `timestamp` as `2026-10-05 08:08:10.572`. Pass them back
+unchanged as snapshot-query values (`{ lt: row.created_at }`): the database compares
+them as timestamps. String order is time order only when all values have the same
+offset, and some browsers do not parse this form with `new Date()`. To sort or do
+date math on the client, add a numeric column (for example `created_ms double
+precision`, set to `Date.now()` on insert), which arrives as a `number`.
 
 **How it works.** A shape keeps no state on the server.
 - **Full reconcile** (first load, reconnect, and every 5 minutes as a safety net):
@@ -166,7 +180,7 @@ types arrive as `string`.
   of order and sometimes more than once. This does not matter, because a shape
   never applies a CDC record. It always reads the current rows.
 - **Your own writes:** a plain `INSERT INTO`, `UPDATE`, or `DELETE FROM` on a synced
-  table (through `db.execute()` or `tx.execute()`) runs with `RETURNING` its primary
+  table (through `db.execute()`, or `tx.execute()` in a `db.transaction()`) runs with `RETURNING` its primary
   key, and after commit the written keys go back with the API response, encrypted.
   Before the call resolves, the client reads those rows into the open shapes on
   that table. Aurora DSQL reads are strongly consistent, so the read sees the
@@ -183,21 +197,56 @@ import { useShape } from '@aws-blocks/blocks/react';
 const { rows, shape, isLoading, error } = useShape(() => api.boardCards(boardId), [boardId]);
 ```
 
+`rows` (`readonly T[]`) is empty until the shape has loaded. `shape` (`Shape<T> | null`)
+is `null` until the API call returns; use it for `get()` and `requestSnapshot()`.
+`isLoading` is `true` until the initial rows have arrived. `error` (`Error | null`) is
+the error from the API call (for example a 401 from `requireAuth`) or from the
+initial sync. `useShape` calls the API method once per change of `deps`, so render the
+component that calls it only when the user is signed in, and give it a `key` per
+user. The [`Database` README](../bb-data/README.md#live-sync-local-first-reads) has a
+"load more" feed in React; it works unchanged here.
+
 **Filters that read other tables.** A `where` may use subqueries. Rows move in and out
 of the shape when the other table changes, not only when the row itself does. Every
 table the filter reads must be in `sync.tables`.
 
+Every table in `sync.tables` needs a single-column primary key, also a table that
+only a subquery reads. Give a join table a surrogate key:
+
+```sql
+-- dsql-migrations/001_create_members.sql
+CREATE TABLE members (
+  id TEXT PRIMARY KEY,           -- for example `${boardId}:${userId}`
+  board_id TEXT NOT NULL,
+  user_id TEXT NOT NULL
+);
+```
+
+```sql
+-- dsql-migrations/002_index_members.sql
+CREATE INDEX ASYNC idx_members_user ON members(user_id);
+```
+
 ```typescript
-db.shape<Card>({
+const db = new DistributedDatabase(scope, 'main', {
+  migrationsPath: './aws-blocks/dsql-migrations',
+  sync: { tables: ['cards', 'members'] },   // both tables: the shape's and the subquery's
+});
+
+// In an ApiNamespace method, after requireAuth:
+return db.shape<Card>({
   table: 'cards',
   where: sql`board_id IN (SELECT board_id FROM members WHERE user_id = ${user.userId})`,
 });
 // Adding the user to `members` brings that board's cards into the shape.
 ```
 
-**Large shapes: load what you need.** With `mode: 'changes_only'`, a shape starts empty.
+**Large shapes: load what you need.** With `mode: 'changes_only'`, a shape starts empty
+(for every client, also when other clients have the same shape open).
 Load rows with `requestSnapshot()` (pagination, search, "load more"); loaded rows stay
-live, and every change to the shape arrives from then on. A snapshot query is
+live. Every change to a row in the shape arrives from then on, also for rows that no
+snapshot loaded: a new row appears in `rows` without a request. So page "load more"
+from the oldest row you hold, and treat a page shorter than `limit` as the end. A snapshot query is
 structured, never SQL, and is always combined with the shape's own `where`, so it can
 only narrow the rows the API method authorized. Fields must be in `queryableColumns`
 (default: the shape's columns).
@@ -250,7 +299,8 @@ at p99.9, with 2,000, 10,000, or 50,000 rows. A change costs O(changed rows) in 
 browser: `rows` is patched, not rebuilt.
 
 **Requirements and limits.**
-- Each synced table needs a single-column primary key.
+- Each table in `sync.tables` needs a single-column primary key, also a table that
+  only a subquery reads.
 - A full reconcile reads the whole shape. It runs on the first load, on reconnect,
   and every 5 minutes, so very large shapes (more than about 50,000 rows) make
   these slower. Use narrower filters for larger data.
@@ -307,6 +357,9 @@ DSQL is a subset of PostgreSQL. The local mock enforces these restrictions so co
 
 ## Kysely Query Builder
 
+The adapter is not re-exported by `@aws-blocks/blocks`: add
+`@aws-blocks/bb-distributed-data` to your dependencies to use it.
+
 ```typescript
 import { createKyselyAdapter } from '@aws-blocks/bb-distributed-data';
 
@@ -328,8 +381,7 @@ Do not use Kysely's `.addForeignKeyConstraint()` — it will fail on DSQL.
 ## Error Handling
 
 ```typescript
-import { DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
-import { isBlocksError } from '@aws-blocks/core';
+import { DistributedDatabaseErrors, isBlocksError } from '@aws-blocks/blocks';
 
 try {
   await db.transaction(async (tx) => { /* ... */ });
@@ -362,9 +414,12 @@ try {
 The mock provides a `simulateConflict()` helper for unit testing:
 
 ```typescript
+import assert from 'node:assert';
+import { DistributedDatabaseErrors, isBlocksError } from '@aws-blocks/blocks';
+
 db.simulateConflict(); // next commit will fail with SerializationFailureException
 
-await expect(db.transaction(fn)).rejects.toThrow('SerializationFailureException');
+await assert.rejects(db.transaction(fn), (e: unknown) => isBlocksError(e, DistributedDatabaseErrors.SerializationFailure));
 ```
 
 ```typescript
@@ -421,11 +476,13 @@ interface DistributedDatabaseOptions {
 {
   "exports": {
     ".": {
-      "cdk": "./dist/index.cdk.js",
+      "browser": "./dist/index.browser.js",
+      "cdk": { "types": "./dist/index.cdk.d.ts", "default": "./dist/index.cdk.js" },
       "aws-runtime": "./dist/index.aws.js",
+      "types": "./dist/index.mock.d.ts",
       "default": "./dist/index.mock.js"
     },
-    "./sync-client": "./dist/sync/client.js"
+    "./sync-client": { "types": "./dist/sync/client.d.ts", "default": "./dist/sync/client.js" }
   }
 }
 ```

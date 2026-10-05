@@ -156,6 +156,45 @@ document.body.appendChild(Authenticator(authApi));
 
 See the [`auth-common` README](../auth-common/README.md) for full UI component documentation including `AuthenticatedContent`, `onAuthChange`, and `broadcastAuthChange`.
 
+The components return DOM nodes, so in React mount them from an effect. `onAuthChange` returns an unsubscribe function, which works as the effect's cleanup:
+
+```tsx
+import { useEffect, useRef, useState } from 'react';
+import { AccountMenuBar, Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
+import type { AuthUser } from '@aws-blocks/blocks';
+import { authApi } from 'aws-blocks';
+
+function Mount({ create }: { create: () => Node }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const host = ref.current;
+    if (!host) return;
+    host.append(create());
+    return () => host.replaceChildren();
+  }, [create]);
+  return <div ref={ref} />;
+}
+
+const signIn = () => Authenticator(authApi);
+const menu = () => AccountMenuBar(authApi);
+
+export function App() {
+  const [user, setUser] = useState<AuthUser | null | undefined>(undefined); // undefined: not known yet
+  useEffect(() => onAuthChange(authApi, setUser), []);
+
+  if (user === undefined) return null;
+  if (user === null) return <Mount create={signIn} />;
+  return (
+    <>
+      <Mount create={menu} />
+      <Board key={user.userId} /> {/* signed-in only: its API calls can requireAuth */}
+    </>
+  );
+}
+```
+
+**Looking up other users.** `AuthBasic` has no user directory: there is no method to list users or to check that a username exists. `userId` is the username. If your app refers to other users (for example to share a board), keep your own `users` table and write the signed-in user's row from an API method (for example on first sign-in).
+
 ## AuthBasicUser
 
 Extends the common `AuthUser` with:
