@@ -39,15 +39,21 @@ import blocks.testapp.Api.ListTodos
 import blocks.testapp.Api.UpdateTodo
 import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
+import blocks.testapp.Servers
 import blocks.testapp.Todo
+import blocks.testapp.api
+import blocks.testapp.authApi
+import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcClient
 import com.aws.blocks.example.ui.theme.BlocksKotlinExampleTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
-    val auth = AuthApi()
-    val api = Api()
+    // One entry point for the whole screen: both APIs below run on the HTTP client it owns.
+    private val blocks = Blocks(Servers.local)
+    val auth = blocks.authApi
+    val api = blocks.api
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,6 +82,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        blocks.close()
     }
 }
 

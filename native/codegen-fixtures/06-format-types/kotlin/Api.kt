@@ -1,8 +1,8 @@
 package com.example.app
 
+import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
-import com.aws.blocks.kotlin.BlocksServer
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.String
 import kotlin.uuid.Uuid
@@ -14,10 +14,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 
 public class Api(
-  private val server: BlocksServer = Servers.local,
+  private val client: BlocksClient,
 ) {
-  private val client: BlocksClient = BlocksClient(server)
-
   public suspend fun getEvent(id: Uuid): GetEvent.Result {
     val request = BlocksRequest(method = "api.getEvent", params = listOf(JsonPrimitive(id.toString())), id = BlocksRequest.nextId())
     val result = client.execute(request)
@@ -41,3 +39,6 @@ public class Api(
     }
   }
 }
+
+public val Blocks.api: Api
+  get() = Api(client)

@@ -1,8 +1,8 @@
 package com.example.app
 
+import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
-import com.aws.blocks.kotlin.BlocksServer
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Boolean
 import kotlin.String
@@ -12,10 +12,8 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
 public class Posts(
-  private val server: BlocksServer = Servers.local,
+  private val client: BlocksClient,
 ) {
-  private val client: BlocksClient = BlocksClient(server)
-
   public suspend fun list(authorId: String): kotlin.collections.List<List.Result> {
     val request = BlocksRequest(method = "posts.list", params = listOf(JsonPrimitive(authorId)), id = BlocksRequest.nextId())
     val result = client.execute(request)
@@ -66,3 +64,6 @@ public class Posts(
     )
   }
 }
+
+public val Blocks.posts: Posts
+  get() = Posts(client)

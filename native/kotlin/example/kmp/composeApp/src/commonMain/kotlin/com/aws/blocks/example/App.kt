@@ -6,12 +6,14 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.oidc.OidcClient
 import com.aws.blocks.example.screens.AuthScreen
 import com.aws.blocks.example.screens.FileScreen
@@ -19,14 +21,21 @@ import com.aws.blocks.example.screens.KvStoreScreen
 import com.aws.blocks.example.screens.RealtimeScreen
 import com.aws.blocks.example.screens.TodoScreen
 import com.aws.blocks.example.theme.AppTheme
-import blocks.testapp.Api
-import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
+import blocks.testapp.Servers
+import blocks.testapp.api
+import blocks.testapp.authApi
 
 @Composable
 fun App() {
-    val auth = remember { AuthApi() }
-    val api = remember { Api() }
+    // One entry point for the whole app: both APIs below run on the HTTP client it owns. They are
+    // remembered so that each recomposition hands the screens the same instance.
+    val blocks = remember { Blocks(Servers.local) }
+    val auth = remember { blocks.authApi }
+    val api = remember { blocks.api }
+    DisposableEffect(blocks) {
+        onDispose { blocks.close() }
+    }
     var selectedTab by remember { mutableStateOf(Tab.Auth) }
 
     // The client keeps sign-in state in memory, so it is owned here rather than by the Auth

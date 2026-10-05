@@ -115,7 +115,7 @@ class KotlinCodeGenerator(
 
         // Generate API files before serializers so annotations register every serializer they use.
         val apiFiles = model.apiNamespaces.map { group ->
-            generateApiGroupFile(group, index, model.servers, model.endpoint, serializerRegistry)
+            generateApiGroupFile(group, index, serializerRegistry)
         }
 
         // Emit Serializers.kt for the transferables referenced by generated annotations.
@@ -130,7 +130,7 @@ class KotlinCodeGenerator(
 
         // Emit Servers.kt
         if (model.servers.isNotEmpty()) {
-            files.add(generateServersFile(model.servers))
+            files.add(generateServersFile(model.servers, model.endpoint))
         }
 
         // Emit per-API-group files (interface + impl)
@@ -802,7 +802,12 @@ class KotlinCodeGenerator(
 
     // ── Servers.kt generation ─────────────────────────────────────────
 
-    private fun generateServersFile(servers: List<ServerDefinition>): FileSpec {
+    /**
+     * [endpoint] is the path the spec serves RPC on. It is appended here rather than by the
+     * runtime, because the runtime never sees the spec: `Blocks(Servers.local)` has to reach the
+     * right URL from the constant alone.
+     */
+    private fun generateServersFile(servers: List<ServerDefinition>, endpoint: String?): FileSpec {
         val serverFileBuilder = FileSpec.builder(packageName, "Servers")
 
         // Servers object using BlocksServer from the runtime
@@ -815,7 +820,7 @@ class KotlinCodeGenerator(
                         "%T(name = %S, url = %S)",
                         blocksServerClass,
                         entry.name,
-                        entry.url,
+                        entry.url + (endpoint ?: ""),
                     )
                     .build(),
             )
@@ -830,8 +835,6 @@ class KotlinCodeGenerator(
     private fun generateApiGroupFile(
         group: ApiNamespace,
         index: TypeIndex,
-        servers: List<ServerDefinition>,
-        endpoint: String?,
         serializerRegistry: TransferableSerializerRegistry,
     ): FileSpec {
         val className = toPascalCase(group.name)
@@ -850,10 +853,31 @@ class KotlinCodeGenerator(
         }
 
         builder.addType(
-            generateApiClass(group, className, index, servers, endpoint, serializerRegistry).withApiVisibility(),
+            generateApiClass(group, className, index, serializerRegistry).withApiVisibility(),
         )
+        builder.addProperty(generateApiAccessor(group, className))
 
         return builder.build()
+    }
+
+    /**
+     * Builds the extension property that reaches this namespace from a `Blocks` instance, so one
+     * entry point and one HTTP client serve every namespace in the spec. The API class is a
+     * stateless wrapper over the client, so building a new one on each access is not worth
+     * memoizing.
+     */
+    private fun generateApiAccessor(group: ApiNamespace, className: String): PropertySpec {
+        val apiClass = ClassName(packageName, className)
+        return PropertySpec
+            .builder(toCamelCase(group.name), apiClass)
+            .addModifiers(apiModifiers)
+            .receiver(ClassNames.blocks)
+            .getter(
+                FunSpec.getterBuilder()
+                    .addStatement("return %T(client)", apiClass)
+                    .build(),
+            )
+            .build()
     }
 
     /** Recursively checks if a nested type tree contains any discriminated union. */
@@ -906,41 +930,19 @@ class KotlinCodeGenerator(
         namespace: ApiNamespace,
         className: String,
         index: TypeIndex,
-        servers: List<ServerDefinition>,
-        endpoint: String?,
         serializerRegistry: TransferableSerializerRegistry,
     ): TypeSpec {
-        val clientInitializer = if (endpoint != null) {
-            com.squareup.kotlinpoet.CodeBlock.of("%T(%T(server.name, server.url.toString() + %S))", ClassNames.blocksClient, blocksServerClass, endpoint)
-        } else {
-            com.squareup.kotlinpoet.CodeBlock.of("%T(server)", ClassNames.blocksClient)
-        }
-
-        val constructorBuilder = FunSpec.constructorBuilder()
-        if (servers.isNotEmpty()) {
-            val serversClassName = ClassName(packageName, "Servers")
-            val defaultProperty = toCamelCase(servers[0].name)
-            constructorBuilder.addParameter(
-                ParameterSpec.builder("server", blocksServerClass)
-                    .defaultValue("%T.%N", serversClassName, defaultProperty)
-                    .build(),
-            )
-        } else {
-            constructorBuilder.addParameter("server", blocksServerClass)
-        }
-
         val classBuilder = TypeSpec
             .classBuilder(className)
-            .primaryConstructor(constructorBuilder.build())
+            .primaryConstructor(
+                FunSpec.constructorBuilder()
+                    .addParameter("client", ClassNames.blocksClient)
+                    .build(),
+            )
             .addProperty(
                 PropertySpec
-                    .builder("server", blocksServerClass, KModifier.PRIVATE)
-                    .initializer("server")
-                    .build(),
-            ).addProperty(
-                PropertySpec
                     .builder("client", ClassNames.blocksClient, KModifier.PRIVATE)
-                    .initializer(clientInitializer)
+                    .initializer("client")
                     .build(),
             )
 

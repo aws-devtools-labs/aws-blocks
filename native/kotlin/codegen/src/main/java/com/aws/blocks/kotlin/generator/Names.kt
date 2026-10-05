@@ -33,6 +33,7 @@ object ClassNames {
     val uuid = ClassName("kotlin.uuid", "Uuid")
 
     // Runtime classes
+    val blocks = ClassName("com.aws.blocks.kotlin", "Blocks")
     val blocksClient = ClassName("com.aws.blocks.kotlin", "BlocksClient")
     val blocksJson = ClassName("com.aws.blocks.kotlin.json", "BlocksJson")
     val blocksRequest = ClassName("com.aws.blocks.kotlin", "BlocksRequest")
