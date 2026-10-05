@@ -104,6 +104,10 @@ The wire format now carries `name` (the BB-level error name) alongside `message`
 - Section 11 "Alternatives Considered" updated with reversal note
 - Implementation: `ApiError` class + `isBlocksError` in `core/errors.ts`, handler changes in `dev-server.ts` and `lambda-handler.ts`, client proxy in `client/index.ts`
 
+### Amendment (2026-09-30, default): message forwarding for branded BB errors
+
+An intermediate revision of the RPC error-leak sanitizer (`errorResponseFromCatch`) forwarded a Building Block error's `name` over the wire but **dropped its `message`** for a generic `"Internal error"`. That contradicted this decision — the wire is supposed to carry `name` **alongside `message`** — and it was a DX regression, since a BB error's message is BB-authored on purpose ("Batch contains 150 payloads, exceeds the 100 limit"). The serializer now forwards **both** the `name` and the `message` for a branded BB error (an error stamped by `brandBlocksError` / minted via `blocksError`), bringing the code back in line with this decision. The safety net is unchanged: a raw driver/SDK exception is never branded, so it still collapses to a nameless generic `500` with no message, and `Error.cause` still never crosses the wire. The load-bearing invariant this rests on: **a branded error's message must never embed raw driver/SDK text** — the two re-tag / message-copy sites that used to inline driver text (`bb-kv-store` / `bb-distributed-table` item-too-large remaps, and the `bb-data` / `bb-distributed-data` engine re-tag paths) now author a stable BB message and keep the raw error only as `cause`. A repo-scan guard (`packages/blocks/src/brand-coverage.test.ts`) fails when a BB error producer is not made wire-safe.
+
 ## D-004: Auth-first naming convention for auth Building Blocks
 
 **Date**: 2026-04-07

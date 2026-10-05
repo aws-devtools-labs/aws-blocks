@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Construct, type IDependable } from 'constructs';
-import { CfnOutput, Duration, Fn, Stack } from 'aws-cdk-lib';
+import { Annotations, CfnOutput, Duration, Fn, Stack, Token } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
   AllowedMethods,
@@ -178,6 +178,10 @@ export type CdnConstructProps = {
    * @default Duration.seconds(0)
    */
   ssrDefaultTtl?: Duration;
+  /** Cookie names to add to the SSR cache key. See HostingProps.cdn.cacheKeyCookies. */
+  cacheKeyCookies?: string[];
+  /** Header names to add to the SSR cache key. See HostingProps.cdn.cacheKeyHeaders. */
+  cacheKeyHeaders?: string[];
   /**
    * ARN of an existing WAFv2 WebACL. When set, takes precedence over
    * the `webAcl` construct reference.
@@ -266,6 +270,21 @@ export class CdnConstruct extends Construct {
       (props.computeFunctionUrls && props.computeFunctionUrls.size > 0) ||
       hasComputeRoutes;
     this.errorPageHtml = props.errorPageHtml ?? SSR_ERROR_PAGE_HTML;
+
+    // SSR cache-key options only affect the compute (SSR) cache policy. On a
+    // static-only deploy there is none, so warn (rather than fail) that they
+    // have no effect — keeps a shared config that toggles compute on/off usable.
+    if (
+      !hasCompute &&
+      (props.ssrDefaultTtl !== undefined ||
+        props.cacheKeyCookies !== undefined ||
+        props.cacheKeyHeaders !== undefined)
+    ) {
+      Annotations.of(this).addWarning(
+        'cdn.ssrDefaultTtl / cacheKeyCookies / cacheKeyHeaders have no effect ' +
+          'on a static-only deploy (no compute origin); the options are ignored.',
+      );
+    }
 
     // ---- Lambda@Edge function-count validation ----
     // The KVS single-behavior model removed the per-route cache-behavior and
@@ -561,6 +580,141 @@ export class CdnConstruct extends Construct {
     // (the router copies Host → x-forwarded-host before selecting the server
     // origin). Redirects + build-id rewrite are likewise handled by the router.
 
+    // ── Fail-closed cache-key guard ─────────────────────────────────
+    // The origin-request policy forwards Cookie + Authorization to the
+    // origin, but the SSR cache key below keys only on Next.js router
+    // headers + preview cookies — NOT on credentials. So once an SSR
+    // response is cacheable (ssrDefaultTtl > 0, or the origin emits
+    // s-maxage) a single cache entry would answer requests regardless of
+    // their credentials, and CloudFront ignores `Vary`. Caller-supplied
+    // cacheKeyCookies / cacheKeyHeaders are the opt-in that puts credentials
+    // into the key. If ssrDefaultTtl > 0 is requested WITHOUT either, refuse
+    // to synth rather than cache credential-bearing responses under a shared
+    // cache key.
+    // Normalize + dedupe caller-supplied cache-key entries once up front so
+    // the cap checks, the accept-encoding check, and the allowList threading
+    // all see the same values. Header names are case-INsensitive per HTTP and
+    // CloudFront treats them so — lower-case + dedupe is unambiguously correct
+    // (avoids `Authorization` vs `authorization` double-counting against the
+    // cap or duplicating in the allowList). Cookie names are case-SENSITIVE
+    // per HTTP, so we dedupe by exact match only and preserve caller casing.
+    //
+    // Caller entries are also filtered against the reserved Next.js router
+    // headers / preview cookies that the allowLists below already include, so
+    // a caller passing e.g. 'rsc' or '__prerender_bypass' does not double-list
+    // the name and the cap arithmetic (+5 headers / +2 cookies) reflects the
+    // true distinct count.
+    const RESERVED_SSR_CACHE_HEADERS = [
+      'rsc',
+      'next-router-prefetch',
+      'next-router-state-tree',
+      'next-router-segment-prefetch',
+      'next-action',
+    ];
+    const RESERVED_SSR_CACHE_COOKIES = [
+      '__prerender_bypass',
+      '__next_preview_data',
+    ];
+    // Cookie names the router itself consumes and must never treat as a
+    // caller cache-key cookie. `__dpl` carries the skew-protected build pin
+    // that the router reads on static routes; the two preview cookies above
+    // are already in the SSR cache key. A caller cannot opt any of these into
+    // (or, for `__dpl`, have the router strip it out from under itself) the
+    // cache key.
+    const ROUTER_RESERVED_COOKIES = [...RESERVED_SSR_CACHE_COOKIES, '__dpl'];
+    // CloudFront caps the SSR cache key at 10 cookies and 10 headers total by
+    // default (raisable via quotas.cacheKeyCookies/cacheKeyHeaders); the
+    // reserved names above consume some of each, leaving the remainder for
+    // caller-supplied cdn.cacheKeyCookies/cacheKeyHeaders.
+    const CLOUDFRONT_CACHE_KEY_COOKIE_CAP = budget.limit('cacheKeyCookies');
+    const CLOUDFRONT_CACHE_KEY_HEADER_CAP = budget.limit('cacheKeyHeaders');
+    const extraCacheKeyHeaders = [
+      ...new Set((props.cacheKeyHeaders ?? []).map((h) => h.toLowerCase())),
+    ].filter((h) => !RESERVED_SSR_CACHE_HEADERS.includes(h));
+    const extraCacheKeyCookies = [
+      ...new Set(props.cacheKeyCookies ?? []),
+    ].filter((c) => !ROUTER_RESERVED_COOKIES.includes(c));
+    const hasCacheKeyCredentials =
+      extraCacheKeyHeaders.length > 0 || extraCacheKeyCookies.length > 0;
+    // ssrDefaultTtl may be an unresolved CDK token. Same-unit conversion
+    // does NOT throw — it returns an encoded numeric token — so a token TTL
+    // cannot be proven <= 0. Treat any unresolved value as positive (fail
+    // closed) rather than silently skipping the guard on the tokenized path.
+    let ssrDefaultTtlIsPositive = false;
+    if (props.ssrDefaultTtl) {
+      const secs = props.ssrDefaultTtl.toSeconds({ integral: false });
+      // An unresolved (token) TTL cannot be proven <= 0, so treat it as
+      // positive — fail closed rather than silently skip the guard.
+      ssrDefaultTtlIsPositive = Token.isUnresolved(secs) || secs > 0;
+    }
+    if (hasCompute && ssrDefaultTtlIsPositive && !hasCacheKeyCredentials) {
+      throw new HostingError('SsrCacheKeyCredentialsRequiredError', {
+        message:
+          'cdn.ssrDefaultTtl > 0 makes SSR responses cacheable and shared at the ' +
+          'CloudFront edge, but the SSR cache key does not include Authorization or session ' +
+          'cookies, so one cached response would answer requests regardless of their ' +
+          'credentials (CloudFront ignores Vary).',
+        resolution:
+          'Declare which credentials vary the response so CloudFront keys the ' +
+          'cache on them: set cdn.cacheKeyCookies (your session cookie name(s)) ' +
+          "and/or cdn.cacheKeyHeaders (e.g. 'authorization'). Otherwise ensure " +
+          'personalized routes emit `Cache-Control: private`.',
+      });
+    }
+    // CloudFront forbids 'accept-encoding' in the header allowList when the
+    // enableAcceptEncodingBrotli/Gzip flags are set (they are, below).
+    if (hasCompute && extraCacheKeyHeaders.includes('accept-encoding')) {
+      throw new HostingError('SsrCacheKeyAcceptEncodingError', {
+        message:
+          "cdn.cacheKeyHeaders may not include 'accept-encoding': it conflicts with the brotli/gzip " +
+          'content-negotiation flags CloudFront already applies to the SSR cache key ' +
+          '(enableAcceptEncodingBrotli/Gzip).',
+        resolution: 'Remove it — encoding is handled automatically.',
+      });
+    }
+    // CloudFront caps cookies in the cache key at CLOUDFRONT_CACHE_KEY_COOKIE_CAP
+    // total; the Next.js preview cookies below are reserved, leaving the rest
+    // for callers. Deriving the reserved count from the array keeps this in
+    // sync with RESERVED_SSR_CACHE_COOKIES if it ever changes.
+    if (
+      hasCompute &&
+      extraCacheKeyCookies.length + RESERVED_SSR_CACHE_COOKIES.length >
+        CLOUDFRONT_CACHE_KEY_COOKIE_CAP
+    ) {
+      const available =
+        CLOUDFRONT_CACHE_KEY_COOKIE_CAP - RESERVED_SSR_CACHE_COOKIES.length;
+      throw new HostingError('SsrCacheKeyCookieCapError', {
+        message:
+          `cdn.cacheKeyCookies adds ${extraCacheKeyCookies.length} cookie(s) to the SSR cache key, but ` +
+          `CloudFront allows at most ${CLOUDFRONT_CACHE_KEY_COOKIE_CAP} cookies total (${RESERVED_SSR_CACHE_COOKIES.length} are reserved for Next.js preview mode, ` +
+          `leaving ${available} available).`,
+        resolution:
+          `Reduce cdn.cacheKeyCookies to at most ${available} entries, or opt personalized routes out of ` +
+          'caching with `Cache-Control: private`.',
+      });
+    }
+    // CloudFront caps headers in the cache key at CLOUDFRONT_CACHE_KEY_HEADER_CAP
+    // total; the Next.js router headers below (rsc, next-router-prefetch,
+    // next-router-state-tree, next-router-segment-prefetch, next-action) are
+    // reserved, leaving the rest for callers. Deriving the reserved count from
+    // the array keeps this in sync with RESERVED_SSR_CACHE_HEADERS.
+    if (
+      hasCompute &&
+      extraCacheKeyHeaders.length + RESERVED_SSR_CACHE_HEADERS.length >
+        CLOUDFRONT_CACHE_KEY_HEADER_CAP
+    ) {
+      const available =
+        CLOUDFRONT_CACHE_KEY_HEADER_CAP - RESERVED_SSR_CACHE_HEADERS.length;
+      throw new HostingError('SsrCacheKeyHeaderCapError', {
+        message:
+          `cdn.cacheKeyHeaders adds ${extraCacheKeyHeaders.length} header(s) to the SSR cache key, but ` +
+          `CloudFront allows at most ${CLOUDFRONT_CACHE_KEY_HEADER_CAP} headers total (${RESERVED_SSR_CACHE_HEADERS.length} are reserved for the Next.js router ` +
+          `headers, leaving ${available} available).`,
+        resolution:
+          `Reduce cdn.cacheKeyHeaders to at most ${available} entries, or opt personalized routes out of ` +
+          'caching with `Cache-Control: private`.',
+      });
+    }
     // ---- SSR cache policy (B21) ----
     // CACHING_DISABLED used to short-circuit caching on every compute
     // behavior, which silently broke ISR/SWR: the framework's
@@ -578,7 +732,7 @@ export class CdnConstruct extends Construct {
     //   Cache-Control still don't accidentally cache personalized
     //   responses)
     // - maxTtl: 1 year — clamps any wild origin values (e.g. corrupted
-    //   Cache-Control: s-max-age=999999999)
+    //   Cache-Control: s-max-age=999999999) to at most a year.
     //
     // Content negotiation is handled by enableAcceptEncodingBrotli/Gzip
     // flags — CloudFront normalizes the Accept-Encoding header into
@@ -589,9 +743,10 @@ export class CdnConstruct extends Construct {
     //
     // The cache key includes the Next.js router headers (RSC, prefetch,
     // state tree, segment prefetch) so prefetch payloads don't bleed
-    // into full-page responses. Cookies are explicitly excluded — any
-    // route that varies on cookies must emit `Cache-Control: private`
-    // to opt out.
+    // into full-page responses. Cookies are excluded from the SSR cache
+    // key BY DEFAULT; cdn.cacheKeyCookies opts specific cookies (e.g. a
+    // session cookie) in, and any route that must not be shared should
+    // emit `Cache-Control: private`.
     const ssrCachePolicy = hasCompute
       ? new CachePolicy(this, 'SsrCachePolicy', {
           comment:
@@ -612,6 +767,9 @@ export class CdnConstruct extends Construct {
             // cache key for correctness.
             // See: node_modules/@opennextjs/aws/dist/core/routing/cacheInterceptor.js
             'next-action',
+            // Caller-supplied credential-bearing headers (e.g. 'authorization')
+            // so authenticated SSR responses vary per credential in the key.
+            ...extraCacheKeyHeaders,
           ),
           // Allowlist Next.js's two preview-mode cookies so requests
           // carrying them cache-miss and re-render fresh from the SSR
@@ -634,6 +792,10 @@ export class CdnConstruct extends Construct {
           cookieBehavior: CacheCookieBehavior.allowList(
             '__prerender_bypass',
             '__next_preview_data',
+            // Caller-supplied session cookie name(s) so authenticated SSR
+            // responses are cached per-session rather than shared across
+            // users (see the fail-closed guard above).
+            ...extraCacheKeyCookies,
           ),
           // Cache on all query strings EXCEPT Next's prefetch cache-buster
           // `_rsc`. The App Router appends a fresh random `_rsc=<hash>` to
@@ -732,6 +894,11 @@ export class CdnConstruct extends Construct {
       // Tunable route-table budget (issue #8) — raise via quotas.maxRouteChunks
       // for a very large site after verifying edge-function compute headroom.
       maxChunksPerTable: props.quotas?.maxRouteChunks,
+      // On the single default behavior, configured cache-key cookies/headers
+      // key every route; the router strips them on static + image routes so
+      // shared assets keep a shared cache key (compute routes keep them).
+      cacheKeyCookies: extraCacheKeyCookies,
+      cacheKeyHeaders: extraCacheKeyHeaders,
     });
 
     // ---- Router functions (build-independent; routing data lives in KVS) ----

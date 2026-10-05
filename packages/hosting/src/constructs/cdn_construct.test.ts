@@ -3,8 +3,8 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { App, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { App, CfnParameter, Duration, Stack } from 'aws-cdk-lib';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { PriceClass } from 'aws-cdk-lib/aws-cloudfront';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import {
@@ -732,6 +732,391 @@ void describe('CdnConstruct', () => {
           ]),
         }),
       });
+    });
+  });
+
+  // ---- SSR cache-key credentials (fail-closed guard) ----
+
+  void describe('SSR cache-key credentials', () => {
+    /** Synthesize the SSR CachePolicy config for the given cdn cache-key props. */
+    const synthSsrCachePolicy = (
+      cacheProps: {
+        ssrDefaultTtl?: Duration;
+        cacheKeyCookies?: string[];
+        cacheKeyHeaders?: string[];
+      },
+    ): Record<string, unknown> => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: ssrManifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+        ...cacheProps,
+      });
+
+      const template = Template.fromStack(stack);
+      const cachePolicies = template.findResources(
+        'AWS::CloudFront::CachePolicy',
+      );
+      const ssrPolicy = Object.values(cachePolicies).find((r) => {
+        const props = (r as Record<string, Record<string, unknown>>).Properties;
+        const cfg = props.CachePolicyConfig as Record<string, unknown>;
+        return typeof cfg.Comment === 'string' && cfg.Comment.includes('SSR');
+      }) as Record<string, Record<string, unknown>> | undefined;
+      assert.ok(ssrPolicy, 'Should have an SSR CachePolicy');
+      return ssrPolicy.Properties.CachePolicyConfig as Record<string, unknown>;
+    };
+
+    /** Build a CdnConstruct inline (for assert.throws — synth is at construct time). */
+    const buildCdn = (
+      cacheProps: {
+        ssrDefaultTtl?: Duration;
+        cacheKeyCookies?: string[];
+        cacheKeyHeaders?: string[];
+      },
+    ): void => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: ssrManifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+        ...cacheProps,
+      });
+    };
+
+    void it('clamps the SSR CachePolicy MaxTTL to 1 year (31536000s)', () => {
+      // Clamps wild origin Cache-Control values to at most a year.
+      const cfg = synthSsrCachePolicy({});
+      assert.strictEqual(cfg.MaxTTL, 31536000);
+    });
+
+    void it('threads cacheKeyHeaders into the cache key alongside the router headers', () => {
+      const cfg = synthSsrCachePolicy({
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyHeaders: ['authorization'],
+      });
+      const params = cfg.ParametersInCacheKeyAndForwardedToOrigin as Record<
+        string,
+        unknown
+      >;
+      const headersCfg = params.HeadersConfig as Record<string, unknown>;
+      const headers = (headersCfg.Headers ?? []) as string[];
+      assert.ok(
+        headers.includes('authorization'),
+        'authorization must be in the SSR cache-key header allowList',
+      );
+      // Router headers must still be present.
+      for (const h of ['rsc', 'next-router-prefetch', 'next-action']) {
+        assert.ok(headers.includes(h), `router header ${h} must remain`);
+      }
+    });
+
+    void it('threads cacheKeyCookies into the cache key alongside the preview cookies', () => {
+      const cfg = synthSsrCachePolicy({
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyCookies: ['session'],
+      });
+      const params = cfg.ParametersInCacheKeyAndForwardedToOrigin as Record<
+        string,
+        unknown
+      >;
+      const cookiesCfg = params.CookiesConfig as Record<string, unknown>;
+      const cookies = (cookiesCfg.Cookies ?? []) as string[];
+      assert.ok(
+        cookies.includes('session'),
+        'session cookie must be in the SSR cache-key cookie allowList',
+      );
+      for (const c of ['__prerender_bypass', '__next_preview_data']) {
+        assert.ok(cookies.includes(c), `preview cookie ${c} must remain`);
+      }
+    });
+
+    void it('de-dupes caller cache-key names that collide with reserved Next.js names', () => {
+      const cfg = synthSsrCachePolicy({
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyHeaders: ['rsc', 'authorization'], // 'rsc' is reserved
+        cacheKeyCookies: ['__prerender_bypass', 'session'], // reserved cookie
+      });
+      const params = cfg.ParametersInCacheKeyAndForwardedToOrigin as Record<
+        string,
+        unknown
+      >;
+      const headers = ((params.HeadersConfig as Record<string, unknown>)
+        .Headers ?? []) as string[];
+      const cookies = ((params.CookiesConfig as Record<string, unknown>)
+        .Cookies ?? []) as string[];
+      // Reserved names appear exactly once; caller extras still present.
+      assert.strictEqual(headers.filter((h) => h === 'rsc').length, 1);
+      assert.ok(headers.includes('authorization'));
+      assert.strictEqual(
+        cookies.filter((c) => c === '__prerender_bypass').length,
+        1,
+      );
+      assert.ok(cookies.includes('session'));
+    });
+
+    void it('fails closed: throws when ssrDefaultTtl > 0 without cacheKeyCookies/cacheKeyHeaders', () => {
+      // Guard: a cacheable SSR response with no credentials in the key would
+      // answer requests regardless of their credentials.
+      assert.throws(
+        () => buildCdn({ ssrDefaultTtl: Duration.seconds(60) }),
+        /does not include Authorization or session/,
+      );
+    });
+
+    void it('guard satisfied: does not throw and sets DefaultTTL when cache-key credentials are provided', () => {
+      const cfg = synthSsrCachePolicy({
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyCookies: ['session'],
+      });
+      assert.strictEqual(cfg.DefaultTTL, 60);
+    });
+
+    void it("rejects 'accept-encoding' in cacheKeyHeaders (conflicts with brotli/gzip flags)", () => {
+      assert.throws(
+        () =>
+          buildCdn({
+            ssrDefaultTtl: Duration.seconds(60),
+            cacheKeyHeaders: ['accept-encoding'],
+          }),
+        /accept-encoding/,
+      );
+    });
+
+    void it('rejects more than 8 cacheKeyCookies (CloudFront 10-cookie cap, 2 reserved)', () => {
+      const nineCookies = Array.from({ length: 9 }, (_, i) => `c${i}`);
+      assert.throws(
+        () =>
+          buildCdn({
+            ssrDefaultTtl: Duration.seconds(60),
+            cacheKeyCookies: nineCookies,
+          }),
+        /at most 10 cookies/,
+      );
+    });
+
+    void it('rejects more than 5 cacheKeyHeaders (CloudFront 10-header cap, 5 reserved)', () => {
+      const sixHeaders = Array.from({ length: 6 }, (_, i) => `h${i}`);
+      assert.throws(
+        () =>
+          buildCdn({
+            ssrDefaultTtl: Duration.seconds(60),
+            cacheKeyHeaders: sixHeaders,
+          }),
+        /at most 10 headers/,
+      );
+    });
+
+    // ---- boundary / positive cases ----
+
+    void it('accepts exactly 8 cacheKeyCookies (boundary: 8 + 2 reserved = cap)', () => {
+      const eight = Array.from({ length: 8 }, (_, i) => `c${i}`);
+      const cfg = synthSsrCachePolicy({
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyCookies: eight,
+      });
+      const params = cfg.ParametersInCacheKeyAndForwardedToOrigin as Record<
+        string,
+        unknown
+      >;
+      const cookies = ((params.CookiesConfig as Record<string, unknown>)
+        .Cookies ?? []) as string[];
+      for (const c of eight) {
+        assert.ok(cookies.includes(c), `cookie ${c} must be in the allowList`);
+      }
+    });
+
+    void it('accepts exactly 5 cacheKeyHeaders (boundary: 5 + 5 reserved = cap)', () => {
+      const five = Array.from({ length: 5 }, (_, i) => `x-h${i}`);
+      const cfg = synthSsrCachePolicy({
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyHeaders: five,
+      });
+      const params = cfg.ParametersInCacheKeyAndForwardedToOrigin as Record<
+        string,
+        unknown
+      >;
+      const headers = ((params.HeadersConfig as Record<string, unknown>)
+        .Headers ?? []) as string[];
+      for (const h of five) {
+        assert.ok(headers.includes(h), `header ${h} must be in the allowList`);
+      }
+    });
+
+    void it('treats an unresolved (token) ssrDefaultTtl as > 0 and fails closed', () => {
+      // A CfnParameter-backed Duration is an unresolved token; the guard cannot
+      // prove it <= 0, so it must fail closed exactly like a literal > 0.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const param = new CfnParameter(stack, 'Ttl', { type: 'Number' });
+      assert.throws(
+        () =>
+          new CdnConstruct(stack, 'Cdn', {
+            bucket,
+            manifest: ssrManifest,
+            securityHeadersPolicy: policy,
+            computeFunctionUrls: new Map([['default', fnUrl]]),
+            computeFunctions: new Map([['default', fn]]),
+            ssrDefaultTtl: Duration.seconds(param.valueAsNumber),
+          }),
+        /does not include Authorization or session/,
+      );
+    });
+
+    void it('lowercases cacheKeyHeaders in the cache-key header allowList', () => {
+      const cfg = synthSsrCachePolicy({
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyHeaders: ['Authorization'],
+      });
+      const params = cfg.ParametersInCacheKeyAndForwardedToOrigin as Record<
+        string,
+        unknown
+      >;
+      const headers = ((params.HeadersConfig as Record<string, unknown>)
+        .Headers ?? []) as string[];
+      assert.ok(
+        headers.includes('authorization'),
+        "'Authorization' must be lowercased to 'authorization' in the allowList",
+      );
+      assert.ok(!headers.includes('Authorization'));
+    });
+
+    void it('reserved-only cache-key names do not satisfy the guard (fails closed)', () => {
+      // Reserved names are filtered out before the credential check, so listing
+      // ONLY a reserved name leaves hasCacheKeyCredentials false → fail closed.
+      assert.throws(
+        () =>
+          buildCdn({
+            ssrDefaultTtl: Duration.seconds(60),
+            cacheKeyCookies: ['__prerender_bypass'],
+          }),
+        /does not include Authorization or session/,
+      );
+      // __dpl is the router-reserved skew cookie (also filtered out).
+      assert.throws(
+        () =>
+          buildCdn({
+            ssrDefaultTtl: Duration.seconds(60),
+            cacheKeyCookies: ['__dpl'],
+          }),
+        /does not include Authorization or session/,
+      );
+    });
+
+    // ---- construct-level wiring (mutation-survival) ----
+
+    void it('wires cache-key names into the KVS meta blob (ck filtered, hh lowercased)', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: ssrManifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyCookies: ['sess', '__dpl'],
+        cacheKeyHeaders: ['Authorization'],
+      });
+
+      // The RouteStoreKeys custom resource carries the KVS entries (incl. the
+      // meta blob) as a JSON string in its Entries property.
+      const resources = (
+        Template.fromStack(stack).toJSON() as {
+          Resources: Record<string, { Properties?: { Entries?: string } }>;
+        }
+      ).Resources;
+      const kvEntry = Object.values(resources).find(
+        (r) =>
+          typeof r.Properties?.Entries === 'string' &&
+          r.Properties.Entries.includes('"meta"'),
+      );
+      assert.ok(kvEntry, 'RouteStoreKeys custom resource with Entries required');
+      const entries = JSON.parse(kvEntry.Properties!.Entries!) as Record<
+        string,
+        string
+      >;
+      const meta = JSON.parse(entries.meta) as {
+        ck?: string[];
+        hh?: string[];
+      };
+      // __dpl is router-reserved → filtered out of ck.
+      assert.deepEqual(meta.ck, ['sess']);
+      // Authorization lowercased into hh.
+      assert.deepEqual(meta.hh, ['authorization']);
+    });
+
+    void it('accepts >8 cacheKeyCookies when quotas.cacheKeyCookies raises the cap', () => {
+      const nine = Array.from({ length: 9 }, (_, i) => `c${i}`);
+      assert.doesNotThrow(() => {
+        const stack = createStack();
+        const bucket = new Bucket(stack, 'Bucket');
+        const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+        const { fn, fnUrl } = createSsrFunction(stack);
+        new CdnConstruct(stack, 'Cdn', {
+          bucket,
+          manifest: ssrManifest,
+          securityHeadersPolicy: policy,
+          computeFunctionUrls: new Map([['default', fnUrl]]),
+          computeFunctions: new Map([['default', fn]]),
+          ssrDefaultTtl: Duration.seconds(60),
+          cacheKeyCookies: nine,
+          quotas: { cacheKeyCookies: 20 },
+        });
+      });
+    });
+
+    void it('accepts >5 cacheKeyHeaders when quotas.cacheKeyHeaders raises the cap', () => {
+      const six = Array.from({ length: 6 }, (_, i) => `x-h${i}`);
+      assert.doesNotThrow(() => {
+        const stack = createStack();
+        const bucket = new Bucket(stack, 'Bucket');
+        const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+        const { fn, fnUrl } = createSsrFunction(stack);
+        new CdnConstruct(stack, 'Cdn', {
+          bucket,
+          manifest: ssrManifest,
+          securityHeadersPolicy: policy,
+          computeFunctionUrls: new Map([['default', fnUrl]]),
+          computeFunctions: new Map([['default', fn]]),
+          ssrDefaultTtl: Duration.seconds(60),
+          cacheKeyHeaders: six,
+          quotas: { cacheKeyHeaders: 20 },
+        });
+      });
+    });
+
+    void it('warns (does not throw) when cache-key options are set on a static-only deploy', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      // No compute functions → static-only deploy.
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: spaManifest,
+        securityHeadersPolicy: policy,
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyCookies: ['session'],
+      });
+      Annotations.fromStack(stack).hasWarning(
+        '*',
+        Match.stringLikeRegexp('no effect on a static-only deploy'),
+      );
     });
   });
 

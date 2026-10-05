@@ -8,6 +8,7 @@
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
   "ignore": [
+    "@aws-blocks/agent-bench",
     "@guide/bb-queue",
     "amplify-gen2",
     "amplify-gen2-aws-blocks",

@@ -29,8 +29,8 @@ class BlocksClient(
          * Clears all persisted cookies (e.g. session tokens).
          * Call this to ensure a fully logged-out state across app restarts.
          */
-        fun clearCookies() {
-            PersistentCookiesStorage().clear()
+        suspend fun clearCookies() {
+            sharedCookiesStorage.clear()
         }
     }
 

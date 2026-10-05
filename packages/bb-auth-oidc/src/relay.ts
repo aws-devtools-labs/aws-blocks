@@ -13,6 +13,8 @@
  * 3. Custom schemes / off-origin HTTPS: must match an allowlist entry.
  */
 
+import { brandBlocksError } from '@aws-blocks/core';
+
 /**
  * Brand symbol for the `RelayOrigin` opaque type. Prevents arbitrary
  * strings from being passed where a validated origin is required.
@@ -209,5 +211,5 @@ function originsEqual(a: ParsedOrigin, b: ParsedOrigin): boolean {
 function relayConfigError(message: string): Error {
 	const err = new Error(message);
 	err.name = 'RelayConfigError';
-	return err;
+	return brandBlocksError(err);
 }

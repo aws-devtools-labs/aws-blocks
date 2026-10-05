@@ -300,9 +300,52 @@ export type HostingProps = {
      * Default TTL for SSR/compute cache behaviors when the origin response
      * has no `Cache-Control` header. Set this to enable edge caching of SSR
      * responses; the origin can still override via `s-maxage`/`no-store`.
+     *
+     * ⚠️ SECURITY: enabling this makes SSR responses without an explicit
+     * `Cache-Control` header shared at the CloudFront edge. Because the SSR
+     * cache key does NOT include Authorization or session cookies by default,
+     * one cached response would answer requests regardless of their
+     * credentials. CloudFront ignores `Vary`.
+     * Before enabling, set {@link cacheKeyCookies} (your session cookie
+     * name(s)) and/or {@link cacheKeyHeaders} (e.g. `'authorization'`) to
+     * include credentials in the cache key, or ensure personalized routes
+     * (and any route that sets cookies via `Set-Cookie`) emit
+     * `Cache-Control: private`. Synth fails closed if this resolves to > 0
+     * and neither `cacheKeyCookies` nor `cacheKeyHeaders` is set.
+     *
+     * NOTE: this fail-closed guard covers only `ssrDefaultTtl` — it cannot
+     * detect origin-emitted caching. Routes made cacheable via an origin
+     * `s-maxage`/`revalidate` header (e.g. Next `revalidate`, Nuxt/Astro
+     * defaults) with `ssrDefaultTtl` unset are NOT caught by synth, so such
+     * routes must themselves set `cacheKeyCookies`/`cacheKeyHeaders` or emit
+     * `Cache-Control: private`.
      * @default Duration.seconds(0) — no caching unless the origin opts in.
      */
     ssrDefaultTtl?: Duration;
+    /**
+     * Cookie names that vary the SSR response (e.g. your session cookie).
+     * Listing a name declares that the response differs by that cookie, so
+     * CloudFront keys the SSR cache on it and authenticated responses are
+     * cached per-session rather than shared. Required (together with or instead
+     * of `cacheKeyHeaders`) to safely enable `ssrDefaultTtl`. CloudFront allows
+     * at most 10 cookies in the cache key (2 are reserved for Next.js preview
+     * mode).
+     */
+    cacheKeyCookies?: string[];
+    /**
+     * Header names that vary the SSR response (e.g. `'authorization'`). Listing
+     * a name declares that the response differs by that header, so CloudFront
+     * keys the SSR cache on it. `'accept-encoding'` is not allowed (handled
+     * automatically). Required (together with or instead of `cacheKeyCookies`)
+     * to safely enable `ssrDefaultTtl`.
+     *
+     * On compute deploys the configured cache-key cookies and headers are
+     * stripped from static and image routes, so those assets keep a shared
+     * cache key. Because the router deletes them at viewer-request, they are
+     * also not forwarded to the origin on static/image routes (e.g. an
+     * auth-gated image source would not receive them).
+     */
+    cacheKeyHeaders?: string[];
     /**
      * Bring-your-own ResponseHeadersPolicy. When provided, the construct
      * skips creating its own — share one policy across stacks to avoid the

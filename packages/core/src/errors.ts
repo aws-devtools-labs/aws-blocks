@@ -61,6 +61,15 @@ export class ApiError extends Error {
 		this.name = options?.name ?? DEFAULT_API_ERROR_NAME;
 		this.status = status;
 		this.retriable = options?.retriable ?? false;
+		// Stamp the cross-copy brand so the RPC serializer can recognize this as a
+		// wire-safe BB error even when it was constructed by a SEPARATELY bundled
+		// copy of core (a BB compiled with its own core instance), where a plain
+		// `instanceof ApiError` check fails. `brandBlocksError` keys the brand on
+		// `Symbol.for(...)`, which is stable across bundles. The brand makes an
+		// `ApiError`'s `message` wire-visible, so BB code MUST construct `ApiError`
+		// with its own authored text, never raw driver/SDK/IdP text; the Cognito
+		// `asApiError` path is the known exception, tracked as a follow-up.
+		brandBlocksError(this);
 	}
 }
 
@@ -84,6 +93,89 @@ export function isBlocksError<N extends string>(e: unknown, name: N): e is Error
 }
 
 /**
+ * Marker set on errors produced by {@link blocksError}. It is the RPC
+ * serializer's *unambiguous intentional signal* that an error's `name` is a
+ * Building Block error constant safe to send over the wire — as opposed to a
+ * raw driver/SDK exception (`PostgresError`, `DynamoDBServiceException`) whose
+ * class name happens to be non-generic but must never leak. Inferring intent
+ * from `.name !== 'Error'` alone cannot tell the two apart; this brand can.
+ *
+ * Non-enumerable so it never appears in `JSON.stringify(error)` or log dumps.
+ */
+export const BLOCKS_ERROR_BRAND = Symbol.for('aws-blocks.wireSafeError');
+
+/**
+ * True when `e` is a Building Block error thrown via {@link blocksError} (or an
+ * {@link ApiError}, which is wire-safe by construction). The RPC serializer uses
+ * this to decide whether an error's `name` may cross the wire.
+ */
+export function isWireSafeError(e: unknown): e is Error {
+	return e instanceof ApiError || (e instanceof Error && (e as { [BLOCKS_ERROR_BRAND]?: true })[BLOCKS_ERROR_BRAND] === true);
+}
+
+/**
+ * True when `e` is an {@link ApiError} — including one constructed by a
+ * SEPARATELY bundled copy of core, where `e instanceof ApiError` is false
+ * because the two copies define distinct classes.
+ *
+ * A duplicated `@aws-blocks/core` is common in a real install: npm nests a
+ * private copy under a dependency whenever versions do not dedupe, so an
+ * `ApiError` built in one copy (e.g. `bb-distributed-table`'s) reaches the RPC
+ * serializer running in another copy (`blocks`'s). A plain `instanceof` check
+ * then wrongly rejects it, collapsing a deliberate 409 into a nameless 500.
+ *
+ * The detection is a strict superset of `instanceof ApiError`, not a loose
+ * duck-type: it requires BOTH the cross-copy-stable `BLOCKS_ERROR_BRAND` (which
+ * the `ApiError` constructor stamps) AND a numeric `status`. The brand alone is
+ * carried by every `blocksError()` plain-Error too; the numeric `status` is what
+ * distinguishes an `ApiError` (which owns an HTTP status) from a branded plain
+ * `Error` (which does not), so a branded plain-Error is NOT misread as an
+ * ApiError and still takes the status-500 branch.
+ */
+export function isApiErrorLike(e: unknown): e is Error & { status: number; retriable?: boolean } {
+	return (
+		e instanceof ApiError ||
+		(e instanceof Error &&
+			(e as { [BLOCKS_ERROR_BRAND]?: true })[BLOCKS_ERROR_BRAND] === true &&
+			typeof (e as { status?: unknown }).status === 'number')
+	);
+}
+
+/**
+ * Stamp the non-enumerable `BLOCKS_ERROR_BRAND` onto an already-built named
+ * `Error` and return it, so its `name` crosses the RPC wire (D-003) instead of
+ * being collapsed to a nameless 500.
+ *
+ * This is the single source of truth for the brand. Every Building Block that
+ * throws a named error — whether through its own local `blocksError()` helper
+ * (whose message format differs per package) or by building an `Error` inline —
+ * routes it through this one helper so the "intentional BB error" signal never
+ * diverges per package. It has no runtime dependencies, so it is safe in every
+ * bundle (mock, aws-runtime, CDK synth), and `Symbol.for()` keeps the brand
+ * valid across separately-bundled packages.
+ *
+ * Only stamp an error whose `name` is a BB error constant AND whose `message` is
+ * BB-authored. Do NOT brand a raw driver/SDK exception (`PostgresError`,
+ * `DynamoDBServiceException`) — the brand is exactly the signal that keeps those
+ * class names from leaking. Because a branded error's `message` now also crosses
+ * the wire (D-003), never brand an error whose message embeds raw driver/SDK text
+ * (e.g. a re-tagged Postgres error, or an `err.message` copied from a DynamoDB
+ * `ValidationException`): give it a stable BB-authored message first, keeping the
+ * raw error as `cause` for server-side diagnostics.
+ *
+ * @example
+ * ```typescript
+ * const err = new Error(`${EmailErrors.InvalidInput}: bad address`);
+ * err.name = EmailErrors.InvalidInput;
+ * throw brandBlocksError(err);
+ * ```
+ */
+export function brandBlocksError<T extends Error>(err: T): T {
+	Object.defineProperty(err, BLOCKS_ERROR_BRAND, { value: true, enumerable: false });
+	return err;
+}
+
+/**
  * Build a named `Error` whose `name` is a BB error constant, so it is matchable
  * with {@link isBlocksError} on both server and client. The name is also
  * prefixed into the message for readable logs.
@@ -93,6 +185,11 @@ export function isBlocksError<N extends string>(e: unknown, name: N): e is Error
  * no runtime dependencies, so it is safe to use in every bundle — mock,
  * aws-runtime, and CDK synth.
  *
+ * The error also carries the non-enumerable `BLOCKS_ERROR_BRAND` (via
+ * {@link brandBlocksError}), the signal the RPC serializer reads to forward this
+ * `name` over the wire while still collapsing raw driver/SDK exceptions to a
+ * nameless 500.
+ *
  * @example
  * ```typescript
  * throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'Key already exists');
@@ -101,7 +198,7 @@ export function isBlocksError<N extends string>(e: unknown, name: N): e is Error
 export function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }
 
 /**

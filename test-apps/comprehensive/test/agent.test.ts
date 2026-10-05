@@ -4,8 +4,11 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
+import { isBlocksError } from '@aws-blocks/core';
+import { AgentErrors } from '@aws-blocks/bb-agent';
 import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
 import type { AgentStreamChunk, ChatMessage, CreateChatOptions } from '@aws-blocks/bb-agent/client';
+import type { RealtimeSubscription } from '@aws-blocks/bb-realtime';
 import { codePoller } from './poll-for-code.js';
 
 /**
@@ -14,9 +17,13 @@ import { codePoller } from './poll-for-code.js';
  */
 function cannedTransport(api: typeof apiType) {
   return realtimeTransport({
-    subscribe: async (channelId, handler) => {
+    subscribe: async (channelId, handlerOrOptions) => {
       const { channel } = await api.cannedGetChannel(channelId);
-      return channel.subscribe(handler);
+      // channel.subscribe is overloaded (bare handler | options object). Branch on the
+      // shape so each arm narrows to one overload and the options form reaches the channel.
+      return typeof handlerOrOptions === 'function'
+        ? channel.subscribe(handlerOrOptions)
+        : channel.subscribe(handlerOrOptions);
     },
     sendMessage: async (channelId, message, conversationId) => {
       await api.cannedStream(message, conversationId ?? undefined, channelId);
@@ -127,6 +134,88 @@ export function agentTests(getApi: () => typeof apiType) {
         await done;
         assert.ok(chunks.filter((c: any) => c.type === 'text-delta').length > 0, 'should receive text-delta chunks');
         assert.ok(chunks.some((c: any) => c.type === 'done'), 'should receive done chunk');
+      });
+
+      test('agentGetRawDescriptor returns a fresh, well-formed chunks-channel descriptor', async () => {
+        const api = getApi();
+        const { conversationId } = await api.agentCreateConversationId();
+
+        const d1 = await api.agentGetRawDescriptor(conversationId);
+        // __blocks is stripped so the response middleware does NOT hydrate this into a
+        // subscribe-only channel client — the raw token fields must be reachable.
+        assert.ok(!('__blocks' in d1), 'raw descriptor must have __blocks stripped');
+        assert.strictEqual(typeof d1.token, 'string', 'descriptor carries a channel token');
+        assert.ok((d1.token as string).length > 0, 'channel token is non-empty');
+        const channel1 = d1.channel;
+        // The descriptor targets the AGENT chunks channel for this conversation.
+        assert.ok(typeof channel1 === 'string' && channel1.includes(conversationId), 'channel path targets the conversation');
+
+        // Each call mints a FRESH channel token. The local mint bakes exp=floor(now/1000)
+        // into the token, so a >1s gap guarantees a distinct token (deterministic in both
+        // local mint and the deployed authorizer, which are also exp-based).
+        await new Promise(r => setTimeout(r, 1100));
+        const d2 = await api.agentGetRawDescriptor(conversationId);
+        assert.notStrictEqual(d2.token, d1.token, 'each call mints a fresh channel token');
+      });
+
+      test('reconnect on the agent chunks channel invokes refresh and resubscribes', { timeout: 120_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.agentCreateConversationId();
+        // Subscribe via the SAME path useChat uses (agentGetChannel → hydrated chunks channel).
+        const { channel } = await api.agentGetChannel(conversationId);
+
+        const chunks: any[] = [];
+        let reconnects = 0;
+        let refreshCalls = 0;
+
+        // Mirror realtime.test.ts's refresh callback, sourced from the AGENT's chunks
+        // channel: agentGetRawDescriptor mints a FRESH token server-side and strips
+        // __blocks so the response middleware won't hydrate it; we re-add the discriminant.
+        // We return the raw descriptor as-is (NOT overriding `channel`): it already carries
+        // the concrete full channel path the transport keys the fresh token under, so the
+        // resubscribe after reconnect replays the FRESH token, not a stale one.
+        const sub = channel.subscribe({
+          onMessage: (chunk: any) => { chunks.push(chunk); },
+          onReconnect: () => { reconnects++; },
+          refresh: async () => {
+            refreshCalls++;
+            const fresh = await api.agentGetRawDescriptor(conversationId);
+            return { ...fresh, __blocks: 'realtime/channel' };
+          },
+        } satisfies import('aws-blocks').SubscribeOptions<any>);
+
+        try {
+          await sub.established;
+          // Start a stream (canned provider in local) so the subscription is live mid-turn.
+          await api.agentStream('Say hello', conversationId, conversationId);
+
+          // Wait for at least one chunk — proves delivery on the agent channel pre-drop.
+          const chunkDeadline = Date.now() + 30_000;
+          while (chunks.length < 1) {
+            if (Date.now() > chunkDeadline) throw new Error('no chunk delivered on the agent channel within 30s');
+            await new Promise(r => setTimeout(r, 100));
+          }
+
+          // Force a mid-stream drop of the underlying socket. Because a refresh fn is
+          // registered, the transport must invoke it before reopening, then resubscribe
+          // the chunks channel and fire onReconnect.
+          sub.connection?.close();
+
+          const reconnectDeadline = Date.now() + 60_000;
+          while (reconnects < 1) {
+            if (Date.now() > reconnectDeadline) throw new Error('onReconnect did not fire within 60s of the forced close on the agent channel');
+            await new Promise(r => setTimeout(r, 100));
+          }
+
+          // PR503 assertion: the refresh path IS exercised on the AGENT chunks channel —
+          // agentGetRawDescriptor is invoked to re-mint credentials before the reconnect.
+          // (Post-reconnect transport-level delivery with fresh creds is covered by the
+          // realtime.test.ts refresh e2e — same transport + refresh mechanism.)
+          assert.ok(refreshCalls >= 1, `refresh callback should be invoked on the agent-channel reconnect, got ${refreshCalls}`);
+          assert.ok(reconnects >= 1, 'onReconnect should fire on the agent channel after the forced close');
+        } finally {
+          sub.unsubscribe();
+        }
       });
     });
 
@@ -340,7 +429,7 @@ export function agentTests(getApi: () => typeof apiType) {
         const api = getApi();
         await assert.rejects(
           () => api.agentInferenceOnlyGetConversation('test'),
-          (err: any) => err.message.includes('persistence'),
+          (err: unknown) => isBlocksError(err, AgentErrors.PersistenceRequired),
         );
       });
 
@@ -348,7 +437,7 @@ export function agentTests(getApi: () => typeof apiType) {
         const api = getApi();
         await assert.rejects(
           () => api.agentInferenceOnlyDeleteConversation('test'),
-          (err: any) => err.message.includes('persistence'),
+          (err: unknown) => isBlocksError(err, AgentErrors.PersistenceRequired),
         );
       });
 
@@ -622,12 +711,14 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.strictEqual(second.getConversationId(), conversationId, 'conversationId is set after load');
         const approval = loaded.find(m => m.role === 'approval');
         assert.ok(approval, 'approval message should be present in loaded history');
-        // Asserts the persisted decision survives loadConversation's projection and is
-        // readable as `metadata.approved`. (Note: the `/client` ChatMessage is currently
-        // the flat interface from index.hooks.ts, so this is a value round-trip check,
-        // not a compile-time discriminated-union narrowing proof — see the ChatMessage
-        // de-dup follow-up.)
-        assert.strictEqual(approval?.metadata?.approved, true, 'approval metadata.approved round-trips as true');
+        // `/client` now re-exports the discriminated-union ChatMessage, so narrowing on
+        // role === 'approval' types `metadata` as ApprovalMetadata — reading `.approved`
+        // here needs no cast. This both proves the persisted decision survives
+        // loadConversation's projection AND exercises the compile-time union.
+        assert.ok(approval!.role === 'approval', 'loaded message narrows to the approval variant');
+        if (approval!.role === 'approval') {
+          assert.strictEqual(approval!.metadata?.approved, true, 'approval metadata.approved round-trips as true');
+        }
         second.destroy();
       });
 
@@ -706,6 +797,101 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.ok(latest.some(m => m.role === 'user'), 'user message present in the rendered list');
         // (the assistant-with-content check is the waitUntil predicate above — not repeated here)
         chat.destroy();
+      });
+    });
+
+    describe('createChat mid-turn reconnect (Option A e2e)', () => {
+      // Exercises the FULL createChat -> real hydrated agent channel wiring end-to-end (the
+      // unit tests mock the transport). Sends a message, forces a mid-turn socket drop, and
+      // asserts the spinner clears and the final assistant text is recovered — mirroring the
+      // transport-level reconnect test in realtime.test.ts, but through the createChat path so
+      // a wiring regression (options object degrading to a bare handler, so onReconnect/
+      // onDisconnect are dropped) would be caught.
+      // Per-test timeout for the real-AWS reconnect round-trip (backoff + $connect + resubscribe).
+      test('createChat recovers a mid-turn reconnect: loading clears and final text is restored', { timeout: 120_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.agentCreateConversationId();
+
+        // Capture the live subscription so the test can force a transport drop. The
+        // subscribe adapter records the handle bb-realtime returns (it exposes `.connection`).
+        let sub: RealtimeSubscription | undefined;
+        const messages: Array<{ role: string; content: string }> = [];
+
+        const chat = createChat({
+          // Mirror the app wiring in src/index.ts createChatForConvo, but capture `sub`.
+          transport: realtimeTransport({
+            subscribe: async (channelId, handlerOrOptions) => {
+              const { channel } = await api.agentGetChannel(channelId);
+              // channel.subscribe is overloaded (bare handler | options object). Branch on the
+              // shape so each arm narrows to one overload and the options form (onReconnect/
+              // onDisconnect) reaches the channel intact. Capture the handle to force a drop.
+              sub = typeof handlerOrOptions === 'function'
+                ? channel.subscribe(handlerOrOptions)
+                : channel.subscribe(handlerOrOptions);
+              return sub;
+            },
+            sendMessage: async (channelId, message, convId) => {
+              await api.agentStream(message, convId ?? undefined, channelId);
+            },
+            resume: async (channelId, responses, convId) => {
+              await api.agentResume(
+                channelId,
+                responses.map(r => ({ interruptId: r.interruptId, approved: r.approved ?? false })),
+                convId ?? undefined,
+              );
+            },
+          }),
+          api: {
+            createConversation: async () => ({ conversationId }),
+            getConversation: async (id) => await api.agentGetConversation(id),
+            getPendingInterrupts: async (id) => await api.agentGetPendingInterrupts(id),
+          },
+          onMessagesChange: (m) => {
+            // Replace in place so the outer reference always reflects the latest render.
+            messages.length = 0;
+            for (const x of m) messages.push({ role: x.role, content: x.content });
+          },
+        });
+
+        try {
+          await chat.loadConversation(conversationId);
+          await chat.sendMessage('Say hello');
+
+          // Wait until the turn has started (loading true) so the drop is genuinely mid-turn.
+          // Poll chat.isLoading() directly — TS narrows the method's boolean return.
+          const startDeadline = Date.now() + 30_000;
+          while (!chat.isLoading()) {
+            if (Date.now() > startDeadline) throw new Error('turn did not start (loading never became true) within 30s');
+            await new Promise((r) => setTimeout(r, 100));
+          }
+
+          // Force a mid-turn transport drop; the transport transparently reconnects and
+          // resubscribes, and createChat re-syncs the final assistant text from getConversation
+          // (or a live done chunk resolves it on the resubscribed channel).
+          sub?.connection?.close();
+
+          // The spinner MUST clear (via a live done chunk on the resubscribed channel, or the
+          // reconnect re-sync from the DB) — this is the stuck-spinner failure the PR fixes.
+          const clearDeadline = Date.now() + 90_000;
+          while (chat.isLoading()) {
+            if (Date.now() > clearDeadline) throw new Error('loading did not clear within 90s after the mid-turn drop');
+            await new Promise((r) => setTimeout(r, 250));
+          }
+          assert.strictEqual(chat.isLoading(), false, 'loading cleared after the mid-turn reconnect');
+
+          // The final assistant text is present and non-empty (recovered live or from the DB).
+          const assistant = messages.find((m) => m.role === 'assistant');
+          assert.ok(assistant, 'an assistant message should exist after the turn');
+          assert.ok(assistant!.content.length > 0, 'final assistant text is recovered, not left empty');
+          // The persisted conversation agrees (source of truth).
+          const { messages: persisted } = await api.agentGetConversation(conversationId);
+          assert.ok(
+            persisted.some((m) => m.role === 'assistant' && m.content.length > 0),
+            'the recovered assistant text is backed by the persisted conversation',
+          );
+        } finally {
+          chat.destroy();
+        }
       });
     });
   });

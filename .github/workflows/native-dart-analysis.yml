@@ -2,7 +2,8 @@ name: Native Dart Analysis
 
 # Static analysis for the native Dart SDK packages: format check, analyzer,
 # unit tests, and a pub.dev package score report. Path-filtered at the trigger
-# so it only runs for PRs that touch native/dart/packages/.
+# so it only runs for PRs that touch native/dart/packages/ or the shared
+# codegen fixtures its golden tests consume.
 #
 # No AWS / secrets needed — these run the same on fork PRs.
 
@@ -10,6 +11,7 @@ on:
   pull_request:
     paths:
       - 'native/dart/packages/**'
+      - 'native/codegen-fixtures/**'
       - '.github/workflows/native-dart-analysis.yml'
   workflow_dispatch:
 
@@ -64,14 +66,17 @@ jobs:
             working-directory: native/dart/packages/blocks_runtime
             tool: dart
             runtime-override: false
+            web-tests: true
           - package-name: blocks_codegen
             working-directory: native/dart/packages/blocks_codegen
             tool: dart
             runtime-override: true
+            web-tests: false
           - package-name: blocks_runtime_flutter
             working-directory: native/dart/packages/blocks_runtime_flutter
             tool: flutter
             runtime-override: true
+            web-tests: false
     steps:
       - uses: actions/checkout@v7
         with:
@@ -133,6 +138,13 @@ jobs:
       - name: Run tests
         working-directory: ${{ matrix.working-directory }}
         run: ${{ matrix.tool }} test
+
+      # Blocking. The web variants are selected by conditional import, so they
+      # only run on a browser platform. Chrome ships on the runner.
+      - name: Run web tests
+        if: matrix.web-tests && matrix.sdk == 'stable'
+        working-directory: ${{ matrix.working-directory }}
+        run: dart test -p chrome
 
       # Report-only: prints the pub.dev package score and uploads the report.
       - name: Package score

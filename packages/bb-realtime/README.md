@@ -47,7 +47,7 @@ The `Realtime` instance exposes three methods, all keyed by namespace name (type
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `subscribe(handler)` | `RealtimeSubscription` | Listen for messages (simple form). |
-| `subscribe({ onMessage, onDisconnect?, onReconnect? })` | `RealtimeSubscription` | Listen for messages with disconnect + reconnect handling. |
+| `subscribe({ onMessage, onDisconnect?, onReconnect?, refresh? })` | `RealtimeSubscription` | Listen for messages with disconnect + reconnect handling (and optional token re-minting on reconnect via `refresh`). |
 | `toJSON()` | `RealtimeChannelDescriptor` | Transferable serialization (called automatically by JSON.stringify). |
 
 Channel handles do **not** have a `publish()` method. Publishing always goes through `rt.publish()` (server-side) so that authorization logic stays in your code.
@@ -188,15 +188,41 @@ const sub = channel.subscribe({
 `'client'`), and on every subsequent drop of the same logical subscription.
 
 If a resubscribe is ultimately rejected (a stored token that has passed its ~1h/~2h TTL, or a
-revoked channel) or retries are exhausted, the transport surfaces it as `onDisconnect('error')`
-— that is the fallback point to re-fetch the channel and re-subscribe manually.
+revoked channel) or retries are exhausted, the transport surfaces it as `onDisconnect('error')`.
+Without a `refresh` callback (below), that is the fallback point to re-fetch the channel and
+re-subscribe manually.
 
-> **Transparent reconnect spans the connect token's ~2h life.** The reconnect replays the
-> *stored* connect token (~2h TTL, matching API Gateway's 2h max connection). Past 2h the
-> `$connect` handshake is rejected and reconnect gives up with a terminal `onDisconnect('error')`,
-> so drops are recovered transparently only within that ~2h window. This is a known limitation:
-> a subscription that must outlive 2h should treat the terminal `onDisconnect('error')` as the
-> cue to re-fetch a fresh channel handle (new tokens) and re-subscribe.
+#### Outliving the token TTLs with `refresh`
+
+To keep a subscription alive past the token TTLs **without** hand-rolling re-subscription, pass
+a `refresh` callback:
+
+```typescript
+const sub = channel.subscribe({
+  onMessage: (msg) => { console.log(msg); },
+  // Called before EACH reconnect to re-mint a fresh descriptor (new connect + channel
+  // token), so the subscription outlives the channel (~1h) / connect (~2h) token TTLs.
+  // Return the RAW descriptor (the wire object with `__blocks`/token fields), e.g. your
+  // server's `channel.toJSON()` with `__blocks` stripped, then re-add the discriminant.
+  refresh: async () => ({ ...(await fetchFreshDescriptor()), __blocks: 'realtime/channel' }),
+});
+```
+
+`refresh: () => Promise<RealtimeChannelDescriptor>` is invoked before the socket is reopened on
+each reconnect; the fresh connect token builds the new socket URL and the fresh channel token is
+replayed on resubscribe, so a drop crossing the ~1h/~2h boundary recovers transparently instead
+of giving up. Each channel multiplexed on the connection re-mints its own token in parallel; a
+`refresh` that rejects (or exceeds an internal timeout) falls back to the stored token, and only
+an all-channels-failed outcome surfaces `onDisconnect('error')`. The server method behind
+`refresh` re-issues a channel token, so it must apply the same authorization as the method that
+issued the original channel.
+
+> **Reconnect without `refresh` spans only the connect token's ~2h life.** With no `refresh`,
+> the reconnect replays the *stored* connect token (~2h TTL, matching API Gateway's 2h max
+> connection); past 2h the `$connect` handshake is rejected and reconnect gives up with a
+> terminal `onDisconnect('error')`. Provide `refresh` (above) to re-mint fresh tokens on each
+> reconnect and outlive that window; otherwise treat the terminal `onDisconnect('error')` as the
+> cue to re-fetch a fresh channel handle and re-subscribe manually.
 
 ## Schema Validation
 
@@ -231,7 +257,7 @@ RealtimeErrors.ConnectionFailed  // WebSocket connection or subscribe rejected
 - **Subscribe before you publish.** Realtime is fire-and-forget with no message buffering (local dev and AWS alike): a subscriber only receives messages published *after* its subscription registers (await `sub.established`). If a server-side publisher (e.g. an AsyncJob or Agent stream) may fire before the client subscribes, the client must subscribe first, then trigger the publisher, and backfill any earlier messages from a durable source (DB/history).
 - **Publish through the API**, not the channel handle — keeps authorization logic in one place.
 - **Use channels for dynamic scoping** — `room-123`, `user-456`, `game-abc`. One namespace, many channels.
-- **Keep payloads small** — large messages increase latency and cost. Max 32 KB per published message (including wire envelope).
+- **Keep payloads small** — large messages increase latency and cost. Max 128 KiB (131,072 bytes) per published message (including wire envelope).
 - **One `Realtime` instance per domain** — use multiple namespaces within it for different message types (cursors, chat, presence).
 - **Unsubscribe when done** — especially in components that mount/unmount. Leaked subscriptions hold the WebSocket open.
 - **Delivery is best-effort** — `publish()` sends to all connected subscribers in parallel. If delivery to an individual connection fails, the failure is logged and the rest continue. Stale connections are cleaned up automatically. This is similar to UDP: fire-and-forget per connection.
@@ -299,8 +325,8 @@ The AWS SDK retries throttled requests automatically (3 retries with exponential
 | Limit | Value | Enforced | Notes |
 |---|---|---|---|
 | Channel path (full) | 1024 bytes | Yes — both local and AWS | DynamoDB sort key limit. Includes `{fullId}/{namespace}/` prefix. |
-| Message size (published) | 32 KB | Yes — both local and AWS | API Gateway WebSocket frame limit. Includes wire envelope. |
-| Max connection duration | 2 hours | No — API Gateway hard limit | Use `onDisconnect` to handle |
+| Message size (published) | 128 KiB (131,072 bytes) | Yes — both local and AWS | API Gateway WebSocket *logical message* limit (frames are reassembled; the 32 KB quota is a per-frame limit, not a per-message one). Includes wire envelope. |
+| Max connection duration | 2 hours | No — API Gateway hard limit | Transparent reconnect; use `refresh` to outlive it |
 | Idle timeout | 10 minutes | No — API Gateway hard limit | Client middleware sends keep-alive pings |
 | Account-level API TPS | 10,000/sec | No — API Gateway hard limit | Shared across all API Gateway usage; raisable |
 | New connections | 500/sec | No — API Gateway hard limit | Per account per region; raisable |
@@ -322,7 +348,7 @@ Channel names are scoped by the Realtime instance and namespace: `{fullId}/{name
 
 **Hard limits:**
 - The full channel path (including `{fullId}/{namespace}/` prefix) must fit within a DynamoDB sort key (1024 bytes). This is enforced at runtime in both local dev and AWS — exceeding it throws `ValidationFailedException`.
-- Published messages (including the wire envelope with channel path) must fit within a single API Gateway WebSocket frame (32 KB). This is also enforced at runtime in both environments.
+- Published messages (including the wire envelope with channel path) must fit within API Gateway's 128 KiB logical WebSocket message limit. API Gateway's separate 32 KB quota is a *frame* limit — the service reassembles fragmented frames, so it is not the per-message cap. This is enforced at runtime in both environments.
 - There is no enforced character limit on the user-facing channel name, but excessively long names increase DynamoDB item sizes (affecting read/write costs) and WebSocket message sizes (affecting delivery latency and billing, since messages are metered in 32 KB increments).
 
 The previous AppSync Events implementation had a 5-segment × 50-character channel name limit. That restriction no longer applies.

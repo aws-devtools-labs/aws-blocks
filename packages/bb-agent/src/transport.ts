@@ -17,7 +17,17 @@
  * observer-only attach, and decoupled produce/consume.
  */
 
+import type { DisconnectReason, RealtimeChannelDescriptor } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk, InterruptResponse } from './types.js';
+
+/**
+ * The wire format an app's `subscribe` adapter hands to `channel.subscribe(...)` to
+ * hydrate a live channel. Re-exported from `@aws-blocks/bb-realtime` so transport
+ * consumers (and `createChat` users typing a `refresh` return) can name it without a
+ * second import, and so a `refresh` typed against it is the exact type bb-realtime's
+ * `SubscribeOptions.refresh` expects.
+ */
+export type { RealtimeChannelDescriptor };
 
 /**
  * A request to run one turn on the backend.
@@ -65,7 +75,24 @@ export interface ChatTransport {
 	 * not run a turn — call `run` (or let `createChat.sendMessage` fuse the two).
 	 * `observer: true` is a hint that this consumer only watches (never drives).
 	 */
-	subscribe(channelId: string, opts?: { observer?: boolean }): ChunkStream;
+	subscribe(
+		channelId: string,
+		opts?: {
+			observer?: boolean;
+			/** Called after the transport transparently reconnects and this channel's resubscribe is re-confirmed. */
+			onReconnect?: () => void;
+			/** Called when the channel's connection is lost ('error' for a drop/reject, 'client' on our own unsubscribe). */
+			onDisconnect?: (reason: DisconnectReason) => void;
+			/**
+			 * Called before EACH reconnect to re-mint a fresh channel descriptor (new connect +
+			 * channel token) so the subscription outlives the token TTLs (channel ~1h / connect
+			 * ~2h). A pure pass-through: the transport forwards it into the Realtime channel's
+			 * subscribe options and the channel invokes it — the transport holds no refresh state.
+			 * Omit it and a reconnect replays the original tokens (fine for short turns).
+			 */
+			refresh?: () => Promise<RealtimeChannelDescriptor>;
+		},
+	): ChunkStream;
 	/**
 	 * Run a turn. Produces chunks on `turn.channelId`; it does NOT return them —
 	 * they flow to whoever is subscribed. Resolves once the turn is accepted.
@@ -127,9 +154,20 @@ const TERMINAL_TYPES: ReadonlySet<AgentStreamChunk['type']> = new Set(['done', '
  * @example
  * ```typescript
  * const transport = realtimeTransport({
- *   subscribe: async (channelId, handler) => {
+ *   subscribe: async (channelId, handlerOrOptions) => {
  *     const { channel } = await api.agentGetChannel(channelId);
- *     return channel.subscribe(handler);
+ *     // channel.subscribe is overloaded (bare handler | { onMessage, onReconnect,
+ *     // onDisconnect, refresh } options object). Branch on the shape so the options form
+ *     // reaches the channel intact — reconnect re-sync only wires up when it does, and the
+ *     // channel calls the forwarded `refresh` to re-mint tokens so long turns outlive the
+ *     // channel (~1h) / connect (~2h) TTLs — so DON'T unwrap it to a bare handler.
+ *     // NOTE: both arms pass the SAME value (`handlerOrOptions`) — the branch is NOT a
+ *     // transform, it exists ONLY to pick a distinct overload. The union arg matches
+ *     // NEITHER overload, so a single direct `channel.subscribe(handlerOrOptions)` does
+ *     // not type-check; narrowing via `typeof` first is required.
+ *     return typeof handlerOrOptions === 'function'
+ *       ? channel.subscribe(handlerOrOptions)
+ *       : channel.subscribe(handlerOrOptions);
  *   },
  *   sendMessage: (channelId, message, conversationId) =>
  *     api.agentStream(message, conversationId ?? undefined, channelId),
@@ -144,7 +182,14 @@ export function realtimeTransport(io: {
 	/** Subscribe to a Realtime channel; return the subscription handle (unsubscribe + established). */
 	subscribe: (
 		channelId: string,
-		handler: (chunk: AgentStreamChunk) => void,
+		handlerOrOptions:
+			| ((chunk: AgentStreamChunk) => void)
+			| {
+					onMessage: (chunk: AgentStreamChunk) => void;
+					onDisconnect?: (reason: DisconnectReason) => void;
+					onReconnect?: () => void;
+					refresh?: () => Promise<RealtimeChannelDescriptor>;
+			  },
 	) => Promise<{ unsubscribe(): void; established: Promise<void> }>;
 	/** Start a new turn — submits the backend job that publishes chunks to `channelId`. */
 	sendMessage: (channelId: string, message: string, conversationId: string | null) => Promise<void>;
@@ -154,20 +199,48 @@ export function realtimeTransport(io: {
 	return {
 		// `opts.observer` is part of the seam but advisory here: a Realtime channel
 		// handle is subscribe-only, so there's no delivery difference to apply.
-		subscribe(channelId: string, _opts?: { observer?: boolean }): ChunkStream {
+		subscribe(
+			channelId: string,
+			opts?: {
+				observer?: boolean;
+				onReconnect?: () => void;
+				onDisconnect?: (reason: DisconnectReason) => void;
+				refresh?: () => Promise<RealtimeChannelDescriptor>;
+			},
+		): ChunkStream {
 			const q = new ChunkQueue();
 			let unsub: (() => void) | null = null;
 			// If unsubscribe() is called before io.subscribe resolves, `unsub` isn't set
 			// yet — record the intent and detach on resolve so the subscription can't leak.
 			let unsubscribed = false;
 
+			// The push handler feeds the queue; it is `onMessage` in either shape.
+			const onMessage = (chunk: AgentStreamChunk) => {
+				q.push(chunk);
+				if (TERMINAL_TYPES.has(chunk.type)) q.close();
+			};
+
+			// When the caller wants reconnect/disconnect signals, or supplies a `refresh` to
+			// re-mint tokens on reconnect, forward a PLAIN options object (NOT a callable-with-
+			// props): the hydrated bb-realtime channel resolves `typeof handlerOrOptions ===
+			// 'function'` FIRST, so a hybrid callable would be treated as a bare handler and its
+			// onReconnect/onDisconnect/refresh silently dropped. `refresh` is a pure pass-through
+			// — the channel invokes it before each reconnect; the transport keeps no state.
+			// With no such opts, pass the bare handler so the simple path is unchanged.
+			const subscribeArg =
+				opts?.onReconnect || opts?.onDisconnect || opts?.refresh
+					? {
+							onMessage,
+							onReconnect: opts?.onReconnect,
+							onDisconnect: opts?.onDisconnect,
+							refresh: opts?.refresh,
+						}
+					: onMessage;
+
 			// Attach immediately so chunks published after this point are captured;
 			// `established` surfaces the subscription-confirmed signal to the caller.
 			const established = io
-				.subscribe(channelId, (chunk) => {
-					q.push(chunk);
-					if (TERMINAL_TYPES.has(chunk.type)) q.close();
-				})
+				.subscribe(channelId, subscribeArg)
 				.then((sub) => {
 					if (unsubscribed) {
 						// unsubscribe() was called during the attach window — detach now.

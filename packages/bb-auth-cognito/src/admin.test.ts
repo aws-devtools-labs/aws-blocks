@@ -90,6 +90,63 @@ describe('auth.admin group membership', () => {
 		assert.strictEqual(user.username, 'alice');
 	});
 
+	test('addUserToGroup takes effect on an already-signed-in session (live membership)', async () => {
+		const auth = new AuthCognito(ROOT, unique(), { groups: ['admins'], admin: {} });
+		await signUpAndConfirm(auth, 'liam');
+
+		// User signs in BEFORE being granted admin — their session token carries no groups.
+		const ctx = freshContext();
+		await auth.signIn('liam', 'Password!1', ctx);
+		await assert.rejects(
+			() => auth.requireRole(ctx, 'admins'),
+			(e: unknown) => isBlocksError(e, AuthCognitoErrors.NotAuthorized),
+			'a non-member must be 403 before the grant',
+		);
+
+		// Admin grants membership after the session already exists.
+		await auth.admin.addUserToGroup('liam', 'admins');
+
+		// requireRole must reflect the new membership without a re-login.
+		const user = await auth.requireRole(ctx, 'admins');
+		assert.strictEqual(user.username, 'liam');
+		assert.ok(user.groups.includes('admins'), 'returned user.groups reflects live membership');
+	});
+
+	test('removeUserFromGroup revokes access on an already-signed-in session (live)', async () => {
+		const auth = new AuthCognito(ROOT, unique(), { groups: ['admins'], admin: {} });
+		await signUpAndConfirm(auth, 'mia');
+		await auth.admin.addUserToGroup('mia', 'admins');
+
+		const ctx = freshContext();
+		await auth.signIn('mia', 'Password!1', ctx);
+		assert.strictEqual((await auth.requireRole(ctx, 'admins')).username, 'mia');
+
+		// Revoking membership must lock the live session out immediately — not
+		// linger until the stale token expires.
+		await auth.admin.removeUserFromGroup('mia', 'admins');
+		await assert.rejects(
+			() => auth.requireRole(ctx, 'admins'),
+			(e: unknown) => isBlocksError(e, AuthCognitoErrors.NotAuthorized),
+		);
+	});
+
+	test('requireRole narrows returned groups to the declared set (matches AWS filter)', async () => {
+		const auth = new AuthCognito(ROOT, unique(), { groups: ['admins'], admin: {} });
+		await signUpAndConfirm(auth, 'nate');
+		await auth.admin.addUserToGroup('nate', 'admins');
+
+		// Simulate a stale `.bb-data` blob: a membership key that outlived its
+		// removal from `options.groups` (loadState rehydrates raw.groups as-is).
+		// It must NOT leak into the returned `groups` — `CognitoUser<O>.groups`
+		// promises the declared union, and the AWS path filters it out.
+		(auth as unknown as { state: { groups: Record<string, string[]> } }).state.groups.legacy = ['nate'];
+
+		const ctx = freshContext();
+		await auth.signIn('nate', 'Password!1', ctx);
+		const user = await auth.requireRole(ctx, 'admins');
+		assert.deepStrictEqual(user.groups, ['admins'], 'undeclared stale group must be filtered from the returned list');
+	});
+
 	test('addUserToGroup to an unseeded group throws GroupNotFound', async () => {
 		const auth = new AuthCognito(ROOT, unique(), { groups: ['admins'], admin: {} });
 		await signUpAndConfirm(auth, 'bob');

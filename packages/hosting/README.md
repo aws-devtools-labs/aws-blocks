@@ -345,6 +345,47 @@ new HostingConstruct(stack, 'Hosting', {
 });
 ```
 
+## SSR caching & cache-key credentials
+
+`cdn.ssrDefaultTtl` enables CloudFront edge caching of SSR responses that carry
+no explicit `Cache-Control` header. Those responses are then shared at the edge,
+and the SSR cache key does **not** include `Authorization` or session cookies by
+default — so one cached entry would answer requests regardless of their
+credentials. Set `cdn.cacheKeyCookies` (your session cookie name(s)) and/or
+`cdn.cacheKeyHeaders` (e.g. `'authorization'`) so cached responses are keyed per
+credential. Synth **fails closed**: if `ssrDefaultTtl` resolves to `> 0` and
+neither is set, synthesis throws.
+
+```ts
+new HostingConstruct(stack, 'Hosting', {
+  manifest,
+  cdn: {
+    ssrDefaultTtl: Duration.seconds(60),
+    cacheKeyCookies: ['session'], // your session cookie name(s)
+  },
+});
+```
+
+The guard covers only `ssrDefaultTtl`. Routes made cacheable by the origin
+emitting `s-maxage`/`revalidate` (Next.js `revalidate`, Nuxt `routeRules`,
+Astro SSR) are not seen by synth, so those routes must set the cache-key options
+themselves or emit `Cache-Control: private`. Any route that sets cookies or
+otherwise varies per user should emit `Cache-Control: private`.
+
+CloudFront caps the cache key at 10 cookies and 10 headers; reserved slots leave
+**8 cookies** and **5 headers** for callers. `accept-encoding` is handled
+automatically and is not allowed in `cacheKeyHeaders`.
+
+On a compute deploy every request is routed through a single default cache
+behavior, so `cacheKeyCookies`/`cacheKeyHeaders` affect the cache key for **all**
+routes on that behavior. To keep shared assets from being keyed per credential,
+the edge router deletes the configured cache-key cookies and headers on static
+and image routes before origin selection — those routes compute a shared cache
+key, while SSR/compute routes keep the credentials and stay keyed per credential.
+Because the router deletes them at viewer-request, those cookies and headers are
+also not forwarded to the origin on static and image routes (e.g. an auth-gated
+image source would not receive them).
+
 ## Custom domains
 
 Configure a custom domain through the `domain` prop on `HostingConstruct`
