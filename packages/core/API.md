@@ -74,12 +74,6 @@ export interface BuildingBlockMeta {
 export function clearRouteRegistry(): void;
 
 // @public
-export interface ComputeHandle {
-    // @internal
-    readonly __blocksCompute?: never;
-}
-
-// @public
 export type ComputeOptions = ({
     type: 'serverless';
 } & ServerlessComputeOptions) | ({

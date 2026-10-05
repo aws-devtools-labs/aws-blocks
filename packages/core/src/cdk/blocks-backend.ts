@@ -9,7 +9,7 @@ import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
-import type { Compute } from './compute/compute.js';
+import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
@@ -217,7 +217,7 @@ export class BlocksBackend extends Construct {
 	/** Infrastructure defaults for Building Blocks created under this backend. */
 	public readonly defaults: BlocksDefaults;
 	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
-	_defaultCompute?: Compute;
+	_defaultCompute?: ComputeBase;
 
 	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
 	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {

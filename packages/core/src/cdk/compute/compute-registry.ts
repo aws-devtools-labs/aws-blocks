@@ -3,7 +3,7 @@
 
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import type { Compute } from './compute.js';
+import type { ComputeBase } from './compute.js';
 
 const REGISTRY_KEY = Symbol.for('BLOCKS_COMPUTE_REGISTRY');
 
@@ -13,8 +13,8 @@ const REGISTRY_KEY = Symbol.for('BLOCKS_COMPUTE_REGISTRY');
  * its own — a compute never leaks into another stack's list. Mirrors the config
  * registry (`config-registry.ts`), which scopes its state the same way.
  */
-function getRegistry(stack: cdk.Stack): Compute[] {
-	let list = (stack as any)[REGISTRY_KEY] as Compute[] | undefined;
+function getRegistry(stack: cdk.Stack): ComputeBase[] {
+	let list = (stack as any)[REGISTRY_KEY] as ComputeBase[] | undefined;
 	if (!list) {
 		list = [];
 		(stack as any)[REGISTRY_KEY] = list;
@@ -30,7 +30,7 @@ function getRegistry(stack: cdk.Stack): Compute[] {
  *
  * @param compute - The compute to register (used to locate its stack).
  */
-export function registerCompute(compute: Compute): void {
+export function registerCompute(compute: ComputeBase): void {
 	getRegistry(cdk.Stack.of(compute)).push(compute);
 }
 
@@ -40,6 +40,6 @@ export function registerCompute(compute: Compute): void {
  *
  * @param scope - Any construct in the stack (used to locate the stack).
  */
-export function getComputes(scope: Construct): readonly Compute[] {
+export function getComputes(scope: Construct): readonly ComputeBase[] {
 	return getRegistry(cdk.Stack.of(scope));
 }

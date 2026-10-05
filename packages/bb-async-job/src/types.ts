@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import type { ComputeHandle } from '@aws-blocks/core';
+import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
 /**
@@ -62,28 +62,18 @@ export interface AsyncJobOptions<T> {
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 	/**
-	 * The compute this job's handler runs on. Pass a `Compute` block to place the
-	 * handler on a different runtime than the app default — e.g. a long-running or
-	 * high-memory job that a container (Fargate) can serve but Lambda cannot.
-	 *
-	 * When omitted, the job runs on the app's default compute (Lambda), exactly as
-	 * today. Assigning a container-backed `Compute` moves delivery from a native
-	 * SQS→Lambda event source to an owner-matched poller the container self-starts;
-	 * the per-handler wall-clock limit comes from the compute's `timeoutSeconds`.
-	 * In local dev, compute assignment is transparent — the handler runs in-process
-	 * regardless.
-	/**
-	 * The compute this job's handler runs on. Pass a `Compute` block to place the
-	 * handler on a different runtime than the app default — e.g. a long-running or
-	 * high-memory job that a container (Fargate) can serve but a serverless compute
-	 * cannot.
+	 * The compute this job's handler runs on. Pass a `Compute` block (or any
+	 * {@link ComputeProvider}) to place the handler on a different runtime than the
+	 * app default — e.g. a long-running or high-memory job that a container
+	 * (Fargate) can serve but a serverless compute cannot.
 	 *
 	 * When omitted, the job runs on the app's default (serverless) compute, exactly
-	 * as today. Assigning a container-backed `Compute` moves delivery from a native
-	 * SQS event source to an owner-matched poller the container self-starts. In
+	 * as today. Assigning a container-backed compute moves delivery from a native
+	 * SQS event source to an owner-matched poller the container self-starts; the
+	 * per-handler wall-clock limit comes from the compute's `timeoutSeconds`. In
 	 * local dev, compute assignment is transparent — the handler runs in-process.
 	 */
-	compute?: ComputeHandle;
+	compute?: ComputeProvider;
 
 	/**
 	 * Wall-clock limit for one delivery, in seconds. A property of the work, not

@@ -15,7 +15,9 @@
  * const jobs = new AsyncJob(scope, 'jobs', { compute: worker, handler });
  * ```
  */
-import type { ComputeHandle, ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-blocks/core';
+import type { ComputeBase, ComputeProvider } from '@aws-blocks/core/cdk/internal';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
 import type { ComputeProps } from './types.js';
@@ -23,41 +25,45 @@ import type { ComputeProps } from './types.js';
 export type { ComputeProps } from './types.js';
 
 /**
- * A compute defined by an explicit `type`. Constructing one returns the concrete,
- * `Scope`-backed backing compute (`LambdaCompute` for `serverless`,
- * `ContainerCompute` for `container`) — the value a customer holds and hands to
- * `{ compute }` is the real, branded compute the framework recognizes. `Compute`
- * is therefore a thin selector on `type`, not a wrapper.
+ * A compute defined by an explicit `type`. `Compute` is a Building Block that
+ * **owns** the concrete backing compute (`LambdaCompute` for `serverless`,
+ * `ContainerCompute` for `container`) and exposes it via {@link compute}, so it
+ * satisfies {@link ComputeProvider} — a workload given a `Compute` resolves
+ * `.compute` to the real, branded backing the framework wires against. The
+ * customer reaches for `Compute`; the backing types are internal.
  *
- * The static return type is {@link ComputeHandle} (the opaque public handle) so
- * customer code treats it as "a compute" without depending on the backing class.
+ * Composition (not inheritance): `Compute` is its own `BuildingBlockScope` node
+ * and the backing is a child it constructs. Only the backing registers as a
+ * compute, so the compute census and finalize steps see exactly one compute per
+ * `Compute`.
  */
-export class Compute {
+export class Compute extends BuildingBlockScope implements ComputeProvider {
+	readonly #backing: ComputeBase;
+
 	constructor(scope: ScopeParent, id: string, props: ComputeProps) {
+		super(id, { parent: scope, vpc: {} });
 		const { logRetention } = props;
-		// A JS constructor may return an object, which becomes the result of `new`.
-		// Return the concrete Scope-backed compute so the customer holds the real,
-		// branded instance the framework's delivery + finalize logic recognizes.
-		if (props.type === 'container') {
-			// biome-ignore lint/correctness/noConstructorReturn: intentional selector — see class docs.
-			return new ContainerCompute(scope, id, {
-				size: props.size,
-				scaling: props.scaling,
-				image: props.image,
-				logRetention,
-			}) as unknown as Compute;
-		}
-		// biome-ignore lint/correctness/noConstructorReturn: intentional selector — see class docs.
-		return new LambdaCompute(scope, id, {
-			memory: props.memory,
-			maxTimeoutSeconds: props.maxTimeoutSeconds,
-			logRetention,
-		}) as unknown as Compute;
+		this.#backing =
+			props.type === 'container'
+				? new ContainerCompute(this, 'backing', {
+						size: props.size,
+						scaling: props.scaling,
+						image: props.image,
+						logRetention,
+					})
+				: new LambdaCompute(this, 'backing', {
+						memory: props.memory,
+						maxTimeoutSeconds: props.maxTimeoutSeconds,
+						logRetention,
+					});
+	}
+
+	/**
+	 * The concrete backing compute this block owns — the value a workload wires
+	 * against. Satisfies {@link ComputeProvider}, interchangeable with a raw
+	 * backing (which provides itself).
+	 */
+	get compute(): ComputeBase {
+		return this.#backing;
 	}
 }
-
-/**
- * The type of a constructed {@link Compute} as customers hold it — an opaque
- * {@link ComputeHandle}. The runtime value is the concrete backing compute.
- */
-export type ComputeInstance = ComputeHandle;

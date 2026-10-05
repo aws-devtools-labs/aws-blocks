@@ -83,12 +83,13 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
 
 		// Assign the requested compute (if any) before anything reads `this.compute`
-		// below. `_compute` is the framework's internal per-scope assignment slot;
-		// the public option is typed as the opaque ComputeHandle, so the cast to the
-		// concrete Compute is framework plumbing (the value is always a real Compute
-		// under --conditions=cdk).
+		// below. The public option is a `ComputeProvider` — either the `Compute`
+		// block or a concrete backing — and `.compute` resolves it to the concrete
+		// `ComputeBase` the framework wires against (a backing provides itself; the
+		// `Compute` block provides the backing it owns). No cast: the option type
+		// and the `_compute` slot are both `ComputeBase`.
 		if (options.compute) {
-			this._compute = options.compute as unknown as NonNullable<typeof this._compute>;
+			this._compute = options.compute.compute;
 		}
 
 		const maxRetries = options.maxRetries ?? 3;

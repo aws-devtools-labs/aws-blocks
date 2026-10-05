@@ -14,7 +14,7 @@ import {
 } from '../common/index.js';
 import { assertCdkConditionActive, BlocksBackend, setupBlocksInfra } from './blocks-backend.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
-import type { Compute } from './compute/compute.js';
+import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry } from './config-registry.js';
@@ -79,7 +79,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	/** Infrastructure defaults for Building Blocks created under this stack. */
 	public readonly defaults: BlocksDefaults;
 	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
-	_defaultCompute?: Compute;
+	_defaultCompute?: ComputeBase;
 
 	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
 	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
@@ -238,7 +238,7 @@ export class Scope extends Construct {
 	 * the customer-facing surface exists.
 	 * @internal
 	 */
-	_compute?: Compute;
+	_compute?: ComputeBase;
 
 	constructor(id: string, options?: ScopeOptions) {
 		const parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK;
@@ -289,7 +289,7 @@ export class Scope extends Construct {
 	 * (test/framework) until the customer-facing surface exists; there is no
 	 * public option to set it yet.
 	 */
-	get compute(): Compute {
+	get compute(): ComputeBase {
 		for (let current: ScopeParent | undefined = this; current; current = (current as Scope).parent) {
 			const assigned = (current as Scope)._compute;
 			if (assigned) return assigned;
@@ -313,7 +313,7 @@ export class Scope extends Construct {
 	 *
 	 * @internal Not a customer surface; for framework/BB singleton infra only.
 	 */
-	get defaultCompute(): Compute {
+	get defaultCompute(): ComputeBase {
 		const defaultCompute = this.root._defaultCompute;
 		if (!defaultCompute) {
 			throw new Error(

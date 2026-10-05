@@ -19,7 +19,6 @@ export {
 } from '@aws-blocks/hosting';
 export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
 export {
-	type ComputeHandle,
 	type ComputeOptions,
 	type ComputeType,
 	type ContainerComputeOptions,

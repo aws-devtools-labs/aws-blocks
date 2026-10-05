@@ -9,7 +9,7 @@ import {
 	ensureApiGatewayAccount,
 	getVpcContext,
 } from '@aws-blocks/core/cdk';
-import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
+import { BLOCKS_NAMESPACE, ComputeBase } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
@@ -44,7 +44,7 @@ const LAMBDA_COMPUTE_BRAND: unique symbol = Symbol.for('blocks:LambdaCompute');
  * @internal Not exported from the package's public entry point. Customers
  * cannot instantiate a compute until the customer-facing surface exists.
  */
-export class LambdaCompute extends Compute {
+export class LambdaCompute extends ComputeBase {
 	/**
 	 * Brand enabling cross-copy identification via {@link LambdaCompute.isLambdaCompute}.
 	 * @internal

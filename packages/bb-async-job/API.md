@@ -5,7 +5,7 @@
 ```ts
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { ComputeHandle } from '@aws-blocks/core';
+import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -49,7 +49,7 @@ export const AsyncJobErrors: {
 // @public
 export interface AsyncJobOptions<T> {
     batchSize?: number;
-    compute?: ComputeHandle;
+    compute?: ComputeProvider;
     handler: (payload: T, context: AsyncJobContext) => Promise<void>;
     logger?: ChildLogger;
     maxBatchingWindowSeconds?: number;

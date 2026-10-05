@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Verifies the generic `Compute` block returns the concrete, branded backing
- * compute for the stated `type` (not a wrapper) — so the framework's delivery
- * logic recognizes it.
+ * Verifies the generic `Compute` block owns the concrete, branded backing
+ * compute for the stated `type` and exposes it via `.compute` (the
+ * `ComputeProvider` contract) — so the framework's delivery logic resolves and
+ * recognizes it.
  *
  * Runs under `--conditions=cdk` so the compute packages resolve their CDK
  * entries (real constructs) rather than the mock stubs.
@@ -34,25 +35,26 @@ async function makeStack(): Promise<cdk.Stack> {
 }
 
 describe('Compute — explicit type selection', () => {
-	test("type: 'serverless' returns a LambdaCompute", async () => {
+	test("type: 'serverless' owns a LambdaCompute backing", async () => {
 		const stack = await makeStack();
 		const c = new Compute(stack as never, 'api', { type: 'serverless', memory: 512 });
-		assert.ok(LambdaCompute.isLambdaCompute(c), 'should be a LambdaCompute');
-		assert.ok(!ContainerCompute.isContainerCompute(c), 'should not be a ContainerCompute');
+		// `.compute` resolves to the branded backing the framework wires against.
+		assert.ok(LambdaCompute.isLambdaCompute(c.compute), 'backing should be a LambdaCompute');
+		assert.ok(!ContainerCompute.isContainerCompute(c.compute), 'backing should not be a ContainerCompute');
+		assert.strictEqual(c.compute.type, 'serverless');
 	});
 
-	test("type: 'container' returns a ContainerCompute", async () => {
+	test("type: 'container' owns a ContainerCompute backing", async () => {
 		const stack = await makeStack();
 		const c = new Compute(stack as never, 'worker', { type: 'container', size: { vcpu: 1, memory: 2048 } });
-		assert.ok(ContainerCompute.isContainerCompute(c), 'should be a ContainerCompute');
-		assert.ok(!LambdaCompute.isLambdaCompute(c), 'should not be a LambdaCompute');
+		assert.ok(ContainerCompute.isContainerCompute(c.compute), 'backing should be a ContainerCompute');
+		assert.ok(!LambdaCompute.isLambdaCompute(c.compute), 'backing should not be a LambdaCompute');
+		assert.strictEqual(c.compute.type, 'container');
 	});
 
-	test('container carries its vcpu for per-CPU concurrency math', async () => {
+	test('container backing carries its vcpu for per-CPU concurrency math', async () => {
 		const stack = await makeStack();
-		const c = new Compute(stack as never, 'worker2', { type: 'container', size: { vcpu: 2, memory: 4096 } }) as unknown as {
-			vcpu: number;
-		};
-		assert.strictEqual(c.vcpu, 2);
+		const c = new Compute(stack as never, 'worker2', { type: 'container', size: { vcpu: 2, memory: 4096 } });
+		assert.strictEqual(c.compute.vcpu, 2);
 	});
 });

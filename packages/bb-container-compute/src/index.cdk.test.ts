@@ -54,7 +54,7 @@ describe('ContainerCompute — Fargate in the shared VPC', () => {
 			scaling: { minInstances: 1, maxInstances: 5, strategy: { on: 'cpu', targetPercent: 65 } },
 		});
 		assert.ok(ContainerCompute.isContainerCompute(compute));
-		assert.strictEqual(compute.kind, 'container');
+		assert.strictEqual(compute.type, 'container');
 		assert.strictEqual(compute.vcpu, 0.5);
 
 		// Autoscaling is wired at finalize (after the backend import) so queue-depth

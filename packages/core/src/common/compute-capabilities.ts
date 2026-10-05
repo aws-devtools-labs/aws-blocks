@@ -120,18 +120,6 @@ export type ComputeOptions =
 	| ({ type: 'container' } & ContainerComputeOptions);
 
 /**
- * The public-facing handle for a compute a customer hands to a handler-bearing
- * block (e.g. `new AsyncJob(scope, id, { compute })`). Opaque: a Building Block
- * only passes it back to the framework, which resolves the concrete compute
- * internally. The CDK compute construct and the inert mock/browser stubs satisfy
- * this empty marker structurally, so a BB's options type can reference it
- * without importing CDK.
- */
-export interface ComputeHandle {
-	/** @internal Nominal brand — never populated; present only so the type is distinct. */
-	readonly __blocksCompute?: never;
-}
-
 /**
  * Per-instance concurrency for a job on a container: `maxConcurrencyPerCPU`
  * multiplied by the compute's vCPU count, rounded up, floored at one. A

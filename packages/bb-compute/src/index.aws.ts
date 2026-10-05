@@ -3,24 +3,32 @@
 
 /**
  * AWS-runtime entry for the generic `Compute` block. At runtime a compute is
- * inert (its infrastructure was created at synth), so this selects the inert
- * concrete handle by the explicit `type` — matching the CDK selector's
- * return-an-instance shape so a `{ compute }` reference resolves in both phases.
+ * inert (its infrastructure was created at synth), so this owns an inert backing
+ * selected by the explicit `type` and exposes it via `compute` — matching the
+ * CDK block's `ComputeProvider` shape so a `{ compute }` reference resolves in
+ * every phase.
  */
 import type { ScopeParent } from '@aws-blocks/core';
+import { Scope } from '@aws-blocks/core';
+import type { ComputeBase, ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
 import { ContainerCompute } from '@aws-blocks/bb-container-compute';
 import type { ComputeProps } from './types.js';
 
 export type { ComputeProps } from './types.js';
 
-export class Compute {
+export class Compute extends Scope implements ComputeProvider {
+	readonly #backing: Scope;
+
 	constructor(scope: ScopeParent, id: string, props: ComputeProps) {
-		if (props.type === 'container') {
-			// biome-ignore lint/correctness/noConstructorReturn: intentional selector.
-			return new ContainerCompute(scope, id) as unknown as Compute;
-		}
-		// biome-ignore lint/correctness/noConstructorReturn: intentional selector.
-		return new LambdaCompute(scope, id) as unknown as Compute;
+		super(id, { parent: scope });
+		this.#backing =
+			props.type === 'container'
+				? new ContainerCompute(this, 'backing')
+				: new LambdaCompute(this, 'backing');
+	}
+
+	get compute(): ComputeBase {
+		return this.#backing as unknown as ComputeBase;
 	}
 }

@@ -27,7 +27,6 @@
 // LambdaCompute in @aws-blocks/bb-lambda-compute) to build their API route tree.
 export { BLOCKS_NAMESPACE } from '../constants.js';
 export type {
-	ComputeHandle,
 	ComputeOptions,
 	ComputeType,
 	ContainerComputeOptions,
@@ -37,8 +36,8 @@ export type {
 	ServerlessComputeOptions,
 } from '../common/compute-capabilities.js';
 export { LAMBDA_MAX_TIMEOUT_SECONDS, resolvePerInstanceConcurrency } from '../common/compute-capabilities.js';
-export type { ComputeDashboardSection } from './compute/compute.js';
-export { Compute } from './compute/compute.js';
+export type { ComputeDashboardSection, ComputeProvider } from './compute/compute.js';
+export { ComputeBase } from './compute/compute.js';
 // Enumerate the computes registered on a stack — the Dashboard BB's default
 // compute selection resolves through this at finalize.
 export { getComputes } from './compute/compute-registry.js';

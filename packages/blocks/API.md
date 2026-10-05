@@ -58,7 +58,6 @@ import { CodeDeliveryFn } from '@aws-blocks/bb-auth-cognito';
 import { cognitoFederated } from '@aws-blocks/bb-auth-oidc';
 import { CognitoUser } from '@aws-blocks/bb-auth-cognito';
 import { Compute } from '@aws-blocks/bb-compute';
-import { ComputeHandle } from '@aws-blocks/core';
 import { ComputeOptions } from '@aws-blocks/core';
 import { ComputeProps } from '@aws-blocks/bb-compute';
 import { ComputeType } from '@aws-blocks/core';
@@ -301,8 +300,6 @@ export { cognitoFederated }
 export { CognitoUser }
 
 export { Compute }
-
-export { ComputeHandle }
 
 export { ComputeOptions }
 

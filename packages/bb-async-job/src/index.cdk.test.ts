@@ -30,7 +30,7 @@ import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { isBlocksError } from '@aws-blocks/core';
 import { BlocksPresets, BlocksStack, Scope } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
-import { Compute } from '@aws-blocks/core/cdk/internal';
+import { ComputeBase } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
@@ -39,7 +39,7 @@ import { AsyncJob, AsyncJobErrors } from './index.cdk.js';
 const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
 
 /** A non-Lambda compute, to exercise the "unsupported compute" synth guard. */
-class FakeCompute extends Compute {
+class FakeCompute extends ComputeBase {
 	setEnv(_key: string, _value: string): void {}
 	// Observability hooks are irrelevant here — stub them to satisfy Compute.
 	protected applyTracing(): void {}

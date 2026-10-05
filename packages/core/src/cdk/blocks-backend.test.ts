@@ -16,7 +16,7 @@ import type { ScopeParent } from '../common/index.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { BlocksPresets } from './blocks-defaults.js';
-import { Compute } from './compute/compute.js';
+import { ComputeBase } from './compute/compute.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 import { Scope } from './index.js';
 import { getVpcContext } from './vpc.js';
@@ -28,7 +28,7 @@ import { getVpcContext } from './vpc.js';
 // and synth-shape assertions have something real to resolve to. It is passed to
 // each create() via the internal `defaultComputeFactory` option (see
 // makeBackend), exactly as @aws-blocks/blocks injects LambdaCompute.
-class StubLambdaCompute extends Compute {
+class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
 	readonly apiGateway: apigateway.RestApi;
 	readonly apiUrl: string;

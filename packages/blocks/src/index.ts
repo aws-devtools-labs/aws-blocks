@@ -109,7 +109,6 @@ export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
  */
 export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
 export type {
-	ComputeHandle,
 	ComputeOptions,
 	ComputeType,
 	ContainerComputeOptions,

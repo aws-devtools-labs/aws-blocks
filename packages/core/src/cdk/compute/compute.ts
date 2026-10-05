@@ -25,12 +25,33 @@ import { registerCompute } from './compute-registry.js';
  * enabled explicitly via {@link enableTracing} — which the framework calls on
  * every compute when the app contains a `Tracer` (presence-gated).
  *
+/**
+ * Anything that can be handed to a workload's `compute` option: a concrete
+ * compute (which provides itself) or a Building Block that owns one (the public
+ * {@link Compute} block, whose `.compute` resolves to its backing). A consumer
+ * (`AsyncJob`, `CronJob`, scope-level assignment) depends on this one interface
+ * and reads `.compute` to get the concrete {@link ComputeBase} to wire against —
+ * so it never cares whether it was handed the public block or a raw backing.
+ */
+export interface ComputeProvider {
+	/**
+	 * The concrete compute to run on. A {@link ComputeBase} returns itself; a
+	 * wrapper block returns the backing compute it owns.
+	 */
+	readonly compute: ComputeBase;
+}
+
+/**
  * The abstract base lives in core (a framework primitive); concrete computes
  * live in their own packages (e.g. `LambdaCompute` in `@aws-blocks/bb-lambda-compute`).
  *
+ * A `ComputeBase` is itself a {@link ComputeProvider} that provides itself, so a
+ * raw backing is interchangeable with the public `Compute` block wherever a
+ * `ComputeProvider` is expected.
+ *
  * @internal Not exported from the package's public entry points.
  */
-export abstract class Compute extends Scope {
+export abstract class ComputeBase extends Scope implements ComputeProvider {
 	/**
 	 * API namespaces assigned to run on this compute — recorded so request
 	 * routing can map a namespace to the compute that hosts it. Currently
@@ -42,10 +63,22 @@ export abstract class Compute extends Scope {
 	 * The compute type — `'serverless'` (per-invocation function) or `'container'`
 	 * (long-running task). Set by the concrete subclass and read by delivery logic
 	 * that branches on the runtime model (e.g. AsyncJob wires a native SQS event
-	 * source on serverless but leaves a container to self-poll). Defaults to
-	 * `'serverless'` so a subclass that doesn't set it keeps today's behavior.
+	 * source on serverless but leaves a container to self-poll). Matches the
+	 * `type` discriminant customers state in `ComputeOptions`, so the name is
+	 * consistent from the public options through to the resolved instance.
+	 * Defaults to `'serverless'` so a subclass that doesn't set it keeps today's
+	 * behavior.
 	 */
-	readonly kind: ComputeType = 'serverless';
+	readonly type: ComputeType = 'serverless';
+
+	/**
+	 * A concrete compute provides itself — so a `ComputeBase` satisfies
+	 * {@link ComputeProvider} and can be passed anywhere a provider is accepted,
+	 * interchangeably with the public `Compute` block.
+	 */
+	get compute(): ComputeBase {
+		return this;
+	}
 
 	/**
 	 * The compute's vCPU count, when it has one (a container's `size.vcpu`). Read

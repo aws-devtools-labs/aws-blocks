@@ -29,7 +29,7 @@ import { join } from 'node:path';
 import type { ContainerScaling, ScalingSignal, ScopeParent } from '@aws-blocks/core';
 import { getConfigLocation } from '@aws-blocks/core/cdk';
 import {
-	Compute,
+	ComputeBase,
 	getOrCreateVpc,
 	getVpcContext,
 	initializeVpc,
@@ -72,15 +72,15 @@ const CONTAINER_PORT = 8080;
  * queue-depth autoscaling can sum them. Keyed per compute via a Symbol on the instance. */
 const OWNED_QUEUES: unique symbol = Symbol.for('blocks:ContainerOwnedQueues');
 
-export class ContainerCompute extends Compute {
+export class ContainerCompute extends ComputeBase {
 	/**
 	 * Brand enabling cross-copy identification via {@link ContainerCompute.isContainerCompute}.
 	 * @internal
 	 */
 	readonly [CONTAINER_COMPUTE_BRAND] = true;
 
-	/** Container compute is always container-kind (drives AsyncJob delivery branching). */
-	override readonly kind = 'container' as const;
+	/** Container compute is always container-type (drives AsyncJob delivery branching). */
+	override readonly type = 'container' as const;
 	/** This container's vCPU count (from `size`), read by AsyncJob for per-CPU concurrency math. */
 	override readonly vcpu: number;
 
