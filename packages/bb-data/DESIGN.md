@@ -88,15 +88,62 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 | Resource | Purpose |
 |----------|---------|
-| Aurora Serverless v2 cluster | PostgreSQL database |
+| Aurora Serverless v2 cluster | PostgreSQL database. Storage encryption at rest is **opt-in**: emitted (`storageEncrypted: true`) only when the `@aws-blocks/bb-data:encryptStorageByDefault` context flag is set (new `create-blocks-app` projects set it) or a `storageEncryptionKeyArn` is supplied; otherwise the `StorageEncrypted` property is left unset so existing clusters are not replaced. Uses the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
 | VPC + private subnets | Network isolation |
-| RDS Proxy | Connection pooling |
 | Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
-| Secrets Manager secret | Auto-generated credentials |
+| Secrets Manager secret | Auto-generated credentials; encrypted with `storageEncryptionKeyArn` when one is supplied |
+| Automated backups | On by default, retained 15 days; `pointInTimeRecovery` controls the window (`true` → 15 days, `{ retentionDays: n }` → 1–35 days, `false` → clamps to the 1-day minimum since Aurora cannot disable backups); also the PITR window |
+| CloudWatch log export | PostgreSQL engine log exported to CloudWatch Logs; retention follows `defaults.logRetention` when set, else the account default |
+| LogRetention custom resource | Setting the engine log group's retention adds a CDK `LogRetention` custom resource — a per-stack singleton Lambda + IAM role — because RDS owns the engine log group name via a token id, so CDK can't create the `LogGroup` directly. Intended/unavoidable for this knob |
 | Migration Lambda + CustomResource | Runs .sql files on deploy (retries with exponential backoff, 1s → 30s × 8, while the cluster is unreachable — a new cluster's writer coming up, or a scale-to-zero cluster resuming from auto-pause) |
 | IAM grants | `rds-data:*`, `secretsmanager:GetSecretValue` |
 
 Removal policy: DESTROY in sandbox, RETAIN in production.
+
+### Security posture (Aurora)
+
+- **Encryption at rest** is **opt-in**, gated so new projects are secure by
+  default without replacing an existing cluster. The CDK layer emits
+  `storageEncrypted: true` only when the `@aws-blocks/bb-data:encryptStorageByDefault`
+  context flag is set (the `create-blocks-app` templates set it) or a
+  customer-managed key is supplied; otherwise it leaves the `StorageEncrypted`
+  property unset — CloudFormation renders no key, and an explicit `false` is never
+  emitted, because either would be a template change that forces a destructive
+  replacement of an existing, implicitly-unencrypted cluster. A synth warning
+  (`@aws-blocks/bb-data:StorageEncryptionOptIn`) fires when neither is set. A
+  customer-managed KMS key, when supplied, encrypts both the storage volume and
+  the auto-generated credentials secret and forces encryption on regardless of the
+  flag.
+- **`iamAuthentication` is intentionally NOT enabled.** The cluster is reached
+  exclusively over the RDS Data API (HTTPS + Secrets Manager credentials), never a
+  direct DB socket, so database-level IAM authentication does not apply to this
+  access path.
+- **Automatic secret rotation is a deliberate follow-up**, not implemented here.
+  Rotation requires a rotation Lambda wired into the cluster VPC — a larger change
+  than this hardening pass. Supplying a `storageEncryptionKeyArn` does encrypt the
+  generated secret today.
+- **Upgrade note (destructive replacement):** RDS cannot encrypt an
+  already-provisioned, unencrypted cluster in place, so enabling storage
+  encryption (or changing the key) makes CloudFormation create a **new, empty**
+  encrypted cluster and repoint the stack. There is no in-place path. The
+  migration CustomResource does **not** re-run on a cluster swap — its only
+  CloudFormation properties are the service token and the migrations hash, and
+  neither changes when the cluster is replaced, so CloudFormation never invokes
+  it; the replacement cluster comes up with **no schema**, and migrations run only
+  when a migration file changes (which changes the migrations hash). Under
+  production (RETAIN) the old cluster is orphaned/unreferenced; under sandbox
+  (DESTROY) the old cluster and its data are deleted; under `removalPolicy:
+  'snapshot'` the old cluster is snapshotted as it is replaced, though under
+  production's `deletionProtection: true` the follow-up delete may fail and leave
+  it in place (this cleanup path is unverified on a real deploy). Adding or
+  changing the key also replaces the generated credentials secret (new logical id,
+  new generated password). The replacement is symmetric: removing the flag (or
+  `storageEncryptionKeyArn`) from a project that already deployed encrypted —
+  deleting the `cdk.json` line, a merge dropping it — also changes
+  `StorageEncrypted` and so **likewise replaces the cluster** (back to
+  unencrypted), with the same new-empty-cluster / no-schema outcome. The only safe
+  route is to snapshot the existing cluster, restore it with encryption enabled,
+  then cut over. Review the diff and snapshot first.
 
 ## Schema Migrations (External Databases)
 
@@ -115,11 +162,10 @@ The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResou
 
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
-| No connection pooling | Connection exhaustion only surfaces in AWS | Sandbox testing |
+| No Data API request limits | Mock has no per-request throttling; the AWS Data API enforces request-rate/size limits | Sandbox testing |
 | No VPC isolation | Network access control not enforced locally | Infrastructure concern |
 | PGlite is single-connection | No concurrent transaction behavior | Document; load test in sandbox |
 | No cold start penalty | Aurora 0-ACU cold start not simulated | Latency is a production concern |
-| No RDS Proxy behavior | Connection pinning, failover not simulated | Transparent to app code |
 | TLS cert verification default (`fromExisting` connection string) | Mock defaults to `rejectUnauthorized: false` (local/self-signed DBs); AWS runtime defaults to verifying (`PgClientEngine` → `rejectUnauthorized: true`) | Intentional. Pass `ssl` to override either layer; the `db pull`-generated wiring sets `ssl: resolveDbSsl()` for both, so the generated path is consistent. A hand-written `fromExisting({ connectionString })` with no `ssl` passes locally but verifies in AWS (pin a provider CA via `ssl.ca`). The mock warns once when `ssl` is omitted so this dev/prod gap surfaces locally. |
 | External migration *apply* | n/a — build/deploy lifecycle step, not a runtime method | No mock needed (intentional; see Schema Migrations above) |
 

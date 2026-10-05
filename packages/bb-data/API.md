@@ -94,10 +94,14 @@ export interface DatabaseOptions {
     maxCapacity?: number;
     migrationsPath?: string;
     minCapacity?: number;
+    pointInTimeRecovery?: boolean | {
+        retentionDays: number;
+    };
     postgresVersion?: string;
     removalPolicy?: 'destroy' | 'retain' | 'snapshot';
     rlsPolicy?: 'enforce';
     schema?: TableSchema;
+    storageEncryptionKeyArn?: string;
     subnets?: SubnetSelection;
 }
 
