@@ -71,7 +71,9 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
       env: {
         ...process.env,
         AWS_BLOCKS_DISABLE_TELEMETRY: '1',
-        // Empty is falsy, keeping verbose logging on even if the parent sets quiet mode.
+        // The [rpc-*] request traces are debug-level; seed the child logger at
+        // Debug so the trace this test asserts on is emitted.
+        BLOCKS_LOG_LEVEL: '3',
         BLOCKS_DEV_QUIET: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -105,12 +107,15 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     assert.strictEqual(payload.id, 1);
     assert.ok(!('error' in payload), `Unexpected RPC error: ${JSON.stringify(payload.error)}`);
 
+    // The [rpc-*] traces are debug diagnostics, written to stderr (stdout stays
+    // clean for results). Check the combined output for the trace.
     const logDeadline = Date.now() + 1_000;
-    while (!stdout.includes('[rpc-ok] testApi.pingVoid') && Date.now() < logDeadline) {
+    const hasTrace = () => (stdout + stderr).includes('[rpc-ok] testApi.pingVoid');
+    while (!hasTrace() && Date.now() < logDeadline) {
       await new Promise(resolve => setTimeout(resolve, 25));
     }
-    assert.ok(stdout.includes('[rpc-ok] testApi.pingVoid'), `Missing verbose success log. stdout: ${stdout}`);
-    assert.ok(!stdout.includes('[rpc-err]'), `Unexpected RPC error log. stdout: ${stdout}`);
+    assert.ok(hasTrace(), `Missing verbose success log. stdout: ${stdout}\nstderr: ${stderr}`);
+    assert.ok(!(stdout + stderr).includes('[rpc-err]'), `Unexpected RPC error log. stdout: ${stdout}\nstderr: ${stderr}`);
   });
 
   it('returns a JSON usage hint (not an empty body) for a GET on the API path', async () => {

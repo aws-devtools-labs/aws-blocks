@@ -27,6 +27,7 @@
 import { resolve, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { writeSpec, type FoundationLoader } from './generate-spec.js';
+import { info, verbose, error as logError } from '../logger.js';
 
 /** Pick a loader based on the file extension. `.ts` / `.tsx` use tsx; everything else uses Node's native `import()`. */
 async function selectLoader(foundationPath: string): Promise<FoundationLoader | undefined> {
@@ -73,17 +74,17 @@ export async function runGenerateSpec(backendArg?: string, outputArg?: string): 
 		outputArg ?? join(dirname(backendPath), 'blocks.spec.json')
 	);
 
-	console.log('📝 Generating OpenRPC spec...');
-	console.log('   backend:', backendPath);
-	console.log('   output: ', outputPath);
+	verbose('Generating OpenRPC spec…');
+	verbose(`  backend: ${backendPath}`);
+	verbose(`  output:  ${outputPath}`);
 
 	try {
 		const loader = await selectLoader(backendPath);
 		await writeSpec(backendPath, outputPath, loader);
-		console.log('✅ OpenRPC spec written to', outputPath);
+		info(`✅ OpenRPC spec written to ${outputPath}`);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		console.error('❌ Spec generation failed:', message);
+		logError(`Spec generation failed: ${message}`);
 		process.exit(1);
 	}
 }

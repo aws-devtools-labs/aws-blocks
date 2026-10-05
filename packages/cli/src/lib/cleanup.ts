@@ -3,10 +3,11 @@
 
 import { execSync } from 'node:child_process';
 import { trackCommand } from '@aws-blocks/core/runtime';
+import { info, verbose } from '../logger.js';
 
 export async function cleanup() {
   return trackCommand('cleanup', async () => {
-    console.log('🧹 Cleaning up Blocks processes...');
+    verbose('Cleaning up Blocks processes…');
 
     // Find and kill processes on common Blocks ports
     const ports = [3000, 3001, 3002, 3003];
@@ -19,7 +20,7 @@ export async function cleanup() {
           for (const pid of pids) {
             try {
               execSync(`kill ${pid}`);
-              console.log(`✓ Killed process ${pid} on port ${port}`);
+              verbose(`Killed process ${pid} on port ${port}`);
             } catch {}
           }
         }
@@ -28,6 +29,6 @@ export async function cleanup() {
       }
     }
 
-    console.log('✓ Cleanup complete');
+    info('✓ Cleanup complete');
   });
 }

@@ -1,7 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -12,7 +11,8 @@ import { trackCommand } from '@aws-blocks/core/runtime';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs } from './deploy-stream.js';
 import { filteredSink } from './stream-filter.js';
-import { getLogLevel } from '../logger.js';
+import { getLogLevel, info, verbose, error as logError } from '../logger.js';
+import { runSync } from './run-command.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -21,7 +21,7 @@ export interface DeployOptions {
 
 export async function deploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
-    console.log('🏗️  Preparing deployment...');
+    verbose('Preparing deployment…');
 
     // Load production environment (from .env.production or CI env vars)
     loadProductionEnv();
@@ -37,7 +37,7 @@ export async function deploy(options: DeployOptions) {
     // equals the one the app resolves at synth.
     const secrets = await ensureSecrets('production', options.projectRoot);
     if (secrets.created.length > 0 || secrets.updated.length > 0) {
-      console.log(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
+      verbose(`Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
     }
 
     // Apply external-database migrations to the production database before
@@ -52,20 +52,19 @@ export async function deploy(options: DeployOptions) {
 
     // Generate client code FIRST (before cdk deploy triggers the Vite build)
     const clientPath = join(dirname(foundationPath), 'client.js');
-    console.log('📝 Generating client code...');
+    verbose('Generating client code…');
     const __dirname = dirname(fileURLToPath(import.meta.url));
     const workerPath = join(__dirname, 'generate-client-worker.js');
-    execFileSync('node', ['--conditions=aws-runtime', '--import', 'tsx', workerPath, foundationPath, clientPath], {
-      stdio: 'inherit',
+    runSync('node', ['--conditions=aws-runtime', '--import', 'tsx', workerPath, foundationPath, clientPath], {
+      cwd: options.projectRoot,
       env: { ...process.env, NODE_OPTIONS: '' },
     });
 
-    console.log('🚀 Deploying to AWS...');
-    console.log('   (This may take a few minutes on first deploy)');
-    console.log('   - Backend API (Lambda + API Gateway)');
-    console.log('   - Frontend hosting (S3 + CloudFront)');
-    console.log('   Streaming CloudFormation events below; the deploy keeps running if this');
-    console.log('   process is backgrounded (press Ctrl-C, or send SIGTERM twice, to abort).');
+    info('Deploying to AWS (this can take a few minutes on first deploy)…');
+    verbose('  - Backend API (Lambda + API Gateway)');
+    verbose('  - Frontend hosting (S3 + CloudFront)');
+    verbose('  Streaming CloudFormation events; the deploy keeps running if this');
+    verbose('  process is backgrounded (Ctrl-C, or SIGTERM twice, to abort).');
 
     try {
       await runStreaming(
@@ -87,14 +86,11 @@ export async function deploy(options: DeployOptions) {
         }
       );
     } catch (error) {
-      // Terminal verdict on stdout: a caller that only captures stdout (the case
-      // that produced phantom failures) must still be able to tell a failed
-      // deploy from a killed process. This banner deliberately moved off stderr,
-      // so grepping stderr for this exact string no longer matches — the failure
-      // *reason* is still there. The CDK CLI keeps error-level output on stderr
-      // even under `--ci`, and the entrypoint prints the error itself with
-      // `console.error(error)`.
-      console.log('\n❌ Deployment failed.');
+      // Terminal verdict: a caller that only captures stdout (the case that
+      // produced phantom failures) must still be able to tell a failed deploy
+      // from a killed process. The CDK CLI keeps error-level output on stderr
+      // even under `--ci`, and the entrypoint prints the error itself.
+      logError('Deployment failed.');
       throw error;
     }
     
@@ -116,10 +112,10 @@ export async function deploy(options: DeployOptions) {
     mkdirSync(outDir, { recursive: true });
     writeFileSync(join(outDir, 'config.json'), JSON.stringify(config, null, 2));
 
-    console.log('\n✅ Deployment complete!');
-    console.log(`\n📡 API URL: ${apiUrl}`);
+    info('\n✅ Deployment complete.');
+    info(`📡 API URL: ${apiUrl}`);
     if (hostingUrl) {
-      console.log(`🌐 Frontend URL: ${hostingUrl}`);
+      info(`🌐 Frontend URL: ${hostingUrl}`);
     }
   });
 }

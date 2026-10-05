@@ -4,6 +4,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { trackCommand } from '@aws-blocks/core/runtime';
+import { info, verbose } from '../logger.js';
 
 export interface ConsoleOptions {
   stackId?: string;
@@ -33,7 +34,7 @@ function openInBrowser(url: string): void {
     execFileSync(opener, args, { stdio: 'ignore' });
   } catch {
     // Headless environment (CI, remote shell) — the URL is already printed above.
-    console.log('(Could not launch a browser automatically — open the URL above manually.)');
+    info('(Could not launch a browser automatically — open the URL above manually.)');
   }
 }
 
@@ -53,8 +54,8 @@ export async function openConsole(options: ConsoleOptions) {
     const region = resolveRegion();
     const stackUrl = `https://${region}.console.aws.amazon.com/cloudformation/home?region=${region}#/stacks?filteringText=${encodeURIComponent(stackName)}`;
 
-    console.log('Opening AWS Console...');
-    console.log(stackUrl);
+    verbose('Opening AWS Console…');
+    info(stackUrl);
 
     openInBrowser(stackUrl);
   });

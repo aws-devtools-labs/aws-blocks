@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { warn as logWarn } from '../logger.js';
+
 /**
  * Pre-deploy AWS credential check.
  *
@@ -95,8 +97,8 @@ export async function assertAwsCredentials(
 ): Promise<void> {
 	const region = resolveProbeRegion(env);
 	if (!region) {
-		console.warn(
-			`⚠️  Skipping the AWS credential pre-check for \`npm run ${command}\`: ` +
+		logWarn(
+			`Skipping the AWS credential pre-check for \`blocks ${command}\`: ` +
 				'no region set in AWS_REGION / AWS_DEFAULT_REGION. The deploy will surface any credential error itself.',
 		);
 		return;
@@ -112,19 +114,19 @@ export async function assertAwsCredentials(
 
 		if (CREDENTIAL_ERROR_NAMES.has(name)) {
 			throw new Error(
-				`AWS credentials could not be verified for \`npm run ${command}\` (${name}).\n` +
+				`AWS credentials could not be verified for \`blocks ${command}\` (${name}).\n` +
 					'Configure AWS credentials — for example:\n' +
 					'  • run `aws configure` (or `aws sso login`), or\n' +
 					'  • set AWS_PROFILE to a configured profile, or\n' +
 					'  • export AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN for temporary credentials).\n' +
-					`Then re-run \`npm run ${command}\`.`,
+					`Then re-run \`blocks ${command}\`.`,
 			);
 		}
 
 		// Not a credential problem (network, throttling, STS disabled in-region, …).
 		// Don't block a deploy that might still work — warn and continue.
-		console.warn(
-			`⚠️  Could not verify AWS credentials for \`npm run ${command}\` (${name}); ` +
+		logWarn(
+			`Could not verify AWS credentials for \`blocks ${command}\` (${name}); ` +
 				'continuing — the deploy will report any real error.',
 		);
 	}

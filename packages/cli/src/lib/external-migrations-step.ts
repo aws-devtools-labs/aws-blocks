@@ -29,6 +29,7 @@ import { findConnectionString } from './ensure-secrets.js';
 import { extractDbRef, dbConnectionParameterName } from '@aws-blocks/core/runtime';
 import { getStackName } from '@aws-blocks/core/runtime';
 import { runSync } from './run-command.js';
+import { info, warn as logWarn } from '../logger.js';
 
 const DEFAULT_MIGRATIONS_DIR = './migrations';
 /** Default output dir for db-pull generated files (database.types.ts / database.meta.ts). */
@@ -106,7 +107,7 @@ export async function applyExternalMigrations(opts: ApplyExternalMigrationsOptio
     await assertNotProductionTarget(conn.value, { command: 'npm run sandbox', announceFailOpen: true });
   }
 
-  console.log(`🧬 Applying external database migrations (${opts.stage})...`);
+  info(`🧬 Applying external database migrations (${opts.stage})…`);
   runMigrateSubprocess(conn.value, opts.stage, migrationsDir);
   return true;
 }
@@ -207,7 +208,7 @@ async function assertNotProductionTarget(
     // a note on every `npm run dev` would be false-alarm noise. The consequential,
     // deploy-adjacent sandbox apply announces the blind spot instead (see DESIGN.md).
     if (opts.announceFailOpen) {
-      console.log(
+      info(
         `ℹ️  Could not verify the target database isn't production (.env.production absent ` +
           `and the production SSM parameter was unavailable) — proceeding with \`${opts.command}\`.`,
       );
@@ -256,7 +257,7 @@ export async function applyDevMigrations(opts?: { migrationsDir?: string; genera
     optOutHint: 'set BLOCKS_SKIP_DEV_MIGRATIONS=1 to opt out',
   });
 
-  console.log(`🧬 Applying migrations to your dev database (${hostOf(conn.value)})...`);
+  info(`🧬 Applying migrations to your dev database (${hostOf(conn.value)})…`);
   try {
     // Dev loop: apply, then refresh generated types from the migrated schema in
     // the SAME subprocess (one developer-visible step). Deploy/sandbox omit the
@@ -266,8 +267,8 @@ export async function applyDevMigrations(opts?: { migrationsDir?: string; genera
   } catch (e: any) {
     // Don't block local dev on a migration apply failure (e.g. port 5432 blocked
     // on a corp network). Warn and continue — the app may still run.
-    console.warn(`⚠️  Could not apply migrations in dev: ${e?.message ?? e}`);
-    console.warn(`    Continuing without applying. Run migrations before deploy.`);
+    logWarn(`Could not apply migrations in dev: ${e?.message ?? e}`);
+    logWarn(`Continuing without applying. Run migrations before deploy.`);
     return false;
   }
 }

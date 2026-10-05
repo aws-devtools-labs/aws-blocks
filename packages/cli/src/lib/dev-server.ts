@@ -26,6 +26,7 @@ import { redactToJson } from '@aws-blocks/core/runtime';
 import { buildAndSendEvent } from '@aws-blocks/core/runtime';
 import { applyDevMigrations } from './external-migrations-step.js';
 import { killFrontendTree, terminateProcessTree, findListenerPids, killListenerTree } from './process-tree.js';
+import { info, verbose, debug, isDebug, warn as logWarn, error as logError } from '../logger.js';
 
 function toBodyStream(text: string): ReadableStream<Uint8Array> | null {
   if (!text) return null;
@@ -132,11 +133,11 @@ async function startTypegenWatch(): Promise<(() => void) | undefined> {
     if (scan.secretKeys.length === 0 && scan.configKeys.length === 0) {
       return undefined; // app doesn't use secret()/config() → nothing to type, skip silently
     }
-    console.log('🔑 Type-safe secret()/config() keys — watching for changes...');
+    verbose('Type-safe secret()/config() keys — watching for changes…');
     return await watchHostingValues({ unref: true });
   } catch (error) {
     // Never break the dev server over typegen (e.g. `typescript` not installed).
-    console.warn(`⚠️  hosting-typegen skipped: ${error instanceof Error ? error.message : String(error)}`);
+    logWarn(`hosting-typegen skipped: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
 }
@@ -149,7 +150,7 @@ async function deployLocal(backend: Record<string, any>): Promise<void> {
   const initPromises: Promise<void>[] = [];
   for (const [name, value] of Object.entries(backend)) {
     if (value && typeof value.initialize === 'function') {
-      console.log(`  Initializing ${name}...`);
+      verbose(`Initializing ${name}…`);
       initPromises.push(value.initialize());
     }
   }
@@ -626,10 +627,10 @@ export async function startDevServer(options: DevServerOptions) {
     const portInUse = await isPortOpen(port);
     const decision = evaluateSingleton(existing, { pid: process.pid, ppid: process.ppid }, portInUse, isPidAlive);
     if (decision.action === 'exit') {
-      console.error(
-        `\n⚠️  ${decision.reason}.\n` +
-        `   Not starting a second dev server. Stop the other process (or run the ` +
-        `cleanup script) and retry \`npm run dev\`.\n`,
+      logError(
+        `${decision.reason}.\n` +
+        `   Not starting a second dev server. Stop the other process (or run ` +
+        `\`blocks cleanup\`) and retry \`blocks dev\`.`,
       );
       process.exit(0);
     }
@@ -673,7 +674,7 @@ export async function startDevServer(options: DevServerOptions) {
   (globalThis as any).__BLOCKS_DEV_ATTACHMENTS__ = [];
 
   // 2. Import backend (sync construction phase — BBs register plugins via globals)
-  console.log('Loading backend...');
+  verbose('Loading backend…');
   const backend = await import(backendUrl);
 
   // 3. Read collected dev attachments and clean up
@@ -682,7 +683,7 @@ export async function startDevServer(options: DevServerOptions) {
 
   // 4. Deploy local (async initialization phase) — skip in sandbox mode
   if (!isSandbox) {
-    console.log('Deploying local resources...');
+    verbose('Deploying local resources…');
     await deployLocal(backend);
   }
 
@@ -769,10 +770,10 @@ export async function startDevServer(options: DevServerOptions) {
       if (shouldCreditFrontendReady(child, frontendProcess)) {
         frontendRestarts = [];
       }
-      console.log(`\n  ➜  http://localhost:${port}/${suffix}\n`);
+      info(`\n  ➜  http://localhost:${port}/${suffix}\n`);
     } catch (e) {
-      console.error(`⚠️  Frontend did not start: ${(e as Error).message}`);
-      console.log(`\n  ➜  http://localhost:${port}/  (API only — frontend unavailable)\n`);
+      logWarn(`Frontend did not start: ${(e as Error).message}`);
+      info(`\n  ➜  http://localhost:${port}/  (API only — frontend unavailable)\n`);
     }
   };
 
@@ -809,15 +810,15 @@ export async function startDevServer(options: DevServerOptions) {
       frontendRestarts = decision.recent;
       const why = `code=${code ?? 'null'}, signal=${signal ?? 'null'}`;
       if (!decision.restart) {
-        console.error(
-          `⚠️  Frontend dev server exited (${why}) and exceeded ` +
+        logError(
+          `Frontend dev server exited (${why}) and exceeded ` +
           `${DEFAULT_FRONTEND_RESPAWN_POLICY.maxRestarts} restarts within ` +
           `${DEFAULT_FRONTEND_RESPAWN_POLICY.windowMs / 1000}s — leaving it down. ` +
-          `Fix the error above, then restart \`npm run dev\`.`,
+          `Fix the error above, then restart \`blocks dev\`.`,
         );
         return;
       }
-      console.error(`⚠️  Frontend dev server exited (${why}); restarting in ${decision.delayMs}ms…`);
+      logWarn(`Frontend dev server exited (${why}); restarting in ${decision.delayMs}ms…`);
       respawnTimer = setTimeout(() => {
         respawnTimer = null;
         if (isShuttingDown) return;
@@ -968,7 +969,7 @@ export async function startDevServer(options: DevServerOptions) {
 
   // ── Attach dev servers ─────────────────────────────────────────────────
   for (const specifier of devAttachments) {
-    console.log(`  🔌 Attaching dev server (from ${specifier})`);
+    verbose(`Attaching dev server (from ${specifier})`);
     const mod = await import(specifier);
     if (typeof mod.attach !== 'function') {
       throw new Error(`Dev attachment '${specifier}' does not export an attach() function`);
@@ -987,7 +988,7 @@ export async function startDevServer(options: DevServerOptions) {
   if (!isSandbox) {
     const awsBlocksDir = dirname(resolvedPath);
     const clientPath = join(awsBlocksDir, 'client.js');
-    console.log('📝 Generating client code...');
+    verbose('Generating client code…');
     await writeClientCode(resolvedPath, clientPath);
   }
 
@@ -1011,18 +1012,18 @@ export async function startDevServer(options: DevServerOptions) {
   // treat any stderr line as a failure.
   const r3000 = await reclaimPort(port);
   if (r3000.wasOpen) {
-    (r3000.reclaimed ? console.log : console.error)(reclaimMessage(port, r3000, 'a stale/orphaned listener'));
+    (r3000.reclaimed ? verbose : logError)(reclaimMessage(port, r3000, 'a stale/orphaned listener'));
   }
   if (frontendCommand) {
     const rFrontend = await reclaimPort(frontendPort);
     if (rFrontend.wasOpen) {
-      (rFrontend.reclaimed ? console.log : console.error)(reclaimMessage(frontendPort, rFrontend, 'a stale/orphaned dev server'));
+      (rFrontend.reclaimed ? verbose : logError)(reclaimMessage(frontendPort, rFrontend, 'a stale/orphaned dev server'));
     }
   }
 
   // ── Start listening ────────────────────────────────────────────────────
   const onListening = async (): Promise<void> => {
-    console.log(`AWS Blocks local server running on http://localhost:${port}`);
+    info(`AWS Blocks local server running on http://localhost:${port}`);
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: Date.now() - devStartTime });
 
     // Spawn frontend dev server after Blocks server is ready
@@ -1030,7 +1031,7 @@ export async function startDevServer(options: DevServerOptions) {
       const child = spawnFrontend(frontendCommand);
       await announceFrontendReady(child);
     } else {
-      console.log(`\n  ➜  http://localhost:${port}/\n`);
+      info(`\n  ➜  http://localhost:${port}/\n`);
     }
   };
 
@@ -1046,7 +1047,7 @@ export async function startDevServer(options: DevServerOptions) {
     relisten: () => server.listen(port, onListening),
     scheduleRetry: (fn, delayMs) => { setTimeout(fn, delayMs).unref?.(); },
     onExhausted: () => process.exit(1),
-    warn: (msg) => console.error(msg),
+    warn: (msg) => logError(msg),
   });
   // Malformed/aborted requests must not become unhandled socket errors.
   server.on('clientError', (_err: Error, socket: Duplex) => {
@@ -1073,7 +1074,7 @@ export async function startDevServer(options: DevServerOptions) {
       duration: Date.now() - devStartTime,
       error: { code: 'UNKNOWN', phase: 'startup' },
     });
-    console.error(`\n❌ Dev server failed to start: ${err.message}\n`);
+    logError(`Dev server failed to start: ${err.message}`);
     process.exit(1);
   });
 
@@ -1086,7 +1087,7 @@ export async function startDevServer(options: DevServerOptions) {
     if (cleaningUp) return; // idempotent — a second signal must not re-enter
     cleaningUp = true;
     isShuttingDown = true; // stop the supervisor from respawning the frontend
-    console.log('\nShutting down...');
+    info('\nShutting down…');
 
     if (respawnTimer) { clearTimeout(respawnTimer); respawnTimer = null; }
     stopTypegen?.(); // tear down the typegen watcher (unref'd, but close it cleanly)
@@ -1149,10 +1150,10 @@ function handleApiRequest(
     req.on('end', async () => {
       const rpcHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       // Verbose request/response logging — useful when debugging cross-stack
-      // wire format mismatches (e.g. native client codegen vs server). Set
-      // BLOCKS_DEV_QUIET=1 to suppress. Sensitive fields (passwords, session
-      // tokens, OTP codes) are redacted so they never reach the log stream.
-      if (!process.env.BLOCKS_DEV_QUIET) {
+      // wire format mismatches (e.g. native client codegen vs server). Shown
+      // only at --debug. Sensitive fields (passwords, session tokens, OTP
+      // codes) are redacted so they never reach the log stream.
+      if (isDebug()) {
         let inLog: string;
         try {
           inLog = redactToJson(JSON.parse(body || '{}'));
@@ -1162,22 +1163,20 @@ function handleApiRequest(
           // but truncate it like before to keep logs readable.
           inLog = body;
         }
-        console.log('[rpc-in]', inLog.length > 800 ? inLog.slice(0, 800) + '…' : inLog);
+        debug(`[rpc-in] ${inLog.length > 800 ? inLog.slice(0, 800) + '…' : inLog}`);
       }
       const parsed = parseRpcRequest(body);
 
       if (!parsed.ok) {
-        if (!process.env.BLOCKS_DEV_QUIET) console.log('[rpc-out parse-error]', parsed.response);
+        debug(`[rpc-out parse-error] ${parsed.response}`);
         res.writeHead(200, rpcHeaders);
         res.end(parsed.response);
         return;
       }
 
       const { apiNamespace, method: rpcMethod, args, id: rpcId } = parsed.request;
-      if (!process.env.BLOCKS_DEV_QUIET) {
-        // redactToJson handles circulars and serialization failures itself.
-        console.log('[rpc-call]', `${apiNamespace}.${rpcMethod}`, redactToJson(args));
-      }
+      // redactToJson handles circulars and serialization failures itself.
+      debug(`[rpc-call] ${apiNamespace}.${rpcMethod} ${redactToJson(args)}`);
 
       try {
         const headers = new Headers();
@@ -1232,21 +1231,20 @@ function handleApiRequest(
         if (setCookies.length > 0) headerObj['set-cookie'] = setCookies;
 
         const successPayload = successResponse(responseBody ?? result, rpcId);
-        if (!process.env.BLOCKS_DEV_QUIET) {
+        if (isDebug()) {
           // Log a redacted copy of the response value — never the raw
           // payload, which can carry challenge `session` tokens, MFA shared
           // secrets, etc. that the client legitimately round-trips.
           const okLog = redactToJson(responseBody ?? result);
-          console.log('[rpc-ok]', `${apiNamespace}.${rpcMethod}`,
-            okLog.length > 800 ? okLog.slice(0, 800) + '…' : okLog);
+          debug(`[rpc-ok] ${apiNamespace}.${rpcMethod} ${okLog.length > 800 ? okLog.slice(0, 800) + '…' : okLog}`);
         }
         res.writeHead(responseStatus, headerObj);
         res.end(successPayload);
       } catch (error: any) {
         const errPayload = errorResponseFromCatch(error, rpcId);
-        if (!process.env.BLOCKS_DEV_QUIET) {
-          console.log('[rpc-err]', `${apiNamespace}.${rpcMethod}`, error?.name ?? 'Error', '-', error?.message);
-          if (error?.stack) console.log(error.stack);
+        if (isDebug()) {
+          debug(`[rpc-err] ${apiNamespace}.${rpcMethod} ${error?.name ?? 'Error'} - ${error?.message}`);
+          if (error?.stack) debug(error.stack);
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(errPayload);

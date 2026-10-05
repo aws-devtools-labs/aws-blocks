@@ -4,6 +4,7 @@
 import { trackCommand } from '@aws-blocks/core/runtime';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runSync } from './run-command.js';
+import { info, error as logError } from '../logger.js';
 
 export interface DestroyOptions {
   cdkAppPath: string;
@@ -12,7 +13,7 @@ export interface DestroyOptions {
 
 export async function destroy(options: DestroyOptions) {
   return trackCommand('destroy', async () => {
-    console.log('🗑️  Destroying production stack...');
+    info('🗑️  Destroying production stack…');
 
     try {
       runSync(
@@ -33,10 +34,10 @@ export async function destroy(options: DestroyOptions) {
         }
       );
     } catch (error) {
-      console.error('\n❌ Destroy failed.');
+      logError('Destroy failed.');
       throw error;
     }
 
-    console.log('\n✅ Production stack destroyed!');
+    info('\n✅ Production stack destroyed.');
   });
 }

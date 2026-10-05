@@ -22,6 +22,7 @@ import { pathToFileURL } from 'url';
 import { API_NAMESPACE_MARKER } from '@aws-blocks/core/runtime';
 import { extractMethodTypes, extractSkipCodegenMethods, type MethodTypeInfo } from './extract-ts-types.js';
 import { validateSpec, type SpecValidationError } from './validate-spec.js';
+import { warn as logWarn } from '../logger.js';
 
 // ── OpenRPC types (subset) ──────────────────────────────────────────────────
 
@@ -808,9 +809,9 @@ export async function writeSpec(
 	// Validate conformance
 	const errors = validateSpec(doc);
 	if (errors.length > 0) {
-		console.warn(`⚠️  OpenRPC spec has ${errors.length} conformance issue(s):`);
+		logWarn(`OpenRPC spec has ${errors.length} conformance issue(s):`);
 		for (const err of errors) {
-			console.warn(`   ${err.path}: ${err.message}`);
+			logWarn(`   ${err.path}: ${err.message}`);
 		}
 	}
 

@@ -26,10 +26,27 @@ export enum LogLevel {
 	Debug = 3,
 }
 
-let currentLevel: LogLevel = LogLevel.Normal;
-
 /** The environment variable other packages / child processes read. */
 export const LOG_LEVEL_ENV = 'BLOCKS_LOG_LEVEL';
+
+/**
+ * Seed the initial level from the environment so a child process the CLI
+ * spawns (cdk/tsx/npm, the dev-server subprocess, the client-gen worker)
+ * inherits the parent's verbosity — the parser middleware sets this on the
+ * parent and exports it via {@link LOG_LEVEL_ENV}, and this reads it back.
+ * Falls back to Normal when unset or unparseable.
+ */
+export function initialLevelFromEnv(): LogLevel {
+	const raw = process.env[LOG_LEVEL_ENV];
+	if (raw === undefined || raw === '') return LogLevel.Normal;
+	const n = Number(raw);
+	if (!Number.isInteger(n) || n < LogLevel.Quiet || n > LogLevel.Debug) {
+		return LogLevel.Normal;
+	}
+	return n as LogLevel;
+}
+
+let currentLevel: LogLevel = initialLevelFromEnv();
 
 /**
  * Set the global verbosity level and mirror it into the environment so the
