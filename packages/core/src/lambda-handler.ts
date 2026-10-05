@@ -3,7 +3,6 @@
 
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ApiError } from './errors.js';
 import { BLOCKS_RPC_PREFIX, CLIENT_USER_AGENT_HEADER } from './constants.js';
 import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
@@ -14,6 +13,7 @@ import {
   errorResponse,
   errorResponseFromCatch,
   methodNotFoundResponse,
+  rawRouteErrorFromCatch,
 } from './rpc.js';
 import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
@@ -687,11 +687,9 @@ async function handleRawRoute(
       },
       body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('RawRoute Error:', error);
-    const status = error instanceof ApiError ? error.status : 500;
-    const body: Record<string, any> = { error: error.message };
-    if (error.name && error.name !== 'Error') body.name = error.name;
+    const { status, body } = rawRouteErrorFromCatch(error);
     return {
       statusCode: status,
       headers: Object.fromEntries(
@@ -700,7 +698,7 @@ async function handleRawRoute(
       multiValueHeaders: {
         'Set-Cookie': responseHeaders.getSetCookie?.() ?? [],
       },
-      body: JSON.stringify(body),
+      body,
     };
   }
 }
