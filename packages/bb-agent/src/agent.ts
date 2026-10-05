@@ -199,9 +199,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @param id - unique agent ID (used in resource names, keep short for AppSync namespace limits)
 	 * @param config - developer-facing agent configuration
 	 * @param modelConfig - which model to use, picked by subclass (model.local or model.deployed)
-	 * @param createSnapshotStorage - factory that receives the internal FileBucket and returns the appropriate SnapshotStorage
+	 * @param createSnapshotStorage - factory that receives the internal FileBucket and the agent's logger and returns the appropriate SnapshotStorage
 	 */
-	constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>, modelConfig: ModelConfig | ModelConfig[] | undefined, createSnapshotStorage: (bucket: FileBucket) => SnapshotStorage) {
+	constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>, modelConfig: ModelConfig | ModelConfig[] | undefined, createSnapshotStorage: (bucket: FileBucket, log: ChildLogger) => SnapshotStorage) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = config?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.config = config;
@@ -212,7 +212,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 		// IDs shortened to keep S3 bucket names within the 63-char limit
 		this.sessionBucket = new FileBucket(this, 'sn');
-		this.snapshotStorage = createSnapshotStorage(this.sessionBucket);
+		this.snapshotStorage = createSnapshotStorage(this.sessionBucket, this.log);
 
 		if (!config.inferenceOnly) {
 			this.conversations = new DistributedTable(this, 'convos', {

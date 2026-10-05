@@ -2235,11 +2235,25 @@ describe('OllamaModels presets', () => {
 // drives the mock/local path, so this covers agent.aws.ts by spying the S3Storage ctor.
 
 import { Agent as DeployedAgent } from './index.aws.js';
-import { createDeployedSnapshotStorage } from './agent.aws.js';
-import type { SnapshotStorage, SnapshotManifest } from '@strands-agents/sdk';
+import { createDeployedSnapshotStorage, ResilientSnapshotStorage } from './agent.aws.js';
+import { SessionManager } from '@strands-agents/sdk';
+import type { Snapshot, SnapshotStorage, SnapshotManifest, SnapshotLocation, LocalAgent } from '@strands-agents/sdk';
+import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { S3StorageConfig } from '@strands-agents/sdk/session/s3-storage';
 
 describe('deployed Agent S3Storage region (multi-region)', () => {
+	// A no-op ChildLogger for factory calls that don't assert on logging.
+	function noopLog(): ChildLogger {
+		const log: ChildLogger = {
+			debug() {},
+			info() {},
+			warn() {},
+			error() {},
+			child: () => log,
+		};
+		return log;
+	}
+
 	// Type-safe stand-in for S3Storage that records every config it's constructed with,
 	// so we assert exactly what agent.aws.ts passes in — no S3Storage/AWS SDK internals.
 	function s3StorageSpy() {
@@ -2271,7 +2285,7 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 		try {
 			const { configs, Spy } = s3StorageSpy();
 			const bucket = new FileBucket(new Scope(scopeId), 'sn');
-			createDeployedSnapshotStorage(bucket, Spy);
+			createDeployedSnapshotStorage(bucket, noopLog(), Spy);
 			assert.strictEqual(configs.length, 1, 'S3Storage should be constructed exactly once');
 			assert.strictEqual(configs[0].bucket, bucket.fullId, 'session bucket id should be passed through');
 			return configs[0];
@@ -2296,6 +2310,201 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 	test('deployed Agent constructs on the aws-runtime path', () => {
 		const agent = new DeployedAgent(new Scope('test-s3-agent'), 'r', { systemPrompt: 'test', model: { deployed: { provider: 'canned' } } });
 		assert.ok(agent);
+	});
+
+	// A first turn starts fresh: no snapshot exists yet, so the deployed storage must
+	// not let a MISSING snapshot crash the turn. S3Storage only maps NoSuchKey/
+	// NoSuchBucket to null; a missing object that surfaces as NotFound or an HTTP 404
+	// is instead rethrown as SessionError, which the ResilientSnapshotStorage wrapper
+	// recognises as "no snapshot yet" on the read paths. The fallback is NARROW: a
+	// non-404 fault (a 403 permission gap, a transient 5xx) is rethrown so an
+	// established conversation's persisted state is never silently discarded.
+	describe('first-turn snapshot read is resilient', () => {
+		const location = { sessionId: 'sess-1', scope: 'agent', scopeId: 'a' } as const;
+
+		// S3Storage stand-in whose reads fail with a given error (the way a non-NoSuchKey
+		// GetObject does — the raw error wrapped by SessionError).
+		function throwingStorage(error: Error): new (config: S3StorageConfig) => SnapshotStorage {
+			return class implements SnapshotStorage {
+				constructor(_config: S3StorageConfig) {}
+				async loadSnapshot(): Promise<Snapshot | null> {
+					throw error;
+				}
+				async loadManifest(): Promise<SnapshotManifest> {
+					throw error;
+				}
+				async saveSnapshot(): Promise<void> {
+					throw error;
+				}
+				async listSnapshotIds(): Promise<string[]> {
+					return [];
+				}
+				async deleteSession(): Promise<void> {}
+				async saveManifest(): Promise<void> {}
+			};
+		}
+
+		function deployedStorage(error: Error, warn: (message: string, cause: unknown) => void) {
+			const bucket = new FileBucket(new Scope('test-s3-resilient'), 'sn');
+			// Mirror createDeployedSnapshotStorage, but inject the throwing impl AND a warn spy.
+			return new ResilientSnapshotStorage(new (throwingStorage(error))({ bucket: bucket.fullId }), warn);
+		}
+
+		// S3Storage wraps a GetObject failure as `new SessionError('S3 error reading <key>', { cause })`
+		// — so the raw AWS error arrives on `.cause`, set via the Error options (NON-enumerable),
+		// exactly as `isMissingObjectError` must handle it on the real wire error.
+		function rawS3Error(name: string, httpStatusCode?: number): Error {
+			const raw = new Error(name);
+			raw.name = name;
+			if (httpStatusCode !== undefined) {
+				Object.defineProperty(raw, '$metadata', { value: { httpStatusCode }, enumerable: false });
+			}
+			return raw;
+		}
+		function wrapped(key: string, name: string, httpStatusCode?: number): Error {
+			const wrapper = new Error(`S3 error reading ${key}`, { cause: rawS3Error(name, httpStatusCode) });
+			wrapper.name = 'SessionError';
+			return wrapper;
+		}
+
+		test('loadSnapshot returns null (fresh start) when the snapshot is MISSING (404), logging the cause', async () => {
+			const warnings: { message: string; cause: unknown }[] = [];
+			const cause = wrapped('sess-1/.../snapshot_latest.json', 'NotFound', 404);
+			const storage = deployedStorage(cause, (message, c) => warnings.push({ message, cause: c }));
+
+			const loaded = await storage.loadSnapshot({ location });
+
+			assert.strictEqual(loaded, null, 'a missing first-turn snapshot must start fresh, not throw');
+			assert.strictEqual(warnings.length, 1, 'the underlying S3 error must be logged for diagnosis');
+			assert.strictEqual(warnings[0].cause, cause, 'the real cause is passed to the logger, not swallowed');
+		});
+
+		test('loadManifest returns an empty manifest when the manifest is MISSING (NoSuchKey)', async () => {
+			const warnings: { message: string; cause: unknown }[] = [];
+			const storage = deployedStorage(wrapped('sess-1/.../manifest.json', 'NoSuchKey'), (message, c) => warnings.push({ message, cause: c }));
+
+			const manifest = await storage.loadManifest({ location });
+
+			assert.strictEqual(manifest.schemaVersion, '1.0', 'a missing manifest reads as a fresh empty one');
+			assert.strictEqual(warnings.length, 1);
+		});
+
+		test('loadSnapshot RETHROWS a 403 AccessDenied — a permission gap must not silently wipe an existing conversation', async () => {
+			const warnings: { message: string; cause: unknown }[] = [];
+			const cause = wrapped('sess-1/.../snapshot_latest.json', 'AccessDenied', 403);
+			const storage = deployedStorage(cause, (message, c) => warnings.push({ message, cause: c }));
+
+			await assert.rejects(() => storage.loadSnapshot({ location }), /S3 error reading/, 'a 403 is a real fault, not a missing snapshot');
+			assert.strictEqual(warnings.length, 1, 'the fault is still logged before rethrow');
+			assert.strictEqual(warnings[0].cause, cause);
+		});
+
+		test('loadSnapshot RETHROWS a transient 5xx — crash-and-retry preserves the persisted snapshot', async () => {
+			const cause = wrapped('sess-1/.../snapshot_latest.json', 'ServiceUnavailable', 503);
+			const storage = deployedStorage(cause, () => {});
+
+			await assert.rejects(() => storage.loadSnapshot({ location }), /S3 error reading/, 'a transient 5xx must surface so the turn can retry against the real snapshot');
+		});
+
+		test('loadManifest RETHROWS a non-404 fault', async () => {
+			const cause = wrapped('sess-1/.../manifest.json', 'AccessDenied', 403);
+			const storage = deployedStorage(cause, () => {});
+
+			await assert.rejects(() => storage.loadManifest({ location }), /S3 error reading/);
+		});
+
+		test('a write failure still surfaces — only a MISSING-snapshot read degrades', async () => {
+			const storage = deployedStorage(new Error('AccessDenied'), () => {});
+			const snapshot: Snapshot = { scope: 'agent', schemaVersion: '1.0', createdAt: new Date().toISOString(), data: {}, appData: {} };
+			await assert.rejects(
+				() => storage.saveSnapshot({ location, snapshotId: 'latest', isLatest: true, snapshot }),
+				/AccessDenied/,
+				'a persistence failure is a real fault and must not be swallowed',
+			);
+		});
+
+		// Pins the SDK-internal assumption the loadManifest narrowing rests on: Strands'
+		// SessionManager restores a fresh session via loadSnapshot ALONE and never reads
+		// the manifest. If a future SDK bump starts calling loadManifest on a fresh
+		// session, the 404-only manifest narrowing could rethrow a non-404 fault and
+		// reintroduce the first-turn crash via a different path — so this test fails
+		// loudly the moment that assumption breaks, instead of leaving it a latent risk.
+		test('Strands SessionManager does not read the manifest on a fresh-session restore', async () => {
+			const calls: string[] = [];
+			const spyStorage: SnapshotStorage = {
+				async loadSnapshot() {
+					calls.push('loadSnapshot');
+					return null; // fresh session: no snapshot yet
+				},
+				async loadManifest() {
+					calls.push('loadManifest');
+					return { schemaVersion: '1.0', updatedAt: new Date().toISOString() };
+				},
+				async saveSnapshot() {
+					calls.push('saveSnapshot');
+				},
+				async saveManifest() {
+					calls.push('saveManifest');
+				},
+				async listSnapshotIds() {
+					calls.push('listSnapshotIds');
+					return [];
+				},
+				async deleteSession() {
+					calls.push('deleteSession');
+				},
+			};
+			const manager = new SessionManager({ sessionId: 'parity-session', storage: { snapshot: spyStorage } });
+			// Minimal LocalAgent-shaped stub: `messages` selects the agent branch and `id`
+			// feeds the scope location; a fresh restore returns false before touching the rest.
+			const target = { id: 'agent-1', messages: [], loadSnapshot: () => {} } as unknown as LocalAgent;
+
+			const restored = await manager.restoreSnapshot({ target });
+
+			assert.strictEqual(restored, false, 'a fresh session has no snapshot to restore');
+			assert.ok(calls.includes('loadSnapshot'), 'the restore path reads the snapshot');
+			assert.ok(
+				!calls.includes('loadManifest'),
+				`SessionManager must not read the manifest on a fresh-session restore — if this fails, an SDK bump started calling loadManifest and the 404-only manifest narrowing in ResilientSnapshotStorage needs revisiting (observed calls: ${calls.join(', ')})`,
+			);
+		});
+
+		test('createDeployedSnapshotStorage routes diagnostics through the agent logger, not console.warn', async () => {
+			const warnCalls: { message: string; context?: Record<string, unknown> }[] = [];
+			const log: ChildLogger = {
+				debug() {},
+				info() {},
+				warn(message, context) {
+					warnCalls.push({ message, context });
+				},
+				error() {},
+				child: () => log,
+			};
+			// Inject an S3Storage stand-in whose first-turn read misses (404) so the wrapper logs.
+			const MissingReadImpl = class implements SnapshotStorage {
+				constructor(_config: S3StorageConfig) {}
+				async loadSnapshot(): Promise<Snapshot | null> {
+					throw wrapped('sess-1/.../snapshot_latest.json', 'NotFound', 404);
+				}
+				async loadManifest(): Promise<SnapshotManifest> {
+					return { schemaVersion: '1.0', updatedAt: new Date().toISOString() };
+				}
+				async saveSnapshot(): Promise<void> {}
+				async listSnapshotIds(): Promise<string[]> {
+					return [];
+				}
+				async deleteSession(): Promise<void> {}
+				async saveManifest(): Promise<void> {}
+			};
+			const bucket = new FileBucket(new Scope('test-s3-logger'), 'sn');
+			const storage = createDeployedSnapshotStorage(bucket, log, MissingReadImpl);
+
+			const loaded = await storage.loadSnapshot({ location });
+
+			assert.strictEqual(loaded, null, 'a missing snapshot still starts fresh');
+			assert.strictEqual(warnCalls.length, 1, 'the warning went through the injected logger');
+			assert.ok(warnCalls[0].context && 'cause' in warnCalls[0].context, 'the underlying cause rides in the structured log context');
+		});
 	});
 });
 
