@@ -104,6 +104,9 @@ private class IosRedirectSession(
             }
         }
 
+    /** Nothing is waiting on the outcome: the session dismisses itself on redirect. */
+    override fun reportOutcome(outcome: OidcSignInOutcome) = Unit
+
     override fun close() {
         val webSession = session ?: return
         session = null

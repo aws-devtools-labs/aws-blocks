@@ -143,19 +143,32 @@ class OidcClientTest {
         var closeCount = 0
             private set
 
+        /** What `signIn` forwarded, so a test can tell a dropped argument from a passed one. */
+        var receivedOptions: OidcSignInOptions? = null
+            private set
+
+        var reportedOutcome: OidcSignInOutcome? = null
+            private set
+
         override suspend fun openSession(
             configuredRelayTo: String,
             options: OidcSignInOptions,
-        ): OidcRedirectSession =
-            object : OidcRedirectSession {
+        ): OidcRedirectSession {
+            receivedOptions = options
+            return object : OidcRedirectSession {
                 override val relayTo: String = sessionRelayTo
                 override suspend fun awaitRedirect(authorizeUrl: String): String =
                     onAwaitRedirect(authorizeUrl)
+
+                override fun reportOutcome(outcome: OidcSignInOutcome) {
+                    reportedOutcome = outcome
+                }
 
                 override fun close() {
                     closeCount++
                 }
             }
+        }
     }
 
     @Test

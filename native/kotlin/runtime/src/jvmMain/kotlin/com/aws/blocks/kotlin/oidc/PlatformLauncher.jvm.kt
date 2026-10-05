@@ -7,7 +7,11 @@ import io.ktor.http.URLBuilder
 import io.ktor.http.parseQueryString
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.URI
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.CompletableDeferred
@@ -43,6 +47,13 @@ internal class JvmLoopbackSession(
 ) : OidcRedirectSession {
 
     private val redirect = CompletableDeferred<String>()
+
+    /** Filled by [reportOutcome] once the caller knows whether the sign-in actually worked. */
+    private val outcome = CompletableFuture<OidcSignInOutcome>()
+
+    /** Opened once the browser has been given its response, so [close] cannot cut it short. */
+    private val responded = CountDownLatch(1)
+
     private val executor = Executors.newSingleThreadExecutor()
     private val server: HttpServer =
         HttpServer.create(InetSocketAddress(InetAddress.getByName(LOOPBACK_HOST), 0), 0)
@@ -62,6 +73,13 @@ internal class JvmLoopbackSession(
             ?: throw OidcCancelledException(
                 "Sign-in timed out after $timeout waiting for a redirect at $relayTo",
             )
+    }
+
+    override fun reportOutcome(outcome: OidcSignInOutcome) {
+        this.outcome.complete(outcome)
+        // The handler is still holding the browser's connection open; stop(0) in close()
+        // would drop it mid-response.
+        responded.await(RESPOND_TIMEOUT_SECONDS, TimeUnit.SECONDS)
     }
 
     override fun close() {
@@ -86,29 +104,50 @@ internal class JvmLoopbackSession(
             return
         }
 
-        // Respond before completing: the caller's `finally` stops the server, and stop(0)
-        // closes connections that are still open.
-        if ("code" in params) {
-            serve(exchange, options.successPage, OidcLoopbackPages.success())
-        } else {
-            serve(
-                exchange,
-                options.errorPage,
-                OidcLoopbackPages.failure(params["error"], params["error_description"]),
-                extraQuery = errorParameters(params),
-            )
-        }
+        // Hand the callback over first, so nothing that goes wrong while responding can
+        // strand the caller waiting for a redirect that already arrived.
         redirect.complete("$relayTo?$rawQuery")
+
+        try {
+            serve(exchange, outcomeForDisplay())
+        } finally {
+            responded.countDown()
+        }
     }
 
-    private fun serve(
+    /**
+     * Waits for the caller to validate the callback and exchange the code.
+     *
+     * Falling back to the callback query would be wrong for a `code` that fails validation,
+     * so the fallback only applies when no outcome arrives at all, which means the caller
+     * stopped running.
+     */
+    private fun outcomeForDisplay(): OidcSignInOutcome =
+        runCatching { outcome.get(OUTCOME_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
+            .getOrElse { OidcSignInOutcome.Failed(null, null) }
+
+    private fun serve(exchange: HttpExchange, outcome: OidcSignInOutcome) {
+        when (outcome) {
+            OidcSignInOutcome.Succeeded ->
+                render(exchange, options.successPage) { OidcLoopbackPages.success() }
+
+            is OidcSignInOutcome.Failed -> render(
+                exchange,
+                options.errorPage,
+                extraQuery = errorParameters(outcome),
+            ) { OidcLoopbackPages.failure(outcome.error, outcome.description) }
+        }
+    }
+
+    /** [builtIn] is only rendered when it is the page that will actually be served. */
+    private fun render(
         exchange: HttpExchange,
         page: OidcLandingPage,
-        builtIn: String,
         extraQuery: Parameters = Parameters.Empty,
+        builtIn: () -> String,
     ) {
         when (page) {
-            OidcLandingPage.BuiltIn -> respond(exchange, HTTP_OK, builtIn)
+            OidcLandingPage.BuiltIn -> respond(exchange, HTTP_OK, builtIn())
             is OidcLandingPage.Html -> respond(exchange, HTTP_OK, page.document)
             is OidcLandingPage.Redirect -> sendRedirect(exchange, withQuery(page.url, extraQuery))
         }
@@ -122,7 +161,9 @@ internal class JvmLoopbackSession(
     }
 
     private fun sendRedirect(exchange: HttpExchange, url: String) {
-        exchange.responseHeaders.add("Location", url)
+        // Header values go out one byte per character, so anything non-ASCII in the URL has
+        // to be percent-encoded first or it reaches the browser corrupted.
+        exchange.responseHeaders.add("Location", URI(url).toASCIIString())
         sendEmpty(exchange, HTTP_FOUND)
     }
 
@@ -135,15 +176,21 @@ internal class JvmLoopbackSession(
      * The authorization code and `state` are deliberately absent: forwarding them would put
      * them in the landing page's access logs, its `Referer` header, and browser history.
      */
-    private fun errorParameters(params: Parameters): Parameters = Parameters.build {
-        params["error"]?.let { append("error", it) }
-        params["error_description"]?.let { append("error_description", it) }
+    private fun errorParameters(outcome: OidcSignInOutcome.Failed): Parameters = Parameters.build {
+        outcome.error?.let { append("error", it) }
+        outcome.description?.let { append("error_description", it) }
     }
 
-    /** Leaves [url] untouched when there is nothing to add, so the app's value is preserved. */
+    /**
+     * Leaves [url] untouched when there is nothing to add, so the app's value is preserved.
+     * Names in [extra] replace any the app already set, so the page reads one value for each.
+     */
     private fun withQuery(url: String, extra: Parameters): String {
         if (extra.isEmpty()) return url
-        return URLBuilder(url).apply { parameters.appendAll(extra) }.buildString()
+        return URLBuilder(url).apply {
+            extra.names().forEach { parameters.remove(it) }
+            parameters.appendAll(extra)
+        }.buildString()
     }
 
     private companion object {
@@ -155,5 +202,10 @@ internal class JvmLoopbackSession(
         const val HTTP_FOUND = 302
         const val HTTP_NOT_FOUND = 404
         const val NO_BODY = -1L
+
+        // Long enough for a token exchange, short enough that a caller that stopped running
+        // does not hold the browser indefinitely.
+        const val OUTCOME_TIMEOUT_SECONDS = 30L
+        const val RESPOND_TIMEOUT_SECONDS = 10L
     }
 }
