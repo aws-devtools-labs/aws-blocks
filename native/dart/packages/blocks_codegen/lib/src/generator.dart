@@ -742,6 +742,21 @@ class DartCodeGenerator {
     };
   }
 
+  /// The object message type carried by [t] (a record or sealed class, named
+  /// directly or via `$ref`, including the nullable `T?` form) unwrapped to
+  /// its non-nullable form; or null when [t] is not an object the runtime's
+  /// `Map`-only deserializer can decode. Shared by [_channelMessageType] and
+  /// [_mapValueFromJson] so the "unwrap nullable, resolve `$ref`, is it
+  /// record/sealed" logic cannot drift between them.
+  ResolvedType? _objectMessageType(
+    ResolvedType t,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    final arg = t is NullableType ? t.inner : t;
+    final resolved = arg is SchemaReference ? allTypes[arg.name] : arg;
+    return resolved is RecordType || resolved is SealedClassType ? arg : null;
+  }
+
   /// The channel message type to hydrate, or null to leave the value raw. Only
   /// an object type (record/sealed, incl. via `$ref`, and nullable `T?`) is
   /// decodable by the runtime's `Map`-only deserializer.
@@ -750,11 +765,7 @@ class DartCodeGenerator {
     Map<String, ResolvedType> allTypes,
   ) {
     if (typeArgs.isEmpty) return null;
-    final arg = typeArgs[0] is NullableType
-        ? (typeArgs[0] as NullableType).inner
-        : typeArgs[0];
-    final resolved = arg is SchemaReference ? allTypes[arg.name] : arg;
-    return resolved is RecordType || resolved is SealedClassType ? arg : null;
+    return _objectMessageType(typeArgs[0], allTypes);
   }
 
   // --- fromJson expression helpers ---
@@ -1068,13 +1079,34 @@ class DartCodeGenerator {
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
       SealedClassType(name: final name) =>
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
-      // Without the guard an unbound tag emits a redundant `result == null ?
-      // null : result`; falling through keeps it byte-identical to base.
-      TransferableType(blocksType: final kt, typeArgs: final args)
-          when knownTransferableTags.contains(kt) =>
-        '$accessor == null ? null : ${_deserializeTransferable(accessor, kt, args, allTypes)}',
+      // Transferable result: `_nullableTransferable` wraps a hydrating
+      // deserializer with the `== null` guard, and collapses to a bare accessor
+      // when the value stays raw (a non-hydratable channel, or an unbound tag),
+      // avoiding a redundant `result == null ? null : result`.
+      TransferableType(blocksType: final kt, typeArgs: final args) =>
+        _nullableTransferable(accessor, kt, args, allTypes),
       _ => accessor,
     };
+  }
+
+  /// Wraps a bound transferable's deserializer with the `== null` guard, but
+  /// collapses `x == null ? null : x` to `x` when the transferable itself stays
+  /// raw (a non-hydratable channel message), so the nullable arm emits a bare
+  /// accessor rather than a redundant throwing ternary.
+  String _nullableTransferable(
+    String accessor,
+    String blocksType,
+    List<ResolvedType> typeArgs,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    final inner = _deserializeTransferable(
+      accessor,
+      blocksType,
+      typeArgs,
+      allTypes,
+    );
+    if (inner == accessor) return accessor;
+    return '$accessor == null ? null : $inner';
   }
 
   /// Per-value deserialization for a `Map<String, V>` entry value `v` (dynamic).
@@ -1100,18 +1132,10 @@ class DartCodeGenerator {
           return '$n.fromJson($v as String)';
         }
         return '$v as $n';
-      case NullableType(inner: final inner):
-        final innerName = switch (inner) {
-          SealedClassType(name: final n) => n,
-          RecordType(name: final n) => n,
-          SchemaReference(name: final n)
-              when allTypes[n] is RecordType ||
-                  allTypes[n] is SealedClassType =>
-            n,
-          _ => null,
-        };
-        if (innerName != null) {
-          return '$v == null ? null : $innerName.fromJson($v as Map<String, dynamic>)';
+      case NullableType():
+        final obj = _objectMessageType(valueType, allTypes);
+        if (obj != null) {
+          return '$v == null ? null : ${_dartTypeStr(obj, allTypes)}.fromJson($v as Map<String, dynamic>)';
         }
         return '$v as ${_dartTypeStr(valueType, allTypes)}';
       default:
@@ -1160,17 +1184,27 @@ class DartCodeGenerator {
     final cast = '$accessor as Map<String, dynamic>';
     return switch (blocksType) {
       'realtime/channel' => () {
+        // Raw-vs-hydrated decision shared with the builder's
+        // AWSBLOCKS-NATIVE-002 diagnostic so the two cannot disagree.
+        if (!channelMessageHydratable(typeArgs, allTypes)) {
+          // No valid `(json) => T` deserializer for this message type; the
+          // builder emits the diagnostic, the body stays raw.
+          return accessor;
+        }
         final msg = _channelMessageType(typeArgs, allTypes);
         if (msg != null) {
           return 'RealtimeChannel.fromJson($cast, (json) => ${_dartTypeStr(msg, allTypes)}.fromJson(json))';
         }
-        // `RealtimeChannel<dynamic>`, so an identity deserializer type-checks.
-        if (typeArgs.isEmpty ||
-            _dartTypeStr(typeArgs[0], allTypes) == 'dynamic') {
-          return 'RealtimeChannel.fromJson($cast, (json) => json)';
+        // A `Map` message is decodable by the `Map`-only runtime: rebuild it
+        // per-value through the shared map decoder.
+        final arg = typeArgs.isEmpty ? null : typeArgs[0];
+        final unwrapped = arg is NullableType ? arg.inner : arg;
+        if (unwrapped is MapType) {
+          return 'RealtimeChannel.fromJson($cast, (json) => json.map((k, v) => MapEntry(k, ${_mapValueFromJson('v', unwrapped.valueType, allTypes)})))';
         }
-        // No valid `(json) => T` deserializer for a non-object type; stay raw.
-        return accessor;
+        // `RealtimeChannel<dynamic>` (incl. `dynamic?` and the absent arg), so
+        // an identity deserializer type-checks.
+        return 'RealtimeChannel.fromJson($cast, (json) => json)';
       }(),
       'file-bucket/download' => 'FileDownloadHandle.fromJson($cast)',
       'file-bucket/upload' => 'FileUploadHandle.fromJson($cast)',

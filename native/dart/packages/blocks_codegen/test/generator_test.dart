@@ -405,10 +405,336 @@ void main() {
           ],
         }),
       );
-      expect(output, isNot(contains('String.fromJson')));
-      expect(output, contains('return result == null ? null : result;'));
+      // Non-hydratable message: no `fromJson` call is emitted for it, and the
+      // nullable arm collapses to a bare `return result;` rather than a
+      // redundant `result == null ? null : result` throwing ternary.
+      expect(output, isNot(contains('fromJson')));
+      expect(output, isNot(contains('result == null ? null : result')));
       expect(output, contains('return result;'));
     });
+
+    test('a sealed-union channel message type hydrates via fromJson', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.events',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {r'$ref': '#/components/schemas/Event'},
+                  ],
+                },
+              },
+            },
+          ],
+          'components': {
+            'schemas': {
+              'Event': {
+                'oneOf': [
+                  {
+                    'type': 'object',
+                    'properties': {
+                      'kind': {
+                        'type': 'string',
+                        'enum': ['added'],
+                      },
+                      'id': {'type': 'string'},
+                    },
+                    'required': ['kind', 'id'],
+                  },
+                  {
+                    'type': 'object',
+                    'properties': {
+                      'kind': {
+                        'type': 'string',
+                        'enum': ['removed'],
+                      },
+                      'id': {'type': 'string'},
+                    },
+                    'required': ['kind', 'id'],
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      );
+      // The sealed union is a decodable object, so the channel hydrates it.
+      expect(output, contains('sealed class Event'));
+      expect(output, contains('Future<RealtimeChannel<Event>> events()'));
+      expect(
+        output,
+        contains(
+          'return RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => Event.fromJson(json))',
+        ),
+      );
+    });
+
+    test('a Map channel message type hydrates per value', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.metrics',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {
+                      'type': 'object',
+                      'additionalProperties': {'type': 'number'},
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(
+        output,
+        contains('Future<RealtimeChannel<Map<String, num>>> metrics()'),
+      );
+      expect(
+        output,
+        contains(
+          'return RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => json.map((k, v) => MapEntry(k, v as num)))',
+        ),
+      );
+    });
+
+    test('a nullable dynamic channel type argument uses an identity decoder', () {
+      // `oneOf: [{}, {type: null}]` renders the type arg as `dynamic?`; the
+      // structural check must still treat it as the identity/dynamic case.
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.dynQ',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {
+                      'oneOf': [
+                        <String, dynamic>{},
+                        {'type': 'null'},
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(output, isNot(contains('.fromJson(json)')));
+      expect(
+        output,
+        contains(
+          'return RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => json)',
+        ),
+      );
+    });
+
+    test('a non-hydratable bound channel emits the AWSBLOCKS-NATIVE-002 '
+        'diagnostic', () {
+      final model = _build(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.liveCount',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {'type': 'string'},
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(
+        model.warnings,
+        contains(
+          'AWSBLOCKS-NATIVE-002: api.liveCount returns realtime/channel with a '
+          "non-hydratable message type 'String' on dart; the value is "
+          'returned un-hydrated (not supported yet).',
+        ),
+      );
+    });
+
+    test(
+      'a nullable non-hydratable bound channel also emits AWSBLOCKS-NATIVE-002',
+      () {
+        final model = _build(
+          jsonEncode({
+            'openrpc': '1.3.2',
+            'info': {'title': 'test', 'version': '1.0.0'},
+            'methods': [
+              {
+                'name': 'api.liveCount',
+                'params': <Map<String, dynamic>>[],
+                'result': {
+                  'name': 'R',
+                  'schema': {
+                    'oneOf': [
+                      {
+                        'x-blocks-transferable': 'realtime/channel',
+                        'x-blocks-type-args': [
+                          {'type': 'string'},
+                        ],
+                      },
+                      {'type': 'null'},
+                    ],
+                  },
+                },
+              },
+            ],
+          }),
+        );
+        expect(
+          model.warnings,
+          contains(
+            'AWSBLOCKS-NATIVE-002: api.liveCount returns realtime/channel with a '
+            "non-hydratable message type 'String' on dart; the value is "
+            'returned un-hydrated (not supported yet).',
+          ),
+        );
+      },
+    );
+
+    test(
+      'AWSBLOCKS-NATIVE-002 is emitted exactly when the channel body is raw',
+      () {
+        // Parity across the type-arg matrix (direct and nullable): the diagnostic
+        // and the generated raw body are driven by one shared predicate, so an op
+        // is diagnosed if and only if its body stays `return result;`.
+        Map<String, dynamic> channelOp(
+          String name,
+          Map<String, dynamic> arg, {
+          bool nullable = false,
+        }) {
+          final channel = {
+            'x-blocks-transferable': 'realtime/channel',
+            'x-blocks-type-args': [arg],
+          };
+          return {
+            'name': name,
+            'params': <Map<String, dynamic>>[],
+            'result': {
+              'name': 'R_$name',
+              'schema': nullable
+                  ? {
+                      'oneOf': [
+                        channel,
+                        {'type': 'null'},
+                      ],
+                    }
+                  : channel,
+            },
+          };
+        }
+
+        final model = _build(
+          jsonEncode({
+            'openrpc': '1.3.2',
+            'info': {'title': 'test', 'version': '1.0.0'},
+            'methods': [
+              channelOp('api.obj', {r'$ref': '#/components/schemas/Msg'}),
+              channelOp('api.map', {
+                'type': 'object',
+                'additionalProperties': {'type': 'number'},
+              }),
+              channelOp('api.dyn', {
+                'oneOf': [
+                  <String, dynamic>{},
+                  {'type': 'null'},
+                ],
+              }),
+              channelOp('api.str', {'type': 'string'}),
+              channelOp('api.list', {
+                'type': 'array',
+                'items': {'type': 'string'},
+              }),
+              channelOp('api.enumArg', {r'$ref': '#/components/schemas/Color'}),
+              channelOp('api.strNull', {'type': 'string'}, nullable: true),
+              channelOp('api.mapNull', {
+                'type': 'object',
+                'additionalProperties': {'type': 'number'},
+              }, nullable: true),
+            ],
+            'components': {
+              'schemas': {
+                'Msg': {
+                  'type': 'object',
+                  'properties': {
+                    'x': {'type': 'number'},
+                  },
+                  'required': ['x'],
+                },
+                'Color': {
+                  'type': 'string',
+                  'enum': ['red', 'blue'],
+                },
+              },
+            },
+          }),
+        );
+        final output = _generateModel(model);
+
+        // Ops whose generated body stays raw (`return result;`), keyed by the
+        // `_client.call('<fullName>', ...)` that precedes the return.
+        final rawOps = <String>{};
+        final allOps = <String>{};
+        final re = RegExp(
+          r"_client\.call\('([^']+)'[^;]*\);\s*return ([^\n]*);",
+        );
+        for (final m in re.allMatches(output)) {
+          final fullName = m.group(1)!;
+          allOps.add(fullName);
+          if (m.group(2)!.trim() == 'result') rawOps.add(fullName);
+        }
+
+        final warnedOps = model.warnings
+            .where((w) => w.startsWith('AWSBLOCKS-NATIVE-002:'))
+            .map(
+              (w) =>
+                  w.split(' returns realtime/channel').first.split(': ').last,
+            )
+            .toSet();
+
+        // The invariant: diagnosed set == raw-body set, both directions.
+        expect(warnedOps, equals(rawOps));
+        // And it is the primitive/list/enum shapes (direct and nullable), not
+        // the object/map/dynamic ones, that stay raw.
+        expect(
+          rawOps,
+          equals({'api.str', 'api.list', 'api.enumArg', 'api.strNull'}),
+        );
+        expect(allOps.length, 8);
+      },
+    );
   });
 
   group('tuple generation', () {
