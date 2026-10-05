@@ -47,7 +47,7 @@ describe('assertAwsCredentials', () => {
 		await assert.rejects(
 			() => assertAwsCredentials('sandbox', async () => { throw namedError('CredentialsProviderError'); }, REGION_ENV),
 			(err: Error) => {
-				assert.match(err.message, /npm run sandbox/);
+				assert.match(err.message, /blocks sandbox/);
 				assert.match(err.message, /aws configure|AWS_PROFILE|AWS_ACCESS_KEY_ID/);
 				assert.match(err.message, /CredentialsProviderError/); // the name, for debugging
 				return true;
@@ -59,7 +59,7 @@ describe('assertAwsCredentials', () => {
 		await assert.rejects(
 			() => assertAwsCredentials('deploy', async () => { throw namedError('ExpiredToken'); }, REGION_ENV),
 			(err: Error) => {
-				assert.match(err.message, /npm run deploy/);
+				assert.match(err.message, /blocks deploy/);
 				assert.match(err.message, /aws sso login|AWS_PROFILE/);
 				return true;
 			},

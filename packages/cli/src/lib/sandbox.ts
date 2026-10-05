@@ -14,6 +14,7 @@ import { classifyError } from '@aws-blocks/core/runtime';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
+import { info, verbose, warn as logWarn, error as logError } from '../logger.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
@@ -155,10 +156,10 @@ export async function startSandbox(options: SandboxOptions) {
   // projectRoot below — so the written name matches the name resolved at synth.
   const secrets = await ensureSecrets('sandbox', process.cwd());
   if (secrets.created.length > 0) {
-    console.log(`🔐 Created secrets: ${secrets.created.join(', ')}`);
+    verbose(`Created secrets: ${secrets.created.join(', ')}`);
   }
   if (secrets.updated.length > 0) {
-    console.log(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
+    verbose(`Updated secrets: ${secrets.updated.join(', ')}`);
   }
 
   // Apply external-database migrations to the sandbox database before
@@ -169,8 +170,7 @@ export async function startSandbox(options: SandboxOptions) {
   // Runs before CDK deploy so both success and failure paths include block info.
   await importBackendForRegistry(backendPath);
 
-  console.log("🚀 Deploying to AWS...");
-  console.log("   (This may take a few minutes on first deploy)");
+  info('🚀 Deploying to AWS (this can take a few minutes on first deploy)…');
 
   try {
     runSync(
@@ -190,8 +190,8 @@ export async function startSandbox(options: SandboxOptions) {
       duration: Date.now() - sandboxStartTime,
       error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
     });
-    console.error("\n❌ Deployment failed.");
-    console.error(sandboxFailureRecoveryHint());
+    logError('Deployment failed.');
+    logError(sandboxFailureRecoveryHint());
     throw error;
   }
 
@@ -203,8 +203,8 @@ export async function startSandbox(options: SandboxOptions) {
     throw new Error("Could not find API URL in CDK outputs");
   }
 
-  console.log("\n✅ Sandbox deployed!");
-  console.log(`📡 API URL: ${apiUrl}`);
+  info("\n✅ Sandbox deployed.");
+  info(`📡 API URL: ${apiUrl}`);
 
   buildAndSendEvent({
     command: 'sandbox',
@@ -222,11 +222,11 @@ export async function startSandbox(options: SandboxOptions) {
   // the backend registers aws-middleware, not mock-middleware).
   const backendDefPath = resolve(join(dirname(resolve(backendPath)), 'index.ts'));
   const clientPath = join(dirname(backendDefPath), 'client.js');
-  console.log('📝 Generating client code...');
+  verbose('Generating client code…');
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const workerPath = join(__dirname, 'generate-client-worker.js');
-  execFileSync('node', ['--conditions=aws-runtime', '--import', 'tsx', workerPath, backendDefPath, clientPath], {
-    stdio: 'inherit',
+  runSync('node', ['--conditions=aws-runtime', '--import', 'tsx', workerPath, backendDefPath, clientPath], {
+    cwd: process.cwd(),
     env: { ...process.env, NODE_OPTIONS: '' },
   });
 
@@ -234,9 +234,8 @@ export async function startSandbox(options: SandboxOptions) {
     return apiUrl;
   }
 
-  console.log("\n👀 Starting CDK watch mode...");
-  console.log("🌐 Starting local dev server (proxying to AWS)...");
-  console.log(`\n   Open http://localhost:${clientPort}\n`);
+  info("\n👀 Starting CDK watch mode and local dev server (proxying to AWS)…");
+  info(`   Open http://localhost:${clientPort}\n`);
 
   const cdkWatch = spawnCommand("npx", [
     "cdk", "watch",
@@ -258,11 +257,11 @@ export async function startSandbox(options: SandboxOptions) {
   cdkWatch.stdout?.on("data", (data) => {
     const str = data.toString().trim();
     if (!str.match(/\[(START|END|REPORT|INIT_START)\s+RequestId:/)) {
-      console.log(`[CDK Watch] ${str}`);
+      verbose(`[CDK Watch] ${str}`);
     }
   });
   cdkWatch.stderr?.on("data", (data) => {
-    console.error(`[CDK Watch] ${data.toString().trim()}`);
+    verbose(`[CDK Watch] ${data.toString().trim()}`);
   });
 
   const devServerCmd = devCommand || `npx tsx watch aws-blocks/scripts/server.ts`;
@@ -288,9 +287,8 @@ export async function startSandbox(options: SandboxOptions) {
   const cleanup = async () => {
     if (cleaningUp) return; // idempotent — a second signal must not re-enter
     cleaningUp = true;
-    console.log("\n\n🛑 Stopping local processes...");
-    console.log("   (AWS resources are still running)");
-    console.log("\n   To destroy AWS resources, run: npm run sandbox:destroy\n");
+    info("\n\n🛑 Stopping local processes (AWS resources are still running)…");
+    info("   To destroy AWS resources, run: blocks sandbox:destroy\n");
     // Reap BOTH child trees the way the dev server reaps Vite — a process-group
     // SIGTERM→SIGKILL via the shared terminateProcessTree — instead of a bare
     // kill() that signals only the npx/shell parent and orphans the real
@@ -371,8 +369,8 @@ export async function emptyBucket(s3: S3Client, bucket: string): Promise<void> {
 			// resolved by hand. Log loudly with the first error code — this is the
 			// kind of silent skip that leaks a stack, so make it visible in CI output.
 			const first = res.Errors[0];
-			console.warn(
-				`  ⚠️  ${bucket}: ${res.Errors.length} object(s) could NOT be deleted ` +
+			logWarn(
+				`${bucket}: ${res.Errors.length} object(s) could NOT be deleted ` +
 					`(e.g. ${first.Key}: ${first.Code}). This bucket will block stack teardown ` +
 					`until cleared manually.`,
 			);
@@ -412,12 +410,12 @@ async function emptySandboxBuckets(stackNames: string[]): Promise<void> {
 				try {
 					await emptyBucket(s3, b);
 				} catch (e) {
-					console.warn(`  ⚠️  could not empty ${b}: ${(e as Error).message}`);
+					logWarn(`could not empty ${b}: ${(e as Error).message}`);
 				}
 			}
 		}
 	} catch (e) {
-		console.warn(`  ⚠️  bucket-emptying step skipped: ${(e as Error).message}`);
+		logWarn(`bucket-emptying step skipped: ${(e as Error).message}`);
 	}
 }
 
@@ -441,7 +439,7 @@ function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): 
 		// Warn (don't stay silent): if this returns [] on a real failure, the retry
 		// skips bucket-emptying — the exact silent-no-op this change exists to avoid.
 		const detail = (e as { stderr?: string; message?: string }).stderr || (e as Error).message;
-		console.warn(`  ⚠️  could not list sandbox stacks via 'cdk ls'; skipping bucket-emptying: ${detail}`);
+		logWarn(`could not list sandbox stacks via 'cdk ls'; skipping bucket-emptying: ${detail}`);
 		return [];
 	}
 }
@@ -477,20 +475,20 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 	for (let attempt = 0; ; attempt++) {
 		try {
 			deps.runDestroy();
-			console.log(attempt === 0 ? '\n✅ Sandbox destroyed!' : '\n✅ Sandbox destroyed on retry!');
+			info(attempt === 0 ? '\n✅ Sandbox destroyed.' : '\n✅ Sandbox destroyed on retry.');
 			return;
 		} catch (error) {
 			if (attempt < retryDelays.length) {
 				if (stackNames === undefined) stackNames = deps.listStackNames();
 				if (stackNames.length > 0) {
-					console.log('\n🧹 Emptying versioned S3 buckets before retry...');
+					verbose('Emptying versioned S3 buckets before retry…');
 					await deps.emptyBuckets(stackNames);
 				}
 				const delaySec = retryDelays[attempt] / 1000;
-				console.log(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
+				info(`Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)…`);
 				await deps.sleep(retryDelays[attempt]);
 			} else {
-				console.error('\n❌ Destroy failed after retries.');
+				logError('Destroy failed after retries.');
 				throw error;
 			}
 		}
@@ -499,7 +497,7 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 
 export async function destroySandbox(backendPath: string) {
   return trackCommand('sandbox:destroy', async () => {
-    console.log("🗑️  Destroying sandbox...");
+    info("🗑️  Destroying sandbox…");
 
     // Load .env.local so CDK synth can read project refs and other config.
     try { loadEnvFile('.env.local'); } catch (e: any) {
