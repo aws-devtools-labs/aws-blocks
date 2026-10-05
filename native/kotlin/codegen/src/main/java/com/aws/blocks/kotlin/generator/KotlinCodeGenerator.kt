@@ -826,9 +826,35 @@ class KotlinCodeGenerator(
             )
         }
         serverFileBuilder.addType(serversObjectBuilder.build().withApiVisibility())
+        serverFileBuilder.addFunction(generateDefaultEntryPoint(servers.first().name))
 
         return serverFileBuilder.build()
     }
+
+    /**
+     * Builds the accessor that lets callers write `Blocks()` for the spec's first server. The
+     * runtime cannot default the server itself, because it never sees the spec; an `invoke` on the
+     * companion puts the default where regenerating the spec keeps it current.
+     */
+    private fun generateDefaultEntryPoint(defaultServerName: String): FunSpec =
+        FunSpec
+            .builder("invoke")
+            .addKdoc(
+                "Reaches the backend on [Servers.%N], the first server the spec declares.\n\n" +
+                    "Name another one with `Blocks(Servers.other)`.",
+                toCamelCase(defaultServerName),
+            )
+            .addModifiers(apiModifiers)
+            .addModifiers(KModifier.OPERATOR)
+            .receiver(ClassNames.blocksCompanion)
+            .returns(ClassNames.blocks)
+            .addStatement(
+                "return %T(%T.%N)",
+                ClassNames.blocks,
+                ClassName(packageName, "Servers"),
+                toCamelCase(defaultServerName),
+            )
+            .build()
 
     // ── Per-API-group file generation ─────────────────────────────────
 

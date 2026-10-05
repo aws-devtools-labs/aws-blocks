@@ -68,17 +68,17 @@ On iOS, declare the same `relayTo` scheme in the app's `Info.plist` under `CFBun
 
 ## Using the Generated Code
 
-`Blocks` is the entry point. Construct one with a server from the generated `Servers` object, and
-reach each API in the spec through the extension property code generation adds for it.
+`Blocks` is the entry point. `Blocks()` reaches the server the spec declares, and each API in the
+spec is an extension property code generation adds for it.
 
 ```kotlin
 import com.aws.blocks.kotlin.Blocks
-import com.example.myapp.generated.Servers
 import com.example.myapp.generated.Todo
 import com.example.myapp.generated.api
 import com.example.myapp.generated.authApi
+import com.example.myapp.generated.invoke
 
-val blocks = Blocks(Servers.local)
+val blocks = Blocks()
 
 // Create a todo
 val todo: Todo = blocks.api.createTodo(title = "Buy groceries", priority = 1.0)
@@ -93,9 +93,14 @@ blocks.api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(complet
 val user = blocks.authApi.getCurrentUser()
 ```
 
+`Blocks()` is generated, so it follows the spec's first server by name — regenerate against a
+different backend and the call site does not change. The `invoke` import is what brings it into
+scope; without it the compiler reports a missing `server` argument. To pin a specific server from a
+multi-server spec, name it: `Blocks(Servers.sandbox)`.
+
 One instance holds one HTTP client and connection pool for every API in the spec, so build one and
 hold it for as long as the backend is in use. It is an `AutoCloseable`: `close()` shuts the client
-down, and work scoped to a block can use `Blocks(Servers.local).use { ... }`.
+down, and work scoped to a block can use `Blocks().use { ... }`.
 
 The API objects those properties return are stateless wrappers over that client, so reading one
 twice is as cheap as holding it — `blocks.api.listTodos()` on each call is fine.

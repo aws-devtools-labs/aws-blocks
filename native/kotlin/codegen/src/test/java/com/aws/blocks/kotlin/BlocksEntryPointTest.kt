@@ -95,10 +95,28 @@ class BlocksEntryPointTest : FunSpec({
         source shouldContain """BlocksServer(name = "local", url = "http://localhost:3001")"""
     }
 
-    test("internal visibility covers the extension property too") {
+    test("a zero-argument accessor is generated for the spec's default server") {
+        val source = generate(spec(servers = """[{ "name": "local", "url": "http://localhost:3001" }]"""))
+
+        source shouldContain
+            "public operator fun Blocks.Companion.invoke(): Blocks = Blocks(Servers.local)"
+    }
+
+    test("the default server is the spec's first one rather than one named local") {
+        val source = generate(
+            spec(servers = """[{ "name": "sandbox", "url": "https://api.example.com/prod" }]"""),
+        )
+
+        source shouldContain
+            "public operator fun Blocks.Companion.invoke(): Blocks = Blocks(Servers.sandbox)"
+    }
+
+    test("internal visibility covers the generated accessors too") {
         val source = generate(spec(), internalVisibility = true)
 
         source shouldContain "internal val Blocks.todos: Todos"
+        source shouldContain "internal operator fun Blocks.Companion.invoke(): Blocks"
         source.contains("public val Blocks.") shouldBe false
+        source.contains("public operator fun") shouldBe false
     }
 })
