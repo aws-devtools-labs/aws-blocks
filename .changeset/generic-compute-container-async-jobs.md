@@ -3,6 +3,7 @@
 "@aws-blocks/bb-container-compute": minor
 "@aws-blocks/bb-lambda-compute": minor
 "@aws-blocks/bb-async-job": minor
+"@aws-blocks/bb-cron-job": patch
 "@aws-blocks/core": minor
 "@aws-blocks/blocks": minor
 ---
