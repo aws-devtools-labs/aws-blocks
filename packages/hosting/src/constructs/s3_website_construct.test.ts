@@ -53,7 +53,7 @@ describe('S3WebsiteAdapter — capability matrix + negotiation', () => {
   const a = new S3WebsiteAdapter();
   it('is the s3-website service; dynamic + TLS unsupported', () => {
     assert.equal(a.service, 's3-website');
-    assert.equal(a.supports('ServeStaticAsset'), 'extended');
+    assert.equal(a.supports('ServeStaticAsset'), 'supported');
     assert.equal(a.supports('CustomDomainTls'), 'unsupported');
     assert.equal(a.supports('RunServerRender'), 'unsupported');
   });

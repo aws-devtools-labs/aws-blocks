@@ -23,8 +23,8 @@ import { S3WebsiteConstruct } from './s3_website_construct.js';
 
 /** S3 website's per-capability support (static/SPA only, HTTP-only). */
 const S3_WEBSITE_SUPPORT: Record<CapabilityId, SupportTier> = {
-  RouteRequest: 'extended', // website index/error-document routing
-  ServeStaticAsset: 'extended', // public website bucket
+  RouteRequest: 'supported', // website index/error-document routing
+  ServeStaticAsset: 'supported', // public website bucket
   RunServerRender: 'unsupported',
   StreamServerRender: 'unsupported',
   ProxySameOriginApi: 'unsupported',
@@ -33,12 +33,12 @@ const S3_WEBSITE_SUPPORT: Record<CapabilityId, SupportTier> = {
   InjectResponseHeaders: 'unsupported',
   FilterRequests: 'unsupported',
   CacheResponses: 'unsupported',
-  AtomicRelease: 'degraded', // deploy overwrites the root; no build-id cutover
+  AtomicRelease: 'unsupported', // deploy overwrites the root; no build-id cutover
   PinSession: 'unsupported',
   OptimizeImage: 'unsupported',
   RestrictGeo: 'unsupported',
   AccessLogging: 'unsupported', // S3 server access logging not wired in the website construct yet
-  ServeErrorPage: 'degraded', // has an S3 error-document slot (used for SPA fallback), not branded multi-status pages
+  ServeErrorPage: 'unsupported', // has an S3 error-document slot (used for SPA fallback), not branded multi-status pages
   Redirect: 'unsupported', // S3 routing rules not wired for the plan's redirects
   Alarms: 'unsupported',
 };

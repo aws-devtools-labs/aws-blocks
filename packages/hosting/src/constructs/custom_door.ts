@@ -4,7 +4,7 @@
  * A custom door is a customer-authored {@link FrontDoorLayerAdapter}. Before we
  * let it build anything, we negotiate the deploy's {@link CapabilityPlan}
  * against the adapter's own `supports()` declaration: a capability the app
- * DEMANDS that the door marks `unsupported` (or `degraded` without an explicit
+ * DEMANDS that the door marks `unsupported` (without an explicit
  * `degrade` opt-in) fails HERE, at synth — never as a silently broken runtime.
  * This is "safe by construction": the guarantee holds even if the adapter author
  * never calls `negotiate` themselves, because the framework runs it around them.
@@ -23,7 +23,7 @@ import { enforceNegotiation, type NegotiationMode } from './negotiation_policy.j
 
 /** Options for {@link renderCustomDoor}. */
 export type RenderCustomDoorOptions = {
-	/** Capabilities the app accepts in a degraded form (else they fail in `strict`). */
+	/** Capabilities the app waives — deploy without them (else they fail in `strict`). */
 	degrade?: CapabilityId[];
 	/** How strictly the capability check is enforced. @default 'strict' */
 	negotiation?: NegotiationMode;
@@ -36,10 +36,10 @@ export type RenderCustomDoorOptions = {
  * @param plan    the service-agnostic {@link CapabilityPlan} for the deploy.
  * @param adapter the customer's {@link FrontDoorLayerAdapter}.
  * @param ctx     the render context (the same CDK handles the built-in doors get).
- * @param opts.degrade capabilities the app accepts in a degraded form (else they fail).
+ * @param opts.degrade capabilities the app waives — deploy without them (else they fail).
  * @param opts.negotiation `'strict'` (default) · `'warn'` · `'off'` — see {@link NegotiationMode}.
  * @throws HostingError('UnsupportedFrontDoorError') in `strict` mode when a demanded
- *   capability is `unsupported`, or `degraded` without being listed in `degrade`.
+ *   capability is `unsupported` and not listed in `degrade`.
  */
 export function renderCustomDoor(
 	scope: Construct,
@@ -53,7 +53,7 @@ export function renderCustomDoor(
 		negotiation: opts.negotiation,
 		errorCode: 'UnsupportedFrontDoorError',
 		resolution:
-			"Support the missing capabilities in your adapter's `supports`/`renderLayer`, accept a degraded one via `frontDoor.degrade`, relax the check via `frontDoor.negotiation`, or choose a built-in door.",
+			"Support the missing capabilities in your adapter's `supports`/`renderLayer`, waive one via `frontDoor.degrade`, relax the check via `frontDoor.negotiation`, or choose a built-in door.",
 	});
 	return adapter.renderLayer(scope, plan, ctx);
 }

@@ -28,7 +28,7 @@ describe('CloudFrontAdapter — capability matrix', () => {
 
   it('supports every capability at the core tier (full-feature default door)', () => {
     for (const cap of ALL_CAPABILITIES) {
-      assert.equal(adapter.supports(cap), 'core', `expected ${cap} to be core`);
+      assert.equal(adapter.supports(cap), 'supported', `expected ${cap} to be core`);
     }
   });
 });

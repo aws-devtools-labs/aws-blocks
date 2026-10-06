@@ -462,7 +462,7 @@ export interface HostingProps {
    * existing ALB, private/internal deploys, or apps that don't need a CDN.
    *
    * Edge-only capabilities (edge caching, per-route response headers, skew-pin,
-   * geo) are degraded on ALB and must be accepted via `degrade` (synth fails
+   * geo) are unsupported on ALB and must be waived via `degrade` (synth fails
    * otherwise — conscious, never silent). Same-origin API proxy (`/aws-blocks/*`)
    * is CloudFront-only for now; on ALB the frontend reaches the backend via
    * `BLOCKS_API_URL` (cross-origin).
@@ -472,7 +472,7 @@ export interface HostingProps {
    * It owns routing and proxies `/aws-blocks/*` same-origin natively (no
    * forwarder Lambda). Choose the flavor with `api`: `'rest'` (default) or
    * `'http'` (HTTP API v2). Edge capabilities and response streaming are
-   * degraded/unsupported and must be accepted via `degrade`.
+   * unsupported and must be waived via `degrade`.
    *
    * Pass `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` to STACK the two — a CloudFront
    * edge (static/SSR/image served as today) that forwards the same-origin API

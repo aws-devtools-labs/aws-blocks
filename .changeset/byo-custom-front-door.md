@@ -37,6 +37,11 @@ The capability vocabulary was reviewed against real sample apps for what can
 actually be detected from an app. `LongRequest` and `LargePayload` are removed:
 nothing in an app's build or props reveals them, so they could never be checked.
 
+`SupportTier` is simplified to two values, `'supported' | 'unsupported'`. A door
+states a fact about each capability; what the app can live without is the app's
+call. `degrade: [capability]` now waives any unsupported capability the app
+demands (deploy without it), and `negotiation` relaxes the check door-wide.
+
 Additive and backward-compatible: omit `frontDoor` (or use any built-in door —
 `'cloudfront'` default, `'none'`, `{ kind: 'alb' }`, `{ kind: 'apiGateway' }`,
 `{ kind: 'stacked', … }`) and nothing changes.

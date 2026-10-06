@@ -20,7 +20,7 @@ const door = (tiers: Partial<Record<CapabilityId, SupportTier>>) => {
 		service: 'test-door',
 		supports(cap: CapabilityId): SupportTier {
 			calls++;
-			return tiers[cap] ?? 'core';
+			return tiers[cap] ?? 'supported';
 		},
 		get calls() {
 			return calls;
@@ -44,13 +44,13 @@ describe('enforceNegotiation', () => {
 		);
 	});
 
-	it('strict throws on a demanded degraded capability not listed in degrade', () => {
-		assert.throws(() => enforceNegotiation(ssrPlan, door({ RunServerRender: 'degraded' }), opts('strict')));
+	it('strict throws on a demanded unsupported capability not listed in degrade', () => {
+		assert.throws(() => enforceNegotiation(ssrPlan, door({ RunServerRender: 'unsupported' }), opts('strict')));
 	});
 
-	it('strict accepts a degraded capability listed in degrade', () => {
+	it('strict accepts an unsupported capability waived via degrade', () => {
 		assert.doesNotThrow(() =>
-			enforceNegotiation(ssrPlan, door({ RunServerRender: 'degraded' }), opts('strict', ['RunServerRender'])),
+			enforceNegotiation(ssrPlan, door({ RunServerRender: 'unsupported' }), opts('strict', ['RunServerRender'])),
 		);
 	});
 

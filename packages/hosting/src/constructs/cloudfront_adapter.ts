@@ -26,32 +26,32 @@ import type { ChildHandles, FrontDoorLayerAdapter, LayerHandle } from './layer.j
 
 /**
  * CloudFront's per-capability support. CloudFront is the full-feature default:
- * it supports every hosting capability the standard (`core`) way — global edge
+ * it supports (`supported`) every hosting capability — global edge
  * caching, streaming SSR, Lambda@Edge / CloudFront Functions, OAC private
  * origins, a ResponseHeadersPolicy, a CLOUDFRONT-scoped WAF, and geo
  * restriction. This table is the CloudFront column of the capability × service
  * matrix; other adapters (ALB, API Gateway) will declare their own, where some
- * cells are `extended`, `degraded`, or `unsupported`.
+ * cells are `unsupported`.
  */
 const CLOUDFRONT_SUPPORT: Record<CapabilityId, SupportTier> = {
-  RouteRequest: 'core',
-  ServeStaticAsset: 'core',
-  RunServerRender: 'core',
-  StreamServerRender: 'core',
-  ProxySameOriginApi: 'core',
-  RouteApiNamespace: 'core', // a behavior per namespace → each compute's ingress
-  CustomDomainTls: 'core',
-  InjectResponseHeaders: 'core',
-  FilterRequests: 'core',
-  CacheResponses: 'core',
-  AtomicRelease: 'core',
-  PinSession: 'core',
-  OptimizeImage: 'core',
-  RestrictGeo: 'core',
-  AccessLogging: 'core', // enableLogging + logBucket
-  ServeErrorPage: 'core', // custom error responses / error-page HTML
-  Redirect: 'core', // CloudFront Function (www↔apex) + KVS redirects
-  Alarms: 'core', // MonitoringConstruct (CF 5xx, Lambda errors/throttles, DLQ)
+  RouteRequest: 'supported',
+  ServeStaticAsset: 'supported',
+  RunServerRender: 'supported',
+  StreamServerRender: 'supported',
+  ProxySameOriginApi: 'supported',
+  RouteApiNamespace: 'supported', // a behavior per namespace → each compute's ingress
+  CustomDomainTls: 'supported',
+  InjectResponseHeaders: 'supported',
+  FilterRequests: 'supported',
+  CacheResponses: 'supported',
+  AtomicRelease: 'supported',
+  PinSession: 'supported',
+  OptimizeImage: 'supported',
+  RestrictGeo: 'supported',
+  AccessLogging: 'supported', // enableLogging + logBucket
+  ServeErrorPage: 'supported', // custom error responses / error-page HTML
+  Redirect: 'supported', // CloudFront Function (www↔apex) + KVS redirects
+  Alarms: 'supported', // MonitoringConstruct (CF 5xx, Lambda errors/throttles, DLQ)
 };
 
 /**

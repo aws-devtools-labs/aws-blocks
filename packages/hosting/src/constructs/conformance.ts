@@ -28,7 +28,7 @@ import { CAPABILITY_DEMAND, formatNegotiationErrors, negotiate } from '../plan/n
 import type { AdapterContext, CapabilityId, CapabilityPlan, SupportTier } from '../plan/types.js';
 import type { FrontDoorLayerAdapter } from './layer.js';
 
-const VALID_TIERS: ReadonlySet<SupportTier> = new Set<SupportTier>(['core', 'extended', 'degraded', 'unsupported']);
+const VALID_TIERS: ReadonlySet<SupportTier> = new Set<SupportTier>(['supported', 'unsupported']);
 
 /** Every capability in the vocabulary (the demand registry is the source of truth). */
 const ALL_CAPABILITIES = Object.keys(CAPABILITY_DEMAND) as CapabilityId[];
@@ -49,7 +49,7 @@ export type AdapterConformanceOptions = {
 	plan?: CapabilityPlan;
 	/** Render context the adapter reads (bucket, compute, …). Defaults to `{}`. */
 	ctx?: AdapterContext;
-	/** Capabilities accepted in degraded form for the negotiation check. */
+	/** Capabilities waived (deploy without them) for the negotiation check. */
 	degrade?: CapabilityId[];
 };
 
@@ -78,7 +78,7 @@ export function assertAdapterConformance(
 		}
 		if (!VALID_TIERS.has(tier)) {
 			throw new Error(
-				`${label}: supports('${capability}') returned ${JSON.stringify(tier)} — expected 'core' | 'extended' | 'degraded' | 'unsupported'.`,
+				`${label}: supports('${capability}') returned ${JSON.stringify(tier)} — expected 'supported' | 'unsupported'.`,
 			);
 		}
 	}

@@ -391,7 +391,7 @@ export type HostingConstructProps = {
    *   For enterprises behind an existing ALB, private/internal deploys, or
    *   apps that simply don't need a global edge. Capabilities CloudFront does
    *   at the edge (edge cache, per-route response headers, skew-pin, geo)
-   *   are degraded on ALB and must be accepted via `degrade` (the negotiator
+   *   are unsupported on ALB and must be waived via `degrade` (the negotiator
    *   fails synth otherwise — conscious, never silent).
    * - `{ kind: 'apiGateway', … }` — an Amazon API Gateway as the front door
    *   (regional, no CDN, no VPC/NAT, scale-to-zero, pay-per-request). The
@@ -400,7 +400,7 @@ export type HostingConstructProps = {
    *   Lambda, and proxies `/aws-blocks/*` same-origin to the backend natively
    *   (no forwarder Lambda). Best for a SPA/SSR app that wants no CDN and no
    *   always-on ALB baseline. Edge capabilities (edge cache, per-route headers,
-   *   skew-pin, geo) and response streaming are degraded/unsupported and must
+   *   skew-pin, geo) and response streaming are unsupported and must
    *   be accepted via `degrade`. Choose the flavor with `api`: `'rest'`
    *   (default) or `'http'` (cheaper HTTP API v2).
    *
@@ -431,7 +431,7 @@ export type HostingConstructProps = {
          * the `api` prop; enables cookie auth with no CORS.
          */
         backendApiUrl?: string;
-        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
+        /** Capabilities the app explicitly waives — deploy without them (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
         /**
          * How strictly the capability check is enforced. `'strict'` (default) fails
@@ -465,7 +465,7 @@ export type HostingConstructProps = {
          * HTTPS URL natively — no forwarder Lambda (unlike the ALB door).
          */
         backendApiUrl?: string;
-        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
+        /** Capabilities the app explicitly waives — deploy without them (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
         /**
          * How strictly the capability check is enforced. `'strict'` (default) fails
@@ -494,7 +494,7 @@ export type HostingConstructProps = {
          * `plan.backend` origin the adapter routes to.
          */
         backendApiUrl?: string;
-        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
+        /** Capabilities the app explicitly waives — deploy without them (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
         /**
          * How strictly the capability check is enforced. `'strict'` (default) fails
@@ -1618,8 +1618,8 @@ export class HostingConstruct extends Construct {
       // Demand signals from the app's props/manifest (the demand surface) — the
       // negotiator requires the matching capability ONLY when the app asked for
       // it, so a door that lacks an UN-demanded feature negotiates clean (missing
-      // ≠ degraded). A door that lacks a DEMANDED feature fails/degrades loudly
-      // instead of silently dropping it.
+      // ≠ degraded). A door that lacks a DEMANDED feature fails loudly (unless the
+      // app waives it via `degrade`) instead of silently dropping it.
       const serverStreams = serverName ? manifest.compute?.[serverName]?.streaming === true : false;
       const plan = buildCapabilityPlan({
         manifest,
@@ -1681,7 +1681,7 @@ export class HostingConstruct extends Construct {
         // SSR/image Lambdas) plus native same-origin backend proxy. `api` picks
         // REST (default; lambda:InvokeFunction — no Function-URL body-hash issue)
         // vs the cheaper HTTP API v2. Edge capabilities (cache/headers/skew/geo)
-        // and streaming are degraded/unsupported and accepted via `degrade`.
+        // and streaming are unsupported and waived via `degrade`.
         handle = renderGraph(this, composeGraph(plan, 'api-gateway'), plan, {
           ...common,
           apiType: fd.api ?? 'http',

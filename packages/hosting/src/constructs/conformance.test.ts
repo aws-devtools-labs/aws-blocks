@@ -10,7 +10,7 @@ import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
 class GoodDoor implements FrontDoorLayerAdapter {
 	readonly service = 'good-edge';
 	supports(cap: CapabilityId): SupportTier {
-		return cap === 'RouteRequest' || cap === 'ServeStaticAsset' ? 'core' : 'unsupported';
+		return cap === 'RouteRequest' || cap === 'ServeStaticAsset' ? 'supported' : 'unsupported';
 	}
 	renderLayer(scope: Construct, _plan: CapabilityPlan, _ctx: AdapterContext): LayerHandle {
 		new CfnResource(scope, 'GoodDoorRes', { type: 'AWS::CloudFormation::WaitConditionHandle' });
@@ -43,7 +43,7 @@ describe('assertAdapterConformance', () => {
 	it('fails when supports() returns an invalid tier', () => {
 		const door = new GoodDoor();
 		door.supports = () => 'maybe' as SupportTier;
-		assert.throws(() => assertAdapterConformance(door, { scope: freshScope() }), /expected 'core'/);
+		assert.throws(() => assertAdapterConformance(door, { scope: freshScope() }), /expected 'supported'/);
 	});
 
 	it('fails when the adapter cannot serve the baseline static plan', () => {

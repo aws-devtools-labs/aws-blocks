@@ -13,7 +13,7 @@ const planWith = (over: Partial<CapabilityPlan> = {}): CapabilityPlan => ({
 
 const adapterWith = (tiers: Partial<Record<CapabilityId, SupportTier>>): FrontDoorAdapter => ({
   service: 'test',
-  supports: (c) => tiers[c] ?? 'core',
+  supports: (c) => tiers[c] ?? 'supported',
   render: () => ({ url: 'http://x' }),
 });
 
@@ -72,21 +72,21 @@ describe('negotiate', () => {
     assert.equal(errors[0]?.capability, 'ServeStaticAsset');
   });
 
-  it('errors on a required + degraded capability without opt-in', () => {
+  it('errors on a required + unsupported capability without a waiver', () => {
     const plan = planWith({ policies: { spaFallback: false, hasServer: false, skewEnabled: true } });
-    const { errors } = negotiate(plan, adapterWith({ PinSession: 'degraded' }));
+    const { errors } = negotiate(plan, adapterWith({ PinSession: 'unsupported' }));
     assert.ok(errors.some((e) => e.capability === 'PinSession'));
   });
 
-  it('warns (not errors) on a degraded capability the app opted into', () => {
+  it('warns (not errors) on an unsupported capability the app waived via degrade', () => {
     const plan = planWith({ policies: { spaFallback: false, hasServer: false, skewEnabled: true } });
-    const { errors, warnings } = negotiate(plan, adapterWith({ PinSession: 'degraded' }), { degrade: ['PinSession'] });
+    const { errors, warnings } = negotiate(plan, adapterWith({ PinSession: 'unsupported' }), { degrade: ['PinSession'] });
     assert.equal(errors.length, 0);
     assert.ok(warnings.some((w) => w.capability === 'PinSession'));
   });
 
-  it('is silent for a fully core/extended adapter', () => {
-    const { errors, warnings } = negotiate(planWith(), adapterWith({ RouteRequest: 'extended' }));
+  it('is silent for a fully supported adapter', () => {
+    const { errors, warnings } = negotiate(planWith(), adapterWith({ RouteRequest: 'supported' }));
     assert.equal(errors.length, 0);
     assert.equal(warnings.length, 0);
   });

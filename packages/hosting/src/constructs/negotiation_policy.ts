@@ -25,7 +25,7 @@ const MODES: ReadonlySet<NegotiationMode> = new Set<NegotiationMode>(['strict', 
 
 /** Options for {@link enforceNegotiation}. */
 export type EnforceNegotiationOptions = {
-	/** Capabilities the app accepts in a degraded form (else they fail in `strict`). */
+	/** Capabilities the app waives — deploy without them (else they fail in `strict`). */
 	degrade?: CapabilityId[];
 	/** How strictly to enforce. @default 'strict' */
 	negotiation?: NegotiationMode;
@@ -41,7 +41,7 @@ export type EnforceNegotiationOptions = {
  * reported as warnings.
  *
  * @throws HostingError(`opts.errorCode`) in `strict` mode when a demanded
- *   capability is unsupported, or degraded without being listed in `degrade`.
+ *   capability is unsupported and not listed in `degrade`.
  * @throws HostingError('InvalidPropsError') for an unknown `negotiation` value.
  */
 export function enforceNegotiation(
@@ -82,7 +82,7 @@ export function enforceNegotiation(
 
 	for (const w of result.warnings) {
 		process.stderr.write(
-			`⚠️  Hosting(${door.service}): capability '${w.capability}' runs in a degraded form (accepted via \`degrade\`).\n`,
+			`⚠️  Hosting(${door.service}): capability '${w.capability}' is not available — deploying without it (waived via \`degrade\`).\n`,
 		);
 	}
 }

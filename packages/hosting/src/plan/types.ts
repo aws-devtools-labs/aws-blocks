@@ -55,7 +55,7 @@ export type RouteTable = {
 /**
  * Cross-cutting deployment policies — the neutral form of what today lives in
  * the CloudFront KVS `meta` blob and various construct props. A renderer maps
- * each to its service's mechanism (or declares it unsupported/degraded).
+ * each to its service's mechanism (or declares it unsupported).
  */
 export type PlanPolicies = {
   /** URL prefix the whole site is served under (Next `basePath` etc.), or undefined. */
@@ -196,13 +196,19 @@ export type CapabilityId =
   | 'Alarms';
 
 /**
- * How well an adapter supports a capability.
- *   - `core`        — supported the standard way.
- *   - `extended`    — supported via a different but full mechanism.
- *   - `degraded`    — a lesser version (opt-in required, else the negotiator fails).
- *   - `unsupported` — cannot do it (required → hard synth error).
+ * Whether a door can deliver a capability. A fact about the door, not a
+ * judgment about the app:
+ *   - `supported`   — the door delivers the capability's behavior, by any
+ *                     mechanism (a CloudFront Function or ALB listener rules both
+ *                     count). A demand passes silently.
+ *   - `unsupported` — the door can't deliver it. A demand fails synth unless the
+ *                     app waives that capability via `degrade`, or relaxes the
+ *                     whole check via `negotiation: 'warn' | 'off'`.
+ *
+ * What the app can live without is the app's decision (`degrade`), so the door
+ * no longer grades "reduced" support.
  */
-export type SupportTier = 'core' | 'extended' | 'degraded' | 'unsupported';
+export type SupportTier = 'supported' | 'unsupported';
 
 /** Per-deploy context an adapter needs beyond the plan (CDK handles, scope, etc.). */
 export type AdapterContext = {

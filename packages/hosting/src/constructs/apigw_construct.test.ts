@@ -197,10 +197,10 @@ describe('ApiGatewayAdapter — capability matrix', () => {
   const a = new ApiGatewayAdapter();
   it('is the api-gateway service', () => assert.equal(a.service, 'api-gateway'));
   it('supports SSR (core) but not streaming (unsupported)', () => {
-    assert.equal(a.supports('RunServerRender'), 'core');
+    assert.equal(a.supports('RunServerRender'), 'supported');
     assert.equal(a.supports('StreamServerRender'), 'unsupported');
-    assert.equal(a.supports('ProxySameOriginApi'), 'core');
-    assert.equal(a.supports('CacheResponses'), 'degraded');
+    assert.equal(a.supports('ProxySameOriginApi'), 'supported');
+    assert.equal(a.supports('CacheResponses'), 'unsupported');
   });
   it('throws when the plan requires streaming without opt-in', () => {
     const app = new App();

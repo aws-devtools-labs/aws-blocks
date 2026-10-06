@@ -9,7 +9,7 @@
  * ordered by specificity so the first match wins — the ALB analogue of
  * CloudFront's KVS router.
  *
- * What ALB does NOT do (declared `degraded`/handled by the negotiator, not
+ * What ALB does NOT do (declared `unsupported`/handled by the negotiator, not
  * silently dropped): global edge caching, per-route response-header injection,
  * skew-pin cookies, geo restriction. See {@link AlbAdapter}.
  */

@@ -2,14 +2,16 @@
  * Capability negotiation — the conscious-degradation contract.
  *
  * Given a {@link CapabilityPlan} and a {@link FrontDoorAdapter}, decide whether
- * the chosen front door can serve the deploy, and how. The rule:
- *   - a REQUIRED capability the adapter marks `unsupported` → hard error.
- *   - a REQUIRED capability the adapter marks `degraded` → error UNLESS the app
- *     explicitly opted into degrading it, in which case a warning.
- *   - `core` / `extended` → fine, silent.
+ * the chosen front door can serve the deploy. The door states a fact per
+ * capability (`supported` | `unsupported`); the APP decides what it can live
+ * without. The rule:
+ *   - a REQUIRED capability the adapter marks `supported` → fine, silent.
+ *   - a REQUIRED capability the adapter marks `unsupported` → error UNLESS the
+ *     app explicitly waived it via `degrade`, in which case a warning.
  *
- * This is what makes "some capabilities degrade per service" EXPLICIT rather
- * than a silent `if (!cloudfront) skip`.
+ * This is what makes "some capabilities are missing per service" EXPLICIT rather
+ * than a silent `if (!cloudfront) skip`. The door-wide escape hatch
+ * (`negotiation: 'warn' | 'off'`) is applied by the caller on top of this.
  */
 import type { CapabilityId, CapabilityPlan, FrontDoorAdapter } from './types.js';
 
@@ -85,8 +87,8 @@ export const requiredCapabilities = (plan: CapabilityPlan): Set<CapabilityId> =>
 };
 
 export type NegotiationResult = {
-  /** Capabilities that block the deploy (required + unsupported, or required + degraded without opt-in). */
-  errors: Array<{ capability: CapabilityId; tier: 'unsupported' | 'degraded' }>;
+  /** Capabilities that block the deploy (required + unsupported, not waived via `degrade`). */
+  errors: Array<{ capability: CapabilityId; tier: 'unsupported' }>;
   /** Capabilities that work but in a lesser form the app opted into. */
   warnings: Array<{ capability: CapabilityId }>;
 };
@@ -95,7 +97,7 @@ export type NegotiationResult = {
 export type NegotiateOptions = {
   /** Override the inferred required set. */
   required?: Iterable<CapabilityId>;
-  /** Capabilities the app explicitly accepts in degraded form. */
+  /** Capabilities the app explicitly waives (deploys without) even if the door lacks them. */
   degrade?: Iterable<CapabilityId>;
 };
 
@@ -121,8 +123,6 @@ export const negotiate = (
   for (const capability of required) {
     const tier = adapter.supports(capability);
     if (tier === 'unsupported') {
-      errors.push({ capability, tier });
-    } else if (tier === 'degraded') {
       if (degradeOk.has(capability)) warnings.push({ capability });
       else errors.push({ capability, tier });
     }
@@ -132,10 +132,9 @@ export const negotiate = (
 
 /** Format a {@link NegotiationResult}'s errors into an actionable message. */
 export const formatNegotiationErrors = (service: string, result: NegotiationResult): string => {
-  const lines = result.errors.map(({ capability, tier }) =>
-    tier === 'unsupported'
-      ? `  • ${capability}: not available on '${service}'.`
-      : `  • ${capability}: only available in a degraded form on '${service}' — pass it in \`degrade\` to accept that, or choose a different front door.`,
+  const lines = result.errors.map(
+    ({ capability }) =>
+      `  • ${capability}: not available on '${service}' — list it in \`degrade\` to deploy without it, or choose a different front door.`,
   );
   return `Front door '${service}' cannot serve this deploy:\n${lines.join('\n')}`;
 };

@@ -24,7 +24,7 @@ const ssrPlan: CapabilityPlan = {
 	release: { buildId: 'testbuild' },
 };
 
-// The baseline an SSR-capable door supports as `core`; each test overrides the
+// The baseline an SSR-capable door supports as `supported`; each test overrides the
 // contested capability via the `tiers` ctor arg. (An SSR plan demands
 // RunServerRender AND AtomicRelease — the build-id cutover — so both are here.)
 const CORE_BASELINE: ReadonlySet<CapabilityId> = new Set<CapabilityId>([
@@ -41,7 +41,7 @@ class FakeDoor implements FrontDoorLayerAdapter {
 	constructor(private readonly tiers: Partial<Record<CapabilityId, SupportTier>> = {}) {}
 	supports(cap: CapabilityId): SupportTier {
 		if (cap in this.tiers) return this.tiers[cap] as SupportTier;
-		return CORE_BASELINE.has(cap) ? 'core' : 'unsupported';
+		return CORE_BASELINE.has(cap) ? 'supported' : 'unsupported';
 	}
 	renderLayer(scope: Construct, _plan: CapabilityPlan, _ctx: AdapterContext): LayerHandle {
 		this.rendered = true;
@@ -71,21 +71,21 @@ describe('renderCustomDoor', () => {
 		assert.equal(door.rendered, false, 'the adapter must not build anything when negotiation fails');
 	});
 
-	it('fails when a demanded capability is degraded and NOT accepted via degrade', () => {
-		const door = new FakeDoor({ RunServerRender: 'degraded' });
-		assert.throws(() => renderCustomDoor(stack(), ssrPlan, door, {}), /RunServerRender|degraded/);
+	it('fails when a demanded unsupported capability is NOT waived via degrade', () => {
+		const door = new FakeDoor({ RunServerRender: 'unsupported' });
+		assert.throws(() => renderCustomDoor(stack(), ssrPlan, door, {}), /RunServerRender/);
 		assert.equal(door.rendered, false);
 	});
 
-	it('renders when a degraded capability is explicitly accepted via degrade', () => {
-		const door = new FakeDoor({ RunServerRender: 'degraded' });
+	it('renders when an unsupported capability is explicitly waived via degrade', () => {
+		const door = new FakeDoor({ RunServerRender: 'unsupported' });
 		const handle = renderCustomDoor(stack(), ssrPlan, door, {}, { degrade: ['RunServerRender'] });
 		assert.equal(door.rendered, true);
 		assert.equal(handle.url, 'https://fake.example');
 	});
 
 	it('renders when the door fully supports the demanded capability', () => {
-		const door = new FakeDoor({ RunServerRender: 'core' });
+		const door = new FakeDoor({ RunServerRender: 'supported' });
 		renderCustomDoor(stack(), ssrPlan, door, {});
 		assert.equal(door.rendered, true);
 	});

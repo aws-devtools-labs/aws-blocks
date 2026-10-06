@@ -30,19 +30,19 @@ import { ApiGatewayRestConstruct } from './apigw_rest_construct.js';
 
 /** API Gateway HTTP API's per-capability support. */
 const APIGW_SUPPORT: Record<CapabilityId, SupportTier> = {
-  RouteRequest: 'extended', // API routes instead of KVS + CF Function
-  ServeStaticAsset: 'extended', // asset-proxy Lambda instead of S3+OAC
-  RunServerRender: 'core',
+  RouteRequest: 'supported', // API routes instead of KVS + CF Function
+  ServeStaticAsset: 'supported', // asset-proxy Lambda instead of S3+OAC
+  RunServerRender: 'supported',
   StreamServerRender: 'unsupported', // HTTP API cannot stream responses (buffered only)
-  ProxySameOriginApi: 'core', // native HTTP proxy to the backend API Gateway
-  RouteApiNamespace: 'core', // a route per namespace → each compute's ingress (HttpUrlIntegration)
-  CustomDomainTls: 'core', // HTTPS by default; custom domain via API GW domain names
-  InjectResponseHeaders: 'degraded', // no per-route response-header injection
-  FilterRequests: 'degraded', // no native WAF on HTTP API (REST API only) → WAF elsewhere
-  CacheResponses: 'degraded', // no global edge cache
-  AtomicRelease: 'extended', // build-id prefixed S3 keys; no KVS cutover
-  PinSession: 'degraded', // no edge function for the skew cookie
-  OptimizeImage: 'core', // the image-opt Lambda as an integration
+  ProxySameOriginApi: 'supported', // native HTTP proxy to the backend API Gateway
+  RouteApiNamespace: 'supported', // a route per namespace → each compute's ingress (HttpUrlIntegration)
+  CustomDomainTls: 'supported', // HTTPS by default; custom domain via API GW domain names
+  InjectResponseHeaders: 'unsupported', // no per-route response-header injection
+  FilterRequests: 'unsupported', // no native WAF on HTTP API (REST API only) → WAF elsewhere
+  CacheResponses: 'unsupported', // no global edge cache
+  AtomicRelease: 'supported', // build-id prefixed S3 keys; no KVS cutover
+  PinSession: 'unsupported', // no edge function for the skew cookie
+  OptimizeImage: 'supported', // the image-opt Lambda as an integration
   RestrictGeo: 'unsupported', // no geo control on HTTP API
   AccessLogging: 'unsupported', // access logging not wired in ApiGatewayConstruct yet (follow-on)
   ServeErrorPage: 'unsupported', // no gateway-response error pages wired
@@ -91,7 +91,7 @@ export class ApiGatewayAdapter implements FrontDoorAdapter, FrontDoorLayerAdapte
       errorCode: 'CapabilityNotSupportedError',
       resolution:
         'Choose a front door that supports these capabilities (e.g. cloudfront/alb), or accept the ' +
-        'degraded behavior explicitly by listing the capability in `degrade`.',
+        'missing capability explicitly by listing it in `degrade`.',
     });
 
     const constructProps = {

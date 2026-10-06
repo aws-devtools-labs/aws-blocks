@@ -152,14 +152,14 @@ describe('AlbAdapter — negotiation gating', () => {
   const adapter = new AlbAdapter();
 
   it('declares ALB support tiers', () => {
-    assert.equal(adapter.supports('RunServerRender'), 'core');
-    assert.equal(adapter.supports('StreamServerRender'), 'core');
-    assert.equal(adapter.supports('RouteRequest'), 'extended');
-    assert.equal(adapter.supports('CacheResponses'), 'degraded');
-    assert.equal(adapter.supports('PinSession'), 'degraded');
+    assert.equal(adapter.supports('RunServerRender'), 'supported');
+    assert.equal(adapter.supports('StreamServerRender'), 'supported');
+    assert.equal(adapter.supports('RouteRequest'), 'supported');
+    assert.equal(adapter.supports('CacheResponses'), 'unsupported');
+    assert.equal(adapter.supports('PinSession'), 'unsupported');
   });
 
-  it('throws when a plan requires a degraded capability without opt-in (skew on)', () => {
+  it('throws when a plan requires an unsupported capability without a waiver (skew on)', () => {
     const app = new App();
     const stack = new Stack(app, 'S2', { env: { account: '111111111111', region: 'us-west-2' } });
     const bucket = new Bucket(stack, 'Assets');
@@ -173,7 +173,7 @@ describe('AlbAdapter — negotiation gating', () => {
     );
   });
 
-  it('renders when the degraded capability is explicitly accepted', () => {
+  it('renders when the unsupported capability is explicitly waived', () => {
     const app = new App();
     const stack = new Stack(app, 'S3', { env: { account: '111111111111', region: 'us-west-2' } });
     const bucket = new Bucket(stack, 'Assets');
