@@ -12,6 +12,7 @@ import type { BlocksDefaults } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
+import { claimApiFrontDoor, resolveApiFrontDoor, scheduleApiFrontDoor } from './api-front-door.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
@@ -64,6 +65,26 @@ export interface BlocksBackendProps {
 	 * corresponding stack default.
 	 */
 	defaults: BlocksDefaults;
+	/**
+	 * How the backend's API is exposed to the internet. Default: `'regional'`.
+	 *
+	 * - `'regional'` — the shared regional gateway, reached directly on its own
+	 *   endpoint. Cheap, and a stable address for a given deployment (no CDN hop).
+	 * - `'edge'` — a global, CDN-backed front door in front of that gateway, with
+	 *   edge termination. Choose it for a geographically distributed audience.
+	 *
+	 * The default is a constant `'regional'` — it is NEVER derived from the app's
+	 * shape, so adding or removing Building Blocks never silently changes how the
+	 * API is exposed.
+	 *
+	 * ⚠️ **Switching `'regional'` ⇄ `'edge'` changes the API's endpoint domain.**
+	 * Browser auth cookies and sessions are bound to the origin they were set on,
+	 * so a switch invalidates every existing cookie/session — users are signed out
+	 * and must sign in again. (A stable custom domain — a future feature — would
+	 * let you move between tiers without this.) Pick a tier before you have real
+	 * users, and treat a later change as a breaking migration.
+	 */
+	apiFrontDoor?: 'regional' | 'edge';
 }
 
 /**
@@ -213,6 +234,20 @@ export class BlocksBackend extends Construct {
 	_defaultCompute?: Compute;
 	/** The single shared HTTP API v2 gateway fronting the default compute; built in `create()`. @internal */
 	_sharedGateway?: SharedGateway;
+	/** Set when a `Hosting` distribution has claimed the API front-door role (see {@link claimApiFrontDoor}). @internal */
+	_apiFrontDoorClaimedByHosting?: boolean;
+	/** Public origin of whichever front door ended up fronting the API. @internal */
+	_apiFrontDoorResolvedUrl?: string;
+
+	/**
+	 * Claim the API front-door role for a `Hosting` distribution fronting this
+	 * backend's API. Recorded on this instance (not ambient per-stack state) so a
+	 * `Hosting` in a different stack can still suppress the managed `edge`
+	 * distribution — see {@link ApiFrontDoorOwner}. @internal Framework-only.
+	 */
+	claimApiFrontDoor(distributionUrl: string): void {
+		claimApiFrontDoor(this, distributionUrl);
+	}
 
 	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
 	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
@@ -222,7 +257,14 @@ export class BlocksBackend extends Construct {
 	get gateway(): IHttpApi {
 		return this.requireSharedGateway().httpApi;
 	}
-	/** The shared gateway's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+	/**
+	 * The shared gateway's direct RPC endpoint URL (the `regional` tier). Always
+	 * the gateway's own `execute-api` URL — even under `apiFrontDoor: 'edge'`, where
+	 * the public, front-door-aware address is whatever `ApiUrl` output the embedding
+	 * stack emits (the CloudFront URL) and this value stays the origin that
+	 * Hosting/SSR forward to. To be removed once consumers move to the multi-compute
+	 * model.
+	 */
 	get apiUrl(): string {
 		return this.requireSharedGateway().apiUrl;
 	}
@@ -339,7 +381,15 @@ export class BlocksBackend extends Construct {
 		if (!defaultApiHandler) {
 			throw new Error('Default compute exposes no apiHandler() — the shared HTTP API gateway needs an HTTP front door.');
 		}
-		backend._sharedGateway = createSharedGateway(backend, { handler: defaultApiHandler, defaults: backend.defaults });
+		const sharedGateway = createSharedGateway(backend, { handler: defaultApiHandler, defaults: backend.defaults });
+		backend._sharedGateway = sharedGateway;
+
+		// Decide the API front door now that the shared gateway (the origin) exists.
+		// Deferred to synth via an aspect: a `Hosting` built after this resolves may
+		// claim the front-door role, in which case no managed `edge` distribution is
+		// provisioned. `edge` ⇒ a CloudFront distribution in front of the gateway;
+		// `regional` (the default) ⇒ the gateway is reached directly.
+		scheduleApiFrontDoor(backend, resolveApiFrontDoor(props.apiFrontDoor) === 'edge', sharedGateway.apiUrl);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));

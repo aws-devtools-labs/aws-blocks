@@ -17,9 +17,11 @@ import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
+import { claimApiFrontDoor, resolveApiFrontDoor, resolvedApiFrontDoorUrl, scheduleApiFrontDoor } from './api-front-door.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
+import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 
@@ -78,6 +80,20 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	_defaultCompute?: Compute;
 	/** The single shared HTTP API v2 gateway fronting the default compute; built in `create()`. @internal */
 	_sharedGateway?: SharedGateway;
+	/** Set when a `Hosting` distribution has claimed the API front-door role (see {@link claimApiFrontDoor}). @internal */
+	_apiFrontDoorClaimedByHosting?: boolean;
+	/** Public origin of whichever front door ended up fronting the API. @internal */
+	_apiFrontDoorResolvedUrl?: string;
+
+	/**
+	 * Claim the API front-door role for a `Hosting` distribution fronting this
+	 * stack's API. Recorded on this instance (not ambient per-stack state) so a
+	 * `Hosting` in a different stack can still suppress the managed `edge`
+	 * distribution — see {@link ApiFrontDoorOwner}. @internal Framework-only.
+	 */
+	claimApiFrontDoor(distributionUrl: string): void {
+		claimApiFrontDoor(this, distributionUrl);
+	}
 
 	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
 	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
@@ -87,7 +103,13 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	get gateway(): cdk.aws_apigatewayv2.IHttpApi {
 		return this.requireSharedGateway().httpApi;
 	}
-	/** The shared gateway's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+	/**
+	 * The shared gateway's direct RPC endpoint URL (the `regional` tier). Always
+	 * the gateway's own `execute-api` URL — even under `apiFrontDoor: 'edge'`, where
+	 * the public, front-door-aware address is the `ApiUrl` stack output and this
+	 * value stays the origin that Hosting/SSR forward to. To be removed once
+	 * consumers move to the multi-compute model.
+	 */
 	get apiUrl(): string {
 		return this.requireSharedGateway().apiUrl;
 	}
@@ -170,7 +192,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		if (!defaultApiHandler) {
 			throw new Error('Default compute exposes no apiHandler() — the shared HTTP API gateway needs an HTTP front door.');
 		}
-		stack._sharedGateway = createSharedGateway(stack, { handler: defaultApiHandler, defaults: stack.defaults });
+		const sharedGateway = createSharedGateway(stack, { handler: defaultApiHandler, defaults: stack.defaults });
+		stack._sharedGateway = sharedGateway;
+
+		// Decide the API front door now that the shared gateway (the origin) exists.
+		// Deferred to synth via an aspect: a `Hosting` built after this resolves may
+		// claim the front-door role, in which case no managed `edge` distribution is
+		// provisioned. `edge` ⇒ a CloudFront distribution in front of the gateway;
+		// `regional` (the default) ⇒ the gateway is reached directly.
+		scheduleApiFrontDoor(stack, resolveApiFrontDoor(props.apiFrontDoor) === 'edge', sharedGateway.apiUrl);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
@@ -184,7 +214,24 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		// state is settled — so the dashboard is order-independent.
 		finalizeDashboards(stack);
 
-		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
+		// Where a client should send RPC calls. Lazy because the answer is only
+		// settled at synth: in `edge` mode a CloudFront distribution — the managed
+		// one, or a `Hosting` distribution that claimed the role — is decided by an
+		// aspect that runs after this. Resolving eagerly here would bake in the raw
+		// gateway URL and bypass the front door entirely.
+		//
+		// The front-door URL is an origin base (`https://{host}`), so the RPC prefix
+		// is appended; the `regional` fallback (`stack.apiUrl`) already carries it.
+		// `deploy.ts` / `sandbox.ts` read this output and hand it to a client as
+		// `BLOCKS_API_URL`.
+		new cdk.CfnOutput(stack, 'ApiUrl', {
+			value: cdk.Lazy.string({
+				produce: () => {
+					const frontDoorUrl = resolvedApiFrontDoorUrl(stack);
+					return frontDoorUrl ? `${frontDoorUrl}${BLOCKS_RPC_PREFIX}` : stack.apiUrl;
+				},
+			}),
+		});
 
 		addBlocksStackMetadata(stack);
 

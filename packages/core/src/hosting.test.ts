@@ -11,6 +11,7 @@ import { _setSynthExistsChecker } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import { claimApiFrontDoor, scheduleApiFrontDoor } from './cdk/api-front-door.js';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
 import { type BlocksStackApi, Hosting } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
@@ -512,6 +513,62 @@ describe('Hosting', () => {
           ]),
         }),
       });
+    });
+  });
+
+  // ── edge front door + Hosting coexistence (P2) ─────────────────
+  //
+  // When the app sets apiFrontDoor: 'edge' AND fronts its frontend with Hosting in
+  // the same stack, the API belongs on Hosting's distribution — the standalone
+  // managed edge distribution must stand down so there is exactly one.
+  describe('edge front door + Hosting claim', () => {
+    it('leaves exactly one distribution (Hosting’s) when Hosting fronts the API in edge mode', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'EdgeHostingClaimStack');
+
+      // Simulate what BlocksStack.create() does in edge mode: schedule the managed
+      // front door over the shared gateway, then build Hosting in the same stack.
+      // In production `props.api` IS the owner the aspect is scheduled on (the
+      // BlocksStack), so its `claimApiFrontDoor` records the claim on that same
+      // object; the aspect reads it back and stands down. Mirror that here by
+      // backing the api's claim with the scheduled owner (`stack`).
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        claimApiFrontDoor: (url) => claimApiFrontDoor(stack, url),
+      };
+      scheduleApiFrontDoor(stack, true, api.apiUrl);
+      new Hosting(stack, 'Hosting', { root: tmpDir, api });
+
+      const template = Template.fromStack(stack);
+      // The managed front door stood down — only Hosting's single distribution remains.
+      template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    });
+
+    it('a Hosting in a DIFFERENT stack still suppresses the backend stack’s managed edge distribution', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const backendStack = new Stack(app, 'BackendStack');
+      const frontendStack = new Stack(app, 'FrontendStack');
+
+      // The managed edge front door is scheduled on the backend stack; a Hosting
+      // built in a SEPARATE stack claims the role on the backend object (a live
+      // reference), so the aspect — scheduled on that same object — reads the claim
+      // and stands the managed distribution down. The previous Symbol.for per-stack
+      // state could not cross stacks, so the backend stack got a second distribution.
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        claimApiFrontDoor: (url) => claimApiFrontDoor(backendStack, url),
+      };
+      scheduleApiFrontDoor(backendStack, true, api.apiUrl);
+      new Hosting(frontendStack, 'Hosting', { root: tmpDir, api });
+
+      // Managed edge distribution stood down in the backend stack (claimed cross-stack)...
+      Template.fromStack(backendStack).resourceCountIs('AWS::CloudFront::Distribution', 0);
+      // ...and only Hosting's distribution exists, in the frontend stack.
+      Template.fromStack(frontendStack).resourceCountIs('AWS::CloudFront::Distribution', 1);
     });
   });
 

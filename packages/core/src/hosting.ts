@@ -15,10 +15,9 @@ import {
   type SkewProtectionConfig,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
-import { AllowedMethods, CachePolicy, OriginRequestPolicy, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
-import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
+import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
 import { registerConfig } from './cdk/config-registry.js';
 import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
@@ -120,6 +119,13 @@ export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
 export interface BlocksStackApi {
   /** Fully-qualified HTTP API v2 RPC URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/aws-blocks/api`). The `$default` stage carries no stage path segment. */
   readonly apiUrl: string;
+  /**
+   * Claim the API front-door role for this `Hosting` distribution, suppressing
+   * the backend's managed `edge` distribution. Optional so any `{ apiUrl }`
+   * object stays assignable; `BlocksStack`/`BlocksBackend` implement it.
+   * @internal Framework-only.
+   */
+  claimApiFrontDoor?(distributionUrl: string): void;
 }
 
 /**
@@ -712,7 +718,7 @@ export class Hosting extends Construct {
 
     // ── 7. Add CloudFront behaviors for API proxy ────────────────
     if (props.api) {
-      this.addApiBehaviors(hosting, props.api.apiUrl);
+      this.addApiBehaviors(hosting, props.api);
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -850,27 +856,38 @@ export class Hosting extends Construct {
   }
 
   /**
-   * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
+   * Add CloudFront behaviors that proxy API traffic to the shared gateway origin,
+   * and claim the API front-door role for this distribution.
+   *
+   * Claiming is part of the same step: with the API served from this distribution,
+   * the backend's managed `edge` distribution — decided later by an aspect at
+   * synth — must stand down, so the SPA/SSR frontend and the API are same-origin
+   * on one distribution (no CORS, no second hop). The claim is recorded on the
+   * backend object (`api.claimApiFrontDoor`), a live reference Hosting holds, so
+   * the aspect scheduled on that same object reads it back — even when `Hosting`
+   * and its backend live in *different* stacks.
+   *
+   * The shared `edge` front door and these behaviors forward to the same origin
+   * via the same `httpOriginFromEndpoint` + `API_BEHAVIOR_OPTIONS`, so the two
+   * paths cannot drift.
    */
-  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string): void {
-    const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
-    const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
-    const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
+  private addApiBehaviors(hosting: HostingConstruct, api: BlocksStackApi): void {
+    const apiUrl = api.apiUrl;
+    // `distributionUrl` is custom-domain-aware (custom domain when configured,
+    // else the CloudFront default), so clients are pointed at the domain the app
+    // is actually served from. The claim is recorded on the backend object
+    // (`props.api`) itself — a live reference Hosting holds — so it suppresses
+    // that backend's managed `edge` distribution even when Hosting lives in a
+    // different stack. Optional: a bare `{ apiUrl }` origin simply isn't claimed.
+    api.claimApiFrontDoor?.(hosting.distributionUrl);
 
     // The shared HTTP API v2 `$default` stage serves at the API root, so the
     // execute-api origin takes no stage path segment (unlike the old REST API,
     // whose URL embedded a `/{stage}` prefix that had to be set as `originPath`).
-    const apiGatewayOrigin = new HttpOrigin(hostname);
+    const apiGatewayOrigin = httpOriginFromEndpoint(apiUrl);
 
-    const behaviorDefaults = {
-      allowedMethods: AllowedMethods.ALLOW_ALL,
-      cachePolicy: CachePolicy.CACHING_DISABLED,
-      originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-    };
-
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
 
     // Proxy the auth BB's reserved subtree as a single behavior. The auth flow
     // (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
@@ -879,7 +896,7 @@ export class Hosting extends Construct {
     // instance count, and never drifts as routes are added. Added directly (not
     // via the route loop below) so it's emitted exactly once even with multiple
     // AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
 
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
     for (const route of getRegisteredRoutes()) {
@@ -905,7 +922,7 @@ export class Hosting extends Construct {
       }
 
       addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
+      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
     }
   }
 }
