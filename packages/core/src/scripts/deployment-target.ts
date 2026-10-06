@@ -33,6 +33,15 @@ async function readCdkSettings(path: string): Promise<Record<string, unknown>> {
 	throw new Error('Could not read CDK configuration. Check cdk.json and ~/.cdk.json before deploying.');
 }
 
+/** The paths of the shared AWS config and credentials files, as the SDK finds them. */
+export function sharedConfigFiles(env: NodeJS.ProcessEnv = process.env): { configFilepath: string; filepath: string } {
+	const home = (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || homedir();
+	return {
+		configFilepath: env.AWS_CONFIG_FILE ?? join(home, '.aws', 'config'),
+		filepath: env.AWS_SHARED_CREDENTIALS_FILE ?? join(home, '.aws', 'credentials'),
+	};
+}
+
 /**
  * Find the Region and the profile that CDK uses for a deployment.
  *
@@ -75,8 +84,7 @@ export async function resolveDeploymentTarget({
 
 	const { loadSharedConfigFiles } = await import('@smithy/shared-ini-file-loader');
 	const { configFile, credentialsFile } = await loadSharedConfigFiles({
-		configFilepath: env.AWS_CONFIG_FILE ?? join(home, '.aws', 'config'),
-		filepath: env.AWS_SHARED_CREDENTIALS_FILE ?? join(home, '.aws', 'credentials'),
+		...sharedConfigFiles(env),
 		ignoreCache: true,
 	});
 	const selectedProfile = settingsProfile || envProfile || 'default';

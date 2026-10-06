@@ -1,6 +1,12 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import {
+	type AwsCliVersionReader,
+	classifyCredentialError,
+	credentialErrorLabel,
+	credentialFailureMessage,
+} from './credential-guidance.js';
 import { type DeploymentTargetOptions, resolveDeploymentTarget } from './deployment-target.js';
 
 /**
@@ -17,23 +23,11 @@ import { type DeploymentTargetOptions, resolveDeploymentTarget } from './deploym
  * (STS unreachable, throttled, disabled in a region) is not treated as a
  * credential failure — it warns and lets the deploy proceed, since blocking on
  * an unverifiable probe would reject a deploy that might have worked.
+ *
+ * On a credential failure, the message names the credential source (for example
+ * an SSO or `aws login` profile, or access keys in the environment) and the
+ * command that fixes it. The check never prompts, signs in, or changes credentials.
  */
-
-/**
- * Error `name`s that mean the credentials themselves are missing, expired, or
- * invalid — the cases where the "configure your credentials" remediation is
- * correct. Anything else (network, throttling, an explicit `AccessDenied` — which
- * actually proves the identity resolved) is surfaced as itself instead.
- */
-const CREDENTIAL_ERROR_NAMES = new Set([
-	'CredentialsProviderError',
-	'ExpiredToken',
-	'ExpiredTokenException',
-	'InvalidClientTokenId',
-	'UnrecognizedClientException',
-	'SignatureDoesNotMatch',
-	'TokenRefreshRequired',
-]);
 
 /**
  * Probe that resolves when valid AWS credentials are available for `region` and
@@ -72,6 +66,8 @@ export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
 	command: string;
 	/** Credential probe; defaults to STS GetCallerIdentity. Override in tests. */
 	probe?: CredentialProbe;
+	/** Reads `aws --version` when the guidance recommends `aws login`. Override in tests. */
+	readAwsCliVersion?: AwsCliVersionReader;
 }
 
 /**
@@ -80,7 +76,9 @@ export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
  *
  * The check uses the Region and the profile from {@link resolveDeploymentTarget}.
  * If no Region is set, the check shows a warning and does not send a request.
- * Network and service errors are not fatal; see the module doc.
+ * Network and service errors are not fatal; see the module doc. The AWS CLI
+ * version is checked only after a credential failure, so it never blocks valid
+ * credentials.
  *
  * @throws {Error} With actionable guidance when the probe reports a credential error,
  * or when the CDK configuration cannot be read.
@@ -88,6 +86,7 @@ export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
 export async function assertAwsCredentials({
 	command,
 	probe = stsProbe,
+	readAwsCliVersion,
 	...options
 }: AssertAwsCredentialsOptions): Promise<void> {
 	const { region, profile } = await resolveDeploymentTarget(options);
@@ -102,27 +101,36 @@ export async function assertAwsCredentials({
 	try {
 		await probe(region, profile);
 	} catch (error) {
-		// Use the error *name* only — never the raw message, which for an STS
-		// authorization failure embeds the caller ARN and account id (and this
-		// Error propagates through telemetry).
-		const name = error instanceof Error && error.name ? error.name : 'UnknownError';
+		// Use the error name (or a Node.js network error code) only, never the raw
+		// message, which for an STS authorization failure embeds the caller ARN and
+		// account id (and this Error propagates through telemetry).
+		const label = credentialErrorLabel(error);
+		const failure = classifyCredentialError(label);
 
-		if (CREDENTIAL_ERROR_NAMES.has(name)) {
-			throw new Error(
-				`AWS credentials could not be verified for \`npm run ${command}\` (${name}).\n` +
-					'Configure AWS credentials — for example:\n' +
-					'  • run `aws configure` (or `aws sso login`), or\n' +
-					'  • set AWS_PROFILE to a configured profile, or\n' +
-					'  • export AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN for temporary credentials).\n' +
-					`Then re-run \`npm run ${command}\`.`,
+		// Not a credential problem: don't block a deploy that might still work.
+		if (failure === 'network') {
+			console.warn(
+				`⚠️  Could not reach AWS to verify credentials for \`npm run ${command}\` (${label}); ` +
+					'continuing — if the deploy also fails to connect, check your network or proxy settings.',
 			);
+			return;
 		}
-
-		// Not a credential problem (network, throttling, STS disabled in-region, …).
-		// Don't block a deploy that might still work — warn and continue.
-		console.warn(
-			`⚠️  Could not verify AWS credentials for \`npm run ${command}\` (${name}); ` +
-				'continuing — the deploy will report any real error.',
+		if (failure === 'inconclusive') {
+			console.warn(
+				`⚠️  Could not verify AWS credentials for \`npm run ${command}\` (${label}); ` +
+					'continuing — the deploy will report any real error.',
+			);
+			return;
+		}
+		throw new Error(
+			await credentialFailureMessage({
+				command,
+				errorName: label,
+				failure,
+				env: options.env,
+				profile,
+				readAwsCliVersion,
+			}),
 		);
 	}
 }
