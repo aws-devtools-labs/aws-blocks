@@ -7,6 +7,7 @@ import {
 	parseCdkEvent,
 	createCdkProgressReporter,
 	createDeployStdout,
+	createDeployStreams,
 	type ProgressReporter,
 } from './deploy-progress.js';
 import { type OutputSink } from './stream-filter.js';
@@ -170,5 +171,40 @@ describe('deploy-progress — createDeployStdout', () => {
 		finish(true);
 		assert.match(text(), /🚀 Deploying to AWS/);
 		assert.doesNotMatch(text(), /AWS::/); // raw lines not forwarded
+	});
+});
+
+describe('deploy-progress — createDeployStreams', () => {
+	it('drives one reporter from BOTH stdout and stderr at Normal', () => {
+		// stdout target collects; stderr target is a throwaway (the reporter writes
+		// its curated output to the stdout target regardless of which child stream
+		// an event arrived on). This is the sandbox/destroy case: CDK (no --ci)
+		// sends events to stderr, and the reporter must still render progress.
+		const { sink: outSink, text } = collectingSink();
+		const { sink: errSink } = collectingSink();
+		const { stdout, stderr, finish } = createDeployStreams(
+			outSink,
+			errSink,
+			LogLevel.Normal,
+			{ now: clockFrom(0) },
+		);
+		// Events arrive ONLY on stderr (the no-ci case).
+		stderr.write('bb-x | 0 | t | CREATE_IN_PROGRESS | AWS::S3::Bucket | B\n');
+		stderr.write('bb-x | 40 | t | CREATE_COMPLETE | AWS::CloudFormation::Stack | bb-x\n');
+		finish(true);
+		assert.match(text(), /🚀 Deploying to AWS/);
+		assert.match(text(), /✅ Deploy finished -- 40 resources/);
+		assert.doesNotMatch(text(), /AWS::/); // raw lines never forwarded
+		// stdout and stderr feed the same reporter instance.
+		assert.equal(stdout, stderr);
+	});
+
+	it('passes both streams through at Verbose (finish no-op)', () => {
+		const { sink: outSink } = collectingSink();
+		const { sink: errSink } = collectingSink();
+		const { stdout, stderr, finish } = createDeployStreams(outSink, errSink, LogLevel.Verbose);
+		assert.equal(stdout, outSink); // identity pass-through
+		assert.equal(stderr, errSink);
+		assert.doesNotThrow(() => finish(true));
 	});
 });

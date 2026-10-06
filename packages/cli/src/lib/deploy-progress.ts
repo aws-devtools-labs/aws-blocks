@@ -295,18 +295,51 @@ export function createCdkProgressReporter(
 }
 
 /**
- * The stdout wiring a CDK-driving command (deploy / sandbox) hands to
- * {@link runStreaming}, chosen by verbosity so both commands behave the same:
+ * The stdout + stderr wiring a CDK-driving command (deploy / sandbox / destroy)
+ * hands to {@link runStreaming}, chosen by verbosity so every command behaves
+ * the same:
  *
- * - **Normal / Quiet** -> a {@link createCdkProgressReporter}: raw CDK lines are
- *   swallowed and replaced by curated milestones + one live progress indicator.
- * - **Verbose / Debug** -> {@link filteredSink} (which at Verbose is a straight
- *   pass-through), so the full raw CDK stream is shown for debugging.
+ * - **Normal / Quiet** -> a single {@link createCdkProgressReporter} fed by BOTH
+ *   streams. The CDK CLI sends its event stream to stdout only under `--ci`
+ *   (the production deploy path) and to **stderr** otherwise (the sandbox and
+ *   destroy paths, which do not pass `--ci`). Feeding one shared reporter from
+ *   both streams means the curated progress works regardless of which stream
+ *   CDK chose, instead of silently showing nothing when the events land on the
+ *   stream the reporter was not watching.
+ * - **Verbose / Debug** -> {@link filteredSink} on each stream (a straight
+ *   pass-through at Verbose), so the full raw CDK output is shown for debugging.
  *
- * Returns the sink plus a `finish(ok)` the caller invokes once `runStreaming`
- * resolves (ok=true) or throws (ok=false), so the closing summary line is
- * flushed exactly once. At Verbose+ `finish` is a no-op (the raw stream speaks
- * for itself).
+ * Returns both sinks plus a `finish(ok)` the caller invokes once
+ * {@link runStreaming} resolves (ok=true) or throws (ok=false), so the closing
+ * summary line is flushed exactly once. At Verbose+ `finish` is a no-op.
+ */
+export function createDeployStreams(
+	stdoutTarget: OutputSink,
+	stderrTarget: OutputSink,
+	level: LogLevel,
+	options: ProgressReporterOptions = {},
+): { stdout: OutputSink; stderr: OutputSink; finish(ok: boolean): void } {
+	if (level >= LogLevel.Verbose) {
+		return {
+			stdout: filteredSink(stdoutTarget, level),
+			stderr: filteredSink(stderrTarget, level),
+			finish: () => {},
+		};
+	}
+	// One reporter, written to the real stdout, fed by both child streams so an
+	// event on EITHER drives the same progress line.
+	const reporter = createCdkProgressReporter(stdoutTarget, options);
+	return {
+		stdout: reporter,
+		stderr: reporter,
+		finish: (ok: boolean) => reporter.finish(ok),
+	};
+}
+
+/**
+ * Back-compat single-stream helper (stdout only). Prefer
+ * {@link createDeployStreams} so CDK events on stderr (sandbox/destroy, no
+ * `--ci`) are not missed.
  */
 export function createDeployStdout(
 	target: OutputSink,
