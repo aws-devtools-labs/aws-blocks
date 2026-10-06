@@ -4,21 +4,21 @@ import { Annotations, CfnOutput, Duration, Fn, Stack, Token } from 'aws-cdk-lib'
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
   AllowedMethods,
-  BehaviorOptions,
+  type BehaviorOptions,
   CacheCookieBehavior,
   CacheHeaderBehavior,
   CachePolicy,
   CacheQueryStringBehavior,
   Function as CloudFrontFunction,
   Distribution,
-  ErrorResponse,
+  type ErrorResponse,
   FunctionCode,
   FunctionEventType,
   FunctionRuntime,
   GeoRestriction,
   HttpVersion,
-  IOrigin,
-  IResponseHeadersPolicy,
+  type IOrigin,
+  type IResponseHeadersPolicy,
   KeyValueStore,
   LambdaEdgeEventType,
   OriginProtocolPolicy,
@@ -35,16 +35,16 @@ import {
   HttpOrigin,
   S3BucketOrigin,
 } from 'aws-cdk-lib/aws-cloudfront-origins';
-import { IBucket } from 'aws-cdk-lib/aws-s3';
+import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
 import {
   CfnPermission,
-  IFunction,
-  IFunctionUrl,
-  IVersion,
+  type IFunction,
+  type IFunctionUrl,
+  type IVersion,
 } from 'aws-cdk-lib/aws-lambda';
-import { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
-import { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
+import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
+import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import {
   EndpointType,
   LambdaIntegration,
@@ -53,9 +53,9 @@ import {
 } from 'aws-cdk-lib/aws-apigateway';
 import { HostingError } from '../hosting_error.js';
 import { prependBasePath } from '../adapters/shared/basepath.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
-import { SkewProtectionConfig } from './skew_protection.js';
+import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
   ORIGIN_ID,
