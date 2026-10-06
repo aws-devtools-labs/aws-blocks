@@ -25,6 +25,7 @@ import {
 import { redactToJson } from '@aws-blocks/core/runtime';
 import { buildAndSendEvent } from '@aws-blocks/core/runtime';
 import { applyDevMigrations } from './external-migrations-step.js';
+import { importBackend } from './load-backend.js';
 import { killFrontendTree, terminateProcessTree, findListenerPids, killListenerTree } from './process-tree.js';
 import { info, verbose, debug, isDebug, warn as logWarn, error as logError } from '../logger.js';
 
@@ -675,7 +676,11 @@ export async function startDevServer(options: DevServerOptions) {
 
   // 2. Import backend (sync construction phase — BBs register plugins via globals)
   verbose('Loading backend…');
-  const backend = await import(backendUrl);
+  // Use importBackend (tsx/esm/api for a .ts entry) rather than a bare
+  // import(): the sandbox dev server is a child `npx tsx watch` process started
+  // with NODE_OPTIONS='', so a runtime import() of the .ts backend is otherwise
+  // handled by Node's native loader and throws `Unknown file extension ".ts"`.
+  const backend = await importBackend(backendUrl, import.meta.url);
 
   // 3. Read collected dev attachments and clean up
   const devAttachments: string[] = (globalThis as any).__BLOCKS_DEV_ATTACHMENTS__;
