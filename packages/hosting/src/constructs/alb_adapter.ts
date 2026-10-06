@@ -34,7 +34,6 @@ const ALB_SUPPORT: Record<CapabilityId, SupportTier> = {
   StreamServerRender: 'core', // ALB holds a long streaming connection to its target
   ProxySameOriginApi: 'core', // same ALB routes the API subtree to the server target
   RouteApiNamespace: 'extended', // per-namespace listener rules → a forwarder Lambda per ingress
-  RunEdgeFunction: 'unsupported', // no edge layer to attach Lambda@Edge to
   CustomDomainTls: 'core', // HTTPS listener + a regional ACM cert
   InjectResponseHeaders: 'degraded', // ALB can't inject per-route response headers → move into SSR/origin
   FilterRequests: 'core', // native WAFv2 REGIONAL WebACL associated with the ALB

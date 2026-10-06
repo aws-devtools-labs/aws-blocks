@@ -95,12 +95,6 @@ export type PlanPolicies = {
   monitoringEnabled?: boolean;
   /** The app requires edge caching as a hard need (rare; perf is otherwise optional). */
   edgeCacheRequired?: boolean;
-  /**
-   * The build ships edge-runtime functions (manifest compute `type: 'edge'`, e.g. a
-   * Next.js `runtime = 'edge'` route) that must run AT the edge — only a door
-   * that can attach Lambda@Edge serves them.
-   */
-  hasEdgeFunctions?: boolean;
 };
 
 /** Release/atomicity info for the deploy. */
@@ -185,7 +179,6 @@ export type CapabilityId =
   | 'RouteRequest'
   | 'ServeStaticAsset'
   | 'RunServerRender'
-  | 'RunEdgeFunction'
   | 'StreamServerRender'
   | 'ProxySameOriginApi'
   | 'RouteApiNamespace'

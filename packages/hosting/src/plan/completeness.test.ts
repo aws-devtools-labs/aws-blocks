@@ -52,7 +52,6 @@ const maximalPlan: CapabilityPlan = {
     geoRestricted: true,
     monitoringEnabled: true,
     edgeCacheRequired: true,
-    hasEdgeFunctions: true,
   },
   release: { buildId: 'b1' },
   backend: {

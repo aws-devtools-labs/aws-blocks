@@ -42,8 +42,6 @@ export const CAPABILITY_DEMAND: Record<CapabilityId, (plan: CapabilityPlan) => b
   ServeStaticAsset: () => true,
   // Conditional hard needs — required only when the app actually uses them.
   RunServerRender: (p) => p.policies.hasServer,
-  // Edge-runtime functions in the build must run at the edge (Lambda@Edge).
-  RunEdgeFunction: (p) => p.policies.hasEdgeFunctions === true,
   // Build-id cutover / invalidation guards a COMPUTE origin serving cacheable
   // HTML referencing build-prefixed assets (stale-HTML→403). Pure-static has no
   // such risk, so static doors negotiate clean without an atomicity opt-in.

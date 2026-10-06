@@ -59,13 +59,6 @@ describe('requiredCapabilities', () => {
     assert.ok(req.has('ProxySameOriginApi') && req.has('RouteApiNamespace'));
   });
 
-  it('requires RunEdgeFunction only when the build ships edge-runtime functions', () => {
-    assert.ok(!requiredCapabilities(planWith({})).has('RunEdgeFunction'));
-    const edgePlan = planWith({});
-    edgePlan.policies = { ...edgePlan.policies, hasEdgeFunctions: true };
-    assert.ok(requiredCapabilities(edgePlan).has('RunEdgeFunction'));
-  });
-
   it('requires nothing backend-related when there is no backend (cross-origin API)', () => {
     const req = requiredCapabilities(planWith());
     assert.ok(!req.has('ProxySameOriginApi') && !req.has('RouteApiNamespace'));
@@ -96,13 +89,6 @@ describe('negotiate', () => {
     const { errors, warnings } = negotiate(planWith(), adapterWith({ RouteRequest: 'extended' }));
     assert.equal(errors.length, 0);
     assert.equal(warnings.length, 0);
-  });
-
-  it('errors when edge-runtime functions meet a door without an edge layer (e.g. ALB)', () => {
-    const plan = planWith({});
-    plan.policies = { ...plan.policies, hasEdgeFunctions: true };
-    const { errors } = negotiate(plan, adapterWith({ RunEdgeFunction: 'unsupported' }));
-    assert.ok(errors.some((e) => e.capability === 'RunEdgeFunction'));
   });
 
   it('errors when a multi-namespace plan hits a single-origin door (RouteApiNamespace unsupported)', () => {

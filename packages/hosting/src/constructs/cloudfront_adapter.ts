@@ -40,7 +40,6 @@ const CLOUDFRONT_SUPPORT: Record<CapabilityId, SupportTier> = {
   StreamServerRender: 'core',
   ProxySameOriginApi: 'core',
   RouteApiNamespace: 'core', // a behavior per namespace → each compute's ingress
-  RunEdgeFunction: 'core', // Lambda@Edge associations on the distribution's behaviors
   CustomDomainTls: 'core',
   InjectResponseHeaders: 'core',
   FilterRequests: 'core',

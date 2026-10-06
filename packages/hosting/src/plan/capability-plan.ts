@@ -139,8 +139,6 @@ export const buildCapabilityPlan = (input: BuildCapabilityPlanInput): Capability
       geoRestricted: input.demand?.geoRestricted === true,
       monitoringEnabled: input.demand?.monitoringEnabled === true,
       edgeCacheRequired: input.demand?.edgeCacheRequired === true,
-      // Read from the build (deterministic): any edge-runtime compute.
-      hasEdgeFunctions: Object.values(manifest.compute ?? {}).some((c) => c.type === 'edge'),
     },
     release: { buildId },
     ...(backend ? { backend } : {}),
