@@ -2,7 +2,7 @@
 
 package com.aws.blocks.kotlin.e2e
 
-import blocks.e2e.OidcAuthApi
+import blocks.e2e.oidcAuthApi
 import com.aws.blocks.kotlin.InternalBlocksApi
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcPlatformLauncher
@@ -61,7 +61,7 @@ private class RedirectFollowingLauncher : OidcPlatformLauncher {
 
 class OidcE2ETest {
 
-    private val api = OidcAuthApi(server = e2eServer())
+    private val api = e2eBlocks().oidcAuthApi
 
     @Test
     fun signInReachesSignedIn() = runTest {
