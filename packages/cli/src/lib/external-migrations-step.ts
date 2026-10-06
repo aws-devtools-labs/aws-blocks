@@ -61,8 +61,9 @@ function runMigrateSubprocess(
   migrationsDir: string,
   regenerateTypesDir?: string,
 ): void {
+  // Omit stdio so runSync gates the migrator's output by verbosity (Normal
+  // keeps only migration/warning/error lines; --verbose shows the raw stream).
   runSync('npx', buildMigrateArgs(stage, migrationsDir, regenerateTypesDir), {
-    stdio: 'inherit',
     env: { ...process.env, BLOCKS_MIGRATE_URL: connValue },
   });
 }

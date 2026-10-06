@@ -33,10 +33,13 @@ export interface OutputSink {
  * annoyance; a false drop hides real signal).
  */
 const KEEP_AT_NORMAL: RegExp[] = [
-	// CloudFormation resource events: "CREATE_IN_PROGRESS", "UPDATE_COMPLETE", …
-	/\b(CREATE|UPDATE|DELETE|IMPORT|ROLLBACK)_[A-Z_]+\b/,
-	// CDK stack progress markers and outputs.
-	/\b\d+\/\d+\b.*\|/, // "12/34 |" style progress with a resource
+	// CloudFormation FAILURE / rollback transitions only — the progress reporter
+	// (deploy-progress.ts) now owns the *_IN_PROGRESS / *_COMPLETE firehose for
+	// the deploy/destroy paths, so a residual runSync path must still surface a
+	// failure but no longer leak the raw per-resource progress stream.
+	/_FAILED\b/,
+	/ROLLBACK/,
+	// CDK summary markers and outputs.
 	/^\s*✅|^\s*❌|^\s*✨|^\s*⚠|Outputs:|Stack ARN:/,
 	// Errors / failures / warnings anywhere in the line.
 	/\b(error|failed|failure|exception|warn(ing)?)\b/i,

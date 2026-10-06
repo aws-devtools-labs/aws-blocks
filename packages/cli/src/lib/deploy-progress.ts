@@ -122,6 +122,12 @@ export interface ProgressReporterOptions {
 	now?: () => number;
 	/** Label shown in milestone lines. Defaults to `Deploying to AWS`. */
 	label?: string;
+	/**
+	 * The action word used in the start/finish lines: `deploy` -> "🚀 … / ✅
+	 * Deploy finished", `destroy` -> "🗑️ … / ✅ Destroy finished". Defaults to
+	 * `deploy`.
+	 */
+	verb?: 'deploy' | 'destroy';
 }
 
 /** A reporter sink plus a {@link ProgressReporter.finish} to flush the summary. */
@@ -145,8 +151,14 @@ export function createCdkProgressReporter(
 	target: OutputSink,
 	options: ProgressReporterOptions = {},
 ): ProgressReporter {
-	const { isTty = false, now = Date.now, label = 'Deploying to AWS' } = options;
+	const { isTty = false, now = Date.now, label = 'Deploying to AWS', verb = 'deploy' } = options;
 	const startedAt = now();
+
+	// Verb-specific wording for the start milestone and the closing summary.
+	const startIcon = verb === 'destroy' ? '\ud83d\uddd1\ufe0f' : '\ud83d\ude80';
+	const finishedWord = verb === 'destroy' ? 'Destroy finished' : 'Deploy finished';
+	const failedWord = verb === 'destroy' ? 'Destroy failed' : 'Deploy failed';
+	const applyWord = verb === 'destroy' ? 'to remove' : 'to apply';
 
 	let announcedSynth = false;
 	let announcedDeploy = false;
@@ -226,9 +238,9 @@ export function createCdkProgressReporter(
 						total = event.total;
 						const scope =
 							total && total > 0
-								? ` -- ${total} resource${total === 1 ? '' : 's'} to apply`
+								? ` -- ${total} resource${total === 1 ? '' : 's'} ${applyWord}`
 								: '';
-						milestone(`\ud83d\ude80 ${label}${scope}`);
+						milestone(`${startIcon} ${label}${scope}`);
 					}
 					if (event.total && (total === null || event.total > total)) {
 						total = event.total;
@@ -270,13 +282,13 @@ export function createCdkProgressReporter(
 				if (announcedDeploy) {
 					const n = total && total > 0 ? total : completed;
 					target.write(
-						`\u2705 Deploy finished -- ${n} resource${n === 1 ? '' : 's'} in ${elapsed}\n`,
+						`\u2705 ${finishedWord} -- ${n} resource${n === 1 ? '' : 's'} in ${elapsed}\n`,
 					);
 				}
 				// No deploy events (no-op / nothing to deploy): stay silent; the
 				// command prints the authoritative "deployed" line + URLs.
 			} else {
-				target.write(`\u274c Deploy failed after ${elapsed}\n`);
+				target.write(`\u274c ${failedWord} after ${elapsed}\n`);
 			}
 		},
 	};

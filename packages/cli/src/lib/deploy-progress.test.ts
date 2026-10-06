@@ -122,6 +122,23 @@ describe('deploy-progress — reporter (piped, no TTY)', () => {
 		const synthLines = lines().filter((l) => /Synthesizing app/.test(l));
 		assert.equal(synthLines.length, 1);
 	});
+
+	it('uses destroy wording when verb=destroy', () => {
+		const { sink, lines } = collectingSink();
+		const r = createCdkProgressReporter(sink, {
+			isTty: false,
+			now: clockFrom(0),
+			label: 'Destroying sandbox',
+			verb: 'destroy',
+		});
+		r.write('bb-x | 0 | t | DELETE_IN_PROGRESS | AWS::S3::Bucket | B\n');
+		r.write('bb-x | 40 | t | DELETE_COMPLETE | AWS::CloudFormation::Stack | bb-x\n');
+		r.finish(true);
+		const out = lines();
+		assert.ok(out.some((l) => /🗑️ Destroying sandbox/.test(l)), out.join('|'));
+		assert.ok(out.some((l) => /✅ Destroy finished -- 40 resources/.test(l)), out.join('|'));
+		assert.ok(!out.some((l) => /Deploy/.test(l)), 'no deploy wording leaks into destroy');
+	});
 });
 
 describe('deploy-progress — reporter (TTY)', () => {

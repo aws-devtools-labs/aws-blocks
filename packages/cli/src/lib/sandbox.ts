@@ -464,8 +464,8 @@ function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): 
  * `destroySandbox`, fakes in tests so the retry/empty-before-retry wiring (the
  * sev2 fix) is exercised without spawning cdk. */
 export interface DestroyRetryDeps {
-	/** Run one `cdk destroy` attempt; throws on failure. */
-	runDestroy: () => void;
+	/** Run one `cdk destroy` attempt; throws on failure. May be async. */
+	runDestroy: () => void | Promise<void>;
 	/** Resolve the app's stack names (for bucket enumeration). */
 	listStackNames: () => string[];
 	/** Empty the given stacks' versioned S3 buckets. */
@@ -490,7 +490,7 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 	let stackNames: string[] | undefined;
 	for (let attempt = 0; ; attempt++) {
 		try {
-			deps.runDestroy();
+			await deps.runDestroy();
 			info(attempt === 0 ? '\n✅ Sandbox destroyed.' : '\n✅ Sandbox destroyed on retry.');
 			return;
 		} catch (error) {
@@ -530,7 +530,26 @@ export async function destroySandbox(backendPath: string) {
     ];
     const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
     await runDestroyWithRetries({
-      runDestroy: () => runSync('npm', cdkArgs, { stdio: 'inherit', env: cdkEnv }),
+      runDestroy: async () => {
+        const { sink, finish } = createDeployStdout(process.stdout, getLogLevel(), {
+          isTty: Boolean(process.stdout.isTTY),
+          label: 'Destroying sandbox',
+          verb: 'destroy',
+        });
+        try {
+          await runStreaming('npm', cdkArgs, {
+            label: 'cdk destroy',
+            heartbeatMs: getLogLevel() >= 2 ? undefined : 0,
+            stdout: sink,
+            stderr: filteredSink(process.stderr, getLogLevel()),
+            env: cdkEnv,
+          });
+          finish(true);
+        } catch (error) {
+          finish(false);
+          throw error;
+        }
+      },
       listStackNames: () => listSandboxStackNames(backendPath, cdkEnv),
       emptyBuckets: emptySandboxBuckets,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
