@@ -534,7 +534,7 @@ export class HostingConstruct extends Construct {
    */
   readonly buildId: string;
   readonly computeFunctions: Map<string, LambdaFunction | experimental.EdgeFunction> = new Map();
-  private readonly cdn: CdnConstruct;
+  private readonly cdn?: CdnConstruct;
   readonly computeFunctionUrls: Map<string, FunctionUrl> = new Map();
   /**
    * `live` aliases for compute resources with provisioned concurrency.
@@ -576,7 +576,8 @@ export class HostingConstruct extends Construct {
    * reachable through the KVS route table.
    */
   addBuildAssetDependency(dependency: IDependable): void {
-    this.cdn.addBuildAssetDependency(dependency);
+    // No-op for non-CloudFront doors — there's no KVS route table to gate.
+    this.cdn?.addBuildAssetDependency(dependency);
   }
 
   /**

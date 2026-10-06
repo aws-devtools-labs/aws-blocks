@@ -156,10 +156,15 @@ const chunkRows = (rows: unknown[]): string[] => {
  * @param opts.maxChunksPerTable Override the per-table chunk budget (a
  *   CloudFront-specific concern sourced from the `quotas.maxRouteChunks` prop),
  *   NOT part of the neutral plan.
+ * @param opts.cacheKeyCookies Cache-key cookie names (`cdn.cacheKeyCookies`) the
+ *   router strips on static + image routes so shared assets keep a shared cache
+ *   key; compute routes keep them. CloudFront-specific, NOT part of the plan.
+ * @param opts.cacheKeyHeaders Cache-key header names (`cdn.cacheKeyHeaders`),
+ *   stripped the same way (lowercased + de-duped). CloudFront-specific.
  */
 export const renderKvsEntries = (
   plan: CapabilityPlan,
-  opts: { maxChunksPerTable?: number } = {},
+  opts: { maxChunksPerTable?: number; cacheKeyCookies?: string[]; cacheKeyHeaders?: string[] } = {},
 ): Record<string, string> => {
   const { policies, routes, release } = plan;
 
@@ -188,11 +193,11 @@ export const renderKvsEntries = (
   // static + image branches so shared assets keep a shared key (compute routes
   // keep them). Omitted from meta when nothing is configured, so existing apps'
   // meta blob is unchanged.
-  const ck = (input.cacheKeyCookies ?? []).filter((c) => c.length > 0);
+  const ck = (opts.cacheKeyCookies ?? []).filter((c) => c.length > 0);
   // Header names are case-INsensitive per HTTP; lowercase + de-dupe so the
   // strip loop matches CloudFront's own casing and never double-lists a name.
   const hh = [
-    ...new Set((input.cacheKeyHeaders ?? []).map((h) => h.toLowerCase())),
+    ...new Set((opts.cacheKeyHeaders ?? []).map((h) => h.toLowerCase())),
   ].filter((h) => h.length > 0);
 
   const meta = {
@@ -332,7 +337,11 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
       skewEnabled: input.skewEnabled,
       edgeTargets: input.edgeTargets,
     }),
-    { maxChunksPerTable: input.maxChunksPerTable },
+    {
+      maxChunksPerTable: input.maxChunksPerTable,
+      cacheKeyCookies: input.cacheKeyCookies,
+      cacheKeyHeaders: input.cacheKeyHeaders,
+    },
   );
 
 /**

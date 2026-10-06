@@ -176,6 +176,25 @@ describe('getCorsPatterns — channel separation', () => {
   it('returns null when neither source is configured', () => {
     assert.strictEqual(getCorsPatterns(), null);
   });
+
+  it('matches a mixed-case hosting literal case-insensitively (ALB DNS vs lowercase browser Origin)', () => {
+    // An ALB's DNS name is case-preserving (`stress-Hosti-AbCd…`) but the browser
+    // lowercases it in the Origin header; a case-sensitive match 403'd sign-in on
+    // the ALB front door.
+    process.env.CORS_HOSTING_ORIGINS = 'http://blocks-Hosti-AbCdEf-123.us-west-2.elb.amazonaws.com';
+    _resetCorsPatterns();
+
+    assert.strictEqual(isOriginAllowed('http://blocks-hosti-abcdef-123.us-west-2.elb.amazonaws.com'), true);
+    // Still escaped: case-insensitivity must not loosen the literal match.
+    assert.strictEqual(isOriginAllowed('http://blocks-hosti-abcdef-123xus-west-2.elb.amazonaws.com'), false);
+  });
+
+  it('matches the regex channel case-insensitively too', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://App\\.Example\\.com';
+    _resetCorsPatterns();
+
+    assert.strictEqual(isOriginAllowed('https://app.example.com'), true);
+  });
 });
 
 // ── buildCorsHeaders unit tests ─────────────────────────────────────────────
