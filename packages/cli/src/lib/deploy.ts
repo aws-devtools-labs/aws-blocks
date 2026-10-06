@@ -11,6 +11,7 @@ import { trackCommand } from '@aws-blocks/core/runtime';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs } from './deploy-stream.js';
 import { filteredSink } from './stream-filter.js';
+import { createDeployStdout } from './deploy-progress.js';
 import { getLogLevel, info, verbose, error as logError } from '../logger.js';
 import { runSync } from './run-command.js';
 
@@ -60,12 +61,19 @@ export async function deploy(options: DeployOptions) {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
 
-    info('Deploying to AWS (this can take a few minutes on first deploy)…');
+    // The progress reporter owns the user-facing "Deploying" milestone (it is
+    // emitted on the first CloudFormation event), so keep these as verbose detail.
+    verbose('Deploying to AWS (this can take a few minutes on first deploy)…');
     verbose('  - Backend API (Lambda + API Gateway)');
     verbose('  - Frontend hosting (S3 + CloudFront)');
     verbose('  Streaming CloudFormation events; the deploy keeps running if this');
     verbose('  process is backgrounded (Ctrl-C, or SIGTERM twice, to abort).');
 
+    const { sink: deployStdout, finish: finishProgress } = createDeployStdout(
+      process.stdout,
+      getLogLevel(),
+      { isTty: Boolean(process.stdout.isTTY), label: 'Deploying to AWS' },
+    );
     try {
       await runStreaming(
         "npx",
@@ -76,7 +84,10 @@ export async function deploy(options: DeployOptions) {
         {
           label: 'cdk deploy',
           cwd: options.projectRoot,
-          stdout: filteredSink(process.stdout, getLogLevel()),
+          // Heartbeats are redundant with the progress indicator at Normal; the
+          // reporter's own live line is the "still working" signal.
+          heartbeatMs: getLogLevel() >= 2 ? undefined : 0,
+          stdout: deployStdout,
           stderr: filteredSink(process.stderr, getLogLevel()),
           env: {
             ...process.env,
@@ -85,11 +96,13 @@ export async function deploy(options: DeployOptions) {
           }
         }
       );
+      finishProgress(true);
     } catch (error) {
       // Terminal verdict: a caller that only captures stdout (the case that
       // produced phantom failures) must still be able to tell a failed deploy
       // from a killed process. The CDK CLI keeps error-level output on stderr
       // even under `--ci`, and the entrypoint prints the error itself.
+      finishProgress(false);
       logError('Deployment failed.');
       throw error;
     }
