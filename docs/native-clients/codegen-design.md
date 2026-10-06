@@ -158,7 +158,11 @@ The full reference, including the tag table for native codegen authors, lives in
 
 #### Unbound transferables: the `UnknownTransferable` carrier
 
-When a bare direct result's `x-blocks-transferable` tag has no known runtime binding, the native clients degrade it to a typed `UnknownTransferable` carrier, validated against the declared `__blocks` tag. The unbound fallback is direct-only; an unbound transferable in a nested, nullable, or parameter position stays `JSONValue`. A nullable *bound* transferable result does hydrate to its optional concrete type.
+When a bare direct result's `x-blocks-transferable` tag has no known runtime binding, the native clients degrade it to a typed `UnknownTransferable` carrier, validated against the declared `__blocks` tag. A malformed descriptor raises the platform's standard decoding error: Dart `FormatException`, Swift `DecodingError`, Kotlin `TransferableException`.
+
+The unbound fallback is direct-only; a transferable in any other position is unchanged from before the fallback, except that on Kotlin a nullable result still fails code generation.
+
+A nullable *bound* transferable result does hydrate to its optional concrete type.
 
 ---
 
