@@ -7,10 +7,14 @@ import { keepAtNormalLine, filteredSink, type OutputSink } from './stream-filter
 import { LogLevel } from '../logger.js';
 
 describe('stream filter — keepAtNormalLine', () => {
-	it('keeps CloudFormation resource events', () => {
-		assert.ok(keepAtNormalLine('MyStack | 3/10 | CREATE_IN_PROGRESS | AWS::Lambda::Function'));
-		assert.ok(keepAtNormalLine('UPDATE_COMPLETE'));
+	it('keeps CloudFormation FAILURE and rollback transitions', () => {
+		// Raw per-resource progress is now owned by the progress reporter, so a
+		// plain *_IN_PROGRESS / *_COMPLETE line is dropped at Normal...
+		assert.equal(keepAtNormalLine('MyStack | 3/10 | CREATE_IN_PROGRESS | AWS::Lambda::Function'), false);
+		assert.equal(keepAtNormalLine('UPDATE_COMPLETE'), false);
+		// ...but a failure or rollback must still surface.
 		assert.ok(keepAtNormalLine('DELETE_FAILED something'));
+		assert.ok(keepAtNormalLine('MyStack | 2/10 | UPDATE_ROLLBACK_IN_PROGRESS | AWS::S3::Bucket'));
 	});
 
 	it('keeps errors, warnings and outputs', () => {
@@ -48,13 +52,14 @@ describe('stream filter — filteredSink', () => {
 		assert.deepEqual(out, ['Bundling asset...\n']);
 	});
 
-	it('drops noise but keeps signal at Normal', () => {
+	it('drops noise and raw progress but keeps failures at Normal', () => {
 		const { sink, out } = collectingSink();
 		const wrapped = filteredSink(sink, LogLevel.Normal);
 		wrapped.write('Bundling asset MyStack/Fn/Code...\n');
-		wrapped.write('MyStack | 4/10 | CREATE_COMPLETE | AWS::S3::Bucket\n');
+		wrapped.write('MyStack | 4/10 | CREATE_COMPLETE | AWS::S3::Bucket\n'); // raw progress: dropped
+		wrapped.write('MyStack | 4/10 | CREATE_FAILED | AWS::S3::Bucket boom\n'); // failure: kept
 		wrapped.write('\n');
 		assert.equal(out.length, 1);
-		assert.match(out[0], /CREATE_COMPLETE/);
+		assert.match(out[0], /CREATE_FAILED/);
 	});
 });
