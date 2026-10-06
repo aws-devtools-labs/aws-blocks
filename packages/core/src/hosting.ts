@@ -118,7 +118,7 @@ export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
  * instance but kept structural so Hosting doesn't depend on the concrete class.
  */
 export interface BlocksStackApi {
-  /** Fully-qualified API Gateway URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks`). */
+  /** Fully-qualified HTTP API v2 RPC URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/aws-blocks/api`). The `$default` stage carries no stage path segment. */
   readonly apiUrl: string;
 }
 
@@ -856,11 +856,11 @@ export class Hosting extends Construct {
     const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
     const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
     const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
-    const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
 
-    const apiGatewayOrigin = new HttpOrigin(hostname, {
-      originPath: `/${stage}`,
-    });
+    // The shared HTTP API v2 `$default` stage serves at the API root, so the
+    // execute-api origin takes no stage path segment (unlike the old REST API,
+    // whose URL embedded a `/{stage}` prefix that had to be set as `originPath`).
+    const apiGatewayOrigin = new HttpOrigin(hostname);
 
     const behaviorDefaults = {
       allowedMethods: AllowedMethods.ALLOW_ALL,

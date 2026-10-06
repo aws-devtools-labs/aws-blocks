@@ -6,12 +6,11 @@ import { dirname, join } from 'node:path';
 import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
-import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
-import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
@@ -20,15 +19,14 @@ import { BlocksPresets, BlocksStack, Scope } from './index.js';
 
 // A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
 // @aws-blocks/blocks), which core's own tests can't depend on. Use an
-// equivalent inline stub: a Compute that owns a NodejsFunction + API Gateway,
-// so create() can build the default and the handler/gateway/apiUrl accessors
-// and synth-shape assertions have something real to resolve to. It is passed to
-// each create() via the internal `defaultComputeFactory` option (see makeStack /
-// makeBackend), exactly as @aws-blocks/blocks injects LambdaCompute.
+// equivalent inline stub: a Compute that owns a NodejsFunction and exposes it
+// via apiHandler(), so create() can build the default + the shared HTTP API
+// gateway and the handler/gateway/apiUrl accessors have something real to
+// resolve to. It is passed to each create() via the internal
+// `defaultComputeFactory` option (see makeStack / makeBackend), exactly as
+// @aws-blocks/blocks injects LambdaCompute.
 class StubLambdaCompute extends Compute {
 	readonly fn: lambda.NodejsFunction;
-	readonly apiGateway: apigateway.RestApi;
-	readonly apiUrl: string;
 	readonly logGroup: cdk.aws_logs.LogGroup;
 
 	constructor(scope: ScopeParent, id: string) {
@@ -45,16 +43,14 @@ class StubLambdaCompute extends Compute {
 			environment: { BLOCKS_STACK_NAME: this.backendStackName },
 			bundling: { minify: true, esbuildArgs: { '--conditions': 'aws-runtime' } },
 		});
-		this.apiGateway = new apigateway.RestApi(this, 'API', { restApiName: 'Blocks API' });
-		this.apiGateway.root.addProxy({
-			defaultIntegration: new apigateway.LambdaIntegration(this.fn),
-			anyMethod: true,
-		});
-		this.apiUrl = `${this.apiGateway.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
 	}
 
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
+	}
+
+	override apiHandler(): IFunction {
+		return this.fn;
 	}
 
 	protected applyTracing(): void {}

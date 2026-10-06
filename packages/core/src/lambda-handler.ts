@@ -100,11 +100,10 @@ export function isLoopbackForwardedHost(forwardedHost: string | undefined): bool
 }
 
 /**
- * Reconstruct the absolute request URL from an API Gateway Lambda event.
+ * Reconstruct the absolute request URL from an API Gateway HTTP API (v2) event.
  *
- * - Path comes from `event.path` (API Gateway v1) or `event.requestContext.http.path` (v2).
- * - Query string from `event.multiValueQueryStringParameters` when present (preserves duplicates),
- *   falling back to `event.queryStringParameters`, then `event.rawQueryString` (v2).
+ * - Path comes from `event.rawPath` (falling back to `event.requestContext.http.path`).
+ * - Query string from `event.rawQueryString`, falling back to `event.queryStringParameters`.
  * - When a trusted loopback `X-Forwarded-Host` is present (the sandbox dev-server
  *   front door), the URL is rebuilt as the browser-visible origin: that host,
  *   plain `http`, and **no** API Gateway stage prefix. Otherwise host comes from
@@ -114,7 +113,8 @@ export function isLoopbackForwardedHost(forwardedHost: string | undefined): bool
  * @internal Exported for testing only.
  */
 export function buildEventUrl(event: any): URL {
-  const path: string = event.path || event.requestContext?.http?.path || '/';
+  // HTTP API v2 exposes the path at `event.rawPath` (and `requestContext.http.path`).
+  const path: string = event.rawPath || event.requestContext?.http?.path || '/';
   const forwardedHost: string | undefined =
     event.headers?.['x-forwarded-host'] || event.headers?.['X-Forwarded-Host'];
 
@@ -142,24 +142,18 @@ export function buildEventUrl(event: any): URL {
     const host = event.headers?.Host || event.headers?.host || 'localhost';
     const proto = event.headers?.['x-forwarded-proto'] || event.headers?.['X-Forwarded-Proto'] || 'https';
     origin = `${proto}://${host}`;
-    // API Gateway REST APIs have a stage prefix (e.g. /prod) that's part of the
-    // external URL but NOT included in event.path. Include it so ctx.request.url
-    // reflects the full external-facing URL — needed for callback URLs, stub IdP
-    // issuer URLs, etc.
+    // The HTTP API v2 `$default` stage carries NO path segment, so it is skipped.
+    // A non-`$default` named stage IS part of the external URL (and absent from
+    // `rawPath`), so prepend it — ctx.request.url must reflect the full
+    // external-facing URL (callback URLs, stub IdP issuer URLs, etc.).
     const stage = event.requestContext?.stage;
-    fullPath = stage ? `/${stage}${path}` : path;
+    fullPath = stage && stage !== '$default' ? `/${stage}${path}` : path;
   }
 
   const url = new URL(fullPath, origin);
 
   if (event.rawQueryString) {
     url.search = `?${event.rawQueryString}`;
-  } else if (event.multiValueQueryStringParameters) {
-    const params = new URLSearchParams();
-    for (const [k, values] of Object.entries(event.multiValueQueryStringParameters)) {
-      for (const v of values as string[]) params.append(k, v);
-    }
-    url.search = params.toString();
   } else if (event.queryStringParameters) {
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(event.queryStringParameters)) {
@@ -189,7 +183,7 @@ const REMAINING_TIME_BUFFER_MS = 1_000;
 /**
  * Classified event source type for Lambda invocations.
  *
- * - `'http'`: API Gateway REST (v1) or HTTP (v2) request
+ * - `'http'`: API Gateway HTTP API (v2) request
  * - `'websocket'`: API Gateway WebSocket (CONNECT/DISCONNECT/MESSAGE)
  * - `'records'`: Event source mapping (SQS, Kinesis, DDB Streams)
  * - `'direct'`: Direct invoke with Blocks-controlled payload (EventBridge Scheduler)
@@ -203,10 +197,11 @@ export type EventClass = 'http' | 'websocket' | 'records' | 'direct';
  * and the dispatcher (to route to the correct handler). Single source of truth
  * prevents drift when new async event types are added.
  *
- * Returns `'http'` only when positive HTTP indicators are present (`httpMethod`
- * or `requestContext.http.method`). Events that don't match any classification
- * also fall to `'http'` via the dispatcher, but `isApiGatewayHttpEvent` gates
- * the timeout guard to only fire when `classifyEvent` returns `'http'`.
+ * Returns `'records'` / `'direct'` / `'websocket'` for those event sources;
+ * every other event — an HTTP API v2 request, or any unrecognized shape — falls
+ * through to `'http'`, which the dispatcher handles. `isApiGatewayHttpEvent`
+ * applies its own positive `requestContext.http.method` check to gate the HTTP
+ * timeout guard.
  *
  * @internal Exported for testing only.
  */
@@ -219,14 +214,13 @@ export function classifyEvent(event: any): EventClass {
   ) {
     return 'websocket';
   }
-  if (event.httpMethod || event.requestContext?.http?.method) return 'http';
+  // HTTP API v2 requests and anything unrecognized route through the HTTP dispatcher.
   return 'http';
 }
 
 /**
  * Detect whether a Lambda event originates from API Gateway (HTTP).
  *
- * API Gateway v1 (REST): has `httpMethod` at top level.
  * API Gateway v2 (HTTP): has `requestContext.http.method`.
  *
  * Events that are NOT API Gateway HTTP:
@@ -237,7 +231,7 @@ export function classifyEvent(event: any): EventClass {
  * @internal Exported for testing only.
  */
 export function isApiGatewayHttpEvent(event: any): boolean {
-  return classifyEvent(event) === 'http' && !!(event.httpMethod || event.requestContext?.http?.method);
+  return classifyEvent(event) === 'http' && !!event.requestContext?.http?.method;
 }
 
 /**
@@ -443,15 +437,56 @@ export class TransientConfigError extends Error {
 }
 
 /**
- * Extract the request path from a Lambda event, normalizing between
- * API Gateway v1 (REST) and v2 (HTTP API) event shapes.
+ * Extract the request path from an API Gateway HTTP API (v2) event.
  *
- * - v1 REST API: path is at `event.path`
- * - v2 HTTP API: path is at `event.requestContext.http.path`
+ * - v2 HTTP API: path is at `event.rawPath` (or `event.requestContext.http.path`)
  * - Fallback: `'/'`
  */
 function getRequestPath(event: any): string {
-  return event.path || event.requestContext?.http?.path || '/';
+  return event.rawPath || event.requestContext?.http?.path || '/';
+}
+
+/**
+ * Resolve the inbound cookie string from an API Gateway HTTP API (v2) event.
+ *
+ * v2 HTTP API delivers cookies in a top-level `event.cookies` string array
+ * (`name=value` entries), which we rejoin with `; ` into the standard header
+ * value; a `Cookie` header is honored as a fallback. Returns `''` when none.
+ */
+function getInboundCookies(event: any): string {
+  if (Array.isArray(event.cookies) && event.cookies.length > 0) {
+    return event.cookies.join('; ');
+  }
+  return event.headers?.cookie || event.headers?.Cookie || '';
+}
+
+/**
+ * Build the request `Headers` for a handler context from the event, folding the
+ * v2 top-level `event.cookies` array back into a `Cookie` header so handlers
+ * read cookies the same way regardless of payload format. `inboundCookies` is
+ * the already-resolved value from {@link getInboundCookies}.
+ */
+function buildRequestHeaders(event: any, inboundCookies: string): Headers {
+  const headers = new Headers(event.headers || {});
+  if (inboundCookies && !headers.has('cookie')) {
+    headers.set('cookie', inboundCookies);
+  }
+  return headers;
+}
+
+/**
+ * Serialize a response `Headers` object into the HTTP API v2 Lambda response
+ * fields, routing `Set-Cookie` to a top-level `cookies` array (omitted when there
+ * are none) — v2 ignores `multiValueHeaders`. `headers` is the single-valued map
+ * with `Set-Cookie` removed, so cookies are never comma-joined into one malformed
+ * header.
+ */
+function buildResponseEnvelope(responseHeaders: Headers): { headers: Record<string, string>; cookies?: string[] } {
+  const headers = Object.fromEntries(
+    [...responseHeaders.entries()].filter(([k]) => k.toLowerCase() !== 'set-cookie'),
+  );
+  const setCookies = responseHeaders.getSetCookie?.() ?? [];
+  return setCookies.length > 0 ? { headers, cookies: setCookies } : { headers };
 }
 
 function createHandler(backend: any) {
@@ -491,7 +526,7 @@ function createHandler(backend: any) {
     }
 
     const origin = event.headers?.origin || event.headers?.Origin || '';
-    const httpMethod = event.httpMethod || event.requestContext?.http?.method;
+    const httpMethod = event.requestContext?.http?.method;
     const corsHeaders = buildCorsHeaders(origin);
 
     // Reject cross-origin requests from disallowed origins
@@ -518,8 +553,9 @@ function createHandler(backend: any) {
     // AsyncLocalStorage so downstream code (e.g. the Blocks client making
     // server-side API calls during SSR) can forward them automatically.
     // Wraps both RawRoute and RPC handling so any handler that calls Blocks
-    // APIs server-side gets forwarded cookies.
-    const inboundCookies = event.headers?.cookie || event.headers?.Cookie || '';
+    // APIs server-side gets forwarded cookies. Normalizes v1 (Cookie header)
+    // and v2 (`event.cookies` array) shapes.
+    const inboundCookies = getInboundCookies(event);
 
     return requestCookies.run(inboundCookies, async () => {
     // RawRoute dispatch — check path-based routes before falling through to RPC
@@ -568,12 +604,15 @@ function createHandler(backend: any) {
 
     const { apiNamespace, method, args, id: rpcId } = parsed.request;
 
-    try {
-      const headers = new Headers(event.headers || {});
+    // Hoisted out of the `try` so the `catch` can still route any `Set-Cookie`
+    // the handler set before it threw (e.g. an auth BB clearing a stale session
+    // on failure) into the v2 top-level `cookies` array.
+    let responseStatus = 200;
+    const responseHeaders = new Headers(rpcHeaders);
+    let responseBody: any;
 
-      let responseStatus = 200;
-      const responseHeaders = new Headers(rpcHeaders);
-      let responseBody: any;
+    try {
+      const headers = buildRequestHeaders(event, inboundCookies);
 
       const context = {
         request: {
@@ -610,16 +649,15 @@ function createHandler(backend: any) {
 
       const result = await apiMethods[method](...args);
 
-      return {
-        statusCode: responseStatus,
-        headers: Object.fromEntries(responseHeaders.entries()),
-        body: successResponse(responseBody ?? result, rpcId),
-      };
+      const body = successResponse(responseBody ?? result, rpcId);
+      // v2 HTTP API ignores multi-value headers, so route any Set-Cookie into the
+      // top-level `cookies` array (and strip it from `headers`).
+      return { statusCode: responseStatus, ...buildResponseEnvelope(responseHeaders), body };
     } catch (error: any) {
       console.error('Lambda Error:', error);
       return {
         statusCode: 200,
-        headers: rpcHeaders,
+        ...buildResponseEnvelope(responseHeaders),
         body: errorResponseFromCatch(error, rpcId),
       };
     }
@@ -634,7 +672,7 @@ async function handleRawRoute(
   corsHeaders: Record<string, string>,
   signal?: AbortSignal,
 ) {
-  const headers = new Headers(event.headers || {});
+  const headers = buildRequestHeaders(event, getInboundCookies(event));
   const { bodyText, bodyStream } = decodeEventBody(event);
 
   let responseStatus = 200;
@@ -668,14 +706,10 @@ async function handleRawRoute(
   try {
     await route.handler(context);
 
+    // Route Set-Cookie into the v2 top-level `cookies` array.
     return {
       statusCode: responseStatus,
-      headers: Object.fromEntries(
-        [...responseHeaders.entries()].filter(([k]) => k.toLowerCase() !== 'set-cookie')
-      ),
-      multiValueHeaders: {
-        'Set-Cookie': responseHeaders.getSetCookie?.() ?? [],
-      },
+      ...buildResponseEnvelope(responseHeaders),
       body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
     };
   } catch (error: any) {
@@ -685,12 +719,7 @@ async function handleRawRoute(
     if (error.name && error.name !== 'Error') body.name = error.name;
     return {
       statusCode: status,
-      headers: Object.fromEntries(
-        [...responseHeaders.entries()].filter(([k]) => k.toLowerCase() !== 'set-cookie')
-      ),
-      multiValueHeaders: {
-        'Set-Cookie': responseHeaders.getSetCookie?.() ?? [],
-      },
+      ...buildResponseEnvelope(responseHeaders),
       body: JSON.stringify(body),
     };
   }
