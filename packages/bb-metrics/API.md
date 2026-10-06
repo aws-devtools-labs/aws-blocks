@@ -66,6 +66,8 @@ export interface MetricsEmitter {
 // @public
 export const MetricsErrors: {
     readonly InvalidMetricName: "InvalidMetricNameException";
+    readonly InvalidMetricValue: "InvalidMetricValueException";
+    readonly InvalidTimestamp: "InvalidTimestampException";
     readonly InvalidDimensions: "InvalidDimensionsException";
     readonly BatchTooLarge: "BatchTooLargeException";
     readonly InvalidNamespace: "InvalidNamespaceException";

@@ -21,6 +21,10 @@
 export const MetricsErrors = {
 	/** Metric name is empty or exceeds 1024 characters. */
 	InvalidMetricName: 'InvalidMetricNameException',
+	/** Metric value is non-finite or outside the CloudWatch-supported range. */
+	InvalidMetricValue: 'InvalidMetricValueException',
+	/** Metric timestamp is not a valid Date. */
+	InvalidTimestamp: 'InvalidTimestampException',
 	/** Dimensions exceed 30 entries, or contain empty keys/values, or key/value exceeds 1024 chars. */
 	InvalidDimensions: 'InvalidDimensionsException',
 	/** Batch contains more than 100 metrics. */
