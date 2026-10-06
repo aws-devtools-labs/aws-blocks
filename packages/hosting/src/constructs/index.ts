@@ -99,6 +99,7 @@ export { createSecurityHeadersPolicy, type SecurityHeadersProps } from './securi
 // (private-asset access, same-origin API base, route ordering) instead of
 // reimplementing them. See the "BYO / Custom Front Door" design doc.
 export { assertAdapterConformance, type AdapterConformanceOptions } from './conformance.js';
+export type { NegotiationMode } from './negotiation_policy.js';
 export { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 export { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 export { backendBaseUrl } from './apigw_routes.js';

@@ -9,9 +9,8 @@
  */
 import { Fn } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { HostingError } from '../hosting_error.js';
 import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
-import { formatNegotiationErrors, negotiate } from '../plan/negotiate.js';
+import { enforceNegotiation, type NegotiationMode } from './negotiation_policy.js';
 import type {
   AdapterContext,
   CapabilityId,
@@ -50,6 +49,8 @@ export type S3WebsiteRenderContext = AdapterContext & {
   /** The built static assets directory to publish. */
   staticDir: string;
   degrade?: CapabilityId[];
+  /** How strictly the capability check is enforced (`'strict'` default · `'warn'` · `'off'`). */
+  negotiation?: NegotiationMode;
 };
 
 export class S3WebsiteAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter {
@@ -68,21 +69,15 @@ export class S3WebsiteAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter
    * website endpoint host (HTTP-only — S3 website endpoints don't support TLS).
    */
   renderLayer(scope: Construct, plan: CapabilityPlan, ctx: S3WebsiteRenderContext): LayerHandle {
-    const result = negotiate(plan, this, { degrade: ctx.degrade });
-    if (result.errors.length > 0) {
-      throw new HostingError('CapabilityNotSupportedError', {
-        message: formatNegotiationErrors(this.service, result),
-        resolution:
-          "`frontDoor: 'none'` serves a pure static site / SPA directly from S3 (HTTP only, no " +
-          'front door). For SSR, a same-origin API, image optimization, HTTPS, or atomic deploys, ' +
-          "use the CloudFront default (omit `frontDoor`) or `{ kind: 'alb' }`.",
-      });
-    }
-    for (const w of result.warnings) {
-      process.stderr.write(
-        `⚠️  Hosting(s3-website): capability '${w.capability}' runs in a degraded form (accepted via \`degrade\`).\n`,
-      );
-    }
+    enforceNegotiation(plan, this, {
+      degrade: ctx.degrade,
+      negotiation: ctx.negotiation,
+      errorCode: 'CapabilityNotSupportedError',
+      resolution:
+        "`frontDoor: 'none'` serves a pure static site / SPA directly from S3 (HTTP only, no " +
+        'front door). For SSR, a same-origin API, image optimization, HTTPS, or atomic deploys, ' +
+        "use the CloudFront default (omit `frontDoor`) or `{ kind: 'alb' }`.",
+    });
     const site = new S3WebsiteConstruct(scope, 'S3Website', { plan, staticDir: ctx.staticDir });
     return {
       url: site.url,

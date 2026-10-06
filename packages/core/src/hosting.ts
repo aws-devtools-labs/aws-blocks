@@ -4,7 +4,13 @@
 import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
+import type {
+  DeployManifest,
+  FrameworkType,
+  KindStoreOptions,
+  NegotiationMode,
+  RouteBehavior,
+} from '@aws-blocks/hosting/constructs';
 import { detectFramework, type FrameworkAdapterFn, getAdapter, normalizeBasePath } from '@aws-blocks/hosting/adapters';
 import {
   createSecurityHeadersPolicy,
@@ -502,6 +508,13 @@ export interface CloudFrontOverRouterFrontDoor {
   vpc?: import('aws-cdk-lib/aws-ec2').IVpc;
   /** Internal (private) ALB vs internet-facing. Default: internet-facing. */
   internal?: boolean;
+  /**
+   * How strictly the ALB router layer enforces the capability check. `'strict'`
+   * (default) fails synth on a demanded capability it can't serve; `'warn'`
+   * reports it and proceeds; `'off'` skips the check.
+   * @default 'strict'
+   */
+  negotiation?: NegotiationMode;
 }
 
 // ─── Default build output directories per framework ──────────────
@@ -849,7 +862,13 @@ export class Hosting extends Construct {
       // the ALB and the ALB routes to everything. The internal CF → ALB hop is
       // HTTP (no cert on the ALB); the viewer hop is HTTPS at the edge.
       frontDoor: cfOverRouter
-        ? { kind: 'alb', vpc: cfOverRouter.vpc, internal: cfOverRouter.internal, backendApiUrl: props.api?.apiUrl }
+        ? {
+            kind: 'alb',
+            vpc: cfOverRouter.vpc,
+            internal: cfOverRouter.internal,
+            backendApiUrl: props.api?.apiUrl,
+            negotiation: cfOverRouter.negotiation,
+          }
         : typeof props.frontDoor === 'object' &&
             props.api &&
             'kind' in props.frontDoor &&

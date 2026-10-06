@@ -433,6 +433,13 @@ export type HostingConstructProps = {
         backendApiUrl?: string;
         /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
+        /**
+         * How strictly the capability check is enforced. `'strict'` (default) fails
+         * synth on a demanded capability the door can't serve; `'warn'` reports it
+         * and proceeds; `'off'` skips the check — the deploy then owns correctness.
+         * @default 'strict'
+         */
+        negotiation?: import('./negotiation_policy.js').NegotiationMode;
       }
     | {
         kind: 'apiGateway';
@@ -460,6 +467,13 @@ export type HostingConstructProps = {
         backendApiUrl?: string;
         /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
+        /**
+         * How strictly the capability check is enforced. `'strict'` (default) fails
+         * synth on a demanded capability the door can't serve; `'warn'` reports it
+         * and proceeds; `'off'` skips the check — the deploy then owns correctness.
+         * @default 'strict'
+         */
+        negotiation?: import('./negotiation_policy.js').NegotiationMode;
       }
     | {
         /** BYO — a customer-authored front door. */
@@ -482,6 +496,13 @@ export type HostingConstructProps = {
         backendApiUrl?: string;
         /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
+        /**
+         * How strictly the capability check is enforced. `'strict'` (default) fails
+         * synth on a demanded capability the door can't serve; `'warn'` reports it
+         * and proceeds; `'off'` skips the check — the deploy then owns correctness.
+         * @default 'strict'
+         */
+        negotiation?: import('./negotiation_policy.js').NegotiationMode;
       };
   // NOTE: S3-website is not a public front-door *kind* — it is an ORIGIN, not a
   // front door (it fronts nothing). It is surfaced as `frontDoor: 'none'` (serve
@@ -1650,6 +1671,7 @@ export class HostingConstruct extends Construct {
           waf: props.waf,
           monitoring: Boolean(props.monitoring),
           degrade: fd.degrade,
+          negotiation: fd.negotiation,
         });
         // The ALB's DNS (from the layer's origin handle) — the composed CF → ALB
         // edge reads this to point CloudFront's single origin at the ALB.
@@ -1675,13 +1697,17 @@ export class HostingConstruct extends Construct {
               }
             : undefined,
           degrade: fd.degrade,
+          negotiation: fd.negotiation,
         });
       } else if (fd?.kind === 'custom') {
         // BYO custom door: negotiate (framework-enforced → an unmet demand fails
         // at synth, never a silent runtime break), then let the customer's
         // adapter render its own door. It reads the same ctx the built-in doors
         // get; backend routing lives in `plan.backend.origins`.
-        handle = renderCustomDoor(this, plan, fd.adapter, { ...common, degrade: fd.degrade }, fd.degrade);
+        handle = renderCustomDoor(this, plan, fd.adapter, { ...common, degrade: fd.degrade }, {
+          degrade: fd.degrade,
+          negotiation: fd.negotiation,
+        });
         // If the door exposes a regional origin (e.g. an ALB it built), surface
         // its DNS so a composed edge could point at it — same as the ALB door.
         this.loadBalancerDnsName = handle.originHandle?.domainName;

@@ -8,6 +8,8 @@
  * `degrade` opt-in) fails HERE, at synth — never as a silently broken runtime.
  * This is "safe by construction": the guarantee holds even if the adapter author
  * never calls `negotiate` themselves, because the framework runs it around them.
+ * A platform that validates its door its own way can relax this on purpose via
+ * `frontDoor.negotiation` (`'warn'` reports unmet demands; `'off'` skips the check).
  *
  * On success the adapter renders its own door and returns a {@link LayerHandle}
  * (the public `url` + an `originHandle` a parent layer could attach to). We do
@@ -15,10 +17,17 @@
  * assets, compute, backend), handed over via `ctx` and `plan.backend`.
  */
 import type { Construct } from 'constructs';
-import { HostingError } from '../hosting_error.js';
-import { formatNegotiationErrors, negotiate } from '../plan/negotiate.js';
 import type { AdapterContext, CapabilityId, CapabilityPlan } from '../plan/types.js';
 import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
+import { enforceNegotiation, type NegotiationMode } from './negotiation_policy.js';
+
+/** Options for {@link renderCustomDoor}. */
+export type RenderCustomDoorOptions = {
+	/** Capabilities the app accepts in a degraded form (else they fail in `strict`). */
+	degrade?: CapabilityId[];
+	/** How strictly the capability check is enforced. @default 'strict' */
+	negotiation?: NegotiationMode;
+};
 
 /**
  * Negotiate `plan` against `adapter`, then render the custom door.
@@ -27,24 +36,24 @@ import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
  * @param plan    the service-agnostic {@link CapabilityPlan} for the deploy.
  * @param adapter the customer's {@link FrontDoorLayerAdapter}.
  * @param ctx     the render context (the same CDK handles the built-in doors get).
- * @param degrade capabilities the app accepts in a degraded form (else they fail).
- * @throws HostingError('UnsupportedFrontDoorError') when a demanded capability is
- *   `unsupported`, or `degraded` without being listed in `degrade`.
+ * @param opts.degrade capabilities the app accepts in a degraded form (else they fail).
+ * @param opts.negotiation `'strict'` (default) · `'warn'` · `'off'` — see {@link NegotiationMode}.
+ * @throws HostingError('UnsupportedFrontDoorError') in `strict` mode when a demanded
+ *   capability is `unsupported`, or `degraded` without being listed in `degrade`.
  */
 export function renderCustomDoor(
 	scope: Construct,
 	plan: CapabilityPlan,
 	adapter: FrontDoorLayerAdapter,
 	ctx: AdapterContext,
-	degrade?: CapabilityId[],
+	opts: RenderCustomDoorOptions = {},
 ): LayerHandle {
-	const result = negotiate(plan, adapter, { degrade });
-	if (result.errors.length > 0) {
-		throw new HostingError('UnsupportedFrontDoorError', {
-			message: formatNegotiationErrors(adapter.service, result),
-			resolution:
-				"Support the missing capabilities in your adapter's `supports`/`renderLayer`, accept a degraded one via `frontDoor.degrade`, or choose a built-in door.",
-		});
-	}
+	enforceNegotiation(plan, adapter, {
+		degrade: opts.degrade,
+		negotiation: opts.negotiation,
+		errorCode: 'UnsupportedFrontDoorError',
+		resolution:
+			"Support the missing capabilities in your adapter's `supports`/`renderLayer`, accept a degraded one via `frontDoor.degrade`, relax the check via `frontDoor.negotiation`, or choose a built-in door.",
+	});
 	return adapter.renderLayer(scope, plan, ctx);
 }

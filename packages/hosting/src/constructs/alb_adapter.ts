@@ -14,8 +14,7 @@ import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import type { IVpc } from 'aws-cdk-lib/aws-ec2';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
-import { HostingError } from '../hosting_error.js';
-import { formatNegotiationErrors, negotiate } from '../plan/negotiate.js';
+import { enforceNegotiation, type NegotiationMode } from './negotiation_policy.js';
 import type {
   AdapterContext,
   CapabilityId,
@@ -68,6 +67,8 @@ export type AlbRenderContext = AdapterContext & {
   monitoring?: boolean;
   /** Capabilities the app explicitly accepts in degraded form (else the negotiator fails). */
   degrade?: CapabilityId[];
+  /** How strictly the capability check is enforced (`'strict'` default · `'warn'` · `'off'`). */
+  negotiation?: NegotiationMode;
 };
 
 export class AlbAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter {
@@ -89,20 +90,14 @@ export class AlbAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter {
   renderLayer(scope: Construct, plan: CapabilityPlan, ctx: AlbRenderContext): LayerHandle {
     // Conscious degradation: fail synth if the plan requires a capability ALB
     // can't do (or degrades without opt-in). Never a silent drop.
-    const result = negotiate(plan, this, { degrade: ctx.degrade });
-    if (result.errors.length > 0) {
-      throw new HostingError('CapabilityNotSupportedError', {
-        message: formatNegotiationErrors(this.service, result),
-        resolution:
-          'Choose a front door that supports these capabilities (e.g. CloudFront), or accept the ' +
+    enforceNegotiation(plan, this, {
+      degrade: ctx.degrade,
+      negotiation: ctx.negotiation,
+      errorCode: 'CapabilityNotSupportedError',
+      resolution:
+        'Choose a front door that supports these capabilities (e.g. CloudFront), or accept the ' +
           'degraded behavior explicitly by listing the capability in `degrade`.',
-      });
-    }
-    for (const w of result.warnings) {
-      process.stderr.write(
-        `⚠️  Hosting(alb): capability '${w.capability}' runs in a degraded form on ALB (accepted via \`degrade\`).\n`,
-      );
-    }
+    });
 
     const alb = new AlbConstruct(scope, 'Alb', {
       plan,

@@ -25,6 +25,14 @@ now also exports the building blocks the built-in doors use — `generateAlbAsse
 a test kit that verifies a custom adapter's `supports()` is total and consistent
 with what `renderLayer` builds.
 
+Every object-form door (`{ kind: 'alb' }`, `{ kind: 'apiGateway' }`,
+`{ kind: 'stacked', … }`, `{ kind: 'custom', … }`) also accepts
+`negotiation: 'strict' | 'warn' | 'off'`, an explicit escape hatch for the
+capability check. `'strict'` (the default) keeps today's behavior: a demanded
+capability the door can't serve fails synth. `'warn'` reports it and deploys
+anyway; `'off'` skips the check, for platforms that validate their door their
+own way. `degrade` (accepting specific capabilities) works in every mode.
+
 Additive and backward-compatible: omit `frontDoor` (or use any built-in door —
 `'cloudfront'` default, `'none'`, `{ kind: 'alb' }`, `{ kind: 'apiGateway' }`,
 `{ kind: 'stacked', … }`) and nothing changes.

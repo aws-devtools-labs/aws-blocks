@@ -79,7 +79,7 @@ describe('renderCustomDoor', () => {
 
 	it('renders when a degraded capability is explicitly accepted via degrade', () => {
 		const door = new FakeDoor({ RunServerRender: 'degraded' });
-		const handle = renderCustomDoor(stack(), ssrPlan, door, {}, ['RunServerRender']);
+		const handle = renderCustomDoor(stack(), ssrPlan, door, {}, { degrade: ['RunServerRender'] });
 		assert.equal(door.rendered, true);
 		assert.equal(handle.url, 'https://fake.example');
 	});
@@ -88,5 +88,31 @@ describe('renderCustomDoor', () => {
 		const door = new FakeDoor({ RunServerRender: 'core' });
 		renderCustomDoor(stack(), ssrPlan, door, {});
 		assert.equal(door.rendered, true);
+	});
+
+	it("negotiation: 'warn' renders despite an unsupported demanded capability", () => {
+		const door = new FakeDoor({ RunServerRender: 'unsupported' });
+		const handle = renderCustomDoor(stack(), ssrPlan, door, {}, { negotiation: 'warn' });
+		assert.equal(door.rendered, true);
+		assert.equal(handle.url, 'https://fake.example');
+	});
+
+	it("negotiation: 'off' renders without consulting supports() at all", () => {
+		const door = new FakeDoor({ RunServerRender: 'unsupported' });
+		let consulted = 0;
+		const original = door.supports.bind(door);
+		door.supports = (cap: CapabilityId) => {
+			consulted++;
+			return original(cap);
+		};
+		renderCustomDoor(stack(), ssrPlan, door, {}, { negotiation: 'off' });
+		assert.equal(door.rendered, true);
+		assert.equal(consulted, 0, "'off' must skip negotiation entirely");
+	});
+
+	it("negotiation: 'strict' (explicit) behaves like the default", () => {
+		const door = new FakeDoor({ RunServerRender: 'unsupported' });
+		assert.throws(() => renderCustomDoor(stack(), ssrPlan, door, {}, { negotiation: 'strict' }), /RunServerRender/);
+		assert.equal(door.rendered, false);
 	});
 });

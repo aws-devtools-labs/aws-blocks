@@ -184,4 +184,18 @@ describe('AlbAdapter — negotiation gating', () => {
     const res = new AlbAdapter().render(stack, skewPlan, { bucket, degrade: ['PinSession'] });
     assert.ok(res.url.startsWith('http'));
   });
+
+  for (const negotiation of ['warn', 'off'] as const) {
+    it(`renders an unmet demand without opt-in when negotiation is '${negotiation}'`, () => {
+      const app = new App();
+      const stack = new Stack(app, `S-${negotiation}`, { env: { account: '111111111111', region: 'us-west-2' } });
+      const bucket = new Bucket(stack, 'Assets');
+      const skewPlan: CapabilityPlan = {
+        ...staticPlan,
+        policies: { ...staticPlan.policies, skewEnabled: true },
+      };
+      const res = new AlbAdapter().render(stack, skewPlan, { bucket, negotiation });
+      assert.ok(res.url.startsWith('http'));
+    });
+  }
 });

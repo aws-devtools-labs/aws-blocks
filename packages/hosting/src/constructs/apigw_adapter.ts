@@ -14,9 +14,8 @@ import { Fn } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
-import { HostingError } from '../hosting_error.js';
 import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
-import { formatNegotiationErrors, negotiate } from '../plan/negotiate.js';
+import { enforceNegotiation, type NegotiationMode } from './negotiation_policy.js';
 import type {
   AdapterContext,
   CapabilityId,
@@ -68,6 +67,8 @@ export type ApiGatewayRenderContext = AdapterContext & {
   /** Custom domain(s) for the door — a regional cert + DomainName + mapping + Route 53 alias. */
   domain?: ApiGwCustomDomain;
   degrade?: CapabilityId[];
+  /** How strictly the capability check is enforced (`'strict'` default · `'warn'` · `'off'`). */
+  negotiation?: NegotiationMode;
 };
 
 export class ApiGatewayAdapter implements FrontDoorAdapter, FrontDoorLayerAdapter {
@@ -86,20 +87,14 @@ export class ApiGatewayAdapter implements FrontDoorAdapter, FrontDoorLayerAdapte
    * host (scheme stripped, token-safe) — HTTPS by default.
    */
   renderLayer(scope: Construct, plan: CapabilityPlan, ctx: ApiGatewayRenderContext): LayerHandle {
-    const result = negotiate(plan, this, { degrade: ctx.degrade });
-    if (result.errors.length > 0) {
-      throw new HostingError('CapabilityNotSupportedError', {
-        message: formatNegotiationErrors(this.service, result),
-        resolution:
-          'Choose a front door that supports these capabilities (e.g. cloudfront/alb), or accept the ' +
-          'degraded behavior explicitly by listing the capability in `degrade`.',
-      });
-    }
-    for (const w of result.warnings) {
-      process.stderr.write(
-        `⚠️  Hosting(api-gateway): capability '${w.capability}' runs in a degraded form (accepted via \`degrade\`).\n`,
-      );
-    }
+    enforceNegotiation(plan, this, {
+      degrade: ctx.degrade,
+      negotiation: ctx.negotiation,
+      errorCode: 'CapabilityNotSupportedError',
+      resolution:
+        'Choose a front door that supports these capabilities (e.g. cloudfront/alb), or accept the ' +
+        'degraded behavior explicitly by listing the capability in `degrade`.',
+    });
 
     const constructProps = {
       plan,
