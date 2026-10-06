@@ -10,8 +10,7 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '@aws-blocks/core/runtime';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs } from './deploy-stream.js';
-import { filteredSink } from './stream-filter.js';
-import { createDeployStdout } from './deploy-progress.js';
+import { createDeployStreams } from './deploy-progress.js';
 import { getLogLevel, info, verbose, error as logError } from '../logger.js';
 import { runSync } from './run-command.js';
 
@@ -69,11 +68,11 @@ export async function deploy(options: DeployOptions) {
     verbose('  Streaming CloudFormation events; the deploy keeps running if this');
     verbose('  process is backgrounded (Ctrl-C, or SIGTERM twice, to abort).');
 
-    const { sink: deployStdout, finish: finishProgress } = createDeployStdout(
-      process.stdout,
-      getLogLevel(),
-      { isTty: Boolean(process.stdout.isTTY), label: 'Deploying to AWS' },
-    );
+    const { stdout: deployStdout, stderr: deployStderr, finish: finishProgress } =
+      createDeployStreams(process.stdout, process.stderr, getLogLevel(), {
+        isTty: Boolean(process.stdout.isTTY),
+        label: 'Deploying to AWS',
+      });
     try {
       await runStreaming(
         "npx",
@@ -88,7 +87,7 @@ export async function deploy(options: DeployOptions) {
           // reporter's own live line is the "still working" signal.
           heartbeatMs: getLogLevel() >= 2 ? undefined : 0,
           stdout: deployStdout,
-          stderr: filteredSink(process.stderr, getLogLevel()),
+          stderr: deployStderr,
           env: {
             ...process.env,
             NODE_OPTIONS: '--conditions=cdk',

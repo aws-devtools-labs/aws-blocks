@@ -14,8 +14,7 @@ import { classifyError } from '@aws-blocks/core/runtime';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { runStreaming } from './deploy-stream.js';
-import { createDeployStdout } from './deploy-progress.js';
-import { filteredSink } from './stream-filter.js';
+import { createDeployStreams } from './deploy-progress.js';
 import { terminateProcessTree } from './process-tree.js';
 import { info, verbose, warn as logWarn, error as logError, getLogLevel } from '../logger.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
@@ -176,11 +175,11 @@ export async function startSandbox(options: SandboxOptions) {
   // The progress reporter owns the user-facing "Deploying" milestone.
   verbose('Deploying to AWS (this can take a few minutes on first deploy)…');
 
-  const { sink: deployStdout, finish: finishProgress } = createDeployStdout(
-    process.stdout,
-    getLogLevel(),
-    { isTty: Boolean(process.stdout.isTTY), label: 'Deploying to AWS' },
-  );
+  const { stdout: deployStdout, stderr: deployStderr, finish: finishProgress } =
+    createDeployStreams(process.stdout, process.stderr, getLogLevel(), {
+      isTty: Boolean(process.stdout.isTTY),
+      label: 'Deploying to AWS',
+    });
   try {
     await runStreaming(
       "npm",
@@ -193,7 +192,7 @@ export async function startSandbox(options: SandboxOptions) {
         // The reporter's live line is the "still working" signal; no heartbeat.
         heartbeatMs: getLogLevel() >= 2 ? undefined : 0,
         stdout: deployStdout,
-        stderr: filteredSink(process.stderr, getLogLevel()),
+        stderr: deployStderr,
         env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
       },
     );
@@ -531,17 +530,18 @@ export async function destroySandbox(backendPath: string) {
     const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
     await runDestroyWithRetries({
       runDestroy: async () => {
-        const { sink, finish } = createDeployStdout(process.stdout, getLogLevel(), {
-          isTty: Boolean(process.stdout.isTTY),
-          label: 'Destroying sandbox',
-          verb: 'destroy',
-        });
+        const { stdout, stderr, finish } = createDeployStreams(
+          process.stdout,
+          process.stderr,
+          getLogLevel(),
+          { isTty: Boolean(process.stdout.isTTY), label: 'Destroying sandbox', verb: 'destroy' },
+        );
         try {
           await runStreaming('npm', cdkArgs, {
             label: 'cdk destroy',
             heartbeatMs: getLogLevel() >= 2 ? undefined : 0,
-            stdout: sink,
-            stderr: filteredSink(process.stderr, getLogLevel()),
+            stdout,
+            stderr,
             env: cdkEnv,
           });
           finish(true);
