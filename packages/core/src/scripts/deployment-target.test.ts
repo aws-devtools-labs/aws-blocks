@@ -71,6 +71,38 @@ describe('resolveDeploymentTarget', () => {
 		});
 	});
 
+	it('reads the AMAZON Region variables in the CDK order', async () => {
+		const regionFor = async () => (await resolveDeploymentTarget({ env, projectRoot })).region;
+		env.AMAZON_DEFAULT_REGION = 'ap-south-1';
+		assert.equal(await regionFor(), 'ap-south-1');
+		env.AWS_DEFAULT_REGION = 'us-east-2';
+		assert.equal(await regionFor(), 'us-east-2');
+		env.AMAZON_REGION = 'eu-west-1';
+		assert.equal(await regionFor(), 'eu-west-1');
+		env.AWS_REGION = 'cn-north-1';
+		assert.equal(await regionFor(), 'cn-north-1');
+	});
+
+	it('selects AWS_DEFAULT_PROFILE after AWS_PROFILE, as CDK does', async () => {
+		env.AWS_DEFAULT_PROFILE = 'deployment';
+		assert.deepEqual(await resolveDeploymentTarget({ env, projectRoot }), {
+			region: 'eu-west-1',
+			profile: 'deployment',
+		});
+		// The SDK does not read AWS_DEFAULT_PROFILE, but CDK uses environment keys first.
+		assert.deepEqual(
+			await resolveDeploymentTarget({
+				env: { ...env, AWS_ACCESS_KEY_ID: 'id', AWS_SECRET_ACCESS_KEY: 'key' },
+				projectRoot,
+			}),
+			{ region: 'eu-west-1', profile: undefined },
+		);
+		assert.deepEqual(await resolveDeploymentTarget({ env: { ...env, AWS_PROFILE: 'default' }, projectRoot }), {
+			region: 'us-east-1',
+			profile: undefined,
+		});
+	});
+
 	it('ignores context entries and CDK_DEFAULT_REGION', async () => {
 		await writeFile(join(projectRoot, 'cdk.json'), '{"context":{"region":"eu-west-3","profile":"deployment"}}');
 		env.CDK_DEFAULT_REGION = 'ap-south-1';
