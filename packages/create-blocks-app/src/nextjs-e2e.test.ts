@@ -1,13 +1,14 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert';
 import { execFile, execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import type { TestEvent } from 'node:test/reporters';
 
 const run = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -15,16 +16,55 @@ const templateDir = join(dirname(fileURLToPath(import.meta.url)), '../templates/
 const templateTest = join(templateDir, 'test/e2e.test.ts');
 let compiledDir: string;
 
+const requiredTests = ['home page loads', 'app: server serves its Blocks config', 'greet returns message and timestamp'];
+
+function assertTemplateTestsRan(report: string) {
+  const events: TestEvent[] = report.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const completed = events.filter((event) => event.type === 'test:pass' || event.type === 'test:fail');
+  for (const name of requiredTests) {
+    const results = completed.filter((event) => event.data.name === name);
+    assert.strictEqual(results.length, 1, `Expected one completed result for ${name}\n${report}`);
+    assert.ok(!results[0].data.skip && !results[0].data.todo, `Expected ${name} to run without skip or TODO\n${report}`);
+  }
+}
+
+describe('Next.js template execution guard', () => {
+  const completed = requiredTests.map((name) => ({ type: 'test:pass', data: { name } }));
+  const report = (events: unknown[]) => events.map((event) => JSON.stringify(event)).join('\n');
+
+  it('allows unrelated skipped tests', () => {
+    assertTemplateTestsRan(report([...completed, { type: 'test:pass', data: { name: 'unrelated', skip: 'optional' } }]));
+  });
+
+  for (const name of requiredTests) {
+    it(`rejects skipped, TODO, missing, or duplicate results for ${name}`, () => {
+      const otherTests = completed.filter((event) => event.data.name !== name);
+      assert.throws(() => assertTemplateTestsRan(report([...otherTests, { type: 'test:pass', data: { name, skip: 'customized' } }])), /to run without skip or TODO/);
+      assert.throws(() => assertTemplateTestsRan(report([...otherTests, { type: 'test:pass', data: { name, todo: true } }])), /to run without skip or TODO/);
+      assert.throws(() => assertTemplateTestsRan(report(otherTests)), /Expected one completed result/);
+      assert.throws(() => assertTemplateTestsRan(report([...completed, { type: 'test:pass', data: { name } }])), /Expected one completed result/);
+    });
+  }
+});
+
 async function runTemplateTests(env: NodeJS.ProcessEnv, timeout = 15000, killSignal: NodeJS.Signals = 'SIGTERM') {
   const childEnv = { ...env };
   // The child runs its own test runner rather than joining this runner.
   delete childEnv.NODE_TEST_CONTEXT;
+  const reportDir = mkdtempSync(join(compiledDir, 'results-'));
+  const reportFile = join(reportDir, 'events.jsonl');
+  const readReport = () => existsSync(reportFile) ? readFileSync(reportFile, 'utf8') : '';
   try {
     // One test file needs no worker isolation; killing the runner must not orphan a worker.
-    const result = await run(process.execPath, ['--test', '--experimental-test-isolation=none', '--test-reporter=tap', join(compiledDir, 'test/e2e.test.js')], {
+    const result = await run(process.execPath, [
+      '--test', '--experimental-test-isolation=none',
+      '--test-reporter=tap', '--test-reporter-destination=stdout',
+      `--test-reporter=${join(dirname(fileURLToPath(import.meta.url)), 'nextjs-e2e-reporter.js')}`,
+      `--test-reporter-destination=${reportFile}`, join(compiledDir, 'test/e2e.test.js'),
+    ], {
       env: childEnv, timeout, killSignal,
     });
-    return { exitCode: 0, stdout: result.stdout, diagnostic: result.stdout };
+    return { exitCode: 0, report: readReport(), diagnostic: [result.stdout, result.stderr].join('\n') };
   } catch (error) {
     const failure = error as Error & {
       code?: number | string | null; signal?: string | null; killed?: boolean; stdout?: string; stderr?: string;
@@ -32,7 +72,7 @@ async function runTemplateTests(env: NodeJS.ProcessEnv, timeout = 15000, killSig
     const stdout = failure.stdout ?? '';
     return {
       exitCode: !failure.killed && !failure.signal && typeof failure.code === 'number' ? failure.code : -1,
-      stdout,
+      report: readReport(),
       diagnostic: [
         failure.killed || failure.signal ? 'Child process was terminated (timeout or signal)' : 'Child process failed',
         failure.message,
@@ -40,6 +80,8 @@ async function runTemplateTests(env: NodeJS.ProcessEnv, timeout = 15000, killSig
         stdout, failure.stderr ?? '',
       ].join('\n'),
     };
+  } finally {
+    rmSync(reportDir, { recursive: true, force: true });
   }
 }
 
@@ -114,9 +156,9 @@ describe('Next.js template E2E assertions', () => {
           TEST_URL: `http://127.0.0.1:${address.port}${scenario.trailingSlash ? '/' : ''}`,
           NODE_OPTIONS: '',
         };
-        const { exitCode, stdout, diagnostic } = await runTemplateTests(env);
+        const { exitCode, report, diagnostic } = await runTemplateTests(env);
         assert.strictEqual(exitCode, scenario.exitCode, diagnostic);
-        assert.match(stdout, /# skipped 0\b/, stdout);
+        assertTemplateTestsRan(report);
         assert.ok(configRequests > 0, 'E2E must request the Blocks config even when the page is customized');
         if (scenario.configStatus === 200) {
           assert.deepStrictEqual(apiRequests, [{ method: 'api.greet', params: ['World'] }], 'E2E must call the sample API');
