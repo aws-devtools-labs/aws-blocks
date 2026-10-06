@@ -45,10 +45,6 @@ export type BuildCapabilityPlanInput = {
    * the common single-compute same-origin case. See {@link BackendPlan}.
    */
   backendOrigins?: BackendOrigin[];
-  /** The app needs backend requests longer than a router's short timeout (agent loops, big jobs). */
-  backendNeedsLongRequests?: boolean;
-  /** The app needs backend payloads above a router's size cap (large uploads/downloads). */
-  backendNeedsLargePayloads?: boolean;
   /**
    * Demand signals — app-expressed needs (from HostingProps / manifest) that make
    * the matching capability REQUIRED. Omitted ⇒ not demanded ⇒ never fails a door
@@ -115,11 +111,7 @@ export const buildCapabilityPlan = (input: BuildCapabilityPlanInput): Capability
   // ── Backend/API routing (same-origin only; undefined = cross-origin) ──
   const backend =
     input.backendOrigins && input.backendOrigins.length > 0
-      ? {
-          origins: input.backendOrigins,
-          needsLongRequests: input.backendNeedsLongRequests === true,
-          needsLargePayloads: input.backendNeedsLargePayloads === true,
-        }
+      ? { origins: input.backendOrigins }
       : undefined;
 
   return {
@@ -147,6 +139,8 @@ export const buildCapabilityPlan = (input: BuildCapabilityPlanInput): Capability
       geoRestricted: input.demand?.geoRestricted === true,
       monitoringEnabled: input.demand?.monitoringEnabled === true,
       edgeCacheRequired: input.demand?.edgeCacheRequired === true,
+      // Read from the build (deterministic): any edge-runtime compute.
+      hasEdgeFunctions: Object.values(manifest.compute ?? {}).some((c) => c.type === 'edge'),
     },
     release: { buildId },
     ...(backend ? { backend } : {}),

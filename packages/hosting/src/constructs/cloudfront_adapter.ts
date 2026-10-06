@@ -40,8 +40,7 @@ const CLOUDFRONT_SUPPORT: Record<CapabilityId, SupportTier> = {
   StreamServerRender: 'core',
   ProxySameOriginApi: 'core',
   RouteApiNamespace: 'core', // a behavior per namespace → each compute's ingress
-  LongRequest: 'core', // routes to the origin; the origin's own timeout applies
-  LargePayload: 'core', // proxied to the origin without a router-imposed size cap
+  RunEdgeFunction: 'core', // Lambda@Edge associations on the distribution's behaviors
   CustomDomainTls: 'core',
   InjectResponseHeaders: 'core',
   FilterRequests: 'core',

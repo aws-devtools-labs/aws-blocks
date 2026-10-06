@@ -95,6 +95,12 @@ export type PlanPolicies = {
   monitoringEnabled?: boolean;
   /** The app requires edge caching as a hard need (rare; perf is otherwise optional). */
   edgeCacheRequired?: boolean;
+  /**
+   * The build ships edge-runtime functions (manifest compute `type: 'edge'`, e.g. a
+   * Next.js `runtime = 'edge'` route) that must run AT the edge — only a door
+   * that can attach Lambda@Edge serves them.
+   */
+  hasEdgeFunctions?: boolean;
 };
 
 /** Release/atomicity info for the deploy. */
@@ -145,10 +151,6 @@ export type BackendOrigin = {
 export type BackendPlan = {
   /** API-namespace → ingress routes. A lone `'*'` origin is the single-compute same-origin case. */
   origins: BackendOrigin[];
-  /** The app needs requests longer than a router's short timeout (agent loops, big batch jobs). */
-  needsLongRequests?: boolean;
-  /** The app needs payloads above a router's size cap (large uploads/downloads). */
-  needsLargePayloads?: boolean;
 };
 
 /**
@@ -183,11 +185,10 @@ export type CapabilityId =
   | 'RouteRequest'
   | 'ServeStaticAsset'
   | 'RunServerRender'
+  | 'RunEdgeFunction'
   | 'StreamServerRender'
   | 'ProxySameOriginApi'
   | 'RouteApiNamespace'
-  | 'LongRequest'
-  | 'LargePayload'
   | 'CustomDomainTls'
   | 'InjectResponseHeaders'
   | 'FilterRequests'

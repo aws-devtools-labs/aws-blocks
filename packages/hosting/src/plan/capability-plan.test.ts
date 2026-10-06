@@ -92,6 +92,7 @@ describe('buildCapabilityPlan — policies + release', () => {
       geoRestricted: false,
       monitoringEnabled: false,
       edgeCacheRequired: false,
+      hasEdgeFunctions: false,
     });
     assert.equal(plan.release.buildId, 'build-123');
   });

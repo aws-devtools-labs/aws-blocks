@@ -33,6 +33,13 @@ capability the door can't serve fails synth. `'warn'` reports it and deploys
 anyway; `'off'` skips the check, for platforms that validate their door their
 own way. `degrade` (accepting specific capabilities) works in every mode.
 
+The capability vocabulary was reviewed against real sample apps for what can
+actually be detected from an app. `LongRequest` and `LargePayload` are removed:
+nothing in an app's build or props reveals them, so they could never be checked.
+`RunEdgeFunction` is added: a build that ships edge-runtime functions (e.g. a
+Next.js `runtime = 'edge'` route) now fails synth on a door with no edge layer
+(ALB, API Gateway, S3 website), instead of deploying with the route unwired.
+
 Additive and backward-compatible: omit `frontDoor` (or use any built-in door —
 `'cloudfront'` default, `'none'`, `{ kind: 'alb' }`, `{ kind: 'apiGateway' }`,
 `{ kind: 'stacked', … }`) and nothing changes.

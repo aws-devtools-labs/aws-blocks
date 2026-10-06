@@ -46,21 +46,24 @@ describe('requiredCapabilities', () => {
     );
     assert.ok(req.has('ProxySameOriginApi'));
     assert.ok(!req.has('RouteApiNamespace'), 'single-compute `*` should not require namespace path-routing');
-    assert.ok(!req.has('LongRequest') && !req.has('LargePayload'));
   });
 
-  it('requires RouteApiNamespace for a named namespace, and payload/timeout caps when declared', () => {
+  it('requires RouteApiNamespace for a named namespace', () => {
     const req = requiredCapabilities(
       planWith({
         backend: {
           origins: [{ namespace: 'notes', ingress: { kind: 'url', url: 'https://x/aws-blocks/api' } }],
-          needsLongRequests: true,
-          needsLargePayloads: true,
         },
       }),
     );
     assert.ok(req.has('ProxySameOriginApi') && req.has('RouteApiNamespace'));
-    assert.ok(req.has('LongRequest') && req.has('LargePayload'));
+  });
+
+  it('requires RunEdgeFunction only when the build ships edge-runtime functions', () => {
+    assert.ok(!requiredCapabilities(planWith({})).has('RunEdgeFunction'));
+    const edgePlan = planWith({});
+    edgePlan.policies = { ...edgePlan.policies, hasEdgeFunctions: true };
+    assert.ok(requiredCapabilities(edgePlan).has('RunEdgeFunction'));
   });
 
   it('requires nothing backend-related when there is no backend (cross-origin API)', () => {
@@ -95,12 +98,11 @@ describe('negotiate', () => {
     assert.equal(warnings.length, 0);
   });
 
-  it('errors when a plan needs LongRequest on a door that cannot (e.g. API Gateway 29 s cap)', () => {
-    const plan = planWith({
-      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://x/aws-blocks/api' } }], needsLongRequests: true },
-    });
-    const { errors } = negotiate(plan, adapterWith({ LongRequest: 'unsupported' }));
-    assert.ok(errors.some((e) => e.capability === 'LongRequest'));
+  it('errors when edge-runtime functions meet a door without an edge layer (e.g. ALB)', () => {
+    const plan = planWith({});
+    plan.policies = { ...plan.policies, hasEdgeFunctions: true };
+    const { errors } = negotiate(plan, adapterWith({ RunEdgeFunction: 'unsupported' }));
+    assert.ok(errors.some((e) => e.capability === 'RunEdgeFunction'));
   });
 
   it('errors when a multi-namespace plan hits a single-origin door (RouteApiNamespace unsupported)', () => {

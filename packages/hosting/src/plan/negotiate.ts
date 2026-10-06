@@ -42,6 +42,8 @@ export const CAPABILITY_DEMAND: Record<CapabilityId, (plan: CapabilityPlan) => b
   ServeStaticAsset: () => true,
   // Conditional hard needs — required only when the app actually uses them.
   RunServerRender: (p) => p.policies.hasServer,
+  // Edge-runtime functions in the build must run at the edge (Lambda@Edge).
+  RunEdgeFunction: (p) => p.policies.hasEdgeFunctions === true,
   // Build-id cutover / invalidation guards a COMPUTE origin serving cacheable
   // HTML referencing build-prefixed assets (stale-HTML→403). Pure-static has no
   // such risk, so static doors negotiate clean without an atomicity opt-in.
@@ -57,10 +59,6 @@ export const CAPABILITY_DEMAND: Record<CapabilityId, (plan: CapabilityPlan) => b
   ProxySameOriginApi: (p) => (p.backend?.origins.length ?? 0) > 0,
   // Path-routing DISTINCT namespaces (multi-compute); a lone `'*'` doesn't need it.
   RouteApiNamespace: (p) => p.backend?.origins.some((o) => o.namespace !== '*') ?? false,
-  // Router payload/timeout budgets (API GW 29s/10MB, ALB-Lambda 1MB) — required
-  // only when the app declares the need, so a capping door is caught not silent.
-  LongRequest: (p) => p.backend?.needsLongRequests === true,
-  LargePayload: (p) => p.backend?.needsLargePayloads === true,
   // Opt-in security / compliance — required only when the app turned them on.
   FilterRequests: (p) => p.policies.wafEnabled === true,
   RestrictGeo: (p) => p.policies.geoRestricted === true,

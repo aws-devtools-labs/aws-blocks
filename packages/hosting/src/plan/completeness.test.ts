@@ -52,12 +52,11 @@ const maximalPlan: CapabilityPlan = {
     geoRestricted: true,
     monitoringEnabled: true,
     edgeCacheRequired: true,
+    hasEdgeFunctions: true,
   },
   release: { buildId: 'b1' },
   backend: {
     origins: [{ namespace: 'notes', ingress: { kind: 'url', url: 'https://x/aws-blocks/api' } }],
-    needsLongRequests: true,
-    needsLargePayloads: true,
   },
 };
 
