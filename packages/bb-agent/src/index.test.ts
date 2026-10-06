@@ -2379,9 +2379,9 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 			assert.strictEqual(warnings[0].cause, cause, 'the real cause is passed to the logger, not swallowed');
 		});
 
-		test('loadManifest returns an empty manifest when the manifest is MISSING (NoSuchKey)', async () => {
+		test('loadManifest returns an empty manifest when the manifest is MISSING (404)', async () => {
 			const warnings: { message: string; cause: unknown }[] = [];
-			const storage = deployedStorage(wrapped('sess-1/.../manifest.json', 'NoSuchKey'), (message, c) => warnings.push({ message, cause: c }));
+			const storage = deployedStorage(wrapped('sess-1/.../manifest.json', 'NotFound', 404), (message, c) => warnings.push({ message, cause: c }));
 
 			const manifest = await storage.loadManifest({ location });
 

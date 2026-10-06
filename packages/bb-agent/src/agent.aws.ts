@@ -38,9 +38,12 @@ function freshManifest(): SnapshotManifest {
  * — a 404 the SDK's own `NoSuchKey`/`NoSuchBucket` check does not recognise.
  *
  * S3Storage wraps a GetObject failure as `SessionError('S3 error reading <key>', { cause })`,
- * so the raw AWS error arrives on `cause`. A missing object surfaces as a `NoSuchKey`/
- * `NoSuchBucket`/`NotFound` error name or an HTTP 404 in the SDK's `$metadata`. We walk a
- * bounded `cause` chain because the raw error may be nested one wrapper deep.
+ * so the raw AWS error arrives on `cause`. Crucially, S3Storage's own `_isNotFoundError`
+ * already catches `NoSuchKey`/`NoSuchBucket` and returns `null` BEFORE constructing that
+ * `SessionError`, so those two names can never reach this wrapper — the only missing-object
+ * shapes that escape as a `SessionError` are a `NotFound` error name or a bare HTTP 404 in
+ * the SDK's `$metadata` (no `NoSuchKey` name). We match exactly those, walking a bounded
+ * `cause` chain because the raw error may be nested one wrapper deep.
  *
  * Everything else — a `403 AccessDenied` (a genuine permission gap; S3 does NOT mask a
  * missing object as 403 here because the execution role is granted `s3:ListBucket`), a
@@ -51,12 +54,14 @@ function freshManifest(): SnapshotManifest {
 function isMissingObjectError(error: unknown): boolean {
 	let current: unknown = error;
 	for (let depth = 0; current !== null && typeof current === 'object' && depth < 5; depth++) {
-		if ('name' in current) {
-			const name = current.name;
-			if (name === 'NoSuchKey' || name === 'NoSuchBucket' || name === 'NotFound') {
-				return true;
-			}
+		// NoSuchKey/NoSuchBucket are intentionally NOT matched here: S3Storage._isNotFoundError
+		// maps them to null before any SessionError is thrown, so they never reach this wrapper.
+		if ('name' in current && current.name === 'NotFound') {
+			return true;
 		}
+		// Name-agnostic by design: ANY 404 in $metadata is treated as missing-object, not
+		// only a `NotFound` name. With s3:ListBucket granted, a missing object is the only
+		// 404 S3Storage can surface here, so the status code alone is a sufficient signal.
 		if ('$metadata' in current && current.$metadata !== null && typeof current.$metadata === 'object' && 'httpStatusCode' in current.$metadata && current.$metadata.httpStatusCode === 404) {
 			return true;
 		}
@@ -86,11 +91,21 @@ function isMissingObjectError(error: unknown): boolean {
  * preserves the persisted state for a crash-and-retry instead of silently resuming
  * from a fresh session and discarding it. Write, delete and list paths are delegated
  * untouched: a failure there is a real persistence fault and must still surface.
+ *
+ * The 404 fallback cannot tell a never-written object apart from one that was
+ * deleted or lost — both surface as the same S3 404 — so a missing-object read
+ * ALWAYS starts fresh, not only on a genuine first turn. An established
+ * conversation whose snapshot vanished would also restart with no history. This
+ * is unavoidable at the 404 level and exactly matches both the SDK's own
+ * `NoSuchKey → null` handling and the local `FileBucketSnapshotStorage` (which
+ * returns `null` when `bucket.get` is falsy), so it is consistent, not a
+ * regression — the "first turn" framing above describes the motivating case, not
+ * a guarantee that an existing snapshot is immune to a fresh start if it is lost.
  */
 export class ResilientSnapshotStorage implements SnapshotStorage {
 	constructor(
 		private readonly inner: SnapshotStorage,
-		private readonly warn: (message: string, cause: unknown) => void = (message, cause) => console.warn(message, cause),
+		private readonly warn: (message: string, cause: unknown) => void,
 	) {}
 
 	async loadSnapshot(params: { location: SnapshotLocation; snapshotId?: string }): Promise<Snapshot | null> {
@@ -157,7 +172,7 @@ export class ResilientSnapshotStorage implements SnapshotStorage {
 /**
  * Builds the deployed Agent's snapshot storage, pinning S3Storage to the Lambda
  * execution region (`AWS_REGION`) so non-us-east-1 deploys use the correct regional
- * endpoint, and wrapping it in {@link ResilientSnapshotStorage} so a first
+ * endpoint (#120), and wrapping it in {@link ResilientSnapshotStorage} so a first
  * turn starts fresh instead of crashing when no snapshot exists yet. The agent's
  * `log` is threaded in so the wrapper's fresh-start and rethrow diagnostics flow
  * through bb-logger alongside the rest of the agent's structured warnings, not raw

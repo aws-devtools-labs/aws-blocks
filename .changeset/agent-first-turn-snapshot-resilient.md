@@ -14,6 +14,8 @@ fallback is narrow: a non-404 fault (a `403 AccessDenied` permission gap, a
 transient `5xx`/throttle, a corrupt-snapshot parse error) is rethrown, so an
 established conversation's persisted state is never silently discarded, and
 write/delete paths are unchanged, so a real persistence failure still surfaces.
-No API change — `createDeployedSnapshotStorage`'s signature is unchanged, and
-the new `ResilientSnapshotStorage` wrapper is internal (not part of the
-package's public export surface).
+No public API change — `createDeployedSnapshotStorage` is internal and gains a
+required `log: ChildLogger` parameter `(bucket, log, S3StorageImpl?)` so the
+wrapper's diagnostics route through bb-logger, and the new
+`ResilientSnapshotStorage` wrapper is internal (not part of the package's public
+export surface).
