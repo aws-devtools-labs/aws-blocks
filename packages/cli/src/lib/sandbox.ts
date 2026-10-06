@@ -13,8 +13,11 @@ import { buildAndSendEvent } from '@aws-blocks/core/runtime';
 import { classifyError } from '@aws-blocks/core/runtime';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runSync, spawnCommand } from './run-command.js';
+import { runStreaming } from './deploy-stream.js';
+import { createDeployStdout } from './deploy-progress.js';
+import { filteredSink } from './stream-filter.js';
 import { terminateProcessTree } from './process-tree.js';
-import { info, verbose, warn as logWarn, error as logError } from '../logger.js';
+import { info, verbose, warn as logWarn, error as logError, getLogLevel } from '../logger.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
@@ -170,20 +173,33 @@ export async function startSandbox(options: SandboxOptions) {
   // Runs before CDK deploy so both success and failure paths include block info.
   await importBackendForRegistry(backendPath);
 
-  info('🚀 Deploying to AWS (this can take a few minutes on first deploy)…');
+  // The progress reporter owns the user-facing "Deploying" milestone.
+  verbose('Deploying to AWS (this can take a few minutes on first deploy)…');
 
+  const { sink: deployStdout, finish: finishProgress } = createDeployStdout(
+    process.stdout,
+    getLogLevel(),
+    { isTty: Boolean(process.stdout.isTTY), label: 'Deploying to AWS' },
+  );
   try {
-    runSync(
+    await runStreaming(
       "npm",
       // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
       // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
       buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath }),
       {
-        stdio: "inherit",
+        label: 'cdk deploy',
+        cwd: process.cwd(),
+        // The reporter's live line is the "still working" signal; no heartbeat.
+        heartbeatMs: getLogLevel() >= 2 ? undefined : 0,
+        stdout: deployStdout,
+        stderr: filteredSink(process.stderr, getLogLevel()),
         env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
       },
     );
+    finishProgress(true);
   } catch (error) {
+    finishProgress(false);
     buildAndSendEvent({
       command: 'sandbox',
       state: 'FAIL',
