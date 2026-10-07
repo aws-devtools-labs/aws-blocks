@@ -263,6 +263,7 @@ function collectBindings(
 	errors: SpecValidationError[],
 ): void {
 	const seenTags = new Map<string, { id: string; sourcePackage: string }>();
+	const seenIds = new Map<string, string>();
 	let index = 0;
 
 	for (const source of sources) {
@@ -291,6 +292,17 @@ function collectBindings(
 				errors.push({ path: `${path}.id`, message: `Binding "id" must be a non-blank string (${declaredBy})` });
 				continue;
 			}
+			const priorId = seenIds.get(id);
+			if (priorId) {
+				errors.push({
+					path: `${path}.id`,
+					message:
+						`Binding id "${id}" is already declared by ${priorId}. ` +
+						'A binding id must be unique across all blocks.',
+				});
+				continue;
+			}
+			seenIds.set(id, sourceName);
 
 			if (!isNonBlankString(declaration.kind)) {
 				errors.push({

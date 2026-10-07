@@ -440,6 +440,27 @@ describe('rule 6 — malformed metadata', () => {
 		}
 	});
 
+	it('rejects a binding id reused across blocks, so each diagnostic names one binding', () => {
+		const errors = validateNativeCatalogs([
+			source({ bindings: [binding({ id: 'dup', tag: 'example-iot/device-link' })] }),
+			{ sourcePackage: '@example/bb-other', bindings: [binding({ id: 'dup', tag: 'example-iot/other' })] },
+		]);
+		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["dup"].id']);
+		assert.match(errors[0].message, /already declared by @example\/bb-iot/);
+	});
+
+	it('rejects a binding id reused twice within one block', () => {
+		const errors = validateNativeCatalogs([
+			source({
+				bindings: [
+					binding({ id: 'dup', tag: 'example-iot/device-link' }),
+					binding({ id: 'dup', tag: 'example-iot/other' }),
+				],
+			}),
+		]);
+		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["dup"].id']);
+	});
+
 	it('rejects a built-in tag without also reporting it as a duplicate', () => {
 		const errors = validateNativeCatalogs([
 			source({
