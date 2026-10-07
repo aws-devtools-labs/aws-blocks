@@ -35,8 +35,8 @@ const VERSION = '2.0' as const;
 /**
  * Maximum accepted request-body size, in bytes (10 MiB).
  *
- * Matches the payload limit API Gateway enforces in production (~10 MB for a
- * REST API). In prod an oversized body is rejected by API Gateway at the edge —
+ * Matches the payload limit API Gateway enforces in production (~10 MB). In prod
+ * an oversized body is rejected by API Gateway at the edge —
  * before the Lambda is invoked — so this guard's rejection path effectively
  * runs on the dev/mock server, where there is no edge to stop it: an oversized
  * body would otherwise buffer and wedge the local database (e.g. PGlite). By
