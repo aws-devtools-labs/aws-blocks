@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { isTelemetryEnabled } from '@aws-blocks/core/runtime';
-import { CORE_VERSION } from '@aws-blocks/core/runtime';
+import { cliVersion } from './cli-version.js';
 
 /**
  * Build CDK CLI telemetry-related environment variables.
@@ -19,5 +19,5 @@ export function getCdkTelemetryEnv(command: string): Record<string, string> {
   if (!isTelemetryEnabled()) {
     return { CDK_DISABLE_CLI_TELEMETRY: '1' };
   }
-  return { CDK_CLI_USERAGENT: `aws-blocks/${CORE_VERSION}/${command}` };
+  return { CDK_CLI_USERAGENT: `aws-blocks/${cliVersion()}/${command}` };
 }
