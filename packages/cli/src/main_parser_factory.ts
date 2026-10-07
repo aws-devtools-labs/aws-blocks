@@ -1,7 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { createRequire } from 'node:module';
 import yargs, { type Argv } from 'yargs';
 import { createDeployCommand } from './commands/deploy_command_factory.js';
 import { createDestroyCommand } from './commands/destroy_command_factory.js';
@@ -19,17 +18,7 @@ import { createVendorizeCommand } from './commands/vendorize_command_factory.js'
 import { createTelemetryCommand } from './commands/telemetry_command_factory.js';
 import { createHelpCommand } from './commands/help_command_factory.js';
 import { levelFromFlags, setLogLevel } from './logger.js';
-
-function cliVersion(): string {
-	try {
-		const require = createRequire(import.meta.url);
-		// dist/main_parser_factory.js → ../package.json
-		const pkg = require('../package.json') as { version?: string };
-		return pkg.version ?? '0.0.0';
-	} catch {
-		return '0.0.0';
-	}
-}
+import { cliVersion } from './lib/cli-version.js';
 
 /**
  * Build the `blocks` yargs parser with every command registered. Exported so
