@@ -16,12 +16,22 @@
  * @see docs/native-clients/schema-generation-guide-for-devs.md — customer-facing guide and `x-blocks-*` reference
  */
 
-import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { pathToFileURL } from 'url';
 import { API_NAMESPACE_MARKER } from '../api.js';
 import { extractMethodTypes, extractSkipCodegenMethods, type MethodTypeInfo } from './extract-ts-types.js';
-import { validateSpec, type SpecValidationError } from './validate-spec.js';
+import {
+	buildNativeCatalogs,
+	NATIVE_BINDINGS_EXTENSION,
+	NATIVE_PACKAGES_EXTENSION,
+	type NativeBindingsCatalog,
+	NativeCatalogError,
+	type NativeDeclarationSource,
+	type NativePackagesCatalog,
+} from './native-catalogs.js';
+import { validateNativeCatalogs } from './validate-native-catalogs.js';
+import { type SpecValidationError, validateSpec } from './validate-spec.js';
 
 // ── OpenRPC types (subset) ──────────────────────────────────────────────────
 
@@ -31,6 +41,8 @@ interface OpenRpcDocument {
 	servers?: { name: string; url: string }[];
 	methods: OpenRpcMethod[];
 	components?: { schemas?: Record<string, JsonSchema> };
+	[NATIVE_PACKAGES_EXTENSION]?: NativePackagesCatalog;
+	[NATIVE_BINDINGS_EXTENSION]?: NativeBindingsCatalog;
 }
 
 interface OpenRpcMethod {
@@ -242,9 +254,18 @@ export type FoundationLoader = (fileUrl: string) => Promise<Record<string, unkno
 
 const defaultLoader: FoundationLoader = (url) => import(url);
 
+/**
+ * Declarations are supplied by the authoring surface that reads them from a
+ * block's `package.json`.
+ */
+export interface SpecGenerationOptions {
+	nativeDeclarations?: readonly NativeDeclarationSource[];
+}
+
 export async function generateSpec(
 	foundationPath: string,
 	loader: FoundationLoader = defaultLoader,
+	options: SpecGenerationOptions = {},
 ): Promise<OpenRpcDocument> {
 	// Reuse the same global-collector pattern as generate-client.ts so that
 	// Building Block constructors don't fail during import.
@@ -516,6 +537,20 @@ export async function generateSpec(
 		doc.components = { schemas: componentSchemas };
 	}
 
+	// Validated against the declarations, not `doc`: a duplicate identity error
+	// has to name both declaring blocks, which the catalogs never carry.
+	const nativeDeclarations = options.nativeDeclarations ?? [];
+	if (nativeDeclarations.length > 0) {
+		const nativeErrors = validateNativeCatalogs(nativeDeclarations, methods);
+		if (nativeErrors.length > 0) throw new NativeCatalogError(nativeErrors);
+
+		const catalogs = buildNativeCatalogs(nativeDeclarations);
+		const packagesCatalog = catalogs?.[NATIVE_PACKAGES_EXTENSION];
+		const bindingsCatalog = catalogs?.[NATIVE_BINDINGS_EXTENSION];
+		if (packagesCatalog) doc[NATIVE_PACKAGES_EXTENSION] = packagesCatalog;
+		if (bindingsCatalog) doc[NATIVE_BINDINGS_EXTENSION] = bindingsCatalog;
+	}
+
 	return doc;
 }
 
@@ -784,14 +819,16 @@ function sharedRequiredProperties(members: JsonSchema[]): string[] {
 
 /**
  * Generate the OpenRPC spec, validate it, and write it to disk as `blocks.spec.json`.
- * Logs validation warnings but does not fail — the spec is still written.
+ * Conformance issues are warnings; the spec is still written. Invalid native
+ * declarations throw `NativeCatalogError` before any write.
  */
 export async function writeSpec(
 	foundationPath: string,
 	outputPath: string,
 	loader?: FoundationLoader,
+	options?: SpecGenerationOptions,
 ): Promise<void> {
-	const doc = await generateSpec(foundationPath, loader);
+	const doc = await generateSpec(foundationPath, loader, options);
 
 	// Populate servers array from deployed config if available
 	const projectRoot = dirname(dirname(foundationPath));

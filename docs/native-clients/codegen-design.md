@@ -156,6 +156,16 @@ Two `x-blocks-*` extension fields cover the gaps where standard OpenRPC doesn't 
 
 The full reference, including the tag table for native codegen authors, lives in [`schema-generation-guide-for-devs.md` § Spec extensions reference](./schema-generation-guide-for-devs.md#spec-extensions-reference).
 
+#### Declared native packages and bindings
+
+Two top-level extension objects let a block declare its own native package instead of relying on a generator's hard-coded tag switch.
+
+`x-blocks-native-packages` is keyed by logical package identity. Each entry holds a `platforms` object whose `dart`, `swift`, and `android` fields are independently optional; a present field carries a `package` object naming the package-manager identity and the import or module name.
+
+`x-blocks-native-bindings` holds an array of bindings. Each carries a stable `id`, a `kind` (only `transferable` in schema 1), and maps an exact `tag` to a package `export`, a factory `abi`, and a `genericArity` of 0 or 1.
+
+Both objects carry `schemaVersion: 1` and are emitted only when non-empty. An absent platform field means the package is not offered there, and that result degrades to `UnknownTransferable` on that platform alone.
+
 #### Unbound transferables: the `UnknownTransferable` carrier
 
 When a bare direct result's `x-blocks-transferable` tag has no known runtime binding, the native clients degrade it to a typed `UnknownTransferable` carrier, validated against the declared `__blocks` tag. A malformed descriptor raises the platform's standard decoding error: Dart `FormatException`, Swift `DecodingError`, Kotlin `TransferableException`.
