@@ -129,6 +129,18 @@ export type {
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
 export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
 export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
+export type {
+	Bindings as DatabaseBindings,
+	ClusterKind,
+	ClusterRef,
+	ClusterType,
+	DatabaseClusterOptions,
+	DistributedClusterOptions,
+	ExternalCluster,
+	ExternalClusterRef,
+	ProvisionedClusterOptions,
+} from '@aws-blocks/bb-database';
+export { DatabaseCluster } from '@aws-blocks/bb-database';
 export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
 export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 export type {

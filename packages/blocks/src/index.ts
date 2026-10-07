@@ -240,6 +240,34 @@ export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from
  * Full docs: `README.md` in the package directory above.
  */
 export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
+export type {
+	Bindings as DatabaseBindings,
+	ClusterKind,
+	ClusterRef,
+	ClusterType,
+	DatabaseClusterOptions,
+	DistributedClusterOptions,
+	ExternalCluster,
+	ExternalClusterRef,
+	ProvisionedClusterOptions,
+} from '@aws-blocks/bb-database';
+/**
+ * **The cluster a `bb-database` `Database` runs on — pick a category, not a service.**
+ *
+ * Part of the `Database` block (`@aws-blocks/bb-database`), not a block on its
+ * own: it exists only to be passed as a `Database`'s `cluster` option.
+ *
+ * `new DatabaseCluster(scope, 'main', { type: 'provisioned' })` is Aurora
+ * Serverless v2 (all of PostgreSQL); `{ type: 'distributed' }` is Aurora DSQL
+ * (scales to zero, a PostgreSQL subset). `DatabaseCluster.fromExisting()`
+ * references a PostgreSQL you already have. Each block on a cluster gets its own
+ * schema. The matching `Database` class lives in `@aws-blocks/bb-database`
+ * (this umbrella's `Database` export is still the `bb-data` block).
+ *
+ * Package: `@aws-blocks/bb-database`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { DatabaseCluster } from '@aws-blocks/bb-database';
 export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
 /**
  * **Serverless SQL database backed by Aurora DSQL.**

@@ -18,6 +18,7 @@ import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
 import { createKyselyAdapter, DatabaseErrors } from '@aws-blocks/bb-data';
 import { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
+import { Database as SqlDatabase, DatabaseCluster } from '@aws-blocks/bb-database';
 import { z } from 'zod';
 
 
@@ -349,6 +350,16 @@ const dsql = new DistributedDatabase(scope, 'dsql', {
   migrationsPath: './aws-blocks/dsql-migrations',
   removalPolicy: 'destroy',
 });
+
+// bb-database: one Database block for every cluster kind.
+// `dbx` owns a distributed (Aurora DSQL) cluster; migrations default to
+// ./aws-blocks/migrations/dbx and go through the rewriter.
+const dbx = new SqlDatabase(scope, 'dbx');
+// `inventory` and `ledger` share one provisioned (Aurora Serverless v2) cluster,
+// each in its own schema — both migrations create a table named `items`.
+const pgCluster = new DatabaseCluster(scope, 'pg', { type: 'provisioned', minCapacity: 0.5, removalPolicy: 'destroy' });
+const inventory = new SqlDatabase(scope, 'inventory', { cluster: pgCluster });
+const ledger = new SqlDatabase(scope, 'ledger', { cluster: pgCluster });
 
 // AsyncJob - Background job processing
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
@@ -1560,6 +1571,153 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   
   async returnLargePayload(size: number) {
     return { data: 'x'.repeat(size) };
+  },
+
+  // ------------------------------------------------------------------------
+  // bb-database Tests (Database + DatabaseCluster)
+  // ------------------------------------------------------------------------
+
+  async dbxInfo() {
+    return {
+      dbx: { cluster: dbx.cluster, schemaName: dbx.schemaName },
+      inventory: { cluster: inventory.cluster, schemaName: inventory.schemaName },
+      ledger: { cluster: ledger.cluster, schemaName: ledger.schemaName },
+    };
+  },
+
+  async dbxInsert(id: string, name: string, value: number) {
+    const { rowCount } = await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${name}, ${value})`);
+    return { rowCount };
+  },
+
+  async dbxGet(id: string) {
+    return await dbx.queryOne<{ id: string; name: string; value: number; category: string }>(
+      sql`SELECT * FROM dbx_items WHERE id = ${id}`,
+    );
+  },
+
+  async dbxList() {
+    return await dbx.query<{ id: string; name: string; value: number; category: string }>(
+      sql`SELECT * FROM dbx_items ORDER BY id`,
+    );
+  },
+
+  async dbxDelete(id: string) {
+    const { rowCount } = await dbx.execute(sql`DELETE FROM dbx_items WHERE id = ${id}`);
+    return { rowCount };
+  },
+
+  // A read-modify-write with no side effects: safe to re-run on a conflict.
+  async dbxTransfer(fromId: string, toId: string, amount: number) {
+    await dbx.transaction(
+      async (tx) => {
+        const sender = await tx.queryOne<{ value: number }>(sql`SELECT value FROM dbx_items WHERE id = ${fromId}`);
+        if (!sender || sender.value < amount) throw new Error('Insufficient balance');
+        await tx.execute(sql`UPDATE dbx_items SET value = value - ${amount} WHERE id = ${fromId}`);
+        await tx.execute(sql`UPDATE dbx_items SET value = value + ${amount} WHERE id = ${toId}`);
+      },
+      { retryOnConflict: true, maxRetries: 3 },
+    );
+    return { success: true };
+  },
+
+  // Local mode only: simulateConflict() throws in the Lambda runtime, so the
+  // handler reports that nothing was simulated and the test skips.
+  async dbxSimulatedConflictTransfer(fromId: string, toId: string, amount: number) {
+    try {
+      dbx.simulateConflict();
+    } catch {
+      return { simulated: false, attempts: 0 };
+    }
+    let attempts = 0;
+    await dbx.transaction(
+      async (tx) => {
+        attempts++;
+        await tx.execute(sql`UPDATE dbx_items SET value = value - ${amount} WHERE id = ${fromId}`);
+        await tx.execute(sql`UPDATE dbx_items SET value = value + ${amount} WHERE id = ${toId}`);
+      },
+      { retryOnConflict: true },
+    );
+    return { simulated: true, attempts };
+  },
+
+  async dbxDuplicateInsert(id: string) {
+    try {
+      await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${'dup'}, ${0})`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // DDL on the app connection of a distributed cluster: the mock's guard
+  // locally, DSQL's own 42501 (→ QueryFailed) when deployed.
+  async dbxRejectDdl() {
+    try {
+      await dbx.execute(sql`CREATE TABLE dbx_should_not_exist (id TEXT PRIMARY KEY)`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  async dbxRejectTruncate() {
+    try {
+      await dbx.execute(sql`TRUNCATE dbx_items`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  async dbxKyselySelect(minValue: number) {
+    interface KyselySchema {
+      dbx_items: { id: string; name: string; value: number; category: string };
+    }
+    const kysely = createKyselyAdapter<KyselySchema>(dbx);
+    return kysely.selectFrom('dbx_items').select(['id', 'name', 'value']).where('value', '>=', minValue).execute();
+  },
+
+  // Shared provisioned cluster: two blocks, two schemas, one table name.
+  async inventoryAdd(sku: string, qty: number) {
+    return await inventory.queryOne<{ id: number; sku: string; qty: number }>(
+      sql`INSERT INTO items (sku, qty) VALUES (${sku}, ${qty}) RETURNING id, sku, qty`,
+    );
+  },
+
+  async inventoryDelete(sku: string) {
+    const { rowCount } = await inventory.execute(sql`DELETE FROM items WHERE sku = ${sku}`);
+    return { rowCount };
+  },
+
+  async ledgerAdd(accountId: string, owner: string, amount: number) {
+    await ledger.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO accounts (id, owner) VALUES (${accountId}, ${owner}) ON CONFLICT (id) DO NOTHING`);
+      await tx.execute(sql`INSERT INTO items (account_id, amount) VALUES (${accountId}, ${amount})`);
+    });
+    return await ledger.queryOne<{ account_id: string; total: number }>(
+      sql`SELECT account_id, total::int AS total FROM account_totals WHERE account_id = ${accountId}`,
+    );
+  },
+
+  // ON DELETE CASCADE — a foreign key the provisioned cluster enforces.
+  async ledgerDeleteAccount(accountId: string) {
+    await ledger.execute(sql`DELETE FROM accounts WHERE id = ${accountId}`);
+    const row = await ledger.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items WHERE account_id = ${accountId}`);
+    return { remainingItems: row?.n ?? 0 };
+  },
+
+  async sharedClusterCounts() {
+    const inv = await inventory.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
+    const led = await ledger.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
+    return { inventory: inv?.n ?? 0, ledger: led?.n ?? 0 };
+  },
+
+  // Row Level Security on a provisioned cluster (compile-time: only Database<'provisioned' | 'external'> has withRLS).
+  async ledgerOwnedAccounts(owner: string) {
+    const scoped = await ledger.withRLS({ userId: owner });
+    const rows = await scoped.query<{ id: string }>(sql`SELECT id FROM accounts ORDER BY id`);
+    return rows.map((r) => r.id);
   },
 
   // ------------------------------------------------------------------------
