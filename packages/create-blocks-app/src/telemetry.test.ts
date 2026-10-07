@@ -6,7 +6,28 @@ import { tmpdir } from 'node:os';
 import { createServer, type Server } from 'node:http';
 import { spawnSync } from 'node:child_process';
 
-import { getTelemetryFilePath, trackCommand } from './telemetry.js';
+import { getTelemetryFilePath, isDisableValue, trackCommand } from './telemetry.js';
+
+interface DisableValueCase {
+  value: string | null;
+  expected: boolean;
+}
+
+describe('create-blocks-app telemetry/isDisableValue (shared case table)', () => {
+  const { cases }: { cases: DisableValueCase[] } = JSON.parse(
+    readFileSync(new URL('../../core/src/telemetry/disable-value-cases.test.json', import.meta.url), 'utf-8'),
+  );
+
+  it('loads the shared case table', () => {
+    assert.ok(cases.length > 10, `expected the shared disable-value cases, got ${cases.length}`);
+  });
+
+  for (const testCase of cases) {
+    it(`${JSON.stringify(testCase.value)} → ${testCase.expected}`, () => {
+      assert.strictEqual(isDisableValue(testCase.value ?? undefined), testCase.expected);
+    });
+  }
+});
 
 describe('create-blocks-app telemetry/isCI', () => {
   interface IsCICase {
@@ -270,4 +291,82 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
     server.close();
     rmSync(tmp, { recursive: true, force: true });
   });
+
+  it('AWS_BLOCKS_DISABLE_TELEMETRY=true writes file but fires no HTTP sink', async () => {
+    const tmp = join(tmpdir(), `cba-telemetry-true-${Date.now()}`);
+    const filePath = join(tmp, 'events.json');
+    process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+
+    const received: string[] = [];
+    const server: Server = await new Promise((resolve) => {
+      const s = createServer((req, res) => {
+        let body = '';
+        req.on('data', (chunk: string) => { body += chunk; });
+        req.on('end', () => {
+          received.push(body);
+          res.writeHead(200);
+          res.end();
+        });
+      });
+      s.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    const addr = server.address() as { port: number };
+    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = 'true';
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+
+    try {
+      await trackCommand('create', async () => {});
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      // File sink still fires regardless of opt-out (D-010 contract)
+      assert.ok(existsSync(filePath), 'telemetry file should exist');
+      assert.strictEqual(received.length, 0, 'no HTTP request should be sent when opted out');
+    } finally {
+      server.close();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('create-blocks-app telemetry/opt-out persists no identifiers', () => {
+  // Driven in a child process: the id helper writes to the real HOME otherwise.
+  const EMIT_CHILD = `
+  const [moduleUrl] = process.argv.slice(1);
+  const { trackCommand } = await import(moduleUrl);
+  await trackCommand('create', async () => {});
+  `;
+
+  const moduleUrl = new URL('./telemetry.js', import.meta.url).href;
+
+  for (const value of ['1', 'true', 'TRUE', 'yes', ' true ']) {
+    it(`writes no identifiers and sends nothing when AWS_BLOCKS_DISABLE_TELEMETRY=${JSON.stringify(value)}`, () => {
+      const home = join(tmpdir(), `cba-optout-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      mkdirSync(home, { recursive: true });
+
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', EMIT_CHILD, moduleUrl], {
+        encoding: 'utf-8',
+        cwd: home,
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          HOME: home,
+          USERPROFILE: home,
+          AWS_BLOCKS_DISABLE_TELEMETRY: value,
+          NODE_DEBUG: 'blocks-telemetry',
+          // Unset would fall through to DEFAULT_ENDPOINT, the real collector.
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
+        },
+      });
+
+      assert.strictEqual(result.status, 0, result.stderr);
+      const idFile = join(home, '.blocks', 'telemetry', 'installation-id');
+      assert.ok(!existsSync(idFile), 'installation-id must not be written');
+      assert.doesNotMatch(result.stderr, /sending event to/, 'no event should be sent');
+      assert.ok(!result.stderr.includes('AWS Blocks collects anonymous usage data'), 'no first-run notice');
+
+      rmSync(home, { recursive: true, force: true });
+    });
+  }
 });

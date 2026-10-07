@@ -57,6 +57,21 @@ describe('getTelemetryStatus', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
+  for (const value of ['true', 'TRUE', 'yes', ' true ']) {
+    it(`returns enabled=false when AWS_BLOCKS_DISABLE_TELEMETRY=${JSON.stringify(value)}`, () => {
+      process.env.AWS_BLOCKS_DISABLE_TELEMETRY = value;
+      clearCIVars();
+      const tmp = join(tmpdir(), `blocks-status-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      mkdirSync(tmp, { recursive: true });
+      process.chdir(tmp);
+
+      const status = getTelemetryStatus();
+      assert.strictEqual(status.enabled, false);
+      assert.strictEqual(status.envVar, value);
+      rmSync(tmp, { recursive: true, force: true });
+    });
+  }
+
   it('returns enabled=false when project config disables', () => {
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     clearCIVars();

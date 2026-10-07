@@ -6,7 +6,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { isTelemetryEnabled } from './consent.js';
+import { isDisableValue, isTelemetryEnabled } from './consent.js';
 import { detectOS, detectNodeVersion, detectPackageManager, detectAgent, collectEnvironment } from './environment.js';
 import { trackCommand, classifyError } from './trackCommand.js';
 import { buildAndSendEvent, buildEvent, sendEvent, getTelemetryFilePath } from './client.js';
@@ -17,6 +17,27 @@ import { Scope, OFFICIAL_BB_NAMES } from '../common/index.js';
 import type { ScopeParent } from '../common/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+interface DisableValueCase {
+  value: string | null;
+  expected: boolean;
+}
+
+describe('telemetry/isDisableValue (shared case table)', () => {
+  const { cases }: { cases: DisableValueCase[] } = JSON.parse(
+    readFileSync(new URL('../../src/telemetry/disable-value-cases.test.json', import.meta.url), 'utf-8'),
+  );
+
+  it('loads the shared case table', () => {
+    assert.ok(cases.length > 10, `expected the shared disable-value cases, got ${cases.length}`);
+  });
+
+  for (const testCase of cases) {
+    it(`${JSON.stringify(testCase.value)} → ${testCase.expected}`, () => {
+      assert.strictEqual(isDisableValue(testCase.value ?? undefined), testCase.expected);
+    });
+  }
+});
 
 describe('telemetry/consent', () => {
   const originalEnv = { ...process.env };
@@ -33,21 +54,39 @@ describe('telemetry/consent', () => {
     assert.strictEqual(isTelemetryEnabled(), false);
   });
 
-  it('returns true when AWS_BLOCKS_DISABLE_TELEMETRY is not 1', () => {
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '0';
-    delete process.env.CI;
-    delete process.env.CONTINUOUS_INTEGRATION;
-    delete process.env.BUILD_NUMBER;
-    delete process.env.CODEBUILD_BUILD_ID;
-    delete process.env.GITHUB_ACTIONS;
-    delete process.env.GITLAB_CI;
-    delete process.env.CIRCLECI;
-    delete process.env.JENKINS_URL;
-    delete process.env.TF_BUILD;
-    delete process.env.BITBUCKET_BUILD_NUMBER;
-    delete process.env.BUILDKITE;
-    assert.strictEqual(isTelemetryEnabled(), true);
-  });
+  for (const value of ['true', 'TRUE', 'yes', ' true ']) {
+    it(`returns false when AWS_BLOCKS_DISABLE_TELEMETRY=${JSON.stringify(value)}`, () => {
+      process.env.AWS_BLOCKS_DISABLE_TELEMETRY = value;
+      delete process.env.CI;
+      assert.strictEqual(isTelemetryEnabled(), false);
+    });
+  }
+
+  // Driven in a child process: afterEach replaces `process.env`, severing HOME.
+  const CONSENT_CHILD = `
+  const [moduleUrl] = process.argv.slice(1);
+  const { isTelemetryEnabled } = await import(moduleUrl);
+  process.stdout.write(String(isTelemetryEnabled()));
+  `;
+
+  for (const value of ['0', 'false', '']) {
+    it(`stays enabled when AWS_BLOCKS_DISABLE_TELEMETRY=${JSON.stringify(value)}`, () => {
+      const home = mkdtempSync(join(tmpdir(), 'blocks-consent-home-'));
+      const consentUrl = new URL('./consent.js', import.meta.url).href;
+
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', CONSENT_CHILD, consentUrl], {
+        encoding: 'utf-8',
+        cwd: home,
+        timeout: 30_000,
+        env: { HOME: home, USERPROFILE: home, AWS_BLOCKS_DISABLE_TELEMETRY: value, PATH: process.env.PATH ?? '' },
+      });
+
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.strictEqual(result.stdout, 'true');
+
+      rmSync(home, { recursive: true, force: true });
+    });
+  }
 
   it('returns true in CI (CI does not suppress telemetry)', () => {
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
@@ -111,6 +150,49 @@ describe('telemetry/consent', () => {
     assert.strictEqual(isTelemetryEnabled(), false);
     rmSync(tmp, { recursive: true, force: true });
   });
+});
+
+describe('telemetry/opt-out persists no identifiers', () => {
+  // Driven in a child process: the id helpers write to the real HOME and cwd.
+  const EMIT_CHILD = `
+  const [moduleUrl] = process.argv.slice(1);
+  const { buildAndSendEvent } = await import(moduleUrl);
+  buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
+  `;
+
+  const moduleUrl = new URL('./client.js', import.meta.url).href;
+
+  for (const value of ['1', 'true', 'TRUE', 'yes', ' true ']) {
+    it(`writes no identifiers and sends nothing when AWS_BLOCKS_DISABLE_TELEMETRY=${JSON.stringify(value)}`, () => {
+      const home = mkdtempSync(join(tmpdir(), 'blocks-optout-home-'));
+      const project = mkdtempSync(join(tmpdir(), 'blocks-optout-proj-'));
+
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', EMIT_CHILD, moduleUrl], {
+        encoding: 'utf-8',
+        cwd: project,
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          HOME: home,
+          USERPROFILE: home,
+          AWS_BLOCKS_DISABLE_TELEMETRY: value,
+          NODE_DEBUG: 'blocks-telemetry',
+          // Unset would fall through to DEFAULT_ENDPOINT, the real collector.
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
+        },
+      });
+
+      assert.strictEqual(result.status, 0, result.stderr);
+      const idFile = join(home, '.blocks', 'telemetry', 'installation-id');
+      assert.ok(!existsSync(idFile), 'installation-id must not be written');
+      assert.ok(!existsSync(join(project, '.blocks', 'config.json')), 'project config.json must not be written');
+      assert.doesNotMatch(result.stderr, /sending event to/, 'no event should be sent');
+      assert.ok(!result.stderr.includes('AWS Blocks collects anonymous usage data'), 'no first-run notice');
+
+      rmSync(home, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    });
+  }
 });
 
 describe('telemetry/environment', () => {
