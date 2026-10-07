@@ -2,22 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The migration rewriter: turns a directory of ordinary PostgreSQL migration
- * files into a plan the target cluster accepts.
- *
- * On a `distributed` (Aurora DSQL) cluster:
- * - every DDL statement runs in its own implicit transaction, DML in the
- *   file's explicit transaction;
- * - `CREATE INDEX` becomes `CREATE INDEX ASYNC` followed by a wait on the job;
- * - `ALTER TABLE … ADD CONSTRAINT … CHECK` gets `NOT VALID` plus a separate
- *   `VALIDATE CONSTRAINT` step;
- * - `SERIAL` / `BIGSERIAL` / `SMALLSERIAL` become identity columns with
- *   `CACHE 65536`;
- * - anything the cluster cannot run is rejected, citing the DSQL doc page.
- *
- * On a `provisioned` or external cluster the DSQL-only rewrites are left out
- * (a `CREATE INDEX ASYNC` written for DSQL is normalized back to a plain
- * `CREATE INDEX`), so one set of files is portable between kinds.
+ * The migration rewriter: turns ordinary PostgreSQL migration files into a
+ * plan the target cluster accepts. The DSQL rewrites (identity columns, async
+ * indexes, `NOT VALID` checks, one DDL per transaction) apply only to
+ * `distributed`; other kinds run the files as written, minus `ASYNC`.
  */
 import { brandBlocksError } from '@aws-blocks/core';
 import { DOLLAR_QUOTE_TAG_RE, splitStatements } from '@aws-blocks/data-common';

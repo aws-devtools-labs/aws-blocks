@@ -2,21 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * One PGlite instance per local cluster, shared by every `Database` on it.
- *
- * PGlite is one process-local PostgreSQL with a single session. Sharing it
- * between blocks means two things have to hold:
- *
- * 1. **One schema per block.** Each block's statements run with `search_path`
- *    set to its schema. The cluster remembers the session's current schema and
- *    switches only when the next statement belongs to a different block.
- * 2. **No interleaving.** Work is serialized with a mutex: an auto-commit
- *    statement, or a whole `BEGIN … COMMIT`, holds the lock, so a second block's
- *    `SET search_path` can never land in the middle of the first one's
- *    transaction. A statement issued from inside the open transaction's own
- *    callback joins it (see `tx-scope.ts`) instead of deadlocking.
- *
- * Data persists in `.bb-data/{clusterFullId}/`.
+ * One PGlite per local cluster, shared by its blocks. PGlite has a single
+ * session, so each block's statements switch `search_path` to its schema, and
+ * a mutex held for each statement or whole transaction keeps blocks from
+ * interleaving. A query from inside a block's own transaction joins it
+ * (`tx-scope.ts`) instead of deadlocking.
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';

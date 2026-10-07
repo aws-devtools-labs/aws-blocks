@@ -2,14 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Database — AWS Lambda runtime entry point.
- *
- * Connects to the deployed cluster the CDK layer provisioned: Aurora DSQL over
- * `pg` with IAM tokens (`distributed`), Aurora Serverless v2 over the RDS Data
- * API (`provisioned`), or the external database (`fromExisting()`). Connection
- * details arrive through the config the CDK layer registered under
- * `BLOCKS_{clusterId}_*`, keyed by the cluster, so every block on a shared
- * cluster reads the same entry and differs only in its schema.
+ * Lambda runtime entry point. DSQL over `pg` with IAM tokens, Aurora
+ * over the RDS Data API, or `pg` to an external database. Connection config is
+ * keyed by cluster (`BLOCKS_{clusterId}_*`), so blocks on one cluster share it.
  */
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { getSdkIdentifiers, registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
@@ -55,11 +50,7 @@ function readClusterConfig(clusterFullId: string, type: ClusterType): Record<str
 		: { clusterArn: read('CLUSTER_ARN'), secretArn: read('SECRET_ARN'), databaseName: read('DATABASE') || env };
 }
 
-/**
- * The cluster a `Database` runs on, when several blocks share one. Part of the
- * `Database` block, not a block itself. At runtime it only names the deployed
- * cluster; each block opens its own connections to it.
- */
+/** At runtime a cluster only names the deployed resource; each block opens its own connections. */
 export class DatabaseCluster<T extends ClusterType = ClusterType> extends Scope {
 	readonly type: T;
 	readonly kind: T;
@@ -80,7 +71,7 @@ export class DatabaseCluster<T extends ClusterType = ClusterType> extends Scope 
 }
 
 /**
- * SQL database on PostgreSQL — Lambda runtime. See the package README for the
+ * SQL database on PostgreSQL, Lambda runtime build. See the package README for the
  * full API; the surface is identical to local mode.
  */
 export class Database<K extends ClusterKind = 'distributed'> extends Scope {

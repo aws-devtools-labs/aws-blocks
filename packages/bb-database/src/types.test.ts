@@ -64,13 +64,13 @@ function typeChecks(): void {
 	// withRLS() / crud() exist only where the kind allows them.
 	void onMain.withRLS({ userId: 'u' });
 	void onExternal.crud({ tables: [], auth: async () => ({ userId: 'u' }) });
-	// @ts-expect-error — not available on a 'distributed' cluster
+	// @ts-expect-error: not available on a 'distributed' cluster
 	void owned.withRLS({ userId: 'u' });
-	// @ts-expect-error — not available on a 'distributed' cluster
+	// @ts-expect-error: not available on a 'distributed' cluster
 	void onShared.crud({ tables: [], auth: async () => ({ userId: 'u' }) });
-	// @ts-expect-error — a dynamic choice gets the conservative surface
+	// @ts-expect-error: a dynamic choice gets the conservative surface
 	void onDynamic.withRLS({ userId: 'u' });
-	// @ts-expect-error — a dynamic choice gets the conservative surface
+	// @ts-expect-error: a dynamic choice gets the conservative surface
 	void onAny.crud({ tables: [], auth: async () => ({ userId: 'u' }) });
 
 	// query / queryOne / execute / transaction: every kind.
@@ -78,28 +78,28 @@ function typeChecks(): void {
 	void onAny.transaction;
 
 	// Cluster options are narrowed by `type`.
-	// @ts-expect-error — minCapacity does not belong to a distributed cluster
+	// @ts-expect-error: minCapacity does not belong to a distributed cluster
 	new DatabaseCluster(scope, 'c1', { type: 'distributed', minCapacity: 1 });
-	// @ts-expect-error — snapshot is not a distributed removal policy
+	// @ts-expect-error: snapshot is not a distributed removal policy
 	new DatabaseCluster(scope, 'c2', { type: 'distributed', removalPolicy: 'snapshot' });
-	// @ts-expect-error — service names are not categories
+	// @ts-expect-error: service names are not categories
 	new DatabaseCluster(scope, 'c3', { type: 'aurora' });
-	// @ts-expect-error — type is required
+	// @ts-expect-error: type is required
 	new DatabaseCluster(scope, 'c4', {});
 	new DatabaseCluster(scope, 'c5', { type: 'provisioned', removalPolicy: 'snapshot', postgresVersion: '16.13' });
 
 	// Block options: schema / rlsPolicy only where the cluster is provisioned or external.
-	// @ts-expect-error — schema on a block with no cluster
+	// @ts-expect-error: schema on a block with no cluster
 	new Database(scope, 'b1', { schema: {} });
-	// @ts-expect-error — rlsPolicy on a distributed cluster
+	// @ts-expect-error: rlsPolicy on a distributed cluster
 	new Database(scope, 'b2', { cluster: shared, rlsPolicy: 'enforce' });
-	// @ts-expect-error — removalPolicy lives on the cluster once `cluster` is set
+	// @ts-expect-error: removalPolicy lives on the cluster once `cluster` is set
 	new Database(scope, 'b3', { cluster: main, removalPolicy: 'destroy' });
-	// @ts-expect-error — schema is not accepted on the conservative surface
+	// @ts-expect-error: schema is not accepted on the conservative surface
 	new Database(scope, 'b4', { cluster: dynamic, schema: {} });
 
 	// fromExisting rejects the misleading TLS combination.
-	// @ts-expect-error — a pinned CA with verification off is not expressible
+	// @ts-expect-error: a pinned CA with verification off is not expressible
 	DatabaseCluster.fromExisting({ connectionString: 'postgres://x', ssl: { ca: 'x', rejectUnauthorized: false } });
 
 	// The descriptor carries the kind.

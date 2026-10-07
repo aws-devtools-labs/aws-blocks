@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Aurora DSQL compatibility rules — catch unsupported PostgreSQL features at dev
+ * Aurora DSQL compatibility rules. They catch unsupported PostgreSQL features at dev
  * time on a `distributed` cluster, before they fail in production. Each rule
  * cites the DSQL doc page it was checked against.
  *
@@ -80,25 +80,25 @@ export function stripLiteralsAndComments(sql: string): string {
 const RULES: ValidationRule[] = [
 	{
 		pattern: /\b(FOREIGN\s+KEY|REFERENCES)\b/i,
-		message: "Foreign keys need a 'provisioned' cluster; DSQL does not support foreign key constraints.",
+		message: "Foreign keys need a 'provisioned' cluster. DSQL does not support them.",
 		severity: 'error',
 		doc: COMPAT_DOC,
 	},
 	{
 		pattern: /\bCREATE\s+(OR\s+REPLACE\s+)?TRIGGER\b/i,
-		message: "Triggers need a 'provisioned' cluster; DSQL does not support triggers.",
+		message: "Triggers need a 'provisioned' cluster. DSQL does not support them.",
 		severity: 'error',
 		doc: COMPAT_DOC,
 	},
 	{
 		pattern: /\bCREATE\s+(OR\s+REPLACE\s+)?(MATERIALIZED\s+)?VIEW\b/i,
-		message: "Views need a 'provisioned' cluster; DSQL does not support views.",
+		message: "Views need a 'provisioned' cluster. DSQL does not support them.",
 		severity: 'error',
 		doc: COMPAT_DOC,
 	},
 	{
 		pattern: /\bCREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b[\s\S]*\bLANGUAGE\s+plpgsql\b/i,
-		message: "PL/pgSQL needs a 'provisioned' cluster; DSQL does not support PL/pgSQL.",
+		message: "PL/pgSQL needs a 'provisioned' cluster. DSQL does not support it.",
 		severity: 'error',
 		doc: COMPAT_DOC,
 	},
@@ -122,7 +122,7 @@ const RULES: ValidationRule[] = [
 	},
 	{
 		pattern: /\bCREATE\s+EXTENSION\b/i,
-		message: "Extensions need a 'provisioned' cluster; DSQL does not support CREATE EXTENSION.",
+		message: "Extensions need a 'provisioned' cluster. DSQL does not support CREATE EXTENSION.",
 		severity: 'error',
 		doc: COMPAT_DOC,
 	},
@@ -155,7 +155,7 @@ const RULES: ValidationRule[] = [
 	},
 	{
 		pattern: /\b(CREATE\s+POLICY|ENABLE\s+ROW\s+LEVEL\s+SECURITY)\b/i,
-		message: "Row Level Security needs a 'provisioned' cluster; DSQL does not support RLS.",
+		message: "Row Level Security needs a 'provisioned' cluster. DSQL does not support it.",
 		severity: 'error',
 		doc: COMPAT_DOC,
 	},
@@ -167,11 +167,16 @@ const RULES: ValidationRule[] = [
 	},
 	{
 		pattern: /\bSET\s+TRANSACTION\s+ISOLATION\s+LEVEL\b/i,
-		message: 'DSQL uses fixed Repeatable Read isolation.',
+		message: 'DSQL always uses Repeatable Read. Remove SET TRANSACTION ISOLATION LEVEL.',
 		severity: 'error',
 		doc: TX_DOC,
 	},
-	{ pattern: /\bCOLLATE\b/i, message: 'DSQL only supports C collation.', severity: 'error', doc: COMPAT_DOC },
+	{
+		pattern: /\bCOLLATE\b/i,
+		message: 'DSQL only supports the C collation. Remove the COLLATE clause.',
+		severity: 'error',
+		doc: COMPAT_DOC,
+	},
 	{
 		pattern: /(?<!::)\bJSONB\b/i,
 		message: 'DSQL does not support JSONB columns. Use JSON (JSONB is available as a runtime cast via ::jsonb).',
@@ -251,7 +256,7 @@ export class TransactionTracker {
 		this.rowCount += count;
 		if (this.rowCount > TRANSACTION_ROW_LIMIT) {
 			const err = new Error(
-				`DSQL limits transactions to ${TRANSACTION_ROW_LIMIT} mutated rows. Current: ${this.rowCount}. Batch the work. (${TX_DOC})`,
+				`DSQL limits transactions to ${TRANSACTION_ROW_LIMIT} mutated rows. This one changed ${this.rowCount}. Split the work into smaller transactions. (${TX_DOC})`,
 			);
 			err.name = DatabaseErrors.TransactionRowLimitExceeded;
 			throw brandBlocksError(err);

@@ -4,20 +4,10 @@
 import { ApiError, brandBlocksError } from '@aws-blocks/core';
 
 /**
- * Standardized error constants for the Database Building Block.
- *
- * Every engine translates its driver errors to these names, so the same code
- * matches on every kind of cluster and on both sides of the RPC wire:
- * `isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)`.
- *
- * | Error | Kinds | When |
- * |---|---|---|
- * | `QueryFailed` | all | any SQL error (the SQLSTATE stays on the server-side `cause`) |
- * | `ConnectionFailed` | `provisioned`, external | endpoint, secret, or network failure |
- * | `TransactionFailed` | all | the callback threw, or commit failed for a reason other than a conflict |
- * | `UniqueConstraintViolation` | all | SQLSTATE `23505`; HTTP 409, not retriable |
- * | `SerializationFailure` | all; `distributed` in practice | SQLSTATE `40001` at commit; HTTP 409, retriable |
- * | `TransactionRowLimitExceeded` | `distributed` | more than 3,000 rows mutated in one transaction |
+ * Error names for query and transaction failures, the same on every cluster
+ * kind. Match with `isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)`
+ * on either side of the RPC wire. See the README's Errors table for when each
+ * is raised and how it is retried.
  */
 export const DatabaseErrors = {
 	QueryFailed: 'QueryFailedException',
@@ -29,27 +19,25 @@ export const DatabaseErrors = {
 } as const;
 
 /**
- * Error name raised by the mock's DDL guard when a DDL statement runs on the
- * app-runtime connection of a `distributed` cluster, which is DML-only (parity
- * with the deployed `dsql:DbConnect` grant). Mock-path only: on the deployed
- * path DSQL rejects the statement with SQLSTATE 42501, which falls through to
- * `QueryFailed`, so this is deliberately not on the public {@link DatabaseErrors}.
+ * Raised by the local mock when DDL runs on a `distributed` app connection.
+ * Deployed DSQL raises SQLSTATE 42501 instead (→ `QueryFailed`), so this name
+ * is not on the public {@link DatabaseErrors}.
  */
 export const DSQL_PERMISSION_ERROR_NAME = 'DsqlPermissionException';
 
 /** Error name raised when a statement or migration uses a feature a `distributed` cluster lacks. */
 export const DSQL_VALIDATION_ERROR_NAME = 'DsqlValidationError';
 
-/** Serialization failure — OCC conflict. SQLSTATE class 40 (Transaction Rollback). */
+/** Serialization failure (an OCC conflict). SQLSTATE class 40, transaction rollback. */
 export const PG_SERIALIZATION_FAILURE = '40001';
 /** Unique constraint violation. SQLSTATE class 23 (Integrity Constraint Violation). */
 export const PG_UNIQUE_VIOLATION = '23505';
 /** Connection exception class prefix. SQLSTATE class 08. */
 export const PG_CONNECTION_EXCEPTION_CLASS = '08';
-/** Aurora DSQL: stale schema cache. Retried anywhere, because the fix is a catalog refresh. */
+/** Aurora DSQL stale schema cache. Retried once, anywhere: the retry refreshes the catalog. */
 export const DSQL_STALE_SCHEMA_CACHE = 'OC001';
 
-/** The single message text for the `withRLS()` / `crud()` capability gap, shared by the compiler doc comment and the runtime check. */
+/** Message for `withRLS()` / `crud()` on a `distributed` cluster; the method doc comments repeat it. */
 export const RLS_UNAVAILABLE_MESSAGE =
 	"Not available on a 'distributed' cluster. Use type: 'provisioned' or DatabaseCluster.fromExisting().";
 
@@ -95,10 +83,7 @@ export function isKnownDatabaseErrorName(name: string): boolean {
 	return knownErrors.has(name);
 }
 
-/**
- * Stable, BB-authored client-facing messages per error name. The raw driver
- * text is never sent — it is kept only as `cause` for server-side diagnostics.
- */
+/** Client-facing message per error name. Driver text stays on the server-side `cause`. */
 const RE_TAG_MESSAGES: Record<string, string> = {
 	[DatabaseErrors.QueryFailed]: 'The database query failed',
 	[DatabaseErrors.ConnectionFailed]: 'The database connection failed',
@@ -108,11 +93,7 @@ const RE_TAG_MESSAGES: Record<string, string> = {
 	[DatabaseErrors.TransactionRowLimitExceeded]: 'The transaction mutated more rows than the cluster allows',
 };
 
-/**
- * Build a BRANDED re-tag error: a fresh `Error` carrying the BB `name` and a
- * stable message, with the original driver error kept as `cause`. The name
- * crosses the wire; the driver text never does.
- */
+/** A branded error with a BB `name` and stable message; the driver error is kept as `cause`. */
 export function reTagged(name: string, cause: Error): Error {
 	const message = RE_TAG_MESSAGES[name] ?? RE_TAG_MESSAGES[DatabaseErrors.QueryFailed];
 	const wrapped = new Error(`${name}: ${message}`, { cause });

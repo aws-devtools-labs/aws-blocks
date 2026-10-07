@@ -2,16 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Provisions one cluster — Aurora DSQL (`distributed`) or Aurora Serverless v2
- * (`provisioned`) — plus the single migration Lambda every `Database` on it
- * shares. Each block attaches itself with {@link ClusterInfra.attach}, which
- * bundles the block's migration files into the Lambda and adds one
- * CustomResource per block so the block's schema is created and migrated at
- * deploy time. CustomResources on one cluster are chained so they never run
- * concurrently against the same database.
- *
- * Used by both the `DatabaseCluster` construct and a `Database` that owns its
- * cluster, so the two cannot drift.
+ * Provisions one cluster (DSQL or Aurora Serverless v2) and the migration
+ * Lambda its blocks share. Each block calls {@link ClusterInfra.attach}, which
+ * publishes the block's migrations as an S3 asset and adds a CustomResource;
+ * resources on one cluster are chained so they never run concurrently.
+ * Used by `DatabaseCluster` and by a `Database` that owns its cluster.
  */
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -190,10 +185,8 @@ export class ClusterInfra {
 			grantAdmin = aurora.grantDataApi;
 		}
 
-		// One migration Lambda per cluster. CDK bundles a function's code when the
-		// function is constructed — before any block attaches — so migration files
-		// are not part of the bundle. Each block ships its own as an S3 asset
-		// instead (see attach()).
+		// The code is bundled now, before any block attaches, so migrations travel
+		// as per-block S3 assets instead (see attach()).
 		const here = dirname(fileURLToPath(import.meta.url));
 		this.migrationFn = new lambda.NodejsFunction(props.owner, 'MigrationFn', {
 			// Points at the compiled migration-lambda.js in dist/ (src/ is not published).
@@ -247,11 +240,7 @@ export class ClusterInfra {
 		this.lastCustomResource = cfn;
 	}
 
-	/**
-	 * Publish a block's migration files as one JSON document (`{ fileName: sql }`)
-	 * — a single-file asset is uploaded as-is, so the Lambda reads it with one
-	 * `GetObject` and no unzip.
-	 */
+	/** A block's migrations as one `{ fileName: sql }` JSON asset (uploaded as-is, no unzip). */
 	private migrationsAsset(scope: Construct, migrationsPath: string): Asset {
 		const files: Record<string, string> = {};
 		for (const file of readdirSync(migrationsPath)
@@ -310,7 +299,7 @@ export class ClusterInfra {
 			if (!Number.isInteger(days) || days < 1 || days > 35) {
 				cdk.Annotations.of(scope).addWarningV2(
 					'@aws-blocks/bb-database:InvalidPitrDays',
-					`pointInTimeRecovery.retentionDays must be an integer between 1 and 35 (got ${String(days)}) — falling back to ${DEFAULT_BACKUP_RETENTION_DAYS} days.`,
+					`pointInTimeRecovery.retentionDays must be an integer between 1 and 35 (got ${String(days)}). Using ${DEFAULT_BACKUP_RETENTION_DAYS} days.`,
 				);
 			} else backupDays = days;
 		} else if (pitr === false) backupDays = 1;

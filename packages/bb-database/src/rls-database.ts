@@ -101,7 +101,7 @@ export class RLSScopedDatabase extends RLSEnabledDatabase {
 		this.ctx = ctx;
 	}
 
-	/** @throws Always — cannot nest RLS scopes. */
+	/** @throws Always: RLS scopes cannot be nested. */
 	override withRLS(_context: RLSContext): RLSScopedDatabase {
 		throw new Error('Cannot nest withRLS() calls. This database is already RLS-scoped.');
 	}

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `db.crud()` — runtime CRUD generation for the Database Building Block.
+ * `db.crud()`: generated CRUD handlers for the Database Building Block.
  *
  * Generates typed list/get/create/update/delete handlers for each table, with
  * filtering, sorting, pagination, and column selection. All queries run through

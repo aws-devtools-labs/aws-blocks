@@ -356,7 +356,7 @@ const dsql = new DistributedDatabase(scope, 'dsql', {
 // ./aws-blocks/migrations/dbx and go through the rewriter.
 const dbx = new SqlDatabase(scope, 'dbx');
 // `inventory` and `ledger` share one provisioned (Aurora Serverless v2) cluster,
-// each in its own schema — both migrations create a table named `items`.
+// each in its own schema. Both migrations create a table named `items`.
 const pgCluster = new DatabaseCluster(scope, 'pg', { type: 'provisioned', minCapacity: 0.5, removalPolicy: 'destroy' });
 const inventory = new SqlDatabase(scope, 'inventory', { cluster: pgCluster });
 const ledger = new SqlDatabase(scope, 'ledger', { cluster: pgCluster });
@@ -1700,7 +1700,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     );
   },
 
-  // ON DELETE CASCADE — a foreign key the provisioned cluster enforces.
+  // ON DELETE CASCADE: a foreign key the provisioned cluster enforces.
   async ledgerDeleteAccount(accountId: string) {
     await ledger.execute(sql`DELETE FROM accounts WHERE id = ${accountId}`);
     const row = await ledger.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items WHERE account_id = ${accountId}`);

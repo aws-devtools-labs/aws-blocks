@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Browser stub — Database and DatabaseCluster run server-side only. This keeps
+// Browser stub. Database and DatabaseCluster run server-side only; this keeps
 // Node.js / AWS SDK / PGlite code out of client bundles.
 
 import type { ExternalCluster, ExternalClusterRef } from './types.js';

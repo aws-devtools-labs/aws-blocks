@@ -25,7 +25,7 @@ import { classifyStatement, TransactionTracker, validateStatement } from '../val
 /** Stable, BB-authored message for the mock's DDL guard. */
 export const DDL_NOT_ALLOWED_MESSAGE =
 	'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime of a distributed cluster. ' +
-	'Put them in a migration file — the migration Lambda has dsql:DbConnectAdmin for DDL.';
+	'Put them in a migration file; the migration Lambda runs DDL with dsql:DbConnectAdmin.';
 
 interface TrackedHandle {
 	tracker?: TransactionTracker;
@@ -97,10 +97,13 @@ export class MockEngine implements DatabaseEngine {
 		if (this.shouldConflict) {
 			this.shouldConflict = false;
 			await this.inner.rollbackTransaction(handle);
-			const err = Object.assign(new Error('Simulated serialization conflict — transaction not committed.'), {
-				code: PG_SERIALIZATION_FAILURE,
-				name: DatabaseErrors.SerializationFailure,
-			});
+			const err = Object.assign(
+				new Error('Simulated serialization conflict. The transaction was not committed.'),
+				{
+					code: PG_SERIALIZATION_FAILURE,
+					name: DatabaseErrors.SerializationFailure,
+				},
+			);
 			throw serializationConflict(err);
 		}
 		await this.inner.commitTransaction(handle);

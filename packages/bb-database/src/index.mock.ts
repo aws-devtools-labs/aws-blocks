@@ -3,7 +3,7 @@
 
 import { join } from 'node:path';
 /**
- * Database — local development entry point (`npm run dev`, tests).
+ * Local development entry point (`npm run dev`, tests).
  *
  * Every cluster is a PGlite (WASM PostgreSQL) on disk under `.bb-data/`, one
  * instance per cluster with one schema per block. A `distributed` cluster adds
@@ -50,18 +50,11 @@ import type {
 import { BB_NAME, BB_VERSION } from './version.js';
 
 /**
- * The cluster a `Database` runs on, when several blocks share one. Pick a
+ * A cluster several `Database` blocks share, each in its own schema. Pick a
  * category, not a service: `distributed` (Aurora DSQL) or `provisioned`
- * (Aurora Serverless v2).
+ * (Aurora Serverless v2). Part of the `Database` block, not a block on its own.
  *
- * Not a Building Block on its own: a cluster with no `Database` on it does
- * nothing useful. It exists only to be passed as a `Database`'s `cluster`
- * option, and carries no block identity (telemetry and user-agent attribution
- * go to the `Database` blocks on it).
- *
- * Locally, one PGlite instance backs the cluster and each block gets its own
- * schema inside it; cluster options such as `minCapacity` provision nothing
- * here and are ignored without comment. Data persists in `.bb-data/{fullId}/`.
+ * Locally it is one PGlite under `.bb-data/{fullId}/`; capacity options are ignored.
  *
  * @example
  * const main = new DatabaseCluster(scope, 'main', { type: 'provisioned', minCapacity: 0.5 });
@@ -93,12 +86,14 @@ export class DatabaseCluster<T extends ClusterType = ClusterType> extends Scope 
 	}
 
 	/**
-	 * Reference a PostgreSQL you already have — anything that speaks the
-	 * PostgreSQL protocol. Returns a plain value, not a Scope; pass it as a
-	 * `Database`'s `cluster`. Several blocks may share it; each gets its own schema.
+	 * Reference a PostgreSQL you already have. Returns a plain value to pass as a
+	 * `Database`'s `cluster`; several blocks may share it, each in its own schema.
 	 *
 	 * @example
-	 * const supabase = DatabaseCluster.fromExisting({ connectionString: process.env.DATABASE_URL!, ssl: { ca } });
+	 * const supabase = DatabaseCluster.fromExisting({
+	 *   connectionString: process.env.DATABASE_URL ?? '',
+	 *   ssl: { ca: process.env.DATABASE_CA_CERT },
+	 * });
 	 * const db = new Database(scope, 'db', { cluster: supabase, schemaName: 'public' });
 	 */
 	static fromExisting(ref: ExternalClusterRef): ExternalCluster {
@@ -316,17 +311,13 @@ function externalKey(cluster: ExternalCluster): string {
 /** Warn at most once per process that an external connection omitted `ssl`. */
 let warnedMockSslOmitted = false;
 
-/**
- * Local dev defaults to NOT verifying the certificate (self-signed local
- * databases are common); the deployed runtime verifies by default. Warn when
- * `ssl` is omitted so the gap surfaces before a deploy.
- */
+/** Locally, an omitted `ssl` means unverified (the deployed runtime verifies); warn once. */
 function mockExternalSsl(ssl: ExternalSslOptions | undefined): ExternalSslOptions {
 	if (ssl) return ssl;
 	if (!warnedMockSslOmitted) {
 		warnedMockSslOmitted = true;
 		console.warn(
-			'[bb-database] DB TLS (local dev): this external connection has no `ssl` set — connecting WITHOUT ' +
+			'[bb-database] DB TLS (local dev): this external connection has no `ssl` set, so it connects WITHOUT ' +
 				'certificate verification locally, but the deployed runtime verifies by default. Pin your provider CA ' +
 				'via `ssl: { ca }` (or set `ssl: { rejectUnauthorized: false }` explicitly) so local and deploy behave the same.',
 		);

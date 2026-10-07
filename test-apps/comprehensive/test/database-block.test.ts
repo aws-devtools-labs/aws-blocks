@@ -9,7 +9,7 @@ import type { api as apiType } from 'aws-blocks';
 
 // Compile-time assertions (same pattern as database.test.ts). The cluster
 // descriptor's `kind` must survive the RPC boundary as the literal the backend
-// inferred from the constructor — a distributed default for `dbx`, the shared
+// inferred from the constructor: a distributed default for `dbx`, the shared
 // provisioned cluster for `inventory` and `ledger`.
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;

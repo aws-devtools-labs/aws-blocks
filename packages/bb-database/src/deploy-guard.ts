@@ -2,20 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The deploy guard: runs before `cdk deploy` in the production stage and stops
- * a deploy that would move a `Database` to another cluster or destroy a
- * cluster resource.
- *
- * 1. Read the synthesized template's binding record.
- * 2. If the stack exists, fetch the deployed template and diff `databases` and
- *    `clusters`. Any entry whose cluster id or type differs is a stop.
- * 3. Create a change set, scan it for `Remove` or `Replace` on
- *    `AWS::RDS::DBCluster` / `AWS::DSQL::Cluster`, delete the change set. This
- *    is the backstop for a destructive change the record diff does not express.
- * 4. Stop with the message, or proceed.
- *
- * The sandbox stage never runs the guard; the dev server keeps the record check
- * through the per-block marker (see `bindings.ts`).
+ * Production deploy guard. Stops when the binding record differs from the
+ * deployed template, then, as a backstop, when a change set would remove or
+ * replace a DSQL or Aurora cluster. Sandbox deploys skip it.
  */
 import {
 	type Change,

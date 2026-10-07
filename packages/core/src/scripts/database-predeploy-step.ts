@@ -2,14 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Pre-`cdk deploy` step for apps that use `@aws-blocks/bb-database`: the deploy
- * guard (production only — a `Database` keeps its cluster for life) and the
- * host-side migrations for blocks on `DatabaseCluster.fromExisting()`.
- *
- * `core` must not depend on `bb-database` (the dependency runs the other way),
- * so this invokes the `bb-database` CLI as a subprocess — the same pattern
- * `applyExternalMigrations` uses for `bb-data`. It is a no-op when the package
- * is not installed in the project, so apps without a `Database` pay nothing.
+ * Pre-`cdk deploy` step for apps using `@aws-blocks/bb-database`: the deploy
+ * guard (production only) and host-side migrations for `fromExisting()` blocks.
+ * Runs the `bb-database` CLI as a subprocess because core cannot depend on it;
+ * a no-op when the package is not installed.
  */
 import { createRequire } from 'node:module';
 import { runSync } from './run-command.js';

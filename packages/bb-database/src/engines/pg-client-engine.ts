@@ -36,7 +36,7 @@ export interface PgClientEngineConfig {
 function assertPostgresUrl(connectionString: string): void {
 	if (!/^postgres(ql)?:\/\//i.test((connectionString ?? '').trim())) {
 		const err = new Error(
-			'Database connection string is not a valid postgres:// URL — the connection secret was not provisioned. ' +
+			'Database connection string is not a valid postgres:// URL, so the connection secret was not provisioned. ' +
 				'Set it in .env.local (sandbox) or .env.production (deploy), then re-run the deploy.',
 		);
 		err.name = DatabaseErrors.ConnectionFailed;
@@ -72,13 +72,13 @@ export function tlsConnectionMessage(
 	if (ssl?.rejectUnauthorized === false) {
 		return {
 			level: 'warn',
-			message: `[bb-database] DB TLS: connected${where} — server certificate NOT verified (encrypted only).`,
+			message: `[bb-database] DB TLS: connected${where}. Server certificate NOT verified (encrypted only).`,
 		};
 	}
 	const against = ssl && 'ca' in ssl && ssl.ca ? 'the pinned CA' : "Node's built-in trust store";
 	return {
 		level: 'log',
-		message: `[bb-database] DB TLS: connected${where} — server certificate verified against ${against}.`,
+		message: `[bb-database] DB TLS: connected${where}. Server certificate verified against ${against}.`,
 	};
 }
 

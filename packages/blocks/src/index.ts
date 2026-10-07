@@ -252,7 +252,7 @@ export type {
 	ProvisionedClusterOptions,
 } from '@aws-blocks/bb-database';
 /**
- * **The cluster a `bb-database` `Database` runs on — pick a category, not a service.**
+ * **The cluster a `bb-database` `Database` runs on. Pick a category, not a service.**
  *
  * Part of the `Database` block (`@aws-blocks/bb-database`), not a block on its
  * own: it exists only to be passed as a `Database`'s `cluster` option.

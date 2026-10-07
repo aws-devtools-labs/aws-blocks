@@ -2,16 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Process-wide registries that enforce two app-level rules at construction:
- *
- * 1. `Database` and `DatabaseCluster` short ids are unique per app, so a later
- *    compile-time binding check can look a block up by the literal in its
- *    constructor, and a rename after first deploy is a visible binding change.
- * 2. Two blocks on one cluster never share a schema.
- *
- * Both checks run in every entry point (dev server, synth, Lambda cold start);
- * the message text is the same everywhere. Keyed on `globalThis` so the three
- * entry files, loaded under different conditions in one process, agree.
+ * Construction-time checks run by every entry point: `Database` and
+ * `DatabaseCluster` short ids are unique per app, and blocks on one cluster
+ * never share a schema. State lives on `globalThis` so entry files loaded under
+ * different conditions in one process agree.
  */
 import { configError } from './errors.js';
 

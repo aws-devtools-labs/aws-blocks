@@ -105,7 +105,7 @@ export interface DataApiEngineConfig {
 }
 
 /**
- * DatabaseEngine over the RDS Data API. Stateless — each call is an independent
+ * DatabaseEngine over the RDS Data API. Stateless: each call is an independent
  * HTTP request, so schema scoping rides on the transaction id.
  */
 export class DataApiEngine implements DatabaseEngine {
@@ -254,6 +254,6 @@ export class DataApiEngine implements DatabaseEngine {
 		}
 	}
 
-	/** No-op — the Data API is stateless. */
+	/** No-op: the Data API holds no connections. */
 	async destroy(): Promise<void> {}
 }

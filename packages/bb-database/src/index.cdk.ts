@@ -3,7 +3,7 @@
 
 import { relative } from 'node:path';
 /**
- * Database — CDK infrastructure entry point (`cdk synth --conditions=cdk`).
+ * CDK infrastructure entry point (`cdk synth --conditions=cdk`).
  *
  * A `DatabaseCluster` provisions Aurora DSQL or Aurora Serverless v2 plus one
  * migration Lambda. A `Database` either owns a `distributed` cluster or attaches
@@ -96,7 +96,7 @@ export class DatabaseCluster<T extends ClusterType = ClusterType> extends Buildi
 }
 
 /**
- * SQL database on PostgreSQL — infrastructure. Owns a `distributed` cluster
+ * SQL database on PostgreSQL, infrastructure build. Owns a `distributed` cluster
  * when `cluster` is omitted; otherwise attaches to the given cluster.
  */
 export class Database<K extends ClusterKind = 'distributed'> extends BuildingBlockScope {
@@ -174,7 +174,7 @@ export class Database<K extends ClusterKind = 'distributed'> extends BuildingBlo
 		);
 	}
 
-	/** Reference a PostgreSQL you already have — alias of `DatabaseCluster.fromExisting()`. */
+	/** Alias of `DatabaseCluster.fromExisting()`. */
 	static fromExisting(ref: ExternalClusterRef): ExternalCluster {
 		return externalCluster(ref);
 	}

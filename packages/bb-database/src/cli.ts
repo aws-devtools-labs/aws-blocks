@@ -72,7 +72,7 @@ function hostSideSsl(): ExternalSslOptions {
 		);
 	}
 	console.warn(
-		'[bb-database] DB TLS: server certificate NOT verified — set DATABASE_CA_CERT to your provider CA to verify.',
+		'[bb-database] DB TLS: server certificate NOT verified. Set DATABASE_CA_CERT to your provider CA to verify it.',
 	);
 	return { rejectUnauthorized: false };
 }

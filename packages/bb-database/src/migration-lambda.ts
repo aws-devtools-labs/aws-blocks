@@ -2,18 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CloudFormation custom-resource handler that, per `Database` block at deploy:
- *
- * 1. creates the block's schema,
- * 2. applies the block's migrations through the rewriter's plan,
- * 3. on a `distributed` cluster, provisions the app's database role and grants
- *    it DML on the block's schema (the app connects with `dsql:DbConnect`, the
- *    Lambda with `dsql:DbConnectAdmin`).
- *
- * A block's migration files arrive as one S3 asset (`{ fileName: sql }` JSON)
- * named by the `migrationsBucket` / `migrationsKey` properties. The
- * `migrationsHash` / `schemaName` / `appRoleArn` properties re-run the
- * resource when they change.
+ * Custom-resource handler, one invocation per `Database` block: creates the
+ * block's schema, applies its migrations (read from the S3 asset in the
+ * resource properties), and on `distributed` grants the app role DML on it.
  */
 import type { DatabaseEngine } from '@aws-blocks/data-common';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
@@ -32,9 +23,8 @@ const INITIAL_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
 
 /**
- * True when the error means "the cluster isn't accepting statements yet" — a
- * freshly created cluster, a scale-to-zero cluster resuming, a DSQL endpoint not
- * yet reachable — rather than "the statement is wrong".
+ * True when the cluster is not accepting statements yet (just created, resuming
+ * from scale-to-zero, endpoint not reachable), as opposed to a bad statement.
  */
 export function isRetryableMigrationError(e: unknown): boolean {
 	if (!(e instanceof Error)) return false;

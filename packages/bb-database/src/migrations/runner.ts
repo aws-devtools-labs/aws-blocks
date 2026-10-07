@@ -4,14 +4,9 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 /**
- * Runs a {@link MigrationPlan} against an engine whose `search_path` already
- * points at the block's schema.
- *
- * Tracking lives in the block's schema: `_migrations (name TEXT PRIMARY KEY,
- * applied_at TIMESTAMP)` records each file once it is fully applied, and
- * `_migration_progress (name, step)` records the last completed step of a file
- * that failed mid-plan, so a re-run resumes at the failed step instead of
- * replaying the ones that succeeded.
+ * Runs a {@link MigrationPlan} in the block's schema. `_migrations` records
+ * finished files; `_migration_progress` records the last completed step of an
+ * unfinished one, so a re-run resumes where it failed.
  */
 import { brandBlocksError } from '@aws-blocks/core';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Aurora DSQL engine — `pg.Pool` with IAM token authentication.
+ * Aurora DSQL engine: a `pg.Pool` authenticated with IAM tokens.
  */
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import pg from 'pg';
