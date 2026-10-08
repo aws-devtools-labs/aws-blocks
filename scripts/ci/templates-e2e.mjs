@@ -19,14 +19,12 @@
 //   --skip-publish   reuse an existing dist-registry (CI packs it in an
 //                    earlier job and downloads it as an artifact).
 
-import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { killTree, runBool, startRegistry, isWin } from './_proc.mjs';
 
-const isWin = process.platform === 'win32';
 const ROOT = join(fileURLToPath(import.meta.url), '..', '..', '..');
 const REGISTRY_PORT = 4873;
 const REGISTRY_URL = `http://localhost:${REGISTRY_PORT}/registry/`;
@@ -38,17 +36,6 @@ const children = [];
 // remove it on every exit path (success, failure, or SIGINT/SIGTERM), the way
 // the removed bash harness did with `trap cleanup EXIT`.
 let work;
-
-/** Kill a process tree cross-platform (Windows has no POSIX process groups). */
-function killTree(pid) {
-	if (!pid) return;
-	try {
-		if (isWin) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-		else process.kill(-pid, 'SIGKILL');
-	} catch {
-		/* already gone */
-	}
-}
 
 /** Reap spawned children and remove the scratch dir. Safe to call more than once. */
 function shutdown() {
@@ -70,28 +57,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 }
 
 /** Run a one-shot command; return true on exit 0, false otherwise (never throws). */
-function run(cmd, args, opts = {}) {
-	console.log(`\n$ ${cmd} ${args.join(' ')}  (cwd: ${opts.cwd ?? ROOT})`);
-	// shell:true on Windows so `.cmd` shims (npm, create-blocks-app) resolve.
-	// NOTE: with shell:true spawnSync does NOT auto-quote args, so a path arg
-	// containing a space would break the Windows command line. Safe here because
-	// the only path args (createBin, app) derive from RUNNER_TEMP, which on
-	// GitHub windows-latest has no spaces. If this is ever run on a Windows host
-	// whose temp dir contains a space, quote those args or drop shell:true.
-	const r = spawnSync(cmd, args, { stdio: 'inherit', shell: isWin, ...opts });
-	return r.status === 0;
-}
-
-async function httpUp(url) {
-	try {
-		const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
-		// Match the old `curl -sf`: only a 2xx (metadata actually served) is
-		// ready. A 404 while the package metadata is not yet readable is NOT.
-		return res.ok;
-	} catch {
-		return false;
-	}
-}
+const run = (cmd, args, opts = {}) => runBool(cmd, args, opts, ROOT);
 
 /**
  * The scaffoldable template set, derived from templates/ so it can never drift
@@ -130,22 +96,7 @@ async function main() {
 
 	// ── Step 2: start the local registry (node + tsx loader, no shim needed) ──
 	console.log('\n=== Step 2: Start local registry ===');
-	const registry = spawn(process.execPath, ['--import', 'tsx', 'scripts/publish/serve-local-registry.ts'], {
-		cwd: ROOT,
-		stdio: 'inherit',
-		detached: !isWin,
-	});
-	children.push(registry);
-	for (let i = 0; ; i++) {
-		if (await httpUp(`${REGISTRY_URL}@aws-blocks/blocks`)) break;
-		// Fail fast if the server already died (e.g. :4873 bound, or a malformed
-		// dist-registry) so its real cause surfaces instead of a ~31s timeout.
-		if (registry.exitCode !== null) {
-			throw new Error(`Local registry process exited (${registry.exitCode}) before becoming ready on :${REGISTRY_PORT}`);
-		}
-		if (i > 30) throw new Error(`Local registry did not start on :${REGISTRY_PORT}`);
-		await sleep(1000);
-	}
+	await startRegistry({ root: ROOT, registryUrl: REGISTRY_URL, children });
 	console.log('  Registry ready.');
 
 	// ── Step 3: isolate npm (temp user config + cache; scoped registry) ───────
