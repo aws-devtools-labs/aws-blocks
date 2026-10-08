@@ -81,7 +81,7 @@
     "test:e2e:production:vpc": "cd test-apps/vpc-smoke && npm run test:e2e:production",
     "test:all": "npm run test:unit && npm run test:e2e:local && npm run test:e2e:sandbox && npm run test:e2e:production",
     "test:dev": "npm run test:unit && npm run test:e2e:local && npm run test:e2e:sandbox",
-    "test:templates": "bash scripts/test-templates-e2e.sh",
+    "test:templates": "node scripts/ci/templates-e2e.mjs",
     "test:vendorize": "cd test-apps/comprehensive && npx tsx --test test/vendorize.test.ts",
     "create-app": "node packages/create-blocks-app/dist/index.js",
     "new:bb": "npm run build -w packages/create-block --silent && node packages/create-block/dist/index.js",
