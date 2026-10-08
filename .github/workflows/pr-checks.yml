@@ -184,6 +184,14 @@ jobs:
       - name: Check client user-agent middleware consistency
         run: npm run check:client-user-agent
 
+      # Runs on the root build output, before Unit Tests: a package `pretest` that
+      # bundles an asset would otherwise hide a bundle the release build skips.
+      - name: Test the packed-assets guard
+        run: node --test scripts/check-packed-assets.test.mjs
+
+      - name: Check packed Lambda assets
+        run: npm run check:packed-assets
+
       - name: Check API backward compatibility
         run: npm run check:api
 
