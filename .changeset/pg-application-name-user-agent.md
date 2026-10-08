@@ -1,34 +1,27 @@
 ---
 "@aws-blocks/core": minor
 "@aws-blocks/bb-data": minor
-"@aws-blocks/bb-distributed-data": minor
+"@aws-blocks/bb-distributed-data": patch
 ---
 
-feat: propagate the BB user-agent chain as the Postgres `application_name`
+feat(core): report the BB user-agent chain as the Postgres `application_name`
 
-On the AWS runtime, the two pg-based Building Blocks now set the Postgres
-`application_name` connection parameter to the block's user-agent chain
-(e.g. `aws-blocks/0.2.6 bb/Database/0.2.6`), so the origin is visible in
-`pg_stat_activity` on the server and in provider dashboards (Supabase, Neon,
-Aurora DSQL). This is attribution/telemetry only — it does not change query
-behavior.
+The two pg-based Building Blocks now report the block's user-agent chain as the
+Postgres `application_name` (`aws-blocks/<core> bb/Database/<version>`), so the
+origin of a connection is visible to the server — in `pg_stat_activity` where
+the server exposes it, and in provider dashboards. `bb-data` does this on its
+`connectionString` path; the RDS Data API path is HTTP and unaffected.
+`bb-distributed-data` does it on the DSQL path.
 
-- `@aws-blocks/core`: adds `Scope.formatUserAgentString()`, which renders the
-  existing `buildUserAgentChain()` `[key, value]` chain as a single
-  space-delimited string and caps it at the Postgres `application_name` limit
-  (`NAMEDATALEN - 1` = 63 bytes). When the chain overflows, whole middle
-  entries (intermediate parent BBs) are elided with a `…` marker while the
-  origin (`aws-blocks/<core>`) and the leaf BB are preserved, so the server
-  never truncates the value mid-token. Only official BB names cross into the
-  chain (existing `OFFICIAL_BB_NAMES` gate), so custom ancestor names never
-  leak.
-- `@aws-blocks/bb-data`: the `connectionString` (`PgClientEngine`) path sets
-  `application_name`; the RDS Data API path is unaffected (it is HTTP, not a
-  pg wire connection).
-- `@aws-blocks/bb-distributed-data`: the `DsqlEngine` sets `application_name`
-  alongside its existing IAM-token auth.
+The chain is supplied as pg's `fallback_application_name`, which libpq
+documents for a library setting a default name "but allow it to be overridden by
+the user" — so an `application_name` already set in the caller's connection
+string, or their `PGAPPNAME`, is used instead and never replaced.
 
-`minor` because these packages are pre-1.0, where this repo uses `minor` for a
-change that alters existing runtime behavior (connections now carry an
-`application_name` they did not before). The new engine config field
-(`applicationName`) is optional and non-breaking.
+`Scope.formatUserAgentString()` renders the chain for any string-typed sink and
+applies the two Postgres constraints on `application_name` itself: it keeps the
+value within the 63-**byte** `NAMEDATALEN - 1` limit by dropping whole parent
+entries from inside the chain rather than letting the server clip mid-token
+(omitting the value outright if it will not fit as whole entries), and it emits
+only printable ASCII, which is all Postgres preserves. Only official BB names
+enter the chain, so a custom block's name is never exposed.

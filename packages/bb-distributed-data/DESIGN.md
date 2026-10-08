@@ -41,11 +41,14 @@ bb-distributed-data (this package)
 - Password callback generates fresh tokens per connection (60-min expiry)
 - Translates pg error codes to `DistributedDatabaseErrors` names
 - Pool handles reconnection transparently when connections expire
-- Sets the Postgres `application_name` connection parameter to the block's BB
-  user-agent chain (`Scope.formatUserAgentString()`, e.g.
-  `aws-blocks/0.2.6 bb/DistributedDatabase/0.1.0`) so the origin is visible in
-  `pg_stat_activity`. Capped at the Postgres 63-byte `application_name` limit
-  (middle entries elided rather than truncated mid-token). Attribution only.
+- Reports the block's BB user-agent chain as the Postgres `application_name`
+  (`Scope.formatUserAgentString()`, e.g.
+  `aws-blocks/<core> bb/DistributedDatabase/<version>`). Supplied as pg's
+  `fallback_application_name`, so a caller's `PGAPPNAME` wins. Capped at the
+  Postgres 63-byte limit, dropping whole parent entries rather than truncating
+  mid-token. Attribution only. DSQL applies the value
+  (`current_setting('application_name')` returns it) but does not support
+  `pg_stat_activity`.
 
 ### DsqlMockEngine (Local Dev)
 
@@ -183,7 +186,7 @@ The `DistributedDatabase` class does not wrap errors — engines handle translat
 | No 60-min connection timeout | Dev sessions are short | Document only |
 | No 10 MiB / 5-min tx limits | Impractical to measure locally | Document only |
 | CREATE INDEX ASYNC is synchronous | Index immediately available locally | Log warning |
-| `application_name` on the pg connection | Not set by the mock engine; the AWS `DsqlEngine` sets it to the 63-byte-capped BB user-agent chain | Intentional. Attribution-only; visible in `pg_stat_activity`. |
+| `application_name` on the pg connection | Not reported by the mock engine; the AWS `DsqlEngine` reports the BB user-agent chain (see above) | Intentional. Attribution-only. |
 
 ## Connection Management
 

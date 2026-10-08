@@ -390,7 +390,7 @@ export class Scope extends Construct {
 		return [];
 	}
 
-	protected formatUserAgentString(_maxBytes = 63): string {
+	protected formatUserAgentString(): string {
 		return '';
 	}
 
