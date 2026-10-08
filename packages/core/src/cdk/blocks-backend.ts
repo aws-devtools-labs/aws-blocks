@@ -219,7 +219,14 @@ export class BlocksBackend extends Construct {
 	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
 	_defaultCompute?: Compute;
 
-	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
+	/**
+	 * The default compute's Lambda function.
+	 * @deprecated An app can run on more than one compute, so a single
+	 * backend-level Lambda is no longer a meaningful handle. For IAM grants and
+	 * policies use {@link executionRole} — the shared role every compute assumes
+	 * — e.g. `queue.grantSendMessages(backend.executionRole)`. Removed in a future
+	 * release, once the public compute-configuration surface lands.
+	 */
 	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
 		return this.requireDefaultCompute().fn;
 	}
