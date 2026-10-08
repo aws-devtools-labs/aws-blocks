@@ -383,5 +383,4 @@ const events = new DistributedTable(scope, 'events', {
 
 Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Wipe with `rm -rf .bb-data`. The mock validates the 400 KB item size limit, schema validation, and conditional check failures, matching AWS behavior. Index queries are implemented via in-memory filtering — correctness is preserved but performance characteristics differ from DynamoDB.
 
-
-
+Local writes store independent in-memory snapshots, and reads return independent snapshots before applying `readValidation`. Changing an input after `put()` / `putBatch()`, or changing a returned item, does not update the stored record. Call `put()` / `putBatch()` explicitly to save changes. In-memory snapshots preserve `NumberValue`, sets, maps, and binary values (including `Buffer`). Disk persistence still uses the existing JSON format, which does not preserve these native types across restarts. Values that JSON cannot serialize, such as `bigint`, remain unsupported by the mock.
