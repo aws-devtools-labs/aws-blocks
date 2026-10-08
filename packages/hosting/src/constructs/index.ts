@@ -115,3 +115,14 @@ export { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 export { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 export { backendBaseUrl } from './apigw_routes.js';
 export { coalesceRoutes, routeSpecificity } from '../plan/route-table.js';
+// ── EXPERIMENTAL: shared multi-tenant front doors on build hooks (POC) ────────
+// One door fronting N tenant apps; each app opts in with
+// `frontDoor: { kind: 'custom', door: shared.forTenant('a') }`.
+export {
+	SharedAlbDoor,
+	type SharedAlbDoorProps,
+	SharedApiGatewayDoor,
+	SharedCloudFrontDoor,
+	type SharedDoorProps,
+	type TenantRouting,
+} from './mt_shared_door.js';
