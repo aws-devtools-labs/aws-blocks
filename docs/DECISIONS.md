@@ -347,7 +347,7 @@ Add a `--telemetry-file=/path` flag to all CLI scripts that writes telemetry eve
 3. **Skips pre-existing files** — if the target file already exists, the sink silently does nothing (protects user data)
 4. **One event per file** — each CLI invocation writes exactly one event; if the file already exists, it is skipped
 
-To capture events without sending to the server: combine `--telemetry-file` with `AWS_BLOCKS_DISABLE_TELEMETRY=1`. The file still captures, HTTP does not send.
+To capture events without sending to the server: combine `--telemetry-file` with `AWS_BLOCKS_DISABLE_TELEMETRY` set to `1`, `true`, or `yes` (case-insensitive, trimmed). The file still captures, HTTP does not send.
 
 ### Rationale
 

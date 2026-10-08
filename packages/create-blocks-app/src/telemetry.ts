@@ -42,8 +42,19 @@ export function isCI(): boolean {
   return EXTRA_CI_ENV_VARS.some((key) => !!env[key]);
 }
 
+/**
+ * Whether an `AWS_BLOCKS_DISABLE_TELEMETRY` value means "disabled".
+ *
+ * Keep behaviorally identical to packages/core/src/telemetry/consent.ts.
+ */
+export function isDisableValue(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
 function isTelemetryEnabled(): boolean {
-  if (process.env.AWS_BLOCKS_DISABLE_TELEMETRY === '1') return false;
+  if (isDisableValue(process.env.AWS_BLOCKS_DISABLE_TELEMETRY)) return false;
 
   // Per-project config
   try {
@@ -70,6 +81,7 @@ const FIRST_RUN_NOTICE = `
 AWS Blocks collects anonymous usage data to improve the product.
 No customer content or PII is collected.
 To disable: npx blocks-telemetry --disable (or export AWS_BLOCKS_DISABLE_TELEMETRY=1)
+The env var accepts 1, true, or yes (case-insensitive).
 `;
 
 function getInstallationId(): string {
