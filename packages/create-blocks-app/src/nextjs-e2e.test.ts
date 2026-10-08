@@ -19,7 +19,14 @@ let compiledDir: string;
 const requiredTests = ['home page loads', 'app: server serves its Blocks config', 'greet returns message and timestamp'];
 
 function assertTemplateTestsRan(report: string) {
-  const events: TestEvent[] = report.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const events: TestEvent[] = report.split('\n').flatMap((line, index) => {
+    if (!line) return [];
+    try {
+      return [JSON.parse(line)];
+    } catch (cause) {
+      throw new Error(`Invalid completion event JSON on line ${index + 1}: ${line}\nFull report:\n${report}`, { cause });
+    }
+  });
   const completed = events.filter((event) => event.type === 'test:pass' || event.type === 'test:fail');
   for (const name of requiredTests) {
     const results = completed.filter((event) => event.data.name === name);
@@ -36,6 +43,20 @@ describe('Next.js template execution guard', () => {
     assertTemplateTestsRan(report([...completed, { type: 'test:pass', data: { name: 'unrelated', skip: 'optional' } }]));
   });
 
+  it('includes the line, full report, and parse cause for malformed JSON', () => {
+    const malformed = '{"type":';
+    const output = `${report(completed)}\n\n${malformed}\n`;
+    assert.throws(() => assertTemplateTestsRan(output), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /Invalid completion event JSON on line 5/);
+      assert.ok(error.message.includes(malformed));
+      assert.ok(error.message.includes(output));
+      assert.ok(error.cause instanceof SyntaxError);
+      assert.ok(!Object.keys(error).includes('cause'));
+      return true;
+    });
+  });
+
   for (const name of requiredTests) {
     it(`rejects skipped, TODO, missing, or duplicate results for ${name}`, () => {
       const otherTests = completed.filter((event) => event.data.name !== name);
@@ -45,6 +66,45 @@ describe('Next.js template execution guard', () => {
       assert.throws(() => assertTemplateTestsRan(report([...completed, { type: 'test:pass', data: { name } }])), /Expected one completed result/);
     });
   }
+});
+
+function readExecFileFailure(error: unknown) {
+  const failure = typeof error === 'object' && error !== null ? error : {};
+  return {
+    message: 'message' in failure && typeof failure.message === 'string' ? failure.message : String(error),
+    code: 'code' in failure && (typeof failure.code === 'number' || typeof failure.code === 'string') ? failure.code : undefined,
+    signal: 'signal' in failure && typeof failure.signal === 'string' ? failure.signal : undefined,
+    killed: 'killed' in failure && typeof failure.killed === 'boolean' ? failure.killed : undefined,
+    stdout: 'stdout' in failure && typeof failure.stdout === 'string' ? failure.stdout : '',
+    stderr: 'stderr' in failure && typeof failure.stderr === 'string' ? failure.stderr : '',
+  };
+}
+
+describe('Next.js E2E child failure narrowing', () => {
+  it('preserves valid execFile error fields', () => {
+    const error = Object.assign(new Error('Child timed out'), {
+      code: 1, signal: 'SIGTERM', killed: true, stdout: 'partial TAP', stderr: 'child stderr',
+    });
+    assert.deepStrictEqual(readExecFileFailure(error), {
+      message: 'Child timed out', code: 1, signal: 'SIGTERM', killed: true, stdout: 'partial TAP', stderr: 'child stderr',
+    });
+    assert.strictEqual(readExecFileFailure({ code: 'ENOENT' }).code, 'ENOENT');
+  });
+
+  it('handles primitive rejections without reading properties', () => {
+    for (const error of [null, undefined, 'unexpected rejection', 42]) {
+      assert.deepStrictEqual(readExecFileFailure(error), {
+        message: String(error), code: undefined, signal: undefined, killed: undefined, stdout: '', stderr: '',
+      });
+    }
+  });
+
+  it('ignores fields with unexpected types', () => {
+    const error = { message: 42, code: {}, signal: 9, killed: 'true', stdout: [], stderr: false };
+    assert.deepStrictEqual(readExecFileFailure(error), {
+      message: String(error), code: undefined, signal: undefined, killed: undefined, stdout: '', stderr: '',
+    });
+  });
 });
 
 async function runTemplateTests(env: NodeJS.ProcessEnv, timeout = 15000, killSignal: NodeJS.Signals = 'SIGTERM') {
@@ -57,7 +117,7 @@ async function runTemplateTests(env: NodeJS.ProcessEnv, timeout = 15000, killSig
   try {
     // One test file needs no worker isolation; killing the runner must not orphan a worker.
     const result = await run(process.execPath, [
-      '--test', '--experimental-test-isolation=none',
+      '--conditions=browser', '--test', '--experimental-test-isolation=none',
       '--test-reporter=tap', '--test-reporter-destination=stdout',
       `--test-reporter=${join(dirname(fileURLToPath(import.meta.url)), 'nextjs-e2e-reporter.js')}`,
       `--test-reporter-destination=${reportFile}`, join(compiledDir, 'test/e2e.test.js'),
@@ -66,10 +126,7 @@ async function runTemplateTests(env: NodeJS.ProcessEnv, timeout = 15000, killSig
     });
     return { exitCode: 0, report: readReport(), diagnostic: [result.stdout, result.stderr].join('\n') };
   } catch (error) {
-    const failure = error as Error & {
-      code?: number | string | null; signal?: string | null; killed?: boolean; stdout?: string; stderr?: string;
-    };
-    const stdout = failure.stdout ?? '';
+    const failure = readExecFileFailure(error);
     return {
       exitCode: !failure.killed && !failure.signal && typeof failure.code === 'number' ? failure.code : -1,
       report: readReport(),
@@ -77,7 +134,7 @@ async function runTemplateTests(env: NodeJS.ProcessEnv, timeout = 15000, killSig
         failure.killed || failure.signal ? 'Child process was terminated (timeout or signal)' : 'Child process failed',
         failure.message,
         `code: ${failure.code ?? 'none'}, signal: ${failure.signal ?? 'none'}, killed: ${failure.killed ?? false}`,
-        stdout, failure.stderr ?? '',
+        failure.stdout, failure.stderr,
       ].join('\n'),
     };
   } finally {
@@ -90,15 +147,17 @@ describe('Next.js template E2E assertions', () => {
     compiledDir = mkdtempSync(join(tmpdir(), 'blocks-nextjs-e2e-'));
     writeFileSync(join(compiledDir, 'package.json'), '{"type":"module"}');
     symlinkSync(join(dirname(fileURLToPath(import.meta.url)), '../../../node_modules'), join(compiledDir, 'node_modules'), 'dir');
+    const projectFile = join(compiledDir, 'tsconfig.json');
+    // Inherit the scaffold's resolution and checks; emit only the E2E and its imports for the Node child.
+    writeFileSync(projectFile, JSON.stringify({
+      extends: join(templateDir, 'tsconfig.json'),
+      compilerOptions: { noEmit: false, incremental: false, rootDir: templateDir, outDir: compiledDir },
+      files: [templateTest],
+      include: [],
+    }));
     execFileSync(process.execPath, [
       require.resolve('typescript/bin/tsc'),
-      templateTest,
-      '--target', 'es2022',
-      '--module', 'nodenext',
-      '--moduleResolution', 'nodenext',
-      '--skipLibCheck',
-      '--rootDir', templateDir,
-      '--outDir', compiledDir,
+      '--project', projectFile,
     ], { timeout: 30000 });
   });
 
