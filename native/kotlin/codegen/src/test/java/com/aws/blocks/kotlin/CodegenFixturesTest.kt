@@ -2,6 +2,9 @@ package com.aws.blocks.kotlin
 
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
+import com.aws.blocks.kotlin.model.Info
+import com.aws.blocks.kotlin.model.RpcModel
+import com.aws.blocks.kotlin.model.ServerDefinition
 import com.aws.blocks.kotlin.parser.OpenRpcParser
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -9,6 +12,42 @@ import io.kotest.matchers.shouldBe
 import java.io.File
 
 class CodegenFixturesTest : FunSpec({
+
+    test("uses the RPC endpoint for a spec without servers") {
+        val model = RpcModel(
+            info = Info(title = "Test", version = "1.0.0"),
+            methods = emptyList(),
+        )
+
+        CodegenModelBuilder().build(model).servers shouldBe listOf(
+            ServerDefinition("local", "http://localhost:3001/aws-blocks/api"),
+        )
+    }
+
+    for (endpoint in listOf("/aws-blocks/api", "/custom/rpc")) {
+        test("appends the explicit endpoint $endpoint once when servers are absent") {
+            val spec = """
+                {
+                  "openrpc": "1.3.2",
+                  "info": { "title": "Test", "version": "1.0.0" },
+                  "x-blocks-endpoint": "$endpoint",
+                  "methods": [{ "name": "api.greet", "params": [] }]
+                }
+            """.trimIndent()
+            val model = CodegenModelBuilder().build(OpenRpcParser.parse(spec))
+
+            model.servers shouldBe listOf(ServerDefinition("local", "http://localhost:3001"))
+            model.endpoint shouldBe endpoint
+            model.servers.single().url + model.endpoint shouldBe "http://localhost:3001$endpoint"
+
+            val result = KotlinCodeGenerator("com.example.app").generate(model)
+            val serversSource = result.files.single { it.name == "Servers" }.toString()
+            serversSource.contains("url = \"http://localhost:3001\"") shouldBe true
+            val apiSource = result.files.single { it.name == "Api" }.toString()
+                .replace(Regex("\\s+"), " ")
+            apiSource.contains("server.url.toString() + \"$endpoint\"") shouldBe true
+        }
+    }
 
     val regenerate = System.getProperty("REGENERATE_FIXTURES") == "1"
     val fixturesDir = System.getProperty("FIXTURES_DIR")?.let { File(it) }
