@@ -143,6 +143,9 @@ export class Scope {
   /** Static registry — collects BB names as they're instantiated */
   private static _bbRegistry: Map<string, { version: string; count: number }> = new Map();
 
+  /** Deferred default block, folded in by {@link getRegisteredBlocks}. */
+  private static _defaultBlock: { name: string; version: string } | undefined;
+
   constructor(id: string, options?: ScopeOptions) {
     this.id = id;
     this.parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK || {
@@ -181,12 +184,29 @@ export class Scope {
         customBlocksCount += count;
       }
     }
+    const fallback = Scope._defaultBlock;
+    if (fallback && !Scope._bbRegistry.has(fallback.name) && OFFICIAL_BB_NAMES.has(fallback.name)) {
+      blocks.push(fallback);
+      totalCount += 1;
+    }
     return { blocks, totalCount, customBlocksCount };
+  }
+
+  /**
+   * Folded in only when {@link getRegisteredBlocks} is called, so importing the
+   * declaring package never mutates the registry, and the entry lands after
+   * every block the app actually constructed.
+   *
+   * @internal
+   */
+  static _setDefaultBlockForTelemetry(name: string, version: string): void {
+    Scope._defaultBlock = { name, version };
   }
 
   /** Reset registry (useful for testing). */
   static _resetRegistry(): void {
     Scope._bbRegistry.clear();
+    Scope._defaultBlock = undefined;
   }
 
   get fullId(): string {
