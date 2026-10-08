@@ -252,7 +252,46 @@ jobs:
           path: dist-registry/
 
       - name: Template E2E Tests
-        run: bash scripts/test-templates-e2e.sh --skip-publish
+        run: node scripts/ci/templates-e2e.mjs --skip-publish
+
+  # Same local template suite as e2e-templates, on Windows — the OS where
+  # client-side template tooling (paths, process spawn/kill, .cmd shims, line
+  # endings) diverges from POSIX. Runs the SAME cross-platform driver, so the
+  # two lanes cannot drift. Local only (each template's test:e2e boots a mock
+  # dev server) — no AWS, so no credentials/environment and no deploy wait. The
+  # real Windows deploy smoke stays in windows-e2e.yml (scheduled).
+  e2e-templates-windows:
+    name: E2E Templates (Windows)
+    needs: [build-and-test-local, detect-changes]
+    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
+      - run: npm ci
+
+      - name: Download registry artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-registry
+          path: dist-registry/
+
+      - name: Template E2E Tests (Windows)
+        run: node scripts/ci/templates-e2e.mjs --skip-publish
 
   e2e-sandbox:
     name: E2E Sandbox
@@ -582,7 +621,7 @@ jobs:
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [blocks-integrity, build-and-test-local, e2e-templates, e2e-sandbox, e2e-sandbox-vpc, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
+    needs: [blocks-integrity, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -600,6 +639,7 @@ jobs:
 
           # E2E jobs must either succeed or be skipped (no source changes)
           if [[ "${{ needs.e2e-templates.result }}" != "success" && "${{ needs.e2e-templates.result }}" != "skipped" ]] ||
+             [[ "${{ needs.e2e-templates-windows.result }}" != "success" && "${{ needs.e2e-templates-windows.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-sandbox.result }}" != "success" && "${{ needs.e2e-sandbox.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-sandbox-vpc.result }}" != "success" && "${{ needs.e2e-sandbox-vpc.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-production.result }}" != "success" && "${{ needs.e2e-production.result }}" != "skipped" ]] ||
