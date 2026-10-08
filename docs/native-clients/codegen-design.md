@@ -166,6 +166,14 @@ Two top-level extension objects let a block declare its own native package inste
 
 Both objects carry `schemaVersion: 1` and are emitted only when non-empty. An absent platform field means the package is not offered there, and that result degrades to `UnknownTransferable` on that platform alone.
 
+A block authors both catalogs as static JSON under an `aws-blocks.native` key in its own `package.json`, rather than in a TypeScript registration call.
+
+This supersedes the `Scope.registerNativePackage()` / `Scope.registerNativeBinding()` API specified in the native client codegen design. Declarations are carried in `package.json` because they are build-time dependencies; field names and nesting are unchanged, only the carrier moved.
+
+See [D-018](../DECISIONS.md#d-018-native-declarations-are-read-from-every-resolvable-manifest-not-only-declared-dependencies) for the scan's trust boundary.
+
+`blocks-generate-spec` reads that key from every `node_modules` level from the spec project up to the filesystem root, resolving each import specifier to its nearest installed copy, and passes what it finds as `nativeDeclarations`.
+
 #### Unbound transferables: the `UnknownTransferable` carrier
 
 When a bare direct result's `x-blocks-transferable` tag has no known runtime binding, the native clients degrade it to a typed `UnknownTransferable` carrier, validated against the declared `__blocks` tag. A malformed descriptor raises the platform's standard decoding error: Dart `FormatException`, Swift `DecodingError`, Kotlin `TransferableException`.

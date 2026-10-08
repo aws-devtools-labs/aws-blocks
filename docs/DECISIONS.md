@@ -738,3 +738,37 @@ Two asymmetries are left standing on purpose. As of this decision `create-blocks
 ### References
 - D-010 (clauses 1–2 unchanged; clause 3 narrowed to paths this run did not create)
 - `aws/aws-cdk-cli`, `packages/aws-cdk/lib/cli/telemetry/sink/file-sink.ts` — create-then-append file sink
+
+## D-018: Native declarations are read from every resolvable manifest, not only declared dependencies
+
+**Date**: 2026-10-08
+**Authors:** varshpam
+
+### Context
+A Building Block declares its native packages and transferable bindings under an `aws-blocks.native` key in its own `package.json`. `blocks-generate-spec` finds those declarations by walking every `node_modules` level from the spec project to the filesystem root. From this repo's own test app that is 1804 installed manifests, nearly all of them hoisted transitive dependencies rather than packages the app declares. Any one of them can claim a custom tag, and once a generator consumes the catalogs the client it emits will import the declared package and hand it a descriptor that may carry a signed URL or a short-lived credential.
+
+### Decision
+The scan reads every manifest the spec project can resolve. It is not restricted to the project's own `dependencies`. Generation-time rules bound what a declaration can do, and the authoring guide below specifies them. Publisher trust is bounded by none of them.
+
+Reading every manifest costs one open per installed package — 1804 files from this repo's test app. Only a narrower scan would reduce that, which is the deferred alternative below. A manifest that will not parse is fatal only when its text names `aws-blocks`, decoding `\uXXXX` first, so one corrupt unrelated dependency cannot stop generation. A manifest that cannot be read at all is warned and skipped, because that test cannot be run on bytes the walk never obtained, and D-016 already settled that a hard throw is too blunt for a condition the project cannot fix.
+
+### Rationale
+The decision that moved declarations out of a `Scope` call and into `package.json` did so on the grounds that they *are* dependencies: build-related configuration belongs where a node or web app already declares its dependencies. Reading them with Node's own resolution follows from that framing. A direct-dependency filter would treat a declaration as something narrower than a dependency, which is the one thing the carrier decision ruled out.
+
+Resolution parity is also the property that makes the feature predictable: a block contributes its declarations by being installed where the app can import it, and nothing else. A filter would introduce a second, different notion of which packages count, so a block reachable by `import` could still be ignored by the generator — the silent-omission failure shape, which is worse than a visible one.
+
+Publisher trust is out of scope by design, not by omission. The native-client design doc states that digests establish byte identity rather than publisher trust, and places signing, attestation, revocation, SBOM, license and vulnerability policy with release controls. A dependency that can declare a binding is already a dependency whose code the app executes.
+
+The carrier decision settled where declarations live and how they are shaped; it did not discuss scan breadth directly. The breadth recorded here is the reading consistent with it.
+
+### Alternatives Considered
+- **Restrict the scan to the spec project's own `dependencies`:** deferred, not rejected. It narrows the surface to packages the app named, and is the natural follow-up if the trust posture tightens. It is a breaking change for any block that reaches an app transitively, so it wants its own decision rather than riding along here.
+- **Require an allowlist of declaring packages in the app's own `package.json`:** rejected for v1. It puts a second declaration of the same fact in a second place, and an app that forgets to update it sees a tag silently degrade to `UnknownTransferable`.
+- **Treat a cross-block package reference as an error** (a binding naming a native package another block registered): rejected. The design doc makes it an error only when no catalog declares the package, and sharing one native package across blocks is a legitimate shape.
+
+### References
+- The native client codegen design — digests establish byte identity, not publisher trust
+- The carrier decision that put declarations in `package.json` because they are build-time dependencies. Its authoring API discussion questioned the API's platform-awareness; the carrier itself is recorded only here
+- `docs/native-clients/schema-generation-guide-for-devs.md` — the authoring surface and the three bounding rules
+- `packages/core/src/scripts/read-native-declarations.ts` — the walk
+- `packages/core/src/scripts/validate-native-catalogs.ts` — tag uniqueness, built-in tag protection, ABI allowlist

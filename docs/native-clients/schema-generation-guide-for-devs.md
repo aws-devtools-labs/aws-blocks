@@ -399,6 +399,7 @@ Tags currently emitted:
 | `realtime/channel` | `RealtimeChannel<T>` (where `T` comes from `x-blocks-type-args[0]`) | `bb-realtime` |
 | `file-bucket/download` | `FileDownloadHandle` | `bb-file-bucket` |
 | `file-bucket/upload` | `FileUploadHandle` | `bb-file-bucket` |
+| `oidc/client` | `OidcClient` (`OIDCClient` on Swift) | `bb-auth-oidc` |
 
 **Codegen contract.** When `x-blocks-transferable` is present on a result schema, ignore any other properties on the schema and emit the SDK type for that tag. The platform SDK is responsible for hydrating the descriptor returned over the wire into a live handle.
 
@@ -417,7 +418,7 @@ Carries the JSON Schema for each generic type argument of the SDK type, in decla
 }
 ```
 
-Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. For non-generic transferables (`file-bucket/download`, `file-bucket/upload` today), this field is omitted.
+Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. For non-generic transferables (`file-bucket/download`, `file-bucket/upload`, `oidc/client` today), this field is omitted.
 
 ### `x-blocks-native-packages` (document root)
 
@@ -468,6 +469,67 @@ Each binding carries a stable `id`, a `kind` (only `transferable` in schema 1), 
 **Codegen contract.** A method joins its binding only by tag: `result.schema.x-blocks-transferable` equals `bindings[].tag`. The `abi` fixes the call: under `blocks-transferable-v1`, export `x` resolves to `X.fromBlocksDescriptor`. A built-in tag cannot be bound by a block.
 
 **Stability.** Both catalogs are emitted only when a block declares content.
+
+### Where the catalogs come from: `aws-blocks.native`
+
+Block authors do not edit `blocks.spec.json`. A block declares its native packages and bindings as static JSON under an `aws-blocks.native` key in its own `package.json`. The `aws-blocks` namespace is already in use for `vendorize` on the umbrella package.
+
+`packages` and `bindings` are independently optional. Field values reach the two catalogs intact, but the catalogs are not a copy: bindings sort by `id`, packages sort by identity, each object's fields are emitted in a fixed order, `identity` becomes the catalog key rather than a field of the entry, and a repeated identity is emitted once.
+
+Every binding field shown below is required, `genericArity` included — a binding that omits it fails generation with `Binding "genericArity" must be an integer (declared by <block>)`.
+
+```json
+{
+	"name": "@example/bb-iot",
+	"aws-blocks": {
+		"native": {
+			"packages": [
+				{
+					"identity": "example-iot-native",
+					"platforms": {
+						"dart": { "package": { "name": "example_iot_native", "library": "example_iot_native.dart" } }
+					}
+				}
+			],
+			"bindings": [
+				{
+					"id": "example-device-link",
+					"kind": "transferable",
+					"tag": "example-iot/device-link",
+					"package": "example-iot-native",
+					"export": "deviceLink",
+					"abi": "blocks-transferable-v1",
+					"genericArity": 0
+				}
+			]
+		}
+	}
+}
+```
+
+`blocks-generate-spec` reads the key from every `node_modules` level from the spec project up to the filesystem root, so a block contributes its declarations by being a dependency.
+
+Each import specifier resolves to its nearest installed copy, as in Node's own resolution, so a block hoisted to the project root and also installed in a nested workspace is read once. A copy inside another package's own `node_modules` is not reachable from the spec project and is not read. `schemaVersion` is not authored here — the generator stamps it.
+
+Generation aborts with `NativeCatalogError` before any file is written when a declaration is invalid, and when an installed `package.json` cannot be parsed while its text names `aws-blocks`.
+
+The last is deliberate — a manifest whose text names `aws-blocks` but will not parse cannot be ruled out as the block that owns a binding, so it is not treated as declaring nothing.
+
+Two neighbouring failures are warned and skipped instead: a `node_modules` directory or a manifest that cannot be read for a reason other than absence, which holds no metadata to rule out, and an unparseable manifest whose text never names `aws-blocks`, escapes decoded, which belongs to a package that declares nothing.
+
+Three more are skipped silently, because each is an answer rather than a failure: a level with no `node_modules`, a `node_modules` that is not a directory, and a manifest that parses to something other than an object.
+
+The manifest named in that error is always the nearest copy of its specifier: a shadowed copy is skipped before it is read.
+
+**The declarations are third-party input.** Every manifest the spec project can resolve is read, hoisted transitive dependencies included, not just the packages an app depends on directly. A package reachable only through another package's own `node_modules` is not read, and neither is anything under a dot-directory, which is where pnpm keeps its store.
+
+A dependency that declares a binding therefore participates in the generated client: it can claim a tag no other block has claimed, and it can bind a native package another block registered.
+
+Once a generator consumes the catalogs, the client it emits will import the declared package and hand it the descriptor, which may carry a signed URL or a short-lived credential.
+
+Several rules bound the surface, among them: a tag is claimed once, the four built-in tags cannot be claimed at all, and a `transferable` binding's `abi` must be `blocks-transferable-v1` — `kind` is an open enumeration, so another kind's `abi` is unchecked. Publisher trust is bounded by none of them: per the design doc, signing, attestation, revocation and vulnerability policy are separate release controls.
+
+Restricting the scan to the spec project's own `dependencies` would narrow it further and is deferred, not rejected — see [D-018](../DECISIONS.md#d-018-native-declarations-are-read-from-every-resolvable-manifest-not-only-declared-dependencies).
 
 ### What's not in the spec
 
