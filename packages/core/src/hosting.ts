@@ -868,6 +868,15 @@ export class Hosting extends Construct {
     //    `https://<customDomain>` when configured, else the CloudFront default)
     //    so a custom-domain deploy gets the right public origin and CORS allow.
     if (props.api) {
+      // Register the origin config against the backend this distribution FRONTS —
+      // the same owner resolved for the route behaviors above — not `this`. When two
+      // backends share one stack, `registerConfig(this, …)` would resolve the owner
+      // via `getBlocksRoot(this)`, which (Hosting is parented under the stack, not a
+      // backend) falls back to the ambient CURRENT_BLOCKS_STACK = the last backend
+      // created, landing both keys in the wrong backend's config registry. `props.api`
+      // names the intended backend; fall back to `this` only for a bare `{ apiUrl }`
+      // reference (e.g. a cross-stack api handle that isn't a branded backend root).
+      const configOwner = isBlocksBackendRoot(props.api) ? props.api : this;
       // BLOCKS_PUBLIC_ORIGIN: trusted public origin the app is served from. The
       // auth BB (bb-auth-oidc) reads `process.env.BLOCKS_PUBLIC_ORIGIN` to build
       // OIDC redirect_uris (config-derived, not from a forgeable request
@@ -875,14 +884,14 @@ export class Hosting extends Construct {
       // domain — where the session cookie is scoped — instead of the raw
       // execute-api host (which strips the viewer Host header). Kept a literal
       // key (like CORS_HOSTING_ORIGINS below) rather than a shared constant.
-      registerConfig(this, 'BLOCKS_PUBLIC_ORIGIN', hosting.distributionUrl);
+      registerConfig(configOwner, 'BLOCKS_PUBLIC_ORIGIN', hosting.distributionUrl);
       // CORS_HOSTING_ORIGINS: registered RAW (the unresolved CloudFront domain
       // token) — never escaped here at synth. `hosting.distributionUrl` is a CDK
       // token whose real value (Fn::GetAtt DomainName) only exists post-deploy, so
       // calling `.replace()` on it now would escape the `${Token[...]}` marker into
       // a dead literal that never resolves. The literal origin is escaped at
       // runtime by getCorsPatterns() once the token has resolved to a plain string.
-      registerConfig(this, 'CORS_HOSTING_ORIGINS', hosting.distributionUrl);
+      registerConfig(configOwner, 'CORS_HOSTING_ORIGINS', hosting.distributionUrl);
     }
 
     // ── 10. Expose resources ──────────────────────────────────────

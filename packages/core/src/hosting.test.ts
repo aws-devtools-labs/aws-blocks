@@ -11,6 +11,7 @@ import { _setSynthExistsChecker } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack, Token } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Construct } from 'constructs';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
 import { type BlocksStackApi, Hosting } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
@@ -1178,6 +1179,52 @@ describe('Hosting', () => {
         JSON.stringify(stack.resolve(value)).includes('Fn::GetAtt'),
         'must resolve to the distribution DomainName intrinsic',
       );
+    });
+
+    it('routes origin config to the backend named by props.api, not the last-created backend', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'TwoBackendHostingStack');
+
+      // Two branded backend roots sharing one stack. `A` is what the distribution
+      // fronts; `B` is created last, so it is the ambient CURRENT_BLOCKS_STACK that
+      // the previous `registerConfig(this, …)` path would have resolved to — the
+      // bug this test guards against (both keys landing in B, A getting neither).
+      const BRAND = Symbol.for('blocks:BackendRoot');
+      const makeBackend = (id: string): BlocksStackApi => {
+        const backend = new Construct(stack, id);
+        (backend as unknown as Record<symbol, unknown>)[BRAND] = true;
+        (backend as unknown as { apiUrl: string }).apiUrl =
+          `https://${id}.execute-api.us-east-1.amazonaws.com/prod/aws-blocks`;
+        return backend as unknown as BlocksStackApi;
+      };
+      const backendA = makeBackend('BackendA');
+      const backendB = makeBackend('BackendB');
+
+      const prevAmbient = (globalThis as { CURRENT_BLOCKS_STACK?: unknown }).CURRENT_BLOCKS_STACK;
+      (globalThis as { CURRENT_BLOCKS_STACK?: unknown }).CURRENT_BLOCKS_STACK = backendB;
+      try {
+        new Hosting(stack, 'WebA', { root: tmpDir, api: backendA });
+      } finally {
+        (globalThis as { CURRENT_BLOCKS_STACK?: unknown }).CURRENT_BLOCKS_STACK = prevAmbient;
+      }
+
+      const entriesOf = (owner: unknown) =>
+        (owner as Record<symbol, unknown>)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
+          | { entries: Map<string, unknown> }
+          | undefined;
+
+      const aEntries = entriesOf(backendA)?.entries;
+      assert.ok(aEntries, 'the fronted backend A has a config registry');
+      assert.ok(aEntries.has('BLOCKS_PUBLIC_ORIGIN'), 'BLOCKS_PUBLIC_ORIGIN lands in backend A');
+      assert.ok(aEntries.has('CORS_HOSTING_ORIGINS'), 'CORS_HOSTING_ORIGINS lands in backend A');
+
+      const bEntries = entriesOf(backendB)?.entries;
+      const bGotOrigin = Boolean(
+        bEntries?.has('BLOCKS_PUBLIC_ORIGIN') || bEntries?.has('CORS_HOSTING_ORIGINS'),
+      );
+      assert.strictEqual(bGotOrigin, false, 'the last-created backend B must NOT receive the origin config');
     });
 
     it('registers the raw custom-domain origin (not escaped, not anchored)', () => {
