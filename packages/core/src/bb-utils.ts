@@ -8,6 +8,7 @@
  * Not part of the main '.' export — import from '@aws-blocks/core/bb-utils'.
  */
 export { getMockDataDir } from './common/mock-data.js';
+export { assertNotDeployedMock } from './common/runtime-guard.js';
 export { API_NAMESPACE_MARKER } from './api.js';
 export { EventSourceMapping } from './lambda-handler.js';
 export { constantTimeEquals } from './common/crypto.js';

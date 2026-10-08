@@ -6,8 +6,9 @@
  * Wires to an in-process stub IdP via `OidcClientEngine`.
  */
 
+import { randomBytes } from 'node:crypto';
 import { type ScopeParent, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { assertNotDeployedMock, getMockDataDir } from '@aws-blocks/core/bb-utils';
 import { resolveCookieSecurity } from '@aws-blocks/auth-common/cookies';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AuthOIDC as AuthOIDCBase, DEFAULT_CALLBACK_PATH } from './auth-oidc.js';
@@ -38,8 +39,17 @@ export type {
 	StubUser,
 } from './types.js';
 
-/** Fixed cookie-signing secret for the mock runtime (deterministic for tests). */
-const MOCK_COOKIE_SECRET = 'blocks-mock-cookie-secret-do-not-use-in-prod';
+/**
+ * Per-process, ephemeral cookie-signing secret for the mock runtime.
+ *
+ * Generated once at module load with a CSPRNG, so it is NEVER a constant
+ * shipped on npm. It lives only in memory for the lifetime of the current
+ * local dev/test process, which is sufficient because the same process both
+ * signs and verifies cookies (see the sign+verify round-trip in the engines
+ * constructed below). It intentionally does NOT persist across restarts —
+ * the mock is for local development only.
+ */
+const MOCK_COOKIE_SECRET = randomBytes(32).toString('hex');
 
 /**
  * Credential resolver for the mock runtime's Cognito engine. `cognitoFederated`
@@ -64,6 +74,11 @@ export class AuthOIDC<
 > extends AuthOIDCBase<P> {
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
+		// Fail closed if this mock entry is somehow loaded in a deployed Lambda
+		// (i.e. the artifact was bundled without the `aws-runtime` export
+		// condition). No-op locally; see assertNotDeployedMock for details.
+		assertNotDeployedMock('bb-auth-oidc');
+
 		const sessions = new KVStore<SessionRow>(scope, `${id}-sessions`);
 
 		const cookieNamePrefix = `oidc_${mockPrefix(scope, id)}`;
