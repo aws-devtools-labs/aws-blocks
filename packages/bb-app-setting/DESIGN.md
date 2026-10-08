@@ -58,7 +58,7 @@ The 4 KB (4096 bytes) size limit applies to the **JSON-encoded** value of non-se
 
 ## Mock Implementation
 
-- Data stored in `.bb-data/settings/{scope.fullId}/value.json`.
+- Data stored in `.bb-data/settings.json` as `{ "fullId": value }` entries.
 - Data persists across dev server restarts. Customers can wipe with `rm -rf .bb-data`.
 - `get()` returns the stored value from disk, or the initial `value` from constructor if no file exists.
 - `put()` writes the value to disk immediately.
