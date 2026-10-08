@@ -60,6 +60,9 @@
     "test-apps/db-pull-typecheck",
     "scripts/agent-bench",
     "test-apps/telemetry",
+    "test-apps/mt-cloudfront-proof",
+    "test-apps/mt-apigw-proof",
+    "test-apps/mt-alb-proof",
     "test-infra"
   ],
   "scripts": {
