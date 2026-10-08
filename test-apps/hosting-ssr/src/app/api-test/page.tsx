@@ -307,7 +307,7 @@ export default function ApiTestPage() {
               const username = `apitest-${Date.now()}@example.com`;
               const password = 'TestPass123!';
               await api.authSignUp(username, password);
-              const code = await api.authGetLastCode();
+              const code = await api.authGetLastCode(username);
               if (!code) return { pass: false, observed: { step: 'authGetLastCode', got: null } };
               await api.authConfirmSignUp(username, code.code);
               const signin = await api.authSignIn(username, password);

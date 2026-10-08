@@ -13,21 +13,46 @@ const scope = new Scope('hosting-ssr-test');
 // deployed Lambda this is a no-op so codes never reach CloudWatch.
 const isDeployedLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
 
+// ── Data stores ─────────────────────────────────────────────────────────────
+
+const posts = new KVStore(scope, 'posts', {});
+
 // ── Auth ────────────────────────────────────────────────────────────────────
 
-let lastDeliveredCode: { username: string; code: string } | null = null;
+// The delivered code must survive the round trip from `codeDelivery` to the
+// later `authGetLastCode` read. A module-level variable does not: in the
+// deployed Lambda each request may be served by a different instance, so the
+// code written on one is invisible to the one that later reads it — the reader
+// sees its own `null`, or a leftover code from another user. Both surface as
+// flaky auth e2e. Persist each code in the existing shared store keyed by
+// username instead (a distinct key prefix keeps it out of the posts keyspace),
+// and require `username` on the read so a test can only ask for its own code.
+const codeKey = (username: string) => `__last-code:${username}`;
+
+// A stored record that somehow fails to parse is treated as absent (the poller
+// then times out on its own message) rather than throwing a SyntaxError out of
+// the API method. Mirrors parseStoredRecord in the comprehensive test-app.
+function parseStoredRecord<T>(key: string, raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    console.warn(`[test-app] ignoring unparseable record at "${key}" (${raw.length} bytes) — treating it as absent`);
+    return null;
+  }
+}
+
 const auth = new AuthBasic(scope, 'auth', {
   sessionDuration: 86400,
   passwordPolicy: { minLength: 6 },
   codeDelivery: async (username, code) => {
-    lastDeliveredCode = { username, code };
+    await posts.put(codeKey(username), JSON.stringify({ username, code }));
     if (!isDeployedLambda) console.log(`[AuthBasic] Code for "${username}": ${code}`);
   },
 });
 
 // ── Data stores ─────────────────────────────────────────────────────────────
 
-const posts = new KVStore(scope, 'posts', {});
 const postIndex = new KVStore(scope, 'post-index', {});
 const userPosts = new KVStore(scope, 'user-posts', {});
 
@@ -76,8 +101,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return await auth.checkAuth(context);
   },
 
-  async authGetLastCode() {
-    return lastDeliveredCode;
+  async authGetLastCode(username: string) {
+    return parseStoredRecord<{ username: string; code: string }>(codeKey(username), await posts.get(codeKey(username)));
   },
 
   // Protected

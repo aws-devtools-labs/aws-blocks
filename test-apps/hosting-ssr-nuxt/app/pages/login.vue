@@ -13,7 +13,7 @@ async function handleSignUp() {
   error.value = '';
   try {
     await api.authSignUp(username.value, password.value);
-    const codeInfo = await api.authGetLastCode();
+    const codeInfo = await api.authGetLastCode(username.value);
     if (codeInfo) code.value = codeInfo.code;
     showConfirm.value = true;
     info.value = 'Account created! Confirm with the verification code.';

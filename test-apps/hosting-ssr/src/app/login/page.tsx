@@ -15,7 +15,7 @@ export default function LoginPage() {
     setError('');
     try {
       await api.authSignUp(username, password);
-      const codeInfo = await api.authGetLastCode();
+      const codeInfo = await api.authGetLastCode(username);
       if (codeInfo) setCode(codeInfo.code);
       setShowConfirm(true);
       setInfo('Account created! Confirm with the verification code.');

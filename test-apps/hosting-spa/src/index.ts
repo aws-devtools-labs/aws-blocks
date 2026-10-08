@@ -63,7 +63,7 @@ window.doSignUp = async () => {
     await api.authSignUp(username, password);
     pendingSignUpUsername = username;
     // Auto-retrieve code (test shortcut)
-    const codeInfo = await api.authGetLastCode();
+    const codeInfo = await api.authGetLastCode(username);
     if (codeInfo) ($('confirm-code') as HTMLInputElement).value = codeInfo.code;
     show('confirm-section');
     setText('auth-info', 'Account created! Confirm with the verification code.');
