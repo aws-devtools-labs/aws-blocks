@@ -1814,6 +1814,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { jobIds };
   },
 
+  async asyncJobSubmitThenMutate(key: string, value: string, batch: boolean) {
+    const payload = { key, value };
+    const result = batch
+      ? await testJob.submitBatch([payload])
+      : await testJob.submit(payload);
+    payload.value = 'changed-after-submit';
+    return result;
+  },
+
   async asyncJobGetResult(key: string) {
     const raw = await jobResults.get(`job:${key}`);
     return raw ? JSON.parse(raw) : null;
