@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { negotiate, requiredCapabilities } from './negotiate.js';
-import type { CapabilityPlan, FrontDoorAdapter, CapabilityId, SupportTier } from './types.js';
+import { requiredCapabilities } from './negotiate.js';
+import type { CapabilityPlan } from './types.js';
 
 const planWith = (over: Partial<CapabilityPlan> = {}): CapabilityPlan => ({
   origins: [{ id: 'blocks-s3', kind: 'static' }],
@@ -9,12 +9,6 @@ const planWith = (over: Partial<CapabilityPlan> = {}): CapabilityPlan => ({
   policies: { spaFallback: false, hasServer: false, skewEnabled: false },
   release: { buildId: 'b1' },
   ...over,
-});
-
-const adapterWith = (tiers: Partial<Record<CapabilityId, SupportTier>>): FrontDoorAdapter => ({
-  service: 'test',
-  supports: (c) => tiers[c] ?? 'supported',
-  render: () => ({ url: 'http://x' }),
 });
 
 describe('requiredCapabilities', () => {
@@ -62,40 +56,5 @@ describe('requiredCapabilities', () => {
   it('requires nothing backend-related when there is no backend (cross-origin API)', () => {
     const req = requiredCapabilities(planWith());
     assert.ok(!req.has('ProxySameOriginApi') && !req.has('RouteApiNamespace'));
-  });
-});
-
-describe('negotiate', () => {
-  it('errors on a required + unsupported capability', () => {
-    const { errors } = negotiate(planWith(), adapterWith({ ServeStaticAsset: 'unsupported' }));
-    assert.equal(errors.length, 1);
-    assert.equal(errors[0]?.capability, 'ServeStaticAsset');
-  });
-
-  it('errors on a required + unsupported capability without a waiver', () => {
-    const plan = planWith({ policies: { spaFallback: false, hasServer: false, skewEnabled: true } });
-    const { errors } = negotiate(plan, adapterWith({ PinSession: 'unsupported' }));
-    assert.ok(errors.some((e) => e.capability === 'PinSession'));
-  });
-
-  it('warns (not errors) on an unsupported capability the app waived via degrade', () => {
-    const plan = planWith({ policies: { spaFallback: false, hasServer: false, skewEnabled: true } });
-    const { errors, warnings } = negotiate(plan, adapterWith({ PinSession: 'unsupported' }), { degrade: ['PinSession'] });
-    assert.equal(errors.length, 0);
-    assert.ok(warnings.some((w) => w.capability === 'PinSession'));
-  });
-
-  it('is silent for a fully supported adapter', () => {
-    const { errors, warnings } = negotiate(planWith(), adapterWith({ RouteRequest: 'supported' }));
-    assert.equal(errors.length, 0);
-    assert.equal(warnings.length, 0);
-  });
-
-  it('errors when a multi-namespace plan hits a single-origin door (RouteApiNamespace unsupported)', () => {
-    const plan = planWith({
-      backend: { origins: [{ namespace: 'notes', ingress: { kind: 'url', url: 'https://x/aws-blocks/api' } }] },
-    });
-    const { errors } = negotiate(plan, adapterWith({ RouteApiNamespace: 'unsupported' }));
-    assert.ok(errors.some((e) => e.capability === 'RouteApiNamespace'));
   });
 });

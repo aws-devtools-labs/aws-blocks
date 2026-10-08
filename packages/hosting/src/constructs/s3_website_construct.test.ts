@@ -7,7 +7,8 @@ import { App, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { CapabilityPlan } from '../plan/types.js';
 import { S3WebsiteConstruct } from './s3_website_construct.js';
-import { S3WebsiteAdapter } from './s3_website_adapter.js';
+import { runFrontDoor } from './door_hooks.js';
+import { s3WebsiteDoor } from './s3_website_door.js';
 
 const staticDir = mkdtempSync(join(tmpdir(), 's3site-'));
 writeFileSync(join(staticDir, 'index.html'), '<!doctype html><title>x</title>');
@@ -49,18 +50,17 @@ describe('S3WebsiteConstruct — static/SPA', () => {
   });
 });
 
-describe('S3WebsiteAdapter — capability matrix + negotiation', () => {
-  const a = new S3WebsiteAdapter();
-  it('is the s3-website service; dynamic + TLS unsupported', () => {
-    assert.equal(a.service, 's3-website');
-    assert.equal(a.supports('ServeStaticAsset'), 'supported');
-    assert.equal(a.supports('CustomDomainTls'), 'unsupported');
-    assert.equal(a.supports('RunServerRender'), 'unsupported');
+describe('s3WebsiteDoor — hooks + check', () => {
+  it('is the s3-website service and defines only the core hooks (no feature hooks)', () => {
+    assert.equal(s3WebsiteDoor.service, 's3-website');
+    for (const h of ['sameOriginApi', 'customDomain', 'waf', 'restrictGeo', 'accessLogs', 'alarms'] as const) {
+      assert.equal(s3WebsiteDoor[h], undefined, `${h} must be absent`);
+    }
   });
   it('renders a pure-static SPA plan (no atomicity opt-in needed)', () => {
     const app = new App();
     const stack = new Stack(app, 'S2', { env: { account: '111111111111', region: 'us-west-2' } });
-    assert.ok(new S3WebsiteAdapter().render(stack, spaPlan, { staticDir }).url);
+    assert.ok(runFrontDoor(stack, spaPlan, s3WebsiteDoor, { staticDir }).handle.url);
   });
   it('rejects an SSR plan', () => {
     const app = new App();
@@ -73,6 +73,6 @@ describe('S3WebsiteAdapter — capability matrix + negotiation', () => {
       ],
       policies: { ...spaPlan.policies, hasServer: true },
     };
-    assert.throws(() => new S3WebsiteAdapter().render(stack, ssrPlan, { staticDir }), /RunServerRender/);
+    assert.throws(() => runFrontDoor(stack, ssrPlan, s3WebsiteDoor, { staticDir }), /RunServerRender/);
   });
 });

@@ -2,15 +2,15 @@
  * Service-agnostic hosting contracts — the Ports & Adapters seam.
  *
  * The CORE computes a {@link CapabilityPlan} (what to serve) from a
- * `DeployManifest`; a {@link FrontDoorAdapter} renders that plan onto a concrete
- * service (CloudFront, ALB, API Gateway, …). Nothing in this file imports
+ * `DeployManifest`; a front door (defined with build hooks — see
+ * `constructs/door_hooks.ts`) renders that plan onto a concrete service
+ * (CloudFront, ALB, API Gateway, …). Nothing in this file imports
  * `aws-cdk-lib` or any service SDK — it is pure data + interfaces, so the plan
  * layer stays free of any single front door's assumptions.
  *
  * Types only. Behaviour lives in `route-table.ts` / `capability-plan.ts` (core)
- * and in each adapter (renderers).
+ * and in each front door (renderers).
  */
-import type { Construct } from 'constructs';
 import type { RouteEntry } from './route-table.js';
 
 export type { RouteEntry, RouteKind } from './route-table.js';
@@ -170,10 +170,10 @@ export type CapabilityPlan = {
 // ── Capability negotiation (the conscious-degradation contract) ───────────────
 
 /**
- * A hosting capability — one thing a front door may be asked to do. A service
- * adapter declares, per capability, how well it supports it (its
- * {@link SupportTier}). The negotiator uses these declarations to fail or warn
- * at synth, so degradation is never silent.
+ * A hosting capability — one thing a front door may be asked to do. A door
+ * delivers a capability by DEFINING its build hook, or by REPORTING it from
+ * `route()` (see `constructs/door_hooks.ts`). The check uses that to fail or
+ * warn at synth, so degradation is never silent.
  */
 export type CapabilityId =
   | 'RouteRequest'
@@ -195,48 +195,12 @@ export type CapabilityId =
   | 'Redirect'
   | 'Alarms';
 
-/**
- * Whether a door can deliver a capability. A fact about the door, not a
- * judgment about the app:
- *   - `supported`   — the door delivers the capability's behavior, by any
- *                     mechanism (a CloudFront Function or ALB listener rules both
- *                     count). A demand passes silently.
- *   - `unsupported` — the door can't deliver it. A demand fails synth unless the
- *                     app waives that capability via `degrade`, or relaxes the
- *                     whole check via `negotiation: 'warn' | 'off'`.
- *
- * What the app can live without is the app's decision (`degrade`), so the door
- * no longer grades "reduced" support.
- */
-export type SupportTier = 'supported' | 'unsupported';
-
 /** Per-deploy context an adapter needs beyond the plan (CDK handles, scope, etc.). */
 export type AdapterContext = {
   /** The private assets bucket name/handle is passed via the concrete adapter's own props; */
   /** this context carries only service-neutral flags added over time. */
   readonly [key: string]: unknown;
 };
-
-/** What a front-door adapter returns after rendering a plan. */
-export type FrontDoorResult = {
-  /** The public URL the deploy is reachable at. */
-  url: string;
-};
-
-/**
- * The seam every front-door service implements. An adapter takes a
- * {@link CapabilityPlan} and materializes the service (CloudFront distribution,
- * ALB + listener rules, API Gateway, …), and declares its per-capability
- * {@link SupportTier} so the negotiator can enforce conscious degradation.
- */
-export interface FrontDoorAdapter {
-  /** Stable id for diagnostics/presets (e.g. `cloudfront`, `alb`, `api-gateway`). */
-  readonly service: string;
-  /** Declare how well this service supports a capability. */
-  supports(capability: CapabilityId): SupportTier;
-  /** Materialize the service for the given plan. */
-  render(scope: Construct, plan: CapabilityPlan, ctx: AdapterContext): FrontDoorResult;
-}
 
 // ── The front-door graph (composition model) ──────────────────────────────────
 //

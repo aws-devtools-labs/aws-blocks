@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { App, CfnResource, Stack } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import type { AdapterContext, CapabilityId, CapabilityPlan, SupportTier } from '../plan/types.js';
+import type { CapabilityPlan } from '../plan/types.js';
 import { renderCustomDoor } from './custom_door.js';
-import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
+import { defineFrontDoor, type RouteReport } from './door_hooks.js';
 
 const staticPlan: CapabilityPlan = {
 	origins: [{ id: 'blocks-s3', kind: 'static' }],
@@ -13,106 +13,102 @@ const staticPlan: CapabilityPlan = {
 	release: { buildId: 'testbuild' },
 };
 
-// A plan that DEMANDS RunServerRender (hasServer → the negotiator requires it).
-const ssrPlan: CapabilityPlan = {
+// A plan that DEMANDS RunServerRender + AtomicRelease (hasServer) and a WAF.
+const ssrWafPlan: CapabilityPlan = {
 	origins: [
 		{ id: 'blocks-s3', kind: 'static' },
 		{ id: 'blocks-server', kind: 'server' },
 	],
 	routes: { entries: [{ pattern: '/*', kind: 'server' }], redirects: [], headers: [] },
-	policies: { spaFallback: false, hasServer: true, skewEnabled: false },
+	policies: { spaFallback: false, hasServer: true, skewEnabled: false, wafEnabled: true },
 	release: { buildId: 'testbuild' },
 };
 
-// The baseline an SSR-capable door supports as `supported`; each test overrides the
-// contested capability via the `tiers` ctor arg. (An SSR plan demands
-// RunServerRender AND AtomicRelease — the build-id cutover — so both are here.)
-const CORE_BASELINE: ReadonlySet<CapabilityId> = new Set<CapabilityId>([
-	'RouteRequest',
-	'ServeStaticAsset',
-	'RunServerRender',
-	'AtomicRelease',
-]);
-
-/** A minimal customer-authored door: declares tiers, provisions one resource. */
-class FakeDoor implements FrontDoorLayerAdapter {
-	readonly service = 'fake-edge';
-	rendered = false;
-	constructor(private readonly tiers: Partial<Record<CapabilityId, SupportTier>> = {}) {}
-	supports(cap: CapabilityId): SupportTier {
-		if (cap in this.tiers) return this.tiers[cap] as SupportTier;
-		return CORE_BASELINE.has(cap) ? 'supported' : 'unsupported';
-	}
-	renderLayer(scope: Construct, _plan: CapabilityPlan, _ctx: AdapterContext): LayerHandle {
-		this.rendered = true;
-		new CfnResource(scope, 'FakeDoorRes', { type: 'AWS::CloudFormation::WaitConditionHandle' });
-		return { url: 'https://fake.example', originHandle: { domainName: 'fake.example', protocol: 'https' } };
-	}
-}
+/** A minimal customer-authored door. `report` is what route() says it built; `withWaf` adds the waf hook. */
+const fakeDoor = (opts: { report?: RouteReport; withWaf?: boolean } = {}) => {
+	const calls: string[] = [];
+	const door = defineFrontDoor<Construct>({
+		service: 'fake-edge',
+		create(scope) {
+			calls.push('create');
+			return new CfnResource(scope, 'FakeDoorRes', { type: 'AWS::CloudFormation::WaitConditionHandle' });
+		},
+		route() {
+			calls.push('route');
+			return opts.report ?? { ssr: 'buffered', atomicRelease: true };
+		},
+		handle() {
+			calls.push('handle');
+			return { url: 'https://fake.example', originHandle: { domainName: 'fake.example', protocol: 'https' } };
+		},
+		...(opts.withWaf
+			? {
+					waf: () => {
+						calls.push('waf');
+						return 'regional' as const;
+					},
+				}
+			: {}),
+	});
+	return { door, calls };
+};
 
 const stack = () => new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
 
 describe('renderCustomDoor', () => {
-	it('renders the adapter and returns its handle when every demand is met', () => {
-		const door = new FakeDoor();
-		const handle = renderCustomDoor(stack(), staticPlan, door, {});
-		assert.equal(door.rendered, true);
+	it('runs the hooks in order and returns the handle when every demand is met', () => {
+		const { door, calls } = fakeDoor({ withWaf: true });
+		const handle = renderCustomDoor(stack(), ssrWafPlan, door, {});
+		assert.deepEqual(calls, ['create', 'route', 'waf', 'handle']);
 		assert.equal(handle.url, 'https://fake.example');
 		assert.equal(handle.originHandle.domainName, 'fake.example');
 	});
 
-	it('fails at synth (does not render) when a demanded capability is unsupported', () => {
-		const door = new FakeDoor({ RunServerRender: 'unsupported' });
+	it('does not call a feature hook the app did not demand', () => {
+		const { door, calls } = fakeDoor({ withWaf: true });
+		renderCustomDoor(stack(), staticPlan, door, {});
+		assert.deepEqual(calls, ['create', 'route', 'handle']);
+	});
+
+	it('fails BEFORE building when a demanded capability has no hook', () => {
+		const { door, calls } = fakeDoor({ withWaf: false });
+		assert.throws(() => renderCustomDoor(stack(), ssrWafPlan, door, {}), /FilterRequests/);
+		assert.deepEqual(calls, [], 'nothing is built when a hook is missing');
+	});
+
+	it('fails AFTER route when route() does not report a demanded capability', () => {
+		const { door, calls } = fakeDoor({ withWaf: true, report: { atomicRelease: true } });
 		assert.throws(
-			() => renderCustomDoor(stack(), ssrPlan, door, {}),
-			/RunServerRender|cannot serve/,
-			'a demanded, unsupported capability must throw at synth',
+			() => renderCustomDoor(stack(), ssrWafPlan, door, {}, { negotiation: 'strict' }),
+			/RunServerRender/,
 		);
-		assert.equal(door.rendered, false, 'the adapter must not build anything when negotiation fails');
+		assert.ok(!calls.includes('handle'), 'handle is not reached on a failed report check');
 	});
 
-	it('fails when a demanded unsupported capability is NOT waived via degrade', () => {
-		const door = new FakeDoor({ RunServerRender: 'unsupported' });
-		assert.throws(() => renderCustomDoor(stack(), ssrPlan, door, {}), /RunServerRender/);
-		assert.equal(door.rendered, false);
-	});
-
-	it('renders when an unsupported capability is explicitly waived via degrade', () => {
-		const door = new FakeDoor({ RunServerRender: 'unsupported' });
-		const handle = renderCustomDoor(stack(), ssrPlan, door, {}, { degrade: ['RunServerRender'] });
-		assert.equal(door.rendered, true);
+	it('builds when a missing capability is explicitly waived via degrade', () => {
+		const { door, calls } = fakeDoor({ withWaf: false });
+		const handle = renderCustomDoor(stack(), ssrWafPlan, door, {}, { degrade: ['FilterRequests'] });
+		assert.deepEqual(calls, ['create', 'route', 'handle']);
 		assert.equal(handle.url, 'https://fake.example');
 	});
 
-	it('renders when the door fully supports the demanded capability', () => {
-		const door = new FakeDoor({ RunServerRender: 'supported' });
-		renderCustomDoor(stack(), ssrPlan, door, {});
-		assert.equal(door.rendered, true);
+	it("negotiation: 'warn' builds despite an unmet demand", () => {
+		const { door, calls } = fakeDoor({ withWaf: false, report: {} });
+		renderCustomDoor(stack(), ssrWafPlan, door, {}, { negotiation: 'warn' });
+		assert.deepEqual(calls, ['create', 'route', 'handle']);
 	});
 
-	it("negotiation: 'warn' renders despite an unsupported demanded capability", () => {
-		const door = new FakeDoor({ RunServerRender: 'unsupported' });
-		const handle = renderCustomDoor(stack(), ssrPlan, door, {}, { negotiation: 'warn' });
-		assert.equal(door.rendered, true);
-		assert.equal(handle.url, 'https://fake.example');
+	it("negotiation: 'off' builds without checking, still calling the hooks that exist", () => {
+		const { door, calls } = fakeDoor({ withWaf: true, report: {} });
+		renderCustomDoor(stack(), ssrWafPlan, door, {}, { negotiation: 'off' });
+		assert.deepEqual(calls, ['create', 'route', 'waf', 'handle']);
 	});
 
-	it("negotiation: 'off' renders without consulting supports() at all", () => {
-		const door = new FakeDoor({ RunServerRender: 'unsupported' });
-		let consulted = 0;
-		const original = door.supports.bind(door);
-		door.supports = (cap: CapabilityId) => {
-			consulted++;
-			return original(cap);
-		};
-		renderCustomDoor(stack(), ssrPlan, door, {}, { negotiation: 'off' });
-		assert.equal(door.rendered, true);
-		assert.equal(consulted, 0, "'off' must skip negotiation entirely");
-	});
-
-	it("negotiation: 'strict' (explicit) behaves like the default", () => {
-		const door = new FakeDoor({ RunServerRender: 'unsupported' });
-		assert.throws(() => renderCustomDoor(stack(), ssrPlan, door, {}, { negotiation: 'strict' }), /RunServerRender/);
-		assert.equal(door.rendered, false);
+	it('rejects an unknown negotiation mode', () => {
+		const { door } = fakeDoor();
+		assert.throws(
+			() => renderCustomDoor(stack(), staticPlan, door, {}, { negotiation: 'loose' as never }),
+			/Unknown negotiation mode/,
+		);
 	});
 });

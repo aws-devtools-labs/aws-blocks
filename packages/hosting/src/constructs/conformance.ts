@@ -1,37 +1,50 @@
 /**
- * Conformance test kit for a custom {@link FrontDoorLayerAdapter}.
+ * Conformance test kit for a custom front door defined with hooks
+ * ({@link FrontDoorHooks}).
  *
- * `supports()` is self-declared and TRUSTED by the negotiator — the framework
- * can't verify at synth that a door actually builds what it claims, so an
- * over-declaring door would pass synth and break at runtime. This kit closes
- * that gap in the AUTHOR'S OWN tests (it is NOT a synth-time gate): call it from
- * a `node:test` (or any runner) and it throws with an actionable message if the
- * adapter is internally inconsistent.
+ * Under the hooks model a door's support is read off its hooks, so a door can't
+ * CLAIM a capability it doesn't build — but it can still be malformed (a hook
+ * that isn't a function, a `route` report with a bogus value, a `handle` that
+ * returns no attach point). This kit catches that in the AUTHOR'S OWN tests (it
+ * is NOT a synth-time gate): call it from a `node:test` (or any runner) and it
+ * throws with an actionable message if the door is internally inconsistent.
  *
- * It checks three things:
- *   1. `supports()` is TOTAL — returns a valid {@link SupportTier} for every
- *      {@link CapabilityId} (no throw, no bogus value). A door that forgets a
- *      capability is caught here, not at a customer's synth.
- *   2. The adapter can serve the given `plan` — negotiation against its own
- *      declaration produces no errors (it doesn't demand-fail the plan it's
- *      handed). Defaults to a static-only baseline every door must serve; pass a
- *      richer `plan` (SSR, backend, …) to assert the capabilities your door adds.
- *   3. `renderLayer` runs without throwing on that plan and returns a well-formed
- *      {@link LayerHandle}: a non-empty `originHandle.domainName`, a valid
- *      `protocol`, and a public `url` on the (root) layer.
+ * It checks four things:
+ *   1. Shape — `service` is a non-empty string; `create` / `route` / `handle`
+ *      are functions; every optional feature hook that is present is a function.
+ *   2. The door serves the given `plan` — {@link runFrontDoor} in `strict` mode
+ *      succeeds (every demanded capability has its hook or is reported).
+ *      Defaults to a static-only baseline every door must serve; pass a richer
+ *      `plan` (SSR, backend, …) to assert the capabilities your door adds.
+ *   3. The `route` report is well-formed (`ssr` ∈ `false | 'buffered' |
+ *      'streaming'`, every other field a boolean).
+ *   4. `handle` returns a well-formed {@link LayerHandle}: a non-empty
+ *      `originHandle.domainName`, a valid `protocol`, and a public `url`.
  *
  * @throws Error (not tied to any test runner) on the first failed check.
  */
 import { App, Stack } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { CAPABILITY_DEMAND, formatNegotiationErrors, negotiate } from '../plan/negotiate.js';
-import type { AdapterContext, CapabilityId, CapabilityPlan, SupportTier } from '../plan/types.js';
-import type { FrontDoorLayerAdapter } from './layer.js';
+import type { AdapterContext, CapabilityId, CapabilityPlan } from '../plan/types.js';
+import { type FeatureHookName, type FrontDoorHooks, type FrontDoorRun, type RouteReport, runFrontDoor } from './door_hooks.js';
 
-const VALID_TIERS: ReadonlySet<SupportTier> = new Set<SupportTier>(['supported', 'unsupported']);
-
-/** Every capability in the vocabulary (the demand registry is the source of truth). */
-const ALL_CAPABILITIES = Object.keys(CAPABILITY_DEMAND) as CapabilityId[];
+const FEATURE_HOOKS: readonly FeatureHookName[] = [
+	'sameOriginApi',
+	'customDomain',
+	'waf',
+	'restrictGeo',
+	'accessLogs',
+	'alarms',
+];
+const REPORT_FLAGS: readonly (keyof RouteReport)[] = [
+	'images',
+	'redirects',
+	'errorPages',
+	'cache',
+	'responseHeaders',
+	'atomicRelease',
+	'pinSession',
+];
 
 /** The baseline plan every front door must serve: route + static assets, nothing else. */
 const STATIC_BASELINE: CapabilityPlan = {
@@ -41,77 +54,82 @@ const STATIC_BASELINE: CapabilityPlan = {
 	release: { buildId: 'conformance' },
 };
 
-/** Options for {@link assertAdapterConformance}. */
-export type AdapterConformanceOptions = {
+/** Options for {@link assertDoorConformance}. */
+export type DoorConformanceOptions<TCtx extends AdapterContext = AdapterContext> = {
 	/** Scope to render under (a throwaway App/Stack is created when omitted). */
 	scope?: Construct;
 	/** Plan to exercise — defaults to a static-only baseline. Pass a richer one to cover more. */
 	plan?: CapabilityPlan;
-	/** Render context the adapter reads (bucket, compute, …). Defaults to `{}`. */
-	ctx?: AdapterContext;
-	/** Capabilities waived (deploy without them) for the negotiation check. */
+	/** Render context the door reads (bucket, compute, …). Defaults to `{}`. */
+	ctx?: TCtx;
+	/** Capabilities waived (deploy without them) for the check. */
 	degrade?: CapabilityId[];
 };
 
 /**
- * Assert a custom {@link FrontDoorLayerAdapter} is internally consistent. Throws
- * on the first failure; returns normally when the adapter conforms.
+ * Assert a custom front door is internally consistent. Throws on the first
+ * failure; returns the {@link FrontDoorRun} (what was delivered) when it conforms.
  */
-export function assertAdapterConformance(
-	adapter: FrontDoorLayerAdapter,
-	options: AdapterConformanceOptions = {},
-): void {
-	const label = `Adapter '${adapter.service ?? '(missing service id)'}'`;
-	if (!adapter.service || typeof adapter.service !== 'string') {
-		throw new Error(`${label}: \`service\` must be a non-empty string (it is the negotiator/diagnostics id).`);
-	}
+export function assertDoorConformance<TDoor, TCtx extends AdapterContext>(
+	door: FrontDoorHooks<TDoor, TCtx>,
+	options: DoorConformanceOptions<TCtx> = {},
+): FrontDoorRun<TDoor> {
+	const label = `Door '${door?.service ?? '(missing service id)'}'`;
 
-	// 1. supports() is total over the capability vocabulary.
-	for (const capability of ALL_CAPABILITIES) {
-		let tier: SupportTier;
-		try {
-			tier = adapter.supports(capability);
-		} catch (err) {
-			throw new Error(
-				`${label}: supports('${capability}') threw — it must return a SupportTier for every capability. (${err})`,
-			);
+	// 1. Shape.
+	if (!door || typeof door.service !== 'string' || door.service.length === 0) {
+		throw new Error(`${label}: \`service\` must be a non-empty string (it is the diagnostics id).`);
+	}
+	for (const name of ['create', 'route', 'handle'] as const) {
+		if (typeof door[name] !== 'function') {
+			throw new Error(`${label}: the required \`${name}\` hook must be a function.`);
 		}
-		if (!VALID_TIERS.has(tier)) {
+	}
+	for (const name of FEATURE_HOOKS) {
+		if (door[name] !== undefined && typeof door[name] !== 'function') {
 			throw new Error(
-				`${label}: supports('${capability}') returned ${JSON.stringify(tier)} — expected 'supported' | 'unsupported'.`,
+				`${label}: \`${name}\` must be a function or omitted — defining it is what declares support.`,
 			);
 		}
 	}
 
+	// 2. The door serves the plan it is handed (strict check + build).
 	const plan = options.plan ?? STATIC_BASELINE;
-
-	// 2. The adapter can serve the plan it is handed (declaration ↔ demand).
-	const result = negotiate(plan, adapter, { degrade: options.degrade });
-	if (result.errors.length > 0) {
-		throw new Error(
-			`${label}: does not serve the conformance plan.\n${formatNegotiationErrors(adapter.service, result)}`,
-		);
-	}
-
-	// 3. renderLayer builds without throwing and returns a well-formed handle.
 	const scope =
 		options.scope ??
-		new Stack(new App(), 'AdapterConformanceStack', { env: { account: '111111111111', region: 'us-east-1' } });
-	let handle: ReturnType<FrontDoorLayerAdapter['renderLayer']>;
+		new Stack(new App(), 'DoorConformanceStack', { env: { account: '111111111111', region: 'us-east-1' } });
+	let run: FrontDoorRun<TDoor>;
 	try {
-		handle = adapter.renderLayer(scope, plan, options.ctx ?? {});
+		run = runFrontDoor(scope, plan, door, options.ctx ?? ({} as TCtx), {
+			degrade: options.degrade,
+			negotiation: 'strict',
+		});
 	} catch (err) {
+		throw new Error(`${label}: does not serve the conformance plan. (${err instanceof Error ? err.message : err})`);
+	}
+
+	// 3. The route report is well-formed.
+	const report = run.report;
+	if (report.ssr !== undefined && report.ssr !== false && report.ssr !== 'buffered' && report.ssr !== 'streaming') {
 		throw new Error(
-			`${label}: renderLayer threw on the conformance plan — it must build the door for a plan it declares it supports. (${err})`,
+			`${label}: route() reported ssr = ${JSON.stringify(report.ssr)} — expected false | 'buffered' | 'streaming'.`,
 		);
 	}
+	for (const flag of REPORT_FLAGS) {
+		if (report[flag] !== undefined && typeof report[flag] !== 'boolean') {
+			throw new Error(`${label}: route() reported ${flag} = ${JSON.stringify(report[flag])} — expected a boolean.`);
+		}
+	}
+
+	// 4. handle returns a well-formed attach point + public URL.
+	const handle = run.handle;
 	if (!handle || typeof handle !== 'object') {
-		throw new Error(`${label}: renderLayer must return a LayerHandle.`);
+		throw new Error(`${label}: handle() must return a LayerHandle.`);
 	}
 	const originHandle = handle.originHandle;
 	if (!originHandle || typeof originHandle.domainName !== 'string' || originHandle.domainName.length === 0) {
 		throw new Error(
-			`${label}: renderLayer must return an \`originHandle\` with a non-empty \`domainName\` (the attach point for nesting).`,
+			`${label}: handle() must return an \`originHandle\` with a non-empty \`domainName\` (the attach point for nesting).`,
 		);
 	}
 	if (originHandle.protocol !== 'http' && originHandle.protocol !== 'https') {
@@ -120,8 +138,7 @@ export function assertAdapterConformance(
 		);
 	}
 	if (typeof handle.url !== 'string' || handle.url.length === 0) {
-		throw new Error(
-			`${label}: renderLayer must set a public \`url\` on the root layer (the deploy's public address).`,
-		);
+		throw new Error(`${label}: handle() must set a public \`url\` on the root layer (the deploy's public address).`);
 	}
+	return run;
 }

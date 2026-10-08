@@ -20,8 +20,8 @@
  *     an `HTTP_PROXY` integration straight to the backend (same-origin; no
  *     forwarder Lambda).
  *
- * Trade-offs (declared `unsupported` on {@link ApiGatewayAdapter},
- * enforced by the negotiator): no global edge cache, no per-route response
+ * Trade-offs (absent from `apiGatewayDoor`'s hooks and `route()` report,
+ * enforced by the check): no global edge cache, no per-route response
  * headers, no skew-pin, buffered SSR only (no streaming), ~10 MB payload cap,
  * ~29 s integration timeout.
  */

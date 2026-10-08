@@ -13,23 +13,20 @@ import type {
 } from '@aws-blocks/hosting/constructs';
 import { detectFramework, type FrameworkAdapterFn, getAdapter, normalizeBasePath } from '@aws-blocks/hosting/adapters';
 import {
-  createSecurityHeadersPolicy,
+  cloudFrontEdgeDoor,
   generateBuildId,
   HostingConstruct,
   type HostingConstructProps,
   type HostingDomainConfig,
   type HostingWafConfig,
+  runFrontDoor,
   type SkewProtectionConfig,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import {
   AllowedMethods,
-  CacheCookieBehavior,
-  CacheHeaderBehavior,
   CachePolicy,
-  CacheQueryStringBehavior,
-  Distribution,
-  OriginProtocolPolicy,
+  type Distribution,
   OriginRequestPolicy,
   ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
@@ -1087,54 +1084,29 @@ export class Hosting extends Construct {
     // name. CloudFront's single origin is that ALB; the internal edge → ALB hop
     // is always HTTP.
     const albDns = hosting.loadBalancerDnsName;
-    if (!albDns) {
+    if (!albDns || !hosting.capabilityPlan) {
       throw new Error('Composed CF → ALB door: the ALB router was not provisioned by the hosting construct.');
     }
-    const origin = new HttpOrigin(albDns, { protocolPolicy: OriginProtocolPolicy.HTTP_ONLY });
 
-    // Cache policy that HONORS the ALB's origin Cache-Control (defaultTtl 0): the
-    // asset-proxy stamps `immutable` on hashed static assets (edge-cached) and
-    // `no-cache` on HTML/API (not cached). Cookies are forwarded and keyed so
-    // cookie auth still works through the edge; query strings are forwarded.
-    const cachePolicy = new CachePolicy(this, 'CfAlbCache', {
-      defaultTtl: cdk.Duration.seconds(0),
-      minTtl: cdk.Duration.seconds(0),
-      maxTtl: cdk.Duration.days(365),
-      cookieBehavior: CacheCookieBehavior.all(),
-      headerBehavior: CacheHeaderBehavior.none(),
-      queryStringBehavior: CacheQueryStringBehavior.all(),
-      enableAcceptEncodingGzip: true,
-      enableAcceptEncodingBrotli: true,
-    });
-
-    // Optional edge WAF via a BYO CLOUDFRONT-scoped WebACL ARN (the ALB carries
-    // its own regional WAF separately). Building a WebACL and custom-domain/TLS on
-    // the composed edge are follow-ons — a demanding app should use the default
-    // CloudFront door until then.
-    const webAclId = props.waf?.webAclArn;
-
-    // Stamp HSTS / X-Frame-Options / X-Content-Type-Options at the edge, exactly
-    // as the default CloudFront door does — the ALB can't inject per-response
-    // security headers, so CloudFront (still the edge here) owns them, keeping
-    // the composed door at parity with the standard door.
-    const securityHeaders = createSecurityHeadersPolicy(this, 'CfOverAlbSecurityHeaders', {
-      contentSecurityPolicy: props.contentSecurityPolicy,
-    });
-
-    const distribution = new Distribution(this, 'CfOverAlb', {
-      comment: 'Blocks composed CF → ALB edge (single origin: the ALB router)',
-      defaultBehavior: {
-        origin,
-        allowedMethods: AllowedMethods.ALLOW_ALL,
-        cachePolicy,
-        originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        responseHeadersPolicy: securityHeaders,
+    // The edge is a hook-defined door (`cloudFrontEdgeDoor`) whose `'/*'` child
+    // is the ALB router. The router was already checked against the app's full
+    // demand, so the edge is checked only for what IT owns: a BYO
+    // CLOUDFRONT-scoped web ACL (`waf` hook) when the app supplies one.
+    const webAclArn = props.waf?.webAclArn;
+    const run = runFrontDoor(
+      this,
+      hosting.capabilityPlan,
+      cloudFrontEdgeDoor,
+      { contentSecurityPolicy: props.contentSecurityPolicy, webAclArn },
+      {
+        children: new Map([['/*', { originHandle: { domainName: albDns, protocol: 'http' as const } }]]),
+        required: webAclArn ? ['FilterRequests'] : [],
+        errorCode: 'CapabilityNotSupportedError',
       },
-      webAclId,
-    });
-
-    return { distribution, url: `https://${distribution.distributionDomainName}` };
+    );
+    const distribution = run.door.distribution;
+    if (!distribution) throw new Error('Composed CF → ALB door: the edge did not build its distribution.');
+    return { distribution, url: run.handle.url ?? `https://${distribution.distributionDomainName}` };
   }
 
   /**

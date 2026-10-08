@@ -7,10 +7,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { config, secret } from '@aws-blocks/hosting';
-import { _setSynthExistsChecker } from '@aws-blocks/hosting/constructs';
+import { _setSynthExistsChecker, type CustomDoorContext, defineFrontDoor } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack, Token } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import type { Construct } from 'constructs';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
 import { type BlocksStackApi, Hosting } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
@@ -2021,6 +2022,69 @@ describe('Hosting', () => {
             frontDoor: 'none',
           }),
         /RunServerRender|static|front door/i,
+      );
+    });
+  });
+
+  describe("frontDoor: { kind: 'custom', door } (customer door defined with build hooks)", () => {
+    const probeDoor = () => {
+      const seen: { calls: string[]; features?: CustomDoorContext['features'] } = { calls: [] };
+      const door = defineFrontDoor<Construct, CustomDoorContext>({
+        service: 'probe-door',
+        create(scope) {
+          seen.calls.push('create');
+          return new cdk.CfnResource(scope, 'ProbeDoor', { type: 'AWS::CloudFormation::WaitConditionHandle' });
+        },
+        route() {
+          seen.calls.push('route');
+          return {};
+        },
+        sameOriginApi: () => 'single',
+        waf(_door, ctx) {
+          seen.calls.push('waf');
+          seen.features = ctx.features;
+          return 'regional';
+        },
+        accessLogs(_door, ctx) {
+          seen.calls.push('accessLogs');
+          seen.features = ctx.features;
+        },
+        handle() {
+          seen.calls.push('handle');
+          return { url: 'https://probe.example', originHandle: { domainName: 'probe.example', protocol: 'https' } };
+        },
+      });
+      return { door, seen };
+    };
+
+    it("feature hooks receive the app's feature settings (ctx.features) and run only when demanded", () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'CustomDoorFeatures', { env: { account: '111111111111', region: 'us-east-1' } });
+      const { door, seen } = probeDoor();
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        waf: { enabled: true, rateLimit: 500 },
+        frontDoor: { kind: 'custom', door },
+      });
+      // WAF demanded → waf hook runs with the app's settings; logging not demanded → accessLogs skipped.
+      assert.deepStrictEqual(seen.calls, ['create', 'route', 'waf', 'handle']);
+      assert.strictEqual(seen.features?.waf?.rateLimit, 500);
+    });
+
+    it('fails at synth when the app demands a capability whose hook the door lacks', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'CustomDoorMissingHook', { env: { account: '111111111111', region: 'us-east-1' } });
+      const { door } = probeDoor();
+      assert.throws(
+        () =>
+          new Hosting(stack, 'Hosting', {
+            root: tmpDir,
+            api: MOCK_API,
+            domain: { domainName: 'app.example.com' },
+            frontDoor: { kind: 'custom', door },
+          }),
+        /CustomDomainTls/,
       );
     });
   });

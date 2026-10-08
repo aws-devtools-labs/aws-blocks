@@ -1,73 +1,51 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { CapabilityId, CapabilityPlan, SupportTier } from '../plan/types.js';
-import { enforceNegotiation, type NegotiationMode } from './negotiation_policy.js';
+import { resolveNegotiationMode, settleUnmetCapabilities } from './negotiation_policy.js';
 
-// A plan that demands SSR (hasServer → RunServerRender + AtomicRelease).
-const ssrPlan: CapabilityPlan = {
-	origins: [
-		{ id: 'blocks-s3', kind: 'static' },
-		{ id: 'blocks-server', kind: 'server' },
-	],
-	routes: { entries: [{ pattern: '/*', kind: 'server' }], redirects: [], headers: [] },
-	policies: { spaFallback: false, hasServer: true, skewEnabled: false },
-	release: { buildId: 'b' },
-};
+const opts = { errorCode: 'CapabilityNotSupportedError', resolution: 'pick another door' } as const;
 
-const door = (tiers: Partial<Record<CapabilityId, SupportTier>>) => {
-	let calls = 0;
-	return {
-		service: 'test-door',
-		supports(cap: CapabilityId): SupportTier {
-			calls++;
-			return tiers[cap] ?? 'supported';
-		},
-		get calls() {
-			return calls;
-		},
-	};
-};
+describe('resolveNegotiationMode', () => {
+	it("defaults to 'strict'", () => {
+		assert.equal(resolveNegotiationMode(undefined, 'd'), 'strict');
+	});
 
-const opts = (negotiation?: NegotiationMode, degrade?: CapabilityId[]) => ({
-	negotiation,
-	degrade,
-	errorCode: 'CapabilityNotSupportedError',
-	resolution: 'pick another door',
+	it('accepts every known mode', () => {
+		for (const m of ['strict', 'warn', 'off'] as const) assert.equal(resolveNegotiationMode(m, 'd'), m);
+	});
+
+	it('rejects an unknown mode with InvalidPropsError', () => {
+		assert.throws(() => resolveNegotiationMode('loose' as never, 'd'), /Unknown negotiation mode 'loose'/);
+	});
 });
 
-describe('enforceNegotiation', () => {
-	it('strict (default) throws on a demanded unsupported capability', () => {
+describe('settleUnmetCapabilities', () => {
+	it('strict throws on an unmet capability, naming it', () => {
 		assert.throws(
-			() => enforceNegotiation(ssrPlan, door({ RunServerRender: 'unsupported' }), opts()),
-			(e: Error & { code?: string }) =>
-				e.code === 'CapabilityNotSupportedError' && /RunServerRender/.test(e.message),
+			() => settleUnmetCapabilities('test-door', ['RunServerRender'], { ...opts, mode: 'strict' }),
+			(e: Error) => e.name === 'CapabilityNotSupportedError' && /RunServerRender/.test(e.message),
 		);
 	});
 
-	it('strict throws on a demanded unsupported capability not listed in degrade', () => {
-		assert.throws(() => enforceNegotiation(ssrPlan, door({ RunServerRender: 'unsupported' }), opts('strict')));
+	it('strict passes when every unmet capability is waived via degrade', () => {
+		const r = settleUnmetCapabilities('test-door', ['RunServerRender'], {
+			...opts,
+			mode: 'strict',
+			degrade: ['RunServerRender'],
+		});
+		assert.deepEqual(r.errors, []);
+		assert.deepEqual(r.warnings, [{ capability: 'RunServerRender' }]);
 	});
 
-	it('strict accepts an unsupported capability waived via degrade', () => {
-		assert.doesNotThrow(() =>
-			enforceNegotiation(ssrPlan, door({ RunServerRender: 'unsupported' }), opts('strict', ['RunServerRender'])),
+	it('warn reports unmet capabilities without throwing', () => {
+		const r = settleUnmetCapabilities('test-door', ['RunServerRender', 'Alarms'], { ...opts, mode: 'warn' });
+		assert.deepEqual(
+			r.errors.map((e) => e.capability),
+			['RunServerRender', 'Alarms'],
 		);
 	});
 
-	it('warn reports but does not throw', () => {
-		assert.doesNotThrow(() => enforceNegotiation(ssrPlan, door({ RunServerRender: 'unsupported' }), opts('warn')));
-	});
-
-	it('off skips the check without consulting supports()', () => {
-		const d = door({ RunServerRender: 'unsupported' });
-		enforceNegotiation(ssrPlan, d, opts('off'));
-		assert.equal(d.calls, 0);
-	});
-
-	it('rejects an unknown mode', () => {
-		assert.throws(
-			() => enforceNegotiation(ssrPlan, door({}), opts('lenient' as NegotiationMode)),
-			(e: Error & { code?: string }) => e.code === 'InvalidPropsError',
-		);
+	it('nothing unmet → nothing reported', () => {
+		const r = settleUnmetCapabilities('test-door', [], { ...opts, mode: 'strict' });
+		assert.deepEqual(r, { errors: [], warnings: [] });
 	});
 });
