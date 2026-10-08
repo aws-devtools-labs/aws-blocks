@@ -161,9 +161,9 @@ export const THEME_CSS: string = `
 }
 
 .bb-input:focus {
-	outline: none;
 	border-color: var(--bb-color-accent);
-	box-shadow: 0 0 0 2px var(--bb-color-focus-ring);
+	outline: 2px solid var(--bb-color-focus-ring);
+	outline-offset: 1px;
 }
 
 .bb-hint {
@@ -182,8 +182,8 @@ export const THEME_CSS: string = `
 }
 
 .bb-button:focus-visible {
-	outline: none;
-	box-shadow: 0 0 0 2px var(--bb-color-focus-ring);
+	outline: 2px solid var(--bb-color-focus-ring);
+	outline-offset: 1px;
 }
 
 .bb-button-primary {

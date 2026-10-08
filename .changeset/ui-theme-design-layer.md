@@ -27,4 +27,8 @@ with no new runtime framework dependency.
   chrome and todo UI, so the whole page is themed and dark-mode-aware;
   the `bare` template stays deliberately minimal.
 
+Focus states use a real `outline` ring (preserved under forced-colors /
+Windows high-contrast mode) rather than an `outline: none` + `box-shadow`
+ring, which such modes drop.
+
 Additive and non-breaking.
