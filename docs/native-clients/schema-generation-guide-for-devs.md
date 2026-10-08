@@ -371,7 +371,7 @@ If a method shows up with `unknown` types and you didn't expect it, check whethe
 
 This section is for native codegen authors and platform SDK authors. App developers don't need to read it — the extensions are emitted automatically based on what your `aws-blocks/index.ts` returns.
 
-Blocks uses two OpenRPC `x-` extension fields. All others in `blocks.spec.json` are standard OpenRPC 1.3.2.
+Blocks uses four OpenRPC `x-` extension fields: two on a method's result schema, and two at the document root. All others in `blocks.spec.json` are standard OpenRPC 1.3.2.
 
 ### `x-blocks-transferable` (on a method's `result.schema`)
 
@@ -418,6 +418,56 @@ Carries the JSON Schema for each generic type argument of the SDK type, in decla
 ```
 
 Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. For non-generic transferables (`file-bucket/download`, `file-bucket/upload` today), this field is omitted.
+
+### `x-blocks-native-packages` (document root)
+
+Declares the native package each platform needs, keyed by logical package identity. Each entry's `dart`, `swift`, and `android` fields are independently optional; a present field carries a `package` object naming the package-manager identity and the import or module name. No `package` field carries a version.
+
+```json
+{
+	"x-blocks-native-packages": {
+		"schemaVersion": 1,
+		"packages": {
+			"example-iot-native": {
+				"platforms": {
+					"dart": { "package": { "name": "example_iot_native", "library": "example_iot_native.dart" } },
+					"swift": { "package": { "identity": "example-iot-native", "product": "ExampleIotNative", "module": "ExampleIotNative" } },
+					"android": { "package": { "group": "com.example.blocks.iot", "artifact": "iot-native", "kotlinPackage": "com.example.blocks.iot" } }
+				}
+			}
+		}
+	}
+}
+```
+
+**Codegen contract.** An absent platform field means the package is not offered there. A malformed present field is an error.
+
+### `x-blocks-native-bindings` (document root)
+
+Each binding carries a stable `id`, a `kind` (only `transferable` in schema 1), the exact `tag`, the `package` identity, the `export`, a factory `abi`, and a `genericArity` of 0 or 1.
+
+```json
+{
+	"x-blocks-native-bindings": {
+		"schemaVersion": 1,
+		"bindings": [
+			{
+				"id": "example-device-link",
+				"kind": "transferable",
+				"tag": "example-iot/device-link",
+				"package": "example-iot-native",
+				"export": "deviceLink",
+				"abi": "blocks-transferable-v1",
+				"genericArity": 0
+			}
+		]
+	}
+}
+```
+
+**Codegen contract.** A method joins its binding only by tag: `result.schema.x-blocks-transferable` equals `bindings[].tag`. The `abi` fixes the call: under `blocks-transferable-v1`, export `x` resolves to `X.fromBlocksDescriptor`. A built-in tag cannot be bound by a block.
+
+**Stability.** Both catalogs are emitted only when a block declares content.
 
 ### What's not in the spec
 
