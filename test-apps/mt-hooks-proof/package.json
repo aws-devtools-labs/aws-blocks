@@ -1,0 +1,12 @@
+{
+	"name": "bb-test-mt-hooks-proof",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "POC: one shared front door (approach two — build hooks) fronting 3 independent tenant apps",
+	"scripts": {
+		"synth": "cdk synth --app 'npx tsx -C cdk app.cdk.ts'",
+		"deploy": "cdk deploy --all --app 'npx tsx -C cdk app.cdk.ts' --require-approval never",
+		"destroy": "cdk destroy --all --app 'npx tsx -C cdk app.cdk.ts' --force"
+	}
+}
