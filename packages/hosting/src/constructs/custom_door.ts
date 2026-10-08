@@ -1,25 +1,26 @@
 /**
- * BYO custom front door — the framework-enforced negotiate-then-render seam.
+ * BYO custom front door — the framework-enforced check-then-build seam.
  *
- * A custom door is a customer-authored {@link FrontDoorLayerAdapter}. Before we
- * let it build anything, we negotiate the deploy's {@link CapabilityPlan}
- * against the adapter's own `supports()` declaration: a capability the app
- * DEMANDS that the door marks `unsupported` (without an explicit
- * `degrade` opt-in) fails HERE, at synth — never as a silently broken runtime.
- * This is "safe by construction": the guarantee holds even if the adapter author
- * never calls `negotiate` themselves, because the framework runs it around them.
+ * A custom door is a customer-authored {@link FrontDoorHooks} definition (see
+ * `door_hooks.ts`). The framework drives it: before anything is built, every
+ * capability the app DEMANDS must have its hook; after the build, what `route`
+ * and the hooks REPORTED must cover the demand. An unmet demand (not waived via
+ * `degrade`) fails HERE, at synth — never as a silently broken runtime. This is
+ * "safe by construction": the guarantee holds even if the door author never
+ * checks anything themselves, because the framework runs the check around them.
  * A platform that validates its door its own way can relax this on purpose via
  * `frontDoor.negotiation` (`'warn'` reports unmet demands; `'off'` skips the check).
  *
- * On success the adapter renders its own door and returns a {@link LayerHandle}
- * (the public `url` + an `originHandle` a parent layer could attach to). We do
- * NOT provision the door — the adapter does; Hosting still owns the app (S3
- * assets, compute, backend), handed over via `ctx` and `plan.backend`.
+ * The door builds itself and returns a {@link LayerHandle} (the public `url` +
+ * an `originHandle` a parent layer could attach to). We do NOT provision the
+ * door — its hooks do; Hosting still owns the app (S3 assets, compute, backend),
+ * handed over via `ctx` and `plan.backend`.
  */
 import type { Construct } from 'constructs';
 import type { AdapterContext, CapabilityId, CapabilityPlan } from '../plan/types.js';
-import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
-import { enforceNegotiation, type NegotiationMode } from './negotiation_policy.js';
+import { type FrontDoorHooks, runFrontDoor } from './door_hooks.js';
+import type { LayerHandle } from './layer.js';
+import type { NegotiationMode } from './negotiation_policy.js';
 
 /** Options for {@link renderCustomDoor}. */
 export type RenderCustomDoorOptions = {
@@ -30,30 +31,46 @@ export type RenderCustomDoorOptions = {
 };
 
 /**
- * Negotiate `plan` against `adapter`, then render the custom door.
+ * Check `door`'s hooks against `plan`, then build the custom door.
  *
- * @param scope   the construct scope the adapter provisions its resources under.
- * @param plan    the service-agnostic {@link CapabilityPlan} for the deploy.
- * @param adapter the customer's {@link FrontDoorLayerAdapter}.
- * @param ctx     the render context (the same CDK handles the built-in doors get).
+ * @param scope the construct scope the door provisions its resources under.
+ * @param plan  the service-agnostic {@link CapabilityPlan} for the deploy.
+ * @param door  the customer's {@link FrontDoorHooks} definition.
+ * @param ctx   the render context (the same CDK handles the built-in doors get).
  * @param opts.degrade capabilities the app waives — deploy without them (else they fail).
  * @param opts.negotiation `'strict'` (default) · `'warn'` · `'off'` — see {@link NegotiationMode}.
  * @throws HostingError('UnsupportedFrontDoorError') in `strict` mode when a demanded
- *   capability is `unsupported` and not listed in `degrade`.
+ *   capability has no hook / isn't reported, and is not listed in `degrade`.
  */
-export function renderCustomDoor(
+export function renderCustomDoor<TDoor, TCtx extends AdapterContext>(
 	scope: Construct,
 	plan: CapabilityPlan,
-	adapter: FrontDoorLayerAdapter,
-	ctx: AdapterContext,
+	door: FrontDoorHooks<TDoor, TCtx>,
+	ctx: TCtx,
 	opts: RenderCustomDoorOptions = {},
 ): LayerHandle {
-	enforceNegotiation(plan, adapter, {
+	return runFrontDoor(scope, plan, door, ctx, {
 		degrade: opts.degrade,
 		negotiation: opts.negotiation,
 		errorCode: 'UnsupportedFrontDoorError',
 		resolution:
-			"Support the missing capabilities in your adapter's `supports`/`renderLayer`, waive one via `frontDoor.degrade`, relax the check via `frontDoor.negotiation`, or choose a built-in door.",
-	});
-	return adapter.renderLayer(scope, plan, ctx);
+			"Add the missing hook to your door (or report the capability from `route`), waive it via `frontDoor.degrade`, relax the check via `frontDoor.negotiation`, or choose a built-in door.",
+	}).handle;
 }
+
+/**
+ * The render context a custom door's hooks receive: the app infrastructure
+ * Hosting already built (the same handles the built-in doors get).
+ */
+export type CustomDoorContext = AdapterContext & {
+	/** The private assets bucket; static assets live under `builds/<buildId>/`. */
+	bucket: import('aws-cdk-lib/aws-s3').IBucket;
+	/** Compute functions by manifest name (SSR server, image optimization), if any. */
+	computeFunctions?: Map<string, import('aws-cdk-lib/aws-lambda').IFunction>;
+	/** Name of the SSR/server compute in `computeFunctions` (e.g. `default` / `server`). */
+	serverComputeName?: string;
+	/** Name of the image-optimization compute in `computeFunctions`. */
+	imageComputeName?: string;
+	/** Capabilities the app waived via `frontDoor.degrade`. */
+	degrade?: CapabilityId[];
+};

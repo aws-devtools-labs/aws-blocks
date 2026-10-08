@@ -2,76 +2,81 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { App, CfnResource, Stack } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import type { AdapterContext, CapabilityId, CapabilityPlan, SupportTier } from '../plan/types.js';
-import { assertAdapterConformance } from './conformance.js';
-import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
+import type { CapabilityPlan } from '../plan/types.js';
+import { assertDoorConformance } from './conformance.js';
+import { defineFrontDoor, type FrontDoorHooks, type RouteReport } from './door_hooks.js';
+import type { LayerHandle } from './layer.js';
 
-/** A conforming door: total `supports`, serves static, returns a well-formed handle. */
-class GoodDoor implements FrontDoorLayerAdapter {
-	readonly service = 'good-edge';
-	supports(cap: CapabilityId): SupportTier {
-		return cap === 'RouteRequest' || cap === 'ServeStaticAsset' ? 'supported' : 'unsupported';
-	}
-	renderLayer(scope: Construct, _plan: CapabilityPlan, _ctx: AdapterContext): LayerHandle {
-		new CfnResource(scope, 'GoodDoorRes', { type: 'AWS::CloudFormation::WaitConditionHandle' });
-		return { url: 'https://good.example', originHandle: { domainName: 'good.example', protocol: 'https' } };
-	}
-}
+/** A conforming door: core hooks only, serves static, returns a well-formed handle. */
+const goodDoor = (overrides: Partial<FrontDoorHooks<Construct>> = {}): FrontDoorHooks<Construct> =>
+	defineFrontDoor<Construct>({
+		service: 'good-edge',
+		create: (scope) => new CfnResource(scope, 'GoodDoorRes', { type: 'AWS::CloudFormation::WaitConditionHandle' }),
+		route: () => ({}),
+		handle: (): LayerHandle => ({
+			url: 'https://good.example',
+			originHandle: { domainName: 'good.example', protocol: 'https' },
+		}),
+		...overrides,
+	});
+
+const ssrPlan: CapabilityPlan = {
+	origins: [
+		{ id: 'blocks-s3', kind: 'static' },
+		{ id: 'blocks-server', kind: 'server' },
+	],
+	routes: { entries: [{ pattern: '/*', kind: 'server' }], redirects: [], headers: [] },
+	policies: { spaFallback: false, hasServer: true, skewEnabled: false },
+	release: { buildId: 'b1' },
+};
 
 const freshScope = () => new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-east-1' } });
 
-describe('assertAdapterConformance', () => {
-	it('passes for a well-formed adapter', () => {
-		assert.doesNotThrow(() => assertAdapterConformance(new GoodDoor(), { scope: freshScope() }));
+describe('assertDoorConformance', () => {
+	it('passes for a well-formed door and returns what it delivered', () => {
+		const run = assertDoorConformance(goodDoor(), { scope: freshScope() });
+		assert.ok(run.delivered.has('RouteRequest'));
+		assert.ok(run.delivered.has('ServeStaticAsset'));
 	});
 
 	it('fails when `service` is missing', () => {
-		const door = new GoodDoor();
-		(door as { service: string }).service = '';
-		assert.throws(() => assertAdapterConformance(door, { scope: freshScope() }), /service/);
+		assert.throws(() => assertDoorConformance(goodDoor({ service: '' }), { scope: freshScope() }), /service/);
 	});
 
-	it('fails when supports() is not total (throws for some capability)', () => {
-		const door = new GoodDoor();
-		door.supports = (cap: CapabilityId) => {
-			if (cap === 'Alarms') throw new Error('forgot this one');
-			return 'unsupported';
-		};
-		assert.throws(() => assertAdapterConformance(door, { scope: freshScope() }), /Alarms|total/);
+	it('fails when a required core hook is not a function', () => {
+		const door = { ...goodDoor(), route: 'nope' } as unknown as FrontDoorHooks<Construct>;
+		assert.throws(() => assertDoorConformance(door, { scope: freshScope() }), /`route` hook must be a function/);
 	});
 
-	it('fails when supports() returns an invalid tier', () => {
-		const door = new GoodDoor();
-		door.supports = () => 'maybe' as SupportTier;
-		assert.throws(() => assertAdapterConformance(door, { scope: freshScope() }), /expected 'supported'/);
+	it('fails when an optional feature hook is present but not a function', () => {
+		const door = { ...goodDoor(), waf: true } as unknown as FrontDoorHooks<Construct>;
+		assert.throws(() => assertDoorConformance(door, { scope: freshScope() }), /`waf` must be a function or omitted/);
 	});
 
-	it('fails when the adapter cannot serve the baseline static plan', () => {
-		const door = new GoodDoor();
-		door.supports = () => 'unsupported'; // cannot even route/serve static
+	it('fails when the door cannot serve the plan it is handed (no ssr report)', () => {
 		assert.throws(
-			() => assertAdapterConformance(door, { scope: freshScope() }),
-			/does not serve|ServeStaticAsset|RouteRequest/,
+			() => assertDoorConformance(goodDoor(), { scope: freshScope(), plan: ssrPlan }),
+			/does not serve|RunServerRender/,
 		);
 	});
 
-	it('fails when renderLayer returns a handle without a usable originHandle', () => {
-		class NoHandleDoor extends GoodDoor {
-			override renderLayer(scope: Construct): LayerHandle {
-				new CfnResource(scope, 'R', { type: 'AWS::CloudFormation::WaitConditionHandle' });
-				return { url: 'https://x.example', originHandle: { domainName: '', protocol: 'https' } };
-			}
-		}
-		assert.throws(() => assertAdapterConformance(new NoHandleDoor(), { scope: freshScope() }), /domainName/);
+	it('passes the SSR plan once route() reports ssr + atomic release', () => {
+		const door = goodDoor({ route: (): RouteReport => ({ ssr: 'buffered', atomicRelease: true }) });
+		assert.doesNotThrow(() => assertDoorConformance(door, { scope: freshScope(), plan: ssrPlan }));
 	});
 
-	it('fails when renderLayer omits the public url on the root layer', () => {
-		class NoUrlDoor extends GoodDoor {
-			override renderLayer(scope: Construct): LayerHandle {
-				new CfnResource(scope, 'R', { type: 'AWS::CloudFormation::WaitConditionHandle' });
-				return { originHandle: { domainName: 'x.example', protocol: 'https' } };
-			}
-		}
-		assert.throws(() => assertAdapterConformance(new NoUrlDoor(), { scope: freshScope() }), /url/);
+	it('fails when route() reports a bogus ssr flavor', () => {
+		const door = goodDoor({ route: () => ({ ssr: 'sometimes' }) as unknown as RouteReport });
+		assert.throws(() => assertDoorConformance(door, { scope: freshScope() }), /expected false \| 'buffered'/);
+	});
+
+	it('fails when handle() returns a handle without a usable originHandle', () => {
+		const door = goodDoor({ handle: () => ({ url: 'https://x.example', originHandle: { domainName: '', protocol: 'https' } }) });
+		assert.throws(() => assertDoorConformance(door, { scope: freshScope() }), /domainName/);
+	});
+
+	it('fails when handle() omits the public url on the root layer', () => {
+		const door = goodDoor({ handle: () => ({ originHandle: { domainName: 'x.example', protocol: 'https' } }) });
+		assert.throws(() => assertDoorConformance(door, { scope: freshScope() }), /url/);
 	});
 });

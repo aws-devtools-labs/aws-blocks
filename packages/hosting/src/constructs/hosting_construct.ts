@@ -54,9 +54,11 @@ import {
   wireManagedValue,
 } from '../secret-resolve.js';
 import type { HostingResources } from '../types.js';
-import { CdnConstruct } from './cdn_construct.js';
-import { renderCustomDoor } from './custom_door.js';
-import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
+import type { CdnConstruct, CdnConstructProps } from './cdn_construct.js';
+import { cloudFrontDoor } from './cloudfront_door.js';
+import { type CustomDoorContext, renderCustomDoor } from './custom_door.js';
+import { type FrontDoorHooks, runFrontDoor } from './door_hooks.js';
+import type { LayerHandle } from './layer.js';
 import { renderGraph } from './render-graph.js';
 import { buildCapabilityPlan } from '../plan/capability-plan.js';
 import { composeGraph } from '../plan/compose.js';
@@ -479,19 +481,20 @@ export type HostingConstructProps = {
         /** BYO — a customer-authored front door. */
         kind: 'custom';
         /**
-         * Your front-door adapter (see {@link FrontDoorLayerAdapter}). At synth
-         * the framework negotiates the deploy's capability plan against its
-         * `supports()` — a DEMANDED capability the door can't serve fails at
-         * synth (safe by construction) — then calls `renderLayer` to build the
-         * door. You provision the door itself; Hosting still provisions the app
-         * (S3 assets, compute, backend) and hands them over via the render
-         * context + `plan.backend`.
+         * Your front door, defined with build hooks (see {@link FrontDoorHooks} and
+         * `defineFrontDoor`). Defining a hook is what declares support. At synth
+         * the framework checks that every capability the app DEMANDS has its
+         * hook (or is reported by `route`) — an unmet demand fails at synth
+         * (safe by construction) — and runs `create` → `route` → the demanded
+         * feature hooks → `handle` to build the door. You provision the door
+         * itself; Hosting still provisions the app (S3 assets, compute, backend)
+         * and hands them over via the render context + `plan.backend`.
          */
-        adapter: FrontDoorLayerAdapter;
+        door: FrontDoorHooks<unknown, CustomDoorContext>;
         /**
          * Backend API URL to proxy same-origin (`/aws-blocks/*`). Set by the
          * Blocks integration layer from the `api` prop; surfaces as a
-         * `plan.backend` origin the adapter routes to.
+         * `plan.backend` origin the door's `sameOriginApi` hook routes to.
          */
         backendApiUrl?: string;
         /** Capabilities the app explicitly waives — deploy without them (else the negotiator fails). */
@@ -540,6 +543,12 @@ export class HostingConstruct extends Construct {
    * door's edge reads this to point CloudFront's single origin at the ALB.
    */
   loadBalancerDnsName?: string;
+  /**
+   * The service-agnostic capability plan the front door was checked and built
+   * against. A composed layer (the CloudFront edge of the stacked door) is run
+   * against the same plan.
+   */
+  capabilityPlan?: import('../plan/types.js').CapabilityPlan;
   /**
    * The PUBLIC website bucket, present only for `frontDoor: 'none'` (served
    * directly from S3 website hosting — its own public bucket, from root). The Blocks
@@ -1340,7 +1349,7 @@ export class HostingConstruct extends Construct {
       }
     }
 
-    cdn = new CdnConstruct(this, 'Cdn', {
+    const cdnProps: CdnConstructProps = {
       bucket: this.bucket,
       manifest: manifestWithBuildId,
       securityHeadersPolicy,
@@ -1369,7 +1378,40 @@ export class HostingConstruct extends Construct {
             serverError: !!props.errorPages.serverError,
           }
         : undefined,
+    };
+
+    // The CloudFront door is defined with hooks like every other door: each
+    // feature hook passes ONLY its own props to the distribution, and runs only
+    // when the app demands it. The demand flags below are derived from exactly
+    // the props those hooks carry, so every configured feature is built.
+    const cfServerName = this.computeFunctions.has('default')
+      ? 'default'
+      : this.computeFunctions.has('server')
+        ? 'server'
+        : undefined;
+    const cfPlan = buildCapabilityPlan({
+      manifest,
+      buildId,
+      hasServer: Boolean(cfServerName),
+      hasImage: this.computeFunctions.has('image-optimization'),
+      skewEnabled: (props.skewProtection ?? { enabled: true }).enabled !== false,
+      wwwRedirect: props.domain?.wwwRedirect,
+      demand: {
+        customDomain: Boolean(cdnProps.certificate) || Boolean(cdnProps.domainName),
+        wafEnabled: Boolean(cdnProps.webAcl) || Boolean(cdnProps.webAclArn),
+        loggingEnabled: Boolean(cdnProps.accessLogBucket),
+        geoRestricted: Boolean(cdnProps.geoRestriction),
+        hasCustomErrorPages: Boolean(props.errorPages),
+        needsStreaming: cfServerName ? manifest.compute?.[cfServerName]?.streaming === true : false,
+        monitoringEnabled: props.monitoring?.enabled ?? true,
+      },
     });
+    this.capabilityPlan = cfPlan;
+    const cfRun = runFrontDoor(this, cfPlan, cloudFrontDoor, { cdnProps }, {
+      errorCode: 'CapabilityNotSupportedError',
+    });
+    if (!cfRun.door.cdn) throw new Error('cloudfront door: handle() did not build the distribution.');
+    cdn = cfRun.door.cdn;
 
     this.cdn = cdn;
     this.distribution = cdn.distribution;
@@ -1639,6 +1681,7 @@ export class HostingConstruct extends Construct {
           monitoringEnabled: Boolean(props.monitoring),
         },
       });
+      this.capabilityPlan = plan;
       const common = {
         bucket: this.bucket,
         computeFunctions,
@@ -1700,11 +1743,12 @@ export class HostingConstruct extends Construct {
           negotiation: fd.negotiation,
         });
       } else if (fd?.kind === 'custom') {
-        // BYO custom door: negotiate (framework-enforced → an unmet demand fails
-        // at synth, never a silent runtime break), then let the customer's
-        // adapter render its own door. It reads the same ctx the built-in doors
-        // get; backend routing lives in `plan.backend.origins`.
-        handle = renderCustomDoor(this, plan, fd.adapter, { ...common, degrade: fd.degrade }, {
+        // BYO custom door: check its hooks against the plan's demands
+        // (framework-enforced → an unmet demand fails at synth, never a silent
+        // runtime break), then run the customer's hooks to build the door. It
+        // reads the same ctx the built-in doors get; backend routing lives in
+        // `plan.backend.origins`.
+        handle = renderCustomDoor(this, plan, fd.door, { ...common, degrade: fd.degrade }, {
           degrade: fd.degrade,
           negotiation: fd.negotiation,
         });
@@ -1715,7 +1759,7 @@ export class HostingConstruct extends Construct {
         throw new HostingError('UnsupportedFrontDoorError', {
           message: `Unknown front door '${JSON.stringify(props.frontDoor)}'.`,
           resolution:
-            "Use 'cloudfront' (default), 'none' (S3 website), { kind: 'alb' }, { kind: 'apiGateway' }, or { kind: 'custom', adapter }.",
+            "Use 'cloudfront' (default), 'none' (S3 website), { kind: 'alb' }, { kind: 'apiGateway' }, or { kind: 'custom', door }.",
         });
       }
       this.distributionUrl = handle.url ?? '';

@@ -1,19 +1,19 @@
 /**
  * Capability negotiation — the conscious-degradation contract.
  *
- * Given a {@link CapabilityPlan} and a {@link FrontDoorAdapter}, decide whether
- * the chosen front door can serve the deploy. The door states a fact per
- * capability (`supported` | `unsupported`); the APP decides what it can live
- * without. The rule:
- *   - a REQUIRED capability the adapter marks `supported` → fine, silent.
- *   - a REQUIRED capability the adapter marks `unsupported` → error UNLESS the
- *     app explicitly waived it via `degrade`, in which case a warning.
+ * This module owns the DEMAND side: which capabilities a {@link CapabilityPlan}
+ * requires. The SUPPLY side is read off the door's build hooks (a present hook,
+ * or a `route()` report — see `constructs/door_hooks.ts`), never a separate
+ * declaration. The rule:
+ *   - a REQUIRED capability the door delivers → fine, silent.
+ *   - a REQUIRED capability the door doesn't deliver → error UNLESS the app
+ *     explicitly waived it via `degrade`, in which case a warning.
  *
  * This is what makes "some capabilities are missing per service" EXPLICIT rather
  * than a silent `if (!cloudfront) skip`. The door-wide escape hatch
  * (`negotiation: 'warn' | 'off'`) is applied by the caller on top of this.
  */
-import type { CapabilityId, CapabilityPlan, FrontDoorAdapter } from './types.js';
+import type { CapabilityId, CapabilityPlan } from './types.js';
 
 /**
  * The DEMAND registry — the single source of truth for "does this app need this
@@ -87,47 +87,10 @@ export const requiredCapabilities = (plan: CapabilityPlan): Set<CapabilityId> =>
 };
 
 export type NegotiationResult = {
-  /** Capabilities that block the deploy (required + unsupported, not waived via `degrade`). */
+  /** Capabilities that block the deploy (required + not delivered, not waived via `degrade`). */
   errors: Array<{ capability: CapabilityId; tier: 'unsupported' }>;
-  /** Capabilities that work but in a lesser form the app opted into. */
+  /** Capabilities the app waived via `degrade` — deployed without them. */
   warnings: Array<{ capability: CapabilityId }>;
-};
-
-/** Options for {@link negotiate}. */
-export type NegotiateOptions = {
-  /** Override the inferred required set. */
-  required?: Iterable<CapabilityId>;
-  /** Capabilities the app explicitly waives (deploys without) even if the door lacks them. */
-  degrade?: Iterable<CapabilityId>;
-};
-
-/**
- * Negotiate a plan against an adapter. Pure — returns the errors/warnings; the
- * caller decides how to surface them (a synth-time construct throws on errors,
- * emits warnings). Never silently drops a capability.
- */
-export const negotiate = (
-  plan: CapabilityPlan,
-  // Only the capability declaration is needed — `service` (diagnostics) +
-  // `supports`. Accepting the `Pick` (not the full {@link FrontDoorAdapter})
-  // lets a `render`- OR `renderLayer`-shaped adapter (incl. a BYO custom door)
-  // be negotiated without also implementing the render method.
-  adapter: Pick<FrontDoorAdapter, 'service' | 'supports'>,
-  options: NegotiateOptions = {},
-): NegotiationResult => {
-  const required = new Set<CapabilityId>(options.required ?? requiredCapabilities(plan));
-  const degradeOk = new Set<CapabilityId>(options.degrade ?? []);
-  const errors: NegotiationResult['errors'] = [];
-  const warnings: NegotiationResult['warnings'] = [];
-
-  for (const capability of required) {
-    const tier = adapter.supports(capability);
-    if (tier === 'unsupported') {
-      if (degradeOk.has(capability)) warnings.push({ capability });
-      else errors.push({ capability, tier });
-    }
-  }
-  return { errors, warnings };
 };
 
 /** Format a {@link NegotiationResult}'s errors into an actionable message. */

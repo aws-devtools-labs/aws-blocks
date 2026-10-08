@@ -5,7 +5,8 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { CapabilityPlan } from '../plan/types.js';
 import { AlbConstruct } from './alb_construct.js';
-import { AlbAdapter } from './alb_adapter.js';
+import { albDoor } from './alb_door.js';
+import { runFrontDoor } from './door_hooks.js';
 
 const staticPlan: CapabilityPlan = {
   origins: [{ id: 'blocks-s3', kind: 'static' }],
@@ -148,15 +149,15 @@ describe('AlbConstruct — same-origin backend routing (plan.backend)', () => {
   });
 });
 
-describe('AlbAdapter — negotiation gating', () => {
-  const adapter = new AlbAdapter();
-
-  it('declares ALB support tiers', () => {
-    assert.equal(adapter.supports('RunServerRender'), 'supported');
-    assert.equal(adapter.supports('StreamServerRender'), 'supported');
-    assert.equal(adapter.supports('RouteRequest'), 'supported');
-    assert.equal(adapter.supports('CacheResponses'), 'unsupported');
-    assert.equal(adapter.supports('PinSession'), 'unsupported');
+describe('albDoor — check gating', () => {
+  it('reports streaming SSR from route(); no edge cache / session pinning', () => {
+    const stack = new Stack(new App(), 'R', { env: { account: '111111111111', region: 'us-west-2' } });
+    const bucket = new Bucket(stack, 'Assets');
+    const ssrPlan: CapabilityPlan = { ...staticPlan, policies: { ...staticPlan.policies, hasServer: true } };
+    const report = albDoor.route({ scope: stack, props: { bucket } }, ssrPlan, { bucket });
+    assert.equal(report.ssr, 'streaming');
+    assert.notEqual(report.cache, true);
+    assert.notEqual(report.pinSession, true);
   });
 
   it('throws when a plan requires an unsupported capability without a waiver (skew on)', () => {
@@ -168,7 +169,7 @@ describe('AlbAdapter — negotiation gating', () => {
       policies: { ...staticPlan.policies, skewEnabled: true },
     };
     assert.throws(
-      () => new AlbAdapter().render(stack, skewPlan, { bucket }),
+      () => runFrontDoor(stack, skewPlan, albDoor, { bucket }),
       /PinSession/,
     );
   });
@@ -181,8 +182,8 @@ describe('AlbAdapter — negotiation gating', () => {
       ...staticPlan,
       policies: { ...staticPlan.policies, skewEnabled: true },
     };
-    const res = new AlbAdapter().render(stack, skewPlan, { bucket, degrade: ['PinSession'] });
-    assert.ok(res.url.startsWith('http'));
+    const res = runFrontDoor(stack, skewPlan, albDoor, { bucket }, { degrade: ['PinSession'] }).handle;
+    assert.ok(res.url?.startsWith('http'));
   });
 
   for (const negotiation of ['warn', 'off'] as const) {
@@ -194,8 +195,8 @@ describe('AlbAdapter — negotiation gating', () => {
         ...staticPlan,
         policies: { ...staticPlan.policies, skewEnabled: true },
       };
-      const res = new AlbAdapter().render(stack, skewPlan, { bucket, negotiation });
-      assert.ok(res.url.startsWith('http'));
+      const res = runFrontDoor(stack, skewPlan, albDoor, { bucket }, { negotiation }).handle;
+      assert.ok(res.url?.startsWith('http'));
     });
   }
 });

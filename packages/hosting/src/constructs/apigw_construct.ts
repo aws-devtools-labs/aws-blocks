@@ -14,8 +14,8 @@
  *     straight to the backend API Gateway (same-origin; no forwarder Lambda
  *     needed, unlike ALB — HTTP API can proxy an external HTTPS URL natively).
  *
- * Capabilities NOT provided (declared `unsupported` on
- * {@link ApiGatewayAdapter}, enforced by the negotiator): no global edge cache,
+ * Capabilities NOT provided (absent from `apiGatewayDoor`'s hooks and `route()`
+ * report, enforced by the check): no global edge cache,
  * no per-route response-header injection, no skew-pin, buffered SSR only (HTTP
  * API can't stream). API Gateway also imposes a ~29 s request timeout and a
  * ~10 MB payload / ~6 MB response cap. Stage-level config (WAF, TLS/domain,
