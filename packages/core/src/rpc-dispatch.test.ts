@@ -9,6 +9,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { secret, config, isManagedValue as hostingIsManagedValue } from '@aws-blocks/hosting';
 import { ApiNamespace } from './api.js';
 import { isDispatchableExport, resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
 
@@ -24,6 +25,19 @@ describe('isDispatchableExport', () => {
 
   it('rejects a Building Block (Scope) instance', () => {
     assert.strictEqual(isDispatchableExport('todos', { id: 'todos', fullId: 'app-todos', put() {} }), false);
+  });
+
+  it('rejects secret()/config() managed values — parity with generate-client', () => {
+    // generate-client skips these (isManagedValue) before emitting a proxy, so the
+    // dispatcher must not treat them as namespaces either. Uses hosting's REAL
+    // markers, so a change to hosting's brand breaks this test rather than silently
+    // drifting from the brand re-derived in rpc-dispatch.ts.
+    const apiKey = secret('API_KEY');
+    const domain = config('DOMAIN');
+    assert.ok(hostingIsManagedValue(apiKey) && hostingIsManagedValue(domain), 'fixtures are real managed values');
+    assert.strictEqual(isDispatchableExport('apiKey', apiKey), false);
+    assert.strictEqual(isDispatchableExport('domain', domain), false);
+    assert.strictEqual(resolveApiNamespace({ apiKey }, 'apiKey'), undefined);
   });
 
   it('rejects `_`-private exports and primitives', () => {

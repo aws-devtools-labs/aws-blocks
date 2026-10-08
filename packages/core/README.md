@@ -63,6 +63,7 @@ The RPC endpoint dispatches `<exportName>.<method>` against your backend module'
 
 - An exported **Building Block instance** (e.g. `export const todos = new DistributedTable(scope, 'todos')`) is **not** callable over RPC — calling `todos.put` returns *method not found*. Its data plane is only reachable through the `ApiNamespace` methods you write, where your `requireAuth` gates run.
 - **`_`-prefixed exports** are private: they get no client proxy and are not dispatched.
+- **`secret()` / `config()` markers** are deferred values, not APIs: they get no client proxy and are not dispatched.
 - Only **callable methods** are dispatched; members inherited from `Object.prototype` (`toString`, `constructor`, `hasOwnProperty`, …) are never reachable.
 
 #### Calling the API over HTTP (JSON-RPC 2.0)

@@ -14,8 +14,9 @@
  *   `hasOwnProperty`, …), which passes a plain truthiness "method exists" check.
  *
  * The rules mirror what `generate-client` already emits a client proxy for: it skips
- * `_`-prefixed exports and `Scope` instances, so no generated client can call them and
- * rejecting them at dispatch breaks no legitimate caller.
+ * `_`-prefixed exports, `Scope` instances, and `secret()`/`config()` managed values, so
+ * no generated client can call them and rejecting them at dispatch breaks no legitimate
+ * caller.
  *
  * @internal
  */
@@ -32,16 +33,30 @@ function isScopeInstance(value: unknown): boolean {
 }
 
 /**
+ * Brand on `secret()` / `config()` managed values (`MANAGED_BRAND` in
+ * `@aws-blocks/hosting`). Re-derived from the same global-registry key rather than
+ * imported, so the Lambda runtime path doesn't pull `@aws-blocks/hosting` into every
+ * customer bundle; `rpc-dispatch.test.ts` pins it to hosting's real brand.
+ */
+const MANAGED_VALUE_BRAND = Symbol.for('@aws-blocks/hosting.ManagedValue');
+
+/** True for a `secret()` / `config()` marker — inert deferred data, never an API. */
+function isManagedValue(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && (value as Record<symbol, unknown>)[MANAGED_VALUE_BRAND] === true;
+}
+
+/**
  * Whether a backend-module export may be dispatched to as an API namespace.
  *
- * Rejects `_`-private exports, non-function/non-object values, and Building Block
- * (`Scope`) instances. `ApiNamespace` values — and, for backward compatibility, plain
- * exported functions/objects that `generate-client` also proxies — are allowed.
+ * Rejects `_`-private exports, non-function/non-object values, Building Block
+ * (`Scope`) instances, and `secret()`/`config()` managed values. `ApiNamespace`
+ * values — and, for backward compatibility, plain exported functions/objects that
+ * `generate-client` also proxies — are allowed.
  */
 export function isDispatchableExport(name: string, value: unknown): boolean {
   if (name.startsWith('_')) return false;
   if (typeof value !== 'function' && (typeof value !== 'object' || value === null)) return false;
-  return !isScopeInstance(value);
+  return !isScopeInstance(value) && !isManagedValue(value);
 }
 
 /**
