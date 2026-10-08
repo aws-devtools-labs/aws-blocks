@@ -34,7 +34,7 @@ export async function deploy(options: DeployOptions) {
 
     // Fail fast if AWS credentials are missing/expired, before generating the
     // client and spending time in synth only to hit an opaque CDK credential error.
-    await assertAwsCredentials('deploy');
+    await assertAwsCredentials({ command: 'deploy', projectRoot: options.projectRoot });
 
     // Provision secrets for production. projectRoot must match the root cdk
     // synth uses (passed as --context below) so the written parameter name
