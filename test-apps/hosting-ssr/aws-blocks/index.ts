@@ -19,14 +19,12 @@ const posts = new KVStore(scope, 'posts', {});
 
 // ── Auth ────────────────────────────────────────────────────────────────────
 
-// The delivered code must survive the round trip from `codeDelivery` to the
-// later `authGetLastCode` read. A module-level variable does not: in the
-// deployed Lambda each request may be served by a different instance, so the
-// code written on one is invisible to the one that later reads it — the reader
-// sees its own `null`, or a leftover code from another user. Both surface as
-// flaky auth e2e. Persist each code in the existing shared store keyed by
-// username instead (a distinct key prefix keeps it out of the posts keyspace),
-// and require `username` on the read so a test can only ask for its own code.
+// Delivered verification codes are persisted in the existing shared store keyed
+// by username (a distinct key prefix keeps them out of the posts keyspace), with
+// a short TTL so a stale code stops being returned (reads filter expired records;
+// physical reaping would need a ttl-enabled table, unneeded for a throwaway app).
+// See the comprehensive test-app for the full rationale (cross-instance race,
+// per-user keying, expiry).
 const codeKey = (username: string) => `__last-code:${username}`;
 
 // A stored record that somehow fails to parse is treated as absent (the poller
@@ -46,7 +44,7 @@ const auth = new AuthBasic(scope, 'auth', {
   sessionDuration: 86400,
   passwordPolicy: { minLength: 6 },
   codeDelivery: async (username, code) => {
-    await posts.put(codeKey(username), JSON.stringify({ username, code }));
+    await posts.put(codeKey(username), JSON.stringify({ username, code }), { ttlSeconds: 3600 });
     if (!isDeployedLambda) console.log(`[AuthBasic] Code for "${username}": ${code}`);
   },
 });

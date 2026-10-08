@@ -13,7 +13,14 @@ async function handleSignUp() {
   error.value = '';
   try {
     await api.authSignUp(username.value, password.value);
-    const codeInfo = await api.authGetLastCode(username.value);
+    // The code is delivered asynchronously and read back over a separate
+    // request against an eventually-consistent store, so a single read can
+    // race the write and see nothing — poll briefly.
+    let codeInfo = null;
+    for (let i = 0; i < 15 && !codeInfo; i++) {
+      codeInfo = await api.authGetLastCode(username.value);
+      if (!codeInfo) await new Promise((r) => setTimeout(r, 200));
+    }
     if (codeInfo) code.value = codeInfo.code;
     showConfirm.value = true;
     info.value = 'Account created! Confirm with the verification code.';
