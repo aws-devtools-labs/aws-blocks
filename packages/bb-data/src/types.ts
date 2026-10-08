@@ -46,6 +46,26 @@ export interface DatabaseOptions {
    * @default '16.13'
    */
   postgresVersion?: string;
+  /**
+   * Postgres extensions to load in the **local** PGlite engine, by name
+   * (e.g. `['postgis']` or `['pgvector']`).
+   *
+   * Local-only, mirroring `postgresVersion`: read only by the local PGlite
+   * implementation and ignored on AWS, where Aurora PostgreSQL supports these
+   * extensions natively. This keeps spatial / vector code that works on Aurora
+   * also working in local dev, preserving local/production parity.
+   *
+   * Each declared extension is distributed as its own optional package and is
+   * loaded by dynamic import, so only projects that declare one pay its install
+   * cost. A declared extension whose package is not installed fails the dev
+   * server at startup with the exact `npm install` command. Supported names:
+   * `postgis`, `pgvector`.
+   *
+   * You still run `CREATE EXTENSION <name>` in a migration — this option only
+   * makes the extension available for `CREATE EXTENSION` to succeed locally.
+   * @default [] (no extensions)
+   */
+  extensions?: string[];
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
   /**

@@ -334,3 +334,39 @@ test('recovers on a later call after the init-retry budget is exhausted', async 
   assert.deepStrictEqual(rows, [{ id: 'ok' }]);
   assert.ok(creates >= 4, 'engine should build a fresh instance after exhaustion');
 });
+
+// --- #234: Postgres extensions (PGlite.create / PGliteEngine.create) ---
+// With an extension declared, `CREATE EXTENSION` succeeds locally and the
+// extension's types/functions are usable — restoring parity with Aurora, which
+// supports these natively. Without it, the same SQL fails.
+
+test('PGliteEngine.create with no extensions behaves like the plain engine', async () => {
+  engine = await PGliteEngine.create(TEST_DIR);
+  await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)');
+  const rows = await engine.query('SELECT * FROM t');
+  assert.deepStrictEqual(rows, []);
+});
+
+test('pgvector extension: CREATE EXTENSION vector succeeds and a vector column works', async () => {
+  engine = await PGliteEngine.create(join(TEST_DIR, 'vec'), ['pgvector']);
+  await engine.execute('CREATE EXTENSION IF NOT EXISTS vector');
+  await engine.execute('CREATE TABLE items (id TEXT PRIMARY KEY, embedding vector(3))');
+  await engine.execute("INSERT INTO items (id, embedding) VALUES ('a', '[1,2,3]')");
+  // Nearest-neighbour ordering operator proves the extension is actually loaded.
+  const rows = await engine.query<{ id: string }>(
+    "SELECT id FROM items ORDER BY embedding <-> '[1,2,3]' LIMIT 1",
+  );
+  assert.deepStrictEqual(rows, [{ id: 'a' }]);
+});
+
+test('without the extension declared, CREATE EXTENSION vector fails', async () => {
+  engine = new PGliteEngine(join(TEST_DIR, 'novec'));
+  await assert.rejects(
+    () => engine.execute('CREATE EXTENSION vector'),
+    (err: Error) => {
+      // PGlite reports the missing extension control file as a query failure.
+      assert.strictEqual(err.name, DatabaseErrors.QueryFailed);
+      return true;
+    },
+  );
+});
