@@ -73,4 +73,25 @@ export type CustomDoorContext = AdapterContext & {
 	imageComputeName?: string;
 	/** Capabilities the app waived via `frontDoor.degrade`. */
 	degrade?: CapabilityId[];
+	/**
+	 * The app's settings for the features a door's FEATURE HOOKS build — e.g. the
+	 * domain names + certificate a `customDomain` hook attaches, the WAF config a
+	 * `waf` hook applies. Each field is present only when the app configured it
+	 * (which is also what makes the matching capability demanded).
+	 */
+	features?: CustomDoorFeatures;
+};
+
+/** The app's feature settings handed to a custom door's feature hooks (see {@link CustomDoorContext}). */
+export type CustomDoorFeatures = {
+	/** Custom domain(s) + certificate / hosted zone (`customDomain` hook). */
+	domain?: import('./hosting_construct.js').HostingConstructProps['domain'];
+	/** WAF settings (`waf` hook). */
+	waf?: import('./hosting_construct.js').HostingConstructProps['waf'];
+	/** Access-log settings (`accessLogs` hook). */
+	logging?: import('./hosting_construct.js').HostingConstructProps['logging'];
+	/** Alarm settings, incl. subscriptions (`alarms` hook). */
+	monitoring?: import('./hosting_construct.js').HostingConstructProps['monitoring'];
+	/** Geo restriction (`restrictGeo` hook). */
+	geoRestriction?: NonNullable<import('./hosting_construct.js').HostingConstructProps['cdn']>['geoRestriction'];
 };

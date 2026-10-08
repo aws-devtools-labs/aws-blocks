@@ -1748,10 +1748,27 @@ export class HostingConstruct extends Construct {
         // runtime break), then run the customer's hooks to build the door. It
         // reads the same ctx the built-in doors get; backend routing lives in
         // `plan.backend.origins`.
-        handle = renderCustomDoor(this, plan, fd.door, { ...common, degrade: fd.degrade }, {
-          degrade: fd.degrade,
-          negotiation: fd.negotiation,
-        });
+        handle = renderCustomDoor(
+          this,
+          plan,
+          fd.door,
+          {
+            ...common,
+            degrade: fd.degrade,
+            // The feature hooks need the app's settings to build their feature.
+            features: {
+              domain: props.domain,
+              waf: props.waf,
+              logging: props.logging,
+              monitoring: props.monitoring,
+              geoRestriction: props.cdn?.geoRestriction,
+            },
+          },
+          {
+            degrade: fd.degrade,
+            negotiation: fd.negotiation,
+          },
+        );
         // If the door exposes a regional origin (e.g. an ALB it built), surface
         // its DNS so a composed edge could point at it — same as the ALB door.
         this.loadBalancerDnsName = handle.originHandle?.domainName;

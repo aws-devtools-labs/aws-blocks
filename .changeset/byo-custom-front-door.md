@@ -28,7 +28,8 @@ hook (before building), runs `create` → `route` → the demanded hooks →
 reported `'buffered'`). An unmet demand fails synth — safe by construction,
 never a silent runtime break. You provision the door itself; Hosting still
 provisions the app (S3 assets, compute, backend) and hands them over via the
-render context and `plan.backend`.
+render context and `plan.backend`; the app's feature settings (domain, WAF,
+logging, monitoring, geo restriction) reach the feature hooks as `ctx.features`.
 
 Every built-in door is defined the same way: `cloudFrontDoor` (the default
 door — its output is unchanged), `albDoor`, `apiGatewayDoor`, `s3WebsiteDoor`,

@@ -87,7 +87,12 @@ export {
 	type RunFrontDoorOptions,
 	runFrontDoor,
 } from './door_hooks.js';
-export { type CustomDoorContext, renderCustomDoor, type RenderCustomDoorOptions } from './custom_door.js';
+export {
+	type CustomDoorContext,
+	type CustomDoorFeatures,
+	renderCustomDoor,
+	type RenderCustomDoorOptions,
+} from './custom_door.js';
 export { renderGraph } from './render-graph.js';
 export { buildCapabilityPlan, ORIGIN_IDS } from '../plan/capability-plan.js';
 export { composeGraph, composeCloudFrontOverRouter } from '../plan/compose.js';
