@@ -171,3 +171,80 @@ describe('restoreVersion() encodes both the key and the caller-supplied versionI
 		assert.ok(input.CopySource.includes('/reports/q1%20report.pdf?versionId='), input.CopySource);
 	});
 });
+
+// The keys both runtimes must reject identically. This is the whole point of
+// the shared validator: a key rejected in local dev must be rejected on AWS too.
+const INVALID_KEYS = ['../etc/passwd', 'a/../../b', '/leading', 'foo\x00bar', 'ctrl\x01char', '.', 'a/./b', 'a//b', 'a/'];
+
+// Every public method that accepts an object key. Each is invoked with a single
+// invalid key so both layers are asserted to reject it on the SAME method —
+// guarding against a future divergence where one layer validates a method the
+// other does not. deleteBatch takes an array; the rest take the key first.
+const KEY_METHODS: ReadonlyArray<{
+	name: string;
+	call: (bucket: { [k: string]: (...args: any[]) => unknown }, key: string) => Promise<unknown>;
+}> = [
+	{ name: 'put', call: (b, k) => b.put(k, Buffer.from('x')) as Promise<unknown> },
+	{ name: 'get', call: (b, k) => b.get(k) as Promise<unknown> },
+	{ name: 'delete', call: (b, k) => b.delete(k) as Promise<unknown> },
+	{ name: 'deleteBatch', call: (b, k) => b.deleteBatch([k]) as Promise<unknown> },
+	{ name: 'getUrl', call: (b, k) => b.getUrl(k) as Promise<unknown> },
+	{ name: 'putUrl', call: (b, k) => b.putUrl(k) as Promise<unknown> },
+	{ name: 'createUploadHandle', call: (b, k) => b.createUploadHandle(k) as Promise<unknown> },
+	{ name: 'listVersions', call: (b, k) => b.listVersions(k) as Promise<unknown> },
+	{ name: 'restoreVersion', call: (b, k) => b.restoreVersion(k, 'v1') as Promise<unknown> },
+];
+
+describe('object-key validation has mock↔AWS parity', () => {
+	for (const { name, call } of KEY_METHODS) {
+		for (const key of INVALID_KEYS) {
+			test(`the mock rejects ${JSON.stringify(key)} on ${name}()`, async () => {
+				const mock = mockBucket();
+				await assert.rejects(
+					() => call(mock as unknown as { [k: string]: (...a: any[]) => unknown }, key),
+					(err: Error) => err.name === 'ValidationFailed',
+				);
+			});
+
+			test(`the AWS runtime rejects ${JSON.stringify(key)} on ${name}() without reaching S3`, async () => {
+				// Any send() reaching the SDK fails the test: the key must be rejected
+				// before the command is dispatched.
+				const { bucket, sent } = awsBucket(() => { throw new Error('should not reach S3'); });
+				await assert.rejects(
+					() => call(bucket as unknown as { [k: string]: (...a: any[]) => unknown }, key),
+					(err: Error) => err.name === 'ValidationFailed',
+				);
+				assert.strictEqual(sent().length, 0, 'no S3 command should have been sent');
+			});
+		}
+	}
+});
+
+describe('deleteBatch rejects a mixed valid/invalid batch atomically on both layers', () => {
+	// A batch that mixes a valid key BEFORE an invalid one. Both layers must
+	// reject the whole batch without deleting the valid key — AWS validates the
+	// whole batch before any S3 send, and the mock now validates every key up
+	// front before deleting any (rather than deleting the valid key then throwing
+	// on the invalid one).
+	const batch = ['keep/me.txt', '../bad'];
+
+	test('the mock leaves the valid key in place', async () => {
+		const mock = mockBucket();
+		await mock.put('keep/me.txt', 'content');
+		await assert.rejects(
+			() => mock.deleteBatch(batch),
+			(err: Error) => err.name === 'ValidationFailed',
+		);
+		// The valid object preceding the invalid key must survive.
+		assert.notStrictEqual(await mock.get('keep/me.txt'), null, 'valid key should not have been deleted');
+	});
+
+	test('the AWS runtime sends no delete command', async () => {
+		const { bucket, sent } = awsBucket(() => { throw new Error('should not reach S3'); });
+		await assert.rejects(
+			() => bucket.deleteBatch(batch),
+			(err: Error) => err.name === 'ValidationFailed',
+		);
+		assert.strictEqual(sent().length, 0, 'no S3 command should have been sent');
+	});
+});

@@ -24,7 +24,6 @@ import {
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Rule, RuleTargetInput, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction as LambdaFunctionTarget } from 'aws-cdk-lib/aws-events-targets';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import type { IKey } from 'aws-cdk-lib/aws-kms';
 import { type Alias, Code, type FunctionUrl, type IVersion, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
@@ -198,16 +197,34 @@ export type HostingConstructProps = {
       countries: string[];
     };
     /**
-     * Default TTL for SSR/compute cache behaviors when the origin response
-     * does not include a `Cache-Control` header. Set this to enable
-     * CloudFront edge caching of SSR responses and improve hit ratio.
+     * Default TTL for SSR/compute cache behaviors when the origin sends no
+     * `Cache-Control` header. Enables CloudFront edge caching of SSR
+     * responses; the origin can override via `s-maxage`/`no-store`. Synth
+     * fails closed if this resolves to `> 0` and neither {@link cacheKeyCookies}
+     * nor {@link cacheKeyHeaders} is set.
      *
-     * When set, SSR responses without an explicit `Cache-Control` header
-     * are cached at the edge for this duration. The origin can always
-     * override via `s-maxage` or `no-store`.
+     * @see HostingProps.cdn.ssrDefaultTtl for the full note on cache-key
+     * credentials and the fail-closed guard.
      * @default Duration.seconds(0) — no caching unless origin opts in
      */
     ssrDefaultTtl?: Duration;
+    /**
+     * Cookie names to include in the SSR cache key. Set your session cookie
+     * name(s) here so authenticated SSR responses are cached per-session
+     * rather than shared across users. Required (together with or instead of
+     * `cacheKeyHeaders`) to safely enable `ssrDefaultTtl`.
+     * CloudFront allows at most 10 cookies in the cache key (2 are reserved
+     * for Next.js preview mode).
+     */
+    cacheKeyCookies?: string[];
+    /**
+     * Header names to include in the SSR cache key (e.g. `'authorization'`).
+     * Use to vary cached SSR responses by credential-bearing headers.
+     * `'accept-encoding'` is not allowed (handled automatically). Required
+     * (together with or instead of `cacheKeyCookies`) to safely enable
+     * `ssrDefaultTtl`.
+     */
+    cacheKeyHeaders?: string[];
     /**
      * Bring-your-own ResponseHeadersPolicy. When provided, the construct
      * skips creating its own policy — use this to share a single policy
@@ -764,10 +781,24 @@ export class HostingConstruct extends Construct {
         });
         // `buildId` in the properties makes the custom resource re-run on
         // every new build (new prerendered tag set), not just on create.
-        new CustomResource(this, 'IsrTagTableSeed', {
+        const initSeed = new CustomResource(this, 'IsrTagTableSeed', {
           serviceToken: initProvider.serviceToken,
           properties: { buildId },
         });
+        // Retain the seed custom resource on stack DELETE so it is dropped
+        // without a delete-time provider invoke. This is the same teardown-wedge
+        // guard applied to the Custom::CDKBucketDeployment CRs below: a
+        // provider-backed CR whose delete invoke can hang will wedge the whole
+        // stack in DELETE_FAILED. Observed on long-lived e2e stacks whose seed CR
+        // sat DELETE_IN_PROGRESS until the 30-min custom-resource timeout while
+        // every other stack resource had already reached DELETE_COMPLETE.
+        // Safe to retain: the seed only writes build-time tag->path rows into
+        // the cache table, and that table is RemovalPolicy.DESTROY (above), so it
+        // is destroyed with the stack regardless -- skipping the delete invoke
+        // orphans no live resource. (RETAIN here only tells CFN to skip the
+        // Delete and forget the logical CR; the backing provider Lambda is a
+        // normal stack resource and still deletes with the stack.)
+        initSeed.applyRemovalPolicy(RemovalPolicy.RETAIN);
       }
     }
 
@@ -1147,6 +1178,8 @@ export class HostingConstruct extends Construct {
       geoRestriction: props.cdn?.geoRestriction,
       skewProtection: props.skewProtection ?? { enabled: true },
       ssrDefaultTtl: props.cdn?.ssrDefaultTtl,
+      cacheKeyCookies: props.cdn?.cacheKeyCookies,
+      cacheKeyHeaders: props.cdn?.cacheKeyHeaders,
       webAclArn: effectiveWebAclArn ?? props.cdn?.webAclArn,
       quotas: props.cdn?.quotas,
       customErrorPages: props.errorPages
@@ -1359,17 +1392,11 @@ export class HostingConstruct extends Construct {
       }
     }
 
-    // ---- 9b. KMS decrypt grant for CloudFront OAC ----
-    const kmsKey = props.storage?.encryptionKey ?? storage.bucket.encryptionKey;
-    if (props.storage?.encryption === 'KMS' && kmsKey) {
-      kmsKey.addToResourcePolicy(
-        new iam.PolicyStatement({
-          actions: ['kms:Decrypt'],
-          resources: ['*'],
-          principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
-        }),
-      );
-    }
+    // ---- 9b. KMS decrypt for CloudFront OAC ----
+    // No explicit key-policy statement is added here: `S3BucketOrigin.withOriginAccessControl`
+    // (cdn_construct.ts) grants `kms:Decrypt` on the bucket's key — including a BYO
+    // `storage.encryptionKey`, which is set as the bucket's encryption key — conditioned on
+    // `AWS:SourceArn` matching this account's CloudFront distributions.
 
     // ---- 10. DNS records ----
     if (props.domain && dnsConstructs.length > 0) {

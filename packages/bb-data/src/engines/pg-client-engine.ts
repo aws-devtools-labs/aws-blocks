@@ -5,6 +5,7 @@ import pg from 'pg';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { translatePgError } from './pg-error-translator.js';
 import { DatabaseErrors } from '../errors.js';
+import { brandBlocksError } from '@aws-blocks/core';
 import type { ExternalSslOptions } from '../types.js';
 
 /**
@@ -60,7 +61,11 @@ function assertPostgresUrl(connectionString: string): void {
       '(deploy), then re-run `npm run sandbox` / `npm run deploy`. See MIGRATION_GUIDE.md.',
     );
     err.name = DatabaseErrors.ConnectionFailed;
-    throw err;
+    // Branded so the name crosses the wire and isBlocksError(e,
+    // DatabaseErrors.ConnectionFailed) matches on the client. The message is
+    // BB-authored (a provisioning-guidance string, no raw driver text), so
+    // forwarding it is safe (D-003).
+    throw brandBlocksError(err);
   }
 }
 

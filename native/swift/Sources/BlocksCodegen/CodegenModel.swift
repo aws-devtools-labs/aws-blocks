@@ -7,6 +7,17 @@
 
 import Foundation
 
+/// The concrete runtime type each known tag maps to; `isGeneric` wraps the first
+/// type argument (`RealtimeChannel<T>`). The tag Set and type printers derive from this.
+let knownTransferableBindings: [String: (base: String, isGeneric: Bool)] = [
+    "realtime/channel": ("RealtimeChannel", true),
+    "file-bucket/download": ("FileDownloadHandle", false),
+    "file-bucket/upload": ("FileUploadHandle", false),
+    "oidc/client": ("OIDCClient", false)
+]
+
+let knownTransferableTags: Set<String> = Set(knownTransferableBindings.keys)
+
 // MARK: - Resolved Codegen Model
 
 /// A fully resolved, language-independent type ready for translation to Swift.

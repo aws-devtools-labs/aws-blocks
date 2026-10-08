@@ -36,6 +36,7 @@ export type {
 	NamespaceConfig,
 	NamespaceDefs,
 	RealtimeChannel,
+	RealtimeChannelDescriptor,
 	RealtimeSubscription,
 	RealtimeServer,
 	RealtimeOptions,

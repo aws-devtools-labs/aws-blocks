@@ -14,8 +14,9 @@
  * 4. User sends message — chunks arrive via the already-open subscription
  */
 
-import type { DisconnectReason } from '@aws-blocks/bb-realtime';
-import type { AgentStreamChunk } from './types.js';
+import type { DisconnectReason, RealtimeChannelDescriptor } from '@aws-blocks/bb-realtime';
+import type { AgentStreamChunk, JSONValue } from './types.js';
+import type { ApprovalMetadata, ChatMessage } from './index.chat.js';
 
 export type { AgentStreamChunk } from './types.js';
 /** Re-exported so customers can type conversation `metadata` (and other JSON payloads) on the client. */
@@ -36,16 +37,28 @@ export type {
 	TurnRequest,
 } from './index.chat.js';
 
-/** A message in the conversation (for UI rendering). */
-export interface ChatMessage {
-	id: string;
-	role: 'user' | 'assistant' | 'approval';
-	content: string;
-	metadata?: Record<string, any>;
-}
+/**
+ * A message in the conversation (for UI rendering).
+ *
+ * Re-exported from the canonical definition so `/client` consumers get the SAME
+ * discriminated union createChat uses: narrowing on `role === 'approval'` types
+ * `metadata` as {@link ApprovalMetadata}, so `m.metadata?.approved` is typed with
+ * no cast. (Previously `/client` shipped a flat duplicate whose `metadata` was
+ * `Record<string, any>`, silently shadowing the union — this re-export removes that.)
+ */
+export type { ChatMessage, ApprovalMetadata } from './index.chat.js';
 
 /** Handler invoked for each streaming chunk delivered over the Realtime channel. */
 export type ChatChunkHandler = (chunk: AgentStreamChunk) => void;
+
+/**
+ * The wire format an app's `subscribe` adapter hands to `channel.subscribe(...)` to
+ * hydrate a live channel. Kept as a bb-agent-facing alias of bb-realtime's
+ * `RealtimeChannelDescriptor` so existing consumers can keep naming `ChatChannelDescriptor`,
+ * and so a `refresh` typed against it is the exact type bb-realtime's `SubscribeOptions.refresh`
+ * expects.
+ */
+export type ChatChannelDescriptor = RealtimeChannelDescriptor;
 
 /**
  * Options form accepted by {@link UseChatOptions.subscribe}.
@@ -70,6 +83,16 @@ export interface ChatSubscribeOptions {
 	 * resubscribed. useChat uses this to re-sync from the DB (see {@link UseChatOptions.subscribe}).
 	 */
 	onReconnect?: () => void;
+	/**
+	 * Called before each reconnect to obtain a freshly-minted channel descriptor (new
+	 * connect + channel token) so the subscription can outlive the token TTLs (channel
+	 * ~1h / connect ~2h). Mirrors bb-realtime's `SubscribeOptions.refresh` and stays
+	 * zero-arg because the channel is fixed per subscription here. useChat binds
+	 * {@link UseChatOptions.refresh} to the resolved channelId and forwards the bound
+	 * zero-arg form here; the transport calls it on reconnect only (never on the initial
+	 * subscribe) and simply does not use it when undefined.
+	 */
+	refresh?: () => Promise<ChatChannelDescriptor>;
 }
 
 /** Options for creating a chat instance. */
@@ -77,7 +100,7 @@ export interface UseChatOptions {
 	api: {
 		sendMessage(conversationId: string, message: string, channelId: string): Promise<unknown>;
 		createConversation(): Promise<{ conversationId: string }>;
-		getConversation(id: string): Promise<{ messages: { role: string; content: string; metadata?: Record<string, any> }[] }>;
+		getConversation(id: string): Promise<{ messages: { role: string; content: string; metadata?: unknown }[] }>;
 		resume?(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string): Promise<unknown>;
 		getPendingInterrupts?(conversationId: string): Promise<{ interrupts: Array<{ id: string; name: string; reason?: any }> }>;
 	};
@@ -93,6 +116,32 @@ export interface UseChatOptions {
 	 * - established: Promise that resolves when the WS subscription is confirmed
 	 */
 	subscribe: (channelId: string, handlerOrOptions: ChatChunkHandler | ChatSubscribeOptions) => Promise<{ unsubscribe(): void; established: Promise<void> }>;
+	/**
+	 * Optional consumer-supplied callback to re-mint a fresh channel descriptor when the
+	 * Realtime transport reconnects. useChat only holds the channelId (== conversationId)
+	 * plus your `subscribe` adapter; the channel descriptor is minted INSIDE that adapter
+	 * (via your raw-descriptor server method — see the Contract below), which useChat cannot
+	 * reach — so it cannot self-mint.
+	 * Provide this and useChat binds it to the CURRENT channel at the subscribe call site
+	 * and forwards the bound zero-arg form to the subscription (as `refresh`) so long turns
+	 * survive the channel (~1h) / connect (~2h) token TTLs: a reconnect mints fresh tokens
+	 * instead of replaying expired ones. Receives the resolved `channelId` so it re-mints for
+	 * the channel actually in use (which changes across loadConversation), not one captured
+	 * once at construction.
+	 *
+	 * Contract: this MUST resolve to the RAW channel descriptor (the wire object with
+	 * `__blocks`/token fields), NOT a hydrated channel client. To produce one: the app
+	 * exposes a server method that returns the channel's `toJSON()` descriptor with the
+	 * `__blocks` discriminant stripped (so the response middleware does not hydrate it on
+	 * the way back); this callback re-adds `__blocks: 'realtime/channel'`. That server
+	 * method re-issues a connect + channel token, so it MUST apply the SAME authorization
+	 * as the method that issued the original channel — it is a credential-issuing endpoint
+	 * and must be gated like the original. For example, with the test app's example server
+	 * method `agentGetRawDescriptor`:
+	 * `async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' })`.
+	 * When omitted, a reconnect replays the original tokens (fine for short turns).
+	 */
+	refresh?: (channelId: string) => Promise<ChatChannelDescriptor>;
 	/** Called whenever the message list changes. */
 	onMessagesChange?: (messages: ChatMessage[]) => void;
 	/** Called whenever loading state changes. */
@@ -148,6 +197,35 @@ function nextId(): string {
 const RECONNECT_FAILSAFE_MS = 660_000;
 
 /**
+ * Coerce an arbitrary value into a {@link JSONValue} for audit metadata. A value that
+ * is already JSON-round-trippable is kept as-is; anything else (a function, a symbol,
+ * a cyclic object) becomes its string form, so metadata stays a clean JSONValue.
+ * Mirrors the helper in index.chat.ts so an approval message's `input` (typed
+ * `unknown` on InterruptResponse) satisfies ApprovalMetadata's `input?: JSONValue`.
+ */
+function toJSONValue(value: unknown): JSONValue {
+	try {
+		const parsed: JSONValue = JSON.parse(JSON.stringify(value));
+		return parsed;
+	} catch {
+		return String(value);
+	}
+}
+
+/**
+ * Narrow an `unknown` message metadata value (customers pass their backend shape
+ * straight through) into a JSON record for rendering. A plain object is round-tripped
+ * to a clean {@link JSONValue} record; a non-object (null, string, array, undefined)
+ * yields `undefined`. Mirrors the narrow createChat does so the customer never writes
+ * a per-call adapter.
+ */
+function asJSONRecord(value: unknown): Record<string, JSONValue> | undefined {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+	const json = toJSONValue(value);
+	return typeof json === 'object' && json !== null && !Array.isArray(json) ? json : undefined;
+}
+
+/**
  * Create a chat instance for managing agent conversations.
  *
  * @deprecated Prefer {@link createChat}, which is compute-agnostic and takes a
@@ -167,10 +245,20 @@ const RECONNECT_FAILSAFE_MS = 660_000;
  *   },
  *   subscribe: async (channelId, sub) => {
  *     const result = await api.agentGetChannel(channelId);
- *     // `sub` is a ChatSubscribeOptions object (onMessage/onReconnect/onDisconnect);
- *     // channel.subscribe accepts it directly and wires reconnect handling for us.
+ *     // `sub` is a ChatSubscribeOptions object (onMessage/onReconnect/onDisconnect/refresh);
+ *     // channel.subscribe accepts it directly and wires reconnect handling — including
+ *     // calling sub.refresh to re-mint fresh tokens before each reconnect — for us.
  *     return result.channel.subscribe(sub);
  *   },
+ *   // Re-mint a fresh channel descriptor on reconnect so long turns outlive the channel
+ *   // (~1h) / connect (~2h) token TTLs. useChat binds this to the current channelId and
+ *   // forwards the bound zero-arg form to the subscription as sub.refresh.
+ *   // Must resolve to the RAW descriptor (wire object with token fields), not a hydrated
+ *   // channel: the app's server method returns channel.toJSON() with __blocks stripped and
+ *   // this callback re-adds it. That method re-issues tokens, so gate it with the SAME
+ *   // authorization as the method that issued the original channel. `agentGetRawDescriptor`
+ *   // here is the test app's example server method.
+ *   refresh: async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' }),
  *   onMessagesChange: (msgs) => renderMessages(msgs),
  *   onLoadingChange: (loading) => updateSpinner(loading),
  * });
@@ -476,9 +564,9 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		// Pass a plain options object (NOT a callable-with-props). Both bb-realtime
 		// middlewares resolve subscribe with `typeof handlerOrOptions === 'function'`
 		// FIRST — a function is treated as a bare handler and its onMessage/onReconnect/
-		// onDisconnect properties are never read. A hybrid callable would therefore
-		// silently drop onReconnect, making the reconnect re-sync + failsafe dead on the
-		// real transport. The options object hits the transport's object branch.
+		// onDisconnect/refresh properties are never read. A hybrid callable would therefore
+		// silently drop them, making the reconnect re-sync + failsafe + token refresh dead
+		// on the real transport. The options object hits the transport's object branch.
 		const subscribeArg: ChatSubscribeOptions = {
 			onMessage: handleChunk,
 			onReconnect: () => { void handleReconnect(); },
@@ -501,6 +589,12 @@ export function useChat(options: UseChatOptions): ChatInstance {
 				// no longer leave the spinner stuck.
 				if (reason !== 'client' && loading) { armFailsafe(); }
 			},
+			// Bind the consumer-supplied re-mint callback to THIS channelId (where the channel
+			// is known) and forward the zero-arg bound form. The channel changes across
+			// loadConversation / first-send createConversation, so binding here — not at
+			// construction — re-mints for the channel actually in use. When undefined the
+			// transport simply replays the original tokens on reconnect (back-compat).
+			refresh: options.refresh ? () => options.refresh!(channelId) : undefined,
 		};
 
 		const sub = await options.subscribe(channelId, subscribeArg);
@@ -574,9 +668,16 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			// stuck or orphan an empty assistant bubble (the failure mode this method's rejection
 			// path already handles).
 			if (!options.api.resume) throw new Error('respondToInterrupt requires api.resume to be configured');
-			// Add approval messages to chat immediately
+			// Add approval messages to chat immediately. Build metadata as a typed
+			// ApprovalMetadata (no cast) — `input` is `unknown` on InterruptResponse, so
+			// coerce it to JSONValue the same way createChat does.
 			for (const r of responses) {
-				messages = [...messages, { id: nextId(), role: 'approval' as const, content: r.approved ? 'Approved' : 'Denied', metadata: { approved: r.approved, trust: r.trust, toolName: r.toolName, input: r.input } }];
+				const metadata: ApprovalMetadata = {};
+				if (r.approved !== undefined) metadata.approved = r.approved;
+				if (r.trust !== undefined) metadata.trust = r.trust;
+				if (r.toolName !== undefined) metadata.toolName = r.toolName;
+				if (r.input !== undefined) metadata.input = toJSONValue(r.input);
+				messages = [...messages, { id: nextId(), role: 'approval' as const, content: r.approved ? 'Approved' : 'Denied', metadata }];
 			}
 			// Reuse existing empty assistant placeholder or create one
 			const existingEmpty = messages.find(m => m.role === 'assistant' && !m.content);
@@ -617,14 +718,28 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			// 2. THEN load history from DB
 			// TODO: buffer chunks received between subscribe and history load, then deduplicate/merge
 			const { messages: history } = await options.api.getConversation(id);
-			messages = history
-				.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'approval')
-				.map(m => ({
-					id: nextId(),
-					role: m.role as 'user' | 'assistant' | 'approval',
-					content: m.content,
-					metadata: m.metadata,
-				}));
+			messages = history.flatMap<ChatMessage>(m => {
+				// metadata arrives as `unknown` (customers pass their backend shape
+				// straight through — no adapter). Narrow it HERE, once, so the customer
+				// never writes this: a plain object becomes the JSON record, anything
+				// else is dropped.
+				const record = asJSONRecord(m.metadata);
+				if (m.role === 'user' || m.role === 'assistant') {
+					return [{ id: nextId(), role: m.role, content: m.content, metadata: record }];
+				}
+				if (m.role === 'approval') {
+					// Project the narrowed record into the typed ApprovalMetadata shape:
+					// read the known keys, keep the JSON-safe types.
+					const meta: ApprovalMetadata = {};
+					const src = record ?? {};
+					if (typeof src.approved === 'boolean') meta.approved = src.approved;
+					if (typeof src.trust === 'boolean') meta.trust = src.trust;
+					if (typeof src.toolName === 'string') meta.toolName = src.toolName;
+					if (src.input !== undefined) meta.input = src.input;
+					return [{ id: nextId(), role: 'approval', content: m.content, metadata: meta }];
+				}
+				return [];
+			});
 			options.onMessagesChange?.(messages);
 
 			// Check for pending interrupts (e.g., user left mid-approval)

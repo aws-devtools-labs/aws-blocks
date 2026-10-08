@@ -152,3 +152,35 @@ describe('CronJob synth-time schedule validation', () => {
 		);
 	});
 });
+
+describe('CronJob scheduler role trust', () => {
+	test('scheduler assume-role trust is scoped by aws:SourceAccount and aws:SourceArn', async () => {
+		const stack = await makeStack('CronTrust');
+		new CronJob(stack, 'nightly', { schedule: 'rate(1 day)', handler: async () => {} });
+
+		const template = Template.fromStack(stack);
+		const roles = template.findResources('AWS::IAM::Role');
+		const schedulerRoles = Object.values(roles).filter((r) =>
+			JSON.stringify(r.Properties?.AssumeRolePolicyDocument ?? {}).includes('scheduler.amazonaws.com'),
+		);
+		assert.strictEqual(schedulerRoles.length, 1, 'exactly one role trusts scheduler.amazonaws.com');
+
+		const statements = schedulerRoles[0].Properties.AssumeRolePolicyDocument.Statement as Array<
+			Record<string, Record<string, Record<string, unknown>>>
+		>;
+		const trust = statements.find((s) => JSON.stringify(s.Principal).includes('scheduler.amazonaws.com'));
+		assert.ok(trust, 'scheduler trust statement exists');
+
+		// aws:SourceAccount must equal this stack's account.
+		assert.deepStrictEqual(trust.Condition?.StringEquals?.['aws:SourceAccount'], { Ref: 'AWS::AccountId' });
+
+		// aws:SourceArn must match a schedule-group ARN in this account/region — Scheduler reports the
+		// schedule group ARN, so a `schedule/*` pattern would never match.
+		const sourceArn = JSON.stringify(trust.Condition?.ArnLike?.['aws:SourceArn']);
+		assert.ok(sourceArn.includes(':scheduler:'), `SourceArn targets scheduler: ${sourceArn}`);
+		assert.ok(sourceArn.includes(':schedule-group/*'), `SourceArn is a schedule-group pattern: ${sourceArn}`);
+		assert.ok(sourceArn.includes('AWS::Region'), `SourceArn is region-scoped: ${sourceArn}`);
+		assert.ok(sourceArn.includes('AWS::AccountId'), `SourceArn is account-scoped: ${sourceArn}`);
+		assert.ok(sourceArn.includes('AWS::Partition'), `SourceArn uses the stack partition: ${sourceArn}`);
+	});
+});

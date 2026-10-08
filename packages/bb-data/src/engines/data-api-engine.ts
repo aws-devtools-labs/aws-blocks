@@ -11,7 +11,7 @@ import {
 } from '@aws-sdk/client-rds-data';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { installClientUserAgent } from '@aws-blocks/core';
-import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES, wrapError, serializationConflict, uniqueConstraintConflict } from '../errors.js';
+import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES, wrapError, reTagged, serializationConflict, uniqueConstraintConflict } from '../errors.js';
 
 /**
  * Translate `$1`, `$2`, ... placeholders to `:p1`, `:p2`, ... for Data API.
@@ -99,6 +99,7 @@ function translateError(e: unknown): never {
 
     // Prefer SQLState-based classification when available.
     const stateMatch = msg.match(SQLSTATE_PATTERN);
+    let name: string;
     if (stateMatch) {
       const code = stateMatch[1];
       if (code === '40001') {
@@ -111,9 +112,9 @@ function translateError(e: unknown): never {
         // retriable. Matches the PGlite / pg-client engine paths.
         throw uniqueConstraintConflict(e);
       } else if (code.startsWith('08')) {
-        e.name = DatabaseErrors.ConnectionFailed;
+        name = DatabaseErrors.ConnectionFailed;
       } else {
-        e.name = DatabaseErrors.QueryFailed;
+        name = DatabaseErrors.QueryFailed;
       }
     } else if (/unique constraint|duplicate key/i.test(msg)) {
       // Data API errors without a parseable SQLState still carry the driver's
@@ -121,12 +122,14 @@ function translateError(e: unknown): never {
       // SQLState-parsed path above.
       throw uniqueConstraintConflict(e);
     } else if (TRANSIENT_DATA_API_ERROR_NAMES.has(e.name)) {
-      e.name = DatabaseErrors.ConnectionFailed;
+      name = DatabaseErrors.ConnectionFailed;
     } else {
-      e.name = DatabaseErrors.QueryFailed;
+      name = DatabaseErrors.QueryFailed;
     }
-    console.debug(`[DataApiEngine] ${e.name}`);
-    throw e;
+    console.debug(`[DataApiEngine] ${name}`);
+    // Branded re-tag (stable BB message, raw error kept as cause) so the name
+    // crosses the wire without leaking driver text (D-003).
+    throw reTagged(name, e);
   }
   wrapError(e);
 }

@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'native/kotlin/**'
+      - 'native/codegen-fixtures/**'
       - '.github/workflows/native-kotlin-analysis.yml'
   workflow_dispatch:
 
@@ -43,7 +44,7 @@ jobs:
           done
 
   build-and-test:
-    name: Build & Test (runtime)
+    name: Build & Test (runtime, codegen)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -72,6 +73,9 @@ jobs:
 
       - name: Compile common metadata
         run: ./gradlew :runtime:compileCommonMainKotlinMetadata
+
+      - name: Run codegen unit tests
+        run: ./gradlew :codegen:test
 
   ios-test:
     name: Build & Test (runtime, iOS)

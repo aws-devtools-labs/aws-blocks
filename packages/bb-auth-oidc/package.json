@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-auth-oidc",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "keywords": [
     "aws-blocks",
     "authentication",
@@ -51,14 +51,14 @@
     "build": "tsc --build && npm run build:lambda",
     "build:lambda": "esbuild src/idp-registration-lambda.ts --bundle --platform=node --target=node22 --outfile=dist/idp-registration-lambda/index.js --format=cjs --external:@aws-sdk/*",
     "pretest": "npm run build:lambda",
-    "test": "node --test --test-concurrency=1 dist/**/*.test.js"
+    "test": "node --test --test-concurrency=1 'dist/**/*.test.js'"
   },
   "dependencies": {
-    "@aws-blocks/auth-common": "^0.1.8",
-    "@aws-blocks/bb-app-setting": "^0.3.0",
-    "@aws-blocks/bb-kv-store": "^0.2.0",
-    "@aws-blocks/bb-logger": "^0.2.0",
-    "@aws-blocks/core": "^0.5.0",
+    "@aws-blocks/auth-common": "^0.1.9",
+    "@aws-blocks/bb-app-setting": "^0.3.1",
+    "@aws-blocks/bb-kv-store": "^0.3.0",
+    "@aws-blocks/bb-logger": "^0.2.1",
+    "@aws-blocks/core": "^0.6.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.0.0",
     "@aws-sdk/client-ssm": "^3.0.0",
     "jose": "^6.2.3",

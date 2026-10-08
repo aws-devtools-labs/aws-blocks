@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import type { CloudFormationCustomResourceDeleteEvent } from 'aws-lambda';
 import { isRetryableMigrationError, withRetry } from './migration-lambda.js';
 import { DataApiEngine } from './engines/data-api-engine.js';
+import { DatabaseErrors, reTagged } from './errors.js';
 
 // The handler's Delete branch is exercised directly; the retry helper and its
 // error predicate are exported and tested below.
@@ -115,4 +116,38 @@ test('withRetry retries an auto-pause resume error until the cluster is awake', 
   });
   assert.strictEqual(result, 'migrated');
   assert.strictEqual(attempts, 2);
+});
+
+// --- Cause-aware classification ---
+//
+// `reTagged` replaces the surface name/message with a stable BB pair and keeps
+// the raw SDK error as `cause`. The retryable signal for the writer-not-ready and
+// raw transient-name cases therefore lives ONLY on `cause`, so the predicate must
+// read it there. These tests build the wrapped error with the REAL `reTagged`
+// and pin that the surface alone is not retryable.
+
+/** A raw SDK-shaped error, as the Data API client throws it. */
+const rawSdkError = (name: string, message: string): Error =>
+  Object.assign(new Error(message), { name });
+
+test('a QueryFailed re-tag is retryable when its cause is a writer-not-ready error', () => {
+  const wrapped = reTagged(DatabaseErrors.QueryFailed, rawSdkError('BadRequestException', 'Communications link failure'));
+  assert.strictEqual(wrapped.name, DatabaseErrors.QueryFailed, 'sanity: raw name gone from the surface');
+  assert.ok(!wrapped.message.includes('Communications link failure'), 'sanity: raw text gone from the surface');
+  const surfaceOnly = Object.assign(new Error(wrapped.message), { name: wrapped.name });
+  assert.strictEqual(isRetryableMigrationError(surfaceOnly), false, 'the surface alone carries no retryable signal');
+  assert.strictEqual(isRetryableMigrationError(wrapped), true);
+});
+
+test('a QueryFailed re-tag is retryable when its cause has a transient Data API name', () => {
+  const wrapped = reTagged(DatabaseErrors.QueryFailed, rawSdkError('DatabaseResumingException', RESUMING_MESSAGE));
+  assert.strictEqual(isRetryableMigrationError(wrapped), true);
+});
+
+test('a QueryFailed re-tag is NOT retryable when its cause is a genuine SQL error', () => {
+  const wrapped = reTagged(
+    DatabaseErrors.QueryFailed,
+    rawSdkError('DatabaseErrorException', 'ERROR: syntax error at or near "CREAT"; SQLState: 42601'),
+  );
+  assert.strictEqual(isRetryableMigrationError(wrapped), false);
 });

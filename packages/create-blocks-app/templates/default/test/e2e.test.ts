@@ -127,7 +127,7 @@ test('todos: list (only own)', async () => {
   assert.ok(list.every(t => t.userId === 'testuser@example.com'));
 });
 
-test('todos: list sorted by priority (secondary index)', async () => {
+test('todos: list sorted by priority (client-side sort)', async () => {
   // Create todos with different priorities
   await api.createTodo('Low priority task', 3);
   await api.createTodo('High priority task', 1);
@@ -141,7 +141,7 @@ test('todos: list sorted by priority (secondary index)', async () => {
   }
 });
 
-test('todos: list sorted by title (secondary index)', async () => {
+test('todos: list sorted by title (client-side sort)', async () => {
   const sorted = await api.listTodos('title');
   assert.ok(sorted.length >= 2);
   const titles = sorted.map(t => t.title);

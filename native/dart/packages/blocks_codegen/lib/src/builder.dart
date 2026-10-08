@@ -1,5 +1,14 @@
 import 'model.dart';
 
+/// Tags the generator maps to concrete runtime types; any other tag on a
+/// direct result falls back to `UnknownTransferable`. The switches gate on this set.
+const knownTransferableTags = {
+  'realtime/channel',
+  'file-bucket/download',
+  'file-bucket/upload',
+  'oidc/client',
+};
+
 /// A type after the builder has resolved `$ref`s, deduplicated structurally
 /// identical shapes, and assigned a Dart name to everything that needs one.
 sealed class ResolvedType {
@@ -216,6 +225,7 @@ class CodegenModelBuilder {
     'FileDownloadHandle',
     'OidcClient',
     'BlocksClient',
+    'UnknownTransferable',
   };
   final Map<String, ResolvedType> _types = {};
   // Every named type synthesized during a build, in creation order.
@@ -250,6 +260,9 @@ class CodegenModelBuilder {
 
     // Pass 2: Resolve methods and group by namespace
     final namespaceMap = <String, List<Operation>>{};
+    // Formatted after Pass 3 so type-arg names reflect any collision rename.
+    final unboundResults = <(String, TransferableType)>[];
+    final nonHydratableChannels = <(String, TransferableType)>[];
     for (final method in rpc.methods) {
       final parts = method.name.split('.');
       final ns = parts.length > 1
@@ -289,6 +302,27 @@ class CodegenModelBuilder {
         '${method.name}#result',
       );
 
+      // Bare transferable only: a nullable/list/record-wrapped one is a
+      // different ResolvedType and skipped, matching the generator's fallback.
+      if (resultType is TransferableType &&
+          !knownTransferableTags.contains(resultType.blocksType)) {
+        unboundResults.add((method.name, resultType));
+      }
+
+      // A bound `realtime/channel` whose message type cannot be hydrated by the
+      // `Map`-only runtime is declared `RealtimeChannel<T>` but returned raw.
+      // Unwrap a nullable result first: `RealtimeChannel<T>?` emits the same raw
+      // body as the direct form, so it must be diagnosed too. Direct-result
+      // scope only (no field or nested scan).
+      final channelType = resultType is NullableType
+          ? resultType.inner
+          : resultType;
+      if (channelType is TransferableType &&
+          channelType.blocksType == 'realtime/channel' &&
+          !_channelMessageHydratable(channelType.typeArgs)) {
+        nonHydratableChannels.add((method.name, channelType));
+      }
+
       namespaceMap
           .putIfAbsent(ns, () => [])
           .add(
@@ -304,6 +338,14 @@ class CodegenModelBuilder {
     // Pass 3: detect (and resolve) display-name collisions among structurally
     // distinct types before generation.
     _resolveNamingCollisions();
+
+    for (final (operation, transferable) in unboundResults) {
+      _warnings.add(_formatUnboundTransferable(operation, transferable));
+    }
+
+    for (final (operation, transferable) in nonHydratableChannels) {
+      _warnings.add(_formatNonHydratableChannel(operation, transferable));
+    }
 
     final namespaces = namespaceMap.entries
         .map((e) => Namespace(name: e.key, operations: e.value))
@@ -682,6 +724,80 @@ class CodegenModelBuilder {
     _ => '',
   };
 
+  /// Generated model name for a type argument, or '' if it produces no model
+  /// (e.g. a primitive). Includes [SchemaReference], unlike [_displayName].
+  String _transferableTypeArgModelName(ResolvedType type) => switch (type) {
+    RecordType(name: final n) => n,
+    EnumType(name: final n) => n,
+    SealedClassType(name: final n) => n,
+    SchemaReference(name: final n) => n,
+    _ => '',
+  };
+
+  /// Builds the `AWSBLOCKS-NATIVE-001` diagnostic: names the operation, tag,
+  /// platform, and generated type-arg models — never descriptor values.
+  String _formatUnboundTransferable(
+    String operation,
+    TransferableType transferable,
+  ) {
+    final models = transferable.typeArgs
+        .map(_transferableTypeArgModelName)
+        .where((n) => n.isNotEmpty)
+        .toList();
+    final String typeArgClause;
+    if (models.isEmpty) {
+      typeArgClause = 'no generated type-argument models';
+    } else if (models.length == 1) {
+      typeArgClause = 'type argument ${models.first}';
+    } else {
+      typeArgClause = 'type arguments ${models.join(', ')}';
+    }
+    // Keep the diagnostic on one line if a tag contains a newline or CR.
+    final safeTag = transferable.blocksType
+        .replaceAll('\n', r'\n')
+        .replaceAll('\r', r'\r');
+    return 'AWSBLOCKS-NATIVE-001: $operation returns unbound transferable '
+        "'$safeTag' on dart; generated UnknownTransferable "
+        'with $typeArgClause.';
+  }
+
+  /// Whether a bound `realtime/channel` message type-arg can be hydrated by the
+  /// generated client. Delegates to the shared [channelMessageHydratable] so
+  /// this diagnostic and the generator's channel deserializer decide "raw vs
+  /// hydrated" from one place and cannot drift.
+  bool _channelMessageHydratable(List<ResolvedType> typeArgs) =>
+      channelMessageHydratable(typeArgs, _types);
+
+  /// A readable Dart-type label for a channel message type, for diagnostics.
+  String _messageTypeLabel(ResolvedType t) => switch (t) {
+    PrimitiveType(dartType: final dt) => dt,
+    NullableType(inner: final i) => '${_messageTypeLabel(i)}?',
+    ListType(items: final i) => 'List<${_messageTypeLabel(i)}>',
+    MapType(valueType: final v) => 'Map<String, ${_messageTypeLabel(v)}>',
+    RecordType(name: final n) => n,
+    EnumType(name: final n) => n,
+    SealedClassType(name: final n) => n,
+    SchemaReference(name: final n) => n,
+    TransferableType(blocksType: final kt) => kt,
+    TupleType(items: final items) =>
+      '(${items.map(_messageTypeLabel).join(', ')})',
+  };
+
+  /// Builds the `AWSBLOCKS-NATIVE-002` diagnostic: a bound `realtime/channel`
+  /// whose message type the `Map`-only runtime cannot decode, so the value is
+  /// returned un-hydrated. Names the operation and the message type only.
+  String _formatNonHydratableChannel(
+    String operation,
+    TransferableType transferable,
+  ) {
+    final messageLabel = transferable.typeArgs.isEmpty
+        ? 'dynamic'
+        : _messageTypeLabel(transferable.typeArgs.first);
+    return 'AWSBLOCKS-NATIVE-002: $operation returns realtime/channel with a '
+        "non-hydratable message type '$messageLabel' on dart; the value is "
+        'returned un-hydrated (not supported yet).';
+  }
+
   /// Structural identity of a named type. Two types with the same display name
   /// but different fingerprints are a genuine conflict; identical fingerprints
   /// are the (already-merged) dedup case and must not be flagged.
@@ -827,4 +943,27 @@ class CodegenModelBuilder {
 
   String _capitalize(String s) =>
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+}
+
+/// Single source of truth for whether a bound `realtime/channel` message
+/// type-arg can be hydrated by the `Map`-only runtime. An object (record or
+/// sealed class, including via `$ref` and the nullable `T?` form) hydrates via
+/// `fromJson`, a `Map` hydrates per-value, and a `dynamic`/`dynamic?`/absent
+/// arg gets an identity decoder. A concrete primitive, list, enum, or tuple
+/// has no decoder and is returned raw. Both the generator's channel
+/// deserializer (the "raw vs hydrated" gate) and the builder's
+/// `AWSBLOCKS-NATIVE-002` diagnostic consult this, so they cannot drift.
+bool channelMessageHydratable(
+  List<ResolvedType> typeArgs,
+  Map<String, ResolvedType> allTypes,
+) {
+  if (typeArgs.isEmpty) return true;
+  final arg = typeArgs[0] is NullableType
+      ? (typeArgs[0] as NullableType).inner
+      : typeArgs[0];
+  final resolved = arg is SchemaReference ? allTypes[arg.name] : arg;
+  return resolved is RecordType ||
+      resolved is SealedClassType ||
+      resolved is MapType ||
+      (resolved is PrimitiveType && resolved.dartType == 'dynamic');
 }
