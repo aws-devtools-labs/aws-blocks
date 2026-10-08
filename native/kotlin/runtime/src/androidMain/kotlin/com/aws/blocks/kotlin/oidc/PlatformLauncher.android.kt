@@ -28,8 +28,10 @@ internal object PendingOidcResult {
 }
 
 private class AndroidOidcLauncher : OidcPlatformLauncher {
-    override suspend fun openSession(configuredRelayTo: String): OidcRedirectSession =
-        AndroidRedirectSession(configuredRelayTo)
+    override suspend fun openSession(
+        configuredRelayTo: String,
+        options: OidcSignInOptions,
+    ): OidcRedirectSession = AndroidRedirectSession(configuredRelayTo)
 }
 
 private class AndroidRedirectSession(override val relayTo: String) : OidcRedirectSession {
@@ -43,6 +45,9 @@ private class AndroidRedirectSession(override val relayTo: String) : OidcRedirec
         activity.startActivity(intent)
         return deferred.await()
     }
+
+    /** Nothing is waiting on the outcome: the Custom Tab closes itself on redirect. */
+    override fun reportOutcome(outcome: OidcSignInOutcome) = Unit
 
     override fun close() {
         if (PendingOidcResult.isActive) PendingOidcResult.cancel()
