@@ -30,10 +30,52 @@ public class Api {
             public let password: String
             public let username: String
             public let attributes: [String: String]
+
+            public init(password: String, username: String, attributes: [String: String] = [:]) {
+                self.password = password
+                self.username = username
+                self.attributes = attributes
+            }
+
+            private struct DynamicKey: CodingKey {
+                var stringValue: String
+                var intValue: Int? { nil }
+                init?(stringValue: String) { self.stringValue = stringValue }
+                init?(intValue: Int) { return nil }
+            }
+
+            private static let fixedFieldNames: Set<String> = [
+                "password",
+                "username",
+            ]
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: DynamicKey.self)
+                try c.encode(self.password, forKey: DynamicKey(stringValue: "password")!)
+                try c.encode(self.username, forKey: DynamicKey(stringValue: "username")!)
+                for (k, v) in self.attributes where !Self.fixedFieldNames.contains(k) {
+                    try c.encode(v, forKey: DynamicKey(stringValue: k)!)
+                }
+            }
+
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: DynamicKey.self)
+                self.password = try c.decode(String.self, forKey: DynamicKey(stringValue: "password")!)
+                self.username = try c.decode(String.self, forKey: DynamicKey(stringValue: "username")!)
+                var extras: [String: String] = [:]
+                for key in c.allKeys where !Self.fixedFieldNames.contains(key.stringValue) {
+                    extras[key.stringValue] = try c.decode(String.self, forKey: key)
+                }
+                self.attributes = extras
+            }
         }
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 }

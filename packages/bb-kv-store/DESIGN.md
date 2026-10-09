@@ -46,7 +46,7 @@ The attribute name is fixed to `ttl` rather than configurable like `DistributedT
 
 Because DynamoDB deletes expired items asynchronously (typically within 48 hours), an expired item can still be physically present. Both runtimes therefore filter on read: `get` returns `null` and `scan` skips the item as soon as its expiry passes. Conditional expressions still see the stored item until it is actually deleted, matching DynamoDB.
 
-Maintenance sweeps that must act on every row still physically present — deleting the remains of expired items rather than waiting on the reaper — opt out of that filter with `scan({ includeExpired: true })`. It is deliberately not the default: a read answering "is this still valid?" must never see an expired item. `AuthCognito`'s session revoke uses it so a deliberate revoke physically deletes rows whose refresh tokens are still at rest.
+Maintenance sweeps that must act on every row still physically present — deleting the remains of expired items rather than waiting on the reaper — opt out of that filter with `scan({ includeExpired: true })`. It is deliberately not the default: a read answering "is this still valid?" must never see an expired item. `Auth`'s `auth.admin.revokeUserSessions` uses it so a deliberate revoke physically deletes rows whose refresh tokens are still at rest.
 
 This read-side filtering is a `KVStore` guarantee only. `DistributedTable` also supports TTL (`ttl?: keyof T`) but sets `timeToLiveAttribute` without filtering reads, so an expired item there keeps reading as live until the reaper collects it — up to 48 hours. Do not assume the two blocks behave the same; a `DistributedTable` consumer relying on TTL for expiry semantics needs its own read-side check.
 

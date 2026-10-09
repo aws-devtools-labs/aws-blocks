@@ -32,6 +32,32 @@ import { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
  */
 export class AppSetting<T = string> extends BuildingBlockScope {
 	/**
+	 * The SSM parameter name this setting reads and writes, resolved at synth:
+	 * the explicit `name` when one is given (always the case for
+	 * {@link AppSetting.fromExisting}), else the derived default `/${fullId}`.
+	 * The same name the runtime resolves, so another Building Block's CDK layer
+	 * can grant on or reference this exact parameter (e.g. `Auth` registering an
+	 * identity provider whose client secret is this setting).
+	 *
+	 * CDK layer only (synth time) — not on the local or Lambda runtime class.
+	 *
+	 * @example
+	 * new AppSetting(scope, 'apiKey', { secret: true }).parameterName;          // '/<fullId>'
+	 * new AppSetting(scope, 'url', { name: '/my-app/url', value: 'x' }).parameterName; // '/my-app/url'
+	 */
+	public readonly parameterName: string;
+
+	/**
+	 * `true` when the parameter is an SSM SecureString (`secret: true`), for a
+	 * stack-managed setting and for {@link AppSetting.fromExisting} alike. Lets
+	 * another Building Block's CDK layer refuse a plaintext `String` parameter
+	 * where it needs a secret.
+	 *
+	 * CDK layer only (synth time) — not on the local or Lambda runtime class.
+	 */
+	public readonly secret: boolean;
+
+	/**
 	 * Reference an SSM parameter that is created and owned **outside this stack**
 	 * (e.g. a connection string seeded by `ensureSecrets` before deploy). The
 	 * construct does not create, seed, tag, or delete it — it only grants the app
@@ -68,6 +94,8 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 		validateAppSettingOptions(id, internalOptions);
 
 		const parameterName = options.name ?? `/${this.fullId}`;
+		this.parameterName = parameterName;
+		this.secret = options.secret ?? false;
 
 		// Always JSON.stringify
 		// For secrets without a value, the Custom Resource Lambda generates a random string

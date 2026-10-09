@@ -1,6 +1,8 @@
-# Task: Passwordless Email-OTP Profile
+# Task: Email Sign-Up Profile
 
-Build a passwordless sign-in flow in this AWS Blocks app. A visitor enters their email, receives a one-time code, enters the code, and lands on a profile page that shows who they're signed in as. They can sign out.
+Build a sign-up / sign-in flow in this AWS Blocks app. A new visitor enters their email and a password, receives a one-time verification code by email, enters the code, and lands on a profile page that shows who they're signed in as. A returning visitor signs in with their email and password. They can sign out.
+
+This flow deploys as is: the app's auth block confirms sign-ups with a code that Cognito emails with its default sender, so no extra AWS setup is needed.
 
 The sign-in flow is an intrinsically multi-view browser experience, but the signed-in **identity** is a framework surface: an **`api` namespace** method reads the current user from the **auth session** on the server. The page reflects that identity.
 
@@ -10,21 +12,19 @@ The workspace has already been scaffolded. Begin by reading README.md (and any A
 
 ## Requirements
 
-1. A signed-out visitor sees an **email field** and a **submit button**. Submitting begins a passwordless sign-up / sign-in for that email and sends a one-time verification code. If that email **already has an account** (e.g., a returning visitor who previously signed out), detect it and run the **sign-in** code path instead of failing with a "user already exists" error — the same email must be able to authenticate again and land on its profile. An **empty or whitespace-only** email is invalid: validate/trim before submitting and do **not** begin auth or advance to the code view for it — stay on the email form (no code is sent, no unhandled error).
-2. The view then shows a **code field** and its own **submit button**. Submitting the code completes authentication and establishes a session.
-3. Once authenticated, the visitor sees a **profile** view that renders the signed-in user's identity (their email / username) — and the email/code fields are gone.
-4. The profile view has a **sign-out** button that returns the visitor to the signed-out email form.
+1. A signed-out visitor sees an **email field**, a **password field** and a **submit button**. Submitting with a **new** email signs the visitor up, which emails them a one-time verification code. Submitting with an email that **already has an account** (e.g., a returning visitor who previously signed out) and its password **signs that user in** directly — no code, no "user already exists" error — and lands on the profile. An **empty or whitespace-only** email, or an **empty** password, is invalid: validate/trim before submitting and do **not** begin auth or advance to the code view for it — stay on the form (no code is sent, no unhandled error).
+2. After a sign-up, the view shows a **code field** and its own **submit button**. Submitting the emailed code confirms the account, completes authentication and establishes a session — the visitor lands signed in without typing the password again.
+3. Once authenticated, the visitor sees a **profile** view that renders the signed-in user's identity (their email / username) — and the email, password and code fields are gone.
+4. The profile view has a **sign-out** button that returns the visitor to the signed-out form.
 5. **Reject bad codes.** If the submitted code is wrong **or blank/empty**, catch the error and stay on the code-entry view — do **not** establish a session or throw an unhandled error. When a code is actually rejected, show a message in `[data-testid=auth-error]`; that hook must be **absent until a code is rejected**. A wrong code does **not** end the attempt: the verification session stays valid (retriable), so the visitor can immediately re-enter the **correct** code and sign in — and once they do, the error must be **cleared** (`auth-error` removed again).
 6. **Session persistence.** The session lives in a cookie: on a full page reload the visitor stays signed in and the profile re-renders their identity (restore it on load).
-7. **Clean sign-out.** Signing out fully clears the session so a *different* email can sign in afterward and the profile shows the new identity (no stale cached user). A full page reload **after** signing out must **not** restore the session — it stays on the signed-out email form.
-
-This is email-OTP / passwordless: the visitor never types a password.
+7. **Clean sign-out.** Signing out fully clears the session so a *different* email can sign in afterward and the profile shows the new identity (no stale cached user). A full page reload **after** signing out must **not** restore the session — it stays on the signed-out form.
 
 ## The `api` namespace (required)
 
 Expose an **`api` namespace** (the framework's server-side RPC surface — `POST /aws-blocks/api`) with:
 
-1. **`api.getLastCode()`** — test harness hook (the grader has no mailbox): returns the most recently delivered code as `{ username, code }` (or `null`). **This is a test-only backdoor and MUST NOT be a production attack surface:** annotate it `@blocksSkipCodegen` (keep it out of the generated client/types) and gate its body so it returns `null` unless `process.env.BLOCKS_MOCK === 'true'`. Under real Cognito the code is emailed and never retained, so outside mock/test mode this method must reveal nothing. The bench harness runs the dev server with `BLOCKS_MOCK=true`, so the grader can still read the code. Retrieved via:
+1. **`api.getLastCode()`** — test harness hook (the grader has no mailbox): returns the most recently delivered verification code as `{ username, code }` (or `null`), where `username` is the email the code was sent to. **This is a test-only backdoor and MUST NOT be a production attack surface:** annotate it `@blocksSkipCodegen` (keep it out of the generated client/types) and gate its body so it returns `null` unless `process.env.BLOCKS_MOCK === 'true'`. Under real Cognito the code is emailed and never retained, so outside mock/test mode this method must reveal nothing. The bench harness runs the dev server with `BLOCKS_MOCK=true`, so the grader can still read the code. Retrieved via:
    ```
    POST /aws-blocks/api
    { "jsonrpc": "2.0", "method": "api.getLastCode", "params": [], "id": 1 }
@@ -38,9 +38,10 @@ The Playwright test grades your work using these `data-testid` hooks. Implement 
 | Selector | Element | Purpose |
 |---|---|---|
 | `[data-testid=auth-email]` | `<input type="email">` | The email to sign up / sign in with; shown when signed out |
-| `[data-testid=auth-submit]` | `<button>` | Begin auth and send the one-time code |
-| `[data-testid=otp-input]` | `<input>` | Where the visitor types the emailed code |
-| `[data-testid=otp-submit]` | `<button>` | Submit the code to complete authentication |
+| `[data-testid=auth-password]` | `<input type="password">` | The password; shown when signed out |
+| `[data-testid=auth-submit]` | `<button>` | Sign up (sending the verification code) or sign in |
+| `[data-testid=otp-input]` | `<input>` | Where the visitor types the emailed code; shown only while confirming a sign-up |
+| `[data-testid=otp-submit]` | `<button>` | Submit the code to confirm the account and sign in |
 | `[data-testid=profile-username]` | element in the signed-in view | Renders the signed-in user's email / username |
 | `[data-testid=signout-btn]` | `<button>` | Sign out; shown only when signed in |
 | `[data-testid=auth-error]` | element shown in the code-entry view | Renders an error message when the submitted code is rejected (absent until a code is rejected) |
@@ -51,7 +52,7 @@ The mount point for your page is the existing root element. You can replace what
 
 ## Out of scope
 
-- Passwords, password reset, MFA beyond the email OTP, social / federated login
+- Password reset, MFA, passwordless sign-in, social / federated login
 - Groups / roles, custom attributes, device tracking (you may remove any UI not required by this task)
 - Styling beyond what makes the test pass
 
@@ -60,4 +61,4 @@ The mount point for your page is the existing root element. You can replace what
 - All Playwright assertions pass against the running dev server.
 - No errors in the browser console under normal use.
 - Your changes stay inside the workspace root. Don't modify anything under `node_modules/`.
-- **Source inspection (grader; behaviorally unverifiable at runtime):** confirm in the source that `api.getLastCode` returns `null` unless `process.env.BLOCKS_MOCK === 'true'` — i.e. the production OTP-reader gate actually exists. The bench always runs with `BLOCKS_MOCK=true`, so this prod-gate branch is never exercised by the Playwright grader and must be verified by reading the code.
+- **Source inspection (grader; behaviorally unverifiable at runtime):** confirm in the source that `api.getLastCode` returns `null` unless `process.env.BLOCKS_MOCK === 'true'` — i.e. the production code-reader gate actually exists. The bench always runs with `BLOCKS_MOCK=true`, so this prod-gate branch is never exercised by the Playwright grader and must be verified by reading the code.

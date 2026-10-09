@@ -75,9 +75,9 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<SetStatusResult> setStatus({required ApiSetStatusStatus status}) async {
-    final params = <String, dynamic>{
-      'status': status.toJson(),
-    };
+    final params = <dynamic>[
+      status.toJson(),
+    ];
     final result = await _client.call('api.setStatus', params);
     return SetStatusResult.fromJson(result as Map<String, dynamic>);
   }

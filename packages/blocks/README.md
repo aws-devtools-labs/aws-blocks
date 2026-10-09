@@ -7,7 +7,7 @@ AWS Blocks is a backend framework built from **Building Blocks**: self-contained
 This package (`@aws-blocks/blocks`) re-exports every Building Block and the core primitives, so you import everything from one place:
 
 ```typescript
-import { Scope, ApiNamespace, KVStore, AuthBasic } from '@aws-blocks/blocks';
+import { Scope, ApiNamespace, KVStore, Auth } from '@aws-blocks/blocks';
 ```
 
 - **Type-safe, end to end** — your frontend calls backend methods directly; types flow through automatically.
@@ -64,12 +64,12 @@ Blocks compose. Here's the same API gated behind authentication and backed by a 
 
 ```typescript
 // aws-blocks/index.ts
-import { Scope, ApiNamespace, AuthBasic, DistributedTable } from '@aws-blocks/blocks';
+import { Scope, ApiNamespace, Auth, DistributedTable } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
-const auth = new AuthBasic(scope, 'auth', { passwordPolicy: { minLength: 8 } });
+const auth = new Auth(scope, 'auth', { emailPassword: { passwordPolicy: { minLength: 8 } } });
 
 const notes = new DistributedTable(scope, 'notes', {
   schema: z.object({ userId: z.string(), noteId: z.string(), text: z.string() }),
@@ -83,12 +83,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async addNote(text: string) {
     const user = await auth.requireAuth(context);          // 401s if not signed in
     const noteId = crypto.randomUUID();
-    await notes.put({ userId: user.username, noteId, text });
+    await notes.put({ userId: user.userSub, noteId, text });
     return { noteId };
   },
   async listNotes() {
     const user = await auth.requireAuth(context);
-    return await Array.fromAsync(notes.query({ where: { userId: { equals: user.username } } }));
+    return await Array.fromAsync(notes.query({ where: { userId: { equals: user.userSub } } }));
   },
 }));
 ```
@@ -117,10 +117,11 @@ Start from what you need:
   - Relational / SQL (joins, transactions) → see [Choosing a data block](#choosing-a-data-block) below
   - Files, blobs, uploads, static assets → `FileBucket` (bb-file-bucket)
   - A single config value or secret → `AppSetting` (bb-app-setting)
-- **Authenticate users**
-  - Username/password, prototypes/MVPs → `AuthBasic` (bb-auth-basic)
-  - Cognito user pools, MFA, groups → `AuthCognito` (bb-auth-cognito)
-  - External identity provider (OIDC) → `AuthOIDC` (bb-auth-oidc)
+- **Authenticate users** → `Auth` (bb-auth) — one block; each sign-in method is a key on its options object (see [Choosing a sign-in method](#choosing-a-sign-in-method) below)
+  - Your own users with email + password (the default) → `new Auth(scope, 'auth')`
+  - Google, Apple, Facebook or Amazon sign-in → `socialProviders`
+  - Okta, Entra ID, Auth0, GitHub or any OIDC provider → `oidcProviders`
+  - An identity provider that only speaks SAML → `samlProviders`
 - **Run work outside the request/response**
   - Fire-and-forget background jobs → `AsyncJob` (bb-async-job)
   - Scheduled / recurring tasks → `CronJob` (bb-cron-job)
@@ -144,6 +145,22 @@ Reach for one of the SQL blocks when you need to filter or join results across m
 
 If you need SQL, prefer `DistributedDatabase` for basic Postgres-compatible querying. Use `Database` specifically when you need a full (more expensive) Postgres implementation where the engine itself provides and enforces foreign keys, row level security, triggers, views, large transactions (more than 3,000 rows), or integration with an existing Postgres database. Note it carries an idle cost at minimum 0.5 ACU, or a cold start when scaling from zero, unlike the other two blocks.
 
+### Choosing a sign-in method
+
+All methods can be combined in one `Auth` block. They differ in cost and in where they run:
+
+| Method | Configure with | Cognito free tier | Works offline in `npm run dev` | User-pool user (Cognito groups, `auth.admin`) |
+|---|---|---|---|---|
+| Email + password | `emailPassword` (on by default) | 10,000 MAUs (none on the Plus plan) | Yes | Yes |
+| Social | `socialProviders` | 10,000 MAUs, shared with email + password (none on Plus) | No — deploy a sandbox to test | Yes |
+| OIDC, direct (default) | `oidcProviders` | No Cognito charge | Yes, with `stubIdp()` | No — groups come from the IdP's token |
+| OIDC through Cognito | `oidcProviders` with `federateVia: 'cognito'` | 50 MAUs, then $0.015 per MAU on every plan | No | Yes |
+| SAML | `samlProviders` | 50 MAUs, then $0.015 per MAU on every plan | No | Yes |
+
+Free tiers and rates are from [Amazon Cognito pricing](https://aws.amazon.com/cognito/pricing/) as read on 4 October 2026.
+
+MFA and passkeys apply only to email + password users; federated users get MFA from their identity provider. Only direct OIDC supports PKCE-only (public) clients. For the full comparison and how to choose, read *Which option and why* in the `Auth` README (`docs/bb-auth/README.md`).
+
 ## Building Block documentation
 
 Every Building Block ships its docs inside the `@aws-blocks/blocks` package under `docs/<block>/`: each `docs/<block>/` folder contains that block's `README.md`, plus `API.md`, `DESIGN.md`, and `CHANGELOG.md` where present. To read them, locate the bundled folder:
@@ -157,13 +174,11 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 <!-- BEGIN:block-catalog -->
 | Block | What it does | Keywords |
 |-------|--------------|----------|
-| auth-common | Shared interfaces and UI components for all AWS Blocks auth Building Blocks. | — |
+| auth-common | Shared interfaces and UI components for AWS Blocks authentication: the `BlocksAuth` contract that `Auth` implements, the `AuthErrors` vocabulary, and the provider-agnostic sign-in UI. | — |
 | bb-agent | AI agent with streaming, tool calling, and conversation persistence. | — |
 | bb-app-setting | A single application configuration value backed by SSM Parameter Store. | — |
 | bb-async-job | Background job processing backed by SQS and Lambda. | queue, job, background, async, worker, submit, batch, retry, status, transitions, SQS |
-| bb-auth-basic | Simple username/password authentication with JWT sessions, password policy, and optional code-confirmed signup and password reset. | — |
-| bb-auth-cognito | Authentication backed by Amazon Cognito User Pools. | — |
-| bb-auth-oidc | OIDC sign-in gate for AWS Blocks applications. | — |
+| bb-auth | `Auth` is the single authentication Building Block for AWS Blocks: one import and one options object for email + password, social sign-in, generic OIDC and SAML. | — |
 | bb-cron-job | Scheduled task execution backed by EventBridge Scheduler and Lambda. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
 | bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
 | bb-data | Full PostgreSQL database — provisions Aurora Serverless v2 by default, or connects to an existing PostgreSQL database (Supabase, Neon, etc.) via `fromExisting()`. | — |
@@ -242,7 +257,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
 - Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
 - Configure `CORS_ALLOWED_ORIGINS` explicitly for production — avoid wildcards
-- For cross-domain deployments, pass `crossDomain: true` to auth constructors (enables `SameSite=None; Secure; Partitioned`)
+- For cross-domain deployments, pass `session: { crossDomain: true }` to `Auth` (enables `SameSite=None; Secure; Partitioned`)
 - Enable `monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only)
 - Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default
 - Logger provides serialization safety (circular refs, type coercion) but does NOT redact sensitive content — never pass raw credentials, tokens, or secrets to Logger methods; sanitize context objects before logging
@@ -256,6 +271,6 @@ See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guida
 ## Reference
 
 - **Per-block documentation:** `docs/<block>/README.md` (overview), plus `docs/<block>/API.md` (full API reference) and `docs/<block>/DESIGN.md` (architecture & rationale) where present — e.g. `docs/bb-distributed-table/README.md`. The catalog + decision tree live in `docs/README.md`.
-- **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. See the `@aws-blocks/auth-common` README.
+- **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. For custom auth forms, `submitAuthAction` submits an action and notifies every component and tab; `subscribeAuthState` / `getAuthStateSnapshot` expose the auth state as a store (React's `useSyncExternalStore`). See the `@aws-blocks/auth-common` README.
 - **SSR** (`@aws-blocks/blocks/server`): `withAuth` forwards browser cookies to API calls during server rendering. See the `@aws-blocks/core` README.
 - **Wire protocol & debugging:** the client is JSON-RPC 2.0 over a single endpoint — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).

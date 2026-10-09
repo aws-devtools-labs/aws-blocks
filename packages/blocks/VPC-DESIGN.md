@@ -105,14 +105,13 @@ interface VpcRequirements {
 | bb-email-client | `{ interfaceEndpoints: [SES] }` |
 | bb-app-setting | `{ interfaceEndpoints: [SSM] }` |
 | bb-realtime | `{ interfaceEndpoints: [APIGATEWAY] }` |
-| bb-auth-cognito | `{ interfaceEndpoints: [SSM] }` |
-| bb-auth-oidc | `{ interfaceEndpoints: [SSM] }` |
+| bb-auth | `{ interfaceEndpoints: [SSM] }` |
 | bb-distributed-data | `{ requiresEgress: true }` (DSQL over public HTTPS needs Lambda egress) |
 
 > CloudWatch Logs is always provisioned by `finalizeVpc` regardless of BB
 > declarations (Lambda needs it for log delivery from within a VPC). The SSM
 > interface endpoint is no longer always-on — it flows from BB requirements
-> (AppSetting and the auth BBs), so an app that uses neither gets no SSM
+> (AppSetting and `Auth`), so an app that uses neither gets no SSM
 > endpoint.
 
 ### Always-Added Endpoints
@@ -173,7 +172,7 @@ This avoids:
 ```
 test-apps/vpc-smoke/
 ├── aws-blocks/
-│   ├── index.ts          # Instantiates KVStore, DistributedTable, FileBucket, AsyncJob, AppSetting, Realtime, AuthCognito, Database, Logger, Metrics, Tracer
+│   ├── index.ts          # Instantiates KVStore, DistributedTable, FileBucket, AsyncJob, AppSetting, Realtime, Auth, Database, Logger, Metrics, Tracer
 │   ├── index.cdk.ts      # Looks up persistent test VPC, passes vpc: { network: vpc, provisionEndpoints: true }
 │   └── index.handler.ts  # Re-exports BB instances
 └── package.json

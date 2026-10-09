@@ -4,6 +4,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
+import { getTestSupport } from './test-support.js';
 
 export function appSettingTests(getApi: () => typeof apiType) {
   describe('AppSetting BB', () => {
@@ -54,21 +55,23 @@ export function appSettingTests(getApi: () => typeof apiType) {
       assert.strictEqual(typeof value, 'number');
     });
 
+    // A secret's value is not something to serve to any caller, so these read
+    // and write it through the secret-gated `testSupport` namespace.
     test('AppSetting - secret setting returns a non-empty value', async () => {
-      const api = getApi();
-      const { value } = await api.settingGetSecret();
+      const { testSupport, secret } = await getTestSupport();
+      const { value } = await testSupport.settingGetSecret(secret);
       assert.ok(typeof value === 'string');
       assert.ok(value.length > 0);
     });
 
     test('AppSetting - secret setting put then get returns updated value', async () => {
-      const api = getApi();
-      const original = (await api.settingGetSecret()).value;
-      await api.settingPutSecret('my-real-api-key');
-      const { value } = await api.settingGetSecret();
+      const { testSupport, secret } = await getTestSupport();
+      const original = (await testSupport.settingGetSecret(secret)).value;
+      await testSupport.settingPutSecret(secret, 'my-real-api-key');
+      const { value } = await testSupport.settingGetSecret(secret);
       assert.strictEqual(value, 'my-real-api-key');
       // Restore original
-      await api.settingPutSecret(original);
+      await testSupport.settingPutSecret(secret, original);
     });
   });
 }

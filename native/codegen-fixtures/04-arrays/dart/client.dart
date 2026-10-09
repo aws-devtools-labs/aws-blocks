@@ -53,12 +53,12 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<List<String>> listTags() async {
-    final result = await _client.call('api.listTags', <String, dynamic>{});
+    final result = await _client.call('api.listTags', const <dynamic>[]);
     return (result as List<dynamic>).cast<String>();
   }
 
   Future<List<ListItemsResult>> listItems() async {
-    final result = await _client.call('api.listItems', <String, dynamic>{});
+    final result = await _client.call('api.listItems', const <dynamic>[]);
     return (result as List<dynamic>).map((e) => ListItemsResult.fromJson(e as Map<String, dynamic>)).toList();
   }
 }

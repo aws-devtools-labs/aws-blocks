@@ -19,6 +19,49 @@
                   "action": {
                     "type": "string",
                     "enum": [
+                      "signUp"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username",
+                  "password"
+                ],
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "resetPassword"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
                       "signIn"
                     ]
                   },
@@ -41,24 +84,17 @@
                   "action": {
                     "type": "string",
                     "enum": [
-                      "signUp"
+                      "signInWithPasskey"
                     ]
                   },
                   "username": {
-                    "type": "string"
-                  },
-                  "password": {
                     "type": "string"
                   }
                 },
                 "required": [
                   "action",
-                  "username",
-                  "password"
-                ],
-                "additionalProperties": {
-                  "type": "string"
-                }
+                  "username"
+                ]
               },
               {
                 "type": "object",
@@ -122,24 +158,6 @@
                 },
                 "required": [
                   "action"
-                ]
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "action": {
-                    "type": "string",
-                    "enum": [
-                      "resetPassword"
-                    ]
-                  },
-                  "username": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "action",
-                  "username"
                 ]
               },
               {
@@ -333,7 +351,89 @@
                       "challenge",
                       "firstFactor"
                     ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "webauthn"
+                        ]
+                      },
+                      "credential": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "credential"
+                    ]
                   }
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "startPasskeyRegistration"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "completePasskeyRegistration"
+                    ]
+                  },
+                  "credential": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "credential"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "listPasskeys"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "deletePasskey"
+                    ]
+                  },
+                  "credentialId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "credentialId"
                 ]
               }
             ]
@@ -421,6 +521,16 @@
               }
             ]
           },
+          "errorName": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "retriable": {
             "oneOf": [
               {
@@ -445,6 +555,16 @@
           },
           "username": {
             "type": "string"
+          },
+          "displayName": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -490,6 +610,20 @@
                 "type": "null"
               }
             ]
+          },
+          "capability": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "webauthn-get",
+                  "webauthn-create"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -511,9 +645,9 @@
             "type": "string",
             "enum": [
               "number",
+              "password",
               "email",
               "text",
-              "password",
               "tel",
               "hidden"
             ]

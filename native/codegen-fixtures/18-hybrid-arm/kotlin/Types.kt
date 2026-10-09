@@ -13,7 +13,16 @@ public data class AuthAction(
   public val fields: List<AuthField>,
   public val url: String? = null,
   public val method: Method? = null,
+  public val capability: Capability? = null,
 ) {
+  @Serializable
+  public enum class Capability {
+    @SerialName("webauthn-get")
+    WebauthnGet,
+    @SerialName("webauthn-create")
+    WebauthnCreate,
+  }
+
   @Serializable
   public enum class Method {
     @SerialName("GET")
@@ -35,12 +44,12 @@ public data class AuthField(
   public enum class Type {
     @SerialName("number")
     Number,
+    @SerialName("password")
+    Password,
     @SerialName("email")
     Email,
     @SerialName("text")
     Text,
-    @SerialName("password")
-    Password,
     @SerialName("tel")
     Tel,
     @SerialName("hidden")
@@ -54,6 +63,7 @@ public data class AuthState(
   public val user: AuthUser? = null,
   public val actions: List<AuthAction>,
   public val error: String? = null,
+  public val errorName: String? = null,
   public val retriable: Boolean? = null,
 ) {
   @Serializable
@@ -77,4 +87,5 @@ public data class AuthState(
 public data class AuthUser(
   public val userId: String,
   public val username: String,
+  public val displayName: String? = null,
 )

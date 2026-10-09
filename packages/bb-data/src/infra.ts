@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { VpcContext } from '@aws-blocks/core/cdk';
-import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME, deployTimeLambdaEntry } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -341,8 +341,10 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     const migrationsHash = hashMigrationsDir(options.migrationsPath);
     const migrationFn = new lambda.NodejsFunction(scope, `${name}MigrationFn`, {
       // Points at the compiled migration-lambda.js in dist/ (same directory as this file at runtime).
-      // Must NOT use ../src/migration-lambda.ts — src/ is excluded from the published package.
-      entry: join(import.meta.dirname ?? new URL('.', import.meta.url).pathname, 'migration-lambda.js'),
+      // Must NOT use ../src/migration-lambda.ts — an installed package runs from dist/. A vendorized
+      // copy (blocks-vendorize copies src/ only, no dist/) has just ./migration-lambda.ts next to this
+      // file, which deployTimeLambdaEntry falls back to.
+      entry: deployTimeLambdaEntry(import.meta.url, './migration-lambda'),
       handler: 'handler',
       runtime: DEFAULT_NODE_RUNTIME,
       timeout: cdk.Duration.minutes(5),

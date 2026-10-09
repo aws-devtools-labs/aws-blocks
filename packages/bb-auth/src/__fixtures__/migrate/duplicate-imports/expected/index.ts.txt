@@ -1,0 +1,9 @@
+import { Auth as Cognito, AuthErrors } from '@aws-blocks/bb-auth';
+import type { AuthenticatedUser, MfaPreference } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+export const auth = new Cognito(scope, 'auth', {});
+export const notAuthorized = AuthErrors.NotAuthorized;
+export type User = AuthenticatedUser;
+export type Prefs = MfaPreference;

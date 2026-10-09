@@ -4,16 +4,6 @@
 
 ```ts
 
-import { AdminAction } from '@aws-blocks/bb-auth-cognito';
-import { AdminActionGate } from '@aws-blocks/bb-auth-cognito';
-import { AdminCreateInit } from '@aws-blocks/bb-auth-cognito';
-import { AdminDisabled } from '@aws-blocks/bb-auth-cognito';
-import { AdminGetterOf } from '@aws-blocks/bb-auth-cognito';
-import { AdminGrants } from '@aws-blocks/bb-auth-cognito';
-import { AdminOptions } from '@aws-blocks/bb-auth-cognito';
-import { AdminSurface } from '@aws-blocks/bb-auth-cognito';
-import { AdminUser } from '@aws-blocks/bb-auth-cognito';
-import { AdminUserFilter } from '@aws-blocks/bb-auth-cognito';
 import { Agent } from '@aws-blocks/bb-agent';
 import { AgentConfig } from '@aws-blocks/bb-agent';
 import { AgentErrors } from '@aws-blocks/bb-agent';
@@ -31,20 +21,11 @@ import { AsyncJobOptions } from '@aws-blocks/bb-async-job';
 import { AsyncJobState } from '@aws-blocks/bb-async-job';
 import { AsyncJobStatus } from '@aws-blocks/bb-async-job';
 import { AsyncJobTransition } from '@aws-blocks/bb-async-job';
+import { Auth } from '@aws-blocks/bb-auth';
 import { AuthAction } from '@aws-blocks/auth-common';
 import { AuthActionInput } from '@aws-blocks/auth-common';
-import { AuthBasic } from '@aws-blocks/bb-auth-basic';
-import { AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
-import { AuthBasicOptions } from '@aws-blocks/bb-auth-basic';
-import { AuthBasicUser } from '@aws-blocks/bb-auth-basic';
-import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
-import { AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
-import { AuthCognitoOptions } from '@aws-blocks/bb-auth-cognito';
+import { AuthErrors } from '@aws-blocks/bb-auth';
 import { AuthField } from '@aws-blocks/auth-common';
-import { AuthFlowType } from '@aws-blocks/bb-auth-cognito';
-import { AuthOIDC } from '@aws-blocks/bb-auth-oidc';
-import { AuthOIDCErrorName } from '@aws-blocks/bb-auth-oidc';
-import { AuthOIDCErrors } from '@aws-blocks/bb-auth-oidc';
 import { AuthState } from '@aws-blocks/auth-common';
 import { AuthUser } from '@aws-blocks/auth-common';
 import { BatchSubmitResult } from '@aws-blocks/bb-async-job';
@@ -53,20 +34,14 @@ import { BlocksAuth } from '@aws-blocks/auth-common';
 import { ChildLogger } from '@aws-blocks/bb-logger';
 import { ChunkingConfig } from '@aws-blocks/bb-knowledge-base';
 import { ChunkingStrategy } from '@aws-blocks/bb-knowledge-base';
-import { CodeDeliveryDetails } from '@aws-blocks/bb-auth-cognito';
-import { CodeDeliveryFn } from '@aws-blocks/bb-auth-cognito';
-import { cognitoFederated } from '@aws-blocks/bb-auth-oidc';
-import { CognitoUser } from '@aws-blocks/bb-auth-cognito';
 import { ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
 import { ConditionalWriteOptions } from '@aws-blocks/bb-kv-store';
-import { ConfirmSignInOptions } from '@aws-blocks/bb-auth-cognito';
 import { CorsRule } from '@aws-blocks/bb-file-bucket';
 import { CronJob } from '@aws-blocks/bb-cron-job';
 import { CronJobErrors } from '@aws-blocks/bb-cron-job';
 import { CronJobEvent } from '@aws-blocks/bb-cron-job';
 import { CronJobOptions } from '@aws-blocks/bb-cron-job';
-import { customOauth2 } from '@aws-blocks/bb-auth-oidc';
-import { customOidc } from '@aws-blocks/bb-auth-oidc';
+import { customOauth2 } from '@aws-blocks/bb-auth';
 import { Dashboard } from '@aws-blocks/bb-dashboard';
 import { DashboardErrors } from '@aws-blocks/bb-dashboard';
 import { DashboardOptions } from '@aws-blocks/bb-dashboard';
@@ -74,7 +49,6 @@ import { Database } from '@aws-blocks/bb-data';
 import { DatabaseErrors } from '@aws-blocks/bb-data';
 import { DatabaseOptions } from '@aws-blocks/bb-data';
 import { DefaultToolContext } from '@aws-blocks/bb-agent';
-import { DeviceRecord } from '@aws-blocks/bb-auth-cognito';
 import { DisconnectReason } from '@aws-blocks/bb-realtime';
 import { DistributedDatabase } from '@aws-blocks/bb-distributed-data';
 import { DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
@@ -96,7 +70,6 @@ import { ExternalDatabaseRef } from '@aws-blocks/bb-data';
 import { ExternalKmsKeyRef } from '@aws-blocks/bb-kv-store';
 import { ExternalMetricsRef } from '@aws-blocks/bb-metrics';
 import { ExternalTableRef } from '@aws-blocks/bb-kv-store';
-import { ExternalUserPoolRef } from '@aws-blocks/bb-auth-cognito';
 import { ExternalBucketRef as FBExternalBucketRef } from '@aws-blocks/bb-file-bucket';
 import { PutOptions as FBPutOptions } from '@aws-blocks/bb-file-bucket';
 import { ScanOptions as FBScanOptions } from '@aws-blocks/bb-file-bucket';
@@ -107,9 +80,8 @@ import { FileContent } from '@aws-blocks/bb-file-bucket';
 import { FileInfo } from '@aws-blocks/bb-file-bucket';
 import { fromExisting } from '@aws-blocks/bb-data';
 import { GetUrlOptions } from '@aws-blocks/bb-file-bucket';
-import { github } from '@aws-blocks/bb-auth-oidc';
-import { google } from '@aws-blocks/bb-auth-oidc';
-import { GroupAdmin } from '@aws-blocks/bb-auth-cognito';
+import { github } from '@aws-blocks/bb-auth';
+import { isAuthError } from '@aws-blocks/bb-auth';
 import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseOptions } from '@aws-blocks/bb-knowledge-base';
@@ -117,14 +89,12 @@ import { PutOptions as KVPutOptions } from '@aws-blocks/bb-kv-store';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { KVStoreOptions } from '@aws-blocks/bb-kv-store';
-import { LifecycleAdmin } from '@aws-blocks/bb-auth-cognito';
 import { LifecycleRule } from '@aws-blocks/bb-file-bucket';
 import { LogEntry } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
 import { LoggingErrors } from '@aws-blocks/bb-logger';
 import { LoggingOptions } from '@aws-blocks/bb-logger';
 import { LogLevel } from '@aws-blocks/bb-logger';
-import { MappedClaims } from '@aws-blocks/bb-auth-oidc';
 import { MetadataFilter } from '@aws-blocks/bb-knowledge-base';
 import { MetricConfig } from '@aws-blocks/bb-dashboard';
 import { MetricDatum } from '@aws-blocks/bb-metrics';
@@ -136,35 +106,24 @@ import { MetricsErrors } from '@aws-blocks/bb-metrics';
 import { MetricsOptions } from '@aws-blocks/bb-metrics';
 import { MetricsSource } from '@aws-blocks/bb-dashboard';
 import { MetricUnit } from '@aws-blocks/bb-metrics';
-import { MFAPreference } from '@aws-blocks/bb-auth-cognito';
 import { ModelConfig } from '@aws-blocks/bb-agent';
-import { OIDCUser } from '@aws-blocks/bb-auth-oidc';
 import { OllamaModels } from '@aws-blocks/bb-agent';
-import { PasswordPolicy } from '@aws-blocks/bb-auth-basic';
 import { PutUrlOptions } from '@aws-blocks/bb-file-bucket';
 import { ReadValidationMode } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { RealtimeChannel } from '@aws-blocks/bb-realtime';
 import { RealtimeSubscription } from '@aws-blocks/bb-realtime';
-import { RelayOrigin } from '@aws-blocks/bb-auth-oidc';
-import { relayOrigin } from '@aws-blocks/bb-auth-oidc';
-import { ResetPasswordResult } from '@aws-blocks/bb-auth-cognito';
+import { relayOrigin } from '@aws-blocks/bb-auth';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
 import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
-import { SetPasswordOptions } from '@aws-blocks/bb-auth-cognito';
-import { SignInNextStep } from '@aws-blocks/bb-auth-cognito';
-import { SignInOptions } from '@aws-blocks/bb-auth-cognito';
-import { SignInResult } from '@aws-blocks/bb-auth-cognito';
-import { SignUpOptions } from '@aws-blocks/bb-auth-cognito';
-import { SignUpResult } from '@aws-blocks/bb-auth-cognito';
 import { SourceConfig } from '@aws-blocks/bb-knowledge-base';
 import { sql } from '@aws-blocks/bb-data';
 import { SqlQuery } from '@aws-blocks/bb-data';
 import { StreamOptions } from '@aws-blocks/bb-agent';
-import { stubIdp } from '@aws-blocks/bb-auth-oidc';
+import { stubIdp } from '@aws-blocks/bb-auth';
 import { SubmitOptions } from '@aws-blocks/bb-async-job';
 import { SubscribeOptions } from '@aws-blocks/bb-realtime';
 import { TableKey } from '@aws-blocks/bb-distributed-table';
@@ -179,30 +138,8 @@ import { Tracer } from '@aws-blocks/bb-tracer';
 import { TracerOptions } from '@aws-blocks/bb-tracer';
 import { Transaction } from '@aws-blocks/bb-data';
 import { TransactionOptions } from '@aws-blocks/bb-distributed-data';
-import { UpdateAttributeOutcome } from '@aws-blocks/bb-auth-cognito';
-import { UserAttribute } from '@aws-blocks/bb-auth-cognito';
 import { WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
 import { WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
-
-export { AdminAction }
-
-export { AdminActionGate }
-
-export { AdminCreateInit }
-
-export { AdminDisabled }
-
-export { AdminGetterOf }
-
-export { AdminGrants }
-
-export { AdminOptions }
-
-export { AdminSurface }
-
-export { AdminUser }
-
-export { AdminUserFilter }
 
 export { Agent }
 
@@ -238,33 +175,15 @@ export { AsyncJobStatus }
 
 export { AsyncJobTransition }
 
+export { Auth }
+
 export { AuthAction }
 
 export { AuthActionInput }
 
-export { AuthBasic }
-
-export { AuthBasicErrors }
-
-export { AuthBasicOptions }
-
-export { AuthBasicUser }
-
-export { AuthCognito }
-
-export { AuthCognitoErrors }
-
-export { AuthCognitoOptions }
+export { AuthErrors }
 
 export { AuthField }
-
-export { AuthFlowType }
-
-export { AuthOIDC }
-
-export { AuthOIDCErrorName }
-
-export { AuthOIDCErrors }
 
 export { AuthState }
 
@@ -282,19 +201,9 @@ export { ChunkingConfig }
 
 export { ChunkingStrategy }
 
-export { CodeDeliveryDetails }
-
-export { CodeDeliveryFn }
-
-export { cognitoFederated }
-
-export { CognitoUser }
-
 export { ConditionalDeleteOptions }
 
 export { ConditionalWriteOptions }
-
-export { ConfirmSignInOptions }
 
 export { CorsRule }
 
@@ -307,8 +216,6 @@ export { CronJobEvent }
 export { CronJobOptions }
 
 export { customOauth2 }
-
-export { customOidc }
 
 export { Dashboard }
 
@@ -323,8 +230,6 @@ export { DatabaseErrors }
 export { DatabaseOptions }
 
 export { DefaultToolContext }
-
-export { DeviceRecord }
 
 export { DisconnectReason }
 
@@ -367,8 +272,6 @@ export { ExternalKmsKeyRef }
 export { ExternalMetricsRef }
 
 export { ExternalTableRef }
-
-export { ExternalUserPoolRef }
 
 export { FBExternalBucketRef }
 
@@ -419,14 +322,12 @@ export function getSdkIdentifiers(bb: CronJob<any>): {
 };
 
 // @public (undocumented)
-export function getSdkIdentifiers(bb: AuthCognito<any>): {
-    userPoolId: string;
-    clientId: string;
-};
-
-// @public (undocumented)
-export function getSdkIdentifiers(bb: AuthOIDC<any>): {
-    sessionTableName: string;
+export function getSdkIdentifiers(bb: Auth<any>): {
+    userPoolId?: string;
+    clientId?: string;
+    region?: string;
+    hostedUiDomain?: string;
+    hostedUiClientId?: string;
 };
 
 // @public (undocumented)
@@ -480,9 +381,7 @@ export { GetUrlOptions }
 
 export { github }
 
-export { google }
-
-export { GroupAdmin }
+export { isAuthError }
 
 export { KnowledgeBase }
 
@@ -498,8 +397,6 @@ export { KVStoreErrors }
 
 export { KVStoreOptions }
 
-export { LifecycleAdmin }
-
 export { LifecycleRule }
 
 export { LogEntry }
@@ -511,8 +408,6 @@ export { LoggingErrors }
 export { LoggingOptions }
 
 export { LogLevel }
-
-export { MappedClaims }
 
 export { MetadataFilter }
 
@@ -536,15 +431,9 @@ export { MetricsSource }
 
 export { MetricUnit }
 
-export { MFAPreference }
-
 export { ModelConfig }
 
-export { OIDCUser }
-
 export { OllamaModels }
-
-export { PasswordPolicy }
 
 export { PutUrlOptions }
 
@@ -556,11 +445,7 @@ export { RealtimeChannel }
 
 export { RealtimeSubscription }
 
-export { RelayOrigin }
-
 export { relayOrigin }
-
-export { ResetPasswordResult }
 
 export { RetrieveOptions }
 
@@ -571,18 +456,6 @@ export { Segment }
 export { SendBatchResult }
 
 export { SendResult }
-
-export { SetPasswordOptions }
-
-export { SignInNextStep }
-
-export { SignInOptions }
-
-export { SignInResult }
-
-export { SignUpOptions }
-
-export { SignUpResult }
 
 export { SourceConfig }
 
@@ -622,15 +495,12 @@ export { Transaction }
 
 export { TransactionOptions }
 
-export { UpdateAttributeOutcome }
-
-export { UserAttribute }
-
 export { WaitUntilCompleteOptions }
 
 export { WaitUntilSyncedOptions }
 
 
+export * from "@aws-blocks/bb-auth";
 export * from "@aws-blocks/core";
 
 // (No @packageDocumentation comment for this package)

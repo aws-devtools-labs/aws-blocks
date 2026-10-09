@@ -1,0 +1,8 @@
+import { hasAuthError } from '@aws-blocks/blocks/client';
+import type { AuthState } from '@aws-blocks/blocks';
+
+export function message(state: AuthState): string {
+	if (state.errorName === 'SessionExpiredException') return 'Please sign in again';
+	if (hasAuthError(state, 'InvalidCodeException')) return 'Wrong code';
+	return '';
+}

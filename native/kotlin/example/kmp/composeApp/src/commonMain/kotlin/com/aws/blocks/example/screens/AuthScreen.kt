@@ -38,8 +38,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun AuthScreen(
-    client: OidcClient?,
-    loadError: String?,
+    client: OidcClient,
     restoredState: AuthState?,
     modifier: Modifier = Modifier
 ) {
@@ -55,45 +54,41 @@ fun AuthScreen(
         Text("Auth", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(16.dp))
 
-        if (client == null) {
-            Text(loadError?.let { "Error: $it" } ?: "Loading providers...")
-        } else {
-            val authState by client.authState.collectAsState()
-            // Loading means the client has not signed in or out yet, so it has no opinion and
-            // the restored session stands in. Signing in or out gives it one, and it wins.
-            val username = when (val state = authState) {
-                is OidcAuthState.SignedIn -> state.user.username
-                OidcAuthState.SignedOut -> null
-                OidcAuthState.Loading -> restoredState
-                    ?.takeIf { it.state == AuthState.State.SignedIn }
-                    ?.user
-                    ?.username
-            }
+        val authState by client.authState.collectAsState()
+        // Loading means the client has not signed in or out yet, so it has no opinion and
+        // the restored session stands in. Signing in or out gives it one, and it wins.
+        val username = when (val state = authState) {
+            is OidcAuthState.SignedIn -> state.user.username
+            OidcAuthState.SignedOut -> null
+            OidcAuthState.Loading -> restoredState
+                ?.takeIf { it.state == AuthState.State.SignedIn }
+                ?.user
+                ?.username
+        }
 
-            if (username != null) {
-                Text("Signed in as: $username")
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = {
-                    scope.launch {
-                        runCatching { client.signOut() }
-                            .onSuccess { output = "Signed out" }
-                            .onFailure { output = "Error: ${it.message}" }
-                    }
-                }) { Text("Sign Out") }
-            } else {
-                client.providers.forEach { provider ->
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                runCatching { client.signIn(provider) }
-                                    .onSuccess { output = "Signed in as: ${it.username}" }
-                                    .onFailure { output = "Error: ${it.message}" }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Sign in with $provider") }
-                    Spacer(Modifier.height(8.dp))
+        if (username != null) {
+            Text("Signed in as: $username")
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = {
+                scope.launch {
+                    runCatching { client.signOut() }
+                        .onSuccess { output = "Signed out" }
+                        .onFailure { output = "Error: ${it.message}" }
                 }
+            }) { Text("Sign Out") }
+        } else {
+            client.providers.forEach { provider ->
+                Button(
+                    onClick = {
+                        scope.launch {
+                            runCatching { client.signIn(provider) }
+                                .onSuccess { output = "Signed in as: ${it.username}" }
+                                .onFailure { output = "Error: ${it.message}" }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Sign in with $provider") }
+                Spacer(Modifier.height(8.dp))
             }
         }
 

@@ -123,7 +123,7 @@ describe('errorResponseFromCatch does not leak backend internals', () => {
     // Most Building Blocks define a local blocksError() with a package-specific
     // message format, then stamp the wire-safe brand through core's
     // brandBlocksError(). This simulates that path: a fresh named Error built by a
-    // BB (here with an UNPREFIXED message, like bb-app-setting / bb-auth-oidc) and
+    // BB (here with an UNPREFIXED message, like bb-app-setting / bb-auth) and
     // branded. Its BB name AND message must cross the wire.
     const bbErr = new Error('Invalid email address');
     bbErr.name = 'InvalidInputException';

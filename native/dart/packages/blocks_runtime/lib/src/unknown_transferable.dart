@@ -1,3 +1,5 @@
+import 'transferable_descriptor.dart';
+
 /// Fallback for a transferable whose tag has no runtime binding: holds the
 /// [tag] and raw [descriptor] without hydrating them.
 class UnknownTransferable {
@@ -41,4 +43,10 @@ class UnknownTransferable {
     }
     return UnknownTransferable._(tag: tag, descriptor: json);
   }
+
+  /// The raw [descriptor], as the server sent it. A generated client sends
+  /// an unbound transferable this way; `jsonEncode` calls it too.
+  ///
+  /// Returns a copy, so changing it doesn't change [descriptor].
+  Map<String, dynamic> toJson() => transferableDescriptor(tag, descriptor);
 }

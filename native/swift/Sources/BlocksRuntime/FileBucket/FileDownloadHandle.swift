@@ -39,6 +39,27 @@ public class FileDownloadHandle {
         return FileDownloadHandle(url: url)
     }
 
+    private enum DescriptorKeys: String, CodingKey {
+        case blocksType = "__blocks"
+        case url
+    }
+
+    /// Decodes a handle from its `{ "__blocks": "file-bucket/download", "url": … }` descriptor, so a generated
+    /// model can hold one in a field, an array, a dictionary or an optional.
+    public required convenience init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DescriptorKeys.self)
+        try TransferableDescriptor.check(container, key: .blocksType, expected: "file-bucket/download")
+        self.init(url: try container.decode(String.self, forKey: .url))
+    }
+
+    /// Encodes the handle's descriptor, as the server's `toJSON()` sends it:
+    /// `{ "__blocks": "file-bucket/download", "url" }`.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DescriptorKeys.self)
+        try container.encode("file-bucket/download", forKey: .blocksType)
+        try container.encode(url, forKey: .url)
+    }
+
     /// Returns the presigned download URL.
     public func getUrl() -> String { url }
 
@@ -106,3 +127,5 @@ public class FileDownloadHandle {
         }
     }
 }
+
+extension FileDownloadHandle: Codable {}

@@ -24,6 +24,7 @@
     "vendorize": "node ../../packages/blocks/dist/vendorize.js"
   },
   "dependencies": {
+    "@aws-blocks/bb-auth": "*",
     "@aws-blocks/blocks": "*",
     "@aws-blocks/hosting": "*",
     "next": "^15.0.0",

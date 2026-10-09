@@ -4,7 +4,6 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
@@ -15,24 +14,9 @@ import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { formatDeploySignal } from './deploy-stream.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
+import { generateDeployClient } from './deploy-client-codegen.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
-
-/**
- * Import the backend definition to populate the Scope BB registry.
- *
- * All BB variants set bbName/bbVersion on construction, so importing the
- * backend is sufficient to register every block. `buildAndSendEvent` then
- * reads the registry internally — callers don't need to pass block data.
- * Failures are silently swallowed — telemetry is best-effort.
- */
-async function importBackendForRegistry(backendPath: string): Promise<void> {
-  try {
-    await import(pathToFileURL(resolve(backendPath)).href);
-  } catch {
-    // best-effort — telemetry never affects the command
-  }
-}
 
 export interface SandboxOptions {
   backendPath: string;
@@ -166,9 +150,28 @@ export async function startSandbox(options: SandboxOptions) {
   // deploying. No-op unless this app uses an external DB and has ./migrations.
   await applyExternalMigrations({ stage: 'sandbox' });
 
-  // Import backend to populate Scope BB registry (for telemetry).
-  // Runs before CDK deploy so both success and failure paths include block info.
-  await importBackendForRegistry(backendPath);
+  // Generate client code targeting AWS (aws-runtime condition ensures
+  // the backend registers aws-middleware, not mock-middleware) — before the
+  // deploy, as `deploy()` does. The same worker populates the Scope BB registry
+  // for telemetry, so both the success and failure events below report the
+  // app's blocks. The backend is never imported in this process: `backendPath`
+  // is the CDK entry (it refuses to load without `--conditions=cdk`), and an
+  // in-process import of `index.ts` would load every block's local mock.
+  const backendDefPath = resolve(join(dirname(resolve(backendPath)), 'index.ts'));
+  const clientPath = join(dirname(backendDefPath), 'client.js');
+  console.log('📝 Generating client code...');
+  try {
+    await generateDeployClient(backendDefPath, clientPath);
+  } catch (error) {
+    // Not wrapped in trackCommand (see the credential check above): emit FAIL.
+    buildAndSendEvent({
+      command: 'sandbox',
+      state: 'FAIL',
+      duration: Date.now() - sandboxStartTime,
+      error: classifyError(error),
+    });
+    throw error;
+  }
 
   console.log("🚀 Deploying to AWS...");
   console.log("   (This may take a few minutes on first deploy)");
@@ -227,18 +230,6 @@ export async function startSandbox(options: SandboxOptions) {
   // implies the on-disk artifacts a consumer reads next are already present;
   // printed before the deploy-only return below so both paths emit it.
   console.log(`\n${formatDeploySignal(apiUrl)}`);
-
-  // Generate client code targeting AWS (aws-runtime condition ensures
-  // the backend registers aws-middleware, not mock-middleware).
-  const backendDefPath = resolve(join(dirname(resolve(backendPath)), 'index.ts'));
-  const clientPath = join(dirname(backendDefPath), 'client.js');
-  console.log('📝 Generating client code...');
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const workerPath = join(__dirname, 'generate-client-worker.js');
-  execFileSync('node', ['--conditions=aws-runtime', '--import', 'tsx', workerPath, backendDefPath, clientPath], {
-    stdio: 'inherit',
-    env: { ...process.env, NODE_OPTIONS: '' },
-  });
 
   if (deployOnly) {
     return apiUrl;

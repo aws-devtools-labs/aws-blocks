@@ -1,0 +1,85 @@
+{
+  "name": "@aws-blocks/bb-auth",
+  "version": "0.1.0",
+  "keywords": [
+    "aws-blocks",
+    "authentication",
+    "auth",
+    "cognito",
+    "oidc"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "directory": "packages/bb-auth"
+  },
+  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/bb-auth#readme",
+  "bugs": {
+    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+  },
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "bb-auth": "./dist/migrate/bin.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "DESIGN.md",
+    "MIGRATION.md",
+    "CUSTOMIZING-AUTH-UI.md",
+    "src",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "browser": "./dist/index.browser.js",
+      "cdk": {
+        "types": "./dist/index.cdk.d.ts",
+        "default": "./dist/index.cdk.js"
+      },
+      "aws-runtime": "./dist/index.aws.js",
+      "types": "./dist/index.mock.d.ts",
+      "default": "./dist/index.mock.js"
+    },
+    "./ui": {
+      "types": "./dist/ui.d.ts",
+      "default": "./dist/ui.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "node ../../scripts/generate-version.mjs Auth",
+    "build": "tsc --build && npm run build:lambda",
+    "build:lambda": "esbuild immutability-guard-lambda/index=src/cdk/immutability-guard-lambda.ts idp-registration-lambda/index=src/idp-registration-lambda.ts --bundle --platform=node --target=node22 --outdir=dist --format=cjs --external:@aws-sdk/*",
+    "pretest": "npm run build:lambda",
+    "test": "node --test --test-concurrency=1 dist/*.test.js"
+  },
+  "dependencies": {
+    "@aws-blocks/auth-common": "^0.1.9",
+    "@aws-blocks/bb-app-setting": "^0.3.1",
+    "@aws-blocks/bb-kv-store": "^0.3.0",
+    "@aws-blocks/bb-logger": "^0.2.1",
+    "@aws-blocks/core": "^0.6.0",
+    "@aws-sdk/client-cloudformation": "^3.0.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.0.0",
+    "@aws-sdk/client-ssm": "^3.0.0",
+    "aws-jwt-verify": "^5.0.0",
+    "jose": "^6.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.27.1",
+    "typescript": "^5.3.0"
+  },
+  "peerDependencies": {
+    "aws-cdk-lib": "^2.257.0",
+    "constructs": "^10.6.0",
+    "typescript": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  }
+}

@@ -9,7 +9,7 @@
     { "path": "packages/bb-data" },
     { "path": "packages/bb-realtime" },
     { "path": "packages/auth-common" },
-    { "path": "packages/bb-auth-basic" },
+    { "path": "packages/bb-auth" },
     { "path": "packages/bb-app-setting" },
     { "path": "packages/bb-file-bucket" },
     { "path": "packages/bb-agent" },

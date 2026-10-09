@@ -38,6 +38,16 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   defaults: BlocksPresets.sandbox,
 });
 
+// Native OIDC e2e against a deployed backend (see the `auth-oidc` block in
+// `index.ts`): the IdP is chosen from these variables at synth, so the deployed
+// handler gets them too and builds the same provider. Neither is a secret (the
+// client is a public PKCE client). Unset, a deployed `auth-oidc` serves the stub
+// IdP (`unsafeAllowDeployed`), so the native OIDC suites sign in against it.
+for (const name of ['NATIVE_E2E_OIDC_ISSUER', 'NATIVE_E2E_OIDC_CLIENT_ID']) {
+  const value = process.env[name];
+  if (value) blocksStack.handler.addEnvironment(name, value);
+}
+
 // Tag for the scheduled stack janitor (cleanup-stacks.yml). It only deletes
 // stacks tagged blocks:purpose=e2e-*, so without this a leaked per-run sandbox
 // (failed `npm run destroy`) matches the bb-test- prefix but is skipped and

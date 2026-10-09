@@ -109,6 +109,53 @@ export interface AuthActionPayloadMap {
 }
 
 // @public
+export type AuthErrorName = (typeof AuthErrors)[keyof typeof AuthErrors];
+
+// @public
+export const AuthErrors: {
+    readonly NotAuthenticated: "NotAuthenticatedException";
+    readonly NotAuthorized: "NotAuthorizedException";
+    readonly PasswordResetRequired: "PasswordResetRequiredException";
+    readonly TokenExpired: "TokenExpiredException";
+    readonly ReauthenticationRequired: "ReauthenticationRequiredException";
+    readonly UserAlreadyExists: "UsernameExistsException";
+    readonly UserNotConfirmed: "UserNotConfirmedException";
+    readonly UserNotFound: "UserNotFoundException";
+    readonly AliasExists: "AliasExistsException";
+    readonly UnsupportedUserState: "UnsupportedUserStateException";
+    readonly InvalidPassword: "InvalidPasswordException";
+    readonly CodeMismatch: "CodeMismatchException";
+    readonly ExpiredCode: "ExpiredCodeException";
+    readonly InvalidParameter: "InvalidParameterException";
+    readonly MFAMethodNotFound: "MFAMethodNotFoundException";
+    readonly SoftwareTokenMFANotFound: "SoftwareTokenMFANotFoundException";
+    readonly EnableSoftwareTokenMFA: "EnableSoftwareTokenMFAException";
+    readonly WebAuthnNotEnabled: "WebAuthnNotEnabledException";
+    readonly WebAuthnOriginNotAllowed: "WebAuthnOriginNotAllowedException";
+    readonly WebAuthnRelyingPartyMismatch: "WebAuthnRelyingPartyMismatchException";
+    readonly WebAuthnChallengeNotFound: "WebAuthnChallengeNotFoundException";
+    readonly WebAuthnCredentialNotSupported: "WebAuthnCredentialNotSupportedException";
+    readonly WebAuthnClientMismatch: "WebAuthnClientMismatchException";
+    readonly WebAuthnConfigurationMissing: "WebAuthnConfigurationMissingException";
+    readonly ProviderNotConfigured: "ProviderNotConfiguredException";
+    readonly ProviderMisconfigured: "ProviderMisconfiguredException";
+    readonly IdpError: "IdpErrorException";
+    readonly InvalidState: "InvalidStateException";
+    readonly InvalidCallback: "InvalidCallbackException";
+    readonly InvalidRelay: "InvalidRelayException";
+    readonly SdkOutdated: "SdkOutdatedException";
+    readonly EmailPasswordNotEnabled: "EmailPasswordNotEnabledException";
+    readonly NoFederatedProvider: "NoFederatedProviderException";
+    readonly LimitExceeded: "LimitExceededException";
+    readonly TooManyRequests: "TooManyRequestsException";
+    readonly TooManyFailedAttempts: "TooManyFailedAttemptsException";
+    readonly GroupNotFound: "ResourceNotFoundException";
+    readonly InvalidLambdaResponse: "InvalidLambdaResponseException";
+    readonly UserLambdaValidation: "UserLambdaValidationException";
+    readonly InternalError: "InternalErrorException";
+};
+
+// @public
 export interface AuthField {
     defaultValue?: string;
     label: string;
@@ -137,6 +184,7 @@ export interface AuthStateApi {
 
 // @public
 export interface AuthUser {
+    displayName?: string;
     userId: string;
     username: string;
 }
@@ -146,7 +194,16 @@ export interface BlocksAuth {
     checkAuth(context: BlocksContext): Promise<boolean>;
     getCurrentUser(context: BlocksContext): Promise<AuthUser | null>;
     requireAuth(context: BlocksContext): Promise<AuthUser>;
+    requireRole(context: BlocksContext, role: string): Promise<AuthUser>;
 }
+
+// @public
+export function isAuthError<N extends AuthErrorName = AuthErrorName>(e: unknown, name?: N): e is Error & {
+    name: N;
+};
+
+// @public
+export function isAuthErrorName(value: unknown): value is AuthErrorName;
 
 // (No @packageDocumentation comment for this package)
 

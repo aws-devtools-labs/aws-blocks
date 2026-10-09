@@ -93,10 +93,15 @@ public struct OpenRPCParser {
         case .null:
             return .primitive(kind: .void)
 
+        case .unknown:
+            return .primitive(kind: .unknown)
+
         case .constLiteral(let value):
             // `z.literal("foo")` collapses to a single-value enum so it can
-            // participate in discriminator detection downstream.
-            return .unionLiteral(values: [value])
+            // participate in discriminator detection downstream. A boolean or
+            // numeric literal keeps its JSON type.
+            if case .string(let text) = value { return .unionLiteral(values: [text]) }
+            return .literal(value)
 
         case .array(let items, let minItems, let maxItems):
             let elementType = items.map { mapTypeRef($0) } ?? .primitive(kind: .unknown)

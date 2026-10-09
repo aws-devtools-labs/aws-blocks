@@ -11,7 +11,9 @@
  * @internal
  */
 
+import type { AuthState } from './index.js';
 import type { AuthStateApi } from './ui.js';
+import { getAuthStateSnapshot, submitAuthAction, subscribeAuthState } from './ui.js';
 
 declare const api: AuthStateApi;
 
@@ -61,4 +63,75 @@ async function negative() {
 	await api.setAuthState({ action: 'nonsense' });
 }
 
-void positive; void negative;
+// ---------------------------------------------------------------------------
+// The store against React's `useSyncExternalStore` (requirement S10).
+//
+// A structural stand-in with React 18/19's exact signature (`@types/react`
+// `useSyncExternalStore<Snapshot>`), so this compiles without a React
+// dependency. `ui.react-types.test.ts` repeats the check against the real
+// `@types/react`. Zero casts: this is the code a customer writes.
+// ---------------------------------------------------------------------------
+
+declare function useSyncExternalStore<Snapshot>(
+	subscribe: (onStoreChange: () => void) => () => void,
+	getSnapshot: () => Snapshot,
+	getServerSnapshot?: () => Snapshot,
+): Snapshot;
+
+function store() {
+	const subscribe: (onStoreChange: () => void) => () => void = (cb) => subscribeAuthState(api, cb);
+	const getSnapshot: () => AuthState | null = () => getAuthStateSnapshot(api);
+	const state: AuthState | null = useSyncExternalStore(subscribe, getSnapshot, () => null);
+	// The README's hook, verbatim.
+	const useAuthState = () =>
+		useSyncExternalStore(
+			(cb: () => void) => subscribeAuthState(api, cb),
+			() => getAuthStateSnapshot(api),
+			() => null,
+		);
+	const viaHook: AuthState | null = useAuthState();
+	// A listener may also read the new state it is handed.
+	const stop: () => void = subscribeAuthState(api, (s: AuthState) => void s.state);
+	void state;
+	void viaHook;
+	stop();
+}
+
+// ---------------------------------------------------------------------------
+// submitAuthAction — the README / CUSTOMIZING-AUTH-UI.md snippets (R17)
+// ---------------------------------------------------------------------------
+
+async function notifier(username: string, password: string, showError: (message?: string) => void) {
+	// Same discriminated input as setAuthState, so a wrong payload is a compile error.
+	const next: AuthState = await submitAuthAction(api, { action: 'signIn', username, password });
+	if (next.retriable) showError(next.error);
+	await submitAuthAction(api, { action: 'signOut' });
+	// @ts-expect-error — signIn requires password, exactly as setAuthState does.
+	await submitAuthAction(api, { action: 'signIn', username });
+	// @ts-expect-error — unknown action.
+	await submitAuthAction(api, { action: 'nonsense' });
+}
+
+// README "Custom auth UI" snippet.
+async function readmeSignIn(username: string, password: string): Promise<string | undefined> {
+	const next = await submitAuthAction(api, { action: 'signIn', username, password });
+	if (next.retriable) return next.error;
+	return undefined;
+}
+
+// CUSTOMIZING-AUTH-UI.md "Depth 3" snippet.
+async function renderAuth(root: HTMLElement, showError: (message?: string) => void) {
+	const state = await api.getAuthState();
+	if (state.state === 'signedIn') {
+		root.textContent = `Signed in as ${state.user?.username}`;
+		return;
+	}
+	const next = await submitAuthAction(api, { action: 'signIn', username: 'alice', password: 'secret' });
+	if (next.retriable) {
+		showError(next.error);
+		return;
+	}
+	await submitAuthAction(api, { action: 'signOut' });
+}
+
+void positive; void negative; void store; void notifier; void readmeSignIn; void renderAuth;

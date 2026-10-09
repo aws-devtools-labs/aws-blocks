@@ -9,7 +9,7 @@ public class Api {
     }
 
     /// Calls `api.setStatus`.
-    public func setStatus(status: SetStatus.Result.Status) async throws -> SetStatus.Result {
+    public func setStatus(status: SetStatus.Status) async throws -> SetStatus.Result {
         let request = BlocksRequest(method: "api.setStatus", params: [status], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
         guard let result else { throw RPCError(message: "Unexpected null result for api.setStatus") }
@@ -27,6 +27,11 @@ public class Api {
         public struct Result: Codable {
             public let status: Status
             public let updatedAt: String
+
+            public init(status: Status, updatedAt: String) {
+                self.status = status
+                self.updatedAt = updatedAt
+            }
 
             public enum Status: String, Codable {
                 case active

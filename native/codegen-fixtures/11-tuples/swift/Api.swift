@@ -30,6 +30,12 @@ public class Api {
             public let item0: Double
             public let item1: Double
             public let item2: String
+
+            public init(item0: Double, item1: Double, item2: String) {
+                self.item0 = item0
+                self.item1 = item1
+                self.item2 = item2
+            }
         }
     }
 
@@ -38,6 +44,11 @@ public class Api {
         public struct Result: Codable {
             public let item0: String
             public let item1: Int
+
+            public init(item0: String, item1: Int) {
+                self.item0 = item0
+                self.item1 = item1
+            }
         }
     }
 }

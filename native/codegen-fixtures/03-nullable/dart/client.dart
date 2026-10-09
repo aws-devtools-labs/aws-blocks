@@ -58,9 +58,9 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<GetProfileResult> getProfile({required String userId}) async {
-    final params = <String, dynamic>{
-      'userId': userId,
-    };
+    final params = <dynamic>[
+      userId,
+    ];
     final result = await _client.call('api.getProfile', params);
     return GetProfileResult.fromJson(result as Map<String, dynamic>);
   }

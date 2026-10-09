@@ -413,6 +413,64 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         XCTAssertTrue(output.api.contains("[String: UpdateAttributes.ResultValue?]"), "Map value type should be optional")
     }
 
+    // MARK: - unknown
+
+    /// `unknown` is any JSON value: `JSONValue`, not a synthesized empty struct (which drops the
+    /// value and fails to decode anything but an object).
+    func testUnknownGeneratesJSONValue() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.store",
+                "params": [{ "name": "payload", "required": true, "schema": { "type": "unknown" } }],
+                "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Entry" } }
+            }],
+            "components": { "schemas": { "Entry": {
+                "type": "object",
+                "properties": {
+                    "payload": { "type": "unknown" },
+                    "nullablePayload": { "oneOf": [{ "type": "unknown" }, { "type": "null" }] },
+                    "tags": { "type": "array", "items": { "type": "unknown" } },
+                    "claims": { "oneOf": [
+                        { "type": "object", "additionalProperties": { "type": "unknown" } },
+                        { "type": "null" }
+                    ] }
+                },
+                "required": ["payload", "nullablePayload", "tags"]
+            } } }
+        }
+        """)
+
+        XCTAssertTrue(output.models.contains("public let payload: JSONValue\n"))
+        XCTAssertTrue(output.models.contains("public let nullablePayload: JSONValue?"))
+        XCTAssertTrue(output.models.contains("public let tags: [JSONValue]"))
+        XCTAssertTrue(output.models.contains("public let claims: [String: JSONValue]?"))
+        XCTAssertTrue(output.api.contains("func store(payload: JSONValue)"))
+        XCTAssertFalse(output.models.contains("ClaimsValue"), "No struct is synthesized for an unknown value")
+        XCTAssertFalse(output.models.contains("struct Payload"), "No struct is synthesized for an unknown value")
+        XCTAssertTrue(output.models.hasPrefix("import Foundation\nimport BlocksRuntime\n"), "JSONValue is a BlocksRuntime type")
+    }
+
+    func testModelsWithoutJSONValueDoNotImportRuntime() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.get", "params": [],
+                "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Todo" } }
+            }],
+            "components": { "schemas": { "Todo": {
+                "type": "object", "properties": { "title": { "type": "string" } }, "required": ["title"]
+            } } }
+        }
+        """)
+
+        XCTAssertFalse(output.models.contains("import BlocksRuntime"))
+    }
+
     // MARK: - Unknown Transferable
 
     private func build(from json: String) throws -> CodegenModel {

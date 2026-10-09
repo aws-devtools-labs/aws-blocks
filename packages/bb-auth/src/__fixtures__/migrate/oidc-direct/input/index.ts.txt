@@ -1,0 +1,56 @@
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Scope } from '@aws-blocks/core';
+import {
+	AuthOIDC,
+	AuthOIDCErrors,
+	customOauth2,
+	customOidc,
+	github,
+	google,
+	relayOrigin,
+	stubIdp,
+} from '@aws-blocks/bb-auth-oidc';
+
+const scope = new Scope('app');
+const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
+const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
+const oktaSecret = new AppSetting(scope, 'okta-secret', { secret: true });
+
+export const auth = new AuthOIDC(scope, 'oidc-auth', {
+	providers: [
+		// Production IdPs.
+		google({ clientId: 'google-client', clientSecret: () => googleSecret.get() }),
+		github({ clientId: 'gh-client', clientSecret: async () => await githubSecret.get() }),
+		customOidc({
+			name: 'okta',
+			issuerUrl: 'https://dev-1.okta.com',
+			clientId: 'okta-client',
+			clientSecret: () => oktaSecret.get(),
+			scopes: ['openid', 'email'],
+		}),
+		customOauth2({
+			name: 'gitlab',
+			clientId: 'gl-client',
+			clientSecret: 'inline-secret',
+			authUrl: 'https://gitlab.com/oauth/authorize',
+			tokenUrl: 'https://gitlab.com/oauth/token',
+			userInfoUrl: 'https://gitlab.com/api/v4/user',
+			scopes: ['read_user'],
+			mapClaims: (raw) => ({ providerSub: String(raw), email: null, name: null }),
+		}),
+		stubIdp({ name: 'corp', users: [{ sub: 'u-1', email: 'a@example.com', name: 'A' }] }),
+	],
+	allowBearerAuth: true,
+	callbackPath: '/aws-blocks/auth/callback',
+	postSignInPath: '/home',
+	allowedRelayOrigins: [relayOrigin('myapp://auth')],
+	onSignIn: async (user) => {
+		console.log(user.userId, user.email, user.provider);
+	},
+});
+
+export function isExpired(e: unknown): boolean {
+	return e instanceof Error && e.name === AuthOIDCErrors.TokenExpired;
+}
+
+export const callback = auth.callbackPath;

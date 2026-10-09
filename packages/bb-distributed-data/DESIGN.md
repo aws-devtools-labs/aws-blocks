@@ -49,6 +49,7 @@ bb-distributed-data (this package)
 - `TransactionTracker` enforces DDL/DML separation and 3,000-row limit
 - `simulateConflict()` test helper for OCC unit testing (mock-only hook, absent from the deployed AWS surface). The `40001`→409 serialization-conflict mapping is covered by translator/engine **unit tests** (mirroring `bb-data`), not an over-the-wire e2e test: `simulateConflict()` is a mock-only trigger with no counterpart on the deployed runtime, and there is no deterministic way to raise a genuine `40001` conflict over the JSON-RPC wire in local e2e. A duplicate-key `23505`→409 `UniqueConstraintViolation` conflict (not retriable) is different: the DSQL mock enforces the primary-key constraint, so it **is** deterministically inducible over the wire and is additionally covered by an over-the-wire e2e test (`test-apps/comprehensive/test/dsql.test.ts`), not a mock-only hook.
 - Error translation matches production behavior
+- Process lifetime as in `bb-data`'s `PGliteEngine`: PGlite's emulated timers are `unref()`'d, so the mock never keeps a short-lived script alive by itself, and the engine closes PGlite on `beforeExit`, so no `postmaster.pid` is left behind (see `bb-data/DESIGN.md`)
 
 ## Validation Layer
 

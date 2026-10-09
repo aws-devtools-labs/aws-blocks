@@ -16,11 +16,14 @@ import { distributedTableSecureDefaultsTests } from './distributed-table-secure-
 import { realtimeTests } from './realtime.test.js';
 import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
+import { responseCookieTests } from './response-cookies.test.js';
+import { testSupportGateTests } from './test-support-gate.test.js';
 import { corsPreflightTests } from './cors-preflight.test.js';
 import { authCognitoTests } from './auth-cognito.test.js';
 import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
 import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
+import { authValidateUserTests } from './auth-validate-user.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
 import { asyncJobTests } from './async-job.test.js';
@@ -235,26 +238,35 @@ appSettingTests(() => api);
 // Realtime tests (separate file)
 realtimeTests(() => api);
 
-// AuthBasic tests (separate file)
+// Auth email + password tests, formerly AuthBasic (separate file)
 basicAuthTests(() => api);
 
-// AuthBasic cookie-attribute convergence tests (separate file)
+// Auth cookie-attribute convergence tests (separate file)
 authCookieAttrsTests(() => api);
+
+// Multiple Set-Cookie values from one API method (separate file)
+responseCookieTests(() => api);
+
+// The e2e build's test-only support endpoints are secret-gated (separate file)
+testSupportGateTests();
 
 // CORS preflight allow-list tests (separate file)
 corsPreflightTests(() => api);
 
-// AuthCognito tests (separate file)
+// Auth (Cognito user pool) tests, formerly AuthCognito (separate file)
 authCognitoTests(() => api);
 
-// AuthCognito Sandbox tests (separate file)
+// Auth (Cognito user pool) sandbox tests (separate file)
 authCognitoSandboxTests(() => api);
 
-// AuthCognito admin-surface sandbox tests (separate file)
+// Auth admin-surface sandbox tests (separate file)
 authCognitoAdminTests(() => api);
 
-// AuthOIDC tests (separate file)
+// Auth OIDC tests, formerly AuthOIDC (separate file)
 oidcAuthTests(() => api);
+
+// Auth validateUser (Q10): one policy for every sign-up and sign-in
+authValidateUserTests(() => api);
 
 // Database tests (separate file)
 databaseTests(() => api);
@@ -290,7 +302,7 @@ rawRouteTests();
 consoleShortcutTests();
 
 // CLI client tests (separate file)
-cliClientTests();
+cliClientTests(() => api);
 
 // Tracer tests (separate file)
 tracerTests(() => api);

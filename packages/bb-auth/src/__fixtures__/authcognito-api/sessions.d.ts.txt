@@ -1,0 +1,172 @@
+import type { ScopeParent } from '@aws-blocks/core';
+/**
+ * Projection of a {@link SessionRecord}'s `idToken` claims into the fields
+ * customers see as `CognitoUser`. See {@link decodeIdToken}.
+ *
+ * @internal
+ */
+export interface IdTokenClaims {
+    username: string;
+    userSub: string;
+    groups: string[];
+    attributes: Record<string, string>;
+}
+/**
+ * Read a claim from a JWT payload, returning the value only if it's a
+ * string. Any other type (including `undefined`, numbers, arrays,
+ * objects) yields `fallback` (default: empty string).
+ *
+ * Use at JWT-claim boundaries instead of `payload.foo as string` — the
+ * cast form lies to TypeScript and silently produces `"undefined"` /
+ * `"[object Object]"` values when the claim isn't what the call site
+ * expected.
+ *
+ * @internal
+ */
+export declare function safeStringClaim(payload: Record<string, unknown>, key: string, fallback?: string): string;
+/**
+ * Read a claim from a JWT payload, returning only the string entries
+ * of the array. Any non-array value yields `fallback` (default: `[]`);
+ * mixed-type arrays are filtered down to the string entries only.
+ *
+ * @internal
+ */
+export declare function safeStringArrayClaim(payload: Record<string, unknown>, key: string, fallback?: string[]): string[];
+/**
+ * Decode an ID token's payload and project the claims Blocks cares about.
+ *
+ * **Unsafe decode** — signature is NOT re-verified. This function is only
+ * called on tokens that were verified via `aws-jwt-verify` before being
+ * stored in a {@link SessionRecord}, and the record is reached only through
+ * an HMAC-signed session cookie. Re-verifying here would add a JWKS fetch
+ * to every request for zero additional security.
+ *
+ * Allow-shape filter for `attributes`: anything non-reserved and not
+ * `cognito:`-prefixed flows through. A new Cognito reserved claim added
+ * later should be added to `RESERVED_ID_TOKEN_CLAIMS`.
+ *
+ * @internal
+ */
+export declare function decodeIdToken(idToken: string): IdTokenClaims;
+/**
+ * Read a JWT's `exp` claim and return it as absolute ms since epoch.
+ *
+ * Same unsafe-decode guarantees as {@link decodeIdToken}: the token was
+ * verified on sign-in + refresh and is reached only through an HMAC-signed
+ * session cookie. Returns `0` (treated as expired by callers) if the token
+ * is malformed or missing `exp`.
+ *
+ * @internal
+ */
+export declare function jwtExpMs(token: string): number;
+/**
+ * Decode a JWT's payload (claims object) without verifying the signature.
+ *
+ * Same unsafe-decode guarantees as {@link decodeIdToken}: only called
+ * through the HMAC-signed session cookie, and only on tokens Cognito
+ * issued to sign-in / refresh after `aws-jwt-verify` validation.
+ *
+ * Returns an empty object rather than throwing on malformed input so the
+ * caller can surface a reasonable shape when the session store is somehow
+ * populated with garbage.
+ *
+ * @internal
+ */
+export declare function decodeJwtPayload(token: string): Record<string, unknown>;
+/**
+ * Wrap a raw JWT string as an Amplify-JS-v6-compatible `JWT` object. Used by
+ * {@link AuthCognito.fetchAuthSession} to return tokens in the shape
+ * Amplify-JS consumers expect (interoperability).
+ *
+ * @internal
+ */
+export declare function rawToJwt(raw: string): {
+    toString(): string;
+    payload: Record<string, unknown>;
+    expiresAt: number;
+};
+/**
+ * Build an `AuthSession.tokens` object from a stored session record.
+ *
+ * @internal
+ */
+export declare function sessionToTokens(record: SessionRecord): {
+    idToken: ReturnType<typeof rawToJwt>;
+    accessToken: ReturnType<typeof rawToJwt>;
+};
+/**
+ * Record stored in the session `KVStore` keyed by server-generated session ID.
+ *
+ * Intentionally minimal — the three tokens ARE the session. User-visible
+ * fields (username, sub, groups, attributes) come from decoding the ID
+ * token on read; validity comes from the access token's `exp` claim on
+ * read. No denormalized copies that could drift from what Cognito asserts.
+ *
+ * The tokens in this record were verified on sign-in + every refresh via
+ * `aws-jwt-verify` before being stored. Once inside the record, they're
+ * under the HMAC-signed session-cookie protection (a tampered cookie fails
+ * signature check before we ever read the record) — re-verifying on every
+ * read would be belt-and-suspenders, not a security property.
+ *
+ * In the mock runtime, tokens are synthetic base64url-encoded JWT-shaped
+ * strings so the same decode path works.
+ *
+ * @internal
+ */
+export interface SessionRecord {
+    /** ID token — decode for username, sub, groups, attributes. */
+    idToken: string;
+    /** Access token — passed to Cognito SDK calls; `exp` claim gates validity. */
+    accessToken: string;
+    /** Refresh token — used by `REFRESH_TOKEN_AUTH`. */
+    refreshToken: string;
+}
+/**
+ * Session store backed by a nested `KVStore` — provisioned as a child scope
+ * at CDK synth time so it becomes its own DynamoDB table in AWS and a
+ * JSON-on-disk mock locally. Same code path in both runtimes.
+ *
+ * @internal
+ */
+export declare class SessionStore {
+    private kv;
+    private ttlSeconds?;
+    /**
+     * @param ttlSeconds - When set, every write stamps the record with a DynamoDB
+     * TTL of `now + ttlSeconds` so abandoned sessions are reaped instead of
+     * retaining Cognito refresh tokens at rest forever. Callers pass the session
+     * lifetime, keeping the record's ceiling aligned with the session cookie's
+     * `Max-Age`. Authorization itself is still decided by token revalidation on
+     * every request — this only bounds retention.
+     */
+    constructor(scope: ScopeParent, id?: string, ttlSeconds?: number);
+    /**
+     * Expiry options for a write, or `undefined` when no TTL is configured.
+     * Recomputed per write so refreshing a session slides its expiry forward,
+     * matching how the session cookie's `Max-Age` is re-issued on refresh.
+     */
+    private writeOptions;
+    /** Insert a new session record; returns the generated session ID. */
+    createSession(record: SessionRecord): Promise<string>;
+    /** Return the session, or `null` if not found. */
+    lookupSession(sessionId: string): Promise<SessionRecord | null>;
+    /** Delete a session. Silent no-op if it doesn't exist. */
+    deleteSession(sessionId: string): Promise<void>;
+    updateSession(sessionId: string, update: Partial<SessionRecord>): Promise<void>;
+    /**
+     * Delete every session belonging to a user. Used by the admin surface's
+     * `revokeUserSessions` to force re-authentication (mock parity for
+     * Cognito's `AdminUserGlobalSignOut`). Returns the number deleted.
+     *
+     * `SessionRecord` is deliberately minimal (tokens only — see its docs), so
+     * the owning username is recovered by decoding each session's ID token
+     * rather than read from a denormalized field.
+     *
+     * The sweep scans with `includeExpired` because DynamoDB's reaper runs up to
+     * ~48 h after expiry. A row past its TTL but still on disk holds a live
+     * refresh token, and a deliberate revoke is the one moment retention matters
+     * most — so it is deleted rather than skipped as already-invisible.
+     */
+    deleteByUsername(username: string): Promise<number>;
+}
+//# sourceMappingURL=sessions.d.ts.map

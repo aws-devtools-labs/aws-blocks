@@ -23,6 +23,7 @@ import {
   rawRouteErrorFromCatch,
 } from '../rpc.js';
 import { redactToJson } from '../redact.js';
+import { errorResponseSetCookies } from '../set-cookie.js';
 import { isDispatchableExport, resolveApiMethod } from '../rpc-dispatch.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
@@ -1192,6 +1193,10 @@ function handleApiRequest(
         console.log('[rpc-call]', `${apiNamespace}.${rpcMethod}`, redactToJson(args));
       }
 
+      // Declared outside the try so the error path can still deliver cookies
+      // the method set before throwing (matches the Lambda handler).
+      let responseHeaders: Headers | undefined;
+
       try {
         const headers = new Headers();
         Object.entries(req.headers).forEach(([k, v]) => {
@@ -1199,7 +1204,7 @@ function handleApiRequest(
         });
 
         let responseStatus = 200;
-        const responseHeaders = new Headers({ 'Content-Type': 'application/json' });
+        responseHeaders = new Headers({ 'Content-Type': 'application/json' });
         let responseBody: any;
 
         const context = {
@@ -1228,6 +1233,9 @@ function handleApiRequest(
 
         const apiMethods = typeof apiHandler === 'function' ? apiHandler(context) : apiHandler;
 
+        // Only a method the API itself defines is callable: an inherited name
+        // (`constructor`, `toString`, `__proto__`, …) is answered exactly like
+        // an unknown one. Same helper as the Lambda handler.
         const apiMethod = resolveApiMethod(apiMethods, rpcMethod);
         if (!apiMethod) {
           res.writeHead(200, rpcHeaders);
@@ -1266,7 +1274,14 @@ function handleApiRequest(
           if (error?.cause) console.log('  cause:', error.cause);
           if (error?.stack) console.log(error.stack);
         }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        // Only Set-Cookie values that DELETE a cookie survive into the error
+        // response (e.g. a 401 that also clears a dead session cookie) — a
+        // failed call must never issue a live session. Its other headers are
+        // dropped, as before. Same helper as the Lambda handler.
+        const errHeaders: Record<string, string | string[]> = { 'Content-Type': 'application/json' };
+        const errCookies = errorResponseSetCookies(responseHeaders);
+        if (errCookies.length > 0) errHeaders['set-cookie'] = errCookies;
+        res.writeHead(200, errHeaders);
         res.end(errPayload);
       }
     });

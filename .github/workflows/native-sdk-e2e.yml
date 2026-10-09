@@ -30,6 +30,10 @@ jobs:
       swift-changed: ${{ steps.check.outputs.swift-changed }}
       kotlin-changed: ${{ steps.check.outputs.kotlin-changed }}
       any-changed: ${{ steps.check.outputs.any-changed }}
+      # The auth-derived codegen fixtures (18, 23) must match the live Auth
+      # block's spec; a change to the block, the spec generator or the
+      # fixtures re-runs that check (setup job) without the platform suites.
+      auth-fixtures-changed: ${{ steps.check.outputs.auth-fixtures-changed }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -38,7 +42,7 @@ jobs:
       - id: check
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            dart=true; swift=true; kotlin=true
+            dart=true; swift=true; kotlin=true; fixtures=true
           else
             CHANGED="$(git diff --name-only origin/main...HEAD)"
             # Shared inputs affect EVERY platform: the test backend that
@@ -54,6 +58,10 @@ jobs:
             if echo "$CHANGED" | grep -qE '^native/dart/';   then dart=true;   fi
             if echo "$CHANGED" | grep -qE '^native/swift/';  then swift=true;  fi
             if echo "$CHANGED" | grep -qE '^native/kotlin/'; then kotlin=true; fi
+            fixtures=false
+            if echo "$CHANGED" | grep -qE '^packages/(bb-auth|auth-common)/|^packages/core/src/scripts/generate-spec|^native/codegen-fixtures/'; then
+              fixtures=true
+            fi
           fi
           any=false
           if [ "$dart" = true ] || [ "$swift" = true ] || [ "$kotlin" = true ]; then
@@ -64,13 +72,16 @@ jobs:
             echo "swift-changed=$swift"
             echo "kotlin-changed=$kotlin"
             echo "any-changed=$any"
+            echo "auth-fixtures-changed=$fixtures"
           } >> "$GITHUB_OUTPUT"
 
   # Shared setup: build monorepo, generate spec, upload artifact
   setup:
     name: Build & Generate Spec
     needs: [detect-changes]
-    if: needs.detect-changes.outputs.any-changed == 'true'
+    if: >-
+      needs.detect-changes.outputs.any-changed == 'true' ||
+      needs.detect-changes.outputs.auth-fixtures-changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -95,6 +106,13 @@ jobs:
         run: |
           npm run spec
           echo "path=test-apps/native-bindings/aws-blocks/blocks.spec.json" >> $GITHUB_OUTPUT
+
+      # Codegen fixtures 18-hybrid-arm and 23-cognito-nested-unions are the Auth
+      # block's sign-in state machine and sign-in results. regenerate-all.sh only
+      # proves the generators are stable against the committed spec.json; this
+      # proves those specs still match what the live block emits.
+      - name: Check auth codegen fixtures against the live Auth spec
+        run: node native/codegen-fixtures/check-live-auth-fixtures.mjs test-apps/native-bindings/aws-blocks/blocks.spec.json
 
       - name: Upload spec artifact
         uses: actions/upload-artifact@v7
@@ -346,6 +364,37 @@ jobs:
   # Runs on same-repo PRs (fork PRs can't access secrets/OIDC) and on manual
   # dispatch. Deploy uses `npm run deploy` (aws-blocks/scripts/deploy.ts ->
   # aws-blocks/index.cdk.ts); the API serves JSON-RPC under `/aws-blocks/api`.
+  #
+  # Native OIDC sign-in against the sandbox. The OIDC relay suites (Dart
+  # oidc_test.dart, Swift OIDCE2ETests, Kotlin OidcE2ETest) always run in the
+  # local-server jobs above, against `Auth`'s stub IdP. The native-bindings
+  # `auth-oidc` stub sets `unsafeAllowDeployed: true`, so the deployed sandbox
+  # serves the stub too: the Dart and Swift sandbox jobs set RUN_OIDC=1 and run
+  # the suites against it, as they did with `AuthOIDC`. (The Kotlin sandbox job
+  # runs it against the stub on JVM; its iOS leg still needs a real IdP, below.) Optionally, federate a real IdP instead by setting these
+  # Actions variables (repository or `publish` environment — `vars`, not
+  # `secrets`: neither value is secret):
+  #
+  #   NATIVE_E2E_OIDC_ISSUER     the IdP's issuer URL (HTTPS, serving
+  #                              /.well-known/openid-configuration)
+  #   NATIVE_E2E_OIDC_CLIENT_ID  a public client (authorization code + PKCE,
+  #                              no client secret) registered at that IdP
+  #
+  # With both set, each sandbox job below passes them to the deploy (the
+  # native-bindings `auth-oidc` block then federates that IdP directly, keyed
+  # `google`; index.cdk.ts forwards both to the deployed handler) and sets
+  # RUN_OIDC=1, which un-skips the suites. The suites stand in for the browser
+  # by following HTTP redirects, so the IdP must:
+  #   - finish /authorize with redirects only — no login or consent page (a
+  #     test IdP that auto-approves a fixed user; a real Google/Okta tenant
+  #     will not work);
+  #   - accept the per-run redirect URI
+  #     https://<api-id>.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/callback
+  #     — each run deploys a new API, so it must allow any `<api-id>`;
+  #   - issue ID tokens signed with an asymmetric key published in its JWKS,
+  #     with `aud` set to the client id.
+  # Unset (the default), the deployed stub serves the suites (Dart, Swift) and
+  # the Kotlin suite skips.
   dart-e2e-sandbox:
     name: Dart E2E (sandbox)
     needs: [detect-changes, dart-e2e]
@@ -363,6 +412,12 @@ jobs:
     environment: publish
     env:
       BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      # Optional real IdP for the OIDC suites — see "Native OIDC sign-in against
+      # the sandbox" above. Empty unless the repository sets both variables.
+      NATIVE_E2E_OIDC_ISSUER: ${{ vars.NATIVE_E2E_OIDC_ISSUER }}
+      NATIVE_E2E_OIDC_CLIENT_ID: ${{ vars.NATIVE_E2E_OIDC_CLIENT_ID }}
+      # The sandbox always serves a headless IdP: the deployed stub, or the real one above.
+      RUN_OIDC: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -400,13 +455,14 @@ jobs:
         working-directory: test-apps/native-bindings
         run: npm run deploy
 
-      - name: Seed Cognito returning-customer test user
+      - name: Seed returning-customer test user
         working-directory: test-apps/native-bindings
         # Real Cognito emails the confirmation code, so the sign-up→code→confirm
-        # leg can't be verified in CI (auth_cognito_test.dart skips it against a
-        # deployed pool). Instead, admin-provision a confirmed user so the suite
-        # can exercise the real returning-customer sign-in path. AWS_REGION +
-        # BLOCKS_STACK_SUFFIX are inherited from the job/credentials step.
+        # legs can't be verified in CI (the auth suites skip them against a
+        # deployed pool). Instead, admin-provision a confirmed user in every
+        # user pool of the stack so the suites can exercise the real
+        # returning-customer sign-in path. AWS_REGION + BLOCKS_STACK_SUFFIX are
+        # inherited from the job/credentials step.
         run: npm run seed:cognito
 
       - name: Resolve BLOCKS_URL
@@ -473,11 +529,9 @@ jobs:
         working-directory: native/dart/example
         env:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
-          # The sandbox is HTTPS, so the OIDC relay suite can run here (the
-          # local-server job above cannot — the stub IdP rejects http
-          # redirect_uris). The server-relay OidcClient landed in #867 (now on
-          # main), so oidc_test.dart compiles.
-          RUN_OIDC: '1'
+          # oidc_test.dart runs here (the job sets RUN_OIDC=1): against the
+          # deployed stub IdP, or the real IdP when one is configured — see the
+          # note above dart-e2e-sandbox.
         run: |
           printf 'dependency_overrides:\n  blocks_runtime:\n    path: ../packages/blocks_runtime\n  blocks_codegen:\n    path: ../packages/blocks_codegen\n' > pubspec_overrides.yaml
           dart pub get
@@ -503,6 +557,12 @@ jobs:
     environment: publish
     env:
       BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      # Optional real IdP for the OIDC suites — see "Native OIDC sign-in against
+      # the sandbox" above. Empty unless the repository sets both variables.
+      NATIVE_E2E_OIDC_ISSUER: ${{ vars.NATIVE_E2E_OIDC_ISSUER }}
+      NATIVE_E2E_OIDC_CLIENT_ID: ${{ vars.NATIVE_E2E_OIDC_CLIENT_ID }}
+      # The sandbox always serves a headless IdP: the deployed stub, or the real one above.
+      RUN_OIDC: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -531,6 +591,13 @@ jobs:
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
         run: npm run deploy
+
+      - name: Seed returning-customer test user
+        working-directory: test-apps/native-bindings
+        # `Auth` confirms every sign-up with an emailed code, so against a
+        # deployed pool the auth + todos suites sign in this pre-provisioned
+        # user instead (see seed-cognito-user.ts).
+        run: npm run seed:cognito
 
       - name: Resolve BLOCKS_URL
         id: url
@@ -574,7 +641,6 @@ jobs:
       - name: Run Swift E2E against sandbox
         env:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
-          RUN_OIDC: '1'
         run: |
           xcodebuild test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \
@@ -614,6 +680,14 @@ jobs:
             timeout: 45
     env:
       BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      # Optional real IdP for the OIDC suites — see "Native OIDC sign-in against
+      # the sandbox" above. Empty unless the repository sets both variables.
+      NATIVE_E2E_OIDC_ISSUER: ${{ vars.NATIVE_E2E_OIDC_ISSUER }}
+      NATIVE_E2E_OIDC_CLIENT_ID: ${{ vars.NATIVE_E2E_OIDC_CLIENT_ID }}
+      # JVM: the suite runs against the deployed stub IdP, like Dart and Swift
+      # (verified against a real sandbox, 2026-10-05; L50). iOS (Kotlin/Native)
+      # hasn't been run against a deployed stub yet, so it keeps the real-IdP gate.
+      RUN_OIDC: ${{ (matrix.suffix == 'jvm' || (vars.NATIVE_E2E_OIDC_ISSUER != '' && vars.NATIVE_E2E_OIDC_CLIENT_ID != '')) && '1' || '' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -642,6 +716,13 @@ jobs:
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
         run: npm run deploy
+
+      - name: Seed returning-customer test user
+        working-directory: test-apps/native-bindings
+        # `Auth` confirms every sign-up with an emailed code, so against a
+        # deployed pool the auth + todos suites sign in this pre-provisioned
+        # user instead (see seed-cognito-user.ts).
+        run: npm run seed:cognito
 
       - name: Resolve BLOCKS_URL
         id: url

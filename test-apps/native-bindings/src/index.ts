@@ -1,5 +1,5 @@
 import { api, authBasicApi, authCognitoApi, oidcAuthApi } from 'aws-blocks';
-import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
+import { Authenticator, onAuthChange } from '@aws-blocks/bb-auth/ui';
 
 function esc(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -9,11 +9,11 @@ let currentUser: { username: string } | null = null;
 let currentSort: 'priority' | 'createdAt' | undefined = undefined;
 
 // ============================================================================
-// Auth — BasicAuth (drives the todo list)
+// Auth — three `Auth` blocks; the email + password one drives the todo list
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
-  // BasicAuth
+  // Email + password (`auth-basic`)
   const basicContainer = document.getElementById('basic-auth-container');
   if (basicContainer) {
     basicContainer.appendChild(Authenticator(authBasicApi));
@@ -23,12 +23,19 @@ document.addEventListener('DOMContentLoaded', () => {
     await refreshTodos();
   });
 
-  // CognitoAuth
+  // Cognito-style configuration (`auth-cognito`)
   const cognitoContainer = document.getElementById('cognito-auth-container');
   if (cognitoContainer) {
     cognitoContainer.appendChild(Authenticator(authCognitoApi));
   }
 
+  // OIDC through the stub IdP (`auth-oidc`). The block's `signIn:google`
+  // action carries the sign-in URL, so the Authenticator renders a plain
+  // "Sign in with google" button that starts the redirect flow.
+  const oidcContainer = document.getElementById('oidc-auth-container');
+  if (oidcContainer) {
+    oidcContainer.appendChild(Authenticator(oidcAuthApi));
+  }
 });
 
 // ============================================================================
@@ -307,10 +314,8 @@ function setFileResult(text: string, type: 'success' | 'error' | 'info') {
 };
 
 // ============================================================================
-// OIDC Auth (client-initiated PKCE)
+// OIDC Auth — the signed-in user, as the backend sees it
 // ============================================================================
-
-const oidcClient = await oidcAuthApi.getClient();
 
 function showOidc(text: string, success = true) {
   const el = document.getElementById('oidc-result')!;
@@ -318,35 +323,7 @@ function showOidc(text: string, success = true) {
   el.textContent = text;
 }
 
-(window as any).oidcSignIn = (provider: string) => {
-  oidcClient.signIn(provider);
-};
-
-(window as any).oidcSignOut = async () => {
-  await oidcClient.signOut();
-  showOidc('Signed out');
-};
-
 (window as any).oidcGetUser = async () => {
   const user = await api.oidcGetCurrentUser();
   showOidc(user ? JSON.stringify(user, null, 2) : 'Not signed in', !!user);
 };
-
-(window as any).oidcHandleCallback = async () => {
-  try {
-    const user = await oidcClient.handleRedirectCallback();
-    if (user) {
-      showOidc(`Signed in! ${JSON.stringify(user, null, 2)}`);
-      window.history.replaceState({}, '', '/');
-    } else {
-      showOidc('No pending OIDC flow', false);
-    }
-  } catch (e: any) {
-    showOidc(`Error: ${e.message}`, false);
-  }
-};
-
-// Auto-handle callback if returning from OIDC redirect
-if (window.location.search.includes('code=') && window.location.search.includes('state=')) {
-  (window as any).oidcHandleCallback();
-}

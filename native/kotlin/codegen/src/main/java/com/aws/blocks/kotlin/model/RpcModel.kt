@@ -2,6 +2,7 @@ package com.aws.blocks.kotlin.model
 
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 // ── Info Object Hierarchy ─────────────────────────────────────────
 
@@ -132,7 +133,17 @@ data class RpcModel(
 sealed interface TypeRef {
     data class Primitive(val tsType: String, val constraints: Constraints = Constraints.EMPTY) : TypeRef
     data class InlineObject(val fields: List<Field>, val additionalProperties: TypeRef? = null) : TypeRef
-    data class UnionLiteral(val values: List<String>) : TypeRef
+    /**
+     * A string (or boolean) enum. [schemaName] is the component schema it was reached through by
+     * a `${'$'}ref`, which makes it one named enum shared by every use; it is null for an inline enum.
+     * [literals] are the values as the spec writes them, with their JSON types (`true`, `5`, `"a"`):
+     * [values] holds their text, so a boolean `true` and a string `"true"` are told apart only here.
+     */
+    data class UnionLiteral(
+        val values: List<String>,
+        val schemaName: String? = null,
+        val literals: List<JsonPrimitive> = values.map(::JsonPrimitive),
+    ) : TypeRef
     data class ArrayType(val elementType: TypeRef, val constraints: Constraints = Constraints.EMPTY) : TypeRef
     data class MapType(val valueType: TypeRef) : TypeRef
     data class TupleType(val elements: List<TypeRef>) : TypeRef

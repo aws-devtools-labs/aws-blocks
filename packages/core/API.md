@@ -211,11 +211,21 @@ export class Scope {
     };
     // (undocumented)
     readonly id: string;
+    // @internal
+    static _mergeRegistry(entries: Array<[string, {
+        version: string;
+        count: number;
+    }]>): void;
     // (undocumented)
     readonly parent: ScopeParent;
     registerClientMiddleware(packageSpecifier: string): void;
     registerDevAttachment(packageSpecifier: string): void;
     registerLambdaEventHandler(eventSource: string, identifier: string, handler: (record: any) => Promise<void>): void;
+    // @internal
+    static _registryEntries(): Array<[string, {
+        version: string;
+        count: number;
+    }]>;
     static _resetRegistry(): void;
     // @internal
     static _setDefaultBlockForTelemetry(name: string, version: string): void;

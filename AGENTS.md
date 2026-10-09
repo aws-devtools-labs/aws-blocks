@@ -52,14 +52,14 @@ You're an engineer working **on AWS Blocks itself** — the framework and its Bu
 ### Core API & glossary
 | Symbol | From | What it is |
 |---|---|---|
-| `Scope` | `@aws-blocks/core` (runtime/mock) **or** `@aws-blocks/core/cdk` (CDK) | base class every BB extends |
+| `Scope` | `@aws-blocks/core` (runtime/mock) **or** `@aws-blocks/core/cdk` (CDK) | base class every BB extends (CDK layers extend its subclass `BuildingBlockScope`, which also declares the block's VPC needs) |
 | `ScopeParent` | `@aws-blocks/core` (always) | the parent argument type |
 | `ApiNamespace`, `ApiError`, `isBlocksError` | `@aws-blocks/core` | RPC wrapper · HTTP-mapped error · typed-error guard |
 | `registerSdkIdentifiers`, `getSdkIdentifiers` | `@aws-blocks/core` | register (in mock/runtime ctor) / resolve (at call time) a BB's resource names |
 | `registerConfig`, `synthGuard` | `@aws-blocks/core/cdk` | inject Lambda config at synth · `(): never` stub for runtime-only methods |
 | `scope.registerClientMiddleware(pkg)` | `Scope` method (codegen) | registers the client-plugin **package specifier** that hydrates a Transferable into a live client object — the plugin does the hydration, this just registers it |
 | `getMockDataDir` | `@aws-blocks/core/bb-utils` | mock persistence dir → `.bb-data/{fullId}/` |
-| `auth.requireAuth(context)` | an auth BB | gate a method; returns the user or throws 401 |
+| `auth.requireAuth(context)` | `Auth` (`@aws-blocks/bb-auth`) | gate a method; returns the user or throws 401 |
 | `RawRoute` | `@aws-blocks/core` | escape hatch for a raw HTTP route when JSON-RPC isn't enough |
 | `fullId` | — | a BB instance's unique scoped id (drives resource + mock-data naming) |
 | reference object | — | the lightweight handle `fromExisting()` returns (e.g. `{ tableName }`), passed into a constructor — not a constructed BB |
@@ -72,7 +72,7 @@ You're an engineer working **on AWS Blocks itself** — the framework and its Bu
 // aws-blocks/index.ts — define backend + the API surface
 const scope = new Scope('app');
 const notes = new KVStore(scope, 'notes');
-const auth  = new AuthBasic(scope, 'auth');
+const auth  = new Auth(scope, 'auth');
 export const authApi = auth.createApi();                 // BB-authored state machine
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async addNote(text: string) {
@@ -94,20 +94,20 @@ await api.addNote('hello');
 
 ## 🧱 Authoring a NEW Building Block
 
-**Reference, don't clone.** `packages/bb-kv-store/` is the canonical reference for the file structure and the conditional-export layering (`index.mock/aws/cdk/browser.ts` + `types.ts`/`errors.ts`/`version.ts`, the `Scope` subclass, `synthGuard` stubs) — read it to learn the *shape*, not to copy wholesale. Its data model is a DynamoDB key/value table; **that does not generalize.** Pick the closest-shaped BB and understand every line you carry over:
+**Reference, don't clone.** `packages/bb-kv-store/` is the canonical reference for the file structure and the conditional-export layering (`index.mock/aws/cdk/browser.ts` + `types.ts`/`errors.ts`/`version.ts`, the `Scope` / `BuildingBlockScope` subclasses, `synthGuard` stubs) — read it to learn the *shape*, not to copy wholesale. Its data model is a DynamoDB key/value table; **that does not generalize.** Pick the closest-shaped BB and understand every line you carry over:
 
 | Your BB is… | Reference | Note |
 |---|---|---|
 | key/value or single-table | `bb-kv-store` / `bb-distributed-table` | the typical file skeleton below |
 | relational / SQL | `bb-data` (`Database`) / `bb-distributed-data` (`DistributedDatabase`) | `migrationsPath` + ordered `.sql` |
-| auth / composed from other BBs (no own infra) | `bb-auth-basic` | uses `index.ts` only; exposes `createApi()` |
+| auth, or composed from other BBs | `bb-auth` | composes `KVStore` (`sessions`) + `AppSetting` (`session-secret`) in every layer (see `index.cdk.ts`, `sessions.ts`); a base class + injected engines (`auth-base.ts`, `engines/`); exposes `createApi()`. A new sign-in method is an `Auth` option, not a new auth BB |
 | background work (SQS + event source) | `bb-async-job` | `submit()` + a job handler |
 | WebSocket / returns a live client object | `bb-realtime` | client hydration (Transferable) + server APIs; `index.ts`/middleware; `Symbol.for` shared per-stack infra |
 | object storage | `bb-file-bucket` | `scan({prefix})` is valid here (S3 scopes natively) |
 
-> **Two references, two purposes.** Use `bb-kv-store` to learn the **typical file layout & layering**. Use `bb-realtime` to learn the **full client↔server surface** — it's the one BB that demonstrates client-side hydration end-to-end: a server method returns a Transferable (a channel handle) that serializes via `toJSON()` and re-hydrates into a live client object through a registered client middleware, alongside server-side `publish`/`subscribe`. The data BBs only exercise the server/data side. **Don't copy `bb-realtime`'s layout** for a simple BB — it's atypical (single `index.ts`, no mock/aws/cdk split, middleware files, shared per-stack infra).
+> **Two references, two purposes.** Use `bb-kv-store` to learn the **typical file layout & layering**. Use `bb-realtime` to learn the **full client↔server surface** — it's the one BB that demonstrates client-side hydration end-to-end: a server method returns a Transferable (a channel handle) that serializes via `toJSON()` and re-hydrates into a live client object through a registered client middleware, alongside server-side `publish`/`subscribe`. The data BBs only exercise the server/data side. **Don't copy `bb-realtime`'s layout** for a simple BB — it's atypical (a single `index.ts` as its `default` entry, middleware files, shared per-stack infra).
 >
-> Some BBs use a single `index.ts` (no `index.mock/aws/cdk.ts`) and own no CDK/AWS layer (`bb-auth-basic`, `bb-realtime`) — don't force the skeleton onto them. And **never copy a reference's package.json verbatim** — regenerate `files[]` and the `test` glob from your actual `src/` (reference scripts can be stale — e.g. one currently names a non-existent test file and omits a real one).
+> Not every BB fits the four-file skeleton — `bb-realtime` uses a single `index.ts` as its `default` entry (no `index.mock.ts` / `index.browser.ts`) plus middleware files — don't force the skeleton onto them. And **never copy a reference's package.json verbatim** — regenerate `files[]` and the `test` glob from your actual `src/` (reference scripts can be stale — e.g. one currently names a non-existent test file and omits a real one).
 
 **Standard file shape** (`bb-kv-store`):
 ```
@@ -144,12 +144,12 @@ async get(key: string): Promise<T | null> {
 }
 
 // index.cdk.ts — provisions infra; does NOT register identifiers (it derives the same name)
-import { Scope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 static fromExisting(tableName: string): ExternalTableRef { return { __brand: 'ExternalTableRef', tableName }; }
 constructor(...) {
-  super(id, { parent: scope });                                          // no bbName/bbVersion here
+  super(id, { parent: scope, vpc: {} });                                 // no bbName/bbVersion; `vpc` = VPC needs ({} if none)
   this.table = new Table(this, 'table', { tableName: this.fullId.substring(0, 255) /* … */ });
-  this.table.grantReadWriteData(this.handler);                           // grant on the SHARED handler
+  this.table.grantReadWriteData(this.executionRole);                     // grant on the SHARED execution role
   registerConfig(this, 'BLOCKS_THING_FLAG', '…');                        // extra config only (not addEnvironment)
 }
 get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub EVERY runtime method
@@ -206,7 +206,7 @@ When working in an AWS Blocks application (not this monorepo), Building Block do
 |---|---|
 | Linter/formatter | **Biome** (not ESLint/Prettier): tabs (width 4), 120 cols, single quotes, trailing commas everywhere, semicolons always. `biome check` = lint + format + import-sort. |
 | Modules | **ESM everywhere**; relative imports carry the `.js` extension. `strict: true`, ES2022, `moduleResolution: bundler`. |
-| Naming | BB class `PascalCase`, no "BB" prefix (`KVStore`). pkg `@aws-blocks/bb-{kebab}`. errors `{Class}Errors`. The **`BLOCKS_` env prefix is framework-reserved** — not for example app code. Auth BBs lead with `Auth` (`AuthBasic`, `AuthOIDC`, `AuthCognito`). |
+| Naming | BB class `PascalCase`, no "BB" prefix (`KVStore`). pkg `@aws-blocks/bb-{kebab}`. errors `{Class}Errors`. The **`BLOCKS_` env prefix is framework-reserved** — not for example app code. Auth identifiers lead with `Auth` (`Auth`, `AuthOptions`, `AuthErrors`; packages `bb-auth`, `auth-common` — D-004), and there is one auth BB: add a sign-in method as an `Auth` option rather than a new block (D-018). |
 | Schema validation | When a BB accepts a user-provided validation schema, type it as **`StandardSchemaV1`** (Zod/Valibot/ArkType) — don't pull a schema lib into the BB's runtime deps (it's the consumer's choice); if your own tests use `zod`, keep it a `devDependency`. (A BB may take a schema lib as a real `dependency` only for its *own* internal needs, e.g. `bb-agent`.) Validate via `schema['~standard'].validate(value)`, before conditional checks. |
 | Tests | **`node:test` + `node:assert`** (not Jest/Vitest), run on compiled `dist/`. Reset `.bb-data` between tests. Mock tests can't catch AWS-path serialization bugs — serialization/behavior changes also need a sandbox e2e. |
 | Async | `async/await` only; prefer **`Array.fromAsync()`** over `for await` push-loops. |

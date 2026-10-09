@@ -237,7 +237,24 @@ type TemplateInfo = {
   overlayOnly: boolean;
 };
 
-const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'api-only', 'sql', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
+const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'api-only', 'sql', 'nextjs', 'auth', 'amplify', 'demo'];
+
+// Former template names that still resolve to a template, so existing
+// `--template <old name>` invocations (docs, scripts, CI) keep working after a
+// rename. `--help` lists them separately from the template list.
+//   auth-cognito → auth: there is one auth Building Block (`Auth`) now, so the
+//   template is named for what it shows, not for a choice between auth blocks.
+export const TEMPLATE_ALIASES: Readonly<Record<string, string>> = {
+  'auth-cognito': 'auth',
+};
+
+/** Resolve a former template name to its current one, with a one-line note. */
+function resolveTemplateAlias(templateName: string): string {
+  const target = Object.hasOwn(TEMPLATE_ALIASES, templateName) ? TEMPLATE_ALIASES[templateName] : undefined;
+  if (target === undefined) return templateName;
+  console.log(`Note: the "${templateName}" template is now called "${target}"; using "${target}".`);
+  return target;
+}
 
 let templateCatalogCache: TemplateInfo[] | null = null;
 
@@ -687,6 +704,9 @@ async function printUsage() {
   const templateList = catalog
     .map(t => `    ${t.name.padEnd(widest)}   ${t.description}`)
     .join('\n');
+  const aliasList = Object.entries(TEMPLATE_ALIASES)
+    .map(([from, to]) => `${from} → ${to}`)
+    .join(', ');
 
   console.log(`Usage: create-blocks-app [directory] [options]
 
@@ -719,6 +739,8 @@ Options:
                          Available templates: ${names.join(', ')}
 
 ${templateList}
+
+                         Former names (still accepted): ${aliasList}
 
   --skip-install         Skip installing dependencies
   -y, --yes              Skip confirmation prompts
@@ -772,6 +794,7 @@ async function create() {
     }
   }
 
+  templateName = resolveTemplateAlias(templateName);
   await validateTemplateName(templateName);
 
   const templatePkgVersion: string = JSON.parse(

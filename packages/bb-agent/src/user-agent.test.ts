@@ -15,7 +15,7 @@ import { BB_NAME, BB_VERSION } from './version.js';
 
 class ParentAuthBB extends Scope {
 	constructor(parent: ScopeParent, id: string) {
-		super(id, { parent, bbName: 'AuthBasic', bbVersion: '1.0.1' });
+		super(id, { parent, bbName: 'Auth', bbVersion: '1.0.1' });
 	}
 }
 
@@ -74,13 +74,13 @@ describe('Agent user-agent integration (real Agent)', () => {
 
 		assert.deepStrictEqual((agent as any)._agentCore.config.customUserAgent, [
 			['aws-blocks', CORE_VERSION],
-			['bb', 'AuthBasic/1.0.1'],
+			['bb', 'Auth/1.0.1'],
 			['bb', `${BB_NAME}/${BB_VERSION}`],
 		]);
 		const invoke = requests.find(r => r.url?.startsWith('/runtimes/'));
 		assert.ok(invoke, 'InvokeAgentRuntime request should reach the endpoint');
 		assert.ok(invoke.userAgent.includes(`aws-blocks/${CORE_VERSION}`), `x-amz-user-agent missing aws-blocks: ${invoke.userAgent}`);
-		assert.ok(invoke.userAgent.includes('AuthBasic'), `x-amz-user-agent missing parent BB: ${invoke.userAgent}`);
+		assert.ok(invoke.userAgent.includes('Auth'), `x-amz-user-agent missing parent BB: ${invoke.userAgent}`);
 		assert.ok(invoke.userAgent.includes(BB_NAME), `x-amz-user-agent missing Agent BB: ${invoke.userAgent}`);
 	});
 

@@ -23,7 +23,7 @@ import {
   ApiNamespace,
   Scope,
   ApiError,
-  AuthBasic,
+  Auth,
   Database,
   DatabaseErrors,
   isBlocksError,
@@ -33,9 +33,16 @@ import {
 const scope = new Scope('my-app');
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
-const auth = new AuthBasic(scope, 'auth', {
-  passwordPolicy: { minLength: 8 },
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
+// Email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// Sign-up confirms the email address with a 6-digit code; once the caller
+// submits it they are signed in automatically. On AWS, Cognito emails the code.
+const auth = new Auth(scope, 'auth', {
+  session: { crossDomain: process.env.BLOCKS_SANDBOX === 'true' },
+  // Local dev only: no email is sent, so print the code in the `npm run dev`
+  // terminal. Ignored on AWS.
+  codeDelivery: async (username, code, purpose) => {
+    console.log(`[auth] ${purpose} code for ${username}: ${code}`);
+  },
 });
 export const authApi = auth.createApi();
 
@@ -74,7 +81,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const id = newId();
     try {
       await db.execute(
-        sql`INSERT INTO notebooks (id, owner, name) VALUES (${id}, ${user.username}, ${name})`,
+        sql`INSERT INTO notebooks (id, owner, name) VALUES (${id}, ${user.userSub}, ${name})`,
       );
     } catch (e: unknown) {
       // The (owner, name) unique index rejects a duplicate name for this user.
@@ -91,7 +98,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     return await db.query<Notebook>(
       sql`SELECT id, owner, name, created_at FROM notebooks
-          WHERE owner = ${user.username}
+          WHERE owner = ${user.userSub}
           ORDER BY created_at DESC`,
     );
   },
@@ -101,13 +108,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     // Ownership check: only insert if the notebook belongs to the caller.
     const notebook = await db.queryOne<Notebook>(
-      sql`SELECT id FROM notebooks WHERE id = ${notebookId} AND owner = ${user.username}`,
+      sql`SELECT id FROM notebooks WHERE id = ${notebookId} AND owner = ${user.userSub}`,
     );
     if (!notebook) throw new ApiError('Notebook not found', 404, { name: 'NotebookNotFoundException' });
     const id = newId();
     await db.execute(
       sql`INSERT INTO notes (id, notebook_id, owner, body)
-          VALUES (${id}, ${notebookId}, ${user.username}, ${body})`,
+          VALUES (${id}, ${notebookId}, ${user.userSub}, ${body})`,
     );
     return { id, notebookId };
   },
@@ -117,7 +124,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     return await db.query<Note>(
       sql`SELECT id, notebook_id, owner, body, created_at FROM notes
-          WHERE notebook_id = ${notebookId} AND owner = ${user.username}
+          WHERE notebook_id = ${notebookId} AND owner = ${user.userSub}
           ORDER BY created_at ASC`,
     );
   },
@@ -131,10 +138,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     await db.transaction(async (tx) => {
       await tx.execute(
-        sql`DELETE FROM notes WHERE notebook_id = ${notebookId} AND owner = ${user.username}`,
+        sql`DELETE FROM notes WHERE notebook_id = ${notebookId} AND owner = ${user.userSub}`,
       );
       await tx.execute(
-        sql`DELETE FROM notebooks WHERE id = ${notebookId} AND owner = ${user.username}`,
+        sql`DELETE FROM notebooks WHERE id = ${notebookId} AND owner = ${user.userSub}`,
       );
     });
     return { success: true };

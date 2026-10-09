@@ -181,7 +181,7 @@ test('CDK: registers the DATA_SOURCE_ID config (wired to the data source) and su
   // finalizeConfigRegistry serializes the registry into blocks-config.json via a
   // BucketDeployment; the rendered config blob in the synthesized template
   // carries the DATA_SOURCE_ID key bound to the data source's DataSourceId, and
-  // the handler is wired to read it from S3. (Mirrors bb-auth-cognito's CDK test.)
+  // the handler is wired to read it from S3. (Mirrors the auth block's CDK tests.)
   // Grant config read to the handler's role and stamp the coordinates on the
   // handler — the same target as before the shared-role refactor.
   finalizeConfigRegistry(stack, stack.handler.role!, [

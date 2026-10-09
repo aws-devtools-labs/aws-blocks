@@ -68,29 +68,49 @@ private final class RedirectBlocker: NSObject, URLSessionTaskDelegate {
     }
 }
 
-/// OIDC server-relay E2E tests. Only runs against a deployed sandbox (HTTPS)
-/// because the stub IdP rejects http:// redirect URIs.
+/// OIDC server-relay E2E tests against the `auth-oidc` block: authorize-params, the IdP redirect
+/// chain, the relay to `nativebindings://auth`, the code exchange (which sets the session cookie)
+/// and an authenticated RPC. The client is built from the block's fixed routes, with no
+/// server-supplied descriptor.
 ///
-/// Gated by the RUN_OIDC=1 environment variable — skipped otherwise.
+/// Locally the IdP is `Auth`'s stub, which auto-approves. A deployed backend serves the stub only
+/// when the provider opts in with `unsafeAllowDeployed` (the native-bindings test app does), so
+/// there the tests run only with `RUN_OIDC=1`, which says the backend serves a headless IdP: that
+/// deployed stub, or a real, auto-approving IdP (`NATIVE_E2E_OIDC_ISSUER`; see
+/// `.github/workflows/native-sdk-e2e.yml`). Otherwise they are reported as skipped.
 final class OIDCE2ETests: BlocksE2ETestCase {
 
     private let provider = "google"
     private let relayTo = "nativebindings://auth"
 
-    override func invokeTest() {
-        guard ProcessInfo.processInfo.environment["RUN_OIDC"] == "1" else {
-            return
-        }
-        super.invokeTest()
+    /// Whether the backend under test serves an IdP these tests can drive headlessly.
+    private static var hasHeadlessIdp: Bool {
+        isLocalEndpoint || ProcessInfo.processInfo.environment["RUN_OIDC"] == "1"
     }
 
-    private func getOidcClient() async throws -> OIDCClient {
-        let oidcAuthApi = OidcAuthApi(server: Self.server)
-        return try await oidcAuthApi.getClient()
+    private func getOidcClient() throws -> OIDCClient {
+        try XCTSkipUnless(
+            Self.hasHeadlessIdp,
+            "Auth's stub IdP is local-only unless deployed with unsafeAllowDeployed. Against a deployed backend "
+                + "these tests need RUN_OIDC=1 and a headless IdP: that deployed stub, or a real, auto-approving one "
+                + "(NATIVE_E2E_OIDC_ISSUER; see .github/workflows/native-sdk-e2e.yml)"
+        )
+        let client = BlocksClient(server: Self.server)
+        // `Auth`'s fixed routes (packages/bb-auth DESIGN.md → Routes). `OIDCClient` derives the
+        // authorize-params and callback paths from `exchangePath`.
+        return OIDCClient(
+            exchangePath: "/aws-blocks/auth/exchange",
+            refreshPath: "/aws-blocks/auth/exchange/refresh",
+            signOutPath: "/aws-blocks/auth/signout",
+            providers: [provider],
+            providerConfigs: [:],
+            baseUrl: client.baseUrl,
+            client: client
+        )
     }
 
     func testSignInRelayAndAuthenticatedRPC() async throws {
-        let oidc = try await getOidcClient()
+        let oidc = try getOidcClient()
         let launcher = HttpRelayLauncher()
 
         let user = try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)
@@ -99,10 +119,11 @@ final class OIDCE2ETests: BlocksE2ETestCase {
         let currentUser = try await api.oidcRequireAuth()
         XCTAssertFalse(currentUser.userId.isEmpty)
         XCTAssertEqual(currentUser.userId, user.userId)
+        XCTAssertEqual(currentUser.provider, provider)
     }
 
     func testSignOut() async throws {
-        let oidc = try await getOidcClient()
+        let oidc = try getOidcClient()
         let launcher = HttpRelayLauncher()
 
         _ = try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)

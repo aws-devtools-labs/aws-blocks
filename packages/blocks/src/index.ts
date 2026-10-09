@@ -100,106 +100,25 @@ export type {
  * Full docs: `README.md` in the package directory above.
  */
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
+export type * from '@aws-blocks/bb-auth';
 /**
- * **Username/password authentication with JWT sessions.**
+ * **Authentication — email + password, social sign-in, OIDC and SAML in one block.**
  *
- * Use when you need simple credential-based auth for prototypes, internal
- * tools, or MVPs. Includes password hashing (bcrypt), HTTP-only cookie
- * sessions, optional email-confirmed signup, and password reset flows.
+ * Use for any sign-in: email + password backed by a Cognito user pool (MFA,
+ * passkeys, groups + `requireRole`, the opt-in `auth.admin` surface), social
+ * and SAML providers federated through Cognito, and OIDC / OAuth 2.0 providers
+ * federated directly by your backend (no user pool needed). One options object
+ * configures every mechanism, and methods your configuration doesn't support
+ * don't compile. Runs locally with no AWS account; `stubIdp()` is an offline
+ * identity provider for development. Replaces `AuthBasic`, `AuthCognito` and
+ * `AuthOIDC`.
  *
- * Package: `@aws-blocks/bb-auth-basic`
+ * Package: `@aws-blocks/bb-auth`
  * Full docs: `README.md` in the package directory above.
  *
  * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
  */
-export {
-	AuthBasic,
-	AuthBasicErrors,
-	type AuthBasicOptions,
-	type AuthBasicUser,
-	type PasswordPolicy,
-} from '@aws-blocks/bb-auth-basic';
-export type {
-	AdminAction,
-	AdminActionGate,
-	AdminCreateInit,
-	AdminDisabled,
-	AdminGetterOf,
-	AdminGrants,
-	AdminOptions,
-	AdminSurface,
-	AdminUser,
-	AdminUserFilter,
-	AuthCognitoOptions,
-	AuthFlowType,
-	CodeDeliveryDetails,
-	CodeDeliveryFn,
-	CognitoUser,
-	ConfirmSignInOptions,
-	DeviceRecord,
-	ExternalUserPoolRef,
-	GroupAdmin,
-	LifecycleAdmin,
-	MFAPreference,
-	ResetPasswordResult,
-	SetPasswordOptions,
-	SignInNextStep,
-	SignInOptions,
-	SignInResult,
-	SignUpOptions,
-	SignUpResult,
-	UpdateAttributeOutcome,
-	UserAttribute,
-} from '@aws-blocks/bb-auth-cognito';
-/**
- * **Cognito authentication — username/password + MFA + groups.**
- *
- * Use for Cognito auth with MFA (SMS / TOTP / Email OTP), user pool groups +
- * role-based access control, custom attributes, and device tracking. Sessions
- * are opaque HMAC-signed cookies — Cognito tokens never reach the browser.
- *
- * For simple username/password without Cognito, use `AuthBasic`. For direct
- * OIDC (no Cognito), use `AuthOIDC`.
- *
- * Package: `@aws-blocks/bb-auth-cognito`
- * Full docs: `README.md` in the package directory above.
- *
- * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
- */
-export { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
-export type {
-	AuthOIDCErrorName,
-	MappedClaims,
-	OIDCUser,
-	RelayOrigin,
-} from '@aws-blocks/bb-auth-oidc';
-/**
- * **OIDC sign-in gate for Google, GitHub, Okta, Cognito User Pools, and any
- * OIDC-compliant IdP.**
- *
- * Use when you want users to sign in with an external identity provider
- * rather than managing credentials yourself. Sessions outlive the IdP's
- * ~1 hour ID token TTL with transparent background refresh, and sign-out
- * invalidates the session server-side. No session storage to configure.
- * Two lifecycle hooks (`onSignIn`, `onSignOut`) hand customers the seam
- * for profile-row upserts and audit logging.
- *
- * Package: `@aws-blocks/bb-auth-oidc`
- * Full docs: `README.md` in the package directory above.
- *
- * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
- */
-export {
-	AuthOIDC,
-	AuthOIDCErrors,
-	cognitoFederated,
-	customOauth2,
-	customOidc,
-	github,
-	google,
-	relayOrigin,
-	stubIdp,
-} from '@aws-blocks/bb-auth-oidc';
+export { Auth, AuthErrors, customOauth2, github, isAuthError, relayOrigin, stubIdp } from '@aws-blocks/bb-auth';
 export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
 /**
  * **Scheduled task execution backed by EventBridge Scheduler and Lambda.**
