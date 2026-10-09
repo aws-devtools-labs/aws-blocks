@@ -23,6 +23,7 @@
     "dist",
     "README.md",
     "DESIGN.md",
+    "MIGRATION-native-gsi.md",
     "src",
     "LICENSE"
   ],

@@ -316,6 +316,8 @@ const legacy = new DistributedTable(scope, 'legacy', {
 - Use `{ ifFieldEquals }` for optimistic locking when multiple writers are possible
 - Prefer `query()` over `scan()` — scans read every item and are expensive
 
+> **Migrating an existing stack:** if a stack was deployed before this block declared its secondary indexes natively in CloudFormation, a plain redeploy can fail with `ResourceInUse` because CloudFormation tries to create indexes the live table already has. See [MIGRATION-native-gsi.md](./MIGRATION-native-gsi.md) for the one-time adoption procedure. New stacks are unaffected.
+
 ## Scaling & Cost (AWS)
 
 - **Billing:** PAY_PER_REQUEST — no provisioned capacity to manage
