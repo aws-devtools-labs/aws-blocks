@@ -256,9 +256,15 @@ export class ContainerCompute extends ComputeBase {
 				const per = signal.backlogPerInstance;
 				scalable.scaleOnMetric(`QueueDepthScaling`, {
 					metric: backlog,
-					// Below one instance's worth of backlog → scale toward min; each
-					// additional `per` messages adds an instance.
+					// Steps are relative to the current task count (CHANGE_IN_CAPACITY).
+					// An empty backlog removes a task per interval (scale toward min);
+					// each additional `per` messages of backlog adds instances. Without
+					// the `{ upper: 0, change: -1 }` step the service would never scale
+					// in — step scaling only removes capacity when a `change < 0` step
+					// exists — leaving tasks pinned at the scaled-out count (full Fargate
+					// cost) long after the queue drains.
 					scalingSteps: [
+						{ upper: 0, change: -1 },
 						{ upper: per, change: 0 },
 						{ lower: per, change: +1 },
 						{ lower: per * 5, change: +3 },

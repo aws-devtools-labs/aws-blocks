@@ -21,14 +21,11 @@ const REGISTRY_KEY = '__BLOCKS_ASYNC_JOB_REGISTRY__';
 /** The minimal surface the worker needs from a registered job. */
 export interface RunnableJob {
 	/** Execute one delivery: parse, run the handler, record status. Throws on handler error. */
-	_processRecord(
-		record: {
-			messageId: string;
-			body: string;
-			attributes: { ApproximateReceiveCount: string; SentTimestamp: string };
-		},
-		signal?: AbortSignal,
-	): Promise<void>;
+	_processRecord(record: {
+		messageId: string;
+		body: string;
+		attributes: { ApproximateReceiveCount: string; SentTimestamp: string };
+	}): Promise<void>;
 }
 
 function registry(): Map<string, RunnableJob> {

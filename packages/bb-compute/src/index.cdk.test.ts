@@ -3,7 +3,7 @@
 
 /**
  * Verifies the generic `Compute` block owns the concrete, branded backing
- * compute for the stated `type` and exposes it via `.compute` (the
+ * compute for the stated `type` and exposes it via `resolve()` (the
  * `ComputeProvider` contract) — so the framework's delivery logic resolves and
  * recognizes it.
  *
@@ -38,23 +38,23 @@ describe('Compute — explicit type selection', () => {
 	test("type: 'serverless' owns a LambdaCompute backing", async () => {
 		const stack = await makeStack();
 		const c = new Compute(stack as never, 'api', { type: 'serverless', memory: 512 });
-		// `.compute` resolves to the branded backing the framework wires against.
-		assert.ok(LambdaCompute.isLambdaCompute(c.compute), 'backing should be a LambdaCompute');
-		assert.ok(!ContainerCompute.isContainerCompute(c.compute), 'backing should not be a ContainerCompute');
-		assert.strictEqual(c.compute.type, 'serverless');
+		// resolve() returns the branded backing the framework wires against.
+		assert.ok(LambdaCompute.isLambdaCompute(c.resolve()), 'backing should be a LambdaCompute');
+		assert.ok(!ContainerCompute.isContainerCompute(c.resolve()), 'backing should not be a ContainerCompute');
+		assert.strictEqual(c.resolve().type, 'serverless');
 	});
 
 	test("type: 'container' owns a ContainerCompute backing", async () => {
 		const stack = await makeStack();
 		const c = new Compute(stack as never, 'worker', { type: 'container', size: { vcpu: 1, memory: 2048 } });
-		assert.ok(ContainerCompute.isContainerCompute(c.compute), 'backing should be a ContainerCompute');
-		assert.ok(!LambdaCompute.isLambdaCompute(c.compute), 'backing should not be a LambdaCompute');
-		assert.strictEqual(c.compute.type, 'container');
+		assert.ok(ContainerCompute.isContainerCompute(c.resolve()), 'backing should be a ContainerCompute');
+		assert.ok(!LambdaCompute.isLambdaCompute(c.resolve()), 'backing should not be a LambdaCompute');
+		assert.strictEqual(c.resolve().type, 'container');
 	});
 
 	test('container backing carries its vcpu for per-CPU concurrency math', async () => {
 		const stack = await makeStack();
 		const c = new Compute(stack as never, 'worker2', { type: 'container', size: { vcpu: 2, memory: 4096 } });
-		assert.strictEqual(c.compute.vcpu, 2);
+		assert.strictEqual(c.resolve().vcpu, 2);
 	});
 });

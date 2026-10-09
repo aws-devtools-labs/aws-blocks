@@ -188,6 +188,29 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 }
 
 /**
+ * Attach the Lambda VPC-access managed policy (`AWSLambdaVPCAccessExecutionRole`,
+ * ENI management) to the shared execution role when a VPC is active on `root` —
+ * provided OR derived. The role is built eagerly in {@link setupBlocksInfra} and
+ * only gets this policy there when `defaults.vpc` is set; but a container compute
+ * can *derive* a VPC during the backend import, and a `LambdaCompute` then
+ * auto-places its function in that VPC. Without this the serverless function
+ * would land in the VPC with no ENI permissions and fail at ENI creation / cold
+ * start — order-dependently. Called from both `BlocksStack` and `BlocksBackend`
+ * finalize. Idempotent: CDK dedupes a repeat managed policy, so it's a no-op on
+ * the provided-VPC path (where the policy was already attached eagerly).
+ *
+ * @internal
+ */
+export function ensureVpcAccessPolicyWhenVpcActive(root: { executionRole: iam.IRole }): void {
+	if (!isVpcInitialized(root as never)) return;
+	if (root.executionRole instanceof iam.Role) {
+		root.executionRole.addManagedPolicy(
+			iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
+		);
+	}
+}
+
+/**
  * Standalone CDK construct that provisions the Blocks backend: a single Lambda
  * function fronted by API Gateway with RPC + catch-all proxy routing.
  *
@@ -374,6 +397,11 @@ export class BlocksBackend extends Construct {
 					'bring your own. See packages/blocks/VPC.md.',
 			);
 		}
+
+		// A LambdaCompute auto-places its function in whatever VPC is initialized on
+		// the backend — including one a container sibling *derived* during the import.
+		// Ensure the shared role carries ENI permissions in that case (see helper).
+		ensureVpcAccessPolicyWhenVpcActive(backend);
 
 		return backend;
 	}

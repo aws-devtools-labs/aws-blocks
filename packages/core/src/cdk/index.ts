@@ -12,7 +12,7 @@ import {
 	type ScopeOptions,
 	type ScopeParent,
 } from '../common/index.js';
-import { assertCdkConditionActive, BlocksBackend, setupBlocksInfra } from './blocks-backend.js';
+import { assertCdkConditionActive, BlocksBackend, ensureVpcAccessPolicyWhenVpcActive, setupBlocksInfra } from './blocks-backend.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
@@ -206,6 +206,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 					'BlocksStack.create to bring your own. See packages/blocks/VPC.md.',
 			);
 		}
+
+		// Grant the shared role ENI permissions when a VPC is active (provided or
+		// derived by a container compute during import) so a serverless compute
+		// placed in it can create ENIs. See helper for the full rationale.
+		ensureVpcAccessPolicyWhenVpcActive(stack);
 
 		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
 

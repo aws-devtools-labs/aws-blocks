@@ -10,6 +10,7 @@ import { dispatchJobToWorker, isJobWorker } from '@aws-blocks/core';
 import { EventSourceMapping, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import { registerAsyncJob } from './job-registry.js';
 import type { ScopeParent } from '@aws-blocks/core';
+import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type {
 	AsyncJobContext,
@@ -72,7 +73,7 @@ const VISIBILITY_HEARTBEAT_INTERVAL_MS = 30_000;
  */
 const DEFAULT_CONTAINER_CONCURRENCY = 5;
 
-export class AsyncJob<T = unknown> extends Scope {
+export class AsyncJob<T = unknown, C extends ComputeProvider = ComputeProvider<'serverless'>> extends Scope {
 	private _handler: (payload: T, context: AsyncJobContext) => Promise<void>;
 	private _schema?: StandardSchemaV1<T>;
 	private _envKey: string;
@@ -84,7 +85,7 @@ export class AsyncJob<T = unknown> extends Scope {
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
 
-	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
+	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T, C>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this._handler = options.handler;
@@ -199,13 +200,12 @@ export class AsyncJob<T = unknown> extends Scope {
 		messageId: string;
 		body: string;
 		attributes: { ApproximateReceiveCount: string; SentTimestamp: string };
-	}, signal?: AbortSignal): Promise<void> {
+	}): Promise<void> {
 		const payload = JSON.parse(record.body) as T;
 		const ctx: AsyncJobContext = {
 			jobId: record.messageId,
 			receiveCount: parseInt(record.attributes.ApproximateReceiveCount, 10),
 			sentAt: new Date(parseInt(record.attributes.SentTimestamp, 10)).toISOString(),
-			signal,
 		};
 
 		await this._status?.tryRecordTransition(ctx.jobId, 'processing', ctx.receiveCount);
@@ -328,6 +328,12 @@ export class AsyncJob<T = unknown> extends Scope {
 								QueueUrl: queueUrl,
 								MaxNumberOfMessages: Math.min(10, free),
 								WaitTimeSeconds: 20,
+								// Start the visibility window at ~2 heartbeats rather than the
+								// queue default (sized for the Lambda path, up to ~15 min). The
+								// heartbeat extends it while a long job runs; this only bounds
+								// the worst case where a task crashes/OOMs BEFORE the first
+								// heartbeat lands — the message then redrives in ~2 min, not ~15.
+								VisibilityTimeout: VISIBILITY_HEARTBEAT_SECONDS * 2,
 								MessageSystemAttributeNames: ['ApproximateReceiveCount', 'SentTimestamp'],
 							}),
 						);

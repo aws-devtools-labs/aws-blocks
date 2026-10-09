@@ -15,22 +15,17 @@ export interface AsyncJobContext {
 	receiveCount: number;
 	/** ISO 8601 timestamp of when the message was sent. */
 	sentAt: string;
-	/**
-	 * Aborts when the job exceeds its compute's wall-clock limit
-	 * (`Compute.timeoutSeconds`). On a container the limit is **enforced** by
-	 * terminating the worker thread the job runs in, so a handler that ignores this
-	 * signal is still stopped at the deadline; the signal is offered so cooperative
-	 * handlers can also unwind in-flight work (close connections, flush) a moment
-	 * before termination. Present only when a timeout is configured; `undefined` on
-	 * Lambda (the platform enforces the function timeout) and when no limit is set.
-	 */
-	signal?: AbortSignal;
 }
 
 /**
  * Configuration options for creating an AsyncJob.
+ *
+ * Generic over `C`, the {@link ComputeProvider} passed as `compute` (defaulting
+ * to a serverless provider when none is given). Container-only options such as
+ * `maxConcurrencyPerCPU` are merged in only when `C` is a container compute —
+ * see {@link ContainerOnlyJobOptions}.
  */
-export interface AsyncJobOptions<T> {
+export type AsyncJobOptions<T, C extends ComputeProvider = ComputeProvider<'serverless'>> = {
 	/** Async function that processes each job payload. */
 	handler: (payload: T, context: AsyncJobContext) => Promise<void>;
 	/** Optional schema for runtime payload validation on submit. Accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType, etc.). */
@@ -73,7 +68,7 @@ export interface AsyncJobOptions<T> {
 	 * per-handler wall-clock limit comes from the compute's `timeoutSeconds`. In
 	 * local dev, compute assignment is transparent — the handler runs in-process.
 	 */
-	compute?: ComputeProvider;
+	compute?: C;
 
 	/**
 	 * Wall-clock limit for one delivery, in seconds. A property of the work, not
@@ -82,16 +77,29 @@ export interface AsyncJobOptions<T> {
 	 * function timeout. Must fit under the compute's ceiling where one exists.
 	 */
 	timeoutSeconds?: number;
+} & ContainerOnlyJobOptions<C>;
 
-	/**
-	 * How many deliveries of this job run at once per instance, expressed **per
-	 * vCPU**. Blocks multiplies by the compute's vCPU count for the per-instance
-	 * concurrency: `max(1, ceil(maxConcurrencyPerCPU × vcpu))`. Higher for IO-bound
-	 * work that mostly awaits; 1 (or omit) for CPU-bound work. Container-only —
-	 * a serverless compute has no per-instance cap, so it is ignored there.
-	 */
-	maxConcurrencyPerCPU?: number;
-}
+/**
+ * Options that apply only when the job runs on a **container** compute. Merged
+ * into {@link AsyncJobOptions} conditionally on the injected compute's kind, so
+ * these fields are present only for a container compute and are a **compile
+ * error** on a serverless one (not a silently-ignored property). Resolves to
+ * `{}` for a serverless compute or when no compute is assigned (the app default
+ * is serverless).
+ */
+export type ContainerOnlyJobOptions<C extends ComputeProvider> = C extends ComputeProvider<'container'>
+	? {
+			/**
+			 * How many deliveries of this job run at once per instance, expressed
+			 * **per vCPU**. Blocks multiplies by the compute's vCPU count for the
+			 * per-instance concurrency: `max(1, ceil(maxConcurrencyPerCPU × vcpu))`.
+			 * Higher for IO-bound work that mostly awaits; 1 (or omit) for CPU-bound
+			 * work. Container-only — exposed only when the injected `compute` is a
+			 * container; setting it with a serverless compute is a compile error.
+			 */
+			maxConcurrencyPerCPU?: number;
+		}
+	: Record<never, never>;
 
 /**
  * Lifecycle state of a single job.

@@ -8,7 +8,7 @@
  * CDK block's `ComputeProvider` shape so a `{ compute }` reference resolves in
  * every phase.
  */
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ComputeType, ScopeParent } from '@aws-blocks/core';
 import { Scope } from '@aws-blocks/core';
 import type { ComputeBase, ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
@@ -17,10 +17,10 @@ import type { ComputeProps } from './types.js';
 
 export type { ComputeProps } from './types.js';
 
-export class Compute extends Scope implements ComputeProvider {
+export class Compute<K extends ComputeType = ComputeType> extends Scope implements ComputeProvider<K> {
 	readonly #backing: Scope;
 
-	constructor(scope: ScopeParent, id: string, props: ComputeProps) {
+	constructor(scope: ScopeParent, id: string, props: ComputeProps & { type: K }) {
 		super(id, { parent: scope });
 		this.#backing =
 			props.type === 'container'
@@ -28,7 +28,7 @@ export class Compute extends Scope implements ComputeProvider {
 				: new LambdaCompute(this, 'backing');
 	}
 
-	get compute(): ComputeBase {
-		return this.#backing as unknown as ComputeBase;
+	resolve(): ComputeBase & { readonly type: K } {
+		return this.#backing as unknown as ComputeBase & { readonly type: K };
 	}
 }

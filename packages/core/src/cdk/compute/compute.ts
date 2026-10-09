@@ -8,6 +8,31 @@ import { Scope } from '../index.js';
 import { registerCompute } from './compute-registry.js';
 
 /**
+ * Anything that can be handed to a workload's `compute` option: a concrete
+ * compute (which resolves to itself) or a Building Block that owns one (the
+ * public {@link Compute} block, whose `resolve()` returns its backing). A
+ * consumer (`AsyncJob`, `CronJob`, scope-level assignment) depends on this one
+ * interface and calls `resolve()` to get the concrete {@link ComputeBase} to
+ * wire against — so it never cares whether it was handed the public block or a
+ * raw backing.
+ *
+ * The type parameter `K` carries the compute *kind* (`'serverless'` |
+ * `'container'`) at the type level, so a workload's options can be
+ * **compute-conditional** — e.g. `AsyncJob` exposes `maxConcurrencyPerCPU` only
+ * when `K` is `'container'`, making it a compile error on a serverless compute
+ * rather than a silently-ignored property. Defaults to the full `ComputeType`
+ * union when the kind isn't tracked.
+ */
+export interface ComputeProvider<K extends ComputeType = ComputeType> {
+	/**
+	 * Resolve to the concrete compute to run on. A {@link ComputeBase} returns
+	 * itself; a wrapper block returns the backing compute it owns. The result's
+	 * `type` is narrowed to this provider's kind `K`.
+	 */
+	resolve(): ComputeBase & { readonly type: K };
+}
+
+/**
  * Base class for a Blocks *compute* — a runtime that executes handler code
  * (Lambda today; containers later). A compute owns the physical function/service
  * plus its ingress, and receives config via {@link setEnv}.
@@ -25,23 +50,6 @@ import { registerCompute } from './compute-registry.js';
  * enabled explicitly via {@link enableTracing} — which the framework calls on
  * every compute when the app contains a `Tracer` (presence-gated).
  *
-/**
- * Anything that can be handed to a workload's `compute` option: a concrete
- * compute (which provides itself) or a Building Block that owns one (the public
- * {@link Compute} block, whose `.compute` resolves to its backing). A consumer
- * (`AsyncJob`, `CronJob`, scope-level assignment) depends on this one interface
- * and reads `.compute` to get the concrete {@link ComputeBase} to wire against —
- * so it never cares whether it was handed the public block or a raw backing.
- */
-export interface ComputeProvider {
-	/**
-	 * The concrete compute to run on. A {@link ComputeBase} returns itself; a
-	 * wrapper block returns the backing compute it owns.
-	 */
-	readonly compute: ComputeBase;
-}
-
-/**
  * The abstract base lives in core (a framework primitive); concrete computes
  * live in their own packages (e.g. `LambdaCompute` in `@aws-blocks/bb-lambda-compute`).
  *
@@ -72,11 +80,11 @@ export abstract class ComputeBase extends Scope implements ComputeProvider {
 	readonly type: ComputeType = 'serverless';
 
 	/**
-	 * A concrete compute provides itself — so a `ComputeBase` satisfies
+	 * A concrete compute resolves to itself — so a `ComputeBase` satisfies
 	 * {@link ComputeProvider} and can be passed anywhere a provider is accepted,
 	 * interchangeably with the public `Compute` block.
 	 */
-	get compute(): ComputeBase {
+	resolve(): ComputeBase {
 		return this;
 	}
 

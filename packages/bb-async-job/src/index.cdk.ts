@@ -13,6 +13,7 @@ import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
 import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
+import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import type {
 	AsyncJobContext,
 	AsyncJobOptions,
@@ -75,27 +76,26 @@ function validateEventSourceOptions(
 	}
 }
 
-export class AsyncJob<T = unknown> extends BuildingBlockScope {
+export class AsyncJob<T = unknown, C extends ComputeProvider = ComputeProvider<'serverless'>> extends BuildingBlockScope {
 	public readonly queue: Queue;
 	public readonly dlq: Queue;
 
-	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
+	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T, C>) {
 		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
 
 		// Assign the requested compute (if any) before anything reads `this.compute`
 		// below. The public option is a `ComputeProvider` — either the `Compute`
-		// block or a concrete backing — and `.compute` resolves it to the concrete
-		// `ComputeBase` the framework wires against (a backing provides itself; the
-		// `Compute` block provides the backing it owns). No cast: the option type
+		// block or a concrete backing — and `resolve()` returns the concrete
+		// `ComputeBase` the framework wires against (a backing resolves to itself;
+		// the `Compute` block resolves to the backing it owns). No cast: `resolve()`
 		// and the `_compute` slot are both `ComputeBase`.
 		if (options.compute) {
-			this._compute = options.compute.compute;
+			this._compute = options.compute.resolve();
 		}
 
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 10;
 		const maxBatchingWindowSeconds = options.maxBatchingWindowSeconds ?? 5;
-		validateEventSourceOptions(this.fullId, batchSize, maxBatchingWindowSeconds);
 
 		// A AsyncJob's queue must be consumed by exactly one runtime. On a Lambda
 		// compute that's a native SQS event source (below); on a container compute
@@ -115,8 +115,33 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 			);
 		}
 
+		// `maxConcurrencyPerCPU` is a container-only knob (per-vCPU concurrency has
+		// no meaning on a serverless compute, which has no per-instance pool). The
+		// option type already excludes it for a serverless compute — this is the
+		// defense-in-depth runtime guard for callers who bypass the types (plain JS,
+		// `as any`, or a cross-package version skew), so it fails loud at synth
+		// instead of being silently dropped.
+		if (!onContainer && (options as { maxConcurrencyPerCPU?: number }).maxConcurrencyPerCPU !== undefined) {
+			throw blocksError(
+				AsyncJobErrors.InvalidOption,
+				`AsyncJob "${this.fullId}": maxConcurrencyPerCPU applies only to a container compute.`,
+			);
+		}
+
+		// batchSize / maxBatchingWindowSeconds only govern the native SQS→Lambda
+		// event source. Validate them (early, before the queue is built so the
+		// friendly error beats CDK's own Duration checks) only on the Lambda path —
+		// a container job self-polls and never wires an event source, so these
+		// limits don't apply to it.
+		if (onLambda) {
+			validateEventSourceOptions(this.fullId, batchSize, maxBatchingWindowSeconds);
+		}
+
 		this.dlq = new Queue(this, 'dlq', {
-			queueName: `${this.fullId}-dlq`.substring(0, 80),
+			// Reserve room for the `-dlq` suffix (4 chars) before the 80-char cap so a
+			// long fullId can't truncate the dlq and main-queue names to the same 80
+			// chars — identical names fail CloudFormation with "queue already exists".
+			queueName: `${this.fullId.substring(0, 76)}-dlq`,
 			retentionPeriod: Duration.days(14),
 			encryption: QueueEncryption.SQS_MANAGED,
 			enforceSSL: true,
@@ -188,10 +213,13 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 
 			// Per-instance concurrency = maxConcurrencyPerCPU × the compute's vCPU,
 			// rounded up, floored at one. Resolved at synth against the compute's
-			// vcpu so the runtime reads a concrete count.
-			if (options.maxConcurrencyPerCPU !== undefined) {
+			// vcpu so the runtime reads a concrete count. The knob is container-only
+			// (the option type exposes it only here), read via a cast since the base
+			// options type doesn't carry it.
+			const maxConcurrencyPerCPU = (options as { maxConcurrencyPerCPU?: number }).maxConcurrencyPerCPU;
+			if (maxConcurrencyPerCPU !== undefined) {
 				const vcpu = compute.vcpu ?? 1;
-				const perInstance = resolvePerInstanceConcurrency(options.maxConcurrencyPerCPU, vcpu);
+				const perInstance = resolvePerInstanceConcurrency(maxConcurrencyPerCPU, vcpu);
 				registerConfig(this, `BLOCKS_HANDLER_CONCURRENCY_${idKey}`, String(perInstance));
 			}
 
