@@ -12,6 +12,8 @@ import {
 	DEAD_SERVER_KLASS,
 	DEAD_SERVER_REASON,
 	DEAD_SERVER_STATUS,
+	PGLITE_OOM_REASON,
+	isPgliteInitOom,
 	PRICING,
 	buildCapDecision,
 	cellCost,
@@ -447,6 +449,56 @@ describe('dead_server: a crashed/never-served dev-server is a REAL fail (composi
 		const cell = { ...deadCell, failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', isolation_active: true };
 		assert.equal(classifyCell(cell).klass, 'harness_error');
 		assert.equal(isScoredCell(cell), false);
+	});
+});
+
+describe('dead_server PGlite-init-OOM carve-out: a WASM memory-ceiling crash is infra, EXCLUDED (not the agent)', () => {
+	// A dead_server whose dev-log shows the PGlite `_pg_initdb` WASM abort is the mock engine running
+	// out of WASM linear memory under the CI runner — the built app is fine, so it must NOT count
+	// against the agent. Reclassified harness_error (EXCLUDED). The carve-out is signature-gated and
+	// narrow: ONLY this trap reclassifies; every other dead_server stays counted.
+	const base = { task: 'oidc-dsql-notes', template: 'default', dev_server_status: 'dead', tests_passed: 0, tests_failed: 0 };
+
+	it('Aborted(Cannot enlarge memory arrays) in the dev-log → harness_error, EXCLUDED', () => {
+		const cell = { ...base, dev_log_tail: 'postgres: Aborted(Cannot enlarge memory arrays to 0x...)' };
+		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: PGLITE_OOM_REASON });
+		assert.equal(isScoredCell(cell), false);
+	});
+
+	it("RuntimeError: unreachable (the V8/Node trap form) → harness_error, EXCLUDED", () => {
+		const cell = { ...base, dev_log_tail: 'RuntimeError: unreachable\n    at _pg_initdb' };
+		assert.equal(classifyCell(cell).klass, 'harness_error');
+		assert.equal(classifyCell(cell).reason, PGLITE_OOM_REASON);
+	});
+
+	it('a dead_server with NO matching signature stays dead_server (counted) — the gate is narrow', () => {
+		const cell = { ...base, dev_log_tail: 'Error: listen EADDRINUSE: address already in use :::3100' };
+		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
+		assert.equal(isScoredCell(cell), true); // a genuine agent-caused crash still counts
+	});
+
+	it('a dead_server with no dev_log_tail at all stays dead_server (counted)', () => {
+		const cell = { ...base };
+		assert.equal(classifyCell(cell).klass, DEAD_SERVER_KLASS);
+		assert.equal(isScoredCell(cell), true);
+	});
+
+	it('a stray Aborted( in the log does NOT rescue a genuine harness_error / cancellation (precedence holds)', () => {
+		// The PGlite carve-out is ordered inside the dead_server branch, AFTER cancellation/pre-grade —
+		// so a cancelled or pre-grade-failed cell stays EXCLUDED regardless of the log contents.
+		const cancelled = { ...base, status: 'cancelled', failed_at: AGENT_FAIL_AT, dev_log_tail: 'Aborted(OOM)' };
+		assert.equal(classifyCell(cancelled).reason, 'cancelled');
+		assert.equal(classifyCell(cancelled).klass, 'harness_error');
+	});
+
+	it('isPgliteInitOom matches the trap signatures and rejects unrelated / non-string input', () => {
+		assert.equal(isPgliteInitOom('x Aborted(OOM) y'), true);
+		assert.equal(isPgliteInitOom('wasm trap: unreachable'), true);
+		assert.equal(isPgliteInitOom('RuntimeError: unreachable'), true);
+		assert.equal(isPgliteInitOom('EADDRINUSE'), false);
+		assert.equal(isPgliteInitOom(''), false);
+		assert.equal(isPgliteInitOom(undefined), false);
+		assert.equal(isPgliteInitOom(null), false);
 	});
 });
 
