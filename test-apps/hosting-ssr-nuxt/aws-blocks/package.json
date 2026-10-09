@@ -14,5 +14,8 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "vue": "^3.5.41"
   }
 }
