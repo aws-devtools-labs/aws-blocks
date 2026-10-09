@@ -1,5 +1,293 @@
 # @aws-blocks/bb-distributed-data
 
+## 0.2.1
+
+### Patch Changes
+
+- b0be240: Upgrade PGlite from `^0.2.0` to `^0.5.8` to address the `_pg_initdb` WASM init crash seen on Node 22 / CI.
+  
+  On the CI runner (Node 22), PGlite's WASM `initdb` traps with `RuntimeError: unreachable` at `_pg_initdb`; the trapped instance is unrecoverable, so a Database or DistributedDatabase block whose init hits the trap fails to start. The `0.3.7` "wasm runtime exception" fix (electric-sql/pglite#753) did NOT resolve it — an upgrade to `0.3.16` was verified to still trap. PGlite `0.4.0` re-architected initdb into a separate module and `0.4.3` added an initial-memory-size control, so the plausible fix for an initdb-path trap is in the 0.4.x+ line, not 0.3.x. This moves to the current `0.5.8`.
+  
+  The query/transaction API surface the engines use (`new PGlite(dir)`, `query().rows`, `query().affectedRows`, `close()`, `BEGIN`/`COMMIT`/`ROLLBACK`) and the structural data-directory markers (`PG_VERSION`, `base`, `global`, `global/pg_control`) are unchanged on `0.5.8`, so no engine code changes are required. Note: a `.bb-data` directory created by `0.2` (embedded PG16) is **not** forward-compatible with `0.5.8` (embedded PG18) — `hasInitializedPgliteDataDir` keys on marker *presence*, not the `PG_VERSION` contents, so a stale PG16 dir is treated as initialized and the mismatch surfaces at first query with no auto-recovery. Local-dev only (CI starts clean and `.bb-data` is gitignored); a dev with an old dir must delete it and let `0.5.8` recreate it.
+  
+  Note: the trap does not reproduce locally (it is CI-runner-specific), so the crash fix is verified in CI by the `oidc-dsql-notes` / `sql-kb-catalog` dead_server rate; the API compatibility is verified locally.
+- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
+  
+  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
+  
+  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
+  
+  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
+  
+  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
+  
+  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
+  
+  ## Breaking change (why `@aws-blocks/core` is a minor)
+  
+  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
+  
+  ```ts
+  // before — message collapses to "Internal error" on the client
+  throw new Error('Todo not found');
+  
+  // after — status, message, and name all reach the client
+  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  ```
+  
+  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-logger@0.2.1
+
+## 0.2.0
+
+### Minor Changes
+
+- 21443ba: fix(data): map optimistic-concurrency conflicts to JSON-RPC 409 (Conflict) instead of 500
+  
+  Optimistic-concurrency / conditional-write conflicts now surface to clients as
+  JSON-RPC error **code 409 (Conflict)** instead of a generic **500**. Previously
+  these conflicts were thrown as plain named `Error`s (or re-thrown raw driver
+  errors), and the JSON-RPC serializer maps any non-`ApiError` to 500 — so a
+  routine, expected conflict was indistinguishable from an internal server error.
+  
+  Each affected conflict is now an `ApiError` with `status: 409`, so on the client
+  `error.status === 409`. The structured `error.name` is preserved end-to-end, so
+  `isBlocksError(e, ...)` keeps matching by name on both server and client, and the
+  existing typed error constants are unchanged:
+  
+  - `@aws-blocks/bb-kv-store` — a failed `ifNotExists` / `ifExists` /
+    `ifValueEquals` write or delete (`KVStoreErrors.ConditionalCheckFailed`). The
+    AWS runtime now also normalizes DynamoDB's raw `ConditionalCheckFailedException`
+    on both `put` and `delete`, matching the mock.
+  - `@aws-blocks/bb-distributed-table` — a failed `ifNotExists` / `ifExists` /
+    `ifFieldEquals` condition (`DistributedTableErrors.ConditionalCheckFailed`),
+    in both mock and AWS `put`/`delete`.
+  - `@aws-blocks/bb-distributed-data` — a DSQL serialization failure / OCC
+    conflict, SQLSTATE `40001` (`DistributedDatabaseErrors.SerializationFailure`),
+    in both the mock and real engines.
+  - `@aws-blocks/bb-data` — a serializable-isolation conflict, SQLSTATE `40001`
+    (`DatabaseErrors.SerializationFailure`), across the PGlite, pg-client, and
+    Data API engines.
+  
+  The `retriable` flag is scoped to genuine optimistic-lock conflicts: it is
+  `true` for value/field-equals conflicts (`ifValueEquals` / `ifFieldEquals`) and
+  the 40001 serialization failures, and omitted/`false` for existence/uniqueness
+  assertions (`ifNotExists`, `ifExists`), where a blind identical retry would fail
+  identically. Status (409) and `error.name` are unchanged in every case.
+  
+  This is a `minor` bump. Every package here is pre-1.0, where `minor` is this
+  repo's signal for a change that can alter existing behavior: callers that
+  branched on `error.status === 500` for these conflicts (or on the JSON-RPC error
+  code) will now see `409`. Code that matches conflicts by name via
+  `isBlocksError` — the documented pattern — is unaffected.
+  
+  `@aws-blocks/core` and `@aws-blocks/blocks` get a `patch` bump for a docs-only
+  change: a clarifying sentence was added to the `ApiError.retriable` JSDoc
+  (no behavior or API change).
+- a47d71c: fix(data): map duplicate-key unique-constraint violations to JSON-RPC 409 (Conflict) instead of 500
+  
+  A duplicate-key / unique-constraint violation (SQLSTATE `23505`,
+  `UniqueConstraintViolation`) now surfaces to clients as JSON-RPC error
+  **code 409 (Conflict)** instead of a generic **500**. Previously the engine
+  translators set `error.name` on the raw driver error and re-threw a plain named
+  `Error`; the JSON-RPC serializer maps any non-`ApiError` to 500, so a routine,
+  expected duplicate-key conflict was indistinguishable from an internal server
+  error. This mirrors the `40001`/OCC → 409 mapping already established for these
+  Blocks.
+  
+  Each affected conflict is now an `ApiError` with `status: 409`, so on the client
+  `error.status === 409`. The structured `error.name` is preserved end-to-end, so
+  `isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)` (and the
+  `DistributedDatabaseErrors` equivalent) keeps matching by name on both server and
+  client; the typed error constants are unchanged.
+  
+  - `@aws-blocks/bb-data` — a duplicate-key violation (SQLSTATE `23505`,
+    `DatabaseErrors.UniqueConstraintViolation`) across the PGlite, pg-client, and
+    Data API engines (both the SQLState-parsed and message-matched Data API paths),
+    routed through a shared `uniqueConstraintConflict()` helper.
+  - `@aws-blocks/bb-distributed-data` — a DSQL duplicate-key violation (SQLSTATE
+    `23505`, `DistributedDatabaseErrors.UniqueConstraintViolation`) in
+    `translateDsqlError`, in both the mock and real engines.
+  
+  The conflict is **not** flagged `retriable`: a duplicate key is deterministic, so
+  a blind retry of the same insert fails identically (unlike the `40001`
+  serialization failures, which stay retriable). The client-visible message is a
+  fixed, stable string; the raw driver text (which can name columns / constraints)
+  is retained only as `cause` for server-side diagnostics. Genuine infrastructure
+  errors (`ConnectionFailed`, `QueryFailed`) are unchanged and correctly stay 500,
+  and the `SerializationFailure`/OCC paths are untouched.
+  
+  This is a `minor` bump. Both data packages are pre-1.0, where `minor` is this
+  repo's signal for a change that can alter existing behavior: callers that
+  branched on `error.status === 500` for these conflicts (or on the JSON-RPC error
+  code) will now see `409`. Code that matches conflicts by name via
+  `isBlocksError` — the documented pattern — is unaffected.
+  
+  `@aws-blocks/blocks` gets a `patch` bump because it re-exports `bb-data` and
+  `bb-distributed-data` (satisfies the umbrella publish guard); no umbrella source
+  changed.
+  
+  Fixes #508.
+
+### Patch Changes
+
+- e2c3c62: fix(bb-distributed-data): re-run the DSQL role grant when the app's IAM role is replaced
+  
+  `DistributedDatabase` maps the app's IAM role ARN to a DSQL database role with
+  `AWS IAM GRANT`. The migration/provisioning CustomResource is documented as running
+  on every deploy so the mapping "stays in sync if the app Lambda's IAM role is
+  recreated", but its properties were `{ migrationsHash, dbRole }` only — the role ARN
+  reached the Lambda as an environment variable and nothing else.
+  
+  CloudFormation re-invokes a CustomResource only when its **properties** change. When
+  an IAM role replacement changed the ARN while migrations stayed the same, both
+  properties were unchanged, so CloudFormation skipped the resource entirely. The
+  Lambda's `APP_ROLE_ARN` env var was updated but the function was never called, leaving
+  the DSQL grant pointing at the old, deleted ARN. Every query then failed with SQLSTATE
+  `28000` (`invalid_authorization_specification`, "unable to accept connection, access
+  denied") while the deploy itself reported success and the IAM policy still showed a
+  correct `dsql:DbConnect` — the breakage lived in DSQL's internal role mapping, which is
+  invisible from the CloudFormation layer.
+  
+  `appRoleArn` is now a CustomResource property, so a role replacement re-invokes the
+  resource and `provisionAppRole()` re-issues the grant as part of the deploy. The value
+  is a CDK token, so it differs only when the role is genuinely replaced — this does not
+  force the resource to run on every deploy.
+  
+  This was latent from the initial version and stayed dormant while each Lambda kept its
+  own stable execution role. It surfaced once the shared execution role landed (#320,
+  #341): upgrading `@aws-blocks/core` across that range replaces the per-Lambda
+  `HandlerServiceRole` with the shared `BlocksRole`, which is exactly the role-ARN change
+  that the CustomResource failed to notice.
+  
+  `@aws-blocks/blocks` gets a `patch` bump because it re-exports `bb-distributed-data`
+  (satisfies the umbrella publish guard); no umbrella source changed.
+  
+  Fixes #556.
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
+- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
+  
+  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
+  
+  **Building Blocks declare VPC requirements via the constructor, not a method.**
+  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
+  requirements (a value, or a callback for values that depend on `fullId`) and
+  registers them in a central per-stack registry. This keeps the compile-time
+  forcing the previous `abstract getVpcRequirements()` provided — a block can't
+  silently omit its requirements — without a standing method on every subclass, and
+  gives the framework one place to read, deduplicate, and answer "does anything here
+  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
+  
+  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
+  function without a VPC declares `requiresVpc: true`; when one is needed and the
+  customer didn't bring their own, Blocks lazily creates a single shared VPC
+  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
+  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
+  bring-your-own override.
+  
+  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
+  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
+  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
+  compliance requirement to use specific subnets. Omit it to keep the default
+  (prefer isolated, fall back to `private-with-egress`).
+- 6496713: fix(core): harden VPC integration — scoped endpoint SG, runtime-subnet validation, instructive subnet errors
+  
+  Second-pass hardening of VPC support based on review feedback.
+  
+  **Interface endpoints are no longer reachable from the whole VPC.** They now get
+  a dedicated security group that allows 443 only from the Blocks Lambda SG, and
+  the endpoints are created with `open: false` to suppress CDK's default
+  "allow 443 from the entire VPC CIDR" rule. On a bring-your-own VPC this stops
+  unrelated workloads from reaching every Blocks interface endpoint.
+  
+  **`VpcRequirements.subnetRole` is replaced by `requiresEgress`.** The old field
+  was declared but never consumed. `requiresEgress` expresses a real, validated
+  capability: whether the BB's parent runtime (the shared handler Lambda) must be
+  able to reach the internet. `finalizeVpc` validates it against the runtime's
+  actual placement and fails synth with an actionable message on a mismatch — it
+  never relocates the runtime (that's the customer's explicit choice).
+  `bb-distributed-data` (DSQL) declares `requiresEgress: true`, turning a
+  previously silent runtime failure (DSQL in isolated subnets deploys clean, then
+  every call times out) into a build-time error.
+  
+  **`VpcContext.selectSubnets` is now instructive.** It takes the requesting BB and
+  verifies the VPC actually has the requested subnet tier, throwing a BB-named,
+  actionable error instead of the opaque CDK "no subnet groups" error. It accepts
+  an explicit `{ fallback }` so a BB can opt into graceful degradation (e.g. Aurora
+  over the Data API works from `private-with-egress` when there is no isolated
+  tier); the downgrade is never silent. `bb-data` uses this.
+  
+  **Other fixes:** Lambda placement now fails fast with an actionable error when a
+  VPC has no private-with-egress tier and none was specified; `bb-data` drops its
+  unused 5432 ingress rule (Aurora is reached over the RDS Data API, not a socket);
+  removed `any` casts from the Lambda props and endpoint/CIDR handling; de-duplicated
+  the VPC/non-VPC branches in `BlocksStack`.
+  
+  All pre-1.0 `patch` bumps — no breaking changes to shipped, consumed API
+  (`subnetRole` had no consumers). The umbrella `@aws-blocks/blocks` re-exports the
+  affected types.
+- 6496713: fix(core): VPC review follow-ups — egress capability, endpoint trim, S3 gateway
+  
+  Refines VPC support based on review feedback (all changes to the net-new,
+  unreleased VPC feature).
+  
+  **`VpcRequirements.runtimeSubnet` becomes `requiresEgress?: boolean`.** A BB's
+  runtime need is a capability ("my code must reach the internet"), not a specific
+  subnet tier. Modeling it as a single role wrongly rejected a valid placement
+  (e.g. a BB needing egress placed in a `public` subnet). `finalizeVpc` now resolves
+  whether the runtime's placement actually provides egress — from the selected
+  subnets, not a guessed role — and validates `requiresEgress` against that. When
+  egress can't be determined (e.g. an imported VPC whose subnets aren't known at
+  synth) it warns rather than fabricating a pass/fail. `bb-distributed-data` (DSQL)
+  now declares `requiresEgress: true`.
+  
+  **SSM interface endpoint is no longer always provisioned.** Only `AppSetting` and
+  the auth blocks (which compose `AppSetting`) use SSM, so it now flows from Building
+  Block requirements. An app that uses neither no longer pays for an unused interface
+  endpoint. CloudWatch Logs stays always-on (every in-VPC Lambda needs it for log
+  delivery).
+  
+  **The S3 gateway endpoint is now always provisioned.** The runtime pulls config,
+  secrets, and migrations from S3 at cold start. Gateway endpoints are free
+  (route-table entries, no ENI), so this closes a real cold-start access gap at no
+  cost.
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-logger@0.2.0
+  - @aws-blocks/data-common@0.1.5
+
 ## 0.1.8
 
 ### Patch Changes

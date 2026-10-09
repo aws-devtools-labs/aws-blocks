@@ -42,6 +42,11 @@ struct BlocksCodegenTool {
         let generator = SwiftCodeGenerator()
         let output = generator.generate(from: codegenModel)
 
+        // Surface non-fatal diagnostics (e.g. AWSBLOCKS-NATIVE-001) to stderr.
+        for warning in output.warnings {
+            fputs(warning + "\n", stderr)
+        }
+
         // Write output files
         let modelsHeader = """
         //

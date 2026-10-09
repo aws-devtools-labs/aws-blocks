@@ -10,7 +10,7 @@ type Cursor = Parameters<typeof apiType.realtimePublishCursor>[0];
 
 export function realtimeTests(getApi: () => typeof apiType) {
 
-	describe('Realtime', { timeout: 60_000 }, () => {
+	describe('Realtime', () => {
 
 		describe('Publish & Subscribe', () => {
 			test('server publish reaches subscriber via channel handle', async () => {
@@ -279,6 +279,159 @@ export function realtimeTests(getApi: () => typeof apiType) {
 					`Expected a DisconnectReason, got: ${reason}`,
 				);
 			});
+
+			// Per-TEST timeout (not on the describe): the real-AWS reconnect round-trip
+			// can take ~45s, plus the post-reconnect delivery poll. A describe-level
+			// timeout would budget the WHOLE Realtime suite and cancel sibling tests.
+			test('reconnect after a forced close resubscribes and still delivers messages', { timeout: 120_000 }, async () => {
+				const api = getApi();
+				// Dedicated channel so only this subscription's token/resubscribe is exercised.
+				const channelName = `reconnect-e2e-${Date.now()}`;
+				const c1: Cursor = { userId: 'u1', x: 1, y: 1, color: 'red' };
+				const c2: Cursor = { userId: 'u1', x: 2, y: 2, color: 'blue' };
+
+				const channel = await api.realtimeGetChannel(channelName);
+
+				const received: Cursor[] = [];
+				let disconnects = 0;
+				let reconnects = 0;
+
+				const sub = channel.subscribe({
+					onMessage: (msg) => { received.push(msg); },
+					onDisconnect: () => { disconnects += 1; },
+					// Fires after the transport reopens AND this channel resubscribes.
+					onReconnect: () => { reconnects += 1; },
+				});
+
+				try {
+					await sub.established;
+
+					// Deliver a message before the drop.
+					await api.realtimePublishToChannel(channelName, c1);
+					const c1Deadline = Date.now() + 10_000;
+					while (!received.some((m) => m.x === c1.x && m.y === c1.y)) {
+						if (Date.now() > c1Deadline) throw new Error('c1 not received within 10s of publish');
+						await setTimeout(100);
+					}
+
+					// Force a mid-stream drop of the underlying socket (guard undefined).
+					sub.connection?.close();
+
+					// Wait for the transparent reconnect + resubscribe. Against the REAL AWS
+					// transport this is a full round-trip after backoff: >=1s reconnect
+					// backoff -> $connect handshake -> $default Lambda (possible cold start)
+					// -> Secrets Manager token-secret fetch -> token validation -> DynamoDB
+					// put -> PostToConnection subscribe_success back to the client. That
+					// comfortably exceeds the mock's ~instant reconnect, so allow 60s here
+					// (the mock still fires onReconnect in well under a second). Fails clearly
+					// on timeout.
+					const reconnectDeadline = Date.now() + 60_000;
+					while (reconnects < 1) {
+						if (Date.now() > reconnectDeadline) throw new Error('onReconnect did not fire within 60s of the forced close');
+						await setTimeout(200);
+					}
+
+					// A message published AFTER the reconnect proves the resubscribe worked —
+					// it is delivered on the fresh socket, not the closed one. Republish while
+					// polling: the mock fires onReconnect when the resubscribe frame is SENT (it
+					// does not track per-channel server confirmation), so the server may not have
+					// re-registered this subscriber on the very first publish. Retry-publishing
+					// mirrors the server-side-subscribe test's handling of the same race.
+					const c2Deadline = Date.now() + 30_000;
+					while (!received.some((m) => m.x === c2.x && m.y === c2.y)) {
+						if (Date.now() > c2Deadline) throw new Error('c2 not delivered after reconnect within 30s');
+						await api.realtimePublishToChannel(channelName, c2);
+						await setTimeout(1000);
+					}
+
+					assert.ok(reconnects >= 1, 'onReconnect should fire at least once');
+					assert.ok(disconnects >= 1, 'onDisconnect should fire on the forced close, before the reconnect');
+				} finally {
+					sub.unsubscribe();
+				}
+			});
+
+			test('reconnect invokes the refresh callback to obtain fresh credentials', { timeout: 120_000 }, async () => {
+				const api = getApi();
+				const channelName = `refresh-e2e-${Date.now()}`;
+				const c1: Cursor = { userId: 'u1', x: 11, y: 22, color: 'amber' };
+				const c2: Cursor = { userId: 'u2', x: 33, y: 44, color: 'violet' };
+
+				const channel = await api.realtimeGetChannel(channelName);
+
+				const received: Cursor[] = [];
+				let reconnects = 0;
+				let refreshCalls = 0;
+
+				// The reconnect path awaits refresh() BEFORE reopening the socket and
+				// applies the returned descriptor's fresh connect+channel tokens, so a
+				// subscription can outlive the token TTLs (channel ~1h / connect ~2h).
+				// The 1h TTL can't be waited out in a test — this proves the PATH:
+				// refresh IS invoked on reconnect and post-reconnect delivery still works.
+				//
+				// realtimeGetChannel hydrates into a subscribe-only client (no descriptor
+				// fields are reachable on it), so refresh re-mints via
+				// realtimeGetRawDescriptor: that call mints a FRESH channel+connect token
+				// server-side and returns the raw wire fields (it strips __blocks so the
+				// response middleware won't hydrate it into a channel). We re-add the
+				// __blocks discriminant to reconstruct the RealtimeChannelDescriptor the
+				// reconnect path expects. Cast-free: the returned object literal is
+				// contextually typed against SubscribeOptions.refresh's return type.
+				const sub = channel.subscribe({
+					onMessage: (msg) => { received.push(msg); },
+					onReconnect: () => { reconnects++; },
+					refresh: async () => {
+						refreshCalls++;
+						const fresh = await api.realtimeGetRawDescriptor(channelName);
+						return { ...fresh, __blocks: 'realtime/channel' };
+					},
+				} satisfies import('aws-blocks').SubscribeOptions<Cursor>);
+
+				try {
+					await sub.established;
+
+					// Baseline: delivery works before the drop.
+					await api.realtimePublishToChannel(channelName, c1);
+					const preDeadline = Date.now() + 10_000;
+					while (received.length < 1) {
+						if (Date.now() > preDeadline) throw new Error('c1 not delivered within 10s (pre-reconnect)');
+						await setTimeout(200);
+					}
+
+					// Force an unexpected drop. The transport auto-reconnects and, because
+					// a refresh fn is registered, must invoke it before reopening.
+					sub.connection?.close();
+
+					// Wait for the reconnect to complete (onReconnect fires post-resubscribe).
+					const reconnectDeadline = Date.now() + 60_000;
+					while (reconnects < 1) {
+						if (Date.now() > reconnectDeadline) throw new Error('reconnect did not occur within 60s');
+						await setTimeout(200);
+					}
+
+					// PR3-specific assertion: refresh WAS invoked on the reconnect path.
+					assert.ok(refreshCalls >= 1, `refresh callback should be invoked on reconnect, got ${refreshCalls}`);
+
+					// Resubscribe-with-fresh-creds worked: a post-reconnect publish is
+					// delivered. Republish in a poll loop — the mock fires onReconnect on
+					// frame-send, so the server may not have re-registered the subscription
+					// at the instant reconnects reaches 1.
+					const before = received.length;
+					const deliverDeadline = Date.now() + 30_000;
+					while (received.length <= before) {
+						if (Date.now() > deliverDeadline) throw new Error('c2 not delivered within 30s after reconnect');
+						await api.realtimePublishToChannel(channelName, c2);
+						await setTimeout(500);
+					}
+					assert.deepStrictEqual(
+						received[received.length - 1],
+						c2,
+						'post-reconnect message should be delivered after resubscribe with fresh creds',
+					);
+				} finally {
+					sub.unsubscribe();
+				}
+			});
 		});
 
 		describe('Limit Enforcement', () => {
@@ -321,16 +474,16 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				);
 			});
 
-			test('publish rejects message exceeding 32KB frame limit', async () => {
+			test('publish rejects message exceeding 128KiB message limit', async () => {
 				const api = getApi();
 				await assert.rejects(
 					() => api.realtimePublishOversizedPayload(),
 					(err: unknown) => {
 						const e = err as Error & { name: string };
 						return e.name === 'ValidationFailedException'
-							|| (e.message && e.message.includes('frame'));
+							|| (e.message && e.message.includes('128 KiB'));
 					},
-					'Should reject message exceeding WebSocket frame limit',
+					'Should reject message exceeding WebSocket logical message limit',
 				);
 			});
 		});

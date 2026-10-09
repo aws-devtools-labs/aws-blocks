@@ -28,6 +28,7 @@ import {
 	AdminSetUserPasswordCommand,
 	AdminUserGlobalSignOutCommand,
 	ListUsersCommand,
+	type ListUsersCommandOutput,
 	ListUsersInGroupCommand,
 	type AttributeType,
 	type UserType,
@@ -69,10 +70,12 @@ import {
 	Scope,
 	registerSdkIdentifiers,
 	getSdkIdentifiers,
+	installClientUserAgent,
 } from '@aws-blocks/core';
 import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { BB_NAME, BB_VERSION } from './version.js';
+import { declaredGroupNames } from './groups.js';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import type { AuthActionInput, AuthState, AuthStateApi, BlocksAuth } from '@aws-blocks/auth-common';
 import { decodeIdToken, decodeJwtPayload, jwtExpMs, safeStringClaim, sessionToTokens, SessionStore, type SessionRecord } from './sessions.js';
@@ -565,19 +568,109 @@ function mapFactorSetting(
 	}
 }
 
-/** Translate an SDK error (whose `name` mirrors Cognito's exception) into ApiError. */
-function asApiError(e: unknown): never {
+/**
+ * BB-authored wire messages per Cognito exception name. Cognito's own
+ * `message` text can embed account, endpoint, or role detail, and
+ * `ApiError.message` crosses the RPC wire verbatim, so the caller only ever
+ * sees one of these stable strings. Names outside the map get
+ * {@link DEFAULT_COGNITO_ERROR_MESSAGE}.
+ */
+const COGNITO_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+	[AuthCognitoErrors.NotAuthenticated]: 'Authentication required',
+	[AuthCognitoErrors.NotAuthorized]: 'Not authorized',
+	[AuthCognitoErrors.UserNotFound]: 'User not found',
+	[AuthCognitoErrors.UserAlreadyExists]: 'User already exists',
+	[AuthCognitoErrors.InvalidPassword]: 'Password does not meet the password policy',
+	[AuthCognitoErrors.InvalidParameter]: 'Invalid parameter',
+	[AuthCognitoErrors.CodeMismatch]: 'Invalid code',
+	[AuthCognitoErrors.ExpiredCode]: 'Code expired',
+	[AuthCognitoErrors.LimitExceeded]: 'Limit exceeded, try again later',
+	[AuthCognitoErrors.TooManyRequests]: 'Too many requests, try again later',
+	[AuthCognitoErrors.TooManyFailedAttempts]: 'Too many failed attempts, try again later',
+	[AuthCognitoErrors.PasswordResetRequired]: 'Password reset required',
+	[AuthCognitoErrors.UserNotConfirmed]: 'User not confirmed',
+	[AuthCognitoErrors.MFAMethodNotFound]: 'MFA method not found',
+	[AuthCognitoErrors.SoftwareTokenMFANotFound]: 'TOTP not set up',
+	[AuthCognitoErrors.GroupNotFound]: 'Resource not found',
+	[AuthCognitoErrors.UnsupportedUserState]: 'Unsupported user state',
+	[AuthCognitoErrors.AliasExists]: 'Email or phone number already in use',
+	[AuthCognitoErrors.InvalidLambdaResponse]: 'User pool Lambda trigger returned an invalid response',
+	[AuthCognitoErrors.UserLambdaValidation]: 'User pool Lambda trigger rejected the request',
+	[AuthCognitoErrors.InternalError]: 'Authentication service error, try again later',
+	[AuthCognitoErrors.EnableSoftwareTokenMFA]: 'Invalid code',
+	[AuthCognitoErrors.WebAuthnNotEnabled]: 'Passkeys are not enabled for this user pool',
+	[AuthCognitoErrors.WebAuthnOriginNotAllowed]: 'Passkey origin not allowed',
+	[AuthCognitoErrors.WebAuthnRelyingPartyMismatch]: 'Passkey relying party mismatch',
+	[AuthCognitoErrors.WebAuthnChallengeNotFound]: 'Passkey challenge expired, start again',
+	[AuthCognitoErrors.WebAuthnCredentialNotSupported]: 'Passkey credential not supported',
+	[AuthCognitoErrors.WebAuthnClientMismatch]: 'Passkey client mismatch',
+	[AuthCognitoErrors.WebAuthnConfigurationMissing]: 'Passkey configuration missing for this user pool',
+};
+
+const DEFAULT_COGNITO_ERROR_MESSAGE = 'Authentication request failed';
+
+/**
+ * Translate an SDK error (whose `name` mirrors Cognito's exception) into an
+ * ApiError. The wire `message` is BB-authored; the raw SDK error rides on
+ * `cause`, which `Error` installs as a non-enumerable own property, so it
+ * stays server-side and out of `JSON.stringify`.
+ *
+ * @internal
+ */
+export function toCognitoApiError(e: unknown): ApiError {
 	if (e instanceof Error) {
 		const status = statusForCognitoError(e.name);
 		const retriable = isRetriableAuthError(e.name);
-		throw new ApiError(e.message || e.name, status, {
+		return new ApiError(COGNITO_ERROR_MESSAGES[e.name] ?? DEFAULT_COGNITO_ERROR_MESSAGE, status, {
 			name: e.name,
 			cause: e,
 			...(retriable ? { retriable: true } : {}),
 		});
 	}
-	throw new ApiError('Unknown error', 500);
+	return new ApiError('Unknown error', 500);
 }
+
+function asApiError(e: unknown): never {
+	throw toCognitoApiError(e);
+}
+
+/**
+ * Request-scoped memo: dedupe `factory()` by (`context`, `key`) on a `WeakMap`.
+ * Caches the in-flight Promise so concurrent callers in one request share a
+ * single call, and evicts on rejection so a later caller in the same request can
+ * retry a transient failure (e.g. a Cognito throttle) rather than replay it.
+ * Entries are GC'd with `context` — a fresh per-request object — so a long-lived
+ * singleton holding the `WeakMap` never accumulates. Pure logic, exported so the
+ * dedupe/eviction invariant is unit-testable without an SDK client mock.
+ *
+ * @internal
+ */
+export function memoizePerContext<C extends object, V>(
+	memo: WeakMap<C, Map<string, Promise<V>>>,
+	context: C,
+	key: string,
+	factory: () => Promise<V>,
+): Promise<V> {
+	let bucket = memo.get(context);
+	if (!bucket) {
+		bucket = new Map();
+		memo.set(context, bucket);
+	}
+	const cached = bucket.get(key);
+	if (cached) return cached;
+	const pending = factory();
+	bucket.set(key, pending);
+	// Don't cache a failure — evict once settled-rejected so a later guard retries
+	// rather than replays. The `.catch` also keeps the rejection from surfacing as
+	// unhandled if a caller ever fires and forgets. Guard the identity so a retry's
+	// fresh entry isn't clobbered by the original's late rejection.
+	const owned = bucket;
+	pending.catch(() => {
+		if (owned.get(key) === pending) owned.delete(key);
+	});
+	return pending;
+}
+
 
 function statusForCognitoError(name: string): number {
 	switch (name) {
@@ -652,6 +745,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			region: this.region,
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(this.client);
 		registerSdkIdentifiers(this.fullId, { userPoolId, clientId });
 		// Defer CognitoJwtVerifier.create until we actually verify a token —
 		// the factory validates userPoolId at construction time and blows up
@@ -885,9 +979,12 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				return (async function* () {
 					let paginationToken: string | undefined;
 					do {
-						const resp = await self.client.send(new ListUsersCommand({
-							UserPoolId: self.adminUserPoolId(), Limit: 60, Filter: cognitoFilter, PaginationToken: paginationToken,
-						}));
+						let resp: ListUsersCommandOutput;
+						try {
+							resp = await self.client.send(new ListUsersCommand({
+								UserPoolId: self.adminUserPoolId(), Limit: 60, Filter: cognitoFilter, PaginationToken: paginationToken,
+							}));
+						} catch (e) { throw asApiError(e); }
 						for (const u of resp.Users ?? []) {
 							const attributes: Record<string, string> = {};
 							for (const a of (u.Attributes ?? []) as AttributeType[]) {
@@ -1602,12 +1699,86 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		return { tokens: sessionToTokens(record), userSub: safeStringClaim(decodeJwtPayload(record.idToken), 'sub') || undefined };
 	}
 
+	/**
+	 * Request-scoped memo for {@link liveGroupsForUser}. Keyed by the per-request
+	 * `BlocksContext` (a fresh object per request, so entries are GC'd when the
+	 * request ends — the shared Lambda singleton never accumulates them), then by
+	 * username. Dedupes repeated `requireRole` calls within a single request to
+	 * one `AdminListGroupsForUser`, bounding the extra Cognito load — Cognito's
+	 * admin-API quota is low and shared, so multiplying it by every guarded route
+	 * in a request would amplify throttling into cascading auth failures. The
+	 * cached value is the in-flight Promise, so concurrent calls share one round
+	 * trip too. Scope is deliberately one request: a membership change is still
+	 * observed on the next request.
+	 */
+	private readonly liveGroupsMemo = new WeakMap<BlocksContext, Map<string, Promise<string[]>>>();
+
 	async requireRole(context: BlocksContext, role: GroupOf<O>): Promise<CognitoUser<O>> {
 		const user = await this.requireAuth(context);
-		if (!user.groups.includes(role)) {
+		// Read membership live via `AdminListGroupsForUser` rather than trusting
+		// the session token's `cognito:groups` claim — the same reasoning as
+		// `fetchUserAttributes`. An admin who runs `addUserToGroup` /
+		// `removeUserFromGroup` against an already-signed-in user would otherwise
+		// not take effect (grant) or not revoke (removal) until that user's token
+		// next refreshed or they re-logged in. Costs one extra Cognito call per
+		// guarded request (deduped per request — see `liveGroupsMemo`).
+		const liveGroups = await this.liveGroupsForUser(user.username, context);
+		if (!liveGroups.includes(role)) {
 			throw new ApiError(`Not in group '${role}'`, 403, { name: AuthCognitoErrors.NotAuthorized });
 		}
-		return user;
+		// Narrow the returned list to the declared groups. `AdminListGroupsForUser`
+		// can return groups never declared in `options.groups` (created out of band,
+		// or a pool brought in via `fromExisting`), but `CognitoUser<O>.groups`
+		// promises the declared literal union — so returning the raw live list would
+		// hand an exhaustive caller a value outside its type. The authorization
+		// decision above already used the raw read, so gating the returned field
+		// costs nothing and matches the mock (which only knows declared groups).
+		// No declared groups → `GroupOf<O>` is `string`, so the raw list is sound.
+		const declared = declaredGroupNames(this.options.groups);
+		const groups = declared ? liveGroups.filter((g) => declared.has(g)) : liveGroups;
+		return { ...user, groups: groups as GroupOf<O>[] };
+	}
+
+	/**
+	 * Fetch a user's current group memberships directly from Cognito
+	 * (`AdminListGroupsForUser`, paginated), memoized per request. Used by
+	 * `requireRole` so authorization decisions reflect live membership, not the
+	 * stale `cognito:groups` token claim. Granted unconditionally to the
+	 * execution role (see `grantCognitoPermissions` in `index.cdk.ts`).
+	 */
+	private liveGroupsForUser(username: string, context: BlocksContext): Promise<string[]> {
+		return memoizePerContext(this.liveGroupsMemo, context, username, () => this.fetchGroupsFromCognito(username));
+	}
+
+	private async fetchGroupsFromCognito(username: string): Promise<string[]> {
+		const out: string[] = [];
+		let nextToken: string | undefined;
+		try {
+			do {
+				// The NextToken loop paginates memberships. `Limit` is unset, so the
+				// page size is Cognito's default (60); the sandbox e2e never seeds
+				// enough groups to cross a page, so multi-page accumulation is
+				// deliberately not covered by an automated test.
+				const resp = await this.client.send(new AdminListGroupsForUserCommand({
+					UserPoolId: this.adminUserPoolId(), Username: username, NextToken: nextToken,
+				}));
+				for (const g of resp.Groups ?? []) if (g.GroupName) out.push(g.GroupName);
+				nextToken = resp.NextToken;
+			} while (nextToken);
+		} catch (e) {
+			// A user deleted out from under a live session (deleteUser doesn't revoke
+			// the Blocks session, so `requireAuth` still succeeds off the record) is
+			// the maximally-unauthorized case — answer it with the guard's own 403
+			// rather than leaking Cognito's 404 `UserNotFoundException`, which breaks
+			// the documented 401/403 contract a client bounces to sign-in on. Also
+			// restores mock parity: the mock's session survives deletion and reads
+			// empty membership → 403.
+			if (e instanceof Error && e.name === AuthCognitoErrors.UserNotFound) {
+				throw new ApiError('Not authorized', 403, { name: AuthCognitoErrors.NotAuthorized });
+			}
+			throw asApiError(e);
+		}
+		return out;
 	}
 
 	/**

@@ -9,7 +9,8 @@ import { PGlite } from '@electric-sql/pglite';
 import { existsSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { initializePgliteWithRetry, type DatabaseEngine, type TransactionHandle } from '@aws-blocks/data-common';
-import { DistributedDatabaseErrors, PG_SERIALIZATION_FAILURE, translateDsqlError } from '../errors.js';
+import { DistributedDatabaseErrors, DSQL_PERMISSION_ERROR_NAME, DDL_NOT_ALLOWED_MESSAGE, PG_SERIALIZATION_FAILURE, translateDsqlError } from '../errors.js';
+import { brandBlocksError } from '@aws-blocks/core';
 import { validateStatement, classifyStatement, TransactionTracker } from '../validation.js';
 
 function cleanStaleLock(dataDir: string): void {
@@ -34,12 +35,13 @@ interface MockTxHandle { active: boolean; tracker: TransactionTracker; }
 function preprocessSqlForDsqlMock(sql: string, { allowDdl = false } = {}): string {
   validateStatement(sql);
   if (!allowDdl && classifyStatement(sql) === 'ddl') {
-    const err = new Error(
-      'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime. ' +
-      'Use migration files instead — the migration Lambda has dsql:DbConnectAdmin for DDL.',
-    );
-    err.name = 'DsqlPermissionError';
-    throw err;
+    const err = new Error(DDL_NOT_ALLOWED_MESSAGE);
+    err.name = DSQL_PERMISSION_ERROR_NAME;
+    // Branded so the name crosses the RPC wire on the mock path. The name is
+    // internal (not on the public DistributedDatabaseErrors) because only this
+    // mock guard produces it. The message is BB-authored (no raw driver text),
+    // so forwarding it is safe (D-003).
+    throw brandBlocksError(err);
   }
   return sql.replace(/\b(CREATE\s+(?:UNIQUE\s+)?INDEX)\s+ASYNC\b/gi, '$1');
 }

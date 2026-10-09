@@ -1,0 +1,794 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * createChat() — the compute-agnostic client-facing chat API.
+ *
+ * The common case (one user, one conversation, stream the reply) is **one call**:
+ *
+ * ```typescript
+ * const chat = createChat({ transport, api: { ...conversationCRUD } });
+ * await chat.sendMessage('Hello');
+ * ```
+ *
+ * `sendMessage` fuses *subscribe* + *run* (§3 primitives) into a single call, so
+ * the consumer is attached for the whole turn by construction — the
+ * subscribe-before-send race can't surface. The same call resumes a paused turn:
+ * `sendMessage({ interruptResponses })`.
+ *
+ * The easy default is sugar over the flexible primitives, never a parallel API —
+ * `run()` (produce only) and `subscribe()` (consume only) are exposed for the
+ * power cases (fan-out, observer-only attach, decoupled produce/consume).
+ *
+ * The ONE variable piece is the {@link ChatTransport} (`transport`), which hides
+ * the runtime. `api` is the ordinary conversation CRUD (create/load/interrupts),
+ * unchanged across runtimes. Framework-agnostic — no React, drive the UI from the
+ * `on*` callbacks.
+ */
+
+import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
+import type { AgentStreamChunk, InterruptResponse, JSONValue } from './types.js';
+import { AgentErrors, blocksAgentError } from './errors.js';
+
+export type { ChatTransport, ChunkStream, TurnRequest, RealtimeChannelDescriptor } from './transport.js';
+export { realtimeTransport } from './transport.js';
+export type { AgentStreamChunk } from './types.js';
+
+/** Typed metadata carried by an `approval` message — the recorded decision for a
+ * resumed interrupt. All fields optional: a message records only what was set. */
+export interface ApprovalMetadata {
+	approved?: boolean;
+	trust?: boolean;
+	toolName?: string;
+	/** The tool input the decision applied to (audit-only), coerced to a JSON value. */
+	input?: JSONValue;
+}
+
+/**
+ * A message in the conversation (for UI rendering), as a discriminated union on
+ * `role`. Narrowing on `role === 'approval'` types `metadata` as {@link ApprovalMetadata}
+ * — so a consumer reads `m.metadata?.approved` with no cast — while a plain
+ * user/assistant message carries free-form JSON metadata.
+ */
+export type ChatMessage =
+	| { id: string; role: 'user' | 'assistant'; content: string; metadata?: Record<string, JSONValue> }
+	| { id: string; role: 'approval'; content: string; metadata?: ApprovalMetadata };
+
+/** Conversation CRUD — plain request/response RPC to the backend, the same across every runtime. */
+export interface ChatConversationApi {
+	/** Create a new conversation and return its id. Called lazily on the first turn of a fresh chat. */
+	createConversation(): Promise<{ conversationId: string }>;
+	/** Load a conversation's message history for rendering. `metadata` is `unknown`:
+	 * pass your backend's message metadata straight through — no per-call mapping or
+	 * adapter. createChat narrows it internally when rendering an approval message. */
+	getConversation(
+		id: string,
+	): Promise<{ messages: { role: string; content: string; metadata?: unknown }[] }>;
+	/**
+	 * Check whether a conversation has unanswered interrupts (e.g. the user left
+	 * mid-approval). This mirrors the backend RPC, so each interrupt carries `id` —
+	 * the same field `agentGetPendingInterrupts` returns, so your adapter is a
+	 * straight passthrough with no mapping. createChat maps `id` to `interruptId`
+	 * internally before it reaches `onInterrupt`, so everything YOU read (`onInterrupt`)
+	 * and write (`InterruptResponse`) is uniformly `interruptId` — the `id` here never
+	 * surfaces to your consumer code.
+	 */
+	getPendingInterrupts?(
+		conversationId: string,
+	): Promise<{ interrupts: { id: string; name: string; reason?: unknown }[] }>;
+}
+
+/** Options for {@link createChat}. */
+export interface CreateChatOptions {
+	/** The transport — the one runtime-specific piece. Configure it once (e.g. `realtimeTransport(...)`). */
+	transport: ChatTransport;
+	/** Conversation CRUD. Unchanged across runtimes. */
+	api: ChatConversationApi;
+	/**
+	 * Optional callback that re-mints a fresh channel descriptor (new connect + channel
+	 * token) so a long turn's subscription outlives the token TTLs (channel ~1h / connect
+	 * ~2h). Pure pass-through: createChat holds NO refresh state — it binds this to the
+	 * CURRENT channel at the subscribe call site and forwards the bound zero-arg form to
+	 * the transport, and the Realtime channel invokes it before EACH reconnect (never on
+	 * the initial subscribe). Receives the resolved `channelId` so it re-mints for the
+	 * channel actually in use — which changes across lazy createConversation, loadConversation,
+	 * and newConversation — rather than a channel captured once at construction.
+	 *
+	 * **Contract.** This must resolve to the RAW channel descriptor (the wire object with
+	 * `__blocks`/token fields), NOT a hydrated channel client. To produce one:
+	 * 1. The app exposes a server method that returns the channel's `toJSON()` descriptor
+	 *    with the `__blocks` discriminant stripped, so the response middleware does not
+	 *    hydrate it on the way back to the client.
+	 * 2. This callback re-adds `__blocks: 'realtime/channel'` to the returned object so it
+	 *    is a valid descriptor the transport can reopen with.
+	 * 3. That server method re-issues a connect + channel token, so it MUST apply the SAME
+	 *    authorization as the method that issued the original channel — it is a
+	 *    credential-issuing endpoint and must be gated like the original.
+	 *
+	 * For example, with the test app's example server method `agentGetRawDescriptor`:
+	 * `async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' })`.
+	 * When omitted, a reconnect replays the original tokens (fine for short turns), so
+	 * existing callers are unaffected.
+	 */
+	refresh?: (channelId: string) => Promise<RealtimeChannelDescriptor>;
+	/** Called whenever the message list changes. */
+	onMessagesChange?: (messages: ChatMessage[]) => void;
+	/** Called whenever loading state changes. */
+	onLoadingChange?: (isLoading: boolean) => void;
+	/** Called on each streaming chunk. */
+	onChunk?: (chunk: AgentStreamChunk) => void;
+	/**
+	 * Called when the agent encounters an error. `error` is the message; `cause` is the
+	 * original error object when the failure was a rejected attach/run (undefined for a
+	 * stream `error` chunk, which carries only a message), so a call site can
+	 * `isBlocksError(cause, ...)` to branch on error type.
+	 */
+	onError?: (error: string, cause?: unknown) => void;
+	/** Called when the agent pauses for human approval. Continue with `sendMessage({ interruptResponses })`.
+	 *  Each interrupt's `interruptId` is the same field you pass back in `InterruptResponse` — no remap. */
+	onInterrupt?: (interrupts: { interruptId: string; name: string; reason?: unknown }[]) => void;
+}
+
+/** A message to start a turn, or the interrupt responses that resume a paused one. */
+export type SendInput = string | { interruptResponses: InterruptResponse[] };
+
+/** Returned by {@link createChat}. */
+export interface ChatController {
+	/**
+	 * Drive the current turn — start a new message OR resume a paused one. Fuses
+	 * subscribe + run (no race). Resolves `true` when the turn was accepted, `false`
+	 * when it was dropped because a turn is already in flight (so the caller can tell
+	 * "sent" from "ignored" without pre-checking {@link isLoading}).
+	 */
+	sendMessage(input: SendInput): Promise<boolean>;
+	/** Primitive: run a turn (produce only; chunks go to subscribers). Lazily creates the conversation if new. */
+	run(input: SendInput): Promise<{ channelId: string }>;
+	/**
+	 * Primitive: attach a consumer to a channel (the current one, or a shared/observed id).
+	 * On an inference-only chat the live channel is internal (a random UUID, not the null
+	 * `conversationId`), so pass an explicit `channelId` — the id returned by `run()` — rather
+	 * than relying on the current-channel fallback.
+	 */
+	subscribe(opts?: { channelId?: string; observer?: boolean }): ChunkStream;
+	/** Start a fresh conversation — the next turn lazily creates one. */
+	newConversation(): void;
+	/** Switch to an existing conversation and load its history. */
+	loadConversation(conversationId: string): Promise<void>;
+	/** Current rendered messages, for the UI. */
+	getMessages(): ChatMessage[];
+	/** Whether a turn is currently in flight. */
+	isLoading(): boolean;
+	/** Current conversation id (null until the first turn). */
+	getConversationId(): string | null;
+	/** Cancel any in-flight turn subscription. */
+	destroy(): void;
+}
+
+let messageCounter = 0;
+function nextId(): string {
+	return `msg-${++messageCounter}-${Date.now()}`;
+}
+
+// Reconnect-recovery state machine. This is the canonical copy (createChat); it is
+// mirrored in index.hooks.ts's deprecated useChat. Keep the two in sync — a fix here
+// likely applies there. Deliberately not extracted to a shared module: useChat is on a
+// deprecation path (superseded by createChat per #338).
+/**
+ * Last-resort window (ms) of COMPLETE SILENCE after a reconnect. The failsafe is a
+ * backstop, NOT the primary recovery (which is the done chunk / DB re-sync). It is
+ * re-armed by every received chunk (see handleChunk), so it only fires after a window
+ * in which NO chunk at all arrived — not during a long tool-call/thinking gap or a slow
+ * post-reconnect stream. On the multi-hour turns this feature targets, such gaps are
+ * normal.
+ *
+ * This MUST comfortably exceed the Realtime transport's idle-timeout + reconnect budget
+ * (API Gateway WebSocket: 10-min idle timeout, 2h max connection duration), otherwise a
+ * perfectly normal idle → disconnect → reconnect cycle would trip a spurious 'Timed out'.
+ * 11 minutes sits just above the 10-min idle timeout with margin for the reconnect.
+ */
+const RECONNECT_FAILSAFE_MS = 660_000;
+
+/**
+ * Coerce an arbitrary value into a {@link JSONValue} for audit metadata. A value that
+ * is already JSON-round-trippable is kept as-is; anything else (a function, a symbol,
+ * a cyclic object) becomes its string form, so metadata stays a clean JSONValue.
+ */
+function toJSONValue(value: unknown): JSONValue {
+	try {
+		// JSON.parse returns `any`, which is assignable to JSONValue without an
+		// assertion — annotate the local so the type comes from the declaration,
+		// not a cast. The round-trip guarantees the result is JSON-shaped.
+		const parsed: JSONValue = JSON.parse(JSON.stringify(value));
+		return parsed;
+	} catch {
+		return String(value);
+	}
+}
+
+/**
+ * Narrow an `unknown` message metadata value (customers pass their backend shape
+ * straight through) into a JSON record for rendering. A plain object is round-tripped
+ * to a clean {@link JSONValue} record via {@link toJSONValue}; a non-object (null,
+ * string, array, undefined) yields `undefined`. This is the one narrow createChat
+ * does so the customer never writes a per-call adapter.
+ */
+function asJSONRecord(value: unknown): Record<string, JSONValue> | undefined {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+	const json = toJSONValue(value);
+	return typeof json === 'object' && json !== null && !Array.isArray(json) ? json : undefined;
+}
+
+/**
+ * Create a chat controller for driving agent conversations over a {@link ChatTransport}.
+ *
+ * @example One call to stream a reply
+ * ```typescript
+ * const chat = createChat({
+ *   transport,                                   // realtimeTransport(...) — the seam
+ *   api: {
+ *     createConversation:   () => api.agentCreateConversationId(),
+ *     getConversation:      (id) => api.agentGetConversation(id),
+ *     getPendingInterrupts: (id) => api.agentGetPendingInterrupts(id),
+ *   },
+ *   onMessagesChange: (msgs) => render(msgs),
+ *   onInterrupt: async (interrupts) => {
+ *     const decisions = await promptUser(interrupts);
+ *     await chat.sendMessage({ interruptResponses: decisions }); // same call resumes
+ *   },
+ * });
+ *
+ * await chat.sendMessage('Plan our offsite');
+ * ```
+ */
+export function createChat(options: CreateChatOptions): ChatController {
+	const { transport, api } = options;
+	let messages: ChatMessage[] = [];
+	let loading = false;
+	let conversationId: string | null = null;
+	let activeStream: ChunkStream | null = null;
+	let assistantId: string | null = null;
+	let assistantText = '';
+	// Inference-only chats have no persisted id, so the channel is a random UUID.
+	// Remember it so a resume reuses the interrupted turn's channel. Reset on new chat.
+	let lastChannelId: string | null = null;
+	/** Timer id for the post-reconnect failsafe (see RECONNECT_FAILSAFE_MS). null when disarmed. */
+	let failsafeTimer: ReturnType<typeof setTimeout> | null = null;
+	/**
+	 * True once destroy() has run. Guards async callbacks (the reconnect re-sync and the
+	 * failsafe timer) so no onLoadingChange/onError/onMessagesChange fires after teardown.
+	 */
+	let destroyed = false;
+	/**
+	 * Whether onError has already been reported for the CURRENT turn. A send-path
+	 * rejection (e.g. a 504) may mean the turn actually STARTED server-side, so a later
+	 * `error` chunk can arrive for the same turn; this guard reports onError at most once
+	 * per turn. Reset when a new turn begins (sendMessage).
+	 */
+	let errorReported = false;
+
+	function setLoading(next: boolean) {
+		// Idempotent: only notify on an actual change. A turn ends by BOTH the done/
+		// error/interrupt handler and the background consumer's finally, so without this
+		// guard a normal turn would fire onLoadingChange(false) twice.
+		if (loading === next) return;
+		loading = next;
+		options.onLoadingChange?.(loading);
+	}
+
+	/** Cancel the post-reconnect failsafe timer if one is armed. */
+	function clearFailsafe() {
+		if (failsafeTimer !== null) {
+			clearTimeout(failsafeTimer);
+			failsafeTimer = null;
+		}
+	}
+
+	/**
+	 * Arm the bounded post-reconnect failsafe. If the turn is still running after a
+	 * reconnect and the terminal chunk never arrives (lost a second time), this stops
+	 * the spinner and surfaces an error rather than hanging loading=true forever.
+	 */
+	function armFailsafe() {
+		clearFailsafe();
+		failsafeTimer = setTimeout(() => {
+			failsafeTimer = null;
+			// Teardown guard: destroy() may have run while the timer was pending.
+			if (destroyed) return;
+			if (loading) {
+				setLoading(false);
+				// Route through reportError so the once-per-turn errorReported latch covers the
+				// failsafe path too — a later `error` chunk for the same server-started turn
+				// won't then double-report after a failsafe timeout.
+				reportError('Timed out waiting for the agent to respond after reconnect.');
+			}
+		}, RECONNECT_FAILSAFE_MS);
+	}
+
+	/**
+	 * Drop the optimistic empty assistant placeholder (if present and still empty).
+	 * Used on a send-path failure so no orphaned empty bubble is left in the UI.
+	 */
+	function removeEmptyAssistantPlaceholder() {
+		if (!assistantId) return;
+		const placeholder = messages.find((m) => m.id === assistantId);
+		if (placeholder && !placeholder.content) {
+			messages = messages.filter((m) => m.id !== assistantId);
+			options.onMessagesChange?.(messages);
+		}
+		assistantId = null;
+	}
+
+	/**
+	 * Surface an error to the consumer at most ONCE per turn (see errorReported). A 504
+	 * send-rejection and a later `error` chunk can both describe the same failed turn; we
+	 * must not fire onError twice for it. `cause` preserves createChat's 2-arg onError so a
+	 * call site can branch on error type (undefined for a stream `error` chunk).
+	 */
+	function reportError(message: string, cause?: unknown) {
+		if (errorReported) return;
+		errorReported = true;
+		options.onError?.(message, cause);
+	}
+
+	/**
+	 * Shared handler for a rejected send path (transport.run for sendMessage / resume):
+	 * reset loading, drop the dangling empty placeholder, and surface the error via onError
+	 * (swallowed, matching how the `error` chunk is handled — no re-throw).
+	 *
+	 * NOTE: a 504 (or similar) rejection often means the turn DID start server-side, so a
+	 * later done/delta/error chunk may still arrive for it. Recovery of such a started
+	 * turn happens via the normal reconnect → getConversation re-sync path; here we only
+	 * guard against a DOUBLE onError (reportError) if that later chunk is an `error`.
+	 */
+	function handleSendFailure(err: unknown) {
+		setLoading(false);
+		removeEmptyAssistantPlaceholder();
+		reportError(err instanceof Error ? err.message : String(err), err);
+	}
+
+	/**
+	 * Re-sync authoritative state from the DB after the transport transparently
+	 * reconnects. Any chunks published while the socket was down were missed, so the
+	 * persisted conversation is the source of truth:
+	 * - If the turn completed server-side (history ends with a non-empty assistant
+	 *   message), adopt that final text into the in-flight bubble and clear loading —
+	 *   the `done` chunk was lost in the gap.
+	 * - If the turn is still running (no final assistant message yet), keep loading
+	 *   true and wait for the terminal chunk on the resubscribed channel, arming a
+	 *   bounded failsafe so the spinner can't hang if that chunk is also lost.
+	 * Also re-checks pending interrupts, which may have been raised during the gap.
+	 */
+	async function handleReconnect() {
+		if (destroyed) return;
+		if (!conversationId) return;
+		// Capture the in-flight turn identity BEFORE the await. getConversation reads
+		// DynamoDB, which is eventually consistent, so this read can (a) resolve LATE —
+		// after a terminal chunk already resolved the turn on the resubscribed channel —
+		// and (b) reflect a STALE view whose last row is a previous turn's assistant
+		// message. Both are guarded against once the read resolves, using this snapshot.
+		const turnAtStart = assistantId;
+		try {
+			const { messages: history } = await api.getConversation(conversationId);
+			if (destroyed) return;
+			const last = history[history.length - 1];
+			const turnComplete = !!last && last.role === 'assistant' && !!last.content;
+
+			// Turn-identity + liveness guard: only act on the persisted read if the turn we
+			// captured is STILL the in-flight one and we're still loading. If a terminal
+			// chunk (done/error) resolved the turn while getConversation was in flight, it
+			// already nulled assistantId (and set the authoritative final text), so we must
+			// ignore this — possibly stale — DB result rather than clobber a live outcome.
+			const stillSameInFlightTurn = assistantId !== null && assistantId === turnAtStart && loading;
+
+			if (turnComplete && stillSameInFlightTurn) {
+				// Adopt the persisted final text ONLY if it extends what we've already
+				// streamed this turn (nothing streamed yet, or the stream is a prefix of the
+				// persisted text). If it does NOT extend our stream, `last` is a stale /
+				// previous-turn assistant row that does not continue the current bubble;
+				// adopting it would overwrite live text with prior-turn content and halt
+				// streaming, so we treat the turn as still running and wait for the terminal
+				// chunk instead.
+				//
+				// INVARIANT (resume path): a resume-start conversation must not end in a
+				// content-bearing assistant row. On resume, sendMessage({ interruptResponses })
+				// resets assistantText='', which makes extendsStream=true and BYPASSES the prefix
+				// guard — so any content-bearing assistant row that getConversation returns as
+				// `last` would be adopted and the resumed turn closed early. Not reachable today:
+				// the backend does not persist an assistant message on interrupt, so `last` is the
+				// raw empty-content interrupt row and turnComplete is false at resume-start. A
+				// custom getConversation adapter that role-filters to user/assistant (as
+				// loadConversation does client-side) could re-expose this by dropping the interrupt
+				// row and surfacing a prior assistant row as `last`.
+				const extendsStream = assistantText === '' || last.content.startsWith(assistantText);
+				if (extendsStream) {
+					// Turn finished while we were disconnected; the terminal `done` chunk was lost.
+					// Replace the in-flight assistant bubble with the persisted final text.
+					assistantText = last.content;
+					messages = messages.map((m) => (m.id === assistantId ? { ...m, content: last.content } : m));
+					options.onMessagesChange?.(messages);
+					assistantId = null;
+					clearFailsafe();
+					setLoading(false);
+				} else {
+					// Snapshot doesn't extend our stream — keep waiting for the terminal chunk,
+					// guarded by the bounded failsafe.
+					armFailsafe();
+				}
+			} else if (stillSameInFlightTurn) {
+				// Turn still running server-side (no final assistant message yet) — do NOT clear
+				// loading. Wait for the terminal chunk on the resubscribed channel, guarded by
+				// the bounded failsafe.
+				armFailsafe();
+			}
+			// else: the turn was already resolved by a terminal chunk during the await
+			// (assistantId nulled / loading cleared) — nothing to adopt.
+
+			// A pending interrupt may have been raised while the socket was down.
+			if (api.getPendingInterrupts) {
+				const { interrupts } = await api.getPendingInterrupts(conversationId);
+				if (destroyed) return;
+				// Recompute liveness FRESH here — the getPendingInterrupts await above is another
+				// window in which a live terminal `done` chunk can resolve the turn (nulling
+				// assistantId / clearing loading), so the earlier stillSameInFlightTurn snapshot
+				// may be stale. getPendingInterrupts reads eventually-consistent DynamoDB, so a
+				// turn a live `done` already closed can still list a since-resolved interrupt;
+				// surfacing it would re-null assistantId / re-clear loading and re-open a turn
+				// that already completed. DESIGN.md tells handlers to dedupe by interrupt id, but
+				// that does not license us to clobber a resolved turn's state. A GENUINE pause
+				// keeps the turn in-flight (turn-state block above armed the failsafe, still
+				// loading, assistantId still === turnAtStart), so this gate still fires for it.
+				const stillInFlight = assistantId !== null && assistantId === turnAtStart && loading;
+				if (interrupts.length && stillInFlight) {
+					// The turn is PAUSED at an approval prompt — treat it exactly like a live
+					// `interrupt` chunk: clear the failsafe armed just above and drop loading,
+					// so the ~11-min 'Timed out' failsafe cannot fire while the user is legitimately
+					// deciding (no chunks arrive while paused, so nothing would re-arm it).
+					assistantId = null;
+					clearFailsafe();
+					setLoading(false);
+					options.onInterrupt?.(interrupts.map((i) => ({ interruptId: i.id, name: i.name, reason: i.reason })));
+				}
+			}
+		} catch (err) {
+			if (destroyed) return;
+			// Re-sync itself failed. Surface it via reportError so the once-per-turn onError
+			// contract holds uniformly: if a send-rejection already reported onError for this
+			// turn, a re-sync throw here won't emit a second one.
+			reportError(err instanceof Error ? err.message : String(err), err);
+			// Arm the failsafe so the non-hang guarantee is LOCAL — independent of whether the
+			// transport happened to fire onDisconnect before this onReconnect. We used to skip
+			// arming here to avoid a second 'Timed out' onError ~11min later, relying on the
+			// PRECEDING onDisconnect having armed it; that reasoning is now stale. The
+			// errorReported latch (set by the reportError above) already suppresses that second
+			// onError, and armFailsafe is idempotent + re-armed by any later chunk, so a
+			// still-live turn on the resubscribed channel is unaffected.
+			armFailsafe();
+		}
+	}
+
+	/**
+	 * Resolve the channel for a **sendMessage** turn. The ONLY writer of `lastChannelId`
+	 * (run() resolves without mutating it), so interleaving run() with sendMessage can't
+	 * corrupt an inference-only resume target.
+	 */
+	function resolveChannelId(id: string | null, input: SendInput): string {
+		if (id) return id;
+		const isResume = typeof input !== 'string';
+		if (isResume && lastChannelId) return lastChannelId;
+		lastChannelId = crypto.randomUUID();
+		return lastChannelId;
+	}
+
+	/** Drive UI state from a single chunk. Mirrors the useChat state machine. */
+	function handleChunk(chunk: AgentStreamChunk) {
+		// Teardown guard: the ChunkQueue drains items buffered before destroy() closed the
+		// stream, so a chunk can still arrive after destroy(). Drop it so no onChunk/
+		// onMessagesChange/onError/onInterrupt fires post-teardown (mirrors handleReconnect
+		// and the failsafe's destroyed guards).
+		if (destroyed) return;
+		// Liveness: ANY received chunk proves the stream is alive. If the post-reconnect
+		// failsafe is armed, re-arm it (reset its countdown) so it only ever fires after a
+		// window of COMPLETE silence — not during a long tool-call/thinking gap or a slow
+		// post-reconnect stream. Terminal chunks below still clearFailsafe outright.
+		if (failsafeTimer !== null) armFailsafe();
+
+		options.onChunk?.(chunk);
+
+		if (chunk.type === 'text-delta' && chunk.text && assistantId) {
+			assistantText += chunk.text;
+			messages = messages.map((m) => (m.id === assistantId ? { ...m, content: assistantText } : m));
+			options.onMessagesChange?.(messages);
+		}
+
+		if (chunk.type === 'done') {
+			if (chunk.text && assistantId) {
+				messages = messages.map((m) => (m.id === assistantId ? { ...m, content: chunk.text! } : m));
+				options.onMessagesChange?.(messages);
+			}
+			// Null assistantId so it is a reliable in-flight signal: a later-resolving
+			// reconnect re-sync must not adopt a (possibly stale) DB snapshot over this
+			// already-resolved turn (see handleReconnect's turn-identity guard).
+			assistantId = null;
+			clearFailsafe();
+			setLoading(false);
+		}
+
+		if (chunk.type === 'error') {
+			// Drop the empty assistant placeholder if the error arrived before any text
+			// (mirror the interrupt branch), so a failed turn leaves no blank bubble.
+			if (assistantId) {
+				const assistant = messages.find((m) => m.id === assistantId);
+				if (assistant && !assistant.content) {
+					messages = messages.filter((m) => m.id !== assistantId);
+					options.onMessagesChange?.(messages);
+				}
+				assistantId = null;
+			}
+			clearFailsafe();
+			setLoading(false);
+			// Report at most once per turn: a prior send-rejection may have already surfaced
+			// onError for this same (server-started) turn.
+			reportError(chunk.error ?? 'Unknown error');
+		}
+
+		if (chunk.type === 'interrupt' && chunk.interrupts) {
+			// Remove the empty assistant placeholder (no text generated before the interrupt).
+			if (assistantId) {
+				const assistant = messages.find((m) => m.id === assistantId);
+				if (assistant && !assistant.content) {
+					messages = messages.filter((m) => m.id !== assistantId);
+					options.onMessagesChange?.(messages);
+				}
+			}
+			assistantId = null;
+			clearFailsafe();
+			setLoading(false);
+			// The stream chunk carries `id`; expose it as `interruptId` so it matches the
+			// field the caller passes back in InterruptResponse (no remap at the call site).
+			options.onInterrupt?.(chunk.interrupts.map((i) => ({ interruptId: i.id, name: i.name, reason: i.reason })));
+		}
+	}
+
+	/** Lazily create the conversation on the first turn; returns the id (null stays null for inference-only). */
+	async function ensureConversation(): Promise<string | null> {
+		if (conversationId) return conversationId;
+		const { conversationId: id } = await api.createConversation();
+		conversationId = id;
+		return conversationId;
+	}
+
+	/** Subscribe fresh, await confirmation, then run — the fused ordering that removes the race. */
+	async function startTurn(input: SendInput) {
+		const id = await ensureConversation();
+		const channelId = resolveChannelId(id, input);
+
+		// Attach the consumer BEFORE running — no early chunk can be dropped.
+		if (activeStream) activeStream.unsubscribe();
+		const stream = transport.subscribe(channelId, {
+			// After a transparent reconnect + resubscribe, re-sync authoritative state from
+			// the DB — chunks published while the socket was down were missed.
+			onReconnect: () => {
+				void handleReconnect();
+			},
+			// The transport's terminal failure paths — every channel's resubscribe rejected,
+			// or reconnect retries exhausted — surface onDisconnect('error') but deliberately
+			// do NOT fire onReconnect (nothing is live). On such a drop while loading, arm the
+			// bounded failsafe: it re-arms on any subsequent chunk (so a still-live turn is
+			// unaffected) and otherwise clears loading + surfaces onError, so the spinner can
+			// never hang. 'client' (our own unsubscribe) is ignored.
+			onDisconnect: (reason) => {
+				// Arm on ANY non-'client' reason while loading, not just 'error': 'client' is our
+				// own unsubscribe (newConversation/destroy) so we never arm on it, but any other
+				// terminal reason ('error'/'timeout'/'unknown') can leave an in-flight turn with no
+				// live channel and no onReconnect. This is self-correcting — a turn that actually
+				// reconnects re-arms on its next chunk and clears on the terminal chunk / onReconnect
+				// re-sync, so a spurious arm on a reason later followed by onReconnect does no harm,
+				// while a genuinely terminal 'timeout'/'unknown' drop (which fires no onReconnect) can
+				// no longer leave the spinner stuck.
+				if (reason !== 'client' && loading) armFailsafe();
+			},
+			// Pure pass-through: the transport/channel invokes this before each reconnect to
+			// re-mint fresh tokens so long turns outlive the channel (~1h) / connect (~2h)
+			// TTLs. createChat holds no refresh state; it binds the consumer's channel-aware
+			// callback to THIS turn's resolved channelId (closed over here, where the channel
+			// is known) and forwards the zero-arg bound form. undefined leaves reconnect
+			// replaying the original tokens.
+			refresh: options.refresh ? () => options.refresh!(channelId) : undefined,
+		});
+		activeStream = stream;
+		await stream.established;
+
+		if (typeof input === 'string') {
+			await transport.run({ channelId, conversationId: id, message: input });
+		} else {
+			await transport.run({ channelId, conversationId: id, interruptResponses: input.interruptResponses });
+		}
+
+		// Consume in the background; the stream ends on done/error/interrupt.
+		void (async () => {
+			try {
+				for await (const chunk of stream) handleChunk(chunk);
+			} catch (err) {
+				setLoading(false);
+				// Once-per-turn: an `error` chunk for this same (server-started) turn may have
+				// already surfaced onError; reportError won't emit a second one.
+				reportError(err instanceof Error ? err.message : String(err), err);
+			} finally {
+				// Tear down the underlying subscription (e.g. the WebSocket) when the
+				// turn ends — otherwise resuming on the same channel would re-subscribe
+				// over a still-open subscription and never see a fresh confirmation.
+				stream.unsubscribe();
+				if (activeStream === stream) activeStream = null;
+				// Clear loading unconditionally: a terminal chunk already cleared it, but a
+				// stream ended by unsubscribe() (newConversation()/destroy() mid-turn) sees
+				// no terminal chunk, so without this `loading` would stay true and the
+				// `if (loading) return` guard in sendMessage would drop every future send.
+				// Skip it after destroy(): this finally runs on a microtask that can land AFTER
+				// destroy(), and firing onLoadingChange then would emit a callback post-teardown
+				// (the instance is dead, so its loading value no longer matters).
+				if (!destroyed) setLoading(false);
+			}
+		})();
+	}
+
+	return {
+		async sendMessage(input: SendInput) {
+			if (loading) return false;
+
+			if (typeof input === 'string') {
+				const userMsg: ChatMessage = { id: nextId(), role: 'user', content: input };
+				const aMsg: ChatMessage = { id: nextId(), role: 'assistant', content: '' };
+				assistantId = aMsg.id;
+				assistantText = '';
+				messages = [...messages, userMsg, aMsg];
+			} else {
+				// Resuming a paused turn — record the decisions, reuse/insert an assistant placeholder.
+				for (const r of input.interruptResponses) {
+					// Build the approval decision as typed ApprovalMetadata (no `any`, no cast):
+					// include only the fields that are set. `input` is InterruptResponse.input
+					// (audit-only) — coerce to a JSON value when it isn't already one.
+					const metadata: ApprovalMetadata = {};
+					if (r.approved !== undefined) metadata.approved = r.approved;
+					if (r.trust !== undefined) metadata.trust = r.trust;
+					if (r.toolName !== undefined) metadata.toolName = r.toolName;
+					if (r.input !== undefined) metadata.input = toJSONValue(r.input);
+					messages = [
+						...messages,
+						{
+							id: nextId(),
+							role: 'approval' as const,
+							content: r.approved ? 'Approved' : 'Denied',
+							metadata,
+						},
+					];
+				}
+				const existingEmpty = messages.find((m) => m.role === 'assistant' && !m.content);
+				if (existingEmpty) {
+					assistantId = existingEmpty.id;
+				} else {
+					const aMsg: ChatMessage = { id: nextId(), role: 'assistant', content: '' };
+					assistantId = aMsg.id;
+					messages = [...messages, aMsg];
+				}
+				assistantText = '';
+			}
+			options.onMessagesChange?.(messages);
+			// Turn-start cleanup: bind the failsafe timer's lifecycle to the turn, exactly like
+			// errorReported/assistantText. newConversation(), handleSendFailure(), and the
+			// background consumer's finally can all end a loading turn WITHOUT a terminal chunk,
+			// leaving a failsafe armed by an onDisconnect. Clearing it here stops a STALE timer
+			// from an abandoned turn firing during this healthy turn — which would setLoading(false)
+			// and latch a bogus 'Timed out' onError, suppressing this turn's real error.
+			clearFailsafe();
+			errorReported = false; // fresh turn — allow one onError report
+			setLoading(true);
+			// startTurn's attach + submit run before the background consumer's try/catch,
+			// so a rejection here must clear loading (else the guard wedges future sends).
+			try {
+				await startTurn(input);
+			} catch (err) {
+				handleSendFailure(err);
+			}
+			return true;
+		},
+
+		async run(input: SendInput): Promise<{ channelId: string }> {
+			// run() deliberately has NO `if (loading) return` guard (unlike sendMessage /
+			// respondToInterrupt): its contract is to return a channelId, so there is no coherent
+			// early-return value. run() and sendMessage are therefore an EITHER-OR contract on a
+			// single instance — do NOT interleave them. Interleaving would let this errorReported
+			// reset (and the clearFailsafe below) disturb an in-flight sendMessage turn's shared
+			// single-turn state. The errorReported reset is kept (added defensively for
+			// f_3076d418) for the standalone run() path.
+			errorReported = false; // fresh turn — allow one onError report (mirrors sendMessage)
+			// Turn-start cleanup: clear a failsafe left armed by a prior abandoned turn (see
+			// sendMessage) so a stale timer can't fire during this run.
+			clearFailsafe();
+			const id = await ensureConversation();
+			// run() does NOT touch `lastChannelId` (sendMessage owns it). Persisted chat →
+			// conversationId; inference-only → a fresh channel per call. Resume an
+			// inference-only turn through the same entry point that started it.
+			const channelId = id ?? crypto.randomUUID();
+			if (typeof input === 'string') {
+				return transport.run({ channelId, conversationId: id, message: input });
+			}
+			return transport.run({ channelId, conversationId: id, interruptResponses: input.interruptResponses });
+		},
+
+		subscribe(opts?: { channelId?: string; observer?: boolean }): ChunkStream {
+			const channelId = opts?.channelId ?? conversationId;
+			if (!channelId)
+				throw blocksAgentError(
+					AgentErrors.InvalidUsage,
+					'subscribe() needs a channelId — start a conversation first or pass one explicitly.',
+				);
+			return transport.subscribe(channelId, opts?.observer ? { observer: true } : undefined);
+		},
+
+		newConversation() {
+			if (activeStream) {
+				activeStream.unsubscribe();
+				activeStream = null;
+			}
+			conversationId = null;
+			lastChannelId = null;
+			messages = [];
+			assistantId = null;
+			assistantText = '';
+			options.onMessagesChange?.(messages);
+		},
+
+		async loadConversation(id: string) {
+			conversationId = id;
+			const { messages: history } = await api.getConversation(id);
+			messages = history.flatMap<ChatMessage>((m) => {
+				// metadata arrives as `unknown` (customers pass their backend shape
+				// straight through — no adapter). Narrow it HERE, once, so the customer
+				// never writes this: a plain object becomes the JSON record, anything
+				// else is dropped.
+				const record = asJSONRecord(m.metadata);
+				if (m.role === 'user' || m.role === 'assistant') {
+					return [{ id: nextId(), role: m.role, content: m.content, metadata: record }];
+				}
+				if (m.role === 'approval') {
+					// Project the narrowed record into the typed ApprovalMetadata shape:
+					// read the known keys, keep the JSON-safe types.
+					const meta: ApprovalMetadata = {};
+					const src = record ?? {};
+					if (typeof src.approved === 'boolean') meta.approved = src.approved;
+					if (typeof src.trust === 'boolean') meta.trust = src.trust;
+					if (typeof src.toolName === 'string') meta.toolName = src.toolName;
+					if (src.input !== undefined) meta.input = src.input;
+					return [{ id: nextId(), role: 'approval', content: m.content, metadata: meta }];
+				}
+				return [];
+			});
+			options.onMessagesChange?.(messages);
+
+			if (api.getPendingInterrupts) {
+				const { interrupts } = await api.getPendingInterrupts(id);
+				if (interrupts.length)
+					options.onInterrupt?.(interrupts.map((i) => ({ interruptId: i.id, name: i.name, reason: i.reason })));
+			}
+		},
+
+		getMessages() {
+			return messages;
+		},
+		isLoading() {
+			return loading;
+		},
+		getConversationId() {
+			return conversationId;
+		},
+
+		destroy() {
+			destroyed = true;
+			clearFailsafe();
+			if (activeStream) {
+				activeStream.unsubscribe();
+				activeStream = null;
+			}
+		},
+	};
+}

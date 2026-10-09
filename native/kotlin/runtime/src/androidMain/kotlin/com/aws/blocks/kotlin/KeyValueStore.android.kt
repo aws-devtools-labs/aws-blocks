@@ -3,15 +3,15 @@ package com.aws.blocks.kotlin
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import kotlinx.atomicfu.locks.SynchronizedObject
-import kotlinx.atomicfu.locks.synchronized
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 internal actual fun encryptedKeyValueStore(name: String): KeyValueStore =
     AndroidKeyValueStore(name)
 
 private class AndroidKeyValueStore(
     private val name: String
-) : KeyValueStore, SynchronizedObject() {
+) : KeyValueStore {
 
     private val prefs: SharedPreferences by lazy {
         val context = ContextProvider.applicationContext
@@ -27,29 +27,20 @@ private class AndroidKeyValueStore(
         )
     }
 
-    override fun put(key: String, value: String) {
-        synchronized(this) {
-            prefs?.edit()?.putString(key, value)?.apply()
-        }
+    /**
+     * Writes commit rather than apply: the call already suspends on [Dispatchers.IO], so there is
+     * no caller thread to spare, and an applied write is still in flight when the call returns and
+     * is lost if the process dies first.
+     */
+    override suspend fun put(key: String, value: String) {
+        withContext(Dispatchers.IO) { prefs.edit().putString(key, value).commit() }
     }
 
-    override fun get(key: String): String? {
-        return synchronized(this) {
-            prefs.getString(key, null)
-        }
+    override suspend fun get(key: String): String? = withContext(Dispatchers.IO) {
+        prefs.getString(key, null)
     }
 
-    override fun remove(key: String) {
-        synchronized(this) {
-            prefs.edit()?.remove(key)?.apply()
-        }
-    }
-
-    override fun getAll(): Map<String, String> {
-        return synchronized(this) {
-            prefs.all.orEmpty().mapNotNull { (key, value) ->
-                (value as? String)?.let { key to it }
-            }.toMap()
-        }
+    override suspend fun clear() {
+        withContext(Dispatchers.IO) { prefs.edit().clear().commit() }
     }
 }

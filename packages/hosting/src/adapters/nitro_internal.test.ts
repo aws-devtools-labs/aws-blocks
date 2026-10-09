@@ -11,7 +11,7 @@ import {
   resolveNitroBundlePath,
   warnIfNitroOutOfRange,
 } from './nitro.js';
-import { IPX_LAMBDA_HANDLER_SOURCE } from './ipx_lambda_template.js';
+import { IPX_LAMBDA_HANDLER_SOURCE, IPX_LAMBDA_PACKAGE_JSON } from './ipx_lambda_template.js';
 
 /**
  * Regression tests for the Nitro adapter internals that have caused
@@ -401,6 +401,27 @@ describe('parseNuxtImageDomains (image.domains allowlist scan)', () => {
   });
 });
 
+void describe('IPX_LAMBDA_HANDLER_SOURCE — remote fetch never follows redirects (SSRF)', () => {
+  // isRemoteSourceAllowed and the httpStorage `domains` list both validate only
+  // the caller-supplied URL. If the fetch followed a 3xx, an allowlisted host
+  // with an open redirect would reach any target — another host, or 127.0.0.1
+  // inside the Lambda sandbox — without re-validation (verified against a live
+  // ipx@3.1.1: the redirect target was fetched and its image returned).
+  it("configures httpStorage with fetchOptions { redirect: 'error' }", () => {
+    assert.match(
+      IPX_LAMBDA_HANDLER_SOURCE,
+      /ipxHttpStorage\(\{ domains: httpDomains, fetchOptions: \{ redirect: 'error' \} \}\)/,
+    );
+    // No other httpStorage wiring that could omit the guard.
+    assert.strictEqual(IPX_LAMBDA_HANDLER_SOURCE.match(/ipxHttpStorage\(/g)?.length, 1);
+  });
+
+  it('pins ipx to an exact version so the fetch semantics cannot float at deploy time', () => {
+    const pkg = JSON.parse(IPX_LAMBDA_PACKAGE_JSON) as { dependencies: Record<string, string> };
+    assert.match(pkg.dependencies.ipx, /^\d+\.\d+\.\d+$/, `ipx must be pinned exactly, got ${pkg.dependencies.ipx}`);
+  });
+});
+
 void describe('IPX_LAMBDA_HANDLER_SOURCE — remote source support (issue #2)', () => {
   // The handler template is inline code shipped as a string; assert the
   // wiring that makes remote images work end-to-end.
@@ -409,7 +430,7 @@ void describe('IPX_LAMBDA_HANDLER_SOURCE — remote source support (issue #2)', 
     // IPX_RESOURCE_NOT_FOUND. It must be imported and wired, gated on the
     // allowlist domains.
     assert.match(IPX_LAMBDA_HANDLER_SOURCE, /ipxHttpStorage/);
-    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /httpStorage: ipxHttpStorage\(\{ domains: httpDomains \}\)/);
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /httpStorage: ipxHttpStorage\(\{ domains: httpDomains, /);
     // Domains come from the same allowlist the handler enforces.
     assert.match(IPX_LAMBDA_HANDLER_SOURCE, /const httpDomains = \[/);
   });

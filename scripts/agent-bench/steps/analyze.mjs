@@ -16,6 +16,8 @@ import {
 	bedrockConverse,
 	buildRollupUserText,
 	fmt,
+	renderFailureAnalyses,
+	summarizeFailures,
 } from './lib/analysis.mjs';
 import { compositeBand, verdictOf } from './lib/scoring.mjs';
 import { buildAggregate, diffAgainstBaseline } from './lib/overview.mjs';
@@ -83,19 +85,31 @@ function main() {
 			regressed: delta !== null && delta < REGRESSION_DELTA,
 			analysis: c.analysis || null,
 			issues: Array.isArray(c.analysis_issues) ? c.analysis_issues.filter((s) => typeof s === 'string' && s.trim()) : [],
+			failure_analysis: c.failure_analysis && typeof c.failure_analysis === 'object' ? c.failure_analysis : null,
 		};
 	});
 
 	// ── Executive summary: ONE best-effort Bedrock synthesis over the analyses ─
 	const execSummary = synthesize(aggregate, verdictCounts, rows);
 
+	// ── Failure root-cause: deterministic roll-up line + per-cell structured diagnosis ─
+	const failureRows = rows.filter((r) => r.failure_analysis);
+	const failureRollup = summarizeFailures(failureRows);
+
 	// ── Potential issues: deterministic flags + each cell's emitted issues ─────
 	const potential = collectPotentialIssues(rows);
 
-	// ── Render: Executive summary → Potential issues → collapsible per-cell ────
+	// ── Render: Executive summary → Failure root-cause → Potential issues → collapsible per-cell ────
 	const out = [];
 	out.push('## Executive summary', '');
+	if (failureRollup) out.push(failureRollup, '');
 	out.push(execSummary.text, '');
+
+	if (failureRows.length > 0) {
+		out.push('## 🔴 Failure root-cause', '');
+		out.push(`_Deep per-cell diagnosis of ${failureRows.length} failing cell(s) from quoted test/log evidence · model \`${MODEL_ID}\`._`, '');
+		for (const line of renderFailureAnalyses(failureRows)) out.push(line);
+	}
 
 	out.push('## ⚠️ Potential issues', '');
 	if (potential.length === 0) {
@@ -139,8 +153,14 @@ function main() {
 		executive_summary_error: execSummary.error ?? null,
 		potential_issues: potential,
 		cells: rows,
+		failure_analyses: failureRows.map((r) => ({ task: r.task, template: r.template, ...r.failure_analysis })),
 	});
 }
+
+// Badge per failure category (falls back to a generic marker for unknown categories).
+// The failure roll-up helpers (fdisp / summarizeFailures / renderFailureAnalyses) and their constants
+// (FAILURE_CATEGORY_BADGE / MAX_EVIDENCE_CHARS) live in lib/analysis.mjs, colocated with the other pure
+// helpers so they are unit-tested; imported above.
 
 // Deterministic "Potential issues": harness/agent failures + low/regressed composites first, then
 // every per-cell issue, each attributed to its cell.

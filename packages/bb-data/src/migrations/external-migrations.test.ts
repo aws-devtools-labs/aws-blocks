@@ -3,13 +3,18 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   toSessionPortUrl,
   advisoryLockKey,
   warnUngrantedCreateTable,
   extractCreatedTableNames,
   decideBaseline,
+  runExternalMigrations,
 } from './external-migrations.js';
+import { DatabaseErrors } from '../errors.js';
 
 test('toSessionPortUrl rewrites the 6543 transaction-pooler port to 5432', () => {
   const out = toSessionPortUrl(
@@ -230,4 +235,47 @@ test('warnUngrantedCreateTable stays silent for GRANT ON ALL TABLES IN SCHEMA', 
     }),
   );
   assert.strictEqual(warnings.length, 0, 'blanket schema grant covers every table');
+});
+
+// --- Unreachable-host guidance (blocker: cause-aware "Cannot reach the database") ---
+//
+// A socket-level ECONNREFUSED/ETIMEDOUT during lock acquisition is re-tagged by
+// the engine into a branded QueryFailed with a stable BB message and the raw
+// driver error on `cause`. The guidance that turns that into an actionable
+// "Cannot reach the database on port 5432 …" error must therefore inspect the
+// `cause`, not just the surface error — reading only the surface silently drops
+// the guidance (and this exact regression shipped once with CI green). This test
+// needs no database: it points the runner at a closed local port.
+test('runExternalMigrations surfaces actionable guidance when the host is unreachable', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bb-data-extmig-'));
+  // A non-empty migrations dir is required — runExternalMigrations returns early
+  // (without connecting) when there is nothing to apply.
+  writeFileSync(join(dir, '001_init.sql'), 'CREATE TABLE t (id int);');
+
+  // Force the interactive TLS path: externalDbSsl() throws in a non-interactive
+  // (CI) run with no DATABASE_CA_CERT, which would mask the connection-refused we
+  // want to assert. The TCP refusal at a closed port happens before TLS anyway.
+  const savedCi = process.env.CI;
+  const savedCa = process.env.DATABASE_CA_CERT;
+  delete process.env.CI;
+  delete process.env.DATABASE_CA_CERT;
+  try {
+    await assert.rejects(
+      () => runExternalMigrations({
+        // Port 1 is reserved and never listening → immediate ECONNREFUSED.
+        connectionString: 'postgres://u:p@127.0.0.1:1/db',
+        migrationsDir: dir,
+        connectionTimeoutMs: 2000,
+      }),
+      (e: Error) => {
+        assert.strictEqual(e.name, DatabaseErrors.ConnectionFailed, 'guidance must re-brand as ConnectionFailed');
+        assert.match(e.message, /Cannot reach the database/);
+        return true;
+      },
+    );
+  } finally {
+    if (savedCi === undefined) delete process.env.CI; else process.env.CI = savedCi;
+    if (savedCa === undefined) delete process.env.DATABASE_CA_CERT; else process.env.DATABASE_CA_CERT = savedCa;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

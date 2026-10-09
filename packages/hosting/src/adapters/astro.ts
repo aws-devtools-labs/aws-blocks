@@ -36,7 +36,7 @@ import { createJiti } from 'jiti';
 import { getPackageInfoSync, isPackageExists } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
-import { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
+import type { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
 
 export type AstroAdapterOptions = {
   /** Project root directory (absolute). */
@@ -186,12 +186,7 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
       throw buildOutputMissingError(distDir, 'static');
     }
   } else {
-    if (!fs.existsSync(serverEntry)) {
-      throw buildOutputMissingError(serverDir, output);
-    }
-    if (!directoryHasFiles(clientDir)) {
-      throw buildOutputMissingError(clientDir, output);
-    }
+    ensureSsrBuildOutput(clientDir, serverDir, serverEntry, output);
   }
 
   const manifest: DeployManifest =
@@ -695,6 +690,43 @@ const liftAstroRedirects = (config: Record<string, unknown>): Redirect[] => {
 const directoryHasFiles = (dir: string): boolean => {
   if (!fs.existsSync(dir)) return false;
   return fs.readdirSync(dir).length > 0;
+};
+
+/**
+ * Validate a server/hybrid build output.
+ *
+ * `dist/server/entry.mjs` is the required artifact — its absence means the
+ * @astrojs/node standalone build didn't run (throws). An EMPTY `dist/client`,
+ * however, is valid: a pure-SSR app with no static assets (no `public/` files,
+ * no prerendered pages) produces one, and CloudFront simply routes every
+ * request to the SSR Lambda. So do NOT treat an empty client dir as missing —
+ * just ensure it exists (Astro normally creates it) so downstream asset
+ * handling (`staticAssets.directory`, prerender globbing) has a valid path.
+ *
+ * Exported for unit testing.
+ */
+export const ensureSsrBuildOutput = (
+  clientDir: string,
+  serverDir: string,
+  serverEntry: string,
+  output: AstroOutput,
+): void => {
+  if (!fs.existsSync(serverEntry)) {
+    throw buildOutputMissingError(serverDir, output);
+  }
+  // `dist/client` only holds static assets (public/, prerendered pages, hashed
+  // client JS/CSS); a pure-SSR build legitimately emits none. `mkdirSync` with
+  // `recursive` is idempotent, so create unconditionally — but emit a breadcrumb
+  // only when we actually materialize an ABSENT dir, so a silently-empty client
+  // (a broken build that dropped its assets) still surfaces in build logs rather
+  // than being masked by the create.
+  const clientAbsent = !fs.existsSync(clientDir);
+  fs.mkdirSync(clientDir, { recursive: true });
+  if (clientAbsent) {
+    process.stderr.write(
+      'ℹ️  No dist/client emitted; treating as a pure-SSR build (CloudFront routes all requests to the SSR Lambda).\n',
+    );
+  }
 };
 
 const buildOutputMissingError = (

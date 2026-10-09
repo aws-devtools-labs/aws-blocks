@@ -1,5 +1,20 @@
 # @aws-blocks/data-common
 
+## 0.1.5
+
+### Patch Changes
+
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+  - @aws-blocks/bb-logger@0.2.0
+
 ## 0.1.4
 
 ### Patch Changes

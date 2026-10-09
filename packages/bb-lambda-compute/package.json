@@ -1,6 +1,13 @@
 {
   "name": "@aws-blocks/bb-lambda-compute",
-  "version": "0.4.0",
+  "version": "0.5.1",
+  "keywords": [
+    "aws-blocks",
+    "lambda",
+    "serverless",
+    "api-gateway",
+    "compute"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -34,15 +41,19 @@
     "./cdk": {
       "types": "./dist/index.cdk.d.ts",
       "default": "./dist/index.cdk.js"
+    },
+    "./version": {
+      "types": "./dist/version.d.ts",
+      "default": "./dist/version.js"
     }
   },
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs LambdaCompute",
     "build": "tsc --build",
-    "test": "node --test dist/index.cdk.test.js dist/compute-resolution.test.js dist/tracing.cdk.test.js"
+    "test": "node --test dist/index.test.js dist/index.cdk.test.js dist/compute-resolution.test.js dist/tracing.cdk.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.4.0"
+    "@aws-blocks/core": "^0.6.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

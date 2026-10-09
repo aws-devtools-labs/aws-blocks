@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { BLOCKS_RPC_PREFIX, isRpcPath, rpcNamespaceFromPath } from './constants.js';
+import { BLOCKS_RPC_PREFIX, CLIENT_USER_AGENT_HEADER, isRpcPath, rpcNamespaceFromPath } from './constants.js';
 
 describe('isRpcPath', () => {
 	it('matches the bare RPC prefix and the whole per-namespace subtree', () => {
@@ -41,5 +41,11 @@ describe('rpcNamespaceFromPath', () => {
 	it('percent-decodes the segment, falling back to the raw value on malformed encoding', () => {
 		assert.strictEqual(rpcNamespaceFromPath(`${BLOCKS_RPC_PREFIX}/a%2Db`), 'a-b');
 		assert.strictEqual(rpcNamespaceFromPath(`${BLOCKS_RPC_PREFIX}/%ZZ`), '%ZZ');
+	});
+});
+
+describe('CLIENT_USER_AGENT_HEADER', () => {
+	it('is the lowercase custom header name', () => {
+		assert.strictEqual(CLIENT_USER_AGENT_HEADER, 'x-blocks-user-agent');
 	});
 });

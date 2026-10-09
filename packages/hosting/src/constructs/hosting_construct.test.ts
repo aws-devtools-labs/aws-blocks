@@ -6,6 +6,7 @@ import * as os from 'os';
 import { App, CfnResource, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { HostingConstruct } from './hosting_construct.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
@@ -710,6 +711,27 @@ void describe('HostingConstruct — Cache/ISR', () => {
           ]),
         }),
       }),
+    );
+
+    // The seed custom resource must carry DeletionPolicy: Retain. On stack
+    // delete CFN reaps the provider framework Lambda before it sends this
+    // custom resource its Delete; without Retain that delete invoke targets an
+    // already-gone function and hangs to the 30-min timeout -> DELETE_FAILED.
+    // Retain makes CFN drop the resource without a delete invoke, which is
+    // safe because the OpenNext dynamodb-provider remove() path is a no-op.
+    // Match by properties (serviceToken + buildId) to pin the ISR seed
+    // resource specifically, not the DNS/other custom resources in the stack.
+    const seedResources = template.findResources(
+      'AWS::CloudFormation::CustomResource',
+      {
+        Properties: Match.objectLike({ buildId: Match.anyValue() }),
+        DeletionPolicy: 'Retain',
+      },
+    );
+    assert.strictEqual(
+      Object.keys(seedResources).length,
+      1,
+      'ISR tag-table seed custom resource must carry DeletionPolicy: Retain',
     );
   });
 
@@ -1954,8 +1976,8 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     >;
     const statements = keyPolicy['Statement'] as Array<Record<string, unknown>>;
 
-    // Find the CloudFront decrypt statement
-    const cfDecryptStatement = statements.find((stmt) => {
+    // Find the CloudFront decrypt statement(s) on the key.
+    const cfDecryptStatements = statements.filter((stmt) => {
       const actions = stmt.Action;
       const principal = stmt.Principal as Record<string, unknown> | undefined;
       const service = principal?.Service;
@@ -1970,9 +1992,24 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     });
 
     assert.ok(
-      cfDecryptStatement,
+      cfDecryptStatements.length > 0,
       'KMS key policy must grant kms:Decrypt to cloudfront.amazonaws.com',
     );
+
+    // Every CloudFront decrypt grant on the key is conditioned on AWS:SourceArn matching a
+    // CloudFront distribution ARN in this account — none applies unconditionally.
+    for (const stmt of cfDecryptStatements) {
+      const conditions = (stmt.Condition ?? {}) as Record<string, Record<string, unknown>>;
+      const sourceArn = Object.values(conditions)
+        .map((op) => op['AWS:SourceArn'] ?? op['aws:SourceArn'])
+        .find((v) => v !== undefined);
+      const sourceArnJson = JSON.stringify(sourceArn);
+      assert.ok(sourceArn, `CloudFront KMS decrypt grant must carry AWS:SourceArn: ${JSON.stringify(stmt)}`);
+      assert.ok(
+        sourceArnJson.includes(':cloudfront::') && sourceArnJson.includes('AWS::AccountId'),
+        `AWS:SourceArn must be an account-scoped CloudFront distribution ARN: ${sourceArnJson}`,
+      );
+    }
   });
 
   void it('does NOT create KMS key when encryption is S3_MANAGED (default)', () => {
@@ -2036,20 +2073,21 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     });
   });
 
-  void it('creates no alarm topic key when a BYO topic ARN is supplied', () => {
+  void it('applies monitoring.subscriptions to the alarm topic', () => {
     const staticDir = createStaticDir();
     const stack = createStack();
     new HostingConstruct(stack, 'Hosting', {
       manifest: spaManifest(staticDir),
       monitoring: {
-        snsTopicArn: 'arn:aws:sns:us-west-2:123456789012:existing-alarms',
+        subscriptions: [new subs.EmailSubscription('oncall@example.com')],
       },
     });
 
     const template = Template.fromStack(stack);
-    // The caller owns the imported topic's encryption.
-    template.resourceCountIs('AWS::KMS::Key', 0);
-    template.resourceCountIs('AWS::SNS::Topic', 0);
+    template.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: 'oncall@example.com',
+    });
   });
 
   // ---- cdn.ssrDefaultTtl ----
@@ -2062,7 +2100,12 @@ void describe('HostingConstruct — KMS Key Policy', () => {
 
       new HostingConstruct(stack, 'Hosting', {
         manifest: ssrManifest(staticDir, bundleDir),
-        cdn: { ssrDefaultTtl: Duration.seconds(60) },
+        // ssrDefaultTtl > 0 requires a cache-key credential (fail-closed
+        // guard, CWE-524/525) so cacheable SSR responses are keyed per user.
+        cdn: {
+          ssrDefaultTtl: Duration.seconds(60),
+          cacheKeyCookies: ['session'],
+        },
       });
 
       const template = Template.fromStack(stack);

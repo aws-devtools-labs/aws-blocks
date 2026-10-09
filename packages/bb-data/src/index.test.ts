@@ -12,12 +12,21 @@ import { rmSync } from 'node:fs';
 const TEST_DIR = '.bb-data-contract-' + process.pid;
 let base: RLSEnabledDatabase;
 
+// Track every engine created so teardown can release its WASM instance.
+// PGlite 0.3+ no longer force-exits on close, so an unclosed engine keeps
+// the Node event loop alive and `node --test` never exits (57-min CI hang).
+const engines: PGliteEngine[] = [];
+
 afterEach(async () => {
+  for (const engine of engines.splice(0)) {
+    await engine.destroy().catch(() => {});
+  }
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
 
 function createDb(): RLSEnabledDatabase {
   const engine = new PGliteEngine(TEST_DIR);
+  engines.push(engine);
   base = new RLSEnabledDatabase(engine);
   return base;
 }

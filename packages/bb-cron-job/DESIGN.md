@@ -87,6 +87,7 @@ Local Mock
 - **Resource efficiency** — avoids creating N IAM roles for N cron jobs. One role with `lambda:InvokeFunction` scoped to the shared Lambda is sufficient.
 - **Simplicity** — no per-job role management, no cross-references between jobs.
 - **Security** — the role can only invoke the shared Lambda (least privilege for the scheduler service).
+- **Trust scoping** — the role's trust policy admits `scheduler.amazonaws.com` only when `aws:SourceAccount` is the stack's account and `aws:SourceArn` matches `arn:<partition>:scheduler:<region>:<account>:schedule-group/*`. Scheduler reports the schedule *group* ARN as the source, so the pattern is group-based rather than per-schedule.
 
 ### D-CJ-6: Event routing via `source` + `jobName`
 

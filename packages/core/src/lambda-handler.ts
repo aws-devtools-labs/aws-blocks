@@ -3,8 +3,7 @@
 
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ApiError } from './errors.js';
-import { isRpcPath, rpcNamespaceFromPath } from './constants.js';
+import { CLIENT_USER_AGENT_HEADER, isRpcPath, rpcNamespaceFromPath } from './constants.js';
 import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
@@ -14,8 +13,11 @@ import {
   errorResponse,
   errorResponseFromCatch,
   methodNotFoundResponse,
+  rawRouteErrorFromCatch,
 } from './rpc.js';
 import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
+import { validateClientUserAgentToken } from './server/client-user-agent.js';
+import { resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -30,6 +32,14 @@ export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
  */
 export const requestCookies = new AsyncLocalStorage<string>();
 (globalThis as any).__BLOCKS_REQUEST_COOKIES_STORE__ = requestCookies;
+
+/**
+ * Per-request store for the validated native-client token. Also registered on
+ * `globalThis.__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__` so the middleware can
+ * read it without importing `node:async_hooks`.
+ */
+export const requestClientUserAgent = new AsyncLocalStorage<string | undefined>();
+(globalThis as any).__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__ = requestClientUserAgent;
 
 /**
  * Event source mapping identifiers used by AWS when pushing records to Lambda.
@@ -311,18 +321,11 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
       throw new TransientConfigError();
     }
 
-    // Merge hosting-provided CORS origins into the main env var so the lazy
-    // getCorsPatterns() sees a combined value on first access.
-    // loadConfigToProcessEnv() won't override CORS_ALLOWED_ORIGINS if it's
-    // already set (sandbox env var), but CORS_HOSTING_ORIGINS always loads
-    // from S3 since it's never set as a direct env var.
-    const hostingOrigins = process.env.CORS_HOSTING_ORIGINS;
-    if (hostingOrigins) {
-      const existing = process.env.CORS_ALLOWED_ORIGINS;
-      process.env.CORS_ALLOWED_ORIGINS = existing
-        ? `${existing},${hostingOrigins}`
-        : hostingOrigins;
-    }
+    // CORS origins are read directly by getCorsPatterns(), which now compiles
+    // CORS_ALLOWED_ORIGINS (user-supplied regex channel) and CORS_HOSTING_ORIGINS
+    // (framework-injected literal origins, escaped at runtime) via separate paths.
+    // No pre-merge here: folding the resolved CloudFront domain into the regex
+    // channel would regex-compile its dots into wildcards, so the two stay split.
 
     const mod = await backendFactory();
     handler = createHandler(mod);
@@ -541,7 +544,7 @@ function createHandler(backend: any) {
         headers: {
           ...corsHeaders,
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Access-Control-Allow-Headers': `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
           'Access-Control-Max-Age': CORS_MAX_AGE,
         },
         body: '',
@@ -556,7 +559,14 @@ function createHandler(backend: any) {
     // and v2 (`event.cookies` array) shapes.
     const inboundCookies = getInboundCookies(event);
 
-    return requestCookies.run(inboundCookies, async () => {
+    // Validate the attacker-controlled header before storing, so malformed
+    // input never reaches the AWS user agent.
+    const clientUserAgent = validateClientUserAgentToken(
+      event.headers?.[CLIENT_USER_AGENT_HEADER] || event.headers?.['X-Blocks-User-Agent'],
+    );
+
+    return requestCookies.run(inboundCookies, () =>
+      requestClientUserAgent.run(clientUserAgent, async () => {
     // RawRoute dispatch — check path-based routes before falling through to RPC.
     // The whole `/aws-blocks/api` subtree (the bare path and every per-namespace
     // `/aws-blocks/api/{ns}` path) is RPC: dispatch resolves the namespace from
@@ -638,8 +648,9 @@ function createHandler(backend: any) {
         },
       };
 
-      // Get the API by export name
-      const apiHandler = backend[apiNamespace];
+      // Get the API by export name. resolveApiNamespace refuses exported Building
+      // Block instances and `_`-private exports, so only an API surface is callable.
+      const apiHandler = resolveApiNamespace(backend, apiNamespace);
       if (!apiHandler) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId) };
       }
@@ -649,11 +660,13 @@ function createHandler(backend: any) {
         ? apiHandler(context)
         : apiHandler;
 
-      if (!apiMethods[method]) {
+      // Own/declared callable methods only — never an inherited Object.prototype member.
+      const apiMethod = resolveApiMethod(apiMethods, method);
+      if (!apiMethod) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId) };
       }
 
-      const result = await apiMethods[method](...args);
+      const result = await apiMethod(...args);
 
       const body = successResponse(responseBody ?? result, rpcId);
       // v2 HTTP API ignores multi-value headers, so route any Set-Cookie into the
@@ -667,7 +680,7 @@ function createHandler(backend: any) {
         body: errorResponseFromCatch(error, rpcId),
       };
     }
-    });
+    }));
   };
 }
 
@@ -718,15 +731,13 @@ async function handleRawRoute(
       ...buildResponseEnvelope(responseHeaders),
       body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('RawRoute Error:', error);
-    const status = error instanceof ApiError ? error.status : 500;
-    const body: Record<string, any> = { error: error.message };
-    if (error.name && error.name !== 'Error') body.name = error.name;
+    const { status, body } = rawRouteErrorFromCatch(error);
     return {
       statusCode: status,
       ...buildResponseEnvelope(responseHeaders),
-      body: JSON.stringify(body),
+      body,
     };
   }
 }

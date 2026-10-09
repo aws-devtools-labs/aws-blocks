@@ -6,8 +6,11 @@ import assert from 'node:assert';
 import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost, TransientConfigError } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry, getRegisteredRoutes } from './raw-route.js';
+import { ApiError, blocksError } from './errors.js';
 import { decodeRpcResponse } from './rpc.js';
 import { _resetConfigCache, _setS3Fetcher } from './common/config.js';
+import { HttpRequest } from '@smithy/protocol-http';
+import { installClientUserAgent } from './server/client-user-agent.js';
 import type { BlocksContext } from './api.js';
 
 beforeEach(() => {
@@ -498,6 +501,104 @@ describe('createLambdaHandler — RawRoute body handling', () => {
     assert.strictEqual(result.statusCode, 200);
     assert.deepStrictEqual(capturedParams, Object.assign(Object.create(null), { id: 'abc-123' }));
     assert.ok(capturedBody !== null);
+  });
+});
+
+// ── RawRoute uncaught-exception sanitization ────────────────────────────────
+
+describe('createLambdaHandler — RawRoute uncaught exceptions', () => {
+  it('collapses an uncaught raw SDK exception to a generic 500 without leaking its name or message', async () => {
+    class ResourceNotFoundException extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = 'ResourceNotFoundException';
+      }
+    }
+    registerRoute({
+      method: 'GET',
+      path: '/raw/fails',
+      handler: async () => {
+        throw new ResourceNotFoundException('Requested resource not found: Table: internal-orders-prod');
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/fails', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 500);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Internal error' });
+    const serialized = JSON.stringify(result);
+    assert.ok(!serialized.includes('ResourceNotFoundException'));
+    assert.ok(!serialized.includes('internal-orders-prod'));
+  });
+
+  it('keeps the name and message of a branded Building Block error thrown from a raw route', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/bb-error',
+      handler: async () => {
+        throw blocksError('ValidationFailedException', 'email must be a valid address');
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/bb-error', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 500);
+    assert.deepStrictEqual(JSON.parse(result.body), {
+      error: 'ValidationFailedException: email must be a valid address',
+      name: 'ValidationFailedException',
+    });
+  });
+
+  it('keeps the status of an ApiError thrown from a raw route', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/api-error',
+      handler: async () => {
+        throw new ApiError('Forbidden', 403, { name: 'AccessDenied' });
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/api-error', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 403);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Forbidden', name: 'AccessDenied' });
+  });
+
+  it('leaves a deliberate ctx.response error write untouched', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/own-error',
+      handler: async (ctx) => {
+        ctx.response.status = 502;
+        ctx.response.send({ error: 'upstream said: ResourceNotFoundException' });
+      },
+    });
+
+    const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/own-error', body: null }));
+
+    assert.strictEqual(result.statusCode, 502);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'upstream said: ResourceNotFoundException' });
   });
 });
 
@@ -1589,5 +1690,121 @@ describe('createLambdaHandler — HTTP API v2 (payload format 2.0) dispatch', ()
 
     assert.strictEqual(url.searchParams.get('code'), 'abc');
     assert.strictEqual(url.searchParams.get('state'), 'xyz');
+  });
+});
+
+// ── Native client user-agent forwarding (end-to-end, through the real handler) ──
+
+describe('createLambdaHandler — native client user-agent forwarding', () => {
+  // API method: drives a Building-Block-style SDK client and returns the
+  // outgoing user-agent.
+  function uaProbeBackend() {
+    return {
+      api: (_ctx: BlocksContext) => ({
+        async probe() {
+          let mw: any;
+          const client = {
+            middlewareStack: {
+              identify: () => ['getUserAgentMiddleware - build'],
+              add: (m: any) => { mw = m; },
+              addRelativeTo: (m: any) => { mw = m; },
+            },
+          };
+          installClientUserAgent(client);
+          const request = new HttpRequest({
+            hostname: 'example.com',
+            headers: { 'user-agent': 'aws-sdk-js/3.700.0 aws-blocks/0.5.0' },
+          });
+          await mw(async (a: any) => ({ output: a }))({ request });
+          return request.headers['user-agent'];
+        },
+      }),
+    };
+  }
+
+  function probeEvent(clientUserAgent?: string) {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (clientUserAgent !== undefined) headers['x-blocks-user-agent'] = clientUserAgent;
+    return makeEvent({ headers, body: JSON.stringify({ jsonrpc: '2.0', method: 'api.probe', params: [], id: 1 }) });
+  }
+
+  it('appends a valid inbound token to the outgoing SDK user agent', async () => {
+    const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-swift/9.9.9'));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 client/swift/9.9.9');
+  });
+
+  it('drops a malformed inbound token without changing the outgoing user agent', async () => {
+    // Uppercase language: the validator rejects it, so nothing is appended.
+    const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-Swift/0.1.1'));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+  });
+
+  it('appends the token when the client also sends appended metadata', async () => {
+    const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-swift/9.9.9 os/android#14'));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 client/swift/9.9.9');
+  });
+
+  it('leaves the outgoing user agent unchanged when no token header is present', async () => {
+    const result = await invoke(uaProbeBackend(), probeEvent(undefined));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+  });
+
+});
+
+// ── RPC dispatch: only API surfaces are callable ────────────────────────────
+//
+// The dispatcher resolves `backend[apiNamespace][method]`. It must not expose a
+// Building Block instance that happens to be exported from the backend module
+// (its whole data plane would bypass every `requireAuth` in the ApiNamespace
+// layer), `_`-private exports, or members inherited from `Object.prototype`.
+
+function rpcEvent(method: string, params: unknown[] = []) {
+  return makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }) });
+}
+
+function rpcError(result: any): { code: number; message: string } | undefined {
+  return JSON.parse(result.body).error;
+}
+
+describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () => {
+  it('rejects a method on an exported Building Block (Scope) instance', async () => {
+    let wrote = false;
+    // Structurally a Scope (id + fullId), like `export const todos = new DistributedTable(scope, 'todos')`.
+    const todos = { id: 'todos', fullId: 'app-todos', async put() { wrote = true; return 'WROTE'; } };
+    const result = await invoke({ todos }, rpcEvent('todos.put', ['k', 'v']));
+    assert.strictEqual(rpcError(result)?.code, -32601, 'block instance must be method-not-found');
+    assert.strictEqual(wrote, false, 'the block method must never run');
+  });
+
+  it('rejects an underscore-private export', async () => {
+    let ran = false;
+    const backend = { _internal: () => ({ async run() { ran = true; return 1; } }) };
+    const result = await invoke(backend, rpcEvent('_internal.run'));
+    assert.strictEqual(rpcError(result)?.code, -32601);
+    assert.strictEqual(ran, false);
+  });
+
+  for (const inherited of ['toString', 'hasOwnProperty', 'constructor', 'valueOf', '__proto__']) {
+    it(`rejects the inherited Object.prototype member "${inherited}"`, async () => {
+      const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return m; } }) };
+      const result = await invoke(backend, rpcEvent(`api.${inherited}`));
+      assert.strictEqual(rpcError(result)?.code, -32601, `${inherited} must be method-not-found`);
+    });
+  }
+
+  it('rejects a non-function own property on the method map', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ secretConfig: { key: 'x' }, async echo(m: string) { return m; } }) };
+    const result = await invoke(backend, rpcEvent('api.secretConfig'));
+    assert.strictEqual(rpcError(result)?.code, -32601);
+  });
+
+  it('still dispatches a real method (regression guard)', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return { m }; } }) };
+    const result = await invoke(backend, rpcEvent('api.echo', ['hi']));
+    assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
   });
 });
