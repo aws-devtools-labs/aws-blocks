@@ -30,9 +30,12 @@
  *   work. Upstream tracks broader format support in
  *   https://github.com/unjs/ipx/issues/261.
  */
+import { looksLikeSvg } from './ipx_allowlist.js';
+
 export const IPX_LAMBDA_HANDLER_SOURCE = `import { createIPX, createIPXWebServer, ipxHttpStorage } from 'ipx';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { Buffer } from 'node:buffer';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 const bucket = process.env.BUCKET_NAME;
 const region = process.env.BUCKET_REGION;
@@ -151,6 +154,43 @@ const isLocalSourceAllowed = (id) => {
 
 const isSvgPath = (id) => /\\.svg(\\?|$)/i.test(String(id));
 
+// SVG gate by CONTENT, not filename. isSvgPath above is only a cheap pre-filter:
+// an origin's Content-Type isn't constrained by its path, so an SVG served from
+// \`/logo\` or \`/logo.png\` sails past an extension check. svgGuard wraps each
+// storage's getData and rejects SVG bytes (415) before IPX processes them —
+// SVGO, which IPX runs on SVG input, is an optimiser, not a sanitiser. The
+// helper is embedded from ipx_allowlist.ts so the tested code is what runs here.
+const looksLikeSvg = ${looksLikeSvg.toString()};
+
+const svgRejected = () =>
+  Object.assign(new Error('SVG sources are not permitted'), {
+    statusCode: 415,
+    statusText: 'Unsupported Media Type',
+  });
+
+// Per-request record that svgGuard rejected the bytes. The handler reads it and
+// returns the 415 itself, so the contract doesn't depend on how IPX maps an
+// error thrown from storage (ipx@3.1.1 surfaces the thrown statusCode, but an
+// upgrade could turn it into a 500 — the guard still fails closed either way).
+const svgGate = new AsyncLocalStorage();
+
+const svgGuard = (storage) =>
+  allowSvg
+    ? storage
+    : {
+        ...storage,
+        async getData(id, opts) {
+          const data = await storage.getData(id, opts);
+          if (looksLikeSvg(data)) {
+            log(\`reject SVG content: \${id}\`);
+            const gate = svgGate.getStore();
+            if (gate) gate.rejected = true;
+            throw svgRejected();
+          }
+          return data;
+        },
+      };
+
 
 /**
  * Custom IPX storage adapter that reads originals from S3 using the
@@ -224,9 +264,9 @@ const httpDomains = [
 // for every request IPX makes. An allowlisted host that serves its images via a
 // redirect must be allowlisted at its final location.
 const ipx = createIPX({
-  storage: s3IpxStorage,
+  storage: svgGuard(s3IpxStorage),
   ...(httpDomains.length > 0
-    ? { httpStorage: ipxHttpStorage({ domains: httpDomains, fetchOptions: { redirect: 'error' } }) }
+    ? { httpStorage: svgGuard(ipxHttpStorage({ domains: httpDomains, fetchOptions: { redirect: 'error' } })) }
     : {}),
 });
 
@@ -367,7 +407,11 @@ const reject = (status, message) => ({
   body: JSON.stringify({ error: message }),
 });
 
-export const handler = async (event) => {
+export const handler = (event) => svgGate.run({ rejected: false }, () => handleImage(event));
+
+const svgRejectedResponse = () => reject(415, 'SVG sources are not permitted');
+
+const handleImage = async (event) => {
   try {
     const req = eventToRequest(event);
 
@@ -391,8 +435,16 @@ export const handler = async (event) => {
     }
 
     const res = await ipxServer(req);
+    if (svgGate.getStore()?.rejected) return svgRejectedResponse();
+    // Defense in depth: never emit SVG output unless the user opted in, whatever
+    // path the bytes took (e.g. a compressed .svgz source the sniff can't read).
+    if (!allowSvg && /image\\/svg/i.test(res.headers.get('content-type') || '')) {
+      log(\`reject SVG output: \${source}\`);
+      return svgRejectedResponse();
+    }
     return await responseToLambda(res);
   } catch (err) {
+    if (svgGate.getStore()?.rejected) return svgRejectedResponse();
     log(\`error: \${err?.message ?? err}\`);
     return {
       statusCode: 500,
@@ -414,6 +466,10 @@ export const IPX_LAMBDA_PACKAGE_JSON = JSON.stringify(
       // Pinned exactly: the no-redirect SSRF guard depends on ipx forwarding
       // `fetchOptions` to its fetch (verified on 3.1.1). A floating range would let
       // the fetch semantics change at deploy time with no change to AWS Blocks.
+      // The SVG gate also relies on ipx calling the storage adapters' getData for
+      // every source (svgGuard wraps it); its 415 does NOT depend on ipx's error
+      // mapping (the handler returns it). Re-run the executable handler tests in
+      // nitro_internal.test.ts when bumping this.
       ipx: '3.1.1',
       sharp: '^0.34.0',
     },
