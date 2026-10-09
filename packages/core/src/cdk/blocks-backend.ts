@@ -14,6 +14,7 @@ import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
+import { scheduleApiFrontDoor } from './api-front-door.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
@@ -335,6 +336,11 @@ export class BlocksBackend extends Construct {
 			}
 		}
 		addBlocksStackMetadata(cdk.Stack.of(backend));
+
+		// Schedule the managed CloudFront API front door (prod default; off in
+		// sandbox). Resolved by a synth-time aspect, so it observes the whole app;
+		// the client is not switched to it here (that is a later change).
+		scheduleApiFrontDoor(backend, backend.apiUrl, backend.defaults.provisionApiFrontDoor);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));

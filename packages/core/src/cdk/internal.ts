@@ -23,6 +23,9 @@
  * @internal
  */
 
+// Builds a CloudFront origin from a Blocks API URL. Framework/test surface —
+// used by the front-door aspect and reused by Hosting's API behaviors.
+export { httpOriginFromApiUrl } from './api-front-door.js';
 // Reserved `/aws-blocks` path segment, needed by concrete computes (e.g.
 // LambdaCompute in @aws-blocks/bb-lambda-compute) to build their API route tree.
 export { BLOCKS_NAMESPACE } from '../constants.js';
