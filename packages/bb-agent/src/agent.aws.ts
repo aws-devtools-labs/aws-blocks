@@ -34,120 +34,152 @@ function freshManifest(): SnapshotManifest {
 }
 
 /**
- * Returns true when `error` (or its `cause` chain) represents a MISSING S3 object
- * — a 404 the SDK's own `NoSuchKey`/`NoSuchBucket` check does not recognise.
- *
- * S3Storage wraps a GetObject failure as `SessionError('S3 error reading <key>', { cause })`,
- * so the raw AWS error arrives on `cause`. Crucially, S3Storage's own `_isNotFoundError`
- * already catches `NoSuchKey`/`NoSuchBucket` and returns `null` BEFORE constructing that
- * `SessionError`, so those two names can never reach this wrapper — the only missing-object
- * shapes that escape as a `SessionError` are a `NotFound` error name or a bare HTTP 404 in
- * the SDK's `$metadata` (no `NoSuchKey` name). We match exactly those, walking a bounded
- * `cause` chain because the raw error may be nested one wrapper deep.
- *
- * Everything else — a `403 AccessDenied` (a genuine permission gap; S3 does NOT mask a
- * missing object as 403 here because the execution role is granted `s3:ListBucket`), a
- * transient `5xx`/throttle, an invalid-JSON parse failure on a corrupt object — is NOT a
- * missing object and must surface, so an established conversation is never silently
- * discarded by a fault that a crash-and-retry would have preserved.
+ * The shape of a read error worth logging: the deepest AWS error in the `cause`
+ * chain, flattened to the three fields that identify what S3 actually returned.
+ * All optional — a non-AWS error (a JSON parse failure, a plain `Error`) carries
+ * none of them, which is itself diagnostic.
  */
-function isMissingObjectError(error: unknown): boolean {
-	let current: unknown = error;
-	for (let depth = 0; current !== null && typeof current === 'object' && depth < 5; depth++) {
-		// NoSuchKey/NoSuchBucket are intentionally NOT matched here: S3Storage._isNotFoundError
-		// maps them to null before any SessionError is thrown, so they never reach this wrapper.
-		if ('name' in current && current.name === 'NotFound') {
-			return true;
-		}
-		// Name-agnostic by design: ANY 404 in $metadata is treated as missing-object, not
-		// only a `NotFound` name. With s3:ListBucket granted, a missing object is the only
-		// 404 S3Storage can surface here, so the status code alone is a sufficient signal.
-		if ('$metadata' in current && current.$metadata !== null && typeof current.$metadata === 'object' && 'httpStatusCode' in current.$metadata && current.$metadata.httpStatusCode === 404) {
-			return true;
-		}
-		current = 'cause' in current ? current.cause : undefined;
-	}
-	return false;
+interface ReadErrorShape {
+	/** Deepest error `name` (e.g. `NotFound`, `AccessDenied`, `ServiceUnavailable`). */
+	name?: string;
+	/** `$metadata.httpStatusCode` from the AWS SDK response, if present. */
+	httpStatusCode?: number;
+	/** `$metadata.requestId` — lets a captured occurrence be found in CloudTrail/S3 access logs. */
+	requestId?: string;
+	/** `true` when the shape looks like a missing object (a 404 / `NotFound`). */
+	looksMissing: boolean;
 }
 
 /**
- * Wraps the deployed `SnapshotStorage` so a first turn is never crashed by a MISSING
- * session snapshot.
+ * Walks a bounded `cause` chain and extracts the shape of the underlying read error.
+ *
+ * S3Storage wraps a GetObject failure as `SessionError('S3 error reading <key>', { cause })`,
+ * so the raw AWS error arrives on `.cause` (set via Error options, NON-enumerable — which is
+ * exactly why `bb-logger`'s top-level `name`/`message`/`stack` serialization never surfaces it,
+ * and why we flatten it explicitly here). We read `name` and the SDK's `$metadata`
+ * (`httpStatusCode`, `requestId`) from the deepest node that carries them, so a captured
+ * occurrence in production records the concrete error — the piece issue tracking has been
+ * missing — instead of only the opaque `S3 error reading <key>` message string.
+ *
+ * `looksMissing` flags a 404 / `NotFound` shape. It is used ONLY to word the diagnostic
+ * (expected first-turn miss vs. an unexpected read error that we tolerated anyway); it is
+ * NOT a gate on the read-path fallback — see {@link ResilientSnapshotStorage}.
+ */
+function readErrorShape(error: unknown): ReadErrorShape {
+	const shape: ReadErrorShape = { looksMissing: false };
+	let current: unknown = error;
+	for (let depth = 0; current !== null && typeof current === 'object' && depth < 5; depth++) {
+		if (shape.name === undefined && 'name' in current && typeof current.name === 'string' && current.name !== 'SessionError') {
+			shape.name = current.name;
+		}
+		if ('$metadata' in current && current.$metadata !== null && typeof current.$metadata === 'object') {
+			const metadata = current.$metadata;
+			if (shape.httpStatusCode === undefined && 'httpStatusCode' in metadata && typeof metadata.httpStatusCode === 'number') {
+				shape.httpStatusCode = metadata.httpStatusCode;
+			}
+			if (shape.requestId === undefined && 'requestId' in metadata && typeof metadata.requestId === 'string') {
+				shape.requestId = metadata.requestId;
+			}
+		}
+		current = 'cause' in current ? current.cause : undefined;
+	}
+	shape.looksMissing = shape.name === 'NotFound' || shape.name === 'NoSuchKey' || shape.name === 'NoSuchBucket' || shape.httpStatusCode === 404;
+	return shape;
+}
+
+/**
+ * Wraps the deployed `SnapshotStorage` so a first turn is never crashed by a session
+ * snapshot that cannot be READ.
  *
  * On the first turn of a brand-new conversation no snapshot exists yet. Strands'
  * `SessionManager` treats a `null` from `loadSnapshot` (and an empty manifest from
  * `loadManifest`) as "start fresh" — the contract the local FileBucket storage
- * already honours. S3Storage, however, only maps `NoSuchKey`/`NoSuchBucket` to
- * `null`; a missing object that surfaces as `NotFound` or an HTTP 404 is instead
- * rethrown as `SessionError('S3 error reading <key>')`, which propagates out of the
- * loop and fails the whole first turn with no session ever starting.
+ * already honours. S3Storage maps `NoSuchKey`/`NoSuchBucket` to `null`, but a
+ * missing object can also surface as a `NotFound` name, a bare HTTP 404, or — as
+ * the originating issue's own source analysis flags — an `AccessDenied` S3 can
+ * return for a missing object, a regional-endpoint edge, or a transient fault. Any
+ * of those rethrows as `SessionError('S3 error reading <key>')`, propagates out of
+ * the restore loop, and fails the whole first turn with no session ever starting.
  *
- * The two READ paths taken before any snapshot is written (`loadSnapshot`,
- * `loadManifest`) therefore fall back to the fresh-session value ONLY when the
- * underlying error is a missing-object 404 (see {@link isMissingObjectError}),
- * logging the cause either way. The fallback is deliberately NARROW: a non-404
- * fault (a `403 AccessDenied` permission gap, a transient `5xx`/throttle, a
- * corrupt-snapshot parse error) is rethrown — on an EXISTING conversation that
- * preserves the persisted state for a crash-and-retry instead of silently resuming
- * from a fresh session and discarding it. Write, delete and list paths are delegated
- * untouched: a failure there is a real persistence fault and must still surface.
+ * BOTH READ paths taken before any snapshot is written (`loadSnapshot`,
+ * `loadManifest`) therefore fall back to the fresh-session value on ANY read error.
+ * This is deliberately BROAD, not a `404`-only match: the production error shape was
+ * never observed (the issue records only the opaque `S3 error reading <key>` message
+ * — no `name`/`statusCode` was ever logged), and a sandbox deploy showed the genuine
+ * missing-object path is already absorbed by S3Storage before this wrapper, so a
+ * `404`-only match left the real P1 crash — whatever its shape — unfixed. A read
+ * that fails for ANY reason on the pre-write path means there is nothing to restore,
+ * so the correct action is to start fresh, exactly as the local storage does when
+ * `bucket.get` is falsy. The alternative — rethrow and crash the first turn — is the
+ * bug this fix exists to remove.
  *
- * The 404 fallback cannot tell a never-written object apart from one that was
- * deleted or lost — both surface as the same S3 404 — so a missing-object read
- * ALWAYS starts fresh, not only on a genuine first turn. An established
- * conversation whose snapshot vanished would also restart with no history. This
- * is unavoidable at the 404 level and exactly matches both the SDK's own
- * `NoSuchKey → null` handling and the local `FileBucketSnapshotStorage` (which
- * returns `null` when `bucket.get` is falsy), so it is consistent, not a
- * regression — the "first turn" framing above describes the motivating case, not
- * a guarantee that an existing snapshot is immune to a fresh start if it is lost.
+ * Diagnostics are NOT discarded by starting fresh: every tolerated read error is
+ * logged at `error` level (above the deployed agent's default `error` log level, so
+ * it is actually emitted) with the deepest cause's `name`, `httpStatusCode` and
+ * `requestId` flattened out of the non-enumerable `.cause` (see
+ * {@link readErrorShape}) — the concrete shape the issue needs to decide whether a
+ * narrower match is ever warranted. A shape that does not look like a missing object
+ * is logged distinctly ("unexpected read error … starting fresh anyway") so a real
+ * recurring permission/throttle fault stays visible and actionable rather than
+ * silently absorbed.
+ *
+ * WRITE, delete and list paths are delegated untouched: a failure there is a real
+ * persistence fault with state to lose, and must still surface.
+ *
+ * A read fallback cannot tell a never-written object apart from one that was deleted
+ * or lost, so a failing read ALWAYS starts fresh, not only on a genuine first turn.
+ * An established conversation whose snapshot became unreadable would also restart
+ * with no history. That matches the SDK's own `NoSuchKey → null` handling and the
+ * local `FileBucketSnapshotStorage`, so it is consistent, not a regression — the
+ * "first turn" framing describes the motivating case, not a guarantee that an
+ * existing snapshot is immune to a fresh start if it cannot be read.
  */
 export class ResilientSnapshotStorage implements SnapshotStorage {
 	constructor(
 		private readonly inner: SnapshotStorage,
-		private readonly warn: (message: string, cause: unknown) => void,
+		/**
+		 * Logs a tolerated read-path error at `error` level. Receives the human message, the
+		 * flattened {@link ReadErrorShape} (so the concrete S3 error is captured even though it
+		 * rides on a non-enumerable `.cause`), and the raw cause for full-fidelity inspection.
+		 */
+		private readonly logRead: (message: string, shape: ReadErrorShape, cause: unknown) => void,
 	) {}
+
+	private freshStart(path: 'snapshot' | 'manifest', sessionId: string, cause: unknown): void {
+		const shape = readErrorShape(cause);
+		const subject = path === 'snapshot' ? 'session snapshot' : 'snapshot manifest';
+		const message = shape.looksMissing
+			? `No ${subject} found for ${sessionId}; starting a fresh session.`
+			: `Could not read ${subject} for ${sessionId} (unexpected read error); starting a fresh session anyway to avoid crashing the turn.`;
+		this.logRead(message, shape, cause);
+	}
 
 	async loadSnapshot(params: { location: SnapshotLocation; snapshotId?: string }): Promise<Snapshot | null> {
 		try {
 			return await this.inner.loadSnapshot(params);
 		} catch (cause) {
-			if (!isMissingObjectError(cause)) {
-				this.warn(`Failed to read session snapshot for ${params.location.sessionId}. Underlying error:`, cause);
-				throw cause;
-			}
-			this.warn(
-				`No session snapshot found for ${params.location.sessionId}; starting a fresh session. Underlying error:`,
-				cause,
-			);
+			// Any read failure on the pre-write path means there is nothing to restore — start
+			// fresh rather than crash the first turn. The concrete error shape is captured at
+			// error level either way (expected miss vs. unexpected fault worded distinctly).
+			this.freshStart('snapshot', params.location.sessionId, cause);
 			return null;
 		}
 	}
 
 	/**
-	 * Same 404-only fallback as {@link loadSnapshot}. The symmetry is deliberate and safe:
-	 * Strands' `SessionManager` never calls `loadManifest` — the deployed agent's restore
-	 * path is `_onAgentInitialized → restoreSnapshot → loadSnapshot` only, and no SDK code
-	 * path reads the manifest (it is interface surface, not a runtime caller). So a non-404
-	 * manifest read failure cannot abort a turn the way a `loadSnapshot` one could, and
-	 * narrowing both identically keeps the two read paths consistent without reintroducing
-	 * the first-turn crash via the manifest. Should a future SDK start reading the manifest
-	 * on the first turn, revisit whether it needs a broader (non-404) fallback here — the
-	 * `SessionManager does not read the manifest on a fresh-session restore` parity test in
-	 * index.test.ts pins this assumption and fails loudly if an SDK bump breaks it.
+	 * Same broad read-path fallback as {@link loadSnapshot}. The symmetry is deliberate:
+	 * Strands' `SessionManager` restores a fresh session via `loadSnapshot` alone and does
+	 * not read the manifest (the `SessionManager does not read the manifest on a fresh-session
+	 * restore` parity test in index.test.ts pins this), so narrowing the manifest read any
+	 * more tightly than the snapshot read would buy nothing while risking a different first-turn
+	 * crash path if that assumption ever changes. A manifest read is diagnostic rather than
+	 * turn-critical, which makes an any-error fresh start on it strictly safe.
 	 */
 	async loadManifest(params: { location: SnapshotLocation }): Promise<SnapshotManifest> {
 		try {
 			return await this.inner.loadManifest(params);
 		} catch (cause) {
-			if (!isMissingObjectError(cause)) {
-				this.warn(`Failed to read snapshot manifest for ${params.location.sessionId}. Underlying error:`, cause);
-				throw cause;
-			}
-			this.warn(
-				`No snapshot manifest found for ${params.location.sessionId}; treating it as empty. Underlying error:`,
-				cause,
-			);
+			this.freshStart('manifest', params.location.sessionId, cause);
 			return freshManifest();
 		}
 	}
@@ -173,12 +205,17 @@ export class ResilientSnapshotStorage implements SnapshotStorage {
  * Builds the deployed Agent's snapshot storage, pinning S3Storage to the Lambda
  * execution region (`AWS_REGION`) so non-us-east-1 deploys use the correct regional
  * endpoint (#120), and wrapping it in {@link ResilientSnapshotStorage} so a first
- * turn starts fresh instead of crashing when no snapshot exists yet. The agent's
- * `log` is threaded in so the wrapper's fresh-start and rethrow diagnostics flow
- * through bb-logger alongside the rest of the agent's structured warnings, not raw
- * `console.warn`. `S3StorageImpl` is injectable so tests can assert the resulting
- * config and the fresh-start behaviour without depending on S3Storage/AWS SDK
- * internals; production uses the real one.
+ * turn starts fresh instead of crashing when the snapshot cannot be read. The agent's
+ * `log` is threaded in so the wrapper's diagnostics flow through bb-logger alongside
+ * the rest of the agent's structured output. The tolerated read error is logged at
+ * `error` level — the deployed agent's default log level is `error`, so a `warn` would
+ * be dropped and the first real occurrence (the shape issue tracking needs) would never
+ * surface — with the deepest cause's `name`, `httpStatusCode` and `requestId` lifted out
+ * of the non-enumerable `.cause` and placed as top-level structured fields, since
+ * bb-logger otherwise serializes only the outer `SessionError`'s name/message/stack.
+ * `S3StorageImpl` is injectable so tests can assert the resulting config and the
+ * fresh-start behaviour without depending on S3Storage/AWS SDK internals; production
+ * uses the real one.
  */
 export function createDeployedSnapshotStorage(
 	bucket: FileBucket,
@@ -187,7 +224,14 @@ export function createDeployedSnapshotStorage(
 ): SnapshotStorage {
 	return new ResilientSnapshotStorage(
 		new S3StorageImpl({ bucket: bucket.fullId, region: process.env.AWS_REGION }),
-		(message, cause) => log.warn(message, { cause }),
+		(message, shape, cause) =>
+			log.error(message, {
+				s3ErrorName: shape.name,
+				httpStatusCode: shape.httpStatusCode,
+				requestId: shape.requestId,
+				looksMissing: shape.looksMissing,
+				cause,
+			}),
 	);
 }
 

@@ -2313,12 +2313,13 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 	});
 
 	// A first turn starts fresh: no snapshot exists yet, so the deployed storage must
-	// not let a MISSING snapshot crash the turn. S3Storage only maps NoSuchKey/
-	// NoSuchBucket to null; a missing object that surfaces as NotFound or an HTTP 404
-	// is instead rethrown as SessionError, which the ResilientSnapshotStorage wrapper
-	// recognises as "no snapshot yet" on the read paths. The fallback is NARROW: a
-	// non-404 fault (a 403 permission gap, a transient 5xx) is rethrown so an
-	// established conversation's persisted state is never silently discarded.
+	// not let an unreadable snapshot crash the turn. S3Storage maps NoSuchKey/
+	// NoSuchBucket to null, but a missing object can also surface as NotFound, a bare
+	// 404, or — per the originating issue's own source analysis — an AccessDenied/5xx/
+	// regional-endpoint shape, all rethrown as SessionError. The ResilientSnapshotStorage
+	// wrapper treats ANY read failure on the pre-write path as "nothing to restore" and
+	// starts fresh, capturing the concrete error shape at error level either way. Write/
+	// delete/list stay strict so a real persistence fault still surfaces.
 	describe('first-turn snapshot read is resilient', () => {
 		const location = { sessionId: 'sess-1', scope: 'agent', scopeId: 'a' } as const;
 
@@ -2344,20 +2345,24 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 			};
 		}
 
-		function deployedStorage(error: Error, warn: (message: string, cause: unknown) => void) {
+		// The log callback the wrapper now receives: (message, shape, cause) at error level.
+		type ReadLog = { message: string; shape: { name?: string; httpStatusCode?: number; requestId?: string; looksMissing: boolean }; cause: unknown };
+
+		function deployedStorage(error: Error, logRead: (message: string, shape: ReadLog['shape'], cause: unknown) => void) {
 			const bucket = new FileBucket(new Scope('test-s3-resilient'), 'sn');
-			// Mirror createDeployedSnapshotStorage, but inject the throwing impl AND a warn spy.
-			return new ResilientSnapshotStorage(new (throwingStorage(error))({ bucket: bucket.fullId }), warn);
+			// Mirror createDeployedSnapshotStorage, but inject the throwing impl AND a log spy.
+			return new ResilientSnapshotStorage(new (throwingStorage(error))({ bucket: bucket.fullId }), logRead);
 		}
 
 		// S3Storage wraps a GetObject failure as `new SessionError('S3 error reading <key>', { cause })`
 		// — so the raw AWS error arrives on `.cause`, set via the Error options (NON-enumerable),
-		// exactly as `isMissingObjectError` must handle it on the real wire error.
+		// exactly as the wrapper must flatten it on the real wire error. requestId rides in $metadata
+		// too (a real SDK error carries one) so we can assert it is surfaced for diagnosis.
 		function rawS3Error(name: string, httpStatusCode?: number): Error {
 			const raw = new Error(name);
 			raw.name = name;
 			if (httpStatusCode !== undefined) {
-				Object.defineProperty(raw, '$metadata', { value: { httpStatusCode }, enumerable: false });
+				Object.defineProperty(raw, '$metadata', { value: { httpStatusCode, requestId: 'req-abc' }, enumerable: false });
 			}
 			return raw;
 		}
@@ -2367,53 +2372,86 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 			return wrapper;
 		}
 
-		test('loadSnapshot returns null (fresh start) when the snapshot is MISSING (404), logging the cause', async () => {
-			const warnings: { message: string; cause: unknown }[] = [];
+		test('loadSnapshot returns null (fresh start) when the snapshot is MISSING (404), logging the cause and its shape', async () => {
+			const logs: ReadLog[] = [];
 			const cause = wrapped('sess-1/.../snapshot_latest.json', 'NotFound', 404);
-			const storage = deployedStorage(cause, (message, c) => warnings.push({ message, cause: c }));
+			const storage = deployedStorage(cause, (message, shape, c) => logs.push({ message, shape, cause: c }));
 
 			const loaded = await storage.loadSnapshot({ location });
 
 			assert.strictEqual(loaded, null, 'a missing first-turn snapshot must start fresh, not throw');
-			assert.strictEqual(warnings.length, 1, 'the underlying S3 error must be logged for diagnosis');
-			assert.strictEqual(warnings[0].cause, cause, 'the real cause is passed to the logger, not swallowed');
+			assert.strictEqual(logs.length, 1, 'the underlying S3 error must be logged for diagnosis');
+			assert.strictEqual(logs[0].cause, cause, 'the real cause is passed to the logger, not swallowed');
+			assert.strictEqual(logs[0].shape.name, 'NotFound', 'the deepest error name is flattened out of the non-enumerable cause');
+			assert.strictEqual(logs[0].shape.httpStatusCode, 404, 'the httpStatusCode is flattened for diagnosis');
+			assert.strictEqual(logs[0].shape.requestId, 'req-abc', 'the requestId is flattened so the occurrence is traceable');
+			assert.strictEqual(logs[0].shape.looksMissing, true, 'a 404 is classified as a missing object');
+			assert.match(logs[0].message, /No session snapshot found/, 'an expected miss is worded as such');
 		});
 
 		test('loadManifest returns an empty manifest when the manifest is MISSING (404)', async () => {
-			const warnings: { message: string; cause: unknown }[] = [];
-			const storage = deployedStorage(wrapped('sess-1/.../manifest.json', 'NotFound', 404), (message, c) => warnings.push({ message, cause: c }));
+			const logs: ReadLog[] = [];
+			const storage = deployedStorage(wrapped('sess-1/.../manifest.json', 'NotFound', 404), (message, shape, c) => logs.push({ message, shape, cause: c }));
 
 			const manifest = await storage.loadManifest({ location });
 
 			assert.strictEqual(manifest.schemaVersion, '1.0', 'a missing manifest reads as a fresh empty one');
-			assert.strictEqual(warnings.length, 1);
+			assert.strictEqual(logs.length, 1);
+			assert.strictEqual(logs[0].shape.looksMissing, true);
 		});
 
-		test('loadSnapshot RETHROWS a 403 AccessDenied — a permission gap must not silently wipe an existing conversation', async () => {
-			const warnings: { message: string; cause: unknown }[] = [];
+		test('loadSnapshot STARTS FRESH on a 403 AccessDenied — the real production shape must not crash the first turn — but logs it as unexpected', async () => {
+			const logs: ReadLog[] = [];
 			const cause = wrapped('sess-1/.../snapshot_latest.json', 'AccessDenied', 403);
-			const storage = deployedStorage(cause, (message, c) => warnings.push({ message, cause: c }));
+			const storage = deployedStorage(cause, (message, shape, c) => logs.push({ message, shape, cause: c }));
 
-			await assert.rejects(() => storage.loadSnapshot({ location }), /S3 error reading/, 'a 403 is a real fault, not a missing snapshot');
-			assert.strictEqual(warnings.length, 1, 'the fault is still logged before rethrow');
-			assert.strictEqual(warnings[0].cause, cause);
+			const loaded = await storage.loadSnapshot({ location });
+
+			assert.strictEqual(loaded, null, 'a pre-write read error of any shape means nothing to restore — start fresh, do not crash the turn');
+			assert.strictEqual(logs.length, 1, 'the fault is logged at error level with its concrete shape');
+			assert.strictEqual(logs[0].shape.name, 'AccessDenied');
+			assert.strictEqual(logs[0].shape.httpStatusCode, 403);
+			assert.strictEqual(logs[0].shape.looksMissing, false, 'a 403 does not look like a missing object');
+			assert.match(logs[0].message, /unexpected read error/, 'an unexpected shape is worded distinctly so a real recurring fault stays visible');
 		});
 
-		test('loadSnapshot RETHROWS a transient 5xx — crash-and-retry preserves the persisted snapshot', async () => {
+		test('loadSnapshot STARTS FRESH on a transient 5xx — a pre-write read has nothing to restore regardless of shape', async () => {
+			const logs: ReadLog[] = [];
 			const cause = wrapped('sess-1/.../snapshot_latest.json', 'ServiceUnavailable', 503);
-			const storage = deployedStorage(cause, () => {});
+			const storage = deployedStorage(cause, (message, shape, c) => logs.push({ message, shape, cause: c }));
 
-			await assert.rejects(() => storage.loadSnapshot({ location }), /S3 error reading/, 'a transient 5xx must surface so the turn can retry against the real snapshot');
+			const loaded = await storage.loadSnapshot({ location });
+
+			assert.strictEqual(loaded, null, 'a 5xx on the pre-write read starts fresh rather than crashing the first turn');
+			assert.strictEqual(logs[0].shape.looksMissing, false);
+			assert.match(logs[0].message, /unexpected read error/);
 		});
 
-		test('loadManifest RETHROWS a non-404 fault', async () => {
+		test('loadManifest STARTS FRESH on a non-404 fault, logging the shape', async () => {
+			const logs: ReadLog[] = [];
 			const cause = wrapped('sess-1/.../manifest.json', 'AccessDenied', 403);
-			const storage = deployedStorage(cause, () => {});
+			const storage = deployedStorage(cause, (message, shape, c) => logs.push({ message, shape, cause: c }));
 
-			await assert.rejects(() => storage.loadManifest({ location }), /S3 error reading/);
+			const manifest = await storage.loadManifest({ location });
+
+			assert.strictEqual(manifest.schemaVersion, '1.0', 'a manifest read fault starts fresh — the manifest is diagnostic, not turn-critical');
+			assert.strictEqual(logs[0].shape.name, 'AccessDenied');
+			assert.strictEqual(logs[0].shape.looksMissing, false);
 		});
 
-		test('a write failure still surfaces — only a MISSING-snapshot read degrades', async () => {
+		test('a non-AWS read error (corrupt JSON) still starts fresh and logs an empty shape', async () => {
+			const logs: ReadLog[] = [];
+			const storage = deployedStorage(new Error('Unexpected token < in JSON'), (message, shape, c) => logs.push({ message, shape, cause: c }));
+
+			const loaded = await storage.loadSnapshot({ location });
+
+			assert.strictEqual(loaded, null, 'any read failure means nothing to restore');
+			assert.strictEqual(logs[0].shape.name, 'Error', 'a plain Error name is still captured');
+			assert.strictEqual(logs[0].shape.httpStatusCode, undefined, 'no $metadata on a non-AWS error');
+			assert.strictEqual(logs[0].shape.looksMissing, false);
+		});
+
+		test('a write failure still surfaces — only a pre-write READ degrades to a fresh start', async () => {
 			const storage = deployedStorage(new Error('AccessDenied'), () => {});
 			const snapshot: Snapshot = { scope: 'agent', schemaVersion: '1.0', createdAt: new Date().toISOString(), data: {}, appData: {} };
 			await assert.rejects(
@@ -2423,12 +2461,13 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 			);
 		});
 
-		// Pins the SDK-internal assumption the loadManifest narrowing rests on: Strands'
+		// Pins the SDK-internal assumption the manifest read path rests on: Strands'
 		// SessionManager restores a fresh session via loadSnapshot ALONE and never reads
-		// the manifest. If a future SDK bump starts calling loadManifest on a fresh
-		// session, the 404-only manifest narrowing could rethrow a non-404 fault and
-		// reintroduce the first-turn crash via a different path — so this test fails
-		// loudly the moment that assumption breaks, instead of leaving it a latent risk.
+		// the manifest. The manifest read is therefore diagnostic, not turn-critical, which
+		// is what makes its any-error fresh-start safe. If a future SDK bump starts calling
+		// loadManifest on a fresh session, revisit whether the manifest read path needs
+		// different handling — so this test fails loudly the moment that assumption breaks,
+		// instead of leaving it a latent risk.
 		test('Strands SessionManager does not read the manifest on a fresh-session restore', async () => {
 			const calls: string[] = [];
 			const spyStorage: SnapshotStorage = {
@@ -2465,11 +2504,12 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 			assert.ok(calls.includes('loadSnapshot'), 'the restore path reads the snapshot');
 			assert.ok(
 				!calls.includes('loadManifest'),
-				`SessionManager must not read the manifest on a fresh-session restore — if this fails, an SDK bump started calling loadManifest and the 404-only manifest narrowing in ResilientSnapshotStorage needs revisiting (observed calls: ${calls.join(', ')})`,
+				`SessionManager must not read the manifest on a fresh-session restore — if this fails, an SDK bump started calling loadManifest and the manifest read path in ResilientSnapshotStorage needs revisiting (observed calls: ${calls.join(', ')})`,
 			);
 		});
 
-		test('createDeployedSnapshotStorage routes diagnostics through the agent logger, not console.warn', async () => {
+		test('createDeployedSnapshotStorage routes diagnostics through the agent logger at error level, not console.warn, with the flattened shape', async () => {
+			const errorCalls: { message: string; context?: Record<string, unknown> }[] = [];
 			const warnCalls: { message: string; context?: Record<string, unknown> }[] = [];
 			const log: ChildLogger = {
 				debug() {},
@@ -2477,7 +2517,9 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 				warn(message, context) {
 					warnCalls.push({ message, context });
 				},
-				error() {},
+				error(message, context) {
+					errorCalls.push({ message, context });
+				},
 				child: () => log,
 			};
 			// Inject an S3Storage stand-in whose first-turn read misses (404) so the wrapper logs.
@@ -2502,8 +2544,17 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 			const loaded = await storage.loadSnapshot({ location });
 
 			assert.strictEqual(loaded, null, 'a missing snapshot still starts fresh');
-			assert.strictEqual(warnCalls.length, 1, 'the warning went through the injected logger');
-			assert.ok(warnCalls[0].context && 'cause' in warnCalls[0].context, 'the underlying cause rides in the structured log context');
+			// Logged at ERROR level (above the deployed agent's default error log level, so it
+			// is actually emitted) — not warn, which would be dropped.
+			assert.strictEqual(errorCalls.length, 1, 'the diagnostic went through the injected logger at error level');
+			assert.strictEqual(warnCalls.length, 0, 'nothing is logged at warn (it would be dropped at the default error level)');
+			const ctx = errorCalls[0].context;
+			assert.ok(ctx, 'structured context is present');
+			assert.ok('cause' in ctx, 'the underlying cause rides in the structured log context');
+			assert.strictEqual(ctx.s3ErrorName, 'NotFound', 'the deep-cause name is surfaced as a top-level field');
+			assert.strictEqual(ctx.httpStatusCode, 404, 'the httpStatusCode is surfaced as a top-level field');
+			assert.strictEqual(ctx.requestId, 'req-abc', 'the requestId is surfaced so the occurrence is traceable');
+			assert.strictEqual(ctx.looksMissing, true, 'the classification is surfaced');
 		});
 	});
 });
