@@ -101,6 +101,30 @@ export type {
  */
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
 /**
+ * **`Compute` — choose where a workload runs by stating its type.**
+ *
+ * Construct a `Compute` with an explicit `type` (`'serverless'` | `'container'`)
+ * and that type's options; Blocks maps the type to the AWS service that backs it
+ * (`serverless` → Lambda, `container` → Fargate) — the service name never appears
+ * in your code. Options are a discriminated union on `type`, so an attribute that
+ * doesn't apply to the chosen type is a compile error. Hand the result to a
+ * handler-bearing block via its `compute` option (e.g. `AsyncJob`); omit it and
+ * the workload uses the app default (serverless).
+ *
+ * Package: `@aws-blocks/bb-compute`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
+export type {
+	ComputeOptions,
+	ComputeType,
+	ContainerComputeOptions,
+	ContainerScaling,
+	ContainerSize,
+	ScalingSignal,
+	ServerlessComputeOptions,
+} from '@aws-blocks/core';
+/**
  * **Username/password authentication with JWT sessions.**
  *
  * Use when you need simple credential-based auth for prototypes, internal

@@ -41,7 +41,24 @@ let work;
 function shutdown() {
 	for (const c of children) killTree(c.pid);
 	if (work) {
-		rmSync(work, { recursive: true, force: true });
+		// Best-effort: killTree() signals the registry child's group with an async
+		// SIGKILL, so it may still be flushing its npm cache into `work/` when we
+		// get here. `rmSync({recursive, force})` ignores *missing* paths but still
+		// throws ENOTEMPTY if a new entry appears mid-traversal — a cleanup race
+		// that must not fail the suite, since the process is exiting and CI
+		// discards the runner regardless. Retry once after a short grace period,
+		// then give up silently.
+		for (let attempt = 0; attempt < 2; attempt++) {
+			try {
+				rmSync(work, { recursive: true, force: true });
+				break;
+			} catch {
+				// Synchronous grace delay (shutdown() runs from sync signal
+				// handlers, so we can't await): give the killed registry child a
+				// moment to release its handles before the retry.
+				if (attempt === 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+			}
+		}
 		work = undefined;
 	}
 }

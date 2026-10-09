@@ -2,9 +2,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import type { ComputeType } from '../../common/compute-capabilities.js';
 import type { ScopeOptions } from '../../common/index.js';
 import { Scope } from '../index.js';
 import { registerCompute } from './compute-registry.js';
+
+/**
+ * Anything that can be handed to a workload's `compute` option: a concrete
+ * compute (which resolves to itself) or a Building Block that owns one (the
+ * public {@link Compute} block, whose `resolve()` returns its backing). A
+ * consumer (`AsyncJob`, `CronJob`, scope-level assignment) depends on this one
+ * interface and calls `resolve()` to get the concrete {@link ComputeBase} to
+ * wire against — so it never cares whether it was handed the public block or a
+ * raw backing.
+ *
+ * The type parameter `K` carries the compute *kind* (`'serverless'` |
+ * `'container'`) at the type level, so a workload's options can be
+ * **compute-conditional** — e.g. `AsyncJob` exposes `maxConcurrencyPerCPU` only
+ * when `K` is `'container'`, making it a compile error on a serverless compute
+ * rather than a silently-ignored property. Defaults to the full `ComputeType`
+ * union when the kind isn't tracked.
+ */
+export interface ComputeProvider<K extends ComputeType = ComputeType> {
+	/**
+	 * Resolve to the concrete compute to run on. A {@link ComputeBase} returns
+	 * itself; a wrapper block returns the backing compute it owns. The result's
+	 * `type` is narrowed to this provider's kind `K`.
+	 */
+	resolve(): ComputeBase & { readonly type: K };
+}
 
 /**
  * Base class for a Blocks *compute* — a runtime that executes handler code
@@ -27,15 +53,48 @@ import { registerCompute } from './compute-registry.js';
  * The abstract base lives in core (a framework primitive); concrete computes
  * live in their own packages (e.g. `LambdaCompute` in `@aws-blocks/bb-lambda-compute`).
  *
+ * A `ComputeBase` is itself a {@link ComputeProvider} that provides itself, so a
+ * raw backing is interchangeable with the public `Compute` block wherever a
+ * `ComputeProvider` is expected.
+ *
  * @internal Not exported from the package's public entry points.
  */
-export abstract class Compute extends Scope {
+export abstract class ComputeBase extends Scope implements ComputeProvider {
 	/**
 	 * API namespaces assigned to run on this compute — recorded so request
 	 * routing can map a namespace to the compute that hosts it. Currently
 	 * unpopulated (no compute assignment surface yet).
 	 */
 	readonly namespaces: string[] = [];
+
+	/**
+	 * The compute type — `'serverless'` (per-invocation function) or `'container'`
+	 * (long-running task). Set by the concrete subclass and read by delivery logic
+	 * that branches on the runtime model (e.g. AsyncJob wires a native SQS event
+	 * source on serverless but leaves a container to self-poll). Matches the
+	 * `type` discriminant customers state in `ComputeOptions`, so the name is
+	 * consistent from the public options through to the resolved instance.
+	 * Defaults to `'serverless'` so a subclass that doesn't set it keeps today's
+	 * behavior.
+	 */
+	readonly type: ComputeType = 'serverless';
+
+	/**
+	 * A concrete compute resolves to itself — so a `ComputeBase` satisfies
+	 * {@link ComputeProvider} and can be passed anywhere a provider is accepted,
+	 * interchangeably with the public `Compute` block.
+	 */
+	resolve(): ComputeBase {
+		return this;
+	}
+
+	/**
+	 * The compute's vCPU count, when it has one (a container's `size.vcpu`). Read
+	 * by delivery logic that scales a per-vCPU value — notably AsyncJob's
+	 * `maxConcurrencyPerCPU`, which multiplies by this to get per-instance
+	 * concurrency. `undefined` for a serverless compute, which has no vCPU knob.
+	 */
+	readonly vcpu?: number;
 
 	/**
 	 * Whether tracing has been enabled on this compute — flipped by
@@ -78,6 +137,15 @@ export abstract class Compute extends Scope {
 		this.tracerEnabled = true;
 		this.applyTracing();
 	}
+
+	/**
+	 * Finalize-time hook, called once per registered compute by `create()` after
+	 * the backend import — the point where cross-cutting state (e.g. which queues a
+	 * container drains) is fully known. Default no-op; a concrete compute overrides
+	 * it to wire things that can't be built in its constructor (e.g. queue-depth
+	 * autoscaling). Ordering-independent with the other finalize steps.
+	 */
+	finalize(): void {}
 
 	/**
 	 * Turn on this compute's active tracing (e.g. X-Ray) and grant its role the

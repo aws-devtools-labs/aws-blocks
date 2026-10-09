@@ -5,13 +5,14 @@
 ```ts
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 // @public (undocumented)
-export class AsyncJob<T = unknown> extends Scope {
-    constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>);
+export class AsyncJob<T = unknown, C extends ComputeProvider = ComputeProvider<'serverless'>> extends Scope {
+    constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T, C>);
     getStatus(jobId: string): Promise<AsyncJobStatus | null>;
     // @internal
     protected log: ChildLogger;
@@ -44,16 +45,20 @@ export const AsyncJobErrors: {
     readonly UnsupportedCompute: "UnsupportedComputeException";
 };
 
+// Warning: (ae-forgotten-export) The symbol "ContainerOnlyJobOptions" needs to be exported by the entry point index.aws.d.ts
+//
 // @public
-export interface AsyncJobOptions<T> {
-    batchSize?: number;
+export type AsyncJobOptions<T, C extends ComputeProvider = ComputeProvider<'serverless'>> = {
     handler: (payload: T, context: AsyncJobContext) => Promise<void>;
-    logger?: ChildLogger;
-    maxBatchingWindowSeconds?: number;
-    maxRetries?: number;
     schema?: StandardSchemaV1<T>;
+    maxRetries?: number;
+    batchSize?: number;
+    maxBatchingWindowSeconds?: number;
     trackStatus?: boolean;
-}
+    logger?: ChildLogger;
+    compute?: C;
+    timeoutSeconds?: number;
+} & ContainerOnlyJobOptions<C>;
 
 // @public
 export type AsyncJobState = 'queued' | 'processing' | 'complete' | 'failed';

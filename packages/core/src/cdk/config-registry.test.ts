@@ -15,7 +15,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
-import { Compute } from './compute/compute.js';
+import { ComputeBase } from './compute/compute.js';
 import { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
 
@@ -28,7 +28,7 @@ afterEach(() => {
 // A real app's compute comes from @aws-blocks/bb-lambda-compute, which core's own tests can't
 // depend on. This is the same shape: a Compute that owns a real Lambda function and injects config
 // via addEnvironment — enough for finalizeConfigRegistry to stamp BLOCKS_CONFIG_BUCKET/KEY on it.
-class TestCompute extends Compute {
+class TestCompute extends ComputeBase {
 	readonly fn: cdk.aws_lambda.Function;
 
 	constructor(scope: Construct, id: string) {
@@ -61,7 +61,7 @@ class TestCompute extends Compute {
 function stackWithCompute(id: string): {
 	stack: cdk.Stack;
 	role: cdk.aws_iam.Role;
-	computes: readonly Compute[];
+	computes: readonly ComputeBase[];
 } {
 	const app = new cdk.App();
 	const stack = new cdk.Stack(app, id);

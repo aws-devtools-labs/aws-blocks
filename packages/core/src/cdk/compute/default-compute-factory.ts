@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type * as cdk from 'aws-cdk-lib';
-import type { Compute } from './compute.js';
+import type { ComputeBase } from './compute.js';
 import type { BlocksStack } from '../index.js';
 import type { BlocksBackend } from '../blocks-backend.js';
 
@@ -16,7 +16,7 @@ import type { BlocksBackend } from '../blocks-backend.js';
  *
  * @internal
  */
-export interface LambdaShapedCompute extends Compute {
+export interface LambdaShapedCompute extends ComputeBase {
 	readonly fn: cdk.aws_lambda_nodejs.NodejsFunction;
 	readonly apiGateway: cdk.aws_apigateway.RestApi;
 	readonly apiUrl: string;
@@ -35,4 +35,4 @@ export interface LambdaShapedCompute extends Compute {
  *
  * @internal
  */
-export type DefaultComputeFactory = (root: BlocksStack | BlocksBackend) => Compute;
+export type DefaultComputeFactory = (root: BlocksStack | BlocksBackend) => ComputeBase;

@@ -13,7 +13,7 @@ import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { BlocksBackend } from './blocks-backend.js';
-import { Compute } from './compute/compute.js';
+import { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 import { BlocksPresets, BlocksStack, Scope } from './index.js';
@@ -25,7 +25,7 @@ import { BlocksPresets, BlocksStack, Scope } from './index.js';
 // and synth-shape assertions have something real to resolve to. It is passed to
 // each create() via the internal `defaultComputeFactory` option (see makeStack /
 // makeBackend), exactly as @aws-blocks/blocks injects LambdaCompute.
-class StubLambdaCompute extends Compute {
+class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
 	readonly apiGateway: apigateway.RestApi;
 	readonly apiUrl: string;

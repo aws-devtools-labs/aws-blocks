@@ -5,7 +5,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import type { Construct } from 'constructs';
-import type { Compute } from './compute/compute.js';
+import type { ComputeBase } from './compute/compute.js';
 import { getBlocksRoot } from './root-registry.js';
 
 const REGISTRY_KEY = Symbol.for('BLOCKS_CONFIG_REGISTRY');
@@ -120,7 +120,7 @@ function ensureConfigBucket(scope: Construct): s3.Bucket {
 export function finalizeConfigRegistry(
 	root: Construct,
 	executionRole: cdk.aws_iam.IRole,
-	computes: readonly Compute[],
+	computes: readonly ComputeBase[],
 ): void {
 	const registry = getRegistry(getBlocksRoot(root));
 
