@@ -23,10 +23,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const cliPath = join(__dirname, 'generate-spec-cli.js');
 
 function makeBackend(dir: string, ext: 'ts' | 'js'): string {
-	// Copy the marker module next to the foundation so a relative import
-	// resolves through both ESM and CJS loaders.
+	// Copy the ApiNamespace module and its runtime siblings next to the backend
+	// so its relative imports resolve through both the ESM and CJS loaders.
+	// `api.js` imports `constants.js` and `raw-route.js` at runtime (the latter to
+	// register the namespace's routing entry), and `raw-route.js` in turn imports
+	// `constants.js`, so all three must be present.
 	const distDir = join(__dirname, '..');
-	copyFileSync(join(distDir, 'api.js'), join(dir, 'api.js'));
+	for (const file of ['api.js', 'constants.js', 'raw-route.js']) {
+		copyFileSync(join(distDir, file), join(dir, file));
+	}
 
 	const indexPath = join(dir, `index.${ext}`);
 	writeFileSync(indexPath, `

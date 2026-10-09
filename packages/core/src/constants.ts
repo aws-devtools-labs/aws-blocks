@@ -19,6 +19,49 @@ export const BLOCKS_NAMESPACE = '/aws-blocks';
 export const BLOCKS_RPC_PREFIX = '/aws-blocks/api';
 
 /**
+ * Whether a request path targets the RPC endpoint or any namespace under it.
+ *
+ * True for {@link BLOCKS_RPC_PREFIX} itself (the back-compat body-addressed
+ * endpoint) and for every per-namespace path beneath it
+ * (`/aws-blocks/api/{namespace}`). The whole subtree is RPC: dispatch resolves
+ * the namespace from the path (preferred) or the JSON-RPC body (fallback), so a
+ * caller matching against it must treat the prefix and its descendants
+ * identically — e.g. the handler skips RawRoute matching for the entire subtree.
+ *
+ * @param pathname - The request path, without query string.
+ */
+export function isRpcPath(pathname: string): boolean {
+	return pathname === BLOCKS_RPC_PREFIX || pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`);
+}
+
+/**
+ * Extract the API namespace from a per-namespace RPC path, or `undefined` for
+ * the bare {@link BLOCKS_RPC_PREFIX} endpoint.
+ *
+ * The typed client POSTs to `/aws-blocks/api/{namespace}` so a gateway can route
+ * each namespace to the compute that hosts it; this reads that `{namespace}`
+ * segment back out on the server. Only the first segment after the prefix is the
+ * namespace — anything deeper is ignored. Returns `undefined` for the bare
+ * `/aws-blocks/api` path (and a trailing-slash-only variant), where the caller
+ * must fall back to the body's `namespace.method` prefix for back-compat.
+ *
+ * The segment is percent-decoded defensively (matching RawRoute param handling),
+ * falling back to the raw value on malformed encoding.
+ *
+ * @param pathname - The request path, without query string.
+ */
+export function rpcNamespaceFromPath(pathname: string): string | undefined {
+	if (!pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`)) return undefined;
+	const segment = pathname.slice(BLOCKS_RPC_PREFIX.length + 1).split('/')[0];
+	if (!segment) return undefined;
+	try {
+		return decodeURIComponent(segment);
+	} catch {
+		return segment;
+	}
+}
+
+/**
  * Reserved subtree for the auth Building Block's HTTP routes.
  *
  * Like {@link BLOCKS_RPC_PREFIX}, this lives under the reserved `/aws-blocks`

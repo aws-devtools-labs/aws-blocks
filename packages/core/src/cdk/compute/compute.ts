@@ -3,6 +3,7 @@
 
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { ScopeOptions } from '../../common/index.js';
+import type { BlocksThrottling } from '../blocks-defaults.js';
 import { Scope } from '../index.js';
 import { registerCompute } from './compute-registry.js';
 
@@ -31,11 +32,37 @@ import { registerCompute } from './compute-registry.js';
  */
 export abstract class Compute extends Scope {
 	/**
-	 * API namespaces assigned to run on this compute — recorded so request
-	 * routing can map a namespace to the compute that hosts it. Currently
-	 * unpopulated (no compute assignment surface yet).
+	 * API namespaces assigned to run on this compute — recorded (as each
+	 * `ApiNamespace` is constructed) so request routing can map a namespace to the
+	 * compute that hosts it. The shared gateway reads this to add a per-namespace
+	 * route to this compute's function for every non-default compute; namespaces
+	 * on the default compute are served by the gateway's `$default` route and need
+	 * no explicit entry. Populated via the internal `_compute` assignment seam —
+	 * there is no public, customer-facing compute-assignment surface yet.
 	 */
 	readonly namespaces: string[] = [];
+
+	/**
+	 * Optional route-level throttle override for this compute's gateway routes.
+	 * When set, the shared gateway applies it as HTTP API v2 `RouteSettings` on
+	 * each of this compute's explicit per-namespace routes; when `undefined` the
+	 * stage's default throttle applies. Set by a subclass — there is no public,
+	 * customer-facing setter yet (that lands with the compute-assignment release);
+	 * this is only the internal seam.
+	 *
+	 * @internal Read by the shared gateway via {@link routeThrottle}.
+	 */
+	protected _routeThrottle?: BlocksThrottling;
+
+	/**
+	 * Read-only view of {@link _routeThrottle} the shared gateway reads to decide
+	 * this compute's route-level throttle. `undefined` ⇒ inherit the stage default.
+	 *
+	 * @internal
+	 */
+	get routeThrottle(): BlocksThrottling | undefined {
+		return this._routeThrottle;
+	}
 
 	/**
 	 * Whether tracing has been enabled on this compute — flipped by

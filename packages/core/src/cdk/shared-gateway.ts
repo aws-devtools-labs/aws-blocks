@@ -6,7 +6,9 @@ import { Stack } from 'aws-cdk-lib';
 // access-log config; aws-cdk-lib/aws-apigatewayv2 has no v2-specific equivalent.
 import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
 import {
+	type CfnStage,
 	HttpApi,
+	HttpMethod,
 	HttpStage,
 	type IHttpApi,
 	LogGroupLogDestination,
@@ -14,20 +16,31 @@ import {
 } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
+import type { Compute } from './compute/compute.js';
 
 /** Inputs the shared HTTP API v2 gateway is built from. @internal */
 export interface SharedGatewayProps {
 	/**
-	 * The Lambda function the gateway forwards every request to — the stack's
-	 * default compute's `apiHandler()`. The gateway is a dumb catch-all; path
-	 * routing (RPC vs RawRoute) happens inside the function via `matchRoute`.
+	 * Every compute registered on the stack (`getComputes(stack)`), in
+	 * construction order. The gateway builds one Lambda integration per compute
+	 * that serves HTTP (`apiHandler()` defined) and routes each compute's
+	 * namespaces (`Compute.namespaces`) to it; worker-only computes are skipped.
+	 * The {@link defaultCompute} is handled specially (see below), so its entry
+	 * here needs no explicit per-namespace route.
 	 */
-	readonly handler: IFunction;
+	readonly computes: readonly Compute[];
+	/**
+	 * The stack's default compute. Its `apiHandler()` is wired as the HTTP API's
+	 * `$default` catch-all integration, so the RPC root (`/aws-blocks/api`), auth,
+	 * `RawRoute`s, and any namespace assigned to the default compute all reach it
+	 * without an explicit route. Must expose an `apiHandler()` — the shared
+	 * gateway needs an HTTP front door — or construction throws.
+	 */
+	readonly defaultCompute: Compute;
 	/**
 	 * Stack-wide infrastructure defaults. Drives the stage's request throttling
 	 * (`throttling.rateLimit`/`burstLimit`), whether structured JSON access
@@ -54,14 +67,28 @@ export interface SharedGateway {
  * stack's default compute function — replacing the per-compute REST API v1 the
  * compute used to own.
  *
- * The gateway is intentionally a dumb catch-all: a `$default` route forwards
- * **every** method and path (including the root `/`) to the function, and the
- * Lambda handler does the real path routing (`POST /aws-blocks/api` RPC dispatch
- * and `RawRoute` matching). A single `$default` route — rather than
- * `ANY /{proxy+}` — is used precisely because `/{proxy+}` would not match the
- * root path, whereas the old REST proxy tree made the root reachable. This keeps
- * behavior parity with that tree while needing one integration and one invoke
- * permission.
+ * For a single-compute app the gateway is a dumb catch-all: a `$default` route
+ * forwards **every** method and path (including the root `/`) to the default
+ * compute's function, and the Lambda handler does the real path routing
+ * (`POST /aws-blocks/api` RPC dispatch and `RawRoute` matching). A single
+ * `$default` route — rather than `ANY /{proxy+}` — is used precisely because
+ * `/{proxy+}` would not match the root path, whereas the old REST proxy tree made
+ * the root reachable. This keeps behavior parity with that tree while needing one
+ * integration and one invoke permission.
+ *
+ * **Multi-compute fan-out.** When a namespace is assigned to a non-default
+ * compute, the gateway builds one `HttpLambdaIntegration` per such compute and
+ * adds explicit routes (`/aws-blocks/api/{namespace}` plus its `{proxy+}`
+ * subtree, `ANY` method) that forward just that namespace to the compute hosting
+ * it. A more specific route wins over `$default`, so each per-namespace path
+ * reaches ITS function while everything else — the RPC root, auth, raw routes,
+ * and every namespace left on the default compute — still falls through to the
+ * default compute via `$default`. `{namespace}` is a literal path segment (names
+ * are assumed URL-path-safe — they are JS export identifiers — but are not
+ * validated here; a validator belongs with the future compute-assignment surface),
+ * not an API Gateway `{param}`; the `{proxy+}`
+ * subtree is a greedy catch-all for any sub-path, and `ANY` covers POST plus the
+ * OPTIONS preflight.
  *
  * CORS is **not** configured natively on the HTTP API: the framework's allowed
  * origins are regular-expression patterns (so a local dev frontend on any
@@ -80,37 +107,95 @@ export interface SharedGateway {
  * @internal Framework-only; apps reach the gateway via `BlocksStack.gateway`.
  */
 export function createSharedGateway(scope: Construct, props: SharedGatewayProps): SharedGateway {
-	const { handler, defaults } = props;
+	const { computes, defaultCompute, defaults } = props;
 
-	// Reused across the gateway's routes. scopePermissionToRoute: false grants
+	// The default compute's function backs the `$default` catch-all. It is always
+	// a Lambda compute today, so apiHandler() is defined; guard with a clear error
+	// if a worker-only default is ever injected.
+	const defaultHandler = defaultCompute.apiHandler();
+	if (!defaultHandler) {
+		throw new Error(
+			'Default compute exposes no apiHandler() — the shared HTTP API gateway needs an HTTP front door.',
+		);
+	}
+
+	// Reused across the gateway's catch-all. scopePermissionToRoute: false grants
 	// invoke from any route of this API (one broad permission) rather than one
 	// per route — the documented pattern for a single function reused across a
-	// catch-all, and all we need since there is a single `$default` route today.
-	const integration = new HttpLambdaIntegration('BlocksIntegration', handler, {
+	// catch-all.
+	const defaultIntegration = new HttpLambdaIntegration('BlocksIntegration', defaultHandler, {
 		payloadFormatVersion: PayloadFormatVersion.VERSION_2_0,
 		scopePermissionToRoute: false,
 	});
 
 	// createDefaultStage: false — we create the `$default` stage explicitly below
 	// so it can carry throttling + access logging (HttpApi props expose neither).
-	// defaultIntegration wires the `$default` catch-all route to the function.
+	// defaultIntegration wires the `$default` catch-all route to the default
+	// compute's function.
 	const httpApi = new HttpApi(scope, 'SharedHttpApi', {
 		apiName: 'Blocks API',
 		createDefaultStage: false,
-		defaultIntegration: integration,
+		defaultIntegration,
 	});
 
-	// Grant API Gateway permission to invoke the function from the `$default`
-	// route. CDK's `HttpLambdaIntegration` (scopePermissionToRoute: false) grants a
-	// REST-style `{apiId}/*/*/*` (stage/method/path) source ARN, which does NOT
-	// match the HTTP API `$default` route's invoke ARN — so without this, every
-	// request (the whole app, since everything hits `$default`) gets a 500 with the
-	// Lambda never invoked. `{apiId}/*/*` covers `$default`. This is a deploy-only
-	// failure the local dev server cannot surface — verified against a real sandbox.
-	handler.addPermission('BlocksHttpApiDefaultInvoke', {
+	// Grant API Gateway permission to invoke the default compute's function from
+	// the `$default` route. CDK's `HttpLambdaIntegration` (scopePermissionToRoute:
+	// false) grants a REST-style `{apiId}/*/*/*` (stage/method/path) source ARN,
+	// which does NOT match the `$default` route's invoke ARN — so without this,
+	// every request that falls through to `$default` (the RPC root, raw routes, and
+	// any namespace on the default compute) gets a 500 with the Lambda never
+	// invoked. `{apiId}/*/*` covers `$default` (and explicit routes too). This is a
+	// deploy-only failure the local dev server cannot surface — verified against a
+	// real sandbox deploy.
+	defaultHandler.addPermission('BlocksHttpApiDefaultInvoke', {
 		principal: new ServicePrincipal('apigateway.amazonaws.com'),
 		sourceArn: Stack.of(scope).formatArn({ service: 'execute-api', resource: httpApi.apiId, resourceName: '*/*' }),
 	});
+
+	// Fan out: route each NON-default compute's namespaces to its own function.
+	// The default compute needs no explicit route — `$default` already serves its
+	// namespaces (plus the RPC root, auth, and raw routes). Per-route throttle
+	// overrides (if any compute carries one) accumulate here and land on the
+	// CfnStage below, keyed by route key (`${method} ${path}`). The CfnStage
+	// `routeSettings` property is untyped (`any`) and emitted verbatim — no
+	// camelCase→PascalCase mapping — so these use the CloudFormation key casing.
+	const routeSettings: Record<string, { ThrottlingRateLimit: number; ThrottlingBurstLimit: number }> = {};
+	for (const compute of computes) {
+		if (compute === defaultCompute) continue;
+		const handler = compute.apiHandler();
+		// Skip worker-only computes (no HTTP ingress) and HTTP computes that host
+		// no namespace — neither contributes a route, so neither needs an integration.
+		if (!handler || compute.namespaces.length === 0) continue;
+
+		// One integration per compute, reused across all of its namespace routes
+		// (CDK caches the CfnIntegration on first bind, so this is a single resource).
+		const integration = new HttpLambdaIntegration(`BlocksIntegration-${compute.id}`, handler, {
+			payloadFormatVersion: PayloadFormatVersion.VERSION_2_0,
+			scopePermissionToRoute: false,
+		});
+
+		// TODO(compute-assignment): `routeThrottle` is read here but no public setter
+		// exists yet (and a non-default compute only has namespaces once the
+		// compute-assignment surface ships), so this per-route throttle path is
+		// unreachable in production today. When that surface lands, add a public
+		// `throttling` option that sets `_routeThrottle`, and verify `RouteSettings`
+		// appears in the synthesized CFN for a compute carrying a throttle.
+		const throttle = compute.routeThrottle;
+		for (const name of compute.namespaces) {
+			// Literal path segment (not an API Gateway `{param}`): the base path is
+			// the namespace's RPC endpoint, the `{proxy+}` subtree catches any
+			// sub-path under it, and ANY covers POST + OPTIONS preflight.
+			for (const path of [`${BLOCKS_RPC_PREFIX}/${name}`, `${BLOCKS_RPC_PREFIX}/${name}/{proxy+}`]) {
+				httpApi.addRoutes({ path, methods: [HttpMethod.ANY], integration });
+				if (throttle) {
+					routeSettings[`${HttpMethod.ANY} ${path}`] = {
+						ThrottlingRateLimit: throttle.rateLimit,
+						ThrottlingBurstLimit: throttle.burstLimit,
+					};
+				}
+			}
+		}
+	}
 
 	// Structured JSON access logging on the stage, when the stack-wide default
 	// enables it. The log group follows defaults.removalPolicy (production RETAIN
@@ -159,6 +244,13 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 				}
 			: {}),
 	});
+
+	// Apply any per-compute route-level throttle overrides collected above. The L2
+	// HttpStage exposes only the stage-wide default throttle, so route-level
+	// settings go on the underlying CfnStage directly (keyed by route key).
+	if (Object.keys(routeSettings).length > 0) {
+		(stage.node.defaultChild as CfnStage).routeSettings = routeSettings;
+	}
 
 	// `stage.url` for the `$default` stage ends in `/` with no stage segment
 	// (e.g. `https://{id}.execute-api.{region}.amazonaws.com/`), so appending the

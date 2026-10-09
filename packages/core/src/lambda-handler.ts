@@ -3,7 +3,7 @@
 
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { BLOCKS_RPC_PREFIX, CLIENT_USER_AGENT_HEADER } from './constants.js';
+import { CLIENT_USER_AGENT_HEADER, isRpcPath, rpcNamespaceFromPath } from './constants.js';
 import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
@@ -392,8 +392,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
         // error envelope) or a plain HTTP path (simple error JSON).
         const origin = event.headers?.origin || event.headers?.Origin || '';
         const requestPath = getRequestPath(event);
-        const isRpcPath = requestPath === BLOCKS_RPC_PREFIX || requestPath.startsWith(BLOCKS_RPC_PREFIX + '/');
-        const body = isRpcPath
+        const body = isRpcPath(requestPath)
           ? errorResponse(504, 'Request timed out', null, { name: 'HandlerTimeoutError' })
           : JSON.stringify({ error: 'Request timed out', code: 'HANDLER_TIMEOUT' });
         return {
@@ -568,33 +567,35 @@ function createHandler(backend: any) {
 
     return requestCookies.run(inboundCookies, () =>
       requestClientUserAgent.run(clientUserAgent, async () => {
-    // RawRoute dispatch — check path-based routes before falling through to RPC
+    // RawRoute dispatch — check path-based routes before falling through to RPC.
+    // The whole `/aws-blocks/api` subtree (the bare path and every per-namespace
+    // `/aws-blocks/api/{ns}` path) is RPC: dispatch resolves the namespace from
+    // the path or (back-compat) the JSON-RPC body, so skip RawRoute matching for
+    // it and fall through to RPC handling below.
     const requestPath = getRequestPath(event);
-    if (requestPath !== BLOCKS_RPC_PREFIX) {
+    if (!isRpcPath(requestPath)) {
       const matched = matchRoute(httpMethod, requestPath);
       if (matched) {
         return handleRawRoute(event, matched.route, matched.params, corsHeaders, signal);
       }
-      // No RawRoute matched and path is not the RPC endpoint — return 404.
+      // No RawRoute matched and the path is not under the RPC endpoint — 404.
       // Log it: an unmatched route used to be entirely silent, which is what
       // made a split route registry (duplicate @aws-blocks/core copies)
       // undiagnosable from CloudWatch alone. The path is already in the API
       // Gateway access logs, so this adds no new category of data.
-      if (!requestPath.startsWith(BLOCKS_RPC_PREFIX)) {
-        const copies = getLoadedCoreCopies();
-        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
-        console.error(
-          `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
-        );
-        return {
-          statusCode: 404,
-          headers: {
-            'Content-Type': 'application/json',
-            ...corsHeaders,
-          },
-          body: JSON.stringify({ error: 'Not Found' }),
-        };
-      }
+      const copies = getLoadedCoreCopies();
+      const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+      console.error(
+        `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
+      );
+      return {
+        statusCode: 404,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders,
+        },
+        body: JSON.stringify({ error: 'Not Found' }),
+      };
     }
 
     const rpcHeaders = {
@@ -612,7 +613,12 @@ function createHandler(backend: any) {
       return { statusCode: 200, headers: rpcHeaders, body: parsed.response };
     }
 
-    const { apiNamespace, method, args, id: rpcId } = parsed.request;
+    const { apiNamespace: bodyNamespace, method, args, id: rpcId } = parsed.request;
+    // Prefer the namespace addressed in the path (`/aws-blocks/api/{ns}`), which
+    // a gateway can route per-compute; fall back to the body's `namespace.method`
+    // prefix for back-compat (raw HTTP callers and clients that still POST to the
+    // bare `/aws-blocks/api` endpoint).
+    const apiNamespace = rpcNamespaceFromPath(requestPath) ?? bodyNamespace;
 
     // Hoisted out of the `try` so the `catch` can still route any `Set-Cookie`
     // the handler set before it threw (e.g. an auth BB clearing a stale session

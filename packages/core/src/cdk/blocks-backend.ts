@@ -397,16 +397,15 @@ export class BlocksBackend extends Construct {
 		addBlocksStackMetadata(cdk.Stack.of(backend));
 
 		// Build the single shared HTTP API v2 gateway now that the backend module
-		// has imported and every compute exists. It fronts the default compute's
-		// function (its apiHandler()) and backs .gateway/.apiUrl — the HTTP ingress
-		// is no longer owned per-compute. The default compute is always a Lambda
-		// compute today, so apiHandler() is defined; guard with a clear error if a
-		// worker-only default is ever injected.
-		const defaultApiHandler = backend.requireDefaultCompute().apiHandler();
-		if (!defaultApiHandler) {
-			throw new Error('Default compute exposes no apiHandler() — the shared HTTP API gateway needs an HTTP front door.');
-		}
-		const sharedGateway = createSharedGateway(backend, { handler: defaultApiHandler, defaults: backend.defaults });
+		// has imported and every compute exists. Its `$default` catch-all fronts the
+		// default compute's function (its apiHandler()); every other compute's
+		// namespaces are routed to that compute's function. It backs .gateway/.apiUrl
+		// — the HTTP ingress is no longer owned per-compute.
+		const sharedGateway = createSharedGateway(backend, {
+			computes: getComputes(backend),
+			defaultCompute: backend.requireDefaultCompute(),
+			defaults: backend.defaults,
+		});
 		backend._sharedGateway = sharedGateway;
 
 		// Decide the API front door now that the shared gateway (the origin) exists.

@@ -298,6 +298,84 @@ describe('createLambdaHandler — named params (JSON-RPC 2.0 §4.2)', () => {
   });
 });
 
+// ── per-namespace RPC path dispatch ──────────────────────────────────────────
+
+describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
+  it('dispatches a call sent to /aws-blocks/api/{namespace} using the path namespace', async () => {
+    const backend = {
+      reports: (_ctx: BlocksContext) => ({
+        async generate(id: string) { return { id, done: true }; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api/reports',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'reports.generate', params: ['r1'], id: 1 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.deepStrictEqual(body.result, { id: 'r1', done: true });
+  });
+
+  it('still dispatches a call sent to the bare /aws-blocks/api using the body prefix (back-compat)', async () => {
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async echo(msg: string) { return { msg }; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hi'], id: 7 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.deepStrictEqual(body.result, { msg: 'hi' });
+  });
+
+  it('path namespace takes precedence over the body prefix', async () => {
+    // The path addresses `reports`; the body still carries a `<ns>.<method>`
+    // prefix (here a stale `api.`), but the handler dispatches on the path.
+    const backend = {
+      reports: (_ctx: BlocksContext) => ({
+        async generate() { return 'from-reports'; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api/reports',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'api.generate', params: [], id: 2 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'from-reports');
+  });
+
+  it('resolves the path namespace from an API Gateway v2 rawPath', async () => {
+    const backend = {
+      reports: (_ctx: BlocksContext) => ({
+        async ping() { return 'pong'; },
+      }),
+    };
+
+    const result = await invoke(backend, {
+      version: '2.0',
+      rawPath: '/aws-blocks/api/reports',
+      requestContext: { http: { method: 'POST', path: '/aws-blocks/api/reports' } },
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'reports.ping', params: [], id: 3 }),
+      isBase64Encoded: false,
+    });
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'pong');
+  });
+});
+
 // ── RawRoute body tests ─────────────────────────────────────────────────────
 
 describe('createLambdaHandler — RawRoute body handling', () => {
