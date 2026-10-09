@@ -10,10 +10,12 @@
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 
 import { type ScopeParent, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
+import { computeScopeFullId } from '@aws-blocks/core/bb-utils';
 import { resolveCookieSecurity } from '@aws-blocks/auth-common/cookies';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { AuthOIDC as AuthOIDCBase, DEFAULT_CALLBACK_PATH } from './auth-oidc.js';
+import type { AuthEngine } from './engine.js';
 import { OidcClientEngine } from './engines/oidc-client-engine.js';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
@@ -57,7 +59,7 @@ export class AuthOIDC<
 > extends AuthOIDCBase<P> {
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
-		const fullIdForEnv = scopeFullId(scope, id);
+		const fullIdForEnv = computeScopeFullId({ id, parent: scope });
 		const envVarName = cookieSecretEnvVar(fullIdForEnv);
 		// Lazy env resolution — this module is imported during client-code
 		// generation (outside Lambda) where env vars are absent. We defer the
@@ -65,7 +67,12 @@ export class AuthOIDC<
 		// during codegen but runtime calls still fail fast if misconfigured.
 		const parameterName = process.env[envVarName] ?? '';
 
-		const sessions = new KVStore<SessionRow>(scope, `${id}-sessions`);
+		// The store feeds `engine`, which `super()` consumes, so `this` is unavailable.
+		// A plain parent carries the chain; `fullId` keeps the table name unchanged.
+		const sessions = new KVStore<SessionRow>(
+			{ id, fullId: fullIdForEnv, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION },
+			'sessions',
+		);
 
 		const cookieOpts = {
 			...resolveCookieSecurity({
@@ -100,7 +107,7 @@ export class AuthOIDC<
 
 		const hasCognitoFederated = options.providers.some(p => p.kind === 'cognito-federated');
 
-		let engine;
+		let engine: AuthEngine;
 		if (hasCognitoFederated) {
 			const sessionManager = new SessionManager({
 				sessionStore: sessions,
@@ -155,16 +162,5 @@ export class AuthOIDC<
 			}
 		}
 	}
-}
-
-function scopeFullId(scope: ScopeParent, id: string): string {
-	const segments: string[] = [id];
-	let current: ScopeParent | undefined = scope;
-	while (current && 'parent' in current && current.parent) {
-		segments.unshift(current.id);
-		current = (current as { parent: ScopeParent }).parent;
-	}
-	if (current && 'id' in current) segments.unshift(current.id);
-	return segments.join('-');
 }
 

@@ -7,10 +7,11 @@
  */
 
 import { type ScopeParent, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { computeScopeFullId, getMockDataDir } from '@aws-blocks/core/bb-utils';
 import { resolveCookieSecurity } from '@aws-blocks/auth-common/cookies';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AuthOIDC as AuthOIDCBase, DEFAULT_CALLBACK_PATH } from './auth-oidc.js';
+import type { AuthEngine } from './engine.js';
 import { OidcClientEngine } from './engines/oidc-client-engine.js';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
@@ -64,7 +65,13 @@ export class AuthOIDC<
 > extends AuthOIDCBase<P> {
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
-		const sessions = new KVStore<SessionRow>(scope, `${id}-sessions`);
+		const fullId = computeScopeFullId({ id, parent: scope });
+
+		// Same synthetic parent as the AWS runtime, so both report the identical chain.
+		const sessions = new KVStore<SessionRow>(
+			{ id, fullId, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION },
+			'sessions',
+		);
 
 		const cookieNamePrefix = `oidc_${mockPrefix(scope, id)}`;
 		const cookieAttributes = {
@@ -82,7 +89,7 @@ export class AuthOIDC<
 		// and ran OIDC discovery against an empty issuer, crashing `npm run dev`.
 		const hasCognitoFederated = options.providers.some((p) => p.kind === 'cognito-federated');
 
-		let engine;
+		let engine: AuthEngine;
 		if (hasCognitoFederated) {
 			// Cognito federation needs a deployed Cognito User Pool + app-client
 			// credentials, which only exist after `npm run sandbox`/`deploy`. In the

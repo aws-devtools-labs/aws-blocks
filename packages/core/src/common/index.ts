@@ -369,7 +369,22 @@ function isOfficialBuildingBlock(obj: unknown): obj is BuildingBlockMeta {
   return isBuildingBlock(obj) && OFFICIAL_BB_NAMES.has(obj.bbName);
 }
 
-export function computeScopeFullId(scope: { id: string; parent?: any }) {
+/**
+ * The fully-qualified ID of a scope: its parent's `fullId` (or `id`) joined to its own.
+ *
+ * This is what `Scope.fullId` returns. Call it directly only when a block must know its
+ * own `fullId` before `super()` has run — a block that builds a child in its constructor
+ * cannot reach `this.fullId` yet, and must not restate the rule.
+ *
+ * @param scope - The scope's own `id` and its optional parent
+ * @returns The fully-qualified ID, e.g. `"myApp-auth"`
+ *
+ * @example
+ * ```typescript
+ * const fullId = computeScopeFullId({ id, parent: scope });
+ * ```
+ */
+export function computeScopeFullId(scope: { id: string; parent?: ScopeParent }): string {
   if (scope.parent) {
     if ('fullId' in scope.parent && scope.parent.fullId) {
       return `${scope.parent.fullId}-${scope.id}`;
