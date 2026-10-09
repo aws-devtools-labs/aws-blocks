@@ -3,6 +3,8 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Scope } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
 import { createChat, realtimeTransport } from './index.chat.js';
@@ -314,6 +316,90 @@ describe('deleteConversation ownership scoping', () => {
 // ── CannedProvider ──────────────────────────────────────────────────────────
 
 describe('CannedProvider', () => {
+	const collectText = async (provider: CannedProvider, messages: unknown[], options?: unknown): Promise<string> => {
+		const chunks: string[] = [];
+		for await (const event of provider.stream(messages as any, options as any)) {
+			if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'textDelta') chunks.push(event.delta.text);
+		}
+		return chunks.join('');
+	};
+
+	test('uses custom responses verbatim and replaces the built-in dictionary', async () => {
+		const provider = new CannedProvider({ responses: { greeting: '  exact  ', weather: '' } });
+		assert.strictEqual(await collectText(provider, [{ role: 'user', content: [{ text: 'GREETING!' }] }]), '  exact  ');
+		assert.strictEqual(await collectText(provider, [{ role: 'user', content: [{ text: 'weather' }] }]), '');
+		assert.match(await collectText(provider, [{ role: 'user', content: [{ text: 'help' }] }]), /No real model was called/);
+		const noBuiltins = new CannedProvider({ responses: {} });
+		assert.match(await collectText(noBuiltins, [{ role: 'user', content: [{ text: 'weather' }] }]), /No real model was called/);
+		const whitespace = new CannedProvider({ responses: { blank: '\n\t ' } });
+		assert.strictEqual(await collectText(whitespace, [{ role: 'user', content: [{ text: 'blank' }] }]), '\n\t ');
+		const blankKey = new CannedProvider({ responses: { ' \n\t ': 'invalid' } });
+		await assert.rejects(() => collectText(blankKey, [{ role: 'user', content: [{ text: 'anything' }] }]), /blank response phrase/);
+	});
+
+	test('matches the latest message against literal phrases with boundaries and first-entry precedence', async () => {
+		const provider = new CannedProvider({ responses: { 'sign in': 'first', sign: 'second' } });
+		const response = await collectText(provider, [
+			{ role: 'user', content: [{ text: 'weather' }] },
+			{ role: 'user', content: [{ text: 'Please SIGN\t' }, { text: '\nIN!' }] },
+		]);
+		assert.strictEqual(response, 'first');
+		assert.match(await collectText(provider, [{ role: 'user', content: [{ text: 'resignation' }] }]), /No real model was called/);
+		const punctuation = new CannedProvider({ responses: { 'c++': 'C++ response' } });
+		assert.strictEqual(await collectText(punctuation, [{ role: 'user', content: [{ text: 'C++?' }] }]), 'C++ response');
+		assert.match(await collectText(punctuation, [{ role: 'user', content: [{ text: 'c++x' }] }]), /No real model was called/);
+		assert.match(await collectText(punctuation, [{ role: 'user', content: [{ text: 'xc++' }] }]), /No real model was called/);
+		const regexCharacters = new CannedProvider({ responses: { 'a.b*(c)?[d]': 'literal punctuation response' } });
+		assert.strictEqual(await collectText(regexCharacters, [{ role: 'user', content: [{ text: 'A.B*(C)?[D]!' }] }]), 'literal punctuation response');
+		assert.match(await collectText(regexCharacters, [{ role: 'user', content: [{ text: 'xa.b*(c)?[d]' }] }]), /No real model was called/);
+		const unicode = new CannedProvider({ responses: { naïve: 'unicode response' } });
+		assert.strictEqual(await collectText(unicode, [{ role: 'user', content: [{ text: 'NAÏVE!' }] }]), 'unicode response');
+		assert.match(await collectText(unicode, [{ role: 'user', content: [{ text: 'übernaïve' }] }]), /No real model was called/);
+	});
+
+	test('selects the first matching response in dictionary enumeration order', async () => {
+		const responses = { 10: 'ten was inserted first', 2: 'two is enumerated first' };
+		const provider = new CannedProvider({ responses });
+		assert.strictEqual(await collectText(provider, [{ role: 'user', content: [{ text: '10 then 2' }] }]), 'two is enumerated first');
+	});
+
+	test('gives tool results and tool calls precedence over dictionary responses', async () => {
+		const provider = new CannedProvider({ responses: { weather: 'dictionary response' } });
+		const toolStarts = await collectToolStarts(provider, 'weather getWeather', [{ name: 'getWeather', description: '', inputSchema: {} }]);
+		assert.deepStrictEqual(toolStarts, ['getWeather']);
+		assert.match(
+			await collectText(provider, [{ role: 'user', content: [{ toolResult: { toolUseId: 'tool-1', content: [{ text: 'tool wins' }] } }] }]),
+			/tool wins/,
+		);
+	});
+
+	test('does not read a response file on a tool-call path', async () => {
+		const provider = new CannedProvider({ responses: join(process.cwd(), `.missing-canned-responses-${process.pid}.json`) });
+		assert.deepStrictEqual(
+			await collectToolStarts(provider, 'run getStatus', [{ name: 'getStatus', description: '', inputSchema: {} }]),
+			['getStatus'],
+		);
+		assert.match(
+			await collectText(provider, [{ role: 'user', content: [{ toolResult: { toolUseId: 'tool-1', content: [{ text: 'tool result' }] } }] }]),
+			/tool result/,
+		);
+	});
+
+	test('does not read a malformed response file on tool paths', async () => {
+		const filePath = join(process.cwd(), `.malformed-canned-responses-${process.pid}-${Date.now()}.json`);
+		try {
+			writeFileSync(filePath, '{ malformed');
+			const provider = new CannedProvider({ responses: filePath });
+			assert.deepStrictEqual(await collectToolStarts(provider, 'getStatus', [{ name: 'getStatus', description: '', inputSchema: {} }]), ['getStatus']);
+			assert.match(
+				await collectText(provider, [{ role: 'user', content: [{ toolResult: { toolUseId: 'tool-1', content: [{ text: 'result' }] } }] }]),
+				/result/,
+			);
+		} finally {
+			rmSync(filePath, { force: true });
+		}
+	});
+
 	test('returns default response for unknown prompt', async () => {
 		const provider = new CannedProvider();
 		const chunks: string[] = [];
@@ -323,7 +409,7 @@ describe('CannedProvider', () => {
 			}
 		}
 		const text = chunks.join('');
-		assert.ok(text.includes('canned'), 'should contain canned marker');
+		assert.strictEqual(text, 'This is a canned mock response. No real model was called. [canned] ');
 	});
 
 	test('returns keyword response for weather', async () => {
@@ -611,6 +697,73 @@ describe('CannedProvider', () => {
 		assert.ok(toolCall, 'trigger keyword should have fired a tool call');
 		assert.strictEqual(toolCall.metadata.toolName, 'searchDocs');
 		assert.deepStrictEqual(toolCall.metadata.toolInput, { query: 'how do I get started' });
+	});
+
+	test('Agent forwards a configured canned response without type assertions', async () => {
+		const scope = new Scope('test-canned-custom-response');
+		const agent = new Agent(scope, 'custom-response', {
+			inferenceOnly: true,
+			systemPrompt: 'test',
+			model: { local: { provider: 'canned', cannedResponses: { 'welcome back': 'Welcome, Ada.' } } },
+		});
+		const completion = await agent.stream('WELCOME   BACK!', { userId: 'test-user' });
+		const done = await completion.complete();
+		assert.strictEqual(done.text, 'Welcome, Ada.');
+	});
+
+	test('Agent matches sigma canned responses without type assertions', async () => {
+		const scope = new Scope('test-canned-sigma-response');
+		const agent = new Agent(scope, 'sigma-response', {
+			inferenceOnly: true,
+			systemPrompt: 'test',
+			model: { local: { provider: 'canned', cannedResponses: { 'ς': 'matched' } } },
+		});
+		const completion = await agent.stream('Σ', { userId: 'test-user' });
+		assert.strictEqual((await completion.complete()).text, 'matched');
+	});
+
+	test('Agent preserves an empty configured canned response', async () => {
+		const agent = new Agent(new Scope('test-canned-empty-response'), 'empty-response', {
+			inferenceOnly: true,
+			systemPrompt: 'test',
+			model: { local: { provider: 'canned', cannedResponses: { silent: '' } } },
+		});
+		const completion = await agent.stream('silent', { userId: 'test-user' });
+		assert.strictEqual((await completion.complete()).text, '');
+	});
+
+	test('Agent reloads a file-backed dictionary after atomic updates and recovers after malformed JSON', async () => {
+		const baseName = `.bb-agent-canned-agent-${process.pid}-${Date.now()}`;
+		const fileName = `${baseName}.json`;
+		const filePath = join(process.cwd(), fileName);
+		const replacementPath = join(process.cwd(), `${baseName}-replacement.json`);
+		const agent = new Agent(new Scope('test-canned-file-lifecycle'), 'file-lifecycle', {
+			inferenceOnly: true,
+			systemPrompt: 'test',
+			model: { local: { provider: 'canned', cannedResponses: fileName } },
+		});
+
+		try {
+			writeFileSync(filePath, JSON.stringify({ release: 'initial response' }));
+			assert.strictEqual((await (await agent.stream('release')).complete()).text, 'initial response');
+
+			writeFileSync(replacementPath, JSON.stringify({ release: 'atomically replaced response' }));
+			renameSync(replacementPath, filePath);
+			assert.strictEqual((await (await agent.stream('release')).complete()).text, 'atomically replaced response');
+
+			writeFileSync(filePath, '{ malformed');
+			const malformed = await agent.stream('release');
+			await assert.rejects(
+				() => malformed.complete(),
+				error => error instanceof Error && error.name === AgentErrors.StreamFailed && /Malformed canned responses JSON/.test(error.message),
+			);
+
+			writeFileSync(filePath, JSON.stringify({ recovered: 'healthy again' }));
+			assert.strictEqual((await (await agent.stream('recovered')).complete()).text, 'healthy again');
+		} finally {
+			rmSync(filePath, { force: true });
+			rmSync(replacementPath, { force: true });
+		}
 	});
 
 	test("getConversation with limit returns most recent messages", async () => {
@@ -1142,6 +1295,74 @@ describe('model-factory', () => {
 	test('creates CannedProvider for canned config', async () => {
 		const model = await createStrandsModel({ provider: 'canned' });
 		assert.ok(model);
+	});
+
+	test('forwards inline cannedResponses to CannedProvider', async () => {
+		const model = await createStrandsModel({ provider: 'canned', cannedResponses: { status: 'All clear.' } });
+		assert.ok(model instanceof CannedProvider);
+		const chunks: string[] = [];
+		for await (const event of model.stream([{ role: 'user', content: [{ text: 'STATUS' }] }] as any)) {
+			if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'textDelta') chunks.push(event.delta.text);
+		}
+		assert.strictEqual(chunks.join(''), 'All clear.');
+	});
+
+	test('reads cannedResponses files relative to cwd on each text selection and recovers in the same provider', async () => {
+		const baseName = `.bb-agent-canned-responses-${process.pid}-${Date.now()}`;
+		const fileName = `${baseName}.json`;
+		const absolutePath = join(process.cwd(), fileName);
+		const replacementPath = join(process.cwd(), `${baseName}-replacement.json`);
+		const directoryPath = join(process.cwd(), `${baseName}-directory`);
+		const responseFor = async (provider: CannedProvider, text: string): Promise<string> => {
+			const chunks: string[] = [];
+			for await (const event of provider.stream([{ role: 'user', content: [{ text }] }] as any)) {
+				if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'textDelta') chunks.push(event.delta.text);
+			}
+			return chunks.join('');
+		};
+		try {
+			writeFileSync(absolutePath, JSON.stringify({ release: 'first snapshot' }));
+			const model = await createStrandsModel({ provider: 'canned', cannedResponses: fileName });
+			assert.ok(model instanceof CannedProvider);
+			const iterator = model.stream([{ role: 'user', content: [{ text: 'release' }] }] as any)[Symbol.asyncIterator]();
+			await iterator.next();
+			writeFileSync(replacementPath, JSON.stringify({ release: 'replacement' }));
+			renameSync(replacementPath, absolutePath);
+			const snapshotChunks: string[] = [];
+			for (let event = await iterator.next(); !event.done; event = await iterator.next()) {
+				if (event.value.type === 'modelContentBlockDeltaEvent' && event.value.delta.type === 'textDelta') snapshotChunks.push(event.value.delta.text);
+			}
+			assert.strictEqual(snapshotChunks.join(''), 'first snapshot');
+			assert.strictEqual(await responseFor(model, 'release'), 'replacement');
+			mkdirSync(directoryPath);
+			const originalCwd = process.cwd();
+			try {
+				process.chdir(directoryPath);
+				assert.strictEqual(await responseFor(model, 'release'), 'replacement');
+			} finally {
+				process.chdir(originalCwd);
+			}
+			rmSync(absolutePath);
+			await assert.rejects(() => responseFor(model, 'release'), /Unable to read canned responses file/);
+			writeFileSync(absolutePath, '{ not json');
+			await assert.rejects(() => responseFor(model, 'release'), /Malformed canned responses JSON/);
+			writeFileSync(absolutePath, JSON.stringify({ recovered: 'healthy again' }));
+			assert.strictEqual(await responseFor(model, 'recovered'), 'healthy again');
+
+			const unreadable = await createStrandsModel({ provider: 'canned', cannedResponses: directoryPath });
+			assert.ok(unreadable instanceof CannedProvider);
+			await assert.rejects(() => responseFor(unreadable, 'anything'), /Unable to read canned responses file/);
+			for (const content of [JSON.stringify(null), JSON.stringify('not an object'), JSON.stringify(42), JSON.stringify(true), JSON.stringify(['not', 'an object']), JSON.stringify({ release: 1 }), JSON.stringify({ '': 'blank key' })]) {
+				writeFileSync(absolutePath, content);
+				const invalid = await createStrandsModel({ provider: 'canned', cannedResponses: fileName });
+				assert.ok(invalid instanceof CannedProvider);
+				await assert.rejects(() => responseFor(invalid, 'release'), /must be an object mapping|must be a string|blank response phrase/);
+			}
+		} finally {
+			rmSync(absolutePath, { force: true });
+			rmSync(replacementPath, { force: true });
+			rmSync(directoryPath, { recursive: true, force: true });
+		}
 	});
 
 	test('throws on bedrock without modelId', async () => {
