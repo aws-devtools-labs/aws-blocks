@@ -26,6 +26,10 @@ public actor OIDCClient: AuthProvider {
     nonisolated let client: BlocksClient
     private var tokenStore: TokenStore { client.tokenStore }
 
+    /// The descriptor this client was hydrated from, as the server sent it. `nil` for a client built with `init`.
+    /// `encode(to:)` writes it back unchanged.
+    nonisolated let wireDescriptor: [String: JSONValue]?
+
     private var inflightRefresh: Task<Void, Error>?
     private var subscribers: [UUID: AsyncStream<OIDCAuthState>.Continuation] = [:]
 
@@ -38,6 +42,28 @@ public actor OIDCClient: AuthProvider {
         baseUrl: String,
         client: BlocksClient
     ) {
+        self.init(
+            exchangePath: exchangePath,
+            refreshPath: refreshPath,
+            signOutPath: signOutPath,
+            providers: providers,
+            providerConfigs: providerConfigs,
+            baseUrl: baseUrl,
+            client: client,
+            wireDescriptor: nil
+        )
+    }
+
+    init(
+        exchangePath: String,
+        refreshPath: String,
+        signOutPath: String,
+        providers: [String],
+        providerConfigs: [String: OIDCProviderConfig],
+        baseUrl: String,
+        client: BlocksClient,
+        wireDescriptor: [String: JSONValue]?
+    ) {
         self.exchangePath = exchangePath
         self.refreshPath = refreshPath
         self.signOutPath = signOutPath
@@ -45,6 +71,7 @@ public actor OIDCClient: AuthProvider {
         self.providerConfigs = providerConfigs
         self.baseUrl = baseUrl
         self.client = client
+        self.wireDescriptor = wireDescriptor
     }
 
     /// Returns a fresh stream of auth-state transitions. Every active
@@ -377,9 +404,9 @@ public actor OIDCClient: AuthProvider {
     /// {
     ///   "providers": ["google", "github"],
     ///   "providerConfigs": { "google": { "authorizeUrl": "...", "clientId": "...", "scopes": [...], "kind": "..." } },
-    ///   "exchangePath": "/auth/exchange",
-    ///   "refreshPath": "/auth/exchange/refresh",
-    ///   "signOutPath": "/auth/signout"
+    ///   "exchangePath": "/aws-blocks/auth/exchange",
+    ///   "refreshPath": "/aws-blocks/auth/exchange/refresh",
+    ///   "signOutPath": "/aws-blocks/auth/signout"
     /// }
     /// ```
     public static func fromJSON(
@@ -405,7 +432,11 @@ public actor OIDCClient: AuthProvider {
             providers: providers,
             providerConfigs: providerConfigs,
             baseUrl: baseUrl,
-            client: client
+            client: client,
+            wireDescriptor: JSONValue(serialized: descriptor).flatMap { value in
+                if case .dictionary(let entries) = value { return entries }
+                return nil
+            }
         )
     }
 
@@ -440,6 +471,76 @@ public actor OIDCClient: AuthProvider {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return json
+    }
+}
+
+// MARK: - Codable
+
+extension OIDCClient: Codable {
+    private enum DescriptorKeys: String, CodingKey {
+        case blocksType = "__blocks"
+        case exchangePath
+        case refreshPath
+        case signOutPath
+        case providers
+        case providerConfigs
+    }
+
+    /// Decodes a client from its `{ "__blocks": "oidc/client", … }` descriptor, like
+    /// ``fromJSON(_:baseUrl:client:)``, so a generated model can hold one at any depth.
+    ///
+    /// The client signs in through the ``BlocksClient`` that fetched the descriptor, so the decoder must carry it
+    /// in `userInfo[.blocksClient]`: decode with ``BlocksClient/makeDecoder()``. Generated operations do.
+    ///
+    /// - Throws: `DecodingError.dataCorrupted` when the decoder carries no client or the descriptor is malformed.
+    public init(from decoder: Decoder) throws {
+        guard let client = decoder.userInfo[.blocksClient] as? BlocksClient else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Decoding an OIDCClient needs the BlocksClient that fetched it in "
+                    + "decoder.userInfo[.blocksClient]. Decode with BlocksClient.makeDecoder()."
+            ))
+        }
+        let container = try decoder.container(keyedBy: DescriptorKeys.self)
+        try TransferableDescriptor.check(container, key: .blocksType, expected: "oidc/client")
+        let descriptor = try [String: JSONValue](from: decoder)
+        let hydrated: OIDCClient
+        do {
+            let serialized = descriptor.mapValues(\.serialized)
+            hydrated = try Self.fromJSON(serialized, baseUrl: client.baseUrl, client: client)
+        } catch {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid OIDC client descriptor",
+                underlyingError: error
+            ))
+        }
+        self.init(
+            exchangePath: hydrated.exchangePath,
+            refreshPath: hydrated.refreshPath,
+            signOutPath: hydrated.signOutPath,
+            providers: hydrated.providers,
+            providerConfigs: hydrated.providerConfigs,
+            baseUrl: hydrated.baseUrl,
+            client: client,
+            wireDescriptor: descriptor
+        )
+    }
+
+    /// Encodes the descriptor this client was hydrated from, unchanged. A client built with `init` encodes
+    /// `{ "__blocks": "oidc/client", "exchangePath", "refreshPath", "signOutPath", "providers", "providerConfigs" }`.
+    public nonisolated func encode(to encoder: Encoder) throws {
+        if let wireDescriptor {
+            try wireDescriptor.encode(to: encoder)
+            return
+        }
+        var container = encoder.container(keyedBy: DescriptorKeys.self)
+        try container.encode("oidc/client", forKey: .blocksType)
+        try container.encode(exchangePath, forKey: .exchangePath)
+        try container.encode(refreshPath, forKey: .refreshPath)
+        try container.encode(signOutPath, forKey: .signOutPath)
+        try container.encode(providers, forKey: .providers)
+        try container.encode(providerConfigs, forKey: .providerConfigs)
     }
 }
 

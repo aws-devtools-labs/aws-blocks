@@ -15,7 +15,7 @@ menuBarEl.appendChild(AccountMenuBar(authApi));
 
 // ─── App (shown when authenticated, fallback when not) ──────────────────────
 const signInMessage = document.createElement('p');
-signInMessage.textContent = 'Sign in to get started.';
+signInMessage.textContent = 'Sign in to get started. New accounts confirm their email with a 6-digit code — locally, it is printed in the `npm run dev` terminal.';
 
 document.getElementById('app')!.appendChild(
   AuthenticatedContent(authApi, (user) => {

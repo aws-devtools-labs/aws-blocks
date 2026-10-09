@@ -1,7 +1,7 @@
 # Blocks Demo App
 
 A fuller example app on AWS Blocks. It wires together several Building Blocks in
-one place so you can see how they fit: `AuthBasic` for sign-in, a `KVStore` for
+one place so you can see how they fit: `Auth` for sign-in, a `KVStore` for
 loose key/value data, and a `DistributedTable` for a sortable, per-user
 todo list. Vite + vanilla DOM frontend, no framework.
 
@@ -28,7 +28,9 @@ Open http://localhost:3000 after `npm run dev`.
 
 ## What's Included
 
-- **AuthBasic** — sign up / sign in / sign out with JWT sessions.
+- **Auth** — email + password sign-up / sign-in / sign-out with server-side
+  sessions (Amazon Cognito on AWS). Sign-up confirms the email address with a
+  6-digit code; locally the code is printed in the `npm run dev` terminal.
 - **KVStore** — a public `getValue` / `setValue` pair plus a cookie round-trip
   demo (`setCookie` / `getCookie` / `deleteCookie`).
 - **DistributedTable** — per-user todos; `listTodos(sortBy)` sorts the list in

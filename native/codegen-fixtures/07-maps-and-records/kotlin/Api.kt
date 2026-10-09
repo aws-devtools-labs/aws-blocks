@@ -8,9 +8,19 @@ import kotlin.Boolean
 import kotlin.Double
 import kotlin.String
 import kotlin.collections.Map
+import kotlin.collections.Set
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 
 public class Api(
   private val server: BlocksServer = Servers.local,
@@ -35,11 +45,49 @@ public class Api(
       public val ok: Boolean,
     )
 
-    @Serializable
+    @Serializable(with = Input.OpenRecordSerializer::class)
     public data class Input(
       public val username: String,
       public val password: String,
       public val attributes: Map<String, String> = emptyMap(),
-    )
+    ) {
+      @Serializable
+      private data class OpenRecordFields(
+        public val username: String,
+        public val password: String,
+        public val attributes: Map<String, String> = emptyMap(),
+      )
+
+      /**
+       * Writes [attributes] flat into the JSON object, beside the properties (the wire shape of
+       * `additionalProperties`), and reads every key that isn't a property back into it.
+       */
+      internal object OpenRecordSerializer : KSerializer<Input> {
+        private val fieldKeys: Set<String> = setOf("username", "password")
+
+        override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Input")
+
+        override fun serialize(encoder: Encoder, `value`: Input) {
+          val output = encoder as JsonEncoder
+          val fields = output.json.encodeToJsonElement(Input.OpenRecordFields.serializer(), Input.OpenRecordFields(value.username, value.password, value.attributes)).jsonObject
+          val flat = buildJsonObject {
+            for ((key, element) in fields) if (key != "attributes") put(key, element)
+            fields["attributes"]?.jsonObject?.forEach { (key, element) -> if (key !in fieldKeys) put(key, element) }
+          }
+          output.encodeJsonElement(flat)
+        }
+
+        override fun deserialize(decoder: Decoder): Input {
+          val input = decoder as JsonDecoder
+          val flat = input.decodeJsonElement().jsonObject
+          val nested = buildJsonObject {
+            for ((key, element) in flat) if (key in fieldKeys) put(key, element)
+            put("attributes", buildJsonObject { for ((key, element) in flat) if (key !in fieldKeys) put(key, element) })
+          }
+          val fields = input.json.decodeFromJsonElement(Input.OpenRecordFields.serializer(), nested)
+          return Input(fields.username, fields.password, fields.attributes)
+        }
+      }
+    }
   }
 }

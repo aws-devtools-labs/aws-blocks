@@ -21,7 +21,7 @@ import type {
 import { AsyncJobErrors, blocksError } from './errors.js';
 import { STATUS_TABLE_ID, statusTableOptions } from './status.js';
 
-export { AsyncJobErrors } from './errors.js';
+export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
 	AsyncJobContext,
 	AsyncJobOptions,

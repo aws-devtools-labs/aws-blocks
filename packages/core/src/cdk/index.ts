@@ -12,6 +12,7 @@ import {
 	type ScopeOptions,
 	type ScopeParent,
 } from '../common/index.js';
+import { addOrphanedBaselineCheck } from './baselines.js';
 import { assertCdkConditionActive, BlocksBackend, setupBlocksInfra } from './blocks-backend.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
@@ -29,6 +30,7 @@ import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from '../errors.js';
 export type { ScopeOptions } from '../index.js';
 export { ensureApiGatewayAccount } from './apigateway-account.js';
+export { type BaselineRemovalGuard, baselineDir, claimBaseline, hasOrphanedBaselines } from './baselines.js';
 export {
 	BlocksBackend,
 	type BlocksBackendProps,
@@ -43,6 +45,7 @@ export {
 export { blocksNodejsBundling } from './bundling.js';
 export { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
 export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
+export { type DeployTimeLambda, deployTimeLambdaCode, deployTimeLambdaEntry } from './lambda-code.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { getBlocksRoot, getBlocksRootId, getOrCreateOnRoot } from './root-registry.js';
@@ -139,6 +142,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 
 		const infra = setupBlocksInfra(this, props, id);
 		this.executionRole = infra.executionRole;
+
+		// A committed baseline whose block left the app (renamed or removed) would
+		// let CloudFormation delete the resource it guards. Checked here, not by
+		// the block, so it still runs when no instance of the block is left.
+		addOrphanedBaselineCheck(this, props.backendHandlerPath, () => this.id);
 	}
 
 	static async create(scope: Construct, id: string, props: CoreBlocksStackProps) {

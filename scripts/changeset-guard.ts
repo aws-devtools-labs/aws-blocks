@@ -174,6 +174,8 @@ function getChangedPackages(): Set<string> {
 		if (!existsSync(pkgJsonPath)) continue;
 
 		const pkgJson = readJson(pkgJsonPath, `packages/${match[1]}/package.json`);
+		// Private packages are never published, so a changeset for them would describe a release that can't happen.
+		if (pkgJson.private === true) continue;
 		if (typeof pkgJson.name === "string" && pkgJson.name.startsWith(SCOPE)) {
 			packages.add(pkgJson.name);
 		}

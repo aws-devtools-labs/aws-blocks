@@ -36,12 +36,51 @@ jobs:
         working-directory: native/kotlin
         run: scripts/sync-version.sh --check
 
+      # compile-fixture-goldens.test.sh and regenerate-fixtures.test.sh need a JDK and Gradle;
+      # the fixture-goldens job runs them.
       - name: Test the Kotlin scripts
         run: |
           for test in native/kotlin/scripts/*.test.sh; do
+            case "$(basename "$test")" in compile-fixture-goldens.test.sh | regenerate-fixtures.test.sh) continue ;; esac
             echo "== $test =="
             bash "$test"
           done
+
+  # The golden-file tests (`:codegen:test`) only compare text, so a golden that doesn't
+  # compile passes them. This compiles each fixture's Kotlin golden, on its own, against
+  # the in-repo runtime (JVM).
+  fixture-goldens:
+    name: Fixture goldens compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      - name: Test the fixture-goldens script
+        run: bash native/kotlin/scripts/compile-fixture-goldens.test.sh
+
+      # A regenerate (the Kotlin step of regenerate-all.sh) must always run the generator.
+      - name: Test that the fixture regenerate always runs
+        run: bash native/kotlin/scripts/regenerate-fixtures.test.sh
+
+      - name: Compile every fixture's Kotlin golden (fails on errors)
+        run: bash native/kotlin/scripts/compile-fixture-goldens.sh
+
+      # Text comparison can't show that a serializer reads the wire format: these decode and
+      # encode real wire JSON through the goldens of the fixtures with `round-trips/` tests.
+      - name: Round-trip wire JSON through the fixture goldens (JVM)
+        working-directory: native/kotlin
+        run: ./gradlew :fixture-goldens:roundTripFixtureGoldens
 
   build-and-test:
     name: Build & Test (runtime, codegen)

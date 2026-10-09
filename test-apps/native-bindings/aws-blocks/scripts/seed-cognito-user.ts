@@ -1,15 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Seeds a deterministic, CONFIRMED Cognito user into the deployed native-bindings
-// AuthCognito pool so the returning-customer e2e path
-// (native/dart/example/bin/e2e/auth_cognito_test.dart) can sign in WITHOUT an
+// Seeds a deterministic, CONFIRMED Cognito user into EVERY user pool of the
+// deployed native-bindings stack — the `auth-basic` and `auth-cognito` `Auth`
+// blocks each own one (`auth-oidc` federates directly and owns none) — so the
+// returning-customer e2e paths (the native auth + todos suites, e.g.
+// native/dart/example/bin/e2e/auth_cognito_test.dart) can sign in WITHOUT an
 // emailed confirmation code.
 //
-// Why a post-deploy admin seed (vs. the sign-up→code→confirm flow): real Cognito
-// emails the confirmation code, so CI can't read it back. AdminCreateUser
-// (MessageAction SUPPRESS, email_verified) + AdminSetUserPassword (Permanent)
-// produces a confirmed user that can sign in immediately.
+// Why a post-deploy admin seed (vs. the sign-up→code→confirm flow): `Auth`
+// confirms every self-service sign-up with an emailed code, and real Cognito
+// emails it, so CI can't read it back. AdminCreateUser (MessageAction SUPPRESS,
+// email_verified) + AdminSetUserPassword (Permanent) produces a confirmed user
+// that can sign in immediately.
 //
 // TEST-ONLY: this targets throwaway `bb-test-*` stacks. The credentials are a
 // deterministic fixture (defaults below), overridable via env, never a secret.
@@ -42,39 +45,38 @@ const STACK_NAME =
     ? `bb-test-nb-${process.env.BLOCKS_STACK_SUFFIX}`
     : 'bb-test-native-bindings-dart');
 
-// Defaults MUST match auth_cognito_test.dart's _defaultReturningUsername /
-// _defaultReturningPassword. Password satisfies the pool policy (>= 8, has digit).
+// Defaults MUST match the native suites' returning user (Dart harness.dart
+// `returningUser()`, Kotlin BlocksE2ETestCase.kt `returningUser()`, Swift
+// BlocksE2ETestCase.swift `returningUser()`). The password satisfies both pools'
+// policies (>= 8, upper, lower, digit, symbol).
 const USERNAME = process.env.COGNITO_TEST_USERNAME || 'e2e-returning-user';
 const PASSWORD = process.env.COGNITO_TEST_PASSWORD || 'Returning1Pass!';
 const EMAIL = process.env.COGNITO_TEST_EMAIL || `${USERNAME}@example.com`;
 
-async function findUserPoolId(stackName: string): Promise<string> {
+// The pool-owning `Auth` blocks in aws-blocks/index.ts: auth-basic, auth-cognito.
+const EXPECTED_POOLS = 2;
+
+/** Every Cognito user pool in the stack, by logical id. */
+async function findUserPoolIds(stackName: string): Promise<{ logicalId: string; poolId: string }[]> {
   const cfn = new CloudFormationClient({ region: REGION });
   const res = await cfn.send(new DescribeStackResourcesCommand({ StackName: stackName }));
   const pools = (res.StackResources ?? []).filter(
-    (r) => r.ResourceType === 'AWS::Cognito::UserPool',
+    (r) => r.ResourceType === 'AWS::Cognito::UserPool' && r.PhysicalResourceId,
   );
-  if (pools.length === 0) {
-    throw new Error(`No AWS::Cognito::UserPool found in stack ${stackName}`);
-  }
-  if (pools.length > 1) {
-    // native-bindings declares exactly one Cognito pool (auth-cognito). Guard so
-    // this fails loudly rather than seeding the wrong pool if that ever changes.
+  // native-bindings declares two pool-owning Auth blocks (auth-basic,
+  // auth-cognito). Fail loudly rather than silently seed a partial set if that
+  // ever changes.
+  if (pools.length !== EXPECTED_POOLS) {
     throw new Error(
-      `Expected exactly one Cognito UserPool in ${stackName}, found ${pools.length}: ` +
+      `Expected ${EXPECTED_POOLS} Cognito user pools in ${stackName}, found ${pools.length}: ` +
         pools.map((p) => p.LogicalResourceId).join(', '),
     );
   }
-  return pools[0].PhysicalResourceId!;
+  return pools.map((p) => ({ logicalId: p.LogicalResourceId ?? '?', poolId: p.PhysicalResourceId ?? '' }));
 }
 
-async function main() {
-  console.log('[seed-cognito-user] resolving user pool from CloudFormation stack...');
-  const poolId = await findUserPoolId(STACK_NAME);
-  console.log('[seed-cognito-user] resolved user pool, seeding test user...');
-
-  const cog = new CognitoIdentityProviderClient({ region: REGION });
-
+/** Create (or reuse) the confirmed user in one pool and pin its permanent password. */
+async function seedPool(cog: CognitoIdentityProviderClient, poolId: string, label: string): Promise<void> {
   // Idempotent: AdminCreateUser fails with UsernameExistsException on re-seed,
   // which we tolerate (the AdminSetUserPassword below still re-establishes the
   // known permanent password).
@@ -90,10 +92,10 @@ async function main() {
         ],
       }),
     );
-    console.log('[seed-cognito-user] created user');
-  } catch (e: any) {
-    if (e?.name === 'UsernameExistsException') {
-      console.log('[seed-cognito-user] user already exists — reusing');
+    console.log(`[seed-cognito-user] ${label}: created user`);
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === 'UsernameExistsException') {
+      console.log(`[seed-cognito-user] ${label}: user already exists — reusing`);
     } else {
       throw e;
     }
@@ -107,7 +109,16 @@ async function main() {
       Permanent: true,
     }),
   );
-  console.log('[seed-cognito-user] set permanent password — user is CONFIRMED and ready');
+  console.log(`[seed-cognito-user] ${label}: set permanent password — user is CONFIRMED and ready`);
+}
+
+async function main() {
+  console.log('[seed-cognito-user] resolving user pools from CloudFormation stack...');
+  const pools = await findUserPoolIds(STACK_NAME);
+  const cog = new CognitoIdentityProviderClient({ region: REGION });
+  for (const { logicalId, poolId } of pools) {
+    await seedPool(cog, poolId, logicalId);
+  }
 }
 
 main().catch((e) => {

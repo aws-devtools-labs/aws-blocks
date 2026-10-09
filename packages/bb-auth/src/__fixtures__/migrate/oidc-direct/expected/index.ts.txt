@@ -1,0 +1,77 @@
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Scope } from '@aws-blocks/core';
+import {
+	Auth,
+	AuthErrors,
+	customOauth2,
+	github,
+	relayOrigin,
+	stubIdp,
+} from '@aws-blocks/bb-auth';
+
+const scope = new Scope('app');
+const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
+const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
+const oktaSecret = new AppSetting(scope, 'okta-secret', { secret: true });
+
+export const auth = new Auth(scope, 'oidc-auth', {
+	emailPassword: false,
+	oidcProviders: {
+		// Production IdPs.
+		google: {
+			issuer: 'https://accounts.google.com',
+			clientId: 'google-client',
+			clientSecret: googleSecret,
+		},
+		github: github({
+			clientId: 'gh-client',
+			clientSecret: githubSecret,
+		}),
+		okta: {
+			issuer: 'https://dev-1.okta.com',
+			clientId: 'okta-client',
+			clientSecret: oktaSecret,
+			scopes: ['openid', 'email'],
+		},
+		gitlab: customOauth2({
+			name: 'gitlab',
+			clientId: 'gl-client',
+			// TODO(aws-blocks-auth-migrate): provider secrets must be AppSetting references now (not strings or functions). Pass the AppSetting itself.
+			clientSecret: 'inline-secret',
+			endpoints: {
+				authorization: 'https://gitlab.com/oauth/authorize',
+				token: 'https://gitlab.com/oauth/token',
+				userInfo: 'https://gitlab.com/api/v4/user',
+			},
+			scopes: ['read_user'],
+			mapClaims: (raw) => ({ providerSub: String(raw), email: null, name: null }),
+		}),
+		corp: stubIdp({
+			users: [{ sub: 'u-1', email: 'a@example.com', name: 'A' }],
+			// TODO(aws-blocks-auth-migrate): RISK: stubIdp() is local-only in Auth — synth refuses it unless it sets unsafeAllowDeployed. AuthOIDC served this stub
+			//   from deployed stacks too, so the codemod kept that with unsafeAllowDeployed: true. A deployed stub signs ANYONE who
+			//   can reach the app in as its users, with no credentials. Keep the flag only on a disposable test stack. For
+			//   production, remove it and deploy the real provider instead (choose the provider by environment, so npm run dev
+			//   keeps the stub) — MIGRATION.md, "stubIdp() is local-only".
+			unsafeAllowDeployed: true,
+		}),
+	},
+	allowBearerAuth: true,
+	redirects: {
+		callbackPath: '/aws-blocks/auth/callback',
+		postSignInPath: '/home',
+		allowedRelayOrigins: [relayOrigin('myapp://auth')],
+	},
+	// TODO(aws-blocks-auth-migrate): OIDCUser.email is gone: AuthenticatedUser has signInProvider, attributes (string claims), claims (iss, sub, …) and userId (still `${iss}:${sub}`).
+	// TODO(aws-blocks-auth-migrate): OIDCUser.provider is gone: AuthenticatedUser has signInProvider, attributes (string claims), claims (iss, sub, …) and userId (still `${iss}:${sub}`).
+	onSignIn: async (user) => {
+		console.log(user.userId, user.email, user.provider);
+	},
+});
+
+export function isExpired(e: unknown): boolean {
+	return e instanceof Error && e.name === AuthErrors.TokenExpired;
+}
+
+// TODO(aws-blocks-auth-migrate): Auth has no callbackPath getter; it is redirects.callbackPath in the options.
+export const callback = auth.callbackPath;

@@ -1,3 +1,4 @@
+import 'identifiers.dart';
 import 'model.dart';
 
 /// Tags the generator maps to concrete runtime types; any other tag on a
@@ -73,24 +74,38 @@ class SealedClassType extends ResolvedType {
   /// True when the discriminant is a boolean enum (true/false) rather than a
   /// string enum. Drives bool (vs String) emission in the generator.
   final bool discriminantIsBoolean;
+
+  /// For a union embedded in a hybrid arm, the enclosing arm's own keys (its
+  /// discriminant and properties). They share the arm's JSON object, so an
+  /// open variant of this union doesn't collect them as extra keys.
+  final Set<String> enclosingKeys;
   SealedClassType({
     required this.name,
     required this.discriminant,
     required this.variants,
     this.discriminantIsBoolean = false,
+    this.enclosingKeys = const {},
   });
 }
 
 class SealedVariant {
   final String discriminantValue;
-  final String className;
+
+  /// Mutable: rewritten in place when the builder makes type names Dart
+  /// identifiers.
+  String className;
   final List<RecordField> fields;
   final SealedClassType? embeddedUnion;
-  const SealedVariant({
+
+  /// The value type of the variant's extra keys when its arm is an open record
+  /// (`additionalProperties`), as on [RecordType]. Null for a closed arm.
+  final ResolvedType? additionalProperties;
+  SealedVariant({
     required this.discriminantValue,
     required this.className,
     required this.fields,
     this.embeddedUnion,
+    this.additionalProperties,
   });
 }
 
@@ -161,7 +176,17 @@ class CodegenModel {
   final List<Namespace> namespaces;
 
   /// Every named type to emit, from spec schemas plus synthesized inline ones,
-  /// keyed by its final Dart name.
+  /// keyed by its final Dart name. Every type name (and variant class name)
+  /// is a usable Dart identifier: the builder camel-cases a spec name with
+  /// other characters, makes a leading `_` public and escapes one that would
+  /// shadow a name the generated library uses (see `_assignDartTypeNames`).
+  ///
+  /// A schema that isn't a model, an enum or a union (an alias such as
+  /// `UserId: string`, or a nullable object) has no declaration, and is
+  /// keyed by its schema name, or, when a type's Dart name is that name, by
+  /// its JSON pointer `#/components/schemas/<name>`. Every [SchemaReference]
+  /// names a key of this map, except a `$ref` to a schema the spec doesn't
+  /// define.
   final Map<String, ResolvedType> types;
 
   final List<Server> servers;
@@ -228,11 +253,17 @@ class CodegenModelBuilder {
     'UnknownTransferable',
   };
   final Map<String, ResolvedType> _types = {};
+  // What Pass 1 resolved each spec schema to, keyed by the schema's name.
+  // Unlike [_types], later passes never overwrite or drop an entry.
+  final Map<String, ResolvedType> _schemaTypes = {};
   // Every named type synthesized during a build, in creation order.
   final List<_TypeOrigin> _origins = [];
-  // SchemaReferences produced by structural dedup, keyed by their target object,
-  // so a rename of the target can be propagated to all references.
-  final Map<ResolvedType, List<SchemaReference>> _dedupRefs = {};
+  // SchemaReferences produced by structural dedup, keyed by their target
+  // object, so that the target's final Dart name reaches them.
+  final Map<ResolvedType, List<SchemaReference>> _dedupRefs = Map.identity();
+  // Every `$ref` SchemaReference the build creates, with the name of the
+  // schema it points at, so that the schema's final Dart name reaches it.
+  final List<(SchemaReference, String)> _refs = [];
   // Non-fatal diagnostics produced during the build.
   final List<String> _warnings = [];
   int _anonCounter = 0;
@@ -243,14 +274,16 @@ class CodegenModelBuilder {
   /// distinct inline types still claim the same Dart name.
   CodegenModel build(RpcModel rpc) {
     _types.clear();
+    _schemaTypes.clear();
     _origins.clear();
     _dedupRefs.clear();
+    _refs.clear();
     _warnings.clear();
     _anonCounter = 0;
     // Pass 1: Resolve all named schemas (skip reserved names from blocks_runtime)
     for (final entry in rpc.schemas.entries) {
       if (_reserved.contains(entry.key)) continue;
-      _types[entry.key] = _resolveType(
+      _types[entry.key] = _schemaTypes[entry.key] = _resolveType(
         entry.value,
         entry.key,
         false,
@@ -262,7 +295,6 @@ class CodegenModelBuilder {
     final namespaceMap = <String, List<Operation>>{};
     // Formatted after Pass 3 so type-arg names reflect any collision rename.
     final unboundResults = <(String, TransferableType)>[];
-    final nonHydratableChannels = <(String, TransferableType)>[];
     for (final method in rpc.methods) {
       final parts = method.name.split('.');
       final ns = parts.length > 1
@@ -309,20 +341,6 @@ class CodegenModelBuilder {
         unboundResults.add((method.name, resultType));
       }
 
-      // A bound `realtime/channel` whose message type cannot be hydrated by the
-      // `Map`-only runtime is declared `RealtimeChannel<T>` but returned raw.
-      // Unwrap a nullable result first: `RealtimeChannel<T>?` emits the same raw
-      // body as the direct form, so it must be diagnosed too. Direct-result
-      // scope only (no field or nested scan).
-      final channelType = resultType is NullableType
-          ? resultType.inner
-          : resultType;
-      if (channelType is TransferableType &&
-          channelType.blocksType == 'realtime/channel' &&
-          !_channelMessageHydratable(channelType.typeArgs)) {
-        nonHydratableChannels.add((method.name, channelType));
-      }
-
       namespaceMap
           .putIfAbsent(ns, () => [])
           .add(
@@ -339,12 +357,12 @@ class CodegenModelBuilder {
     // distinct types before generation.
     _resolveNamingCollisions();
 
+    // Pass 4: make every type name a Dart identifier, and give every
+    // reference its target's final name.
+    _assignDartTypeNames();
+
     for (final (operation, transferable) in unboundResults) {
       _warnings.add(_formatUnboundTransferable(operation, transferable));
-    }
-
-    for (final (operation, transferable) in nonHydratableChannels) {
-      _warnings.add(_formatNonHydratableChannel(operation, transferable));
     }
 
     final namespaces = namespaceMap.entries
@@ -382,7 +400,7 @@ class CodegenModelBuilder {
       SchemaRefRef(name: final name) =>
         _reserved.contains(name)
             ? const PrimitiveType('dynamic')
-            : SchemaReference(name),
+            : _schemaRef(name),
       UnionLiteralRef(values: final values) => _resolveEnum(values, hint, path),
       InlineObjectRef() => _resolveInlineObject(
         ref,
@@ -435,9 +453,7 @@ class CodegenModelBuilder {
       for (final entry in _types.entries) {
         if (entry.value is RecordType &&
             _structuralKeyOfRecord(entry.value as RecordType) == key) {
-          final dedupRef = SchemaReference(entry.key);
-          _dedupRefs.putIfAbsent(entry.value, () => []).add(dedupRef);
-          return dedupRef;
+          return _dedupRef(entry.value);
         }
       }
     }
@@ -456,8 +472,16 @@ class CodegenModelBuilder {
     final parts = sorted.map(
       (f) => '${f.name}:${_typeKey(f.type)}${f.isRequired ? '!' : ''}',
     );
-    return 'obj{${parts.join(',')}}';
+    return 'obj{${parts.join(',')}}${_extrasKey(record.additionalProperties)}';
   }
+
+  /// The structural-key suffix of an open record's extra keys, so an open
+  /// record never merges with a closed one (or one with other extras). Empty
+  /// for a closed record, which keeps every closed key unchanged.
+  String _extrasKey(ResolvedType? additionalProperties) =>
+      additionalProperties == null
+      ? ''
+      : '+extra:${_typeKey(additionalProperties)}';
 
   String _typeKey(ResolvedType t) => switch (t) {
     PrimitiveType(dartType: final dt) => dt,
@@ -482,9 +506,15 @@ class CodegenModelBuilder {
       final fk = fieldKeys
           .map((f) => '${f.name}:${_typeKey(f.type)}${f.isRequired ? '!' : ''}')
           .join(',');
-      return '${v.discriminantValue}{$fk}';
+      return '${v.discriminantValue}{$fk}${_extrasKey(v.additionalProperties)}';
     });
-    return 'sealed[${sealed.discriminant}${sealed.discriminantIsBoolean ? ':bool' : ''}]{${parts.join('|')}}';
+    // The enclosing keys matter only to an open variant, which excludes them.
+    final enclosing =
+        sealed.enclosingKeys.isNotEmpty &&
+            sealed.variants.any((v) => v.additionalProperties != null)
+        ? '<${(sealed.enclosingKeys.toList()..sort()).join(',')}>'
+        : '';
+    return 'sealed[${sealed.discriminant}${sealed.discriminantIsBoolean ? ':bool' : ''}]$enclosing{${parts.join('|')}}';
   }
 
   ResolvedType _resolveEnum(List<String> values, String? hint, [String? path]) {
@@ -534,9 +564,7 @@ class CodegenModelBuilder {
       for (final entry in _types.entries) {
         if (entry.value is RecordType &&
             _structuralKeyOfRecord(entry.value as RecordType) == key) {
-          final dedupRef = SchemaReference(entry.key);
-          _dedupRefs.putIfAbsent(entry.value, () => []).add(dedupRef);
-          return dedupRef;
+          return _dedupRef(entry.value);
         }
       }
     }
@@ -591,6 +619,7 @@ class CodegenModelBuilder {
     DiscriminatedUnionRef ref,
     String? hint, [
     String? path,
+    Set<String> enclosingKeys = const {},
   ]) {
     final name = hint ?? '_Union${_anonCounter++}';
 
@@ -665,15 +694,32 @@ class CodegenModelBuilder {
           group.first.embeddedUnion!,
           nestedName,
           variantPath,
+          {...enclosingKeys, ref.discriminant, for (final f in fields) f.name},
         );
         embeddedUnion = resolved is SealedClassType ? resolved : null;
       }
+
+      // An open arm (`additionalProperties`) keeps its extra keys, typed like
+      // an open record's (see [_resolveInlineObject]). Merged arms take the
+      // first open one's value type.
+      final extras = group
+          .map((v) => v.additionalProperties)
+          .firstWhere((ap) => ap != null, orElse: () => null);
+      final additionalProps = extras == null
+          ? null
+          : _resolveType(
+              extras,
+              '${className}Extra',
+              false,
+              variantPath == null ? null : '$variantPath>additionalProperties',
+            );
 
       return SealedVariant(
         discriminantValue: discValue,
         className: className,
         fields: fields,
         embeddedUnion: embeddedUnion,
+        additionalProperties: additionalProps,
       );
     }).toList();
 
@@ -682,6 +728,7 @@ class CodegenModelBuilder {
       discriminant: ref.discriminant,
       variants: variants,
       discriminantIsBoolean: ref.discriminantIsBoolean,
+      enclosingKeys: enclosingKeys,
     );
 
     // Structural dedup: reuse an existing sealed class with the same shape
@@ -690,9 +737,7 @@ class CodegenModelBuilder {
     for (final entry in _types.entries) {
       if (entry.value is SealedClassType &&
           _structuralKeyOfSealed(entry.value as SealedClassType) == sealedKey) {
-        final dedupRef = SchemaReference(entry.key);
-        _dedupRefs.putIfAbsent(entry.value, () => []).add(dedupRef);
-        return dedupRef;
+        return _dedupRef(entry.value);
       }
     }
 
@@ -700,6 +745,151 @@ class CodegenModelBuilder {
     _recordOrigin(sealed, path);
     return sealed;
   }
+
+  /// A `$ref` to the schema named [name], tracked so that the final Dart
+  /// name of the schema's type reaches it (see [_assignDartTypeNames]).
+  SchemaReference _schemaRef(String name) {
+    final ref = SchemaReference(name);
+    _refs.add((ref, name));
+    return ref;
+  }
+
+  /// A reference to [target], an existing type of the same shape that a new
+  /// one merges into, tracked so that [target]'s final Dart name reaches it
+  /// (see [_assignDartTypeNames]).
+  SchemaReference _dedupRef(ResolvedType target) {
+    final ref = SchemaReference(_displayName(target));
+    _dedupRefs.putIfAbsent(target, () => []).add(ref);
+    return ref;
+  }
+
+  /// Makes the name of every generated type a usable Dart identifier,
+  /// renames it everywhere — the type itself, each variant class, every
+  /// reference to it, and its key in the type table — and gives every
+  /// reference its target's final name.
+  ///
+  /// A type is named after a schema, or after the field, operation,
+  /// parameter or discriminant value it was inlined in, so its name can hold
+  /// characters Dart can't (`my-doc`, `HeadersContent-type`), start with `_`
+  /// (a library-private class, which no caller can name), or be a type the
+  /// library already uses (`String`, `Map`, `Blocks`), which it would shadow
+  /// or duplicate. Each name goes through `dartIdentifiers`, as the
+  /// generator's member names do: it is camel-cased (`myDoc`,
+  /// `HeadersContentType`), each leading `_` becomes `$` (`$Doc`), and a
+  /// reserved name gets a trailing `$` (`String$`). A name that is already a
+  /// usable identifier is unchanged, and two names that would land on one
+  /// identifier get distinct ones. Names are keyed by the name, not the
+  /// object, since two objects of one name are emitted as one class.
+  ///
+  /// This is the one place a reference gets its name, so every earlier
+  /// rename reaches it too: a schema with one generic-shaped field takes a
+  /// generic name (`ValueResult`, see [_genericNameForShape]), and Pass 3
+  /// suffixes colliding types (`MakeResult2`). A `$ref` follows the type its
+  /// schema resolved to in Pass 1, and a structural-dedup reference the type
+  /// it merged into. The type table is rebuilt in its current order, under
+  /// each declared type's final name, plus each alias schema (one that isn't
+  /// a model, an enum or a union) under its schema name, or its JSON pointer
+  /// when a type's name is that name (a nullable object schema `Box` is
+  /// `Box?`, and its class is `Box`). An alias's own key is never printed:
+  /// the generator emits nothing for it and types a `$ref` to it as the type
+  /// it stands for.
+  void _assignDartTypeNames() {
+    final declared = Set<ResolvedType>.identity()
+      ..addAll(
+        [for (final o in _origins) o.type, ..._types.values].where(_isDeclared),
+      );
+    final names = <String>{
+      for (final type in declared)
+        ...switch (type) {
+          SealedClassType(name: final n, variants: final variants) => [
+            n,
+            for (final v in variants) v.className,
+          ],
+          _ => [_displayName(type)],
+        },
+    };
+    final ids = dartIdentifiers(names, reserved: generatedTopLevelNames);
+    String id(String name) => ids[name] ?? name;
+    for (final type in declared) {
+      switch (type) {
+        case RecordType():
+          type.name = id(type.name);
+        case EnumType():
+          type.name = id(type.name);
+        case SealedClassType():
+          type.name = id(type.name);
+          for (final v in type.variants) {
+            v.className = id(v.className);
+          }
+        default:
+          break;
+      }
+    }
+
+    final typeNames = {for (final type in declared) _displayName(type)};
+    String aliasKey(String schema) =>
+        typeNames.contains(schema) ? '#/components/schemas/$schema' : schema;
+
+    final table = <String, ResolvedType>{};
+    // The declared types an alias schema holds directly (`Box?`'s `Box`),
+    // placed with the alias, since no other table entry may hold them.
+    void placeHeld(ResolvedType type) {
+      switch (type) {
+        case RecordType() || EnumType() || SealedClassType():
+          table.putIfAbsent(_displayName(type), () => type);
+        case NullableType(inner: final i) || ListType(items: final i):
+          placeHeld(i);
+        case MapType(valueType: final v):
+          placeHeld(v);
+        case TupleType(items: final items):
+          items.forEach(placeHeld);
+        case TransferableType(typeArgs: final args):
+          args.forEach(placeHeld);
+        case PrimitiveType() || SchemaReference():
+          break;
+      }
+    }
+
+    void placeAlias(String schema, ResolvedType type) {
+      table.putIfAbsent(aliasKey(schema), () => type);
+      placeHeld(type);
+    }
+
+    for (final MapEntry(:key, :value) in _types.entries) {
+      if (_isDeclared(value)) {
+        table[_displayName(value)] = value;
+      } else if (identical(_schemaTypes[key], value)) {
+        placeAlias(key, value);
+      }
+    }
+    // Aliases a later type of the same name displaced from [_types], and
+    // types an alias displaced, keep their place in the table.
+    for (final MapEntry(:key, :value) in _schemaTypes.entries) {
+      if (!_isDeclared(value)) placeAlias(key, value);
+    }
+    for (final type in declared) {
+      table.putIfAbsent(_displayName(type), () => type);
+    }
+    _types
+      ..clear()
+      ..addAll(table);
+
+    for (final (ref, schema) in _refs) {
+      ref.name = switch (_schemaTypes[schema]) {
+        final t? when _isDeclared(t) => _displayName(t),
+        _? => aliasKey(schema),
+        null => schema,
+      };
+    }
+    for (final MapEntry(key: target, value: refs) in _dedupRefs.entries) {
+      for (final ref in refs) {
+        ref.name = _displayName(target);
+      }
+    }
+  }
+
+  bool _isDeclared(ResolvedType type) =>
+      type is RecordType || type is EnumType || type is SealedClassType;
 
   String _inferSuffix(String baseName) {
     // If the base name ends with "Input", use "Input" as suffix for variants
@@ -759,43 +949,6 @@ class CodegenModelBuilder {
     return 'AWSBLOCKS-NATIVE-001: $operation returns unbound transferable '
         "'$safeTag' on dart; generated UnknownTransferable "
         'with $typeArgClause.';
-  }
-
-  /// Whether a bound `realtime/channel` message type-arg can be hydrated by the
-  /// generated client. Delegates to the shared [channelMessageHydratable] so
-  /// this diagnostic and the generator's channel deserializer decide "raw vs
-  /// hydrated" from one place and cannot drift.
-  bool _channelMessageHydratable(List<ResolvedType> typeArgs) =>
-      channelMessageHydratable(typeArgs, _types);
-
-  /// A readable Dart-type label for a channel message type, for diagnostics.
-  String _messageTypeLabel(ResolvedType t) => switch (t) {
-    PrimitiveType(dartType: final dt) => dt,
-    NullableType(inner: final i) => '${_messageTypeLabel(i)}?',
-    ListType(items: final i) => 'List<${_messageTypeLabel(i)}>',
-    MapType(valueType: final v) => 'Map<String, ${_messageTypeLabel(v)}>',
-    RecordType(name: final n) => n,
-    EnumType(name: final n) => n,
-    SealedClassType(name: final n) => n,
-    SchemaReference(name: final n) => n,
-    TransferableType(blocksType: final kt) => kt,
-    TupleType(items: final items) =>
-      '(${items.map(_messageTypeLabel).join(', ')})',
-  };
-
-  /// Builds the `AWSBLOCKS-NATIVE-002` diagnostic: a bound `realtime/channel`
-  /// whose message type the `Map`-only runtime cannot decode, so the value is
-  /// returned un-hydrated. Names the operation and the message type only.
-  String _formatNonHydratableChannel(
-    String operation,
-    TransferableType transferable,
-  ) {
-    final messageLabel = transferable.typeArgs.isEmpty
-        ? 'dynamic'
-        : _messageTypeLabel(transferable.typeArgs.first);
-    return 'AWSBLOCKS-NATIVE-002: $operation returns realtime/channel with a '
-        "non-hydratable message type '$messageLabel' on dart; the value is "
-        'returned un-hydrated (not supported yet).';
   }
 
   /// Structural identity of a named type. Two types with the same display name
@@ -883,6 +1036,8 @@ class CodegenModelBuilder {
       ..addAll(rebuilt);
   }
 
+  /// Renames [type] in place. Its references follow in Pass 4
+  /// ([_assignDartTypeNames]), the one place a reference gets its name.
   void _renameType(ResolvedType type, String newName) {
     switch (type) {
       case RecordType():
@@ -893,10 +1048,6 @@ class CodegenModelBuilder {
         type.name = newName;
       default:
         return;
-    }
-    // Propagate to any dedup references that pointed at this object.
-    for (final ref in _dedupRefs[type] ?? const <SchemaReference>[]) {
-      ref.name = newName;
     }
   }
 
@@ -943,27 +1094,4 @@ class CodegenModelBuilder {
 
   String _capitalize(String s) =>
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
-}
-
-/// Single source of truth for whether a bound `realtime/channel` message
-/// type-arg can be hydrated by the `Map`-only runtime. An object (record or
-/// sealed class, including via `$ref` and the nullable `T?` form) hydrates via
-/// `fromJson`, a `Map` hydrates per-value, and a `dynamic`/`dynamic?`/absent
-/// arg gets an identity decoder. A concrete primitive, list, enum, or tuple
-/// has no decoder and is returned raw. Both the generator's channel
-/// deserializer (the "raw vs hydrated" gate) and the builder's
-/// `AWSBLOCKS-NATIVE-002` diagnostic consult this, so they cannot drift.
-bool channelMessageHydratable(
-  List<ResolvedType> typeArgs,
-  Map<String, ResolvedType> allTypes,
-) {
-  if (typeArgs.isEmpty) return true;
-  final arg = typeArgs[0] is NullableType
-      ? (typeArgs[0] as NullableType).inner
-      : typeArgs[0];
-  final resolved = arg is SchemaReference ? allTypes[arg.name] : arg;
-  return resolved is RecordType ||
-      resolved is SealedClassType ||
-      resolved is MapType ||
-      (resolved is PrimitiveType && resolved.dartType == 'dynamic');
 }

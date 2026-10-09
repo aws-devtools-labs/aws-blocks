@@ -10,22 +10,14 @@ import XCTest
 
 final class TodosE2ETests: BlocksE2ETestCase {
 
-    private let password = "pass1234"
-    private lazy var username = "todouser_swift_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1_000 ... 9_999))"
-
     private func signIn() async throws {
-
-        _ = try await api.basicSignUp(username: username, password: password)
-        _ = try await api.basicSignIn(username: username, password: password)
+        try await signInTestUser("todouser")
     }
 
     func testAuthGateRejectsUnauthenticated() async throws {
         let freshApi = Api(server: Self.server)
-        do {
+        await assertThrowsBlocksError(AuthErrorNames.notAuthenticated) {
             _ = try await freshApi.listTodos(sortBy: nil)
-            XCTFail("Expected auth error")
-        } catch {
-            // Expected
         }
     }
 
@@ -90,11 +82,8 @@ final class TodosE2ETests: BlocksE2ETestCase {
         _ = try await api.createTodo(title: "before signout")
         _ = try await api.basicSignOut()
 
-        do {
-            _ = try await api.listTodos(sortBy: nil)
-            XCTFail("Expected auth error after sign out")
-        } catch {
-            // Expected
+        await assertThrowsBlocksError(AuthErrorNames.notAuthenticated) {
+            _ = try await self.api.listTodos(sortBy: nil)
         }
     }
 }

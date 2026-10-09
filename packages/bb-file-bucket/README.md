@@ -44,6 +44,8 @@ const bucket = new FileBucket(scope, id, options?)
 
 All FileBucket-provisioned buckets **enforce TLS unconditionally** (`enforceSSL: true`) — CDK attaches a bucket policy denying any request where `aws:SecureTransport` is `false`, closing the in-transit exposure gap. This is not configurable.
 
+The S3 bucket name is derived from the scope chain: the FileBucket id joined to its parent scope ids with `-`. If that name fits S3's 63-character limit, it is used as-is. If it is longer, it is shortened to the start of the name plus `-` and an 8-character hash. The shortened name is the same on every deploy and different from the names of other buckets. A name that breaks any other S3 naming rule (for example, one with uppercase letters) still fails `cdk synth` with a `ValidationFailed` error. To read the resolved name, call `getSdkIdentifiers(bucket).bucketName` (from `@aws-blocks/blocks`).
+
 ### PutOptions
 
 | Option | Type | Description |

@@ -35,6 +35,11 @@ public class Api {
         public struct ResultMessage: Codable {
             public let humidity: Double
             public let temperature: Double
+
+            public init(humidity: Double, temperature: Double) {
+                self.humidity = humidity
+                self.temperature = temperature
+            }
         }
     }
 }

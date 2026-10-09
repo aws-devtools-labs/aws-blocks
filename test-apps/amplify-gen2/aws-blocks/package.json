@@ -16,6 +16,7 @@
     }
   },
   "dependencies": {
+    "@aws-blocks/auth-common": "*",
     "@aws-blocks/blocks": "*",
     "@aws-blocks/bb-kv-store": "*",
     "@aws-blocks/bb-distributed-data": "*",

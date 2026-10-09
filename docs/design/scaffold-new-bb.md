@@ -44,7 +44,7 @@ by `name`; `get()`-style reads return `null` for not-found.
 | Shape | Required files | Example | Notes |
 |---|---|---|---|
 | **Primitive** (owns new infra) | `index.cdk/aws/mock/browser.ts` + `types.ts` + `errors.ts` + `version.ts` | `bb-kv-store` | full 4-layer split; `fromExisting()` factory |
-| **Composite** (composes other BBs, no own infra) | single `index.ts` + `errors.ts` + `version.ts` (+ `index.browser.ts` stub) | `bb-auth-basic` | exports only `browser`/`types`/`default`; no `cdk`/`aws-runtime` conditions |
+| **Composite** (composes other BBs, little or no infra of its own) | single `index.ts` + `errors.ts` + `version.ts` (+ `index.browser.ts` stub) when every layer is the composed BBs' | `bb-auth` | `bb-auth` composes `KVStore` (`sessions`) and `AppSetting` (`session-secret`) in every layer, and a direct-OIDC-only config provisions nothing else; it uses the full four-layer split because it can also own a Cognito pool. The 3-condition `browser`/`types`/`default` shape (no `cdk`/`aws-runtime`) was `bb-auth-basic`'s, removed with the auth unification (D-018); no shipped block uses it now |
 | **Client-facing** (non-HTTP protocol) | all of Primitive **+** a real `index.browser.ts` / client middleware (Transferable) | `bb-realtime` | atypical layout; **v2**, generate a pointer to `bb-realtime`, not a full template |
 
 ## 3. The canonical file skeleton (Primitive, from `bb-kv-store`)

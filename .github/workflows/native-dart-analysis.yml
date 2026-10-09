@@ -1,9 +1,10 @@
 name: Native Dart Analysis
 
 # Static analysis for the native Dart SDK packages: format check, analyzer,
-# unit tests, and a pub.dev package score report. Path-filtered at the trigger
-# so it only runs for PRs that touch native/dart/packages/ or the shared
-# codegen fixtures its golden tests consume.
+# unit tests, and a pub.dev package score report, plus an analyzer pass over
+# the Dart codegen fixture goldens. Path-filtered at the trigger so it only runs
+# for PRs that touch the Dart SDK, its scripts, or the shared codegen fixtures
+# its golden tests consume.
 #
 # No AWS / secrets needed — these run the same on fork PRs.
 
@@ -11,6 +12,8 @@ on:
   pull_request:
     paths:
       - 'native/dart/packages/**'
+      - 'native/dart/scripts/**'
+      - 'native/dart/analysis_options.yaml'
       - 'native/codegen-fixtures/**'
       - '.github/workflows/native-dart-analysis.yml'
   workflow_dispatch:
@@ -51,6 +54,37 @@ jobs:
           dart pub get
           dart run build_runner build
           git diff --exit-code lib/src/version.dart
+
+  # Blocking. The goldens are what blocks_codegen emits for each fixture spec,
+  # so an analyzer error in one is a generated client that doesn't compile. The
+  # golden-file tests only compare text, so this is what catches it.
+  fixture-goldens:
+    name: Fixture goldens analyze (${{ matrix.sdk }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: [min, stable]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ matrix.sdk == 'min' && env.MIN_DART || 'stable' }}
+
+      - name: Test the Dart scripts
+        run: |
+          for test in native/dart/scripts/*.test.sh; do
+            echo "== $test =="
+            bash "$test"
+          done
+
+      - name: Analyze every fixture's Dart golden (fails on errors)
+        run: bash native/dart/scripts/analyze-fixture-goldens.sh
 
   analyze:
     name: ${{ matrix.package-name }} (${{ matrix.sdk }})

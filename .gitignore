@@ -24,6 +24,9 @@ test-apps/telemetry/aws-blocks/client.js
 cdk.out
 cdk.context.json
 
+# Upgrade-in-place fixture app, materialized per run by test-apps/comprehensive/test/upgrade-in-place.ts
+test-apps/.upgrade-in-place/
+
 # Sandbox deploy artifacts (per-deploy state, account-specific)
 .blocks-sandbox/
 !/packages/create-blocks-app/templates/*/src/app/.blocks-sandbox/
@@ -73,9 +76,6 @@ packages/*/src/version.ts
 
 # RFC drafts (personal working docs)
 docs/tech-design/telemetry-rfc.md
-
-# Manual-test Cognito pool manifest (contains per-deploy AWS resource IDs)
-packages/bb-auth-cognito/scripts/.manual-pools.json
 
 my-test/
 

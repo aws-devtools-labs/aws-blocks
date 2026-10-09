@@ -1,4 +1,4 @@
-import { ApiNamespace, ApiError, Scope, KVStore, AuthBasic, DistributedTable } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, KVStore, Auth, DistributedTable } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
@@ -21,13 +21,24 @@ const scope = new Scope('my-app');
 const store = new KVStore(scope, 'app-store', {});
 
 
-const auth = new AuthBasic(scope, 'auth', {
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
+// Auth: email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// Sign-up confirms the email address with a 6-digit code; once the user enters
+// it they are signed in automatically. On AWS, Cognito emails the code.
+const auth = new Auth(scope, 'auth', {
+  session: { crossDomain: process.env.BLOCKS_SANDBOX === 'true' },
+  // Local dev only: no email is sent, so print the code in the `npm run dev`
+  // terminal. Ignored on AWS.
+  codeDelivery: async (username, code, purpose) => {
+    console.log(`[auth] ${purpose} code for ${username}: ${code}`);
+  },
 });
 
-// DistributedTable: Use Zod schemas for type-safe tables
+// DistributedTable: Use Zod schemas for type-safe tables.
+// Per-user todos: the partition key is the owner's `userSub` (stable for the
+// user's lifetime), and every method below reads and writes only the caller's
+// partition, so one user can never list, read or change another user's todos.
 const todoSchema = z.object({
-  userId: z.string(),
+  userSub: z.string(),
   todoId: z.string(),
   title: z.string(),
   completed: z.boolean(),
@@ -38,7 +49,7 @@ const todoSchema = z.object({
 /** Inferred Todo type — used in return type annotations so the spec emitter
  *  produces a named `Todo` schema in `components.schemas` with `$ref` pointers. */
 interface Todo {
-  userId: string;
+  userSub: string;
   todoId: string;
   title: string;
   completed: boolean;
@@ -49,7 +60,7 @@ interface Todo {
 const todos = new DistributedTable(scope, 'todos', {
   schema: todoSchema,
   key: {
-    partitionKey: 'userId',
+    partitionKey: 'userSub',
     sortKey: 'todoId'
   }
 });
@@ -102,7 +113,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // ULID: timestamp-based sortable ID
     const now = Date.now();
     const ulid = now.toString(36) + crypto.randomBytes(8).toString('hex');
-    const todo = { userId: user.username, todoId: ulid, title, completed: false, priority, createdAt: now };
+    const todo = { userSub: user.userSub, todoId: ulid, title, completed: false, priority, createdAt: now };
     await todos.put(todo);
     return todo;
   },
@@ -111,7 +122,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
 
     const list = await Array.fromAsync(
-      todos.query({ where: { userId: { equals: user.username } } })
+      todos.query({ where: { userSub: { equals: user.userSub } } })
     );
 
     // Sort in the API (not via a secondary index) — a per-user todo list is
@@ -126,17 +137,26 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {
     const user = await auth.requireAuth(context);
     
-    const existing = await todos.get({ userId: user.username, todoId });
+    const existing = await todos.get({ userSub: user.userSub, todoId });
     if (!existing) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
-    
-    await todos.put({ ...existing, ...updates });
+
+    // Copy only the editable fields. The RPC layer does not strip properties the
+    // signature doesn't declare, so spreading `updates` would let a caller rewrite
+    // `userSub` / `todoId` and write into another user's partition.
+    const { completed, priority, title } = updates ?? {};
+    await todos.put({
+      ...existing,
+      ...(completed !== undefined ? { completed } : {}),
+      ...(priority !== undefined ? { priority } : {}),
+      ...(title !== undefined ? { title } : {}),
+    });
     return { success: true };
   },
 
   async deleteTodo(todoId: string) {
     const user = await auth.requireAuth(context);
     
-    await todos.delete({ userId: user.username, todoId });
+    await todos.delete({ userSub: user.userSub, todoId });
     return { success: true };
   }
 }));

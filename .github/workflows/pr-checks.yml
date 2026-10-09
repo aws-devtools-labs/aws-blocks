@@ -184,6 +184,11 @@ jobs:
       - name: Check client user-agent middleware consistency
         run: npm run check:client-user-agent
 
+      # publish:local empties dist-registry/ before every run; this pins that the
+      # reset can never delete anything outside it.
+      - name: Test the local-registry reset guard
+        run: npx tsx --test scripts/publish/local-registry.test.ts
+
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
       - name: Test the packed-assets guard

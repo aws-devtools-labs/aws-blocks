@@ -1,0 +1,152 @@
+{
+	"$comment": "Recorded by `upgrade-in-place.ts --dry-run` (cdk synth under --conditions=cdk, suffix upgrade-dryrun), trimmed to the auth block and BlocksSecretsBulk.",
+	"Resources": {
+		"upgradeauthpool556377DE": {
+			"Type": "AWS::Cognito::UserPool",
+			"Properties": {
+				"AccountRecoverySetting": {
+					"RecoveryMechanisms": [
+						{
+							"Name": "verified_phone_number",
+							"Priority": 1
+						},
+						{
+							"Name": "verified_email",
+							"Priority": 2
+						}
+					]
+				},
+				"AdminCreateUserConfig": {
+					"AllowAdminCreateUserOnly": false
+				},
+				"AliasAttributes": [
+					"email"
+				],
+				"AutoVerifiedAttributes": [
+					"email"
+				],
+				"DeletionProtection": "INACTIVE",
+				"EmailVerificationMessage": "The verification code to your new account is {####}",
+				"EmailVerificationSubject": "Verify your new account",
+				"MfaConfiguration": "OFF",
+				"SmsVerificationMessage": "The verification code to your new account is {####}",
+				"UserPoolName": "bb-test-upgrade-dryrun-upgrade-auth",
+				"UserPoolTags": {
+					"blocks:deploy-mode": "production",
+					"blocks:deployment-type": "production",
+					"blocks:purpose": "e2e-upgrade-in-place"
+				},
+				"UserPoolTier": "ESSENTIALS",
+				"VerificationMessageTemplate": {
+					"DefaultEmailOption": "CONFIRM_WITH_CODE",
+					"EmailMessage": "The verification code to your new account is {####}",
+					"EmailSubject": "Verify your new account",
+					"SmsMessage": "The verification code to your new account is {####}"
+				}
+			},
+			"UpdateReplacePolicy": "Delete",
+			"DeletionPolicy": "Delete",
+			"Metadata": {
+				"aws:cdk:path": "bb-test-upgrade-dryrun/upgrade/auth/pool/Resource"
+			}
+		},
+		"upgradeauthclientDFB740B2": {
+			"Type": "AWS::Cognito::UserPoolClient",
+			"Properties": {
+				"AllowedOAuthFlowsUserPoolClient": false,
+				"ExplicitAuthFlows": [
+					"ALLOW_USER_PASSWORD_AUTH",
+					"ALLOW_REFRESH_TOKEN_AUTH"
+				],
+				"GenerateSecret": false,
+				"PreventUserExistenceErrors": "ENABLED",
+				"SupportedIdentityProviders": [
+					"COGNITO"
+				],
+				"UserPoolId": {
+					"Ref": "upgradeauthpool556377DE"
+				}
+			},
+			"Metadata": {
+				"aws:cdk:path": "bb-test-upgrade-dryrun/upgrade/auth/client/Resource"
+			}
+		},
+		"upgradeauthgroupadmins538B4F84": {
+			"Type": "AWS::Cognito::UserPoolGroup",
+			"Properties": {
+				"GroupName": "admins",
+				"UserPoolId": {
+					"Ref": "upgradeauthpool556377DE"
+				}
+			},
+			"Metadata": {
+				"aws:cdk:path": "bb-test-upgrade-dryrun/upgrade/auth/group-admins"
+			}
+		},
+		"upgradeauthsessionstable29328177": {
+			"Type": "AWS::DynamoDB::Table",
+			"Properties": {
+				"AttributeDefinitions": [
+					{
+						"AttributeName": "pk",
+						"AttributeType": "S"
+					}
+				],
+				"BillingMode": "PAY_PER_REQUEST",
+				"DeletionProtectionEnabled": false,
+				"KeySchema": [
+					{
+						"AttributeName": "pk",
+						"KeyType": "HASH"
+					}
+				],
+				"TableName": "bb-test-upgrade-dryrun-upgrade-auth-sessions",
+				"Tags": [
+					{
+						"Key": "blocks:deploy-mode",
+						"Value": "production"
+					},
+					{
+						"Key": "blocks:deployment-type",
+						"Value": "production"
+					},
+					{
+						"Key": "blocks:purpose",
+						"Value": "e2e-upgrade-in-place"
+					}
+				],
+				"TimeToLiveSpecification": {
+					"AttributeName": "ttl",
+					"Enabled": true
+				}
+			},
+			"UpdateReplacePolicy": "Delete",
+			"DeletionPolicy": "Delete",
+			"Metadata": {
+				"aws:cdk:path": "bb-test-upgrade-dryrun/upgrade/auth/sessions/table/Resource"
+			}
+		},
+		"BlocksSecretsBulk": {
+			"Type": "AWS::CloudFormation::CustomResource",
+			"Properties": {
+				"ServiceToken": {
+					"Fn::GetAtt": [
+						"BlocksSecretProviderframeworkonEventB025B3DA",
+						"Arn"
+					]
+				},
+				"Parameters": [
+					{
+						"name": "/bb-test-upgrade-dryrun-upgrade-auth-session-secret"
+					}
+				],
+				"StackName": "bb-test-upgrade-dryrun"
+			},
+			"UpdateReplacePolicy": "Delete",
+			"DeletionPolicy": "Delete",
+			"Metadata": {
+				"aws:cdk:path": "bb-test-upgrade-dryrun/BlocksSecretsBulk/Default"
+			}
+		}
+	}
+}

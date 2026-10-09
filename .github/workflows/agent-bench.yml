@@ -80,17 +80,17 @@ jobs:
       # tokens-per-minute ceiling all at once (that failed 6/10 cells in run 28967475174).
       max-parallel: 5
       # One cell per (task, template) pair: each task runs on the single template that best
-      # exercises its Building Blocks — 10 cells cover 18 Blocks without a full cross-product.
+      # exercises its Building Blocks — 10 cells cover 16 Blocks without a full cross-product.
       matrix:
         include:
-          - { task: auth-notes, template: demo } # AuthBasic + KVStore
+          - { task: auth-notes, template: demo } # Auth (email + password, emailed sign-up code) + KVStore
           - { task: file-gallery, template: bare } # FileBucket
           - { task: async-word-counter, template: bare } # AsyncJob + KVStore
           - { task: collab-presence-board, template: default } # Realtime + DistributedTable
-          - { task: cognito-profile, template: auth-cognito } # AuthCognito (email-OTP)
+          - { task: cognito-profile, template: auth } # Auth (email + password, emailed sign-up code; profile + session)
           - { task: observability-api, template: backend } # Logger + Metrics + Tracer + AppSetting
           - { task: sql-kb-catalog, template: nextjs } # Database + KnowledgeBase
-          - { task: oidc-dsql-notes, template: react } # AuthOIDC + DistributedDatabase
+          - { task: oidc-dsql-notes, template: react } # Auth (direct OIDC, stub IdP) + DistributedDatabase
           - { task: email-digest, template: demo } # CronJob + EmailClient (+ KVStore)
           - { task: kb-chat-agent, template: demo } # Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use
     env:

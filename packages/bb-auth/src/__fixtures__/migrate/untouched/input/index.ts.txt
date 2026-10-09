@@ -1,0 +1,12 @@
+import { Auth, AuthErrors, isAuthError, stubIdp } from '@aws-blocks/blocks';
+import { Scope } from '@aws-blocks/blocks';
+
+const scope = new Scope('app');
+export const auth = new Auth(scope, 'auth', {
+	emailPassword: false,
+	oidcProviders: { corp: stubIdp() },
+});
+
+export function expired(e: unknown): boolean {
+	return isAuthError(e, AuthErrors.NotAuthenticated);
+}

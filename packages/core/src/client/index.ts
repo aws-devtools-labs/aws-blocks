@@ -4,6 +4,7 @@
 export type BlocksContext = any;
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = any;
 import { encodeRpcRequest, decodeRpcResponse } from '../rpc.js';
+import { fetchWithStaleConnectionRetry } from './stale-connection.js';
 
 const IS_SSR = typeof window === 'undefined';
 
@@ -253,6 +254,18 @@ export interface ApiNamespaceClientOptions {
  * import { api } from 'aws-blocks';
  * const user = await api.getUser('123');
  * ```
+ *
+ * **Stale keep-alive connections.** In Node (CLIs, SSR, scripts), a call that fails
+ * because the server closed an idle pooled keep-alive connection just as the call was
+ * sent (`TypeError: fetch failed`, cause `other side closed` / `ECONNRESET` / `EPIPE`,
+ * before any response byte) is resent **once** on a new connection. In that idle-close
+ * race the first copy never reached the server. A server that reads a request and then
+ * crashes before sending a byte looks the same to the client, so in that rare case the
+ * method can run twice. Behind API Gateway, CloudFront or a Function URL a crashed backend
+ * answers with a 5xx, which is never retried. Keep state-changing methods idempotent where
+ * a duplicate would matter. Nothing else is retried:
+ * not a timeout, not an abort, not a failure after the response started, not an HTTP or
+ * RPC error. Browsers already do this resend themselves.
  */
 export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => any>>(
   name: string,
@@ -301,7 +314,9 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
           }
         }
         
-        const response = await fetch(apiUrl, {
+        // A pooled keep-alive socket the server closed while idle fails the call before
+        // any response byte arrives; that one case is resent once (see stale-connection.ts).
+        const response = await fetchWithStaleConnectionRetry(apiUrl, {
           method: 'POST',
           headers: request.headers,
           credentials: 'include',

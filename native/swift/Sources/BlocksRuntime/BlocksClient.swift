@@ -107,8 +107,8 @@ public final class BlocksClient {
             urlRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
-        // Encode request body
-        urlRequest.httpBody = try JSONEncoder().encode(request)
+        // Encode request body (dates as ISO 8601 strings, see `makeEncoder()`)
+        urlRequest.httpBody = try makeEncoder().encode(request)
 
         logger.debug("→ \(request.method) id=\(request.id)")
 
@@ -128,7 +128,12 @@ public final class BlocksClient {
         if let errorObj = responseJson["error"] as? [String: Any] {
             let message = errorObj["message"] as? String ?? "Unknown error"
             let code = errorObj["code"] as? Int ?? -1
-            throw RPCError(message: "Error occured with code: \(code) message: \(message)")
+            let name = (errorObj["data"] as? [String: Any])?["name"] as? String
+            throw RPCError(
+                message: "Error occured with code: \(code) message: \(message)",
+                code: code,
+                name: name
+            )
         }
 
         // Check HTTP status
@@ -195,7 +200,8 @@ public final class BlocksClient {
         urlRequest.httpMethod = "POST"
         urlRequest.httpShouldHandleCookies = false
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // Sorted keys, as `makeEncoder()` writes them: the same body is the same bytes every time.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
         // Attach stored cookies
         let reqHost = requestURL.host ?? ""
@@ -284,8 +290,19 @@ public struct RPCError: BlocksError {
     public let message: String
     public let underlyingError: Error?
 
-    public init(message: String, underlyingError: Error? = nil) {
+    /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its
+    /// HTTP status (e.g. `401`). `nil` for transport and decoding failures.
+    public let code: Int?
+
+    /// The server's error name (`error.data.name`, e.g. `"NotAuthenticatedException"`).
+    /// Errors cross the wire by name, so match on this rather than on `message`.
+    /// `nil` when the server sent none, and for transport and decoding failures.
+    public let name: String?
+
+    public init(message: String, code: Int? = nil, name: String? = nil, underlyingError: Error? = nil) {
         self.message = message
+        self.code = code
+        self.name = name
         self.underlyingError = underlyingError
     }
 }

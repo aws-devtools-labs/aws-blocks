@@ -29,23 +29,46 @@ public class Api {
         public struct ContinueSignIn: Codable {
             public let nextStep: NextStep
 
+            public init(nextStep: NextStep) {
+                self.nextStep = nextStep
+            }
+
             public struct ConfirmSignInWithSmsCode: Codable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
+
+                public init(codeDeliveryDetails: CodeDeliveryDetails, session: String) {
+                    self.codeDeliveryDetails = codeDeliveryDetails
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithTotpCode: Codable {
                 public let session: String
+
+                public init(session: String) {
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithEmailCode: Codable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
+
+                public init(codeDeliveryDetails: CodeDeliveryDetails, session: String) {
+                    self.codeDeliveryDetails = codeDeliveryDetails
+                    self.session = session
+                }
             }
 
             public struct ContinueSignInWithMfaSelection: Codable {
                 public let allowedMFATypes: [AllowedMFAType]
                 public let session: String
+
+                public init(allowedMFATypes: [AllowedMFAType], session: String) {
+                    self.allowedMFATypes = allowedMFATypes
+                    self.session = session
+                }
 
                 public enum AllowedMFAType: String, Codable {
                     case sms = "SMS"
@@ -58,6 +81,11 @@ public class Api {
                 public let allowedMFATypes: [AllowedMFAType]
                 public let session: String
 
+                public init(allowedMFATypes: [AllowedMFAType], session: String) {
+                    self.allowedMFATypes = allowedMFATypes
+                    self.session = session
+                }
+
                 public enum AllowedMFAType: String, Codable {
                     case totp = "TOTP"
                     case email = "EMAIL"
@@ -67,10 +95,19 @@ public class Api {
             public struct ContinueSignInWithTotpSetup: Codable {
                 public let session: String
                 public let sharedSecret: String
+
+                public init(session: String, sharedSecret: String) {
+                    self.session = session
+                    self.sharedSecret = sharedSecret
+                }
             }
 
             public struct ContinueSignInWithEmailSetup: Codable {
                 public let session: String
+
+                public init(session: String) {
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithNewPasswordRequired: Codable {
@@ -87,11 +124,21 @@ public class Api {
                     try c.encodeIfPresent(self.requiredAttributes, forKey: .requiredAttributes)
                     try c.encode(self.session, forKey: .session)
                 }
+
+                public init(requiredAttributes: [String]? = nil, session: String) {
+                    self.requiredAttributes = requiredAttributes
+                    self.session = session
+                }
             }
 
             public struct ContinueSignInWithFirstFactorSelection: Codable {
                 public let availableChallenges: [AvailableChallenge]
                 public let session: String
+
+                public init(availableChallenges: [AvailableChallenge], session: String) {
+                    self.availableChallenges = availableChallenges
+                    self.session = session
+                }
 
                 public enum AvailableChallenge: String, Codable {
                     case password = "PASSWORD"
@@ -103,21 +150,40 @@ public class Api {
 
             public struct ConfirmSignInWithPassword: Codable {
                 public let session: String
+
+                public init(session: String) {
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithFirstFactorEmailOtp: Codable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
+
+                public init(codeDeliveryDetails: CodeDeliveryDetails, session: String) {
+                    self.codeDeliveryDetails = codeDeliveryDetails
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithFirstFactorSmsOtp: Codable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
+
+                public init(codeDeliveryDetails: CodeDeliveryDetails, session: String) {
+                    self.codeDeliveryDetails = codeDeliveryDetails
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithWebAuthn: Codable {
                 public let credentialRequestOptions: String
                 public let session: String
+
+                public init(credentialRequestOptions: String, session: String) {
+                    self.credentialRequestOptions = credentialRequestOptions
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignUp: Codable {
@@ -130,6 +196,10 @@ public class Api {
                 public func encode(to encoder: Encoder) throws {
                     var c = encoder.container(keyedBy: CodingKeys.self)
                     try c.encodeIfPresent(self.codeDeliveryDetails, forKey: .codeDeliveryDetails)
+                }
+
+                public init(codeDeliveryDetails: CodeDeliveryDetails? = nil) {
+                    self.codeDeliveryDetails = codeDeliveryDetails
                 }
             }
 
@@ -231,7 +301,11 @@ public class Api {
         }
 
         public struct SignedIn: Codable {
-            public let user: CognitoUser
+            public let user: AuthenticatedUser
+
+            public init(user: AuthenticatedUser) {
+                self.user = user
+            }
         }
 
         public enum Result: Codable {
@@ -272,23 +346,46 @@ public class Api {
         public struct ContinueSignIn: Codable {
             public let nextStep: NextStep
 
+            public init(nextStep: NextStep) {
+                self.nextStep = nextStep
+            }
+
             public struct ConfirmSignInWithSmsCode: Codable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
+
+                public init(codeDeliveryDetails: CodeDeliveryDetails, session: String) {
+                    self.codeDeliveryDetails = codeDeliveryDetails
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithTotpCode: Codable {
                 public let session: String
+
+                public init(session: String) {
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithEmailCode: Codable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
+
+                public init(codeDeliveryDetails: CodeDeliveryDetails, session: String) {
+                    self.codeDeliveryDetails = codeDeliveryDetails
+                    self.session = session
+                }
             }
 
             public struct ContinueSignInWithMfaSelection: Codable {
                 public let allowedMFATypes: [AllowedMFAType]
                 public let session: String
+
+                public init(allowedMFATypes: [AllowedMFAType], session: String) {
+                    self.allowedMFATypes = allowedMFATypes
+                    self.session = session
+                }
 
                 public enum AllowedMFAType: String, Codable {
                     case sms = "SMS"
@@ -301,6 +398,11 @@ public class Api {
                 public let allowedMFATypes: [AllowedMFAType]
                 public let session: String
 
+                public init(allowedMFATypes: [AllowedMFAType], session: String) {
+                    self.allowedMFATypes = allowedMFATypes
+                    self.session = session
+                }
+
                 public enum AllowedMFAType: String, Codable {
                     case totp = "TOTP"
                     case email = "EMAIL"
@@ -310,10 +412,19 @@ public class Api {
             public struct ContinueSignInWithTotpSetup: Codable {
                 public let session: String
                 public let sharedSecret: String
+
+                public init(session: String, sharedSecret: String) {
+                    self.session = session
+                    self.sharedSecret = sharedSecret
+                }
             }
 
             public struct ContinueSignInWithEmailSetup: Codable {
                 public let session: String
+
+                public init(session: String) {
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithNewPasswordRequired: Codable {
@@ -330,11 +441,21 @@ public class Api {
                     try c.encodeIfPresent(self.requiredAttributes, forKey: .requiredAttributes)
                     try c.encode(self.session, forKey: .session)
                 }
+
+                public init(requiredAttributes: [String]? = nil, session: String) {
+                    self.requiredAttributes = requiredAttributes
+                    self.session = session
+                }
             }
 
             public struct ContinueSignInWithFirstFactorSelection: Codable {
                 public let availableChallenges: [AvailableChallenge]
                 public let session: String
+
+                public init(availableChallenges: [AvailableChallenge], session: String) {
+                    self.availableChallenges = availableChallenges
+                    self.session = session
+                }
 
                 public enum AvailableChallenge: String, Codable {
                     case password = "PASSWORD"
@@ -346,21 +467,40 @@ public class Api {
 
             public struct ConfirmSignInWithPassword: Codable {
                 public let session: String
+
+                public init(session: String) {
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithFirstFactorEmailOtp: Codable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
+
+                public init(codeDeliveryDetails: CodeDeliveryDetails, session: String) {
+                    self.codeDeliveryDetails = codeDeliveryDetails
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithFirstFactorSmsOtp: Codable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
+
+                public init(codeDeliveryDetails: CodeDeliveryDetails, session: String) {
+                    self.codeDeliveryDetails = codeDeliveryDetails
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignInWithWebAuthn: Codable {
                 public let credentialRequestOptions: String
                 public let session: String
+
+                public init(credentialRequestOptions: String, session: String) {
+                    self.credentialRequestOptions = credentialRequestOptions
+                    self.session = session
+                }
             }
 
             public struct ConfirmSignUp: Codable {
@@ -373,6 +513,10 @@ public class Api {
                 public func encode(to encoder: Encoder) throws {
                     var c = encoder.container(keyedBy: CodingKeys.self)
                     try c.encodeIfPresent(self.codeDeliveryDetails, forKey: .codeDeliveryDetails)
+                }
+
+                public init(codeDeliveryDetails: CodeDeliveryDetails? = nil) {
+                    self.codeDeliveryDetails = codeDeliveryDetails
                 }
             }
 
@@ -474,7 +618,11 @@ public class Api {
         }
 
         public struct SignedIn: Codable {
-            public let user: CognitoUser
+            public let user: AuthenticatedUser
+
+            public init(user: AuthenticatedUser) {
+                self.user = user
+            }
         }
 
         public enum Result: Codable {

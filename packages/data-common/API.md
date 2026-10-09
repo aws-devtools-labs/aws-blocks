@@ -6,6 +6,11 @@
 
 import { Kysely } from 'kysely';
 
+// Warning: (ae-internal-missing-underscore) The name "closeOnProcessExit" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal
+export function closeOnProcessExit(close: () => Promise<void>): () => void;
+
 // @public
 export function createKyselyAdapter<T>(db: {
     getEngine(): DatabaseEngine | Promise<DatabaseEngine>;
@@ -57,6 +62,18 @@ export function isPgliteUnreachableTrap(error: unknown): boolean;
 // @public
 export const loadMigrationsFromDir: (dir: string) => Promise<Record<string, string>>;
 
+// Warning: (ae-internal-missing-underscore) The name "PgliteExtensionLike" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal
+export interface PgliteExtensionLike {
+    // (undocumented)
+    name: string;
+    // (undocumented)
+    setup: (pg: unknown, emscriptenOpts: Record<string, unknown>) => Promise<{
+        emscriptenOpts: Record<string, unknown>;
+    }>;
+}
+
 // Warning: (ae-internal-missing-underscore) The name "PgliteInitRetryOptions" should be prefixed with an underscore because the declaration is marked as @internal
 //
 // @internal
@@ -75,8 +92,18 @@ export interface PgliteLike {
     query(sql: string, params?: unknown[]): Promise<unknown>;
 }
 
+// Warning: (ae-internal-missing-underscore) The name "pgliteUnrefTimersExtension" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal
+export const pgliteUnrefTimersExtension: PgliteExtensionLike;
+
 // @public
 export const runMigrations: (engine: DatabaseEngine, migrations: Record<string, string>) => Promise<string[]>;
+
+// Warning: (ae-internal-missing-underscore) The name "runWithUnrefTimers" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal
+export function runWithUnrefTimers<T>(fn: () => T): T;
 
 // @public
 export const splitStatements: (sql: string) => string[];

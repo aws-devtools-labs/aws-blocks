@@ -1,0 +1,5 @@
+import { Auth } from '@aws-blocks/blocks';
+import { Scope } from '@aws-blocks/blocks';
+
+export const scope = new Scope('app');
+export const auth = new Auth(scope, 'auth');

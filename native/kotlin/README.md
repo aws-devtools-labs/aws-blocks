@@ -86,6 +86,35 @@ api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = tr
 
 When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable result still fails code generation.
 
+A transferable the runtime binds (a realtime channel, a file handle, an OIDC client) hydrates into its live object wherever it appears: returned directly, inside a list or map, in a property of a model, or in the messages of a realtime channel (`RealtimeChannel<List<FileDownloadHandle>>`, or a channel whose message model holds one). An OIDC client needs the calling client and the configured `oidc { relayTo }`, so a model that holds one decodes through its generated operation; to decode one yourself, use `OidcClient.json(blocksClient, relayTo).decodeFromJsonElement<LoginMenu>(json)`. A transferable is sent back as its `{ "__blocks": … }` descriptor (its `toJson()`), so an operation can take one as a parameter, directly, in a list or map, or in a model (a model holding an OIDC client encodes with `OidcClient.json`, as the generated operation does).
+
+A schema with both `properties` and `additionalProperties` (TypeScript `T & Record<string, V>`) generates a class whose known properties are typed and whose `attributes: Map<String, V>` holds every other key. Those keys are flat on the wire, next to the properties, in both directions. For example, the `signUp` action of an `Auth` block's `createApi()` takes custom attributes this way; with `export const authApi = auth.createApi()`, `AuthApi.SetAuthState.Input.SignUp(username, password, attributes = mapOf("email" to email))` sends `{"action":"signUp","username":…,"password":…,"email":…}`. An `attributes` entry named like a property, or like the union's discriminator, isn't sent: the property wins. If the schema has a property named `attributes` itself, that property keeps the name and the map is `attributes_2`.
+
+A union (`anyOf` / `oneOf`) generates a sealed class with one subclass per arm, read and written in the spec's wire format. When every arm is an object with a string discriminator property, the subclasses are written with that property (`{"type":"email",…}`). Otherwise each value is its arm's bare JSON value: a string, number, boolean, array, map, date-time or transferable arm is a subclass holding it as `value` (`Search.Query.Variant1("abc")` is sent as `"abc"`), a `const` arm is a `data object` written as its literal, and an object arm is its object, with no extra key. A value decodes to the first arm, in spec order, whose JSON shape it has (its JSON type, its required keys, or its exact literal), and one that matches no arm throws a `SerializationException` naming the union. A boolean or numeric discriminator is written and matched with that JSON type (`"isUpdated": true`). An arm with its own properties plus a nested `oneOf` (the `confirmSignIn` action of an `Auth` block's `createApi()`) is one flat object: `ConfirmSignIn(session, challenge = Challenge.Code(code))` sends `{"action":"confirmSignIn","session":…,"challenge":"code","code":…}`.
+
+Generated names follow the spec, and the wire keeps the spec's names. A property, parameter or operation keeps its spec name, escaped with backticks where Kotlin needs it (`` `class` ``, `` `content-type` ``). A name Kotlin can't declare even in backticks (one holding `.`, `;`, `[`, `]`, `/`, `<`, `>`, `:`, `\`, a backtick or a control character such as a line break) becomes its words in camelCase: a key `back\slash` is the property `backSlash` with `@SerialName("back\\slash")`, and the method `a.b.ping` is `A.bPing()`, which still calls `a.b.ping`. Types, enum constants and union subclasses are PascalCase. When two names land on one Kotlin name in the same scope (properties `user_name` and `userName` with inline object types, enum values `in-progress` and `in_progress`), the first keeps it and the next gets `_2`, then `_3`, and so on; so does a nested type named like a property of its class (`Meta: Meta_2`). Generated names step aside for yours: an operation with a parameter named `client`, `request`, `args`, `result` or `json` keeps that parameter name, and the generated code around it adapts.
+
+## Signing In With `Auth`
+
+An AWS Blocks `Auth` block serves its OIDC sign-in routes at fixed paths, so the OIDC client is built from the server and the provider ids, with no backend call:
+
+```kotlin
+import com.aws.blocks.kotlin.BlocksClient
+import com.aws.blocks.kotlin.oidc.OidcClient
+import com.example.myapp.generated.Servers
+
+val oidc = OidcClient.forAuth(
+    BlocksClient(Servers.local),
+    providers = listOf("google"), // the keys of the backend's oidcProviders
+    relayTo = "com.yourcompany.yourapp://auth/callback", // as in oidc { relayTo } above
+)
+
+val user = oidc.signIn("google") // opens the browser; oidc.authState follows along
+oidc.signOut()
+```
+
+Sign-in stores the backend's session cookie, which every generated API client sends, so methods the backend gates with `requireAuth` work after it. If the backend moves its routes with `redirects.callbackPath`, pass that path's directory as `basePath`.
+
 ## Gradle Tasks
 
 | Task | Description |

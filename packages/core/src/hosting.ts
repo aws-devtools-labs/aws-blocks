@@ -878,7 +878,7 @@ export class Hosting extends Construct {
       // reference (e.g. a cross-stack api handle that isn't a branded backend root).
       const configOwner = isBlocksBackendRoot(props.api) ? props.api : this;
       // BLOCKS_PUBLIC_ORIGIN: trusted public origin the app is served from. The
-      // auth BB (bb-auth-oidc) reads `process.env.BLOCKS_PUBLIC_ORIGIN` to build
+      // auth BB (`Auth`, bb-auth) reads `process.env.BLOCKS_PUBLIC_ORIGIN` to build
       // OIDC redirect_uris (config-derived, not from a forgeable request
       // header) so server-initiated sign-in lands back on the CloudFront/custom
       // domain — where the session cookie is scoped — instead of the raw
@@ -958,7 +958,7 @@ export class Hosting extends Construct {
     // route at synth — proxies the whole flow regardless of providers or
     // instance count, and never drifts as routes are added. Added directly (not
     // via the route loop below) so it's emitted exactly once even with multiple
-    // AuthOIDC instances.
+    // `Auth` instances.
     hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
 
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);

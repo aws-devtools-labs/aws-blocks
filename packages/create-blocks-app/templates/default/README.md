@@ -12,6 +12,8 @@ npm run sandbox      # Deploy to AWS sandbox
 
 Open http://localhost:3000 after `npm run dev`.
 
+**Signing up locally:** sign-up confirms the email address with a 6-digit code. Locally no email is sent, so the code is printed in the `npm run dev` terminal (`[auth] signUp code for …`). Enter it and you are signed in. Once deployed, Amazon Cognito emails the code (its default sender is limited to 50 emails a day).
+
 ## Project Structure
 
 | Path | Purpose |
@@ -23,7 +25,7 @@ Open http://localhost:3000 after `npm run dev`.
 
 ## What's Included
 
-- **AuthBasic** — sign up / sign in / sign out with JWT sessions
+- **Auth** — email + password sign-up / sign-in / sign-out with server-side sessions (Amazon Cognito on AWS)
 - **DistributedTable** — todos stored in DynamoDB with Zod schema validation
 - **Optimistic locking** — `version` field + `ifFieldEquals` prevents lost updates
 - **Realtime** — todo changes broadcast to all connected tabs via WebSocket

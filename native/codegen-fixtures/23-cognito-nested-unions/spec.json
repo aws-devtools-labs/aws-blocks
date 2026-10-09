@@ -401,7 +401,7 @@
                   ]
                 },
                 "user": {
-                  "$ref": "#/components/schemas/CognitoUser"
+                  "$ref": "#/components/schemas/AuthenticatedUser"
                 }
               },
               "required": [
@@ -809,7 +809,7 @@
                   ]
                 },
                 "user": {
-                  "$ref": "#/components/schemas/CognitoUser"
+                  "$ref": "#/components/schemas/AuthenticatedUser"
                 }
               },
               "required": [
@@ -824,46 +824,6 @@
   ],
   "components": {
     "schemas": {
-      "CognitoUser": {
-        "type": "object",
-        "properties": {
-          "userSub": {
-            "type": "string"
-          },
-          "groups": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "attributes": {
-            "type": "object",
-            "additionalProperties": {
-              "oneOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "userId": {
-            "type": "string"
-          },
-          "username": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "userSub",
-          "groups",
-          "attributes",
-          "userId",
-          "username"
-        ]
-      },
       "CodeDeliveryDetails": {
         "type": "object",
         "properties": {
@@ -886,6 +846,70 @@
           "destination",
           "deliveryMedium",
           "attributeName"
+        ]
+      },
+      "AuthenticatedUser": {
+        "type": "object",
+        "properties": {
+          "userSub": {
+            "type": "string"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "admins",
+                "users"
+              ]
+            }
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "signInProvider": {
+            "type": "string",
+            "enum": [
+              "password"
+            ]
+          },
+          "claims": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "unknown"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "userId": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "userSub",
+          "groups",
+          "attributes",
+          "signInProvider",
+          "userId",
+          "username"
         ]
       }
     }

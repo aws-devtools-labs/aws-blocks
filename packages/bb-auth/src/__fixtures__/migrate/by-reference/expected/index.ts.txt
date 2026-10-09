@@ -1,0 +1,11 @@
+import { Auth, type AuthOptions } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+const shared: AuthOptions = { selfSignUp: true };
+
+// TODO(aws-blocks-auth-migrate): options are passed by reference, so the codemod could not map them. Map each option by hand (MIGRATION.md, "Option mapping").
+export const byRef = new Auth(scope, 'by-ref', shared);
+// TODO(aws-blocks-auth-migrate): spread into the options: map the spread object’s keys by hand (MIGRATION.md, "Option mapping").
+// TODO(aws-blocks-auth-migrate): unknown option `futureOption` was kept as is; map it by hand (MIGRATION.md, "Option mapping").
+export const spread = new Auth(scope, 'spread', { ...shared, users: { groups: ['ops'] }, futureOption: 1 });

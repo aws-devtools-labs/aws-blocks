@@ -80,44 +80,8 @@ export type {
 } from '@aws-blocks/bb-async-job';
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
 // Building Blocks (CDK versions)
-export {
-	AuthBasic,
-	AuthBasicErrors,
-	type AuthBasicOptions,
-	type AuthBasicUser,
-	type PasswordPolicy,
-} from '@aws-blocks/bb-auth-basic';
-export type {
-	AuthCognitoOptions,
-	AuthFlowType,
-	CodeDeliveryDetails,
-	CognitoUser,
-	ConfirmSignInOptions,
-	DeviceRecord,
-	ExternalUserPoolRef,
-	MFAPreference,
-	ResetPasswordResult,
-	SignInNextStep,
-	SignInOptions,
-	SignInResult,
-	SignUpOptions,
-	SignUpResult,
-	UpdateAttributeOutcome,
-	UserAttribute,
-} from '@aws-blocks/bb-auth-cognito';
-export { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
-export type { AuthOIDCErrorName, MappedClaims, OIDCUser, RelayOrigin } from '@aws-blocks/bb-auth-oidc';
-export {
-	AuthOIDC,
-	AuthOIDCErrors,
-	cognitoFederated,
-	customOauth2,
-	customOidc,
-	github,
-	google,
-	relayOrigin,
-	stubIdp,
-} from '@aws-blocks/bb-auth-oidc';
+export type * from '@aws-blocks/bb-auth';
+export { Auth, AuthErrors, customOauth2, github, isAuthError, relayOrigin, stubIdp } from '@aws-blocks/bb-auth';
 export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
 export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';
 export type {

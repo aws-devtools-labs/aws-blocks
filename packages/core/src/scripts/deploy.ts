@@ -1,16 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
+import { generateDeployClient } from './deploy-client-codegen.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -48,21 +47,15 @@ export async function deploy(options: DeployOptions) {
     // deploying. No-op unless this app uses an external DB and has ./migrations.
     await applyExternalMigrations({ stage: 'production' });
     
-    // Import backend to populate BB registry for telemetry
+    // Generate client code FIRST (before cdk deploy triggers the Vite build).
+    // This also populates the BB registry for telemetry — from a child process,
+    // never by importing the backend here: an in-process import loads the local
+    // mock layer, whose runtimes (PGlite, CronJob schedulers, …) kept this
+    // process alive forever after the deploy finished.
     const foundationPath = resolve(options.projectRoot, 'aws-blocks/index.ts');
-    try {
-      await import(pathToFileURL(foundationPath).href);
-    } catch { /* ignore import errors */ }
-
-    // Generate client code FIRST (before cdk deploy triggers the Vite build)
     const clientPath = join(dirname(foundationPath), 'client.js');
     console.log('📝 Generating client code...');
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const workerPath = join(__dirname, 'generate-client-worker.js');
-    execFileSync('node', ['--conditions=aws-runtime', '--import', 'tsx', workerPath, foundationPath, clientPath], {
-      stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
+    await generateDeployClient(foundationPath, clientPath);
 
     console.log('🚀 Deploying to AWS...');
     console.log('   (This may take a few minutes on first deploy)');

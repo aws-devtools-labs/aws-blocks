@@ -112,6 +112,7 @@ An intermediate revision of the RPC error-leak sanitizer (`errorResponseFromCatc
 
 **Date**: 2026-04-07
 **Authors:** Jon Wire
+**Status:** Amended by [D-017](#d-017-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc) (2026-10-03). The three auth blocks named below were replaced by one block, `Auth` (`@aws-blocks/bb-auth`). The auth-first convention still governs its identifiers — `Auth`, `AuthOptions`, `AuthErrors`, `AuthenticatedUser`; packages `bb-auth`, `auth-common`. The original record follows unchanged.
 
 ### Context
 Auth Building Blocks span multiple packages (`AuthBasic`, `AuthOIDC`, `AuthCognito`) and share a common interface. We needed a naming convention for the classes, types, and packages.
@@ -134,7 +135,7 @@ Use **auth-first** naming: the word `Auth` comes first in all auth-related ident
 
 ### References
 - Common interface: `packages/auth-common/src/index.ts`
-- Design docs: `docs/tech-design/BB-auth-common.md`, `docs/tech-design/BB-auth-basic.md`
+- Design docs: [`packages/auth-common/DESIGN.md`](../packages/auth-common/DESIGN.md), [`packages/bb-auth/DESIGN.md`](../packages/bb-auth/DESIGN.md). (This record originally cited `docs/tech-design/BB-auth-common.md` and `docs/tech-design/BB-auth-basic.md`; neither file was ever committed.)
 
 ## D-005: Auth state machine uses a unified form model (no redirect action type)
 
@@ -196,6 +197,7 @@ Extend `getMockDataDir` with an optional `options` parameter: `getMockDataDir(sc
 
 **Date**: 2026-06-08
 **Authors:** pranavosu
+**Status:** Still in force. Since [D-017](#d-017-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc) there is one auth block: `Auth` applies this recipe through the same helper (`packages/bb-auth/src/cookies.ts`), with the opt-in at `session: { crossDomain: true }`. The original record follows unchanged.
 
 ### Context
 The three auth Building Blocks disagreed on the session cookie's `SameSite` attribute (and the coupled `Secure` / `Partitioned` handling):
@@ -272,7 +274,7 @@ Every reference doc MUST ship via `"files"` in package.json (so it reaches `node
 ### References
 - Amends: D-002 (original two-file rule)
 - Skill convention this mirrors: `.skills/blocks-pr-review/` (`SKILL.md` + `references/`)
-- First third-file instance: `packages/auth-common/CUSTOMIZING-AUTH-UI.md` (PR #834, issue #700)
+- First third-file instance: [`packages/bb-auth/CUSTOMIZING-AUTH-UI.md`](../packages/bb-auth/CUSTOMIZING-AUTH-UI.md) (PR #834, issue #700; moved from `packages/auth-common/` when the auth Building Blocks were unified into `Auth`)
 
 ## D-009: External databases — Blocks-applied, version-controlled schema migrations
 
@@ -738,3 +740,39 @@ Two asymmetries are left standing on purpose. As of this decision `create-blocks
 ### References
 - D-010 (clauses 1–2 unchanged; clause 3 narrowed to paths this run did not create)
 - `aws/aws-cdk-cli`, `packages/aws-cdk/lib/cli/telemetry/sink/file-sink.ts` — create-then-append file sink
+
+## D-018: One auth Building Block: `Auth` replaces `AuthBasic`, `AuthCognito` and `AuthOIDC`
+
+**Date**: 2026-10-03
+**Authors:** Harshdeep Singh
+
+### Context
+AWS Blocks shipped three auth Building Blocks — `bb-auth-basic`, `bb-auth-cognito` and `bb-auth-oidc` — plus `auth-common`. Users could not tell which to pick or why, and nothing in the framework answered the question. The blocks also disagreed on error names and on what `userId` means, and `AuthBasic` and `AuthCognito` used the same cookie name with incompatible payloads.
+
+### Decision
+Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured through one options object whose sign-in methods are sibling keys: `emailPassword`, `socialProviders`, `oidcProviders` and `samlProviders`.
+
+- **Two federation engines, chosen per provider.** `oidcProviders` entries default to `federateVia: 'direct'` (your backend verifies the IdP's tokens); `federateVia: 'cognito'` is opt-in. Social and SAML providers always federate through Cognito.
+- **No Cognito resources unless something needs them.** A configuration whose only sign-in methods are direct OIDC providers creates no user pool. Adding a pool-backed method later adds the pool rather than replacing anything.
+- **`AuthBasic` is removed with no upgrade path.** Cognito cannot import its bcrypt hashes, so its users must sign up again.
+- **Hard cutover.** The three old packages are removed in the release that publishes `@aws-blocks/bb-auth`, with no shims or aliases. The API breaks deliberately: one error vocabulary (`AuthErrors`), one user type, `get*` / `scan*` naming.
+- **`AuthCognito` deployments upgrade in place.** `Auth` keeps `AuthCognito`'s construct ids, pool name and session format, so an app that switches keeps its user pool, its users and their signed-in sessions.
+- **A comparison table answers "which option and why".** It lives in `packages/bb-auth/README.md`, with a short version in the umbrella README.
+
+### Rationale
+1. **One import, no "which block?" decision.** Adding a sign-in method is a new key on the same block, not a migration to another block.
+2. **Direct OIDC by default avoids a pricing cliff.** Cognito bills users federated through OIDC or SAML on a separate meter with 50 free MAUs, against 10,000 for direct and social sign-in. Direct federation involves no Cognito, runs offline against the built-in stub IdP, and supports PKCE-only (public) clients, which Cognito cannot federate because it requires a client secret.
+3. **Federating through Cognito adds no MFA.** Cognito leaves all authentication of federated users to their IdP. The case for `federateVia: 'cognito'` is having those users in the pool (Cognito groups, `auth.admin`, Cognito-issued tokens), so it stays opt-in.
+4. **Offline development survives.** The local Cognito user pool runs fully offline, so removing `AuthBasic` does not remove offline development.
+
+### Alternatives Considered
+- **Keep three blocks and document the choice.** Leaves the decision with the user and keeps three error vocabularies and `userId` meanings.
+- **Route every provider through Cognito.** One token format, but a 200× smaller free tier for OIDC users, no offline federated sign-in and no PKCE-only IdPs.
+- **A deprecation window with runtime aliases.** Doubles the surface to test and keeps the ambiguity alive; the codemod (`npx @aws-blocks/bb-auth migrate`) and `MIGRATION.md` cover the move instead.
+
+### References
+- User doc and comparison table: [`packages/bb-auth/README.md`](../packages/bb-auth/README.md#which-option-and-why)
+- Upgrade guide and codemod: [`packages/bb-auth/MIGRATION.md`](../packages/bb-auth/MIGRATION.md)
+- Design: [`packages/bb-auth/DESIGN.md`](../packages/bb-auth/DESIGN.md)
+- Research and plan: [`docs/design/auth-unification/`](./design/auth-unification/) (Cognito pricing and federation facts: [`03-cognito-capabilities.md`](./design/auth-unification/03-cognito-capabilities.md))
+- Supersedes the three-block naming in [D-004](#d-004-auth-first-naming-convention-for-auth-building-blocks)

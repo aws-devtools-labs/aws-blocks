@@ -97,6 +97,6 @@ button:hover { background: #e0e0e0; }
 .todo-add input { flex: 1; }
 
 /* Auth containers (Authenticator component) */
-#basic-auth-container, #cognito-auth-container {
+#basic-auth-container, #cognito-auth-container, #oidc-auth-container {
   margin-bottom: 12px;
 }

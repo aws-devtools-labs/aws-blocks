@@ -130,7 +130,13 @@ describe('generateIndexFile', () => {
   });
 
   test('supabaseCrud accepts optional auth parameter', () => {
-    assert.ok(output.includes('supabaseCrud(context: any, auth?:'));
+    assert.match(output, /supabaseCrud\(\s*context: any,\s*auth\?:/);
+  });
+
+  test('supabaseCrud hands the auth user\'s claims to RLS (raw provider sub for direct OIDC users)', () => {
+    // AuthenticatedUser.claims (bb-auth) is set for users of a direct oidcProviders entry only.
+    assert.ok(output.includes('claims?: Readonly<Record<string, unknown>>'));
+    assert.ok(output.includes('user.claims ? { userId: user.userId, claims: { ...user.claims } } : { userId: user.userId }'));
   });
 
   test('throws helpful error when auth not configured', () => {
@@ -279,10 +285,14 @@ describe('generateMigrationGuide', () => {
     assert.ok(output.includes('database.ca.ts'));
     assert.ok(output.includes('DATABASE_CA_CERT'));
   });
-  test('uses AuthOIDC for the auth example', () => {
+  test('uses the unified Auth block for the auth example', () => {
     const output = generateMigrationGuide(TABLES, new Map());
-    assert.ok(output.includes('AuthOIDC'));
-    assert.ok(!output.includes('AuthCognito'));
+    assert.ok(output.includes("import { Auth } from '@aws-blocks/bb-auth';"));
+    assert.ok(output.includes("new Auth(scope, 'auth', {"));
+    // The removed auth blocks must not appear anywhere in the generated guide.
+    for (const removed of ['AuthOIDC', 'AuthCognito', 'AuthBasic', 'bb-auth-oidc', 'bb-auth-cognito', 'bb-auth-basic']) {
+      assert.ok(!output.includes(removed), `generated guide still mentions ${removed}`);
+    }
     assert.ok(!output.includes('supabase.auth'));
   });
 
@@ -318,8 +328,16 @@ describe('generateMigrationGuide', () => {
   test('includes userId-vs-sub note', () => {
     const output = generateMigrationGuide(TABLES, new Map());
     assert.ok(output.includes('User ID Formats'));
-    assert.ok(output.includes('user.claims.sub'));
+    // `claims` is optional on Auth's user (direct OIDC only): the guide reads it guarded.
+    assert.ok(output.includes('user.claims?.sub'));
+    assert.ok(!output.includes('user.claims.sub'));
     assert.ok(output.includes('iss-prefixed'));
+  });
+
+  test('the Auth section says which subject RLS sees — what supabaseCrud() does', () => {
+    const output = generateMigrationGuide(TABLES, new Map());
+    assert.match(output, /`claims\.sub` \(the raw provider\s+`sub`\) is what reaches RLS/);
+    assert.match(output, /has no `claims`, so RLS sees their `userId`/);
   });
 
   test('includes a Deploy to Production section covering the full rollout', () => {

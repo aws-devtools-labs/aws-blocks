@@ -5,7 +5,13 @@ import { PGlite } from '@electric-sql/pglite';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { initializePgliteWithRetry, type DatabaseEngine, type TransactionHandle } from '@aws-blocks/data-common';
+import {
+  closeOnProcessExit,
+  initializePgliteWithRetry,
+  pgliteUnrefTimersExtension,
+  type DatabaseEngine,
+  type TransactionHandle,
+} from '@aws-blocks/data-common';
 import { DatabaseErrors, wrapError, reTagged, serializationConflict, uniqueConstraintConflict } from '../errors.js';
 
 /** PostgreSQL error code for unique constraint violations. */
@@ -127,10 +133,20 @@ function recoverIncompletePgliteDataDir(dataDir: string): void {
  * `beginTransaction()` will interleave on the same connection. This is
  * acceptable for single-threaded local dev servers but must not be used
  * in multi-request concurrent environments.
+ *
+ * Process lifetime: the engine never keeps the Node.js process alive by itself
+ * (PGlite's emulated timers are `unref()`'d), and once the event loop has
+ * nothing left to do it closes PGlite, so PostgreSQL shuts down cleanly and no
+ * stale `postmaster.pid` is left behind. A query after that reopens the engine.
  */
 export class PGliteEngine implements DatabaseEngine {
   private db: PGlite;
   private closed = false;
+  /** Closed by the process-exit hook; the next query reopens a fresh instance. */
+  private closedForExit = false;
+  /** The exit hook's in-flight close; a reopen waits for it, so two instances never share the data dir. */
+  private exitClosing?: Promise<void>;
+  private cancelExitClose?: () => void;
   private readonly dataDir: string;
   private readonly createClient: (dataDir: string) => PGlite;
   private ready?: Promise<PGlite>;
@@ -141,7 +157,7 @@ export class PGliteEngine implements DatabaseEngine {
    *   to a real `PGlite`. Exposed as a seam so tests can inject an instance
    *   that simulates a WASM init trap.
    */
-  constructor(dataDir: string = '.bb-data', createClient: (dataDir: string) => PGlite = (dir) => new PGlite(dir)) {
+  constructor(dataDir: string = '.bb-data', createClient: (dataDir: string) => PGlite = createLocalPglite) {
     this.dataDir = dataDir;
     this.createClient = createClient;
     this.db = this.createDb();
@@ -167,7 +183,21 @@ export class PGliteEngine implements DatabaseEngine {
     mkdirSync(this.dataDir, { recursive: true });
     recoverIncompletePgliteDataDir(this.dataDir);
     cleanStaleLock(this.dataDir);
+    this.cancelExitClose ??= closeOnProcessExit(() => this.closeForExit());
     return this.createClient(this.dataDir);
+  }
+
+  /**
+   * Close PGlite when the process is about to exit (see {@link closeOnProcessExit}),
+   * so PostgreSQL shuts down cleanly and removes its `postmaster.pid`.
+   */
+  private async closeForExit(): Promise<void> {
+    this.cancelExitClose = undefined;
+    if (this.closed || this.closedForExit) return;
+    this.closedForExit = true;
+    this.ready = undefined;
+    this.exitClosing = this.db.close().catch(() => {});
+    await this.exitClosing;
   }
 
   /**
@@ -177,6 +207,19 @@ export class PGliteEngine implements DatabaseEngine {
    * transient memory pressure eases.
    */
   private ensureReady(): Promise<PGlite> {
+    if (this.closedForExit && !this.closed) {
+      // Closed by the exit hook, but the process kept going (e.g. another
+      // `beforeExit` listener ran a query) — reopen once that close has finished.
+      this.closedForExit = false;
+      const closing = this.exitClosing ?? Promise.resolve();
+      this.exitClosing = undefined;
+      this.ready = closing.then(() => {
+        this.db = this.createDb();
+        this.ready = undefined;
+        return this.ensureReady();
+      });
+      return this.ready;
+    }
     if (!this.ready) {
       this.ready = initializePgliteWithRetry(this.db, () => (this.db = this.createDb()), {
         onRetry: (attempt, error) =>
@@ -262,6 +305,20 @@ export class PGliteEngine implements DatabaseEngine {
   async destroy(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.cancelExitClose?.();
+    this.cancelExitClose = undefined;
+    if (this.closedForExit) {
+      await this.exitClosing;
+      return;
+    }
     await this.db.close();
   }
+}
+
+/**
+ * The default PGlite factory: a real `PGlite` whose emulated timers never keep
+ * the process alive by itself (see {@link pgliteUnrefTimersExtension}).
+ */
+function createLocalPglite(dataDir: string): PGlite {
+  return new PGlite(dataDir, { extensions: { awsBlocksUnrefTimers: pgliteUnrefTimersExtension } });
 }

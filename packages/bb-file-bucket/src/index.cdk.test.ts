@@ -16,6 +16,7 @@ import { Template, Match } from 'aws-cdk-lib/assertions';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { FileBucket } from './index.cdk.js';
+import { deriveBucketName } from './bucket-name.js';
 
 // Minimal BlocksStack-shaped parent. The production code path uses BlocksStack,
 // which exposes the shared `executionRole` (blocks grant to it) plus `handler`,
@@ -77,16 +78,23 @@ test('CDK: FileBucket.fromExisting returns a branded ref', () => {
   assert.strictEqual(ref.__brand, 'ExternalBucketRef');
 });
 
-test('CDK: default FileBucket with an over-long derived name throws at synth', () => {
-  const { parent } = setup();
-  // parent id "app" + "-" + a 60-char id => 64 chars, over the S3 limit.
-  assert.throws(
-    () => new FileBucket(parent, 'u'.repeat(60)),
-    (err: unknown) =>
-      err instanceof Error &&
-      err.name === 'ValidationFailed' &&
-      /63-character limit/.test(err.message),
-  );
+test('CDK: an under-limit derived bucket name is provisioned byte-identical to fullId', () => {
+  const { stack, parent } = setup();
+  const bucket = new FileBucket(parent, 'uploads');
+  // Resource identity: names that already fit must never change (a new name replaces the bucket).
+  assert.strictEqual(bucket.fullId, 'teststack-app-uploads');
+  Template.fromStack(stack).hasResourceProperties('AWS::S3::Bucket', { BucketName: 'teststack-app-uploads' });
+});
+
+test('CDK: an over-long derived name is shortened at synth instead of throwing', () => {
+  const { stack, parent } = setup();
+  // stack "teststack" + parent "app" + a 60-char id, joined with "-" => 74 chars, over the S3 limit.
+  const bucket = new FileBucket(parent, 'u'.repeat(60));
+  assert.strictEqual(bucket.fullId.length, 74);
+  const expected = deriveBucketName(bucket.fullId);
+  assert.ok(expected.length <= 63);
+  assert.match(expected, /^teststack-app-u+-[0-9a-f]{8}$/);
+  Template.fromStack(stack).hasResourceProperties('AWS::S3::Bucket', { BucketName: expected });
 });
 
 test('CDK: fromExisting skips derived-name validation even when the chain is over-long', () => {

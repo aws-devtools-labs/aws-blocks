@@ -405,6 +405,32 @@ describe("verify-coverage", () => {
 		assert.match(output, /Skipping coverage check for the release PR/);
 	});
 
+	it("ignores private packages, which are never published", (t) => {
+		const dir = baseRepo(t, {
+			"packages/bb-private/package.json": pkgJson("@aws-blocks/bb-private", { private: true }),
+		});
+		commitPr(dir, { "packages/bb-private/src/index.ts": "export const a = 1;\n" });
+
+		const { status, output } = guard(dir, "verify-coverage");
+		assert.equal(status, 0, output);
+		assert.doesNotMatch(output, /@aws-blocks\/bb-private/);
+	});
+
+	it("still fails for a public package changed alongside a private one", (t) => {
+		const dir = baseRepo(t, {
+			"packages/bb-private/package.json": pkgJson("@aws-blocks/bb-private", { private: true }),
+		});
+		commitPr(dir, {
+			"packages/bb-private/src/index.ts": "export const a = 1;\n",
+			"packages/core/src/index.ts": "export const b = 1;\n",
+		});
+
+		const { status, output } = guard(dir, "verify-coverage");
+		assert.equal(status, 1, output);
+		assert.match(output, /@aws-blocks\/core/);
+		assert.doesNotMatch(output, /@aws-blocks\/bb-private/);
+	});
+
 	it("fails loudly when a changed package's package.json cannot be parsed", (t) => {
 		const dir = baseRepo(t);
 		commitPr(dir, { "packages/core/package.json": "{ not json\n" });

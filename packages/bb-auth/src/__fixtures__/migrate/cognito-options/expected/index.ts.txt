@@ -1,0 +1,41 @@
+import { Auth } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+
+// The production pool. Comments on the block survive.
+export const auth = new Auth(scope, 'auth', {
+	emailPassword: {
+		// Who may sign up.
+		selfSignUp: false,
+		passwordPolicy: { minLength: 12, requireSymbols: false },
+	},
+	users: {
+		signInWith: ['email'],
+		groups: ['admins', { name: 'readers', description: 'Read-only', precedence: 2 }] as const,
+		attributes: [{ name: 'tenant' }, { name: 'age', type: 'Number', mutable: false }],
+		deviceTracking: { challengeRequiredOnNewDevice: true },
+		authFlow: 'USER_AUTH',
+	},
+	mfa: { mode: 'optional', types: ['TOTP'] }, // TOTP only
+	session: {
+		ttlSeconds: 86_400,
+		crossDomain: true,
+	},
+	admin: { actions: ['groups'] },
+	removalPolicy: 'retain',
+	featurePlan: 'plus',
+	passkeys: {
+		relyingPartyId: 'example.com',
+		origins: ['https://example.com'],
+		userVerification: 'preferred',
+	},
+	codeDelivery: async (username, code, purpose) => {
+		console.log(purpose, username, code);
+	},
+});
+
+// R10: MFA on without mfaTypes meant SMS only — the codemod writes that out.
+export const smsOnly = new Auth(scope, 'sms-only', { mfa: { mode: 'required', types: ['SMS'] } });
+
+export const plain = new Auth(scope, 'plain');

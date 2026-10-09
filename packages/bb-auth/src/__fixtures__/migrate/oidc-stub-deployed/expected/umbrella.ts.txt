@@ -1,0 +1,18 @@
+import * as blocks from '@aws-blocks/blocks';
+
+const scope = new blocks.Scope('app');
+
+export const auth = new blocks.Auth(scope, 'umbrella-auth', {
+	emailPassword: false,
+	oidcProviders: {
+		dev: blocks.stubIdp({
+			scopes: ['openid'],
+			// TODO(aws-blocks-auth-migrate): RISK: stubIdp() is local-only in Auth — synth refuses it unless it sets unsafeAllowDeployed. AuthOIDC served this stub
+			//   from deployed stacks too, so the codemod kept that with unsafeAllowDeployed: true. A deployed stub signs ANYONE who
+			//   can reach the app in as its users, with no credentials. Keep the flag only on a disposable test stack. For
+			//   production, remove it and deploy the real provider instead (choose the provider by environment, so npm run dev
+			//   keeps the stub) — MIGRATION.md, "stubIdp() is local-only".
+			unsafeAllowDeployed: true,
+		}),
+	},
+});

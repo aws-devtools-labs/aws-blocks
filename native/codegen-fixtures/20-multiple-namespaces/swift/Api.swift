@@ -38,6 +38,12 @@ public class Posts {
             public let authorId: String
             public let id: String
             public let title: String
+
+            public init(authorId: String, id: String, title: String) {
+                self.authorId = authorId
+                self.id = id
+                self.title = title
+            }
         }
     }
 
@@ -47,12 +53,24 @@ public class Posts {
             public let authorId: String
             public let body: String
             public let title: String
+
+            public init(authorId: String, body: String, title: String) {
+                self.authorId = authorId
+                self.body = body
+                self.title = title
+            }
         }
 
         public struct Result: Codable {
             public let authorId: String
             public let id: String
             public let title: String
+
+            public init(authorId: String, id: String, title: String) {
+                self.authorId = authorId
+                self.id = id
+                self.title = title
+            }
         }
     }
 
@@ -60,6 +78,10 @@ public class Posts {
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 }
@@ -100,6 +122,11 @@ public class Users {
         public struct Input: Codable {
             public let email: String
             public let name: String
+
+            public init(email: String, name: String) {
+                self.email = email
+                self.name = name
+            }
         }
     }
 }

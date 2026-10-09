@@ -8,6 +8,7 @@ export 'src/file_upload_handle.dart';
 export 'src/blocks_client.dart';
 export 'src/blocks_config.dart';
 export 'src/blocks_rpc_exception.dart';
+export 'src/deep_equality.dart';
 export 'src/oidc_auth_state.dart';
 export 'src/oidc_client.dart';
 export 'src/oidc_exception.dart';

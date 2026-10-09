@@ -1,10 +1,14 @@
+@file:OptIn(ExperimentalUuidApi::class)
+
 package com.example.app
 
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
 import com.aws.blocks.kotlin.BlocksServer
 import com.aws.blocks.kotlin.json.BlocksJson
+import kotlin.OptIn
 import kotlin.String
+import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate

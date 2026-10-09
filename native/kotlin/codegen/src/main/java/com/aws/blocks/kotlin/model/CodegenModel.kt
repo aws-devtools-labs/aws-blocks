@@ -1,6 +1,7 @@
 package com.aws.blocks.kotlin.model
 
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 
 // ── Primitive Kind ────────────────────────────────────────────────
 
@@ -79,6 +80,19 @@ data class ResolvedField(
     val defaultValue: JsonElement? = null,
 )
 
+/**
+ * One arm of a union. An object arm has [fields] (and maybe [additionalPropertiesType] or an
+ * [embeddedUnion]); on the wire it is that JSON object. Two other kinds carry no fields:
+ *
+ * - a **value arm** ([valueType] set): a string, number, boolean, `unknown`, formatted string,
+ *   array, map or transferable, or a nullable of one. On the wire it is that bare JSON value
+ *   (`"abc"`, `[1, 2]`), so its Kotlin class holds it as `value`.
+ * - a **literal arm** ([literal] set): a `const` or an `enum` arm, matched by its exact JSON
+ *   literals (`true`, `5`, `"auto"`).
+ *
+ * [discriminatorLiteral] is [discriminatorValue] with the JSON type the spec gives it (`false`,
+ * not `"false"`).
+ */
 data class UnionVariant(
     val name: String,
     val fields: List<ResolvedField>,
@@ -87,6 +101,9 @@ data class UnionVariant(
     val payloadTypeName: String? = null,
     val additionalPropertiesType: ResolvedType? = null,
     val nestedTypes: List<NestedTypeNode> = emptyList(),
+    val valueType: ResolvedType? = null,
+    val literal: List<JsonPrimitive>? = null,
+    val discriminatorLiteral: JsonPrimitive? = null,
 )
 
 data class DiscriminatorInfo(
@@ -96,9 +113,14 @@ data class DiscriminatorInfo(
     val type: DiscriminatorType = DiscriminatorType.STRING,
 )
 
+/** The JSON type of a union's discriminator values. */
 enum class DiscriminatorType {
+    /** Every value is a JSON string: kotlinx's `@JsonClassDiscriminator` reads and writes it. */
     STRING,
+    /** Every value is a JSON boolean. */
     BOOLEAN,
+    /** Numbers, or a mix of JSON types. */
+    OTHER,
 }
 
 data class ServerDefinition(
@@ -120,12 +142,18 @@ data class ApiNamespace(
     val operations: List<Operation>,
 )
 
+/**
+ * One method of an [ApiNamespace]. [name] is its local name (after the namespace), and
+ * [rpcMethod] the spec's method name, which a call sends as the JSON-RPC `method` exactly: a
+ * method with no dot is grouped under `_default`, but its wire name is still `ping`.
+ */
 data class Operation(
     val name: String,
     val parameters: List<OperationParameter>,
     val result: OperationResult,
     val description: String?,
     val nestedTypes: List<NestedTypeNode> = emptyList(),
+    val rpcMethod: String = name,
 )
 
 data class NestedTypeNode(

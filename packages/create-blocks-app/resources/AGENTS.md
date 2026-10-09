@@ -26,19 +26,47 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 ### Methods are namespaced
 
-A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the string you passed as the **second** argument to `new ApiNamespace(scope, '<name>', …)`. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
+A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the name the backend **exports** it under in `aws-blocks/index.ts` — `export const api = new ApiNamespace(scope, 'api', …)` is called as `api.*` — not the second argument to `new ApiNamespace(…)` (keep the two the same to avoid confusion). A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi = auth.createApi()` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
 
 ### Auth is a Building Block, not hand-rolled
 
-Get the current user inside a method with `await auth.requireAuth(context)` (throws if unauthenticated — put it at the top of a protected method). On the frontend, mount the ready-made UI from `@aws-blocks/blocks/ui`:
+There is one auth block, `Auth`, imported from `@aws-blocks/blocks`. One options object configures every sign-in method: email + password (on by default), `socialProviders`, `oidcProviders` and `samlProviders`. Full docs: `bb-auth/README.md` in the docs folder (also `node_modules/@aws-blocks/bb-auth/README.md`).
+
+```ts
+// aws-blocks/index.ts
+import { ApiNamespace, Auth, Scope } from '@aws-blocks/blocks';
+const scope = new Scope('my-app');
+const auth = new Auth(scope, 'auth', {
+  users: { groups: ['admins'] },                       // optional: groups for requireRole
+  // Local dev only: no email is sent, so log the codes. Ignored on AWS (Cognito emails them).
+  codeDelivery: async (username, code, purpose) => console.log(`[auth] ${purpose} code for ${username}: ${code}`),
+});
+export const authApi = auth.createApi();               // the state machine the sign-in UI drives
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async myNotes() {
+    const user = await auth.requireAuth(context);      // 401 NotAuthenticatedException if signed out
+    return user.userSub;                               // key per-user data on userSub
+  },
+  async adminReport() {
+    await auth.requireRole(context, 'admins');         // 403 NotAuthorizedException if not in the group
+  },
+}));
+```
+
+- **Gate every method that needs a user.** API methods are public by default: call `await auth.requireAuth(context)` (or `auth.requireRole(context, '<group>')`) at the top. `auth.getCurrentUser(context)` returns the user or `null` when you only want to branch.
+- **Pass options inline.** The block narrows its types to the literal options: `requireRole` accepts only declared `users.groups`, and methods your configuration doesn't enable are compile errors. Don't route the options through a variable typed `AuthOptions`.
+- **Sign-up always confirms the email address with a 6-digit code.** With `emailPassword.autoSignIn` (on by default) the user is signed in once they enter it — no second password entry — but the code is always required. Locally the code goes to `codeDelivery` and to `.bb-data/<scope id>-<auth id>/last-code.json` (e.g. `.bb-data/my-app-auth/last-code.json`); once deployed, Amazon Cognito emails it (its default sender is limited to 50 emails a day).
+- **The flow over `authApi`** (what the `Authenticator` does for you, and what tests call): `setAuthState({ action: 'signUp', username, password, email })` → state `confirmingSignUp`; `setAuthState({ action: 'confirmSignUp', username, code })`; `setAuthState({ action: 'autoSignIn', username })` → `signedIn`. Later: `{ action: 'signIn', username, password }` and `{ action: 'signOut' }`. By default (`users.signInWith: ['username', 'email']`) users choose a username, which must not look like an email address, and can also sign in with their email once it is confirmed. With `users: { signInWith: ['email'] }` the email *is* the username (omit `email`), and `user.username` is an id Cognito generates — show `user.displayName` (on `AuthState.user` / `onAuthChange`, the email) and read the address server-side from `user.attributes.email`.
+- **Errors cross the wire by name.** Match them with `isBlocksError(e, 'NotAuthenticatedException')` (from `@aws-blocks/blocks/client` on the frontend) or `isAuthError(e, AuthErrors.NotAuthenticated)` on the backend.
+- **Decide `users.signInWith` and custom attributes before the first deploy** — Cognito can't change them on an existing user pool. The first synth writes a baseline under `aws-blocks/baselines/` (commit it); from then on synth refuses such a change. **Never change the block's id** (`'auth'`) or its scope after deploying: that creates a new, empty user pool and removes the old one along with its users.
+
+On the frontend, mount the ready-made UI from `@aws-blocks/blocks/ui` — it renders sign-up, the code step and sign-in, and submits the automatic sign-in for you:
 
 ```ts
 import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
 authContainer.appendChild(Authenticator(authApi));
 onAuthChange(authApi, (user) => { /* re-render for signed-in/out */ });
 ```
-
-`AuthBasic` without a `codeDelivery` config signs a user in immediately on sign-up (no email confirmation step).
 
 ### The deployed frontend finds the backend on its own
 

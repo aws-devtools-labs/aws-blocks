@@ -3,7 +3,8 @@
 
 /**
  * CDK construct tests for DistributedDatabase.
- * Pattern follows bb-auth-cognito/src/index.cdk.test.ts — sets up a plain Stack
+ * Pattern follows the auth block's CDK harness (bb-auth/src/test-support/cdk-synth.ts,
+ * originally bb-auth-cognito's) — sets up a plain Stack
  * with a placeholder handler on globalThis to satisfy Scope.handler lookups.
  */
 import { test } from 'node:test';

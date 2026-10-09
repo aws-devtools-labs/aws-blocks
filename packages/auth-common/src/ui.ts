@@ -7,9 +7,9 @@ import type { AuthState, AuthAction, AuthUser } from './index.js';
  * Typed payload map for `setAuthState` — discriminated on the action
  * name emitted by each BB's state machine.
  *
- * Covers the universal action vocabulary shared by `AuthBasic` and
- * `AuthCognito`. Individual BBs MAY emit additional actions (e.g.
- * Cognito's `confirmSignIn`, `resendSignUpCode`) — these keys exist on
+ * Covers the universal action vocabulary shared by `Auth` and the blocks it
+ * replaced (`AuthBasic`, `AuthCognito`). Individual BBs MAY emit additional
+ * actions (e.g. Cognito's `confirmSignIn`, `resendSignUpCode`) — these keys exist on
  * the map with their BB-specific payload shape. A BB that doesn't
  * support an action will return a "Unknown action" error at runtime
  * even though the call typechecks, because the map is a union across
@@ -39,7 +39,7 @@ export interface AuthActionPayloadMap {
 	 * Complete the auto-sign-in bridge after `confirmSignUp` returned
 	 * `nextStep.signUpStep === 'COMPLETE_AUTO_SIGN_IN'`. Username travels
 	 * as an echo for the UI; the BB redeems the encrypted bridging cookie
-	 * server-side. See `AuthCognito.autoSignIn` for the underlying API.
+	 * server-side. See `Auth.autoSignIn` (formerly `AuthCognito.autoSignIn`) for the underlying API.
 	 */
 	autoSignIn: { username: string };
 	confirmSignIn:
@@ -113,8 +113,14 @@ export interface AuthStateApi {
 // Shared Auth State
 //
 // Single source of truth for auth state on the client. Hydrated once via
-// getAuthState(), then kept current via broadcasts. Components read from
-// here — no redundant network calls.
+// getAuthState(), then written only by submitAuthAction() (this window) and
+// by one refetch per api when another tab broadcasts a sign-in/out.
+// Components read from here — no redundant network calls. Exposed publicly
+// as a store via subscribeAuthState() / getAuthStateSnapshot().
+//
+// The channel name, the window event name and the `{ type: 'auth-change',
+// user }` payload are a wire format: tabs running an older bundle and a
+// newer one coexist during a deploy, so renaming any of them splits them.
 // ---------------------------------------------------------------------------
 
 const AUTH_CHANNEL_NAME = 'blocks-auth';
@@ -126,10 +132,22 @@ function getChannel(): BroadcastChannel {
 	return channel;
 }
 
+/**
+ * Whether browser globals are present. Outside a browser (SSR, Node scripts,
+ * e2e cookie-jar clients) the client-side store and broadcast are skipped: a
+ * module-level cache keyed by a shared `authApi` would leak one request's
+ * `AuthState` into another.
+ */
+function inBrowser(): boolean {
+	return typeof window !== 'undefined';
+}
+
 interface AuthStateCache {
 	state: AuthState | null;
 	hydrating: Promise<AuthState> | null;
 	listeners: Set<(state: AuthState) => void>;
+	/** The one cross-tab listener for this api, installed while it has listeners. */
+	crossTab: ((event: MessageEvent) => void) | null;
 }
 
 const caches = new WeakMap<AuthStateApi, AuthStateCache>();
@@ -137,21 +155,26 @@ const caches = new WeakMap<AuthStateApi, AuthStateCache>();
 function getCache(api: AuthStateApi): AuthStateCache {
 	let cache = caches.get(api);
 	if (!cache) {
-		cache = { state: null, hydrating: null, listeners: new Set() };
+		cache = { state: null, hydrating: null, listeners: new Set(), crossTab: null };
 		caches.set(api, cache);
 	}
 	return cache;
 }
 
-/** Hydrate the cache if needed, return the current state. */
+/**
+ * Hydrate the cache if needed, return the current state. A hydration that
+ * lands writes the store (notifying listeners) unless a newer state was
+ * written while it was in flight — then the newer state wins.
+ */
 async function ensureState(api: AuthStateApi): Promise<AuthState> {
 	const cache = getCache(api);
 	if (cache.state) return cache.state;
 	if (cache.hydrating) return cache.hydrating;
 	cache.hydrating = api.getAuthState()
 		.then((s) => {
-			cache.state = s;
 			cache.hydrating = null;
+			if (cache.state) return cache.state;
+			updateState(api, s);
 			return s;
 		})
 		.catch((e) => {
@@ -164,25 +187,205 @@ async function ensureState(api: AuthStateApi): Promise<AuthState> {
 	return cache.hydrating;
 }
 
-/** Update the cached state and notify all listeners. */
+/**
+ * Update the cached state and notify all listeners. The store's only write
+ * primitive. Callers: `submitAuthAction` (every client-side auth action),
+ * `ensureState` (hydration) and `refetchFromOtherTab` (cross-tab).
+ */
 function updateState(api: AuthStateApi, state: AuthState): void {
 	const cache = getCache(api);
 	cache.state = state;
-	for (const listener of cache.listeners) {
+	for (const listener of [...cache.listeners]) {
 		listener(state);
 	}
 }
 
-/** Subscribe to state changes. Returns unsubscribe function. */
+/**
+ * Another tab signed in or out: refetch once for this api and write the
+ * result. One refetch per api, however many components are subscribed.
+ */
+function refetchFromOtherTab(api: AuthStateApi): void {
+	api.getAuthState()
+		.then((s) => updateState(api, s))
+		.catch(() => {
+			// keep the last-known state; the next broadcast or reload retries
+		});
+}
+
+/**
+ * Subscribe to state changes. Returns an idempotent unsubscribe function.
+ *
+ * Installs this api's cross-tab listener with its first listener and removes
+ * it with its last, so N subscribers cause one refetch per broadcast, not N.
+ * Same-window broadcasts are not refetched: `submitAuthAction` has already
+ * written the store. (`BroadcastChannel` never delivers to the posting
+ * instance, and every subscriber shares one module-level channel.)
+ */
 function subscribe(api: AuthStateApi, listener: (state: AuthState) => void): () => void {
 	const cache = getCache(api);
-	cache.listeners.add(listener);
-	return () => { cache.listeners.delete(listener); };
+	// Wrap so the same function subscribed twice gets two independent slots.
+	const entry = (state: AuthState) => listener(state);
+	cache.listeners.add(entry);
+	if (!cache.crossTab) {
+		const handler = (event: MessageEvent) => {
+			if (event.data?.type === 'auth-change') refetchFromOtherTab(api);
+		};
+		cache.crossTab = handler;
+		getChannel().addEventListener('message', handler);
+	}
+	let active = true;
+	return () => {
+		if (!active) return;
+		active = false;
+		cache.listeners.delete(entry);
+		if (cache.listeners.size === 0 && cache.crossTab) {
+			getChannel().removeEventListener('message', cache.crossTab);
+			cache.crossTab = null;
+		}
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Public store + the single client-side notifier
+// ---------------------------------------------------------------------------
+
+/**
+ * Submit an auth action and drive the same client-side notifications the
+ * built-in `Authenticator` uses, so custom auth UIs built on
+ * {@link onAuthChange}, {@link AuthenticatedContent} or
+ * {@link subscribeAuthState} stay in sync. This is the single client-side
+ * notifier for an auth action: the `Authenticator` (form submit and Enter,
+ * slot `submit`, auto sign-in) and `AccountMenuBar`'s Sign Out all go
+ * through it.
+ *
+ * `api.setAuthState()` is a plain RPC: it changes the server-side session (and
+ * cookie) but notifies nothing on the client, so a custom UI that calls it
+ * directly goes stale, notably on sign-out (issue #185). This helper:
+ *
+ * 1. calls `api.setAuthState(input)` exactly once, with `input` unchanged;
+ * 2. on a retriable failure (`retriable === true`) returns the state untouched:
+ *    nothing is cached or broadcast. Keep the current form (including hidden
+ *    fields such as the challenge `session`) and show `error` inline;
+ * 3. otherwise writes the state to the shared per-`api` store, so
+ *    `subscribeAuthState` listeners and the `Authenticator` re-render. This
+ *    includes mid-flow challenge states (e.g. sign-in form → confirm-code form);
+ * 4. and, when the resulting state is `signedIn` or `signedOut`, broadcasts
+ *    `user ?? null` to `onAuthChange` / `AuthenticatedContent` in this window
+ *    and in other tabs. Mid-flow challenge states are not broadcast. The
+ *    broadcast follows the resulting state, not a diff against the previous
+ *    one, so a failed sign-in that returns `signedOut` re-broadcasts `null`;
+ *    subscribers must be idempotent (the built-in ones are).
+ *
+ * If `setAuthState` rejects (network error, 5xx, parse failure), the same
+ * error is re-thrown and nothing is cached or broadcast. Outside a browser
+ * (no `window`), it behaves exactly like `setAuthState`: no store write, no
+ * broadcast, no throw — so it is safe to call from SSR and Node scripts.
+ *
+ * @param api - The state API your backend exports from `auth.createApi()`.
+ *   Pass the same object every time; the store is keyed by its identity.
+ * @param input - The discriminated auth action to submit.
+ * @returns The exact {@link AuthState} object returned by `setAuthState`
+ *   (`error`, `errorName`, `retriable`, `user` and `actions` pass through
+ *   untouched). Check `.retriable` to show inline errors without leaving the
+ *   current form, and `hasAuthError(state, name)` to branch on `errorName`.
+ *
+ * @example
+ * ```typescript
+ * import { submitAuthAction } from '@aws-blocks/blocks/ui';
+ * import { authApi } from 'aws-blocks';
+ *
+ * const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
+ * if (next.retriable) showError(next.error); // wrong password, bad MFA code, …
+ * // on success, onAuthChange / AuthenticatedContent have already re-rendered.
+ *
+ * await submitAuthAction(authApi, { action: 'signOut' }); // same call for sign-out
+ * ```
+ */
+export async function submitAuthAction(api: AuthStateApi, input: AuthActionInput): Promise<AuthState> {
+	const next = await api.setAuthState(input);
+	if (next.retriable === true || !inBrowser()) return next;
+	updateState(api, next);
+	if (next.state === 'signedIn' || next.state === 'signedOut') {
+		broadcastAuthChange(next.user ?? null);
+	}
+	return next;
+}
+
+/**
+ * Subscribe to the shared auth-state store for `api`. Fires `listener` with
+ * the new {@link AuthState} on every store change: hydration, every
+ * non-retriable {@link submitAuthAction} result (including mid-flow challenge
+ * states), and a sign-in/out in another tab (which triggers one refetch per
+ * `api`, however many subscribers it has). Retriable failures do not change
+ * the store; read those from `submitAuthAction`'s return value.
+ *
+ * Starts hydration if the store is empty, sharing one in-flight
+ * `getAuthState()` with every other subscriber, `onAuthChange` and the
+ * `Authenticator`. It does not call `listener` synchronously; read the
+ * current value with {@link getAuthStateSnapshot}. A failed hydration fires
+ * nothing and is retried by the next subscriber. Designed for React's
+ * `useSyncExternalStore`.
+ *
+ * This is the state-level view; {@link onAuthChange} is the user-level view
+ * (it does not fire for mid-flow states). A single sign-in fires each once.
+ *
+ * Outside a browser (no `window`) it does nothing and returns a no-op.
+ *
+ * @param api - The state API from `auth.createApi()` (same object every time).
+ * @param listener - Called after each store change.
+ * @returns An idempotent unsubscribe function.
+ *
+ * @example
+ * ```tsx
+ * import { useSyncExternalStore } from 'react';
+ * import { subscribeAuthState, getAuthStateSnapshot } from '@aws-blocks/blocks/ui';
+ * import { authApi } from 'aws-blocks';
+ *
+ * const subscribe = (cb: () => void) => subscribeAuthState(authApi, cb);
+ * const getSnapshot = () => getAuthStateSnapshot(authApi);
+ *
+ * export function useAuthState() {
+ *   return useSyncExternalStore(subscribe, getSnapshot, () => null); // null = not yet known
+ * }
+ * ```
+ */
+export function subscribeAuthState(api: AuthStateApi, listener: (state: AuthState) => void): () => void {
+	if (!inBrowser()) return () => {};
+	const unsubscribe = subscribe(api, listener);
+	ensureState(api).catch(() => {
+		// hydration failed: the snapshot stays as it was, nothing fires, and
+		// the cleared in-flight marker lets the next subscriber retry.
+	});
+	return unsubscribe;
+}
+
+/**
+ * Read the current auth state for `api` from the shared store, without a
+ * network call. Returns `null` until the first `getAuthState()` hydration
+ * completes (`null` means "not yet known", not "signed out"). The returned
+ * object keeps the same identity until the store changes, as
+ * `useSyncExternalStore` requires. Always `null` outside a browser.
+ *
+ * @param api - The state API from `auth.createApi()` (same object every time).
+ * @returns The last-known {@link AuthState}, or `null` if not yet hydrated.
+ */
+export function getAuthStateSnapshot(api: AuthStateApi): AuthState | null {
+	if (!inBrowser()) return null;
+	return caches.get(api)?.state ?? null;
 }
 
 // ---------------------------------------------------------------------------
 // Auth Change Broadcasting
 // ---------------------------------------------------------------------------
+
+/**
+ * What the UI shows for the signed-in user: the block's `displayName` (e.g.
+ * the email address on a pool whose usernames are generated ids), else the
+ * `username`.
+ */
+function displayNameOf(user: AuthUser): string {
+	return user.displayName || user.username;
+}
 
 /**
  * Broadcast an auth state change to the current window and all other tabs.
@@ -341,11 +544,11 @@ export function AuthenticatedContent(
  *
  * Mirrors the customization surface Amplify-UI's React Authenticator
  * exposes via `<Authenticator formFields={...}>`. We deliberately do NOT
- * couple the type to a specific BB's vocabulary so `bb-auth-basic` /
- * `bb-auth-supabase` consumers can opt in without learning Cognito's
- * action / next-step names. BBs that want autocomplete-grade typing
- * (e.g. `bb-auth-cognito`) ship a wrapper helper from their own UI
- * entry point — see `cognitoOverrides`.
+ * couple the type to a specific BB's vocabulary so consumers of a custom
+ * auth BB (or a hand-written state machine) can opt in without learning
+ * Cognito's action / next-step names. BBs that want autocomplete-grade
+ * typing (e.g. `bb-auth`) ship a wrapper helper from their own UI entry
+ * point — see `authOverrides` (formerly `bb-auth-cognito`'s `cognitoOverrides`).
  */
 export interface AuthFieldOverride {
 	/** Override the label / placeholder copy. */
@@ -448,27 +651,34 @@ export interface AuthenticatorOptions {
 /**
  * Generic Authenticator component driven by the auth state machine.
  *
- * Works with any auth Building Block (`AuthBasic`, `AuthOIDC`, `AuthCognito`)
- * because it renders based on `AuthState` — it doesn't know or care which
- * provider is behind the API.
+ * Works with any auth Building Block (`Auth`, whatever sign-in methods it is
+ * configured with, or a custom one) because it renders based on `AuthState` —
+ * it doesn't know or care which provider is behind the API.
  *
  * - Internal actions (no `url`): renders form fields + submit button, calls `setAuthState()`
+ *   through {@link submitAuthAction}
  * - External actions (with `url`): submits a real HTML form to the external URL
  * - Broadcasts auth changes via `broadcastAuthChange()` so other components
- *   (`AuthenticatedContent`, `onAuthChange` subscribers) react automatically
- * - Listens for auth changes from other tabs and re-renders
+ *   (`AuthenticatedContent`, `onAuthChange` subscribers) react automatically.
+ *   It does so only through {@link submitAuthAction}, so each sign-in or
+ *   sign-out broadcasts exactly once and mid-flow challenge steps (e.g. the
+ *   confirm-code form) advance this component without broadcasting
+ * - Listens for auth changes from other tabs and re-renders (one shared
+ *   `getAuthState()` refetch per `api`, however many are mounted)
  * - Renders stable `data-testid` hooks on every interactive element
  *   (`authenticator`, `authenticator-action-<action>`, `authenticator-<field>`,
  *   `authenticator-submit`, `authenticator-error`, `authenticator-signed-in`)
  *   for e2e suites. Federated action names keep their provider suffix, so
  *   `signIn:google` gives `authenticator-action-signIn:google`. Presentational
  *   markup (hint text, layout wrappers) carries no hook. The full contract is
- *   in CUSTOMIZING-AUTH-UI.md; treat the names as public API.
+ *   in CUSTOMIZING-AUTH-UI.md (shipped with `@aws-blocks/bb-auth`); treat the
+ *   names as public API.
  *
  * @param api - The state machine API from `auth.createApi()`
  * @param options - Optional customization. See {@link AuthenticatorOptions}.
- *   For Cognito-specific overrides with autocomplete-grade types, import
- *   `cognitoOverrides` from `@aws-blocks/bb-auth-cognito/ui` and
+ *   For overrides with autocomplete-grade types, import
+ *   `authOverrides` from `@aws-blocks/bb-auth/ui` (it replaces
+ *   `cognitoOverrides` from the removed `@aws-blocks/bb-auth-cognito/ui`) and
  *   pass its result here.
  * @returns An HTMLElement that shows auth UI when signed out, signed-in state when authenticated
  *
@@ -501,8 +711,18 @@ export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions)
 
 	const opts: AuthenticatorOptions = options ?? {};
 
+	/**
+	 * Paint `state` without side effects. Used for local overlays (a
+	 * retriable error on the current form, a failed submit) that never
+	 * reach the store, so they must not re-trigger the auto-chain below.
+	 */
+	function paint(state: AuthState) {
+		container.replaceChildren(renderState(api, state, paint, opts));
+	}
+
+	/** Paint a state from the store, then run its auto-chain, if any. */
 	function rerender(state: AuthState) {
-		container.replaceChildren(renderState(api, state, rerender, opts));
+		paint(state);
 		// Auto-chain transitions the BB flagged as "no UI needed" — the
 		// signUp → confirmSignUp → autoSignIn bridge is the canonical case.
 		// When the server returns a state whose only action is `autoSignIn`,
@@ -513,19 +733,27 @@ export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions)
 		if (
 			state.actions.length === 1
 			&& state.actions[0]?.name === 'autoSignIn'
+			// Every mounted Authenticator sees the same store write; only
+			// the first one submits, so the bridge is redeemed once.
+			&& !autoSubmitted.has(state)
 		) {
+			autoSubmitted.add(state);
 			const action = state.actions[0];
 			const autoFields: Record<string, string> = {};
 			for (const f of action.fields) {
 				if (f.defaultValue !== undefined) autoFields[f.name] = f.defaultValue;
 			}
-			void api.setAuthState({ action: 'autoSignIn', ...autoFields } as AuthActionInput).then((next) => {
-				updateState(api, next);
-				broadcastAuthChange(next.user ?? null);
+			void submitAuthAction(api, { action: 'autoSignIn', ...autoFields } as AuthActionInput).then((next) => {
+				// A non-retriable result already re-rendered through the
+				// store. A retriable one didn't touch the store, so overlay
+				// the error on the current state (no auto-chain, no loop).
+				if (next.retriable === true) {
+					paint({ ...state, error: next.error || 'An error occurred' });
+				}
 			}).catch((e: any) => {
 				// autoSignIn failed (cookie expired, network blip, etc.) —
 				// surface the error and leave the user at the manual fallback.
-				rerender({
+				paint({
 					state: 'signedOut',
 					actions: [],
 					error: e?.message ?? 'Auto sign-in failed. Please sign in manually.',
@@ -538,37 +766,28 @@ export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions)
 	// component isn't a blank <div> until the network round-trip lands. A
 	// cold cache has no actions to render yet (they arrive with the async
 	// state), so the sync paint only fires once a prior hydration populated
-	// the cache; the async refresh below covers the cold first load.
+	// the cache; the hydration below covers the cold first load.
 	const cached = getCache(api).state;
 	if (cached) rerender(cached);
 
-	// Refresh from the (async) hydrated state. Skip the repaint when the
-	// resolved state is the very object we already painted synchronously
-	// (warm-cache fast path — `ensureState` returns the cached object), so a
-	// warm load renders exactly once. .catch() so a rejected getAuthState()
-	// doesn't surface as an unhandled rejection or leave the component
-	// stranded.
-	ensureState(api)
-		.then((s) => {
-			if (s === cached) return;
-			rerender(s);
-		})
-		.catch(() => {
-			// keep the last-known frame
-		});
-
-	// Re-render when state is updated (by setAuthState or external changes)
+	// Re-render on every store write: the hydration landing (whoever started
+	// it), every non-retriable submitAuthAction result, and the one refetch
+	// per api a sign-in/out in another tab triggers.
 	subscribe(api, rerender);
 
-	// Re-render on cross-tab auth changes
-	getChannel().addEventListener('message', (e) => {
-		if (e.data?.type === 'auth-change') {
-			api.getAuthState().then((s) => updateState(api, s));
-		}
+	// Hydrate if cold. A warm cache resolves to the object already painted
+	// without writing the store, so a warm load renders exactly once.
+	// .catch() so a rejected getAuthState() doesn't surface as an unhandled
+	// rejection or leave the component stranded.
+	ensureState(api).catch(() => {
+		// keep the last-known frame
 	});
 
 	return container;
 }
+
+/** States whose `autoSignIn` has already been submitted (see `Authenticator`). */
+const autoSubmitted = new WeakSet<AuthState>();
 
 // ---------------------------------------------------------------------------
 // Internal rendering helpers
@@ -592,7 +811,7 @@ function renderState(
 		const heading = document.createElement('h3');
 		heading.setAttribute('data-testid', 'authenticator-signed-in');
 		heading.style.cssText = 'margin-top: 0;';
-		heading.textContent = `Signed in as: ${state.user!.username}`;
+		heading.textContent = `Signed in as: ${displayNameOf(state.user!)}`;
 		div.appendChild(heading);
 	} else {
 		// Heading priority: (1) action-level override on the *first*
@@ -628,15 +847,14 @@ function renderState(
 		if (actionOverride?.render) {
 			const submit = async (values: Record<string, string>) => {
 				try {
-					const newState = await api.setAuthState(
+					// Non-retriable results re-render through the store.
+					const newState = await submitAuthAction(
+						api,
 						{ action: action.name, ...values } as AuthActionInput,
 					);
 					if (newState.retriable === true) {
 						onNewState({ ...state, error: newState.error || 'An error occurred' });
-						return;
 					}
-					updateState(api, newState);
-					broadcastAuthChange(newState.user ?? null);
 				} catch (e: any) {
 					onNewState({
 						state: 'signedOut',
@@ -812,7 +1030,13 @@ function renderInternalAction(
 			// submitting, so we widen at this one call site. Direct callers
 			// who know their action name get full discrimination via
 			// `AuthActionInput`'s per-variant shape.
-			const newState = await api.setAuthState(
+			//
+			// submitAuthAction writes a non-retriable result to the shared
+			// store (re-rendering this Authenticator through its subscriber)
+			// and, for signedIn / signedOut, broadcasts to other components
+			// (AuthenticatedContent, onAuthChange, other tabs).
+			const newState = await submitAuthAction(
+				api,
 				{ action: action.name, ...values } as AuthActionInput,
 			);
 			// Retriable errors surface as a signedOut state with `retriable: true`
@@ -823,12 +1047,7 @@ function renderInternalAction(
 			// stay intact) and overlay the error as inline feedback.
 			if (newState.retriable === true) {
 				onNewState({ ...currentState, error: newState.error || 'An error occurred' });
-				return;
 			}
-			// Update shared cache + notify Authenticator's subscriber
-			updateState(api, newState);
-			// Broadcast to other components (AuthenticatedContent, other tabs)
-			broadcastAuthChange(newState.user ?? null);
 		} catch (e: any) {
 			// HTTP/network/parse errors — the server-side handler catches
 			// BB errors and surfaces them through the AuthState shape, so
@@ -997,6 +1216,27 @@ function b64urlToBuf(s: string): ArrayBuffer {
 	return out.buffer;
 }
 
+/**
+ * Submit a url-bearing action as a plain, invisible HTML form (a browser
+ * navigation). No `data-testid` hooks: the page is leaving, and duplicate
+ * hooks would break strict e2e locators in the meantime.
+ */
+function submitExternalForm(action: AuthAction): void {
+	const form = document.createElement('form');
+	form.method = action.method ?? 'GET';
+	form.action = action.url!;
+	form.style.display = 'none';
+	for (const field of action.fields) {
+		const input = document.createElement('input');
+		input.type = 'hidden';
+		input.name = field.name;
+		input.value = field.defaultValue ?? '';
+		form.appendChild(input);
+	}
+	document.body.appendChild(form);
+	form.submit();
+}
+
 function renderExternalAction(action: AuthAction): Node {
 	const form = document.createElement('form');
 	form.setAttribute('data-testid', `authenticator-action-${action.name}`);
@@ -1030,7 +1270,11 @@ function renderExternalAction(action: AuthAction): Node {
 /**
  * Compact account bar for the top of the page.
  *
- * - Signed in: shows "👤 username" and a Sign Out button
+ * - Signed in: shows "👤 username" and a Sign Out button. Sign Out submits
+ *   the `signOut` action through {@link submitAuthAction}; when the current
+ *   state's `signOut` action carries a `url` (a federated session that must
+ *   also end at the identity provider), it submits a plain form to that URL
+ *   instead, exactly as the `Authenticator` does
  * - Signed out: shows a "Sign In" button that opens the Authenticator in a modal
  *
  * Automatically updates when auth state changes (same window + cross-tab).
@@ -1057,7 +1301,7 @@ export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 		if (user) {
 			const username = document.createElement('span');
 			username.setAttribute('data-testid', 'account-menu-username');
-			username.textContent = `👤 ${user.username}`;
+			username.textContent = `👤 ${displayNameOf(user)}`;
 			username.style.cssText = 'font-size: 14px;';
 
 			const signOutBtn = document.createElement('button');
@@ -1065,9 +1309,17 @@ export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 			signOutBtn.textContent = 'Sign Out';
 			signOutBtn.style.cssText = 'padding: 8px 16px; cursor: pointer;';
 			signOutBtn.addEventListener('click', async () => {
-				const newState = await api.setAuthState({ action: 'signOut' });
-				updateState(api, newState);
-				broadcastAuthChange(newState.user ?? null);
+				// A url-bearing signOut (federated session) is a browser
+				// navigation: the server clears the session and redirects
+				// through the IdP's logout. The next page load hydrates.
+				const signOut = getCache(api).state?.actions.find((a) => a.name === 'signOut');
+				if (signOut?.url) {
+					submitExternalForm(signOut);
+					return;
+				}
+				// Writes the store and broadcasts the sign-out to this
+				// window and other tabs (which re-renders this bar).
+				await submitAuthAction(api, { action: 'signOut' });
 			});
 
 			bar.appendChild(username);

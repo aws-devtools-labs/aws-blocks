@@ -8,10 +8,19 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import type { api as apiType } from 'aws-blocks';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const projectRoot = join(__dirname, '..');
 const clientUrl = pathToFileURL(join(projectRoot, 'aws-blocks', 'client.js')).href;
+
+/**
+ * How long the keep-alive regression test idles the main test process's HTTP pool
+ * while a CLI subprocess runs. It must exceed the dev server's keep-alive socket
+ * lifetime: Node's `server.keepAliveTimeout` (5 s, advertised to clients as
+ * `Keep-Alive: timeout=5`) plus `server.keepAliveTimeoutBuffer` (1 s).
+ */
+const IDLE_GAP_MS = 7_000;
 
 interface CliResult {
   exitCode: number | null;
@@ -29,7 +38,7 @@ interface CliResult {
  * imports the generated JavaScript client by URL (so module resolution works),
  * but runs from a chosen CWD (which controls whether config.json is discoverable).
  */
-export function cliClientTests() {
+export function cliClientTests(getApi: () => typeof apiType) {
   describe('CLI Client (generateClient)', () => {
     let outsideCwd: string;
     before(() => { outsideCwd = mkdtempSync(join(tmpdir(), 'blocks-cli-client-')); });
@@ -89,6 +98,49 @@ export function cliClientTests() {
       assert.strictEqual(result.exitCode, 0, `Should succeed, stderr: ${result.stderr}`);
       assert.ok(result.stdout.includes('OK'));
     });
+
+    // Regression (L8): these tests shell out to `npx tsx` for several seconds. When that
+    // blocked this process's event loop (execFileSync), undici could not run the idle
+    // timer that retires a pooled keep-alive socket after the server's advertised
+    // `Keep-Alive: timeout=5`. The dev server closed the socket meanwhile, so the next
+    // suite's first API call (Tracer › startSegment) reused it and failed with a bare
+    // `TypeError: fetch failed` (cause: ECONNRESET) whenever this suite took longer than ~6 s.
+    //
+    // Since FX54 the core client resends a call once when its pooled socket turns out to be
+    // closed before any response byte. A deployed API Gateway closes idle sockets without
+    // advertising a timeout, and that race failed this test's first `Promise.all` on a sandbox.
+    // The resend would also hide a blocked loop here, so the `ticks` assertion is what pins L8;
+    // `afterGap` pins the customer-visible result against both local and deployed targets.
+    test('API calls still succeed after a CLI subprocess outlives the server keep-alive timeout', { timeout: 40_000 }, async () => {
+      const api = getApi();
+      // Pool several keep-alive connections in this process's global fetch dispatcher.
+      await Promise.all([api.echoData('a'), api.echoData('b'), api.echoData('c')]);
+
+      let ticks = 0;
+      const ticker = setInterval(() => { ticks++; }, 100);
+      try {
+        const result = await runCli(`
+          await new Promise((resolve) => setTimeout(resolve, ${IDLE_GAP_MS}));
+          console.log('OK');
+        `, { timeoutMs: IDLE_GAP_MS + 20_000 });
+        assert.strictEqual(result.exitCode, 0, `Idle subprocess should succeed, stderr: ${result.stderr}`);
+      } finally {
+        clearInterval(ticker);
+      }
+
+      let afterGap: unknown;
+      try {
+        afterGap = await api.echoData('after idle gap');
+      } catch (e) {
+        afterGap = e;
+      }
+      assert.ok(ticks >= 10, `runCli must not block the event loop: only ${ticks} 100 ms timer ticks fired during a ${IDLE_GAP_MS} ms subprocess`);
+      assert.strictEqual(
+        afterGap,
+        'after idle gap',
+        `API call after a ${IDLE_GAP_MS} ms idle gap failed: ${describeError(afterGap)}`,
+      );
+    });
   });
 }
 
@@ -97,9 +149,11 @@ export function cliClientTests() {
  *
  * The script receives the client URL as `clientUrl`; CWD affects only
  * config.json discovery. Awaiting the child keeps the parent event loop
- * responsive.
+ * responsive. Never use `execFileSync` here: blocking this process's event loop
+ * stops undici from retiring idle keep-alive sockets on time, so the next API call
+ * reuses a socket the dev server has already closed and fails with `fetch failed`.
  */
-function runCli(script: string, opts?: { cwd?: string }): Promise<CliResult> {
+function runCli(script: string, opts?: { cwd?: string; timeoutMs?: number }): Promise<CliResult> {
   const env = { ...process.env };
   for (const name of ['NODE_OPTIONS', 'BLOCKS_API_URL', 'BLOCKS_CONFIG']) delete env[name];
   const moduleSource = `const clientUrl = process.argv[1];\n${script}`;
@@ -109,7 +163,7 @@ function runCli(script: string, opts?: { cwd?: string }): Promise<CliResult> {
       cwd: opts?.cwd ?? projectRoot,
       encoding: 'utf-8',
       env,
-      timeout: 12_000,
+      timeout: opts?.timeoutMs ?? 12_000,
     }, (error, stdout, stderr) => {
       const failure = error as (Error & { code?: unknown; signal?: NodeJS.Signals | null }) | null;
       resolve({
@@ -125,4 +179,10 @@ function runCli(script: string, opts?: { cwd?: string }): Promise<CliResult> {
 function assertCompleted(result: CliResult): void {
   assert.strictEqual(result.signal, null, `CLI subprocess was terminated: ${result.stderr}`);
   assert.notStrictEqual(result.exitCode, null, `CLI subprocess did not exit normally: ${result.stderr}`);
+}
+
+/** Render a thrown value with its `cause` — undici's bare `fetch failed` hides the socket error there. */
+function describeError(e: unknown): string {
+  if (!(e instanceof Error)) return JSON.stringify(e);
+  return e.cause === undefined ? String(e) : `${String(e)} (cause: ${String(e.cause)})`;
 }

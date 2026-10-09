@@ -16,3 +16,5 @@ export { splitStatements, runMigrations, loadMigrationsFromDir, DOLLAR_QUOTE_TAG
 export { createKyselyAdapter } from './kysely-adapter.js';
 export { initializePgliteWithRetry, isPgliteUnreachableTrap } from './pglite-init.js';
 export type { PgliteLike, PgliteInitRetryOptions } from './pglite-init.js';
+export { closeOnProcessExit, pgliteUnrefTimersExtension, runWithUnrefTimers } from './pglite-process.js';
+export type { PgliteExtensionLike } from './pglite-process.js';

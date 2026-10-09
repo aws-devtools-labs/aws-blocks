@@ -12,6 +12,7 @@ import 'oidc_exception.dart';
 import 'oidc_types.dart';
 import 'session_store.dart';
 import 'token_store.dart';
+import 'transferable_descriptor.dart';
 
 /// OIDC client implementing PKCE-based auth with token management.
 class OidcClient implements AuthProvider {
@@ -21,11 +22,25 @@ class OidcClient implements AuthProvider {
 
   /// Base path for the server-relay authorize-params endpoint. The provider
   /// name is appended: `{authorizeParamsBasePath}/<provider>`.
+  ///
+  /// Defaults to [defaultAuthorizeParamsBasePath].
   final String authorizeParamsBasePath;
 
   /// The backend's HTTPS callback path registered as the IdP `redirect_uri`
   /// in the server-relay flow.
+  ///
+  /// Defaults to [defaultCallbackPath].
   final String callbackPath;
+
+  /// The auth block's default authorize-params route
+  /// (`POST /aws-blocks/auth/authorize-params/<provider>`), used when neither
+  /// the constructor nor the descriptor names one.
+  static const String defaultAuthorizeParamsBasePath =
+      '/aws-blocks/auth/authorize-params';
+
+  /// The auth block's default callback route (`GET /aws-blocks/auth/callback`),
+  /// used when neither the constructor nor the descriptor names one.
+  static const String defaultCallbackPath = '/aws-blocks/auth/callback';
 
   final List<String> providers;
   final Map<String, ProviderConfig> providerConfigs;
@@ -40,6 +55,10 @@ class OidcClient implements AuthProvider {
 
   final http.Client _httpClient;
 
+  /// The descriptor [fromJson] hydrated this client from, unchanged, as
+  /// [toJson] returns it. Null for a client built with the constructor.
+  Map<String, dynamic>? _wireDescriptor;
+
   final _controller = StreamController<OidcAuthState>.broadcast();
   Completer<void>? _refreshCompleter;
 
@@ -51,8 +70,8 @@ class OidcClient implements AuthProvider {
     required this.providerConfigs,
     required this.baseUrl,
     required this.tokenStore,
-    this.authorizeParamsBasePath = '/auth/authorize-params',
-    this.callbackPath = '/auth/callback',
+    this.authorizeParamsBasePath = defaultAuthorizeParamsBasePath,
+    this.callbackPath = defaultCallbackPath,
     SessionStore? sessionStore,
     http.Client? httpClient,
   }) : sessionStore = sessionStore ?? InMemorySessionStore(),
@@ -528,16 +547,48 @@ class OidcClient implements AuthProvider {
       signOutPath: descriptor['signOutPath'] as String,
       authorizeParamsBasePath:
           descriptor['authorizeParamsBasePath'] as String? ??
-          '/auth/authorize-params',
-      callbackPath: descriptor['callbackPath'] as String? ?? '/auth/callback',
+          defaultAuthorizeParamsBasePath,
+      callbackPath:
+          descriptor['callbackPath'] as String? ?? defaultCallbackPath,
       providers: providers,
       providerConfigs: providerConfigs,
       baseUrl: baseUrl,
       tokenStore: tokenStore,
       sessionStore: sessionStore,
       httpClient: httpClient,
-    );
+    ).._wireDescriptor = descriptor;
   }
+
+  /// This client's `{"__blocks": "oidc/client", …}` descriptor: the one
+  /// [fromJson] hydrated it from, unchanged (keys this runtime doesn't read
+  /// included), or, for a client built with the constructor, its providers
+  /// and paths, in the shape [fromJson] reads. A generated client sends an
+  /// OIDC client parameter, or one inside a model it sends, this way;
+  /// `jsonEncode` calls it too. The base URL and the token and session stores
+  /// are this app's, not the server's, so they aren't part of it.
+  ///
+  /// Returns a copy, so changing it doesn't change this client.
+  Map<String, dynamic> toJson() => transferableDescriptor(
+    'oidc/client',
+    _wireDescriptor ??
+        {
+          'providers': providers,
+          'providerConfigs': {
+            for (final e in providerConfigs.entries)
+              e.key: {
+                'authorizeUrl': e.value.authorizeUrl,
+                'clientId': e.value.clientId,
+                'scopes': e.value.scopes,
+                'kind': e.value.kind,
+              },
+          },
+          'exchangePath': exchangePath,
+          'refreshPath': refreshPath,
+          'signOutPath': signOutPath,
+          'authorizeParamsBasePath': authorizeParamsBasePath,
+          'callbackPath': callbackPath,
+        },
+  );
 
   // --- Private helpers ---
 

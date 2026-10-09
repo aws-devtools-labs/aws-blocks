@@ -324,7 +324,7 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
         const insertPos = apiMatch.index + apiMatch[0].length;
         const authBlock = [
           `  // TODO: add auth — see MIGRATION_GUIDE.md#auth`,
-          `  // const auth = new AuthOIDC(scope, 'auth', { providers: [...] });`,
+          `  // const auth = new Auth(scope, 'auth', { ... });  // import { Auth } from '@aws-blocks/bb-auth'`,
           `  ...supabaseCrud(context),  // pass auth as 2nd arg once configured: supabaseCrud(context, auth)`,
         ].join('\n') + '\n';
         indexFileContent = indexFileContent.slice(0, insertPos) + authBlock + indexFileContent.slice(insertPos);

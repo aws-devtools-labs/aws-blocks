@@ -3,27 +3,43 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError } from '@aws-blocks/core';
+import { AuthErrors, isAuthError } from '@aws-blocks/bb-auth';
 import type { api as apiType } from 'aws-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
+import { getTestSupport } from './test-support.js';
 
-const InvalidCredentials = 'InvalidCredentialsException';
-const UserAlreadyExists = 'UserAlreadyExistsException';
-const SessionExpired = 'SessionExpiredException';
-const InvalidPassword = 'InvalidPasswordException';
-const InvalidCode = 'InvalidCodeException';
+// Ported from AuthBasic to the unified `Auth` block (instance id `auth`).
+// Error names follow the canonical `AuthErrors` vocabulary (the C1 mapping):
+//   InvalidCredentialsException → NotAuthorizedException
+//   UserAlreadyExistsException  → UsernameExistsException
+//   SessionExpiredException     → NotAuthenticatedException
+//   InvalidCodeException        → CodeMismatchException (wrong code, or no
+//                                 outstanding code) | ExpiredCodeException
+//                                 (code past its lifetime); reviewed per test
+//   InvalidPasswordException    → unchanged
+// and an unconfirmed user who signs in with the right password now gets
+// UserNotConfirmedException (Cognito's behaviour) instead of a credential error.
+
+const ENV = process.env.BLOCKS_TEST_ENV || 'local';
+const isLocal = ENV === 'local';
 
 function uniqueUser() {
   return `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-/** Wait for the AuthBasic code delivered to `username`. See ./poll-for-code.ts. */
+/** Wait for the code delivered to `username` on the `auth` instance. See ./poll-for-code.ts. */
 const pollForCode = (api: typeof apiType, username: string, options?: PollForCodeOptions) =>
   codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username, options);
 
 export function basicAuthTests(getApi: () => typeof apiType) {
 
-  describe('AuthBasic', () => {
+  // Every sign-up confirms with an emailed code (Q2). Locally the mock hands it
+  // to `codeDelivery`, which the backend records for `authGetLastCode`; on AWS
+  // Cognito emails it and there is no backdoor to read it, so — like the
+  // `authC` suite — this one runs against the local runtime only. Suites that
+  // just need a signed-in user use `provisionConfirmedUser` (./test-support.ts),
+  // which goes through the secret-gated `testSupport.provisionUser` there.
+  describe('Auth (email + password, formerly AuthBasic)', { skip: !isLocal && 'verification-code flow needs a mailbox (Q2: sign-up always confirms by email)' }, () => {
 
     // ── Sign Up (code-confirmed) ─────────────────────────────────────────
 
@@ -33,12 +49,13 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         const username = uniqueUser();
         await api.authSignUp(username, 'password123');
 
-        // Can't sign in yet — unconfirmed
+        // Can't sign in yet — unconfirmed. Reported only after the correct
+        // password, so it reveals nothing to a caller without the credential.
         try {
           await api.authSignIn(username, 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.UserNotConfirmed), `Expected ${AuthErrors.UserNotConfirmed}, got ${e}`);
         }
       });
 
@@ -55,7 +72,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
 
         const user = await api.authSignIn(username, 'password123');
         assert.strictEqual(user.username, username);
-        assert.ok(user.createdAt);
+        assert.ok(user.userSub, 'a confirmed user has a stable userSub');
         await api.authSignOut();
       });
 
@@ -63,12 +80,17 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         const api = getApi();
         const username = uniqueUser();
         await api.authSignUp(username, 'password123');
+        // Wait for the real code so '000000' is a wrong code for a live one,
+        // not a missing one (and cannot collide with the delivered code).
+        const delivered = await pollForCode(api, username);
+        const wrong = delivered.code === '000000' ? '111111' : '000000';
 
+        // InvalidCode split: a wrong code is CodeMismatch.
         try {
-          await api.authConfirmSignUp(username, '000000');
+          await api.authConfirmSignUp(username, wrong);
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.CodeMismatch), `Expected ${AuthErrors.CodeMismatch}, got ${e}`);
         }
       });
 
@@ -80,7 +102,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignUp(username, 'password456');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, UserAlreadyExists), `Expected ${UserAlreadyExists}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.UserAlreadyExists), `Expected ${AuthErrors.UserAlreadyExists}, got ${e}`);
         }
       });
 
@@ -90,7 +112,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignUp(uniqueUser(), 'short');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidPassword), `Expected ${InvalidPassword}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.InvalidPassword), `Expected ${AuthErrors.InvalidPassword}, got ${e}`);
         }
       });
     });
@@ -122,7 +144,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn(username, 'wrongpassword');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
         }
       });
 
@@ -132,7 +154,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn('no-such-user-ever', 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
         }
       });
     });
@@ -205,7 +227,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authRequired();
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, SessionExpired), `Expected ${SessionExpired}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.NotAuthenticated), `Expected ${AuthErrors.NotAuthenticated}, got ${e}`);
         }
       });
 
@@ -227,7 +249,9 @@ export function basicAuthTests(getApi: () => typeof apiType) {
       test('full reset flow — reset, confirm with code, sign in with new password', async () => {
         const api = getApi();
         const username = uniqueUser();
-        await api.authSignUp(username, 'password123');
+        // A reset code goes only to a verified contact (as on Cognito), so the
+        // user signs up with an email, which the sign-up code verifies.
+        await api.authSignUp(username, 'password123', `${username}@example.com`);
         let code = await pollForCode(api, username);
         await api.authConfirmSignUp(username, code!.code);
 
@@ -247,7 +271,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn(username, 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials));
+          assert.ok(isAuthError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
         }
 
         // New password should work
@@ -259,16 +283,19 @@ export function basicAuthTests(getApi: () => typeof apiType) {
       test('confirmResetPassword rejects invalid code', async () => {
         const api = getApi();
         const username = uniqueUser();
-        await api.authSignUp(username, 'password123');
+        await api.authSignUp(username, 'password123', `${username}@example.com`);
         let code = await pollForCode(api, username);
         await api.authConfirmSignUp(username, code!.code);
         await api.authResetPassword(username);
+        const resetCode = await pollForCode(api, username, { not: code.code });
+        const wrong = resetCode.code === '000000' ? '111111' : '000000';
 
+        // InvalidCode split: a wrong code for an outstanding reset is CodeMismatch.
         try {
-          await api.authConfirmResetPassword(username, '000000', 'newpass123');
+          await api.authConfirmResetPassword(username, wrong, 'newpass123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.CodeMismatch), `Expected ${AuthErrors.CodeMismatch}, got ${e}`);
         }
       });
 
@@ -279,11 +306,14 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         const code = await pollForCode(api, username);
         await api.authConfirmSignUp(username, code!.code);
 
+        // InvalidCode split: with no reset outstanding there is nothing to
+        // match, which Cognito (and the mock) report as CodeMismatch — the same
+        // answer as a wrong code, so the flow does not reveal account state.
         try {
           await api.authConfirmResetPassword(username, '123456', 'newpass123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.CodeMismatch), `Expected ${AuthErrors.CodeMismatch}, got ${e}`);
         }
       });
     });
@@ -314,7 +344,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         // aws-blocks/index.ts.
         const persisted = await api.kvGet(`__last-code:auth:${username}`);
         assert.ok(persisted, 'code should be persisted in the shared store');
-        assert.deepStrictEqual(JSON.parse(persisted!), { username, code: delivered.code });
+        assert.deepStrictEqual(JSON.parse(persisted!), { username, code: delivered.code, purpose: 'signUp' });
       });
 
       test('codes are keyed per user — a later signup does not mask an earlier one', async () => {
@@ -357,7 +387,8 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         // Start from a known-empty set: the mock store persists to disk between
         // local runs, so leftovers from an earlier build would mask what this
         // delivery actually wrote.
-        await api.authPurgeDeliveredCodes();
+        const { testSupport, secret } = await getTestSupport();
+        await testSupport.authPurgeDeliveredCodes(secret);
         await api.authSignUp(username, 'password123');
         await pollForCode(api, username);
 
@@ -382,7 +413,8 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         await api.authSignUp(username, 'password123');
         await pollForCode(api, username);
 
-        const { deleted } = await api.authPurgeDeliveredCodes();
+        const { testSupport, secret } = await getTestSupport();
+        const { deleted } = await testSupport.authPurgeDeliveredCodes(secret);
         assert.ok(deleted >= 1, `expected at least one record purged, got ${deleted}`);
 
         assert.strictEqual(await api.authGetLastCode(username), null, 'purged code should be gone');

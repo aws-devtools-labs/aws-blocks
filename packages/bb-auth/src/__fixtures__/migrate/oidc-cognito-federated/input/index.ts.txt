@@ -1,0 +1,31 @@
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Scope } from '@aws-blocks/core';
+import { AuthOIDC, cognitoFederated } from '@aws-blocks/bb-auth-oidc';
+
+const scope = new Scope('app');
+const googleId = new AppSetting(scope, 'google-id', { secret: true });
+const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
+const entraId = new AppSetting(scope, 'entra-id', { secret: true });
+const entraSecret = new AppSetting(scope, 'entra-secret', { secret: true });
+
+export const auth = new AuthOIDC(scope, 'auth', {
+	providers: [
+		cognitoFederated({
+			name: 'google',
+			identityProvider: 'Google',
+			cognitoDomain: 'myapp',
+			region: 'us-east-1',
+			clientId: googleId,
+			clientSecret: googleSecret,
+		}),
+		cognitoFederated({
+			name: 'entra',
+			identityProvider: 'Entra',
+			idpIssuerUrl: 'https://login.microsoftonline.com/tenant/v2.0',
+			cognitoDomain: 'myapp',
+			region: 'us-east-1',
+			clientId: entraId,
+			clientSecret: entraSecret,
+		}),
+	],
+});

@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { Scope } from '@aws-blocks/core';
+import { Scope, getSdkIdentifiers } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
 import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
@@ -2273,7 +2273,7 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 			const bucket = new FileBucket(new Scope(scopeId), 'sn');
 			createDeployedSnapshotStorage(bucket, Spy);
 			assert.strictEqual(configs.length, 1, 'S3Storage should be constructed exactly once');
-			assert.strictEqual(configs[0].bucket, bucket.fullId, 'session bucket id should be passed through');
+			assert.strictEqual(configs[0].bucket, getSdkIdentifiers(bucket).bucketName, 'the session bucket name the FileBucket registered should be passed through');
 			return configs[0];
 		} finally {
 			if (prev === undefined) delete process.env.AWS_REGION;

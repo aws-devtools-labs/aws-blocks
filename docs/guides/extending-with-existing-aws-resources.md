@@ -40,7 +40,7 @@ actually constraining you. Use this to weigh the tradeoffs:
 - You want mockable tests without stubbing AWS SDK calls — *unless* local mocking isn't required for this resource, or you're comfortable detecting local dev mode and writing your own mocks
 
 **✅ Use Pattern 2 (`fromExisting`) when:**
-- The resource type already has a Blocks BB (`KVStore`, `DistributedTable`, `FileBucket`, `Database`, `AuthCognito`)
+- The resource type already has a Blocks BB (`KVStore`, `DistributedTable`, `FileBucket`, `Database`, `Auth`)
 - You want to apply the runtime logic from an existing Blocks BB to a resource created outside of Blocks (e.g. via another stack, or managed outside the `BlocksBackend`)
 
 **❌ Don't use Pattern 2 (`fromExisting`) when:**
@@ -231,7 +231,7 @@ Today this is supported by:
 | `DistributedTable` | `DistributedTable.fromExisting(tableName)` | Existing DynamoDB table (skips GSI provisioning — customer owns indexes) |
 | `FileBucket` | `FileBucket.fromExisting(bucketName)` | Existing S3 bucket |
 | `Database` | `fromExisting({ ... })` (from `@aws-blocks/bb-data`) | Existing RDS instance |
-| `AuthCognito` | `AuthCognito.fromExisting(userPoolId, clientId?)` | Existing Cognito User Pool |
+| `Auth` | `Auth.fromExisting(userPoolId, clientId?)`, passed as the `userPool` option | Existing Cognito User Pool |
 
 ### Example: KVStore over a legacy DynamoDB table
 
@@ -560,6 +560,13 @@ import { KVStore } from '@aws-blocks/bb-kv-store';   // resolves to vendor/, not
 
 Edit `vendor/bb-kv-store/src/index.cdk.ts` and your changes apply on the next
 `cdk synth` (no rebuild — `tsx` consumes `.ts` directly).
+
+Some blocks also deploy helper Lambdas of their own: `Auth` (the user-pool
+immutability guard, and the identity-provider registration for
+Cognito-federated sign-in), `DistributedTable` (the GSI manager, for a table
+with indexes), and `Database` / `DistributedDatabase` (the migration runner).
+In a vendored copy these are bundled from `vendor/<package>/src/` at synth with
+your app's `esbuild`, so edits to those handlers deploy too.
 
 ### Reverting
 

@@ -202,19 +202,10 @@ class OpenRpcParser {
       );
       final required =
           (schema['required'] as List<dynamic>?)?.cast<String>().toSet() ?? {};
-      TypeRef? additionalProps;
-      if (schema.containsKey('additionalProperties')) {
-        final ap = schema['additionalProperties'];
-        if (ap is bool && ap) {
-          additionalProps = const PrimitiveRef('dynamic');
-        } else if (ap is Map<String, dynamic>) {
-          additionalProps = _parseTypeRef(ap);
-        }
-      }
       return InlineObjectRef(
         properties: parsedProps,
         required: required,
-        additionalProperties: additionalProps,
+        additionalProperties: _parseAdditionalProperties(schema),
       );
     }
 
@@ -223,6 +214,16 @@ class OpenRpcParser {
       _mapPrimitive(type),
       constraints: _parseConstraints(schema),
     );
+  }
+
+  /// The value type of an object schema's extra keys (an open record, TS
+  /// `T & Record<string, V>`): `true` admits any value (`dynamic`), a schema
+  /// types them, and `false` or no `additionalProperties` closes the object.
+  TypeRef? _parseAdditionalProperties(Map<String, dynamic> schema) {
+    final ap = schema['additionalProperties'];
+    if (ap is bool && ap) return const PrimitiveRef('dynamic');
+    if (ap is Map<String, dynamic>) return _parseTypeRef(ap);
+    return null;
   }
 
   TypeRef _parseOneOf(List<Map<String, dynamic>> oneOf) {
@@ -290,6 +291,7 @@ class OpenRpcParser {
             properties: filteredProps,
             required: filteredRequired,
             embeddedUnion: embeddedUnion,
+            additionalProperties: _parseAdditionalProperties(v),
           );
         }).toList();
         final union = DiscriminatedUnionRef(

@@ -23,8 +23,10 @@ class ApiCreateUserInput {
     if (!(email.length >= 5)) throw ArgumentError('email must be at least 5 characters');
     if (!(email.length <= 254)) throw ArgumentError('email must be at most 254 characters');
     if (!(RegExp(r'^[A-Z]{3}$').hasMatch(code))) throw ArgumentError('code must match pattern');
-    if (!(nickname == null || nickname.length >= 2)) throw ArgumentError('nickname must be at least 2 characters');
-    if (!(nickname == null || nickname.length <= 30)) throw ArgumentError('nickname must be at most 30 characters');
+    if (nickname case final nickname?) {
+      if (!(nickname.length >= 2)) throw ArgumentError('nickname must be at least 2 characters');
+      if (!(nickname.length <= 30)) throw ArgumentError('nickname must be at most 30 characters');
+    }
   }
 
   factory ApiCreateUserInput.fromJson(Map<String, dynamic> json) {
@@ -97,9 +99,9 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<CreateUserResult> createUser({required ApiCreateUserInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('api.createUser', params);
     return CreateUserResult.fromJson(result as Map<String, dynamic>);
   }

@@ -11,6 +11,7 @@ import { decodeRpcResponse } from './rpc.js';
 import { _resetConfigCache, _setS3Fetcher } from './common/config.js';
 import { HttpRequest } from '@smithy/protocol-http';
 import { installClientUserAgent } from './server/client-user-agent.js';
+import { ApiNamespace } from './api.js';
 import type { BlocksContext } from './api.js';
 
 beforeEach(() => {
@@ -754,6 +755,378 @@ describe('createLambdaHandler — RawRoute cookie forwarding', () => {
   });
 });
 
+// ── Response Set-Cookie (API Gateway REST proxy format) ─────────────────────
+//
+// The backend Lambda is fronted by an API Gateway REST API with a Lambda proxy
+// integration (bb-lambda-compute), which uses the v1 payload format: the
+// `headers` map holds ONE value per name, so multiple `Set-Cookie` values must
+// travel in `multiValueHeaders`. The local dev server splits cookies itself,
+// so a regression here is invisible locally and only drops cookies on AWS.
+
+/** Every `headers` key that is a Set-Cookie, case-insensitively. */
+function setCookieKeysInHeaders(result: any): string[] {
+  return Object.keys(result.headers ?? {}).filter((k) => k.toLowerCase() === 'set-cookie');
+}
+
+describe('createLambdaHandler — RPC response Set-Cookie', () => {
+  it('returns every Set-Cookie an API method sets in multiValueHeaders', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          // Mirrors bb-auth: session cookie via set(), bridge cookie via append().
+          ctx.response.headers.set('set-cookie', 'session=abc; Path=/; HttpOnly; Secure; SameSite=Lax');
+          ctx.response.headers.append('set-cookie', 'bridge=xyz; Path=/; Max-Age=300; HttpOnly; Secure');
+          return { ok: true };
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], [
+      'session=abc; Path=/; HttpOnly; Secure; SameSite=Lax',
+      'bridge=xyz; Path=/; Max-Age=300; HttpOnly; Secure',
+    ]);
+    // A Set-Cookie left in `headers` as well would be merged in by API Gateway
+    // alongside multiValueHeaders — it must live only in multiValueHeaders.
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(result.body)), { ok: true });
+  });
+
+  it('keeps the other response headers in headers', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.set('set-cookie', 'a=1');
+          ctx.response.headers.set('x-custom', 'v1');
+          ctx.response.headers.append('x-custom', 'v2');
+          return 'ok';
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.strictEqual(result.headers['content-type'], 'application/json');
+    assert.strictEqual(result.headers['cache-control'], 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    // Non-cookie multi-value headers keep their standard comma-joined form.
+    assert.strictEqual(result.headers['x-custom'], 'v1, v2');
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], ['a=1']);
+  });
+
+  it('respects a status set by the method alongside cookies', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.status = 201;
+          ctx.response.headers.append('set-cookie', 'a=1');
+          ctx.response.headers.append('set-cookie', 'b=2');
+          return 'ok';
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.strictEqual(result.statusCode, 201);
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], ['a=1', 'b=2']);
+  });
+
+  it('emits no Set-Cookie when the method sets none', async () => {
+    const backend = { api: () => ({ async echo() { return 'ok'; } }) };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'] ?? [], []);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+  });
+});
+
+describe('createLambdaHandler — RawRoute response Set-Cookie', () => {
+  it('returns every Set-Cookie a RawRoute sets in multiValueHeaders', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/hooks/two-cookies',
+      handler: async (ctx) => {
+        ctx.response.headers.set('set-cookie', 'a=1; Path=/');
+        ctx.response.headers.append('set-cookie', 'b=2; Path=/');
+        ctx.response.send({ ok: true });
+      },
+    });
+
+    const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/hooks/two-cookies' }));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], ['a=1; Path=/', 'b=2; Path=/']);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+  });
+});
+
+// ── Response Set-Cookie (API Gateway HTTP API / Function URL, payload v2) ───
+//
+// Payload format 2.0 has no `multiValueHeaders`; cookies travel in the
+// top-level `cookies: string[]`. v1 behaviour is covered above and must not
+// change.
+
+function makeV2Event(overrides: Record<string, any> = {}) {
+  return {
+    version: '2.0',
+    routeKey: '$default',
+    rawPath: '/aws-blocks/api',
+    rawQueryString: '',
+    requestContext: { http: { method: 'POST', path: '/aws-blocks/api' } },
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: [], id: 1 }),
+    isBase64Encoded: false,
+    ...overrides,
+  };
+}
+
+describe('createLambdaHandler — payload v2 response Set-Cookie', () => {
+  it('RPC: returns every Set-Cookie in v2 `cookies`, not multiValueHeaders or headers', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.set('set-cookie', 'session=abc; Path=/; HttpOnly');
+          ctx.response.headers.append('set-cookie', 'bridge=xyz; Path=/; Max-Age=300');
+          ctx.response.headers.set('x-custom', 'v1');
+          return { ok: true };
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeV2Event());
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(result.cookies, ['session=abc; Path=/; HttpOnly', 'bridge=xyz; Path=/; Max-Age=300']);
+    assert.strictEqual(result.multiValueHeaders, undefined);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+    assert.strictEqual(result.headers['x-custom'], 'v1');
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(result.body)), { ok: true });
+  });
+
+  it('RawRoute: returns every Set-Cookie in v2 `cookies`', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/hooks/v2-cookies',
+      handler: async (ctx) => {
+        ctx.response.headers.set('set-cookie', 'a=1; Path=/');
+        ctx.response.headers.append('set-cookie', 'b=2; Path=/');
+        ctx.response.send({ ok: true });
+      },
+    });
+
+    const result = await invoke({}, makeV2Event({
+      rawPath: '/hooks/v2-cookies',
+      requestContext: { http: { method: 'GET', path: '/hooks/v2-cookies' } },
+      body: undefined,
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(result.cookies, ['a=1; Path=/', 'b=2; Path=/']);
+    assert.strictEqual(result.multiValueHeaders, undefined);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+  });
+});
+
+// ── RPC error responses keep the method's Set-Cookie ────────────────────────
+//
+// A method that clears a cookie and then throws (e.g. `requireAuth` on a
+// deleted user: 401 + clear the session cookie) must deliver BOTH the error
+// and the clearing Set-Cookie. An error with no cookies is unchanged.
+//
+// Only cookie DELETIONS survive an error: a method that signs a user in and
+// then throws to reject them must not hand out a live session with the error.
+
+const CLEAR_SESSION = 'session=; Path=/; HttpOnly; Max-Age=0';
+
+function clearThenThrowBackend() {
+  return {
+    api: (ctx: BlocksContext) => ({
+      async echo() {
+        ctx.response.headers.set('set-cookie', CLEAR_SESSION);
+        ctx.response.headers.set('x-not-forwarded', 'yes');
+        throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+      },
+    }),
+  };
+}
+
+/** Decode the JSON-RPC error envelope into the ApiError the client would see. */
+function decodeRpcError(result: any): ApiError {
+  try {
+    decodeRpcResponse(JSON.parse(result.body));
+  } catch (e) {
+    assert.ok(e instanceof ApiError, `expected ApiError, got ${String(e)}`);
+    return e;
+  }
+  assert.fail('expected the RPC response to be an error');
+}
+
+describe('createLambdaHandler — RPC error response Set-Cookie', () => {
+  it('v1: delivers the 401 AND the clearing Set-Cookie in multiValueHeaders', async () => {
+    const result = await invoke(clearThenThrowBackend(), makeEvent());
+
+    assert.strictEqual(result.statusCode, 200);
+    const err = decodeRpcError(result);
+    assert.strictEqual(err.status, 401);
+    assert.strictEqual(err.name, 'NotAuthenticated');
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], [CLEAR_SESSION]);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+    // Only cookies are carried over — the error envelope keeps its standard headers.
+    assert.strictEqual(result.headers['x-not-forwarded'], undefined);
+    assert.strictEqual(result.headers['Content-Type'], 'application/json');
+  });
+
+  it('v2: delivers the 401 AND the clearing Set-Cookie in `cookies`', async () => {
+    const result = await invoke(clearThenThrowBackend(), makeV2Event());
+
+    assert.strictEqual(decodeRpcError(result).status, 401);
+    assert.deepStrictEqual(result.cookies, [CLEAR_SESSION]);
+    assert.strictEqual(result.multiValueHeaders, undefined);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+  });
+
+  it('an error with no cookies is returned exactly as before', async () => {
+    const backend = {
+      api: () => ({
+        async echo() {
+          throw new ApiError('Conflict', 409, { name: 'AlreadyExists' });
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.deepStrictEqual(Object.keys(result).sort(), ['body', 'headers', 'statusCode']);
+    assert.strictEqual(result.statusCode, 200);
+    // The plain RPC error headers (original casing), no cookie fields added.
+    assert.strictEqual(result.headers['Content-Type'], 'application/json');
+    assert.strictEqual(result.headers['Cache-Control'], 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+    const err = decodeRpcError(result);
+    assert.strictEqual(err.status, 409);
+    assert.strictEqual(err.name, 'AlreadyExists');
+  });
+
+  it('error body never carries SDK metadata, even when cookies are delivered', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.set('set-cookie', CLEAR_SESSION);
+          const sdkError = Object.assign(new Error('User does not exist.'), {
+            name: 'UserNotFoundException',
+            $metadata: { httpStatusCode: 400, requestId: 'req-123' },
+            $fault: 'client',
+          });
+          const err = new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+          Object.defineProperty(err, 'cause', { value: sdkError, enumerable: false });
+          throw err;
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], [CLEAR_SESSION]);
+    assert.ok(!result.body.includes('$metadata'), `body leaked SDK metadata: ${result.body}`);
+    assert.ok(!result.body.includes('req-123'), `body leaked SDK request id: ${result.body}`);
+    assert.ok(!result.body.includes('UserNotFoundException'), `body leaked the SDK error: ${result.body}`);
+  });
+
+  // ── Live cookies are dropped on error ──
+
+  const LIVE_SESSION = 'session=s3cr3t; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600';
+
+  function backendSettingThenThrowing(...cookies: string[]) {
+    return {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          for (const c of cookies) ctx.response.headers.append('set-cookie', c);
+          // e.g. `await auth.signIn(...)` then a post-sign-in policy check rejects the user
+          throw new ApiError('forbidden', 403, { name: 'Forbidden' });
+        },
+      }),
+    };
+  }
+
+  for (const [label, makeEv, cookiesOf] of [
+    ['v1', makeEvent, (r: any) => r.multiValueHeaders?.['Set-Cookie']],
+    ['v2', makeV2Event, (r: any) => r.cookies],
+  ] as const) {
+    it(`${label}: sign-in-then-throw → the error carries NO session cookie`, async () => {
+      const result = await invoke(backendSettingThenThrowing(LIVE_SESSION), makeEv());
+
+      assert.strictEqual(decodeRpcError(result).status, 403);
+      assert.strictEqual(cookiesOf(result), undefined, 'a live cookie must not be forwarded on error');
+      assert.strictEqual(result.multiValueHeaders, undefined);
+      assert.strictEqual(result.cookies, undefined);
+      assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+      assert.ok(!JSON.stringify(result).includes('s3cr3t'), 'session value leaked into the error response');
+    });
+
+    it(`${label}: live + clearing cookie, then throw → only the clearing cookie arrives`, async () => {
+      const result = await invoke(backendSettingThenThrowing(LIVE_SESSION, 'bridge=; Path=/; Max-Age=0'), makeEv());
+
+      assert.strictEqual(decodeRpcError(result).status, 403);
+      assert.deepStrictEqual(cookiesOf(result), ['bridge=; Path=/; Max-Age=0']);
+      assert.ok(!JSON.stringify(result).includes('s3cr3t'), 'session value leaked into the error response');
+    });
+  }
+
+  it('forwards deletions by negative Max-Age or past Expires; drops future Expires and Max-Age-overridden Expires', async () => {
+    const result = await invoke(backendSettingThenThrowing(
+      'a=; Path=/; Max-Age=-1',
+      'b=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+      'c=live; Path=/; Expires=Fri, 01 Jan 2100 00:00:00 GMT',
+      // Max-Age takes precedence over Expires (RFC 6265 §5.3) → this one is live.
+      'd=live; Path=/; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+      // "Max-Age=0" inside the VALUE is not an attribute → session cookie → live.
+      'e=Max-Age=0; Path=/',
+    ), makeEvent());
+
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], [
+      'a=; Path=/; Max-Age=-1',
+      'b=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    ]);
+  });
+
+  it('success responses still forward live cookies (unchanged)', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.append('set-cookie', LIVE_SESSION);
+          ctx.response.headers.append('set-cookie', 'bridge=; Path=/; Max-Age=0');
+          return 'ok';
+        },
+      }),
+    };
+
+    const v1 = await invoke(backend, makeEvent());
+    assert.deepStrictEqual(v1.multiValueHeaders?.['Set-Cookie'], [LIVE_SESSION, 'bridge=; Path=/; Max-Age=0']);
+    const v2 = await invoke(backend, makeV2Event());
+    assert.deepStrictEqual(v2.cookies, [LIVE_SESSION, 'bridge=; Path=/; Max-Age=0']);
+  });
+
+  it('RawRoute error responses still forward every cookie, live ones included (unchanged)', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/hooks/live-then-throw',
+      handler: async (ctx) => {
+        ctx.response.headers.append('set-cookie', LIVE_SESSION);
+        ctx.response.headers.append('set-cookie', 'pending=; Path=/; Max-Age=0');
+        throw new ApiError('nope', 400);
+      },
+    });
+
+    const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/hooks/live-then-throw' }));
+
+    assert.strictEqual(result.statusCode, 400);
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], [LIVE_SESSION, 'pending=; Path=/; Max-Age=0']);
+  });
+});
+
 // ── Timeout guard tests ─────────────────────────────────────────────────────
 
 function makeApiGatewayV2Event(overrides: Record<string, any> = {}) {
@@ -1146,6 +1519,79 @@ describe('classifyEvent — event source classification', () => {
   });
 });
 
+// ── Cognito user pool triggers ──────────────────────────────────────────────
+
+function makeCognitoPreSignUpEvent(overrides: Record<string, any> = {}) {
+  return {
+    version: '1',
+    region: 'us-east-1',
+    userPoolId: 'us-east-1_Pool1',
+    userName: 'alice',
+    callerContext: { awsSdkVersion: 'aws-sdk-unknown-unknown', clientId: 'client-1' },
+    triggerSource: 'PreSignUp_SignUp',
+    request: { userAttributes: { email: 'alice@example.com' }, validationData: null },
+    response: { autoConfirmUser: false, autoVerifyEmail: false, autoVerifyPhone: false },
+    ...overrides,
+  };
+}
+
+describe('createLambdaHandler — Cognito user pool triggers', () => {
+  it('classifies a trigger event as cognito-trigger (and not as HTTP)', () => {
+    const event = makeCognitoPreSignUpEvent();
+    assert.strictEqual(classifyEvent(event), 'cognito-trigger');
+    assert.strictEqual(isApiGatewayHttpEvent(event), false);
+  });
+
+  it('routes by the event\'s userPoolId and returns the event unchanged', async () => {
+    const seen: any[] = [];
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:cognito-idp:us-east-1_Other', async () => {
+      throw new Error('wrong pool');
+    });
+    handlers.set('aws:cognito-idp:us-east-1_Pool1', async (e) => {
+      seen.push(e);
+    });
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+    try {
+      const event = makeCognitoPreSignUpEvent();
+      const result = await createLambdaHandler(async () => ({}))(event);
+      assert.strictEqual(seen.length, 1);
+      assert.deepStrictEqual(result, makeCognitoPreSignUpEvent());
+      assert.deepStrictEqual(result.response, { autoConfirmUser: false, autoVerifyEmail: false, autoVerifyPhone: false });
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+
+  it('propagates a handler rejection (Cognito then rejects the operation)', async () => {
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:cognito-idp:us-east-1_Pool1', async () => {
+      throw new Error('Rejected by policy');
+    });
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+    try {
+      await assert.rejects(createLambdaHandler(async () => ({}))(makeCognitoPreSignUpEvent()), /Rejected by policy/);
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+
+  it('fails closed, naming no resource, when no handler is registered for the pool', async () => {
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = new Map();
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      await assert.rejects(createLambdaHandler(async () => ({}))(makeCognitoPreSignUpEvent()), (e: Error) => {
+        assert.strictEqual(e.message, 'This user pool trigger is not configured.');
+        return true;
+      });
+    } finally {
+      console.error = originalError;
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+});
+
 // ── Decode-path test (ensures client can decode the 504 JSON-RPC envelope) ──
 
 describe('createLambdaHandler — 504 response is decodable by RPC client', () => {
@@ -1344,7 +1790,7 @@ describe('createLambdaHandler — sandbox forwarded-host reaches the route', () 
       method: 'GET',
       path: '/auth/callback',
       handler: async (ctx) => {
-        // This mirrors how AuthOIDC.computeCallbackUrl derives redirect_uri:
+        // This mirrors how the auth block's federation routes derive redirect_uri:
         // entirely from ctx.request.url.host.
         capturedHost = ctx.request.url.host;
         ctx.response.send('');
@@ -1526,6 +1972,179 @@ describe('createLambdaHandler — native client user-agent forwarding', () => {
     assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
   });
 
+});
+
+// ── RPC dispatch surface (only the methods the API defines) ──────────────────
+
+/**
+ * Every member a plain object inherits from `Object.prototype`. A client must
+ * not be able to name any of them as an API method.
+ */
+const INHERITED_NAMES = [
+  'constructor',
+  'toString',
+  'valueOf',
+  'hasOwnProperty',
+  'isPrototypeOf',
+  'propertyIsEnumerable',
+  'toLocaleString',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+  '__proto__',
+];
+
+function rpcCall(method: string, params: unknown[] = []) {
+  return makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }) });
+}
+
+/** The exact body an unknown method on an existing API returns. */
+function unknownMethodBody(method: string, ns = 'api') {
+  return { jsonrpc: '2.0', error: { code: -32601, message: `Method not found: '${method}' on API '${ns}'` }, id: 1 };
+}
+
+/** The exact body an unknown API namespace returns. */
+function unknownApiBody(ns: string) {
+  return { jsonrpc: '2.0', error: { code: -32601, message: `Method not found: API '${ns}' not found` }, id: 1 };
+}
+
+/** A Building Block instance exported from the backend (a `Scope` subclass). */
+class FakeBlock {
+  readonly id = 'notes';
+  readonly fullId = 'app-notes';
+  async get(_key: string) { return 'stored-secret'; }
+  async delete(_key: string) { return 'deleted'; }
+}
+
+function dispatchBackend() {
+  const shared = { async composed() { return 'composed'; } };
+  return {
+    api: new ApiNamespace({ id: 'app' }, 'api', (_ctx: BlocksContext) => ({
+      async echo(msg: string) { return msg; },
+      async viaThis() { return this.echo('bound'); },
+      ...shared,
+      // An app may define a method with an Object.prototype name itself.
+      async toString() { return 'app-defined toString'; },
+    })),
+    auth: new ApiNamespace({ id: 'app' }, 'auth', (_ctx: BlocksContext) => ({
+      getAuthState: async () => ({ state: 'signedOut' }),
+      setAuthState: async (input: { action: string }) => ({ state: 'signedOut', action: input.action }),
+    })),
+    plainApi: { async ping() { return 'pong'; } },
+    notes: new FakeBlock(),
+    // A secret() marker whose (callable) schema must not become an endpoint.
+    stripeKey: { [Symbol.for('@aws-blocks/hosting.ManagedValue')]: true, key: 'STRIPE_KEY', kind: 'secret', schema: (v: unknown) => v },
+  };
+}
+
+describe('createLambdaHandler — RPC dispatch reaches only the API\'s own methods', () => {
+  for (const name of INHERITED_NAMES) {
+    it(`'${name}' (inherited from Object.prototype) is "method not found"`, async () => {
+      // `auth` defines only getAuthState/setAuthState, nothing inherited.
+      const result = await invoke(dispatchBackend(), rpcCall(`auth.${name}`, [{ action: 'x' }]));
+      assert.strictEqual(result.statusCode, 200);
+      assert.deepStrictEqual(JSON.parse(result.body), unknownMethodBody(name, 'auth'));
+    });
+  }
+
+  it('an inherited name returns exactly what an unknown method returns', async () => {
+    const unknown = await invoke(dispatchBackend(), rpcCall('auth.doesNotExist'));
+    const inherited = await invoke(dispatchBackend(), rpcCall('auth.hasOwnProperty', ['getAuthState']));
+    assert.strictEqual(inherited.statusCode, unknown.statusCode);
+    assert.deepStrictEqual(inherited.headers, unknown.headers);
+    const a = JSON.parse(unknown.body);
+    const b = JSON.parse(inherited.body);
+    assert.deepStrictEqual(Object.keys(b.error).sort(), Object.keys(a.error).sort(), 'no extra fields (data, stack, reason)');
+    assert.strictEqual(b.error.code, a.error.code);
+    assert.strictEqual('data' in b.error, false);
+  });
+
+  const craftedPaths: Array<[string, Record<string, unknown>]> = [
+    ['api.__proto__.toString', unknownMethodBody('__proto__.toString')],
+    ['api.constructor.constructor', unknownMethodBody('constructor.constructor')],
+    ['api.echo.call', unknownMethodBody('echo.call')],
+    ['api.echo.constructor', unknownMethodBody('echo.constructor')],
+    ['api.', unknownMethodBody('')],
+    ['constructor.constructor', unknownApiBody('constructor')],
+    ['constructor.toString', unknownApiBody('constructor')],
+    ['__proto__.toString', unknownApiBody('__proto__')],
+    ['hasOwnProperty.call', unknownApiBody('hasOwnProperty')],
+    ['toString.call', unknownApiBody('toString')],
+    ['.echo', unknownApiBody('')],
+  ];
+  for (const [wire, expected] of craftedPaths) {
+    it(`crafted path '${wire}' cannot walk the prototype chain`, async () => {
+      const result = await invoke(dispatchBackend(), rpcCall(wire, ['x']));
+      assert.strictEqual(result.statusCode, 200);
+      assert.deepStrictEqual(JSON.parse(result.body), expected);
+    });
+  }
+
+  it('a namespace lookup on a null-prototype (ES module) backend rejects inherited names too', async () => {
+    const mod = Object.assign(Object.create(null), dispatchBackend());
+    for (const ns of ['constructor', '__proto__', 'toString']) {
+      const result = await invoke(mod, rpcCall(`${ns}.x`));
+      assert.deepStrictEqual(JSON.parse(result.body), unknownApiBody(ns));
+    }
+  });
+
+  it('an exported Building Block instance is not an RPC namespace', async () => {
+    for (const method of ['get', 'delete', 'constructor']) {
+      const result = await invoke(dispatchBackend(), rpcCall(`notes.${method}`, ['k']));
+      assert.deepStrictEqual(JSON.parse(result.body), unknownApiBody('notes'));
+    }
+  });
+
+  it('a secret()/config() marker export is not an RPC namespace', async () => {
+    const result = await invoke(dispatchBackend(), rpcCall('stripeKey.schema', ['x']));
+    assert.deepStrictEqual(JSON.parse(result.body), unknownApiBody('stripeKey'));
+  });
+
+  it('a non-enumerable own property is not dispatchable', async () => {
+    const backend = {
+      api: (_ctx: BlocksContext) => {
+        const methods = { async visible() { return 'ok'; } };
+        Object.defineProperty(methods, 'hidden', { value: async () => 'hidden', enumerable: false });
+        return methods;
+      },
+    };
+    const hidden = await invoke(backend, rpcCall('api.hidden'));
+    assert.deepStrictEqual(JSON.parse(hidden.body), unknownMethodBody('hidden'));
+    const visible = await invoke(backend, rpcCall('api.visible'));
+    assert.strictEqual(JSON.parse(visible.body).result, 'ok');
+  });
+
+  it('a non-function own property is "method not found", not a TypeError', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ version: '1.0', async echo(m: string) { return m; } }) };
+    const result = await invoke(backend, rpcCall('api.version'));
+    assert.deepStrictEqual(JSON.parse(result.body), unknownMethodBody('version'));
+  });
+
+  it('a handler that returns nothing is "method not found", not a TypeError', async () => {
+    const backend = { api: (_ctx: BlocksContext) => undefined };
+    const result = await invoke(backend, rpcCall('api.echo'));
+    assert.deepStrictEqual(JSON.parse(result.body), unknownMethodBody('echo'));
+  });
+
+  it('legitimate methods still dispatch: literal, spread-composed, `this`-bound, app-defined toString', async () => {
+    const backend = dispatchBackend();
+    const cases: Array<[string, unknown[], unknown]> = [
+      ['api.echo', ['hi'], 'hi'],
+      ['api.composed', [], 'composed'],
+      ['api.viaThis', [], 'bound'],
+      ['api.toString', [], 'app-defined toString'],
+      ['plainApi.ping', [], 'pong'],
+      ['auth.getAuthState', [], { state: 'signedOut' }],
+      ['auth.setAuthState', [{ action: 'signOut' }], { state: 'signedOut', action: 'signOut' }],
+    ];
+    for (const [wire, params, expected] of cases) {
+      const result = await invoke(backend, rpcCall(wire, params));
+      const body = JSON.parse(result.body);
+      assert.ok(!body.error, `${wire} errored: ${JSON.stringify(body.error)}`);
+      assert.deepStrictEqual(body.result, expected, wire);
+    }
+  });
 });
 
 // ── RPC dispatch: only API surfaces are callable ────────────────────────────

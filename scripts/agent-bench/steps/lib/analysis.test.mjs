@@ -126,7 +126,7 @@ describe('buildCellUserText(input)', () => {
 			composite: 92,
 			verdict: 'pass',
 			judgeScore: 8,
-			judgeExplanation: 'The agent built a working notes app with AuthBasic and KVStore.',
+			judgeExplanation: 'The agent built a working notes app with Auth and KVStore.',
 			klass: null,
 			metrics: { cycleCount: 5, toolUsage: { bash: { callCount: 3, errorCount: 0 } } },
 			trace: [{ name: 'bash', note: 'all good' }],
@@ -135,7 +135,7 @@ describe('buildCellUserText(input)', () => {
 		assert.match(text, /composite 92\.0\/100/);
 		assert.match(text, /verdict pass/);
 		assert.match(text, /judge 8\/10/);
-		assert.match(text, /notes app with AuthBasic/);
+		assert.match(text, /notes app with Auth and KVStore/);
 		assert.match(text, /cycles=5/);
 		assert.match(text, /Tool\/span names seen: bash/);
 	});
@@ -160,14 +160,14 @@ describe('buildCellUserText(input)', () => {
 describe('parseCellAnalysis(text)', () => {
 	it('splits the ANALYSIS + ISSUES contract into a one-line analysis and bullet issues', () => {
 		const raw = [
-			'ANALYSIS: Built a working notes app with AuthBasic + KVStore; clean pass.',
+			'ANALYSIS: Built a working notes app with Auth + KVStore; clean pass.',
 			'A couple of bash retries early on.',
 			'ISSUES:',
 			'- Repeated fileEditor errors before finding the KVStore API',
 			'- Dev server took 3 restarts to bind a port',
 		].join('\n');
 		const { analysis, issues } = parseCellAnalysis(raw);
-		assert.equal(analysis, 'Built a working notes app with AuthBasic + KVStore; clean pass. A couple of bash retries early on.');
+		assert.equal(analysis, 'Built a working notes app with Auth + KVStore; clean pass. A couple of bash retries early on.');
 		assert.deepEqual(issues, [
 			'Repeated fileEditor errors before finding the KVStore API',
 			'Dev server took 3 restarts to bind a port',

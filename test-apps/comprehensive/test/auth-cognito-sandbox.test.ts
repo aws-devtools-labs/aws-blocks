@@ -106,7 +106,7 @@ async function adminAddUserToGroup(poolId: string, username: string, groupName: 
 }
 
 export function authCognitoSandboxTests(getApi: () => typeof apiType) {
-	describe('AuthCognito Sandbox', { skip: !isSandbox || !COGNITO_POOL_ID || 'sandbox not deployed or pool ID not set' }, () => {
+	describe('Auth (authC) Sandbox', { skip: !isSandbox || !COGNITO_POOL_ID || 'sandbox not deployed or pool ID not set' }, () => {
 		// ── Sign-in with admin-created user ──────────────────────────────────
 
 		describe('signIn (admin-created user)', () => {
@@ -283,7 +283,7 @@ export function authCognitoSandboxTests(getApi: () => typeof apiType) {
 
 	// ── Phase D + E: MFA round-trip (authCMfa pool) ─────────────────────
 
-	describe('AuthCognito MFA Sandbox', { skip: !isSandbox || !COGNITO_MFA_POOL_ID || 'sandbox MFA pool not deployed' }, () => {
+	describe('Auth (authCMfa) MFA Sandbox', { skip: !isSandbox || !COGNITO_MFA_POOL_ID || 'sandbox MFA pool not deployed' }, () => {
 		describe('TOTP round-trip', () => {
 			test('setUpTOTP + verifyTOTPSetup + updateMFAPreference enables TOTP', async () => {
 				const api = getApi();

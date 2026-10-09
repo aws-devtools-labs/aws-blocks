@@ -2,6 +2,8 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
 
 const BASE = process.env.BLOCKS_URL || 'http://localhost:3000';
 const T = 10_000;
+// Meets the auth block's default password policy (length, upper, lower, digit, symbol).
+const PASSWORD = 'Correct-Horse-Battery-9';
 
 const RUN = process.env.RUN_ID || String(Date.now());
 let rpcSeq = 0;
@@ -25,8 +27,8 @@ async function rpc(
 	return { status: res.status(), body: await res.json().catch(() => null) };
 }
 
-// The grader has no mailbox: it reads the most-recently delivered OTP over the
-// same JSON-RPC endpoint via api.getLastCode().
+// The grader has no mailbox: it reads the most-recently delivered verification
+// code over the same JSON-RPC endpoint via api.getLastCode().
 async function fetchOtp(request: APIRequestContext, user: string): Promise<string> {
 	let code = '';
 	await expect
@@ -40,22 +42,29 @@ async function fetchOtp(request: APIRequestContext, user: string): Promise<strin
 				}
 				return '';
 			},
-			{ timeout: T, message: 'OTP not delivered — check api.getLastCode returns { code, username } in mock mode' },
+			{ timeout: T, message: 'code not delivered — check api.getLastCode returns { code, username } in mock mode' },
 		)
 		.not.toBe('');
 	return code;
 }
 
-async function requestCode(page: Page, email: string): Promise<void> {
+async function submitCredentials(page: Page, email: string, password = PASSWORD): Promise<void> {
 	await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
 	await page.getByTestId('auth-email').fill(email);
+	await page.getByTestId('auth-password').fill(password);
 	await page.getByTestId('auth-submit').click();
+}
+
+// Sign a new email up: lands on the code-entry view.
+async function requestCode(page: Page, email: string): Promise<void> {
+	await submitCredentials(page, email);
 	await expect(page.getByTestId('otp-input')).toBeVisible({ timeout: T });
 }
 
-// Drive the full passwordless flow; returns the email that signed in. After
-// this the page's cookie jar is authenticated (page.request calls whoami as it).
-async function signIn(page: Page, request: APIRequestContext, user: string): Promise<string> {
+// Drive the full sign-up flow (credentials → emailed code → profile); returns the
+// email that signed in. After this the page's cookie jar is authenticated
+// (page.request calls whoami as it).
+async function signUp(page: Page, request: APIRequestContext, user: string): Promise<string> {
 	const email = `${user}@test.com`;
 	await requestCode(page, email);
 	const code = await fetchOtp(request, user);
@@ -65,19 +74,26 @@ async function signIn(page: Page, request: APIRequestContext, user: string): Pro
 	return email;
 }
 
+// A returning user: email + password straight to the profile, no code.
+async function signInExisting(page: Page, email: string): Promise<void> {
+	await submitCredentials(page, email);
+	await expect(page.getByTestId('profile-username')).toBeVisible({ timeout: T });
+	await expect(page.getByTestId('otp-input')).toHaveCount(0);
+}
+
 // HARNESS CONTRACT: requires workers:1 (serial; shared-store assertions assume no concurrent runners)
 test.describe('cognito-profile', () => {
 	// --- Framework surface: identity from the auth session over the api ---
 
-	test('api.getLastCode is live in mock mode (the grader can read the OTP) and never errors', async ({ request }) => {
-		// The OTP-reader hook is a mock-only backdoor: the PROMPT requires it to gate on
+	test('api.getLastCode is live in mock mode (the grader can read the code) and never errors', async ({ request }) => {
+		// The code-reader hook is a mock-only backdoor: the PROMPT requires it to gate on
 		// BLOCKS_MOCK and return null in a real deployment. This grader can only exercise the
 		// LIVE (mock) side — the bench always runs with BLOCKS_MOCK=true (3-build-and-test.sh),
 		// so the production-gate branch (getLastCode → null when the flag is unset) never runs
 		// here. That gate is PROMPT-enforced and codegen-skipped but grader-UNVERIFIED; asserting
 		// it under a `else` that can never execute would be a misleading dead assertion, so we
 		// assert only what the bench actually reaches: in mock mode the call must succeed (so the
-		// OTP flow is graded) and must never surface a JSON-RPC error envelope.
+		// sign-up flow is graded) and must never surface a JSON-RPC error envelope.
 		const { status, body } = await rpc(request, 'api.getLastCode', []);
 		expect(status, `unexpected HTTP ${status}`).toBeLessThan(500);
 		expect(body?.error, `getLastCode must not error in mock mode: ${JSON.stringify(body?.error)}`).toBeFalsy();
@@ -92,7 +108,7 @@ test.describe('cognito-profile', () => {
 		expect(anon.body?.result ?? null).toBeNull();
 
 		await page.goto(BASE);
-		const email = await signIn(page, request, uniq('user'));
+		const email = await signUp(page, request, uniq('user'));
 
 		// Authenticated (page.request shares the sign-in cookie): returns identity.
 		const me = await rpc(page.request, 'api.whoami', []);
@@ -105,7 +121,7 @@ test.describe('cognito-profile', () => {
 	test('after sign-out the session is gone — api.whoami is unauthenticated again', async ({ page, request }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
-		await signIn(page, request, uniq('user'));
+		await signUp(page, request, uniq('user'));
 		const before = await rpc(page.request, 'api.whoami', []);
 		expect(before.body?.result?.username, 'whoami must be authenticated before sign-out').toBeTruthy();
 
@@ -119,13 +135,14 @@ test.describe('cognito-profile', () => {
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	// --- Page smoke: the multi-view OTP flow ---
+	// --- Page smoke: the multi-view sign-up flow ---
 
-	test('signed-out visitor sees the email field; code/profile hooks are absent', async ({ page }) => {
+	test('signed-out visitor sees the email and password fields; code/profile hooks are absent', async ({ page }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
 		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
+		await expect(page.getByTestId('auth-password')).toBeVisible();
 		await expect(page.getByTestId('auth-submit')).toBeVisible();
 		await expect(page.getByTestId('otp-input')).toHaveCount(0);
 		await expect(page.getByTestId('profile-username')).toHaveCount(0);
@@ -133,14 +150,15 @@ test.describe('cognito-profile', () => {
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	test('completing the OTP flow lands on a profile with the exact email and a sign-out button', async ({ page, request }) => {
+	test('completing the sign-up flow lands on a profile with the exact email and a sign-out button', async ({ page, request }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
-		const email = await signIn(page, request, uniq('user'));
+		const email = await signUp(page, request, uniq('user'));
 		await expect(page.getByTestId('profile-username')).toContainText(email, { timeout: T });
 		await expect(page.getByTestId('signout-btn')).toBeVisible();
 		await expect(page.getByTestId('auth-email')).toHaveCount(0);
+		await expect(page.getByTestId('auth-password')).toHaveCount(0);
 		await expect(page.getByTestId('otp-input')).toHaveCount(0);
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
@@ -175,7 +193,7 @@ test.describe('cognito-profile', () => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
-		const email = await signIn(page, request, uniq('user'));
+		const email = await signUp(page, request, uniq('user'));
 		await page.reload();
 		await expect(page.getByTestId('profile-username')).toContainText(email, { timeout: T });
 		await expect(page.getByTestId('auth-email')).toHaveCount(0);
@@ -190,20 +208,21 @@ test.describe('cognito-profile', () => {
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	test('a returning user signs in again with the SAME email after signing out', async ({ page, request }) => {
+	test('a returning user signs in again with the SAME email and password after signing out', async ({ page, request }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
 		const user = uniq('returning');
-		const email = await signIn(page, request, user);
+		const email = await signUp(page, request, user);
 		await page.getByTestId('signout-btn').click();
 		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
 
-		// The account already exists → a sign-up-ONLY impl throws here; a correct
-		// app detects the existing user and runs the sign-in OTP path.
-		const email2 = await signIn(page, request, user);
-		expect(email2).toBe(email);
+		// The account already exists → a sign-up-ONLY impl fails here; a correct
+		// app signs the existing user in with their password (no code).
+		await signInExisting(page, email);
 		await expect(page.getByTestId('profile-username')).toContainText(email, { timeout: T });
+		const me = await rpc(page.request, 'api.whoami', []);
+		expect(String(me.body?.result?.username)).toContain(email);
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
@@ -212,11 +231,11 @@ test.describe('cognito-profile', () => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
-		const firstEmail = await signIn(page, request, uniq('user'));
+		const firstEmail = await signUp(page, request, uniq('user'));
 		await page.getByTestId('signout-btn').click();
 		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
 
-		const secondEmail = await signIn(page, request, uniq('user'));
+		const secondEmail = await signUp(page, request, uniq('user'));
 		await expect(page.getByTestId('profile-username')).toContainText(secondEmail, { timeout: T });
 		await expect(page.getByTestId('profile-username')).not.toContainText(firstEmail, { timeout: T });
 
@@ -227,8 +246,16 @@ test.describe('cognito-profile', () => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
-		// Blank email: stay on the email form, no code view.
+		// Blank email: stay on the form, no code view.
 		await page.getByTestId('auth-email').fill('   ');
+		await page.getByTestId('auth-password').fill(PASSWORD);
+		await page.getByTestId('auth-submit').click({ force: true });
+		await expect(page.getByTestId('auth-email')).toBeVisible();
+		await expect(page.getByTestId('otp-input')).toHaveCount(0);
+
+		// Blank password: stay on the form, no code view.
+		await page.getByTestId('auth-email').fill(`${uniq('user')}@test.com`);
+		await page.getByTestId('auth-password').fill('');
 		await page.getByTestId('auth-submit').click({ force: true });
 		await expect(page.getByTestId('auth-email')).toBeVisible();
 		await expect(page.getByTestId('otp-input')).toHaveCount(0);

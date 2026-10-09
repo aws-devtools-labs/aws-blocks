@@ -1,8 +1,10 @@
 # BB: AuthCognitoAdmin — SUPERSEDED
 
+> **Historical design doc.** This describes the admin surface as designed for `AuthCognito` (`@aws-blocks/bb-auth-cognito`), a predecessor of `Auth`. `AuthCognito`, `AuthBasic` and `AuthOIDC` were replaced by the single `Auth` block ([D-018](../DECISIONS.md#d-018-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc)), and the feature now lives there: enable it with `admin: {}` (or `admin: { actions: ['groups'] }`) on `Auth` and use `auth.admin`. See the [`Auth` README](../../packages/bb-auth/README.md#mode-gates) for its compile-time gate, `packages/bb-auth/src/auth-admin.ts` and the `AdminOptions` JSDoc in `packages/bb-auth/src/types.ts` for the surface, and [`Auth` DESIGN.md](../../packages/bb-auth/DESIGN.md) for IAM and parity notes. Links to the removed `bb-auth-cognito` package point at its source on GitHub as of this record; file paths under `packages/bb-auth-cognito/` refer to that package. The rest of this document is unchanged.
+
 > **⚠️ SUPERSEDED.** The original design proposed a separate `@aws-blocks/bb-auth-cognito-admin` package. We instead ship the admin surface as an **opt-in `auth.admin` handle** on the existing `AuthCognito` class.
 >
-> The authoritative design and implementation plan is **[BB-auth-cognito-admin-implementation-plan.md](./BB-auth-cognito-admin-implementation-plan.md)**. For the shipped API and usage, see the [`bb-auth-cognito` README](../../packages/bb-auth-cognito/README.md) (*Admin surface*) and [DESIGN.md](../../packages/bb-auth-cognito/DESIGN.md).
+> The authoritative design and implementation plan is **[BB-auth-cognito-admin-implementation-plan.md](./BB-auth-cognito-admin-implementation-plan.md)**. For the shipped API and usage, see the [`bb-auth-cognito` README](https://github.com/aws-devtools-labs/aws-blocks/blob/b58f248706bba1cfd3a73308dddb92a5733f6da8/packages/bb-auth-cognito/README.md) (*Admin surface*) and [DESIGN.md](https://github.com/aws-devtools-labs/aws-blocks/blob/b58f248706bba1cfd3a73308dddb92a5733f6da8/packages/bb-auth-cognito/DESIGN.md).
 
 ## Why the direction changed
 

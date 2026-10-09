@@ -10,6 +10,8 @@ A Gradle plugin + runtime that generates type-safe Kotlin client code from OpenR
 - **plugin** — Gradle plugin wiring codegen into Android/KMP build variants
 - **runtime** — Kotlin Multiplatform library (Android, iOS, JVM, Desktop): HTTP client, WebSocket, file handles, OIDC auth
 
+Plus **fixture-goldens**, a check-only module (not published) that compiles every codegen fixture's Kotlin golden against the runtime, and runs round-trip tests that decode and encode real wire JSON through the goldens of the fixtures that have them (`fixture-goldens/round-trips/<fixture>/`, each compiled against that fixture's golden only).
+
 ## Key File Paths
 
 ### Codegen Module
@@ -77,6 +79,12 @@ A Gradle plugin + runtime that generates type-safe Kotlin client code from OpenR
 # Run plugin tests only
 ./gradlew :plugin:test
 
+# Compile every codegen fixture's Kotlin golden (../codegen-fixtures/*/kotlin/), one compilation per fixture
+bash scripts/compile-fixture-goldens.sh
+
+# Round-trip wire JSON through the goldens of fixtures with tests in fixture-goldens/round-trips/<fixture>/ (JVM)
+./gradlew :fixture-goldens:roundTripFixtureGoldens
+
 # Dump the intermediate model (useful for debugging spec interpretation)
 ./gradlew awsBlocksDumpModel
 
@@ -130,9 +138,10 @@ If you find yourself needing to break one of these rules, something is wrong wit
 ### After changing the generator (`KotlinCodeGenerator`)
 
 1. Run `./gradlew :codegen:test`
-2. Run `./gradlew clean :example:android:app:assembleDebug` — clean build ensures no stale output
-3. Inspect generated files: `find example/android/app/build/generated/source/aws/blocks/debug -name "*.kt"`
-4. Verify the example app still compiles and the generated API surface matches expectations
+2. If the output changed: regenerate the goldens (`../codegen-fixtures/regenerate-all.sh`), then run `bash scripts/compile-fixture-goldens.sh` — the golden tests only compare text, this compiles them — and `./gradlew :fixture-goldens:roundTripFixtureGoldens`, which checks the compiled goldens read and write the wire format (CI runs both in the `fixture-goldens` job of `.github/workflows/native-kotlin-analysis.yml`)
+3. Run `./gradlew clean :example:android:app:assembleDebug` — clean build ensures no stale output
+4. Inspect generated files: `find example/android/app/build/generated/source/aws/blocks/debug -name "*.kt"`
+5. Verify the example app still compiles and the generated API surface matches expectations
 
 ### After changing the runtime
 

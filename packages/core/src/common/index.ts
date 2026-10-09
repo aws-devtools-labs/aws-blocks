@@ -53,7 +53,7 @@ export type ScopeParent = Scope | { id: string };
  * - **`ApiNamespace`** from `@aws-blocks/core` - Define type-safe APIs with automatic frontend/backend integration
  * - **`KVStore`** from `@aws-blocks/bb-kv-store` - Simple key-value storage (DynamoDB)
  * - **`DistributedTable`** from `@aws-blocks/bb-distributed-table` - Type-safe tables with Zod schemas, indexes, and queries (DynamoDB)
- * - **`AuthBasic`** from `@aws-blocks/bb-auth-basic` - Username/password authentication with JWT tokens and built-in UI components
+ * - **`Auth`** from `@aws-blocks/bb-auth` - Authentication (email + password, social, OIDC and SAML sign-in) with built-in UI components
  * - **`Database`** from `@aws-blocks/bb-data` - SQL database with Kysely query builder (Aurora Serverless)
  * 
  * Read each Building Block's class and method docstrings for detailed documentation.
@@ -61,8 +61,8 @@ export type ScopeParent = Scope | { id: string };
  * ## Choosing the Right Building Block
  * 
  * **For authentication:**
- * - Use `AuthBasic` for username/password auth (includes built-in UI component)
- * - Provides JWT tokens, password hashing, and session management
+ * - Use `Auth` for every kind of sign-in: email + password, social, OIDC and SAML (includes built-in UI components)
+ * - Provides sessions, the `requireAuth` / `requireRole` guards, and sign-up / sign-in flows; see its README's "Which option and why"
  * 
  * **For data storage, choose based on your access patterns:**
  * 
@@ -125,7 +125,7 @@ export type ScopeParent = Scope | { id: string };
  * BBs that want to participate in user-agent chains must set these on their class.
  */
 export interface BuildingBlockMeta {
-	/** Short BB name used in user-agent strings, e.g. "KVStore", "AuthCognito" */
+	/** Short BB name used in user-agent strings, e.g. "KVStore", "Auth" */
 	readonly bbName: string;
 	/** Package version from the BB's own package.json (build-time generated) */
 	readonly bbVersion: string;
@@ -193,6 +193,39 @@ export class Scope {
   }
 
   /**
+   * Raw snapshot of the BB registry (custom BB names included), so a child
+   * process that imported the backend can hand its registrations back to the
+   * parent CLI via {@link Scope._mergeRegistry}. Local only — never sent anywhere;
+   * {@link Scope.getRegisteredBlocks} still applies the telemetry privacy filter.
+   * The default block ({@link Scope._setDefaultBlockForTelemetry}) is included as one
+   * instance when no constructed block has its name, the same way
+   * {@link Scope.getRegisteredBlocks} folds it in.
+   * @internal
+   */
+  static _registryEntries(): Array<[string, { version: string; count: number }]> {
+    const entries: Array<[string, { version: string; count: number }]> = [...Scope._bbRegistry.entries()].map(
+      ([name, entry]) => [name, { ...entry }],
+    );
+    const fallback = Scope._defaultBlock;
+    if (fallback && !Scope._bbRegistry.has(fallback.name)) {
+      entries.push([fallback.name, { version: fallback.version, count: 1 }]);
+    }
+    return entries;
+  }
+
+  /**
+   * Merge entries produced by {@link Scope._registryEntries} (typically in
+   * another process) into this process's registry, adding instance counts.
+   * @internal
+   */
+  static _mergeRegistry(entries: Array<[string, { version: string; count: number }]>): void {
+    for (const [name, { version, count }] of entries) {
+      const existing = Scope._bbRegistry.get(name);
+      Scope._bbRegistry.set(name, { version, count: (existing?.count || 0) + count });
+    }
+  }
+
+  /**
    * Folded in only when {@link getRegisteredBlocks} is called, so importing the
    * declaring package never mutates the registry, and the entry lands after
    * every block the app actually constructed.
@@ -219,16 +252,39 @@ export class Scope {
    * Used by Building Blocks that consume event sources (e.g., AsyncJob → SQS,
    * Realtime → API Gateway WebSocket).
    *
+   * A Cognito user pool trigger registers under `EventSourceMapping.COGNITO_USER_POOL`
+   * with the **user pool id** as `identifier` (the trigger event carries
+   * `userPoolId`, not a block id). Its handler accepts by resolving and rejects
+   * by throwing; the Lambda returns the event unchanged.
+   *
+   * **One handler per key.** A second registration for the same
+   * `{eventSource}:{identifier}` throws instead of replacing the first: every
+   * event is routed to exactly one handler, so a silent last-one-wins would let
+   * one block quietly take over another's events — for a user pool trigger,
+   * that disables the owner's check. Two blocks that both claim one queue or
+   * one pool are a configuration error, reported when the second is constructed.
+   *
    * @param eventSource - Event source prefix (e.g., 'blocks.asyncjob', 'blocks.websocket').
    * @param identifier - Building Block's fullId (scope-qualified ID, e.g., 'myapp-rt').
    *                     Combined with eventSource to form the registry key '{eventSource}:{identifier}'.
    * @param handler - Async function that processes the raw Lambda event.
+   * @throws {Error} When a handler is already registered for `{eventSource}:{identifier}`.
    */
   registerLambdaEventHandler(eventSource: string, identifier: string, handler: (record: any) => Promise<void>): void {
     if (!(globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__) {
       (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = new Map<string, (record: any) => Promise<void>>();
     }
-    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__.set(`${eventSource}:${identifier}`, handler);
+    const handlers: Map<string, (record: any) => Promise<void>> = (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    const key = `${eventSource}:${identifier}`;
+    if (handlers.has(key)) {
+      throw new Error(
+        `Scope '${this.fullId}': a Lambda event handler for "${key}" is already registered by another ` +
+          'Building Block. Each event source is handled by exactly one block, so two blocks cannot both ' +
+          'consume the same queue, schedule, WebSocket API or Cognito user pool trigger. Give each its own ' +
+          'resource, or let only one of them own it.',
+      );
+    }
+    handlers.set(key, handler);
   }
 
   /**

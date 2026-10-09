@@ -265,6 +265,8 @@ export class Database extends BuildingBlockScope {
 
 export { fromExisting } from './from-existing.js';
 export { DatabaseErrors } from './errors.js';
+export { RLSEnabledDatabase } from './database.js';
+export { PgClientEngine } from './engines/pg-client-engine.js';
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
 export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';

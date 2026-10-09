@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'native/swift/**'
+      # The golden tests and the fixture-goldens job read the shared codegen fixtures.
       - 'native/codegen-fixtures/**'
       - '.github/workflows/native-sdk-swift.yml'
   workflow_dispatch:
@@ -37,9 +38,28 @@ jobs:
       - name: Test the Swift scripts
         run: |
           for test in native/swift/scripts/*.test.sh; do
+            # Needs macOS (xcrun swiftc); runs in the fixture-goldens job.
+            [ "$(basename "$test")" = compile-fixture-goldens.test.sh ] && continue
             echo "== $test =="
             bash "$test"
           done
+
+  fixture-goldens:
+    name: Fixture goldens compile
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Test the compile script
+        run: bash native/swift/scripts/compile-fixture-goldens.test.sh
+
+      # The golden tests only compare text, so a golden that doesn't compile still passes them.
+      - name: Compile every fixture's Swift golden as its own module (fails on errors)
+        run: bash native/swift/scripts/compile-fixture-goldens.sh
 
   build-and-test-macos:
     name: Build & Test (macOS)

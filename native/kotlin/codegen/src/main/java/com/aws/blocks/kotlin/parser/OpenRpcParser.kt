@@ -29,7 +29,9 @@ class OpenRpcParseException(message: String) : RuntimeException(message)
  * Handles:
  * - Dotted method names (`"namespace.method"`) → namespace grouping
  * - JSON Schema primitives → [com.aws.blocks.kotlin.model.TypeRef.Primitive]
- * - `$ref` pointers → [com.aws.blocks.kotlin.model.TypeRef.SchemaRef]
+ * - `$ref` pointers → [com.aws.blocks.kotlin.model.TypeRef.SchemaRef] for an object schema, a
+ *   named [com.aws.blocks.kotlin.model.TypeRef.UnionLiteral] for an enum, and the referenced
+ *   type itself for any other schema
  * - `oneOf` with null → [com.aws.blocks.kotlin.model.TypeRef.Nullable]
  * - `type: string` + `enum` → [com.aws.blocks.kotlin.model.TypeRef.UnionLiteral]
  * - `type: array` + `items` → [com.aws.blocks.kotlin.model.TypeRef.ArrayType]
@@ -305,7 +307,7 @@ object OpenRpcParser {
                 is JsonPrimitive -> constEl.content
                 else -> constEl.toString()
             }
-            return TypeRef.UnionLiteral(listOf(constValue))
+            return TypeRef.UnionLiteral(listOf(constValue), literals = listOf(constEl as? JsonPrimitive ?: JsonPrimitive(constValue)))
         }
 
         // Handle $ref
@@ -373,14 +375,14 @@ object OpenRpcParser {
 
         // Handle string enum
         if (type == "string" && schema.containsKey("enum")) {
-            val values = schema["enum"]!!.jsonArray.map { it.jsonPrimitive.content }
-            return TypeRef.UnionLiteral(values)
+            val literals = schema["enum"]!!.jsonArray.map { it.jsonPrimitive }
+            return TypeRef.UnionLiteral(literals.map { it.content }, literals = literals)
         }
 
         // Handle boolean enum (e.g. "type": "boolean", "enum": [true]) — used as discriminator
         if (type == "boolean" && schema.containsKey("enum")) {
-            val values = schema["enum"]!!.jsonArray.map { it.jsonPrimitive.content }
-            return TypeRef.UnionLiteral(values)
+            val literals = schema["enum"]!!.jsonArray.map { it.jsonPrimitive }
+            return TypeRef.UnionLiteral(literals.map { it.content }, literals = literals)
         }
 
         return when (type) {
@@ -454,15 +456,15 @@ object OpenRpcParser {
         val schemaObj = components[schemaName]?.jsonObject
             ?: throw OpenRpcParseException("Unresolved \$ref: $ref")
 
-        // Resolve the schema to an InlineObject
-        val resolved = resolveSchema(schemaObj, components)
-        val inlineObject = when (resolved) {
-            is TypeRef.InlineObject -> resolved
-            else -> throw OpenRpcParseException(
-                "\$ref '$ref' resolved to non-object type"
-            )
+        // An object schema becomes a named type and an enum a named enum. Any other schema (a
+        // primitive, array, map, nullable, union or transferable) is used as the type it declares.
+        return when (val resolved = resolveSchema(schemaObj, components)) {
+            is TypeRef.InlineObject -> {
+                val schemaDescription = schemaObj["description"]?.jsonPrimitive?.contentOrNull
+                TypeRef.SchemaRef(schemaName = schemaName, resolved = resolved, description = schemaDescription)
+            }
+            is TypeRef.UnionLiteral -> resolved.copy(schemaName = schemaName)
+            else -> resolved
         }
-        val schemaDescription = schemaObj["description"]?.jsonPrimitive?.contentOrNull
-        return TypeRef.SchemaRef(schemaName = schemaName, resolved = inlineObject, description = schemaDescription)
     }
 }

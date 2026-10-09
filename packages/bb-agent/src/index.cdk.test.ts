@@ -19,7 +19,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
+import { BlocksStack, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { Agent } from './index.cdk.js';
@@ -164,4 +164,49 @@ test('CDK: multiple agents add the identical shared-role grants ONCE, not per-ag
 	assert.strictEqual(Object.keys(template.findResources('AWS::BedrockAgentCore::Runtime')).length, 3, 'three runtimes');
 	const invokeGrants = json.split('bedrock-agentcore:InvokeAgentRuntime').length - 1;
 	assert.strictEqual(invokeGrants, 1, `InvokeAgentRuntime should be granted once, found ${invokeGrants}`);
+});
+
+test('CDK: an over-long session bucket name is shortened, and the shared role is granted on that bucket', async () => {
+	// FX58: the SB3 production stack's `preset-balanced` agent. Its session bucket's `fullId`
+	// (`<stack>-test-app-preset-balanced-sn`) is 64 characters, so FileBucket provisions the shortened
+	// `deriveBucketName` form. The grant must reference that bucket, and nothing may name the raw
+	// `fullId` as a bucket. `session-bucket.aws.test.ts` pins that the deployed loop addresses the
+	// same literal.
+	const stackId = 'bb-test-prod-sb3prod-devuser1-b1e1a6';
+	const fullId = `${stackId}-test-app-preset-balanced-sn`;
+	const shortened = 'bb-test-prod-sb3prod-devuser1-b1e1a6-test-app-preset-b-0c16bd0c';
+	const app = new cdk.App();
+	const stack = await BlocksStack.create(app, stackId, {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
+	const testApp = new Scope('test-app', { parent: stack });
+	new Agent(testApp, 'preset-balanced', { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
+	const template = Template.fromStack(stack);
+
+	const buckets = template.findResources('AWS::S3::Bucket', { Properties: { BucketName: shortened } });
+	const bucketIds = Object.keys(buckets);
+	assert.strictEqual(bucketIds.length, 1, `expected one bucket named ${shortened}`);
+	const [bucketId] = bucketIds;
+
+	// The grant on the shared role names the provisioned bucket (by its logical id), object-level too.
+	const policies = Object.values(template.findResources('AWS::IAM::Policy')) as Array<{
+		Properties: { PolicyDocument: { Statement: Array<{ Action: string | string[]; Resource: unknown }> } };
+	}>;
+	const statements = policies.flatMap((p) => p.Properties.PolicyDocument.Statement);
+	const onBucket = statements.filter((s) => JSON.stringify(s.Resource).includes(`"${bucketId}"`));
+	const actions = onBucket.flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+	assert.ok(actions.includes('s3:PutObject'), `s3:PutObject on ${bucketId}, found ${JSON.stringify(actions)}`);
+	assert.ok(actions.includes('s3:GetObject*'), `s3:GetObject* on ${bucketId}, found ${JSON.stringify(actions)}`);
+	assert.ok(
+		onBucket.some((s) => JSON.stringify(s.Resource).includes('/*')),
+		'the grant covers the bucket objects',
+	);
+
+	// Nothing addresses the raw, over-long fullId as a bucket.
+	const json = JSON.stringify(template.toJSON());
+	assert.ok(!json.includes(`"${fullId}"`), `the raw fullId ${fullId} appears in the template`);
+	assert.ok(!json.includes(`:s3:::${fullId}`), 'an S3 ARN names the raw fullId');
 });

@@ -1,0 +1,138 @@
+name: Upgrade-in-place E2E
+
+# Proves an existing `AuthCognito` deployment survives switching to the unified
+# `Auth` block: deploys the pre-refactor revision, seeds a user and a session,
+# deploys the PR revision ON TOP OF THE SAME STACK (no destroy in between), then
+# asserts the stack reached UPDATE_COMPLETE, the user pool / sessions table /
+# session secret are byte-identical, and the pre-upgrade session cookie still
+# authenticates. Harness: test-apps/comprehensive/test/upgrade-in-place.ts.
+#
+# WHY THIS IS GATED (label or manual dispatch — never part of the default PR checks):
+#   - Cost and time: two real deploys plus a destroy (~5–8 minutes of AWS time)
+#     on top of a second checkout's `npm ci` + build, per run.
+#   - Signal: it only says something about changes to the auth blocks' CDK layer
+#     (bb-auth), and the auth-unification plan runs it at fixed
+#     milestones (D3, P4a, P6, and before release) rather than on every push.
+#   - Churn: every run creates and deletes a Cognito user pool in the shared e2e
+#     account; on every PR that would multiply for no added signal.
+#   - Why not reuse E2E Production: that job's stack suffix is per PR
+#     (`pr-<n>-<attempt>`) and it destroys stale stacks first, so there is never a
+#     long-lived stack to upgrade INTO. This job manages its own stack
+#     (`bb-test-upgrade-<run id>-<attempt>`) from create to delete.
+#
+# To run it: add the `e2e:upgrade-in-place` label to a same-repo PR (it then
+# re-runs on every push while the label is on), or use "Run workflow".
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: >-
+          Pre-refactor git ref to deploy first; it must ship packages/bb-auth-cognito.
+          Empty = the harness default, the last AuthCognito release tag
+          (DEFAULT_BASE_REF in test-apps/comprehensive/test/upgrade-in-place/lib.ts).
+        required: false
+        default: ''
+
+permissions:
+  id-token: write
+  contents: read
+
+# One run per PR at a time. NEVER cancel in progress: a cancelled runner skips the
+# harness's `finally`, which is what destroys the stack.
+concurrency:
+  group: upgrade-in-place-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  NODE_OPTIONS: '--test-reporter=spec'
+
+jobs:
+  upgrade-in-place:
+    name: E2E Upgrade In Place (AuthCognito → Auth)
+    # Same-repo gate as pr-checks.yml's e2e jobs (fork PRs get no secrets/OIDC
+    # under `pull_request`; this is defense in depth). On `labeled`, run only
+    # when THIS label was the one added.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'e2e:upgrade-in-place') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'e2e:upgrade-in-place'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    environment: publish
+    env:
+      # The explicit opt-in the harness requires before it touches AWS.
+      BLOCKS_UPGRADE_E2E: '1'
+      # Dedicated, per-run stack: bb-test-upgrade-<run id>-<attempt>.
+      BLOCKS_STACK_SUFFIX: upgrade-${{ github.run_id }}-${{ github.run_attempt }}
+      # What existing deployments run: the last release that ships AuthCognito — not
+      # `main` (after the cutover it has no AuthCognito) and not the PR's base branch
+      # (a stacked PR's base is not what customers run). Empty lets the harness use
+      # its pinned tag (one source of truth); the harness refuses any revision that
+      # doesn't ship packages/bb-auth-cognito.
+      BLOCKS_UPGRADE_BASE_REF: ${{ inputs.base_ref || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # The harness checks the base ref (by default a release tag) out in a `git worktree`.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Upgrade-in-place unit tests (offline)
+        working-directory: test-apps/comprehensive
+        run: npm test
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      # A CI step, not a blocking foreground command on a developer machine. The
+      # harness creates the base worktree, runs `npm ci` + build in it, deploys
+      # twice and destroys in a `finally`; it exits 3 (with a banner naming the
+      # stack) if the stack could not be deleted. `--no-build`: the PR revision was
+      # built above (the base worktree it creates is always built).
+      - name: Upgrade in place (AuthCognito → Auth)
+        working-directory: test-apps/comprehensive
+        run: npx tsx test/upgrade-in-place.ts --no-build
+
+      # Belt and braces: if the runner killed the harness before its `finally`
+      # (e.g. the step timed out), delete the stack this job created. Only this
+      # run's dedicated stack name is ever touched.
+      - name: Delete a leaked upgrade-in-place stack
+        if: always()
+        run: |
+          set -euo pipefail
+          STACK="bb-test-${BLOCKS_STACK_SUFFIX}"
+          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+            --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NONE")
+          if [ "$STATUS" = "NONE" ] || [ "$STATUS" = "DELETE_COMPLETE" ]; then
+            echo "✔ $STACK does not exist."
+            exit 0
+          fi
+          echo "::warning::$STACK still exists ($STATUS) — deleting it."
+          aws cloudformation delete-stack --stack-name "$STACK"
+          if ! aws cloudformation wait stack-delete-complete --stack-name "$STACK"; then
+            echo "::error::ORPHANED STACK $STACK in us-east-1 could not be deleted. Delete it manually."
+            exit 1
+          fi
+          echo "✔ $STACK deleted."

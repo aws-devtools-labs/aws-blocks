@@ -164,11 +164,16 @@ class UnionVariant {
   /// their own fields with a further `oneOf`.
   final DiscriminatedUnionRef? embeddedUnion;
 
+  /// The value type of the arm's extra keys when the arm is an open record
+  /// (`additionalProperties`), as on [InlineObjectRef]. Null for a closed arm.
+  final TypeRef? additionalProperties;
+
   const UnionVariant({
     required this.discriminantValue,
     required this.properties,
     required this.required,
     this.embeddedUnion,
+    this.additionalProperties,
   });
 }
 

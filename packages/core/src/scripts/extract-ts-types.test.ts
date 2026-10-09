@@ -249,7 +249,7 @@ describe('extractMethodTypes — indirect ApiNamespace calls (e.g., auth.createA
 					error?: string;
 				}
 
-				export class AuthBasic {
+				export class DemoAuth {
 					createApi() {
 						return new ApiNamespace(null, 'auth', (context) => ({
 							async getAuthState(): Promise<AuthState> {
@@ -263,11 +263,11 @@ describe('extractMethodTypes — indirect ApiNamespace calls (e.g., auth.createA
 				}
 			`,
 			'index.ts': `
-				import { AuthBasic } from './auth.js';
+				import { DemoAuth } from './auth.js';
 
 				${API_NS_MOCK}
 
-				const auth = new AuthBasic();
+				const auth = new DemoAuth();
 
 				export const api = new ApiNamespace(null, 'api', (context) => ({
 					async greet(name: string) {
@@ -521,7 +521,7 @@ describe('extractMethodTypes — open-shape intersections', () => {
 			'index.ts': `
 				${API_NS_MOCK}
 
-				// Mirrors AuthCognito's signUp payload: fixed fields plus an open
+				// Mirrors Auth's signUp payload: fixed fields plus an open
 				// string-keyed bag for custom attributes.
 				type SignUpInput = { username: string; password: string } & Record<string, string>;
 

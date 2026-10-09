@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AWS Blocks Auth</title>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+    .section { margin: 30px 0; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
+    button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+    input { padding: 8px; margin: 5px; }
+    .result { margin-top: 10px; padding: 10px; background: #f5f5f5; border-radius: 4px; }
+    .success { color: green; }
+    .error { color: red; }
+    #auth-status { font-weight: bold; margin-bottom: 10px; }
+    .todo-item { display: flex; align-items: center; gap: 10px; padding: 8px; border-bottom: 1px solid #eee; }
+    .todo-item input[type="checkbox"] { cursor: pointer; }
+    .todo-item .todo-title { flex: 1; border: none; background: transparent; font-size: inherit; padding: 4px; }
+    .todo-item .todo-title:focus { outline: 1px solid #4CAF50; background: #f9f9f9; }
+    .todo-item select { padding: 4px; }
+    .todo-item button { padding: 5px 10px; }
+    #todo-input { flex: 1; }
+    #todo-priority { padding: 8px; }
+    .todo-add { display: flex; gap: 10px; margin-bottom: 15px; }
+    .code-hint { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: #666; font-size: 0.85em; }
+    .code-hint button { padding: 4px 10px; font-size: 0.85em; margin: 0; }
+    .code-hint #last-code-result { font-family: monospace; }
+    .signed-in-only { display: none; }
+    .signed-in .signed-in-only { display: block; }
+    .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+    .hint { color: #666; font-size: 0.85em; }
+    pre.sharedSecret { background: #f5f5f5; padding: 8px; border-radius: 4px; font-size: 0.85em; user-select: all; }
+  </style>
+</head>
+<body>
+  <h1>AWS Blocks Auth</h1>
+
+  <div class="section">
+    <h2>Authentication (email + password)</h2>
+    <p class="hint">
+      Sign up with email + password → enter the 6-digit code sent to that address → you are
+      signed in automatically, with no second password prompt. Returning users sign in with
+      their email and password.
+    </p>
+    <div id="auth-status"></div>
+    <div id="auth-container"></div>
+    <div class="code-hint">
+      <span>Local dev only: sign-up / reset / email-change codes appear here (and in the <code>npm run dev</code> terminal) — no email is sent.</span>
+      <button id="last-code-btn">Show last code</button>
+      <span id="last-code-result"></span>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Todo List</h2>
+    <div class="todo-add">
+      <input type="text" id="todo-input" placeholder="New todo...">
+      <select id="todo-priority">
+        <option value="1">High</option>
+        <option value="2" selected>Medium</option>
+        <option value="3">Low</option>
+      </select>
+      <button id="todo-add-btn">Add</button>
+    </div>
+    <div style="margin-bottom: 10px;">
+      <label>Sort by: </label>
+      <select id="todo-sort">
+        <option value="none">Todo ID</option>
+        <option value="createdAt">Creation Time</option>
+        <option value="priority">Priority</option>
+        <option value="title">Title</option>
+      </select>
+    </div>
+    <div id="todo-error" class="result"></div>
+    <div id="todo-list"></div>
+  </div>
+
+  <div class="section signed-in-only">
+    <h2>Profile</h2>
+    <p class="hint">Live-reads the signed-in user's attributes and lets you mutate a few. Changing <code>email</code> sends a verification code to the new address — locally, the demo surfaces it in the one-liner at the top.</p>
+    <div class="row">
+      <button id="profile-refresh-btn">Refresh</button>
+      <button id="profile-global-signout-btn">Sign out everywhere</button>
+    </div>
+    <div id="profile-attrs" class="result"></div>
+    <div class="row">
+      <label>department: <input type="text" id="profile-department"></label>
+      <button id="profile-update-department-btn">Update</button>
+    </div>
+    <div class="row">
+      <label>email: <input type="email" id="profile-email"></label>
+      <button id="profile-update-email-btn">Update</button>
+    </div>
+    <div class="row signed-in-only" id="profile-confirm-email-row" style="display:none">
+      <label>confirm email code: <input type="text" id="profile-email-code"></label>
+      <button id="profile-confirm-email-btn">Confirm</button>
+    </div>
+    <div class="row">
+      <label>old password: <input type="password" id="profile-old-password"></label>
+      <label>new password: <input type="password" id="profile-new-password"></label>
+      <button id="profile-change-password-btn">Change password</button>
+    </div>
+    <div id="profile-result" class="result"></div>
+  </div>
+
+  <div class="section signed-in-only">
+    <h2>Devices</h2>
+    <p class="hint">Lists the devices tracked for this user (configure tracking with <code>users.deviceTracking</code>).</p>
+    <div class="row">
+      <button id="devices-refresh-btn">List devices</button>
+      <button id="devices-forget-btn">Forget current device</button>
+    </div>
+    <div id="devices-result" class="result"></div>
+  </div>
+
+  <div class="section">
+    <h2>Role-Gated Endpoints</h2>
+    <p style="color: #555; font-size: 0.9em; margin: 5px 0;">
+      The backend wires <code>auth.requireRole(context, '&lt;group&gt;')</code> in front of these
+      endpoints. Freshly signed-up users belong to no groups, so both calls return
+      <code>403 NotAuthorizedException</code> out of the box — that's the wire-up working correctly.
+    </p>
+    <p style="color: #555; font-size: 0.9em; margin: 5px 0;">
+      To see the success path, add your user to a group out-of-band — in production that
+      means the AWS Console (Cognito → User pools → Users → Add to group) or the CLI:
+    </p>
+    <pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; font-size: 0.85em; overflow-x: auto;">aws cognito-idp admin-add-user-to-group \
+  --user-pool-id &lt;pool-id&gt; \
+  --username &lt;username&gt; \
+  --group-name editors</pre>
+    <p style="color: #555; font-size: 0.9em; margin: 5px 0;">
+      <code>requireRole</code> reads the current membership, so the change applies on the next
+      request. To manage groups from application code, enable the opt-in
+      <code>auth.admin</code> surface (<code>admin: {}</code>) — see the <code>Auth</code> README.
+    </p>
+    <button id="editors-only-btn">GET /editorsOnly</button>
+    <button id="readers-only-btn">GET /readersOnly</button>
+    <div id="role-result" class="result"></div>
+  </div>
+
+  <div class="section">
+    <h2>KV Store Test</h2>
+    <input type="text" id="key" placeholder="Key" value="test-key">
+    <input type="text" id="value" placeholder="Value" value="test-value">
+    <button id="kv-set-btn">Set Value</button>
+    <button id="kv-get-btn">Get Value</button>
+    <div id="kv-result" class="result"></div>
+  </div>
+
+  <script type="module" src="/src/index.ts"></script>
+</body>
+</html>

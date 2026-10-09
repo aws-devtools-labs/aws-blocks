@@ -158,12 +158,19 @@ function resolveDbSsl(): { rejectUnauthorized?: true; ca?: string } | { rejectUn
  * (`api.listX`/`getX`/…) are still generated.
  */
 export const WIRING_CRUD_FN = `/** Spread this into your ApiNamespace to add CRUD handlers. */
-export function ${SUPABASE.crudExportName}(context: any, auth?: { requireAuth: (ctx: any) => Promise<{ userId: string }> }) {
+export function ${SUPABASE.crudExportName}(
+  context: any,
+  auth?: { requireAuth: (ctx: any) => Promise<{ userId: string; claims?: Readonly<Record<string, unknown>> }> },
+) {
   return db.crud<TableMeta>({
     tables: Object.keys(tableMeta) as (keyof typeof tableMeta)[],
-    auth: () => {
+    auth: async () => {
       if (!auth) throw new Error('Auth not configured — pass auth to ${SUPABASE.crudExportName}(). See MIGRATION_GUIDE.md#auth');
-      return auth.requireAuth(context);
+      const user = await auth.requireAuth(context);
+      // RLS sees request.jwt.claims.sub = the provider's raw subject (claims.sub) when the
+      // user signed in through an OIDC provider directly, so policies keyed on the raw
+      // sub keep matching; otherwise it sees userId. See MIGRATION_GUIDE.md#auth.
+      return user.claims ? { userId: user.userId, claims: { ...user.claims } } : { userId: user.userId };
     },
   });
 }
@@ -178,14 +185,16 @@ export const GUIDE_AUTH_TO_LIMITATIONS = `## Auth
 
 \`\`\`ts
 // index.ts
-import { AuthOIDC, google } from '@aws-blocks/bb-auth-oidc';
+import { Auth } from '@aws-blocks/bb-auth';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { supabaseCrud } from './supabase.js';
 
-const googleId = new AppSetting(scope, 'google-client-id', { name: 'google-client-id' });
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true, name: 'google-client-secret' });
-const auth = new AuthOIDC(scope, 'auth', {
-  providers: [google({ clientId: () => googleId.get(), clientSecret: () => googleSecret.get() })],
+const auth = new Auth(scope, 'auth', {
+  emailPassword: false,
+  oidcProviders: {
+    google: { issuer: 'https://accounts.google.com', clientId: 'your-google-client-id', clientSecret: googleSecret },
+  },
 });
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
@@ -193,8 +202,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 \`\`\`
 
-AuthOIDC supports Google, Auth0, Clerk, Cognito, and any custom OIDC provider.
-See the @aws-blocks/bb-auth-oidc package README for provider setup.
+\`Auth\` also supports email + password (its default), Auth0, Clerk and any other OIDC
+provider, social sign-in and SAML. See "Which option and why" in the @aws-blocks/bb-auth
+package README for which to pick and how to set each one up.
 
 **Migration-specific note:** ensure the \`userId\` your OIDC provider returns matches
 the format already stored in your Supabase database (e.g. the \`sub\` claim in your
@@ -206,9 +216,13 @@ The \`userId\` from your auth BB is passed to \`withRLS()\`, which sets
 \`current_setting('request.jwt.claims', true)::jsonb->>'sub'\` work
 with any auth provider that returns a stable userId.
 
-**Key rule:** when your auth callback returns \`claims\` (e.g. from Clerk or Auth0),
-\`claims.sub\` (the raw provider sub) is what reaches RLS — not the iss-prefixed
-\`userId\`. This means existing rows keyed on the raw sub keep matching automatically.
+**Key rule:** for a user who signs in through an \`oidcProviders\` entry (Auth0, Clerk,
+Okta… with the default \`federateVia: 'direct'\`), \`Auth\`'s user carries the provider's
+verified \`claims\`, and \`supabaseCrud()\` passes them on: \`claims.sub\` (the raw provider
+\`sub\`) is what reaches RLS — not the iss-prefixed \`userId\`. Existing rows keyed on the
+raw sub keep matching automatically. A user of a Cognito user pool (email + password,
+social, SAML, or \`federateVia: 'cognito'\`) has no \`claims\`, so RLS sees their \`userId\`:
+re-key rows for those users to it.
 
 ## Verify It Works
 
@@ -321,9 +335,9 @@ The value **persists across redeploys** (the bulk-init uses \`Overwrite: false\`
 never clobbers a value you've already set). No redeploy needed after setting — the
 Lambda reads the parameter at runtime.
 
-### 4. If you use OAuth (AuthOIDC), register the production callback URL
+### 4. If you use OAuth or OIDC sign-in, register the production callback URL
 
-Add your deployed app's sign-in callback URL to the allowed redirect URIs in your OIDC provider's dashboard (Google/Auth0/Clerk). Sign-in fails with a redirect-mismatch error until this is done. See your auth BB's docs for the exact callback path.
+Add your deployed app's sign-in callback URL to the allowed redirect URIs in your OIDC provider's dashboard (Google/Auth0/Clerk). Sign-in fails with a redirect-mismatch error until this is done. For an \`Auth\` OIDC provider federated directly (the default), the callback is \`https://<your domain>/aws-blocks/auth/callback\`; see the @aws-blocks/bb-auth README for providers federated through Cognito.
 
 ### 5. Deploy
 
@@ -459,6 +473,7 @@ Your migrated tables store the raw provider \`sub\` as the user identifier
 (e.g., \`auth0|abc123\`). New tables created with Blocks use \`user.userId\`
 by default, which is iss-prefixed (e.g., \`https://tenant.auth0.com/:auth0|abc123\`).
 
-When JOINing migrated tables with new tables, use \`user.claims.sub\` (raw sub)
-as the foreign key in new tables for consistency.
+When JOINing migrated tables with new tables, use \`user.claims?.sub\` (the raw sub,
+on users who signed in through an \`oidcProviders\` entry directly) as the foreign key
+in new tables for consistency.
 `;

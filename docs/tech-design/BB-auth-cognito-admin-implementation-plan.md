@@ -1,5 +1,7 @@
 # AuthCognitoAdmin — Implementation Plan (in-package `auth.admin` handle)
 
+> **Historical design doc.** This describes the admin surface as designed for `AuthCognito` (`@aws-blocks/bb-auth-cognito`), a predecessor of `Auth`. `AuthCognito`, `AuthBasic` and `AuthOIDC` were replaced by the single `Auth` block ([D-018](../DECISIONS.md#d-018-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc)), and the feature now lives there: enable it with `admin: {}` (or `admin: { actions: ['groups'] }`) on `Auth` and use `auth.admin`. See the [`Auth` README](../../packages/bb-auth/README.md#mode-gates) for its compile-time gate, `packages/bb-auth/src/auth-admin.ts` and the `AdminOptions` JSDoc in `packages/bb-auth/src/types.ts` for the surface, and [`Auth` DESIGN.md](../../packages/bb-auth/DESIGN.md) for IAM and parity notes. Links to the removed `bb-auth-cognito` package point at its source on GitHub as of this record; file paths under `packages/bb-auth-cognito/` refer to that package. The rest of this document is unchanged.
+
 **Status:** approved direction, ready to implement.
 **Supersedes:** the separate-`@aws-blocks/bb-auth-cognito-admin`-package design in [`BB-auth-cognito-admin.md`](./BB-auth-cognito-admin.md) and the original [PR #38](https://github.com/aws-devtools-labs/aws-blocks/pull/38).
 **Adopts:** [Chorus counter-proposal — "Alternative to PR #38: in-package admin surface for `bb-auth-cognito`"](https://chorus.aws.dev/doc/8Cdonf9Y6RdR/Alternative-to-PR-38-in-package-admin-surface-for-bb-auth-co).

@@ -1,0 +1,24 @@
+import * as blocks from '@aws-blocks/blocks';
+
+const scope = new blocks.Scope('app');
+
+export const auth = new blocks.AuthCognito(scope, 'auth', {
+	selfSignUp: true,
+	sessionTtlSeconds: 3600,
+});
+
+export function label(user: blocks.CognitoUser): string {
+	return user.username;
+}
+
+export const api = new blocks.ApiNamespace(scope, 'api', (context) => ({
+	async me() {
+		try {
+			const attrs = await auth.fetchUserAttributes(context);
+			return attrs.email ?? null;
+		} catch (e) {
+			if (blocks.isBlocksError(e, blocks.AuthCognitoErrors.NotAuthorized)) return null;
+			throw e;
+		}
+	},
+}));

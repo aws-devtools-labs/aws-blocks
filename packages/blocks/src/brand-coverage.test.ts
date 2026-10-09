@@ -61,6 +61,11 @@ const FILE_ALLOWLIST: Record<string, string> = {
 	// errors surface to the operator's terminal, never through the RPC serializer,
 	// so the wire-safe brand is irrelevant here.
 	'bb-data/src/migrations/external-migrations.ts': 'host-side migration CLI — errors go to the operator, not the RPC wire',
+	// The `bb-auth` codemod (`npx @aws-blocks/bb-auth migrate`): a CLI that rewrites the
+	// app's source files. Its errors are codemod bugs reported in the terminal, never
+	// thrown from an API method, so they never reach the RPC serializer.
+	'bb-auth/src/migrate/text.ts': 'codemod CLI — OverlappingEditError goes to the terminal, not the RPC wire',
+	'bb-auth/src/migrate/transform.ts': 'codemod CLI — IdPreservationError goes to the terminal, not the RPC wire',
 };
 
 /** Recursively collect `*.ts` sources under `dir`, skipping tests, `.d.ts`, `dist`. */
