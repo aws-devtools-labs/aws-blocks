@@ -97,6 +97,13 @@ export interface BlocksDefaults {
 	 * deploy or, on teardown, leave the survivor's access logging broken.
 	 * Enabling it is therefore safe for **one Blocks stack per region** — see
 	 * `ensureApiGatewayAccount` for the full multi-stack teardown caveat.
+	 *
+	 * This governs **API Gateway** access logging only. The shared framework config
+	 * bucket (`BlocksConfigBucket`) always ships S3 server access logs to a dedicated
+	 * log bucket on every stack (including sandbox), independent of this field — it
+	 * has no account/region-level singleton like the API Gateway CloudWatch role, so
+	 * always-on carries no multi-stack hazard there. See `ensureConfigBucket` in
+	 * `config-registry.ts`.
 	 */
 	accessLogging: boolean;
 
