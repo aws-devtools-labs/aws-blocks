@@ -48,6 +48,8 @@
     "zod": "^4.3.0"
   },
   "devDependencies": {
+    "@aws-sdk/client-cloudformation": "^3.0.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.0.0",
     "@types/node": "^20.0.0",
     "aws-cdk-lib": "^2.257.0",
     "concurrently": "^8.2.0",
