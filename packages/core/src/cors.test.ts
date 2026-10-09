@@ -283,14 +283,23 @@ describe('createLambdaHandler — CORS origin validation', () => {
     clearRouteRegistry();
   });
 
+  // API Gateway HTTP API (v2) event — `httpMethod`/`path` overrides map into
+  // `requestContext.http` + `rawPath`; `requestContext` is deep-merged.
   function makeEvent(overrides: Record<string, any> = {}) {
+    const { httpMethod = 'POST', path = '/aws-blocks/api', requestContext, ...rest } = overrides;
     return {
-      httpMethod: 'POST',
-      path: '/aws-blocks/api',
+      version: '2.0',
+      rawPath: path,
+      rawQueryString: '',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hello'], id: 1 }),
       isBase64Encoded: false,
-      ...overrides,
+      ...rest,
+      requestContext: {
+        stage: '$default',
+        ...requestContext,
+        http: { method: httpMethod, path, ...requestContext?.http },
+      },
     };
   }
 
@@ -399,14 +408,23 @@ describe('createLambdaHandler — CORS wildcard pattern (.*)', () => {
     clearRouteRegistry();
   });
 
+  // API Gateway HTTP API (v2) event — `httpMethod`/`path` overrides map into
+  // `requestContext.http` + `rawPath`; `requestContext` is deep-merged.
   function makeEvent(overrides: Record<string, any> = {}) {
+    const { httpMethod = 'POST', path = '/aws-blocks/api', requestContext, ...rest } = overrides;
     return {
-      httpMethod: 'POST',
-      path: '/aws-blocks/api',
+      version: '2.0',
+      rawPath: path,
+      rawQueryString: '',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hello'], id: 1 }),
       isBase64Encoded: false,
-      ...overrides,
+      ...rest,
+      requestContext: {
+        stage: '$default',
+        ...requestContext,
+        http: { method: httpMethod, path, ...requestContext?.http },
+      },
     };
   }
 
@@ -442,14 +460,23 @@ describe('createLambdaHandler — CORS hosting origin (literal channel)', () => 
     clearRouteRegistry();
   });
 
+  // API Gateway HTTP API (v2) event — `httpMethod`/`path` overrides map into
+  // `requestContext.http` + `rawPath`; `requestContext` is deep-merged.
   function makeEvent(overrides: Record<string, any> = {}) {
+    const { httpMethod = 'POST', path = '/aws-blocks/api', requestContext, ...rest } = overrides;
     return {
-      httpMethod: 'POST',
-      path: '/aws-blocks/api',
+      version: '2.0',
+      rawPath: path,
+      rawQueryString: '',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hello'], id: 1 }),
       isBase64Encoded: false,
-      ...overrides,
+      ...rest,
+      requestContext: {
+        stage: '$default',
+        ...requestContext,
+        http: { method: httpMethod, path, ...requestContext?.http },
+      },
     };
   }
 

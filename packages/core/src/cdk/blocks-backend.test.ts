@@ -7,13 +7,12 @@ import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
-import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
@@ -25,15 +24,14 @@ import { getVpcContext } from './vpc.js';
 
 // A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
 // @aws-blocks/blocks), which core's own tests can't depend on. Use an
-// equivalent inline stub: a Compute that owns a NodejsFunction + API Gateway,
-// so create() can build the default and the handler/gateway/apiUrl accessors
-// and synth-shape assertions have something real to resolve to. It is passed to
-// each create() via the internal `defaultComputeFactory` option (see
-// makeBackend), exactly as @aws-blocks/blocks injects LambdaCompute.
+// equivalent inline stub: a Compute that owns a NodejsFunction and exposes it
+// via apiHandler(), so create() can build the default + the shared HTTP API
+// gateway and the handler/gateway/apiUrl accessors have something real to
+// resolve to. It is passed to each create() via the internal
+// `defaultComputeFactory` option (see makeBackend), exactly as
+// @aws-blocks/blocks injects LambdaCompute.
 class StubLambdaCompute extends Compute {
 	readonly fn: lambda.NodejsFunction;
-	readonly apiGateway: apigateway.RestApi;
-	readonly apiUrl: string;
 	readonly logGroup: cdk.aws_logs.LogGroup;
 
 	constructor(scope: ScopeParent, id: string) {
@@ -62,16 +60,14 @@ class StubLambdaCompute extends Compute {
 					}
 				: {}),
 		});
-		this.apiGateway = new apigateway.RestApi(this, 'API', { restApiName: 'Blocks API' });
-		this.apiGateway.root.addProxy({
-			defaultIntegration: new apigateway.LambdaIntegration(this.fn),
-			anyMethod: true,
-		});
-		this.apiUrl = `${this.apiGateway.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
 	}
 
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
+	}
+
+	override apiHandler(): IFunction {
+		return this.fn;
 	}
 
 	protected applyTracing(): void {}
@@ -135,7 +131,7 @@ describe('ESM cache-busting (multi-stage)', () => {
 });
 
 describe('synth shape (drop into existing stack)', () => {
-	test('BlocksBackend lives inside the parent stack and synthesizes Lambda + API Gateway', async () => {
+	test('BlocksBackend lives inside the parent stack and synthesizes Lambda + shared HTTP API', async () => {
 		const app = new cdk.App();
 		const parent = new cdk.Stack(app, 'MyExistingStack');
 
@@ -147,10 +143,11 @@ describe('synth shape (drop into existing stack)', () => {
 		assert.ok(backend.apiUrl, 'BlocksBackend should expose .apiUrl');
 
 		// Synth produces the expected resources inside the parent stack —
-		// no separate stack is created.
+		// no separate stack is created. The gateway is a single shared HTTP API v2.
 		const template = Template.fromStack(parent);
 		template.hasResourceProperties('AWS::Lambda::Function', {});
-		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+		template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+		template.resourceCountIs('AWS::ApiGateway::RestApi', 0);
 	});
 
 	test('multiple BlocksBackends in the same parent stack do not collide', async () => {
@@ -161,7 +158,7 @@ describe('synth shape (drop into existing stack)', () => {
 		await makeBackend(parent, 'BackendB', sideEffectBackendPath);
 
 		const template = Template.fromStack(parent);
-		template.resourceCountIs('AWS::ApiGateway::RestApi', 2);
+		template.resourceCountIs('AWS::ApiGatewayV2::Api', 2);
 	});
 });
 

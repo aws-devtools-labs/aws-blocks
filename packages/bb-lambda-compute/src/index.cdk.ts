@@ -2,18 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import {
-	BLOCKS_RPC_PREFIX,
-	blocksNodejsBundling,
-	DEFAULT_NODE_RUNTIME,
-	ensureApiGatewayAccount,
-	getVpcContext,
-} from '@aws-blocks/core/cdk';
-import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
+import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME, getVpcContext } from '@aws-blocks/core/cdk';
+import { Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
-import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
-import { Architecture } from 'aws-cdk-lib/aws-lambda';
+import { Architecture, type IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { applyXRayTracing, buildHealthWidgets, buildLoggingWidgets, buildTracingWidgets } from './observability.js';
@@ -30,10 +23,12 @@ export type { LambdaComputeProps } from './types.js';
 const LAMBDA_COMPUTE_BRAND: unique symbol = Symbol.for('blocks:LambdaCompute');
 
 /**
- * A Lambda-backed {@link Compute}: a `NodejsFunction` fronted by its own API
- * Gateway REST API. The compute *owns* these resources — a BlocksStack /
- * BlocksBackend's `handler` / `gateway` / `apiUrl` delegate to its default
- * compute's.
+ * A Lambda-backed {@link Compute}: a `NodejsFunction` the stack's single shared
+ * HTTP API v2 gateway fronts. The compute *owns* the function (and its log
+ * group); the HTTP ingress is provisioned once at the stack level and integrates
+ * this compute's {@link apiHandler}. A BlocksStack / BlocksBackend's `handler`
+ * delegates to this compute's `fn`; its `gateway` / `apiUrl` resolve to the
+ * shared gateway.
  *
  * The function assumes the shared execution role (`this.executionRole`), so
  * Building Block grants reach it via that role. The handler entry and
@@ -52,10 +47,6 @@ export class LambdaCompute extends Compute {
 	readonly [LAMBDA_COMPUTE_BRAND] = true;
 	/** The Lambda function backing this compute. */
 	readonly fn: lambda.NodejsFunction;
-	/** The API Gateway REST API fronting {@link fn}. */
-	readonly apiGateway: apigateway.RestApi;
-	/** The RPC endpoint URL (`{gateway}/aws-blocks/api`). */
-	readonly apiUrl: string;
 	/**
 	 * The handler's CloudWatch log group. Logs are always captured here; the
 	 * retention comes from this compute's `logRetention` prop, falling back to the
@@ -127,77 +118,27 @@ export class LambdaCompute extends Compute {
 		// Allowed CORS origins come from the stack's `defaults` (e.g. the sandbox
 		// preset allows localhost so a local dev frontend can reach the deployed
 		// API). Comma-joined to match how the runtime `getCorsPatterns()` parses
-		// CORS_ALLOWED_ORIGINS.
+		// CORS_ALLOWED_ORIGINS. The shared HTTP API does not configure native CORS
+		// (the allowed origins are regex patterns it can't express), so the Lambda
+		// still enforces CORS at runtime from this env var.
 		const allowedOrigins = this.defaults.allowedOrigins;
 		if (allowedOrigins.length > 0) {
 			this.fn.addEnvironment('CORS_ALLOWED_ORIGINS', allowedOrigins.join(','));
 		}
-
-		// Structured JSON access logging on the stage, when the stack-wide default
-		// enables it. Requires the account-level CloudWatch Logs role (see
-		// ensureApiGatewayAccount) — provisioned once per stack, shared across stages.
-		let accessLogGroup: LogGroup | undefined;
-		let apiGatewayAccount: apigateway.CfnAccount | undefined;
-		if (this.defaults.accessLogging) {
-			apiGatewayAccount = ensureApiGatewayAccount(cdk.Stack.of(this));
-			accessLogGroup = new LogGroup(this, 'ApiAccessLogs', {
-				// Same per-compute override / stack-default fallback as the handler log
-				// group, so `logRetention` uniformly governs this compute's log groups.
-				retention: options?.logRetention ?? this.defaults.logRetention,
-				// Access logs are the request audit trail — follow the stack-wide removal
-				// policy (production RETAIN) so they survive a teardown, unlike the
-				// handler's operational stdout log group (always DESTROY). This removal
-				// asymmetry with the handler group is intentional.
-				removalPolicy: this.defaults.removalPolicy,
-			});
-		}
-
-		this.apiGateway = new apigateway.RestApi(this, 'API', {
-			restApiName: 'Blocks API',
-			// Don't let RestApi auto-create its own account-level CloudWatch role: it
-			// would collide with the one shared account we provision — a stack may
-			// have only one effective account setting. When access logging is on we
-			// point the stage at the shared account; when off, none is needed.
-			cloudWatchRole: false,
-			deployOptions: {
-				cachingEnabled: false,
-				// Cap request rate on the stage from the stack-wide default so a runaway
-				// client can't saturate the backend Lambda. Read independently.
-				throttlingRateLimit: this.defaults.throttling.rateLimit,
-				throttlingBurstLimit: this.defaults.throttling.burstLimit,
-				...(accessLogGroup
-					? {
-							accessLogDestination: new apigateway.LogGroupLogDestination(accessLogGroup),
-							accessLogFormat: apigateway.AccessLogFormat.jsonWithStandardFields(),
-						}
-					: {}),
-			},
-		});
-
-		// The stage must be created after the account setting is in place, or a
-		// clean-account first deploy fails at CreateStage.
-		if (apiGatewayAccount) {
-			this.apiGateway.deploymentStage.node.addDependency(apiGatewayAccount);
-		}
-
-		const integration = new apigateway.LambdaIntegration(this.fn);
-
-		// Nested resource tree for /aws-blocks/api. The intermediate resource
-		// gets a proxy so sub-paths (RawRoutes) still reach the function.
-		const awsBlocksResource = this.apiGateway.root.addResource(BLOCKS_NAMESPACE.slice(1));
-		awsBlocksResource.addProxy({ defaultIntegration: integration, anyMethod: true });
-
-		const apiResource = awsBlocksResource.addResource('api');
-		apiResource.addMethod('POST', integration);
-		apiResource.addMethod('OPTIONS', integration);
-
-		this.apiGateway.root.addProxy({ defaultIntegration: integration, anyMethod: true });
-
-		this.apiUrl = `${this.apiGateway.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
 	}
 
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
+	}
+
+	/**
+	 * The function the stack's shared HTTP API v2 gateway integrates — this
+	 * compute's Lambda. Request throttling and access logging live on that shared
+	 * gateway's stage, not here; the gateway forwards every path to the function
+	 * and the Lambda handler does the routing.
+	 */
+	apiHandler(): IFunction {
+		return this.fn;
 	}
 
 	/**

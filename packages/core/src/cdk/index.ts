@@ -20,6 +20,7 @@ import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/defau
 import { finalizeConfigRegistry } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
+import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
@@ -80,20 +81,22 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	public readonly executionRole: cdk.aws_iam.IRole;
 	/** Infrastructure defaults for Building Blocks created under this stack. */
 	public readonly defaults: BlocksDefaults;
-	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
+	/** The default compute (owns the Lambda function); set in `create()`. @internal */
 	_defaultCompute?: Compute;
+	/** The single shared HTTP API v2 gateway fronting the default compute; built in `create()`. @internal */
+	_sharedGateway?: SharedGateway;
 
 	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
 	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
 		return this.requireDefaultCompute().fn;
 	}
-	/** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
-	get gateway(): cdk.aws_apigateway.RestApi {
-		return this.requireDefaultCompute().apiGateway;
+	/** The stack's shared HTTP API v2 gateway. To be removed once consumers move to the multi-compute model. */
+	get gateway(): cdk.aws_apigatewayv2.IHttpApi {
+		return this.requireSharedGateway().httpApi;
 	}
-	/** The default compute's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+	/** The shared gateway's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
 	get apiUrl(): string {
-		return this.requireDefaultCompute().apiUrl;
+		return this.requireSharedGateway().apiUrl;
 	}
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
@@ -109,6 +112,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 			);
 		}
 		return this._defaultCompute as LambdaShapedCompute;
+	}
+
+	private requireSharedGateway(): SharedGateway {
+		if (!this._sharedGateway) {
+			throw new Error(
+				'Blocks stack not fully initialized — access .gateway/.apiUrl after BlocksStack.create() resolves.',
+			);
+		}
+		return this._sharedGateway;
 	}
 
 	private _vpcOptions?: BlocksVpcOptions;
@@ -171,6 +183,18 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 				);
 			}
 		}
+		// Build the single shared HTTP API v2 gateway now that the backend module
+		// has imported and every compute exists. It fronts the default compute's
+		// function (its apiHandler()) and backs .gateway/.apiUrl — the HTTP ingress
+		// is no longer owned per-compute. The default compute is always a Lambda
+		// compute today, so apiHandler() is defined; guard with a clear error if a
+		// worker-only default is ever injected.
+		const defaultApiHandler = stack.requireDefaultCompute().apiHandler();
+		if (!defaultApiHandler) {
+			throw new Error('Default compute exposes no apiHandler() — the shared HTTP API gateway needs an HTTP front door.');
+		}
+		stack._sharedGateway = createSharedGateway(stack, { handler: defaultApiHandler, defaults: stack.defaults });
+
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
 

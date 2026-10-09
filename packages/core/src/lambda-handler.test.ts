@@ -17,14 +17,25 @@ beforeEach(() => {
   clearRouteRegistry();
 });
 
+// Builds an API Gateway HTTP API (v2, payload format 2.0) event — the only shape
+// the shared gateway delivers. The ergonomic `httpMethod`/`path` overrides are
+// mapped into `requestContext.http` + `rawPath`; a `requestContext` override is
+// deep-merged so a test can set `stage` without dropping the `http` method.
 function makeEvent(overrides: Record<string, any> = {}) {
+  const { httpMethod = 'POST', path = '/aws-blocks/api', requestContext, ...rest } = overrides;
   return {
-    httpMethod: 'POST',
-    path: '/aws-blocks/api',
+    version: '2.0',
+    rawPath: path,
+    rawQueryString: '',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hello'], id: 1 }),
     isBase64Encoded: false,
-    ...overrides,
+    ...rest,
+    requestContext: {
+      stage: '$default',
+      ...requestContext,
+      http: { method: httpMethod, path, ...requestContext?.http },
+    },
   };
 }
 
@@ -808,8 +819,8 @@ async function invokeWithContext(backend: any, event: any, context?: LambdaConte
 }
 
 describe('isApiGatewayHttpEvent — event source detection', () => {
-  it('returns true for API Gateway v1 REST event (httpMethod present)', () => {
-    assert.strictEqual(isApiGatewayHttpEvent(makeEvent()), true);
+  it('returns false for a legacy v1 REST event (httpMethod only, no requestContext.http) — v1 is no longer detected', () => {
+    assert.strictEqual(isApiGatewayHttpEvent({ httpMethod: 'POST', path: '/aws-blocks/api' }), false);
   });
 
   it('returns true for API Gateway v2 HTTP event (requestContext.http.method present)', () => {
@@ -1117,8 +1128,8 @@ describe('createLambdaHandler — timeout produces 504 and aborts signal', () =>
 // ── classifyEvent tests ─────────────────────────────────────────────────────
 
 describe('classifyEvent — event source classification', () => {
-  it('classifies API Gateway v1 REST event as http', () => {
-    assert.strictEqual(classifyEvent(makeEvent()), 'http');
+  it('classifies a legacy v1 REST event as http via the fallthrough (not a positively-detected HTTP event)', () => {
+    assert.strictEqual(classifyEvent({ httpMethod: 'POST', path: '/aws-blocks/api' }), 'http');
   });
 
   it('classifies API Gateway v2 HTTP event as http', () => {
@@ -1259,7 +1270,7 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
 
   it('prefers a loopback X-Forwarded-Host over Host', () => {
     const url = buildEventUrl({
-      path: '/auth/callback',
+      rawPath: '/auth/callback',
       headers: { 'x-forwarded-host': 'localhost:3000', Host: EXECUTE_API },
       requestContext: { stage: 'prod' },
     });
@@ -1272,7 +1283,7 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
 
   it('ignores a forged non-loopback X-Forwarded-Host and falls back to Host', () => {
     const url = buildEventUrl({
-      path: '/auth/callback',
+      rawPath: '/auth/callback',
       headers: { 'x-forwarded-host': 'evil.com', Host: EXECUTE_API },
     });
     assert.strictEqual(url.host, EXECUTE_API);
@@ -1280,7 +1291,7 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
 
   it('uses Host when no X-Forwarded-Host is present (full deploy)', () => {
     const url = buildEventUrl({
-      path: '/auth/callback',
+      rawPath: '/auth/callback',
       headers: { Host: EXECUTE_API },
     });
     assert.strictEqual(url.host, EXECUTE_API);
@@ -1290,7 +1301,7 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
     // The dev-server front door is plain HTTP; an execute-api x-forwarded-proto
     // of https must not leak into the browser-visible URL.
     const url = buildEventUrl({
-      path: '/auth/callback',
+      rawPath: '/auth/callback',
       headers: { 'x-forwarded-host': 'localhost:3000', 'x-forwarded-proto': 'https', Host: EXECUTE_API },
     });
     assert.strictEqual(url.protocol, 'http:');
@@ -1299,7 +1310,7 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
 
   it('keeps proto and stage prefix for the non-loopback (deploy) path', () => {
     const url = buildEventUrl({
-      path: '/auth/callback',
+      rawPath: '/auth/callback',
       headers: { 'x-forwarded-proto': 'https', Host: EXECUTE_API },
       requestContext: { stage: 'prod' },
     });
@@ -1309,10 +1320,10 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
   });
 
   it('accepts 127.0.0.1 and [::1] as loopback forwarded hosts', () => {
-    const v4 = buildEventUrl({ path: '/', headers: { 'x-forwarded-host': '127.0.0.1:3000', Host: EXECUTE_API } });
+    const v4 = buildEventUrl({ rawPath: '/', headers: { 'x-forwarded-host': '127.0.0.1:3000', Host: EXECUTE_API } });
     assert.strictEqual(v4.host, '127.0.0.1:3000');
 
-    const v6 = buildEventUrl({ path: '/', headers: { 'x-forwarded-host': '[::1]:3000', Host: EXECUTE_API } });
+    const v6 = buildEventUrl({ rawPath: '/', headers: { 'x-forwarded-host': '[::1]:3000', Host: EXECUTE_API } });
     assert.strictEqual(v6.hostname, '[::1]');
   });
 });
@@ -1463,6 +1474,144 @@ describe('handleEventSourceRecords — SQS partial batch responses', () => {
     } finally {
       delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
     }
+  });
+});
+
+// ── API Gateway HTTP API v2 (payload format 2.0) ─────────────────────────────
+
+/**
+ * A payload-format-2.0 event. v2 differs from REST v1 in exactly the ways the
+ * handler must normalize: `version:'2.0'`, method/path under `requestContext.http`
+ * + `rawPath`/`rawQueryString`, inbound cookies in a top-level `cookies` array,
+ * and no `httpMethod`/`path`.
+ */
+function makeV2Event(overrides: Record<string, any> = {}) {
+  return {
+    version: '2.0',
+    rawPath: '/aws-blocks/api',
+    rawQueryString: '',
+    headers: { 'content-type': 'application/json' },
+    requestContext: { stage: '$default', http: { method: 'POST', path: '/aws-blocks/api' } },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hi'], id: 7 }),
+    isBase64Encoded: false,
+    ...overrides,
+  };
+}
+
+describe('createLambdaHandler — HTTP API v2 (payload format 2.0) dispatch', () => {
+  it('dispatches an RPC POST /aws-blocks/api from a v2 event', async () => {
+    const backend = { api: () => ({ echo: async (msg: string) => `echo:${msg}` }) };
+    const result = await invoke(backend, makeV2Event());
+
+    assert.strictEqual(result.statusCode, 200);
+    const parsed = JSON.parse(result.body);
+    assert.strictEqual(parsed.result, 'echo:hi');
+    assert.strictEqual(parsed.id, 7);
+  });
+
+  it('dispatches a raw GET route from a v2 event (via requestContext.http)', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/health',
+      handler: async (ctx) => ctx.response.send({ status: 'ok' }),
+    });
+
+    const result = await invoke({}, makeV2Event({
+      rawPath: '/health',
+      requestContext: { stage: '$default', http: { method: 'GET', path: '/health' } },
+      body: null,
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(JSON.parse(result.body), { status: 'ok' });
+  });
+
+  it('reads inbound cookies from the v2 top-level `cookies` array', async () => {
+    let captured = '';
+    registerRoute({
+      method: 'GET',
+      path: '/whoami',
+      handler: async (ctx) => {
+        captured = ctx.request.headers.get('cookie') ?? '';
+        ctx.response.send({ ok: true });
+      },
+    });
+
+    const result = await invoke({}, makeV2Event({
+      rawPath: '/whoami',
+      requestContext: { stage: '$default', http: { method: 'GET', path: '/whoami' } },
+      cookies: ['session=abc', 'theme=dark'],
+      body: null,
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.strictEqual(captured, 'session=abc; theme=dark');
+  });
+
+  it('returns a handler-set Set-Cookie via the v2 top-level `cookies` array (not multiValueHeaders)', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/login',
+      handler: async (ctx) => {
+        ctx.response.headers.append('Set-Cookie', 'session=xyz; HttpOnly');
+        ctx.response.send({ ok: true });
+      },
+    });
+
+    const result = await invoke({}, makeV2Event({
+      rawPath: '/login',
+      requestContext: { stage: '$default', http: { method: 'GET', path: '/login' } },
+      body: null,
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(result.cookies, ['session=xyz; HttpOnly']);
+    assert.strictEqual(result.multiValueHeaders, undefined, 'v2 must not use multiValueHeaders');
+  });
+
+  it('buildEventUrl builds the v2 URL from rawPath with no `$default` stage prefix', () => {
+    const url = buildEventUrl(makeV2Event({
+      rawPath: '/aws-blocks/auth/callback',
+      rawQueryString: 'code=123',
+      headers: { host: 'abc.execute-api.us-east-1.amazonaws.com' },
+      requestContext: { stage: '$default', http: { method: 'GET', path: '/aws-blocks/auth/callback' } },
+    }));
+
+    assert.strictEqual(url.pathname, '/aws-blocks/auth/callback', 'no /$default prefix');
+    assert.strictEqual(url.searchParams.get('code'), '123');
+  });
+
+  it('returns an RPC handler-set Set-Cookie via the v2 top-level `cookies` array (not flat headers)', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async setSession() {
+          ctx.response.headers.append('Set-Cookie', 'session=rpc; HttpOnly; SameSite=Strict');
+          return { ok: true };
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeV2Event({
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'api.setSession', params: [], id: 11 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(result.cookies, ['session=rpc; HttpOnly; SameSite=Strict']);
+    assert.strictEqual(result.headers?.['set-cookie'], undefined, 'v2 Set-Cookie must not be in flat headers');
+    assert.strictEqual(result.multiValueHeaders, undefined, 'v2 must not use multiValueHeaders');
+  });
+
+  it('buildEventUrl falls back to queryStringParameters when rawQueryString is an empty string', () => {
+    const url = buildEventUrl(makeV2Event({
+      rawPath: '/aws-blocks/auth/callback',
+      rawQueryString: '',
+      queryStringParameters: { code: 'abc', state: 'xyz' },
+      headers: { host: 'abc.execute-api.us-east-1.amazonaws.com' },
+      requestContext: { stage: '$default', http: { method: 'GET', path: '/aws-blocks/auth/callback' } },
+    }));
+
+    assert.strictEqual(url.searchParams.get('code'), 'abc');
+    assert.strictEqual(url.searchParams.get('state'), 'xyz');
   });
 });
 

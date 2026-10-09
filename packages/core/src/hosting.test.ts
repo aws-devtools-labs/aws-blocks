@@ -24,7 +24,8 @@ import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } 
 // ================================================================
 
 const MOCK_API: BlocksStackApi = {
-  apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks',
+  // Shared HTTP API v2 `$default` stage: no stage path segment before the prefix.
+  apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/aws-blocks/api',
 };
 
 /** Helper: create a minimal SPA build output (dist/ with index.html). */

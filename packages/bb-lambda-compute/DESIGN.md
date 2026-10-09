@@ -4,14 +4,15 @@ Design document for `@aws-blocks/bb-lambda-compute`. For usage, see [README.md](
 
 **Package:** `@aws-blocks/bb-lambda-compute`
 **Type:** Compute (framework infrastructure, not a customer-facing data block)
-**AWS Services:** Lambda (`NodejsFunction`) + API Gateway (REST)
+**AWS Services:** Lambda (`NodejsFunction`). The HTTP ingress is a single
+stack-level shared HTTP API v2, provisioned by core — not owned per compute.
 
 ## Why a compute is a Building Block
 
 A Blocks app runs its handler code on a *compute*. Modeling compute as a
-first-class type — rather than inlining a Lambda and API Gateway in core — lets
-one app run on multiple compute targets (Lambda, containers, customer-owned) and
-target namespaces and handlers at specific ones.
+first-class type — rather than inlining a Lambda in core — lets one app run on
+multiple compute targets (Lambda, containers, customer-owned) and target
+namespaces and handlers at specific ones.
 
 `Compute` (the abstract base) lives in `@aws-blocks/core` because it is a
 framework primitive: `Scope`, the base every block extends, resolves the compute
@@ -38,41 +39,34 @@ supplies the implementation.
   Named `logGroup` (not `handlerLogGroup`) to avoid clashing with the inherited
   `Scope.handlerLogGroup` accessor. `RemovalPolicy.DESTROY` — the handler's
   operational stdout is not durable state.
-- **An API Gateway REST API** fronting the function:
-  - the `/aws-blocks` resource gets a proxy so `RawRoute` sub-paths reach the
-    function;
-  - `/aws-blocks/api` gets explicit `POST` + `OPTIONS` methods (the JSON-RPC
-    endpoint);
-  - the root gets a catch-all proxy so all other paths reach the function.
-  - **Throttling** — the stage's method throttle comes from `defaults.throttling`
-    (sandbox 200/400, production 1000/2000).
-  - **Access logging** — when `defaults.accessLogging` is true (opt-in; off in
-    both presets), the stage writes structured JSON access logs to a dedicated
-    CloudWatch log group (retention = `defaults.logRetention`, removal policy =
-    `defaults.removalPolicy` — production RETAINs the audit trail on teardown,
-    sandbox DESTROYs). `cloudWatchRole` is disabled on the `RestApi` so it does
-    not mint its own `AWS::ApiGateway::Account`; instead the shared account-level
-    CloudWatch Logs role is provisioned once per stack via
-    `ensureApiGatewayAccount()`, and the stage depends on it so a clean-account
-    first deploy applies the account setting before the stage is created.
-    Note: a production (RETAINed) access-log group is **orphaned** on stack
-    teardown and is the operator's to clean up. The group is intentionally left
-    unnamed (CDK-generated physical name) so a teardown-then-redeploy mints a
-    fresh name and can't collide — do not pin a stable `logGroupName`, or a
-    RETAINed group from a prior delete would fail the next create.
+- **A `CORS_ALLOWED_ORIGINS` env var** on the function (only when
+  `defaults.allowedOrigins` is non-empty) so the Lambda enforces CORS at runtime.
+  The allowed origins are regex patterns, which native HTTP API v2 CORS can't
+  express, so the gateway doesn't configure native CORS — OPTIONS flows through
+  to the function.
+
+The HTTP ingress is **not** owned here. `LambdaCompute.apiHandler()` returns `fn`,
+and the stack-level **shared HTTP API v2** (see
+`packages/core/src/cdk/shared-gateway.ts`) integrates it with a `$default`
+catch-all route that forwards every path/method (including the root `/`) to the
+function; the Lambda handler does the routing. Request **throttling**
+(`defaults.throttling`) and optional JSON **access logging**
+(`defaults.accessLogging`) live on that shared gateway's stage. HTTP API v2
+access logging needs no account-level CloudWatch role (`AWS::ApiGateway::Account`),
+so none is provisioned for it.
 
 Public surface (CDK layer):
 
 | Member | Type | Description |
 |--------|------|-------------|
 | `fn` | `NodejsFunction` | The function backing this compute. |
-| `apiGateway` | `RestApi` | The REST API fronting `fn`. |
 | `logGroup` | `LogGroup` | The function's CloudWatch log group (retention from `defaults.logRetention`). |
+| `apiHandler()` | `IFunction` | The function the stack's shared HTTP API gateway integrates (the `Compute` contract; returns `fn`). |
 | `setEnv(key, value)` | `void` | Inject a runtime env var onto the function — the `Compute` contract the framework calls instead of `handler.addEnvironment` directly. |
 
-`fn` and `apiGateway` exist only on the CDK layer (they are `aws-cdk-lib`
-constructs); `setEnv` is part of the `Compute` contract present in every layer
-(a no-op in the non-CDK layers — see below).
+`fn` exists only on the CDK layer (it is an `aws-cdk-lib` construct); `setEnv` and
+`apiHandler` are part of the `Compute` contract present in every layer (a no-op /
+undefined in the non-CDK layers — see below).
 
 ## Owner-derived identity
 
@@ -102,7 +96,7 @@ exports:
 
 | Condition | Entry | Role |
 |-----------|-------|------|
-| `cdk` | `index.cdk.ts` | Provisions the `NodejsFunction` + API Gateway (above). The only layer that touches `aws-cdk-lib`. |
+| `cdk` | `index.cdk.ts` | Provisions the `NodejsFunction` (above) and exposes it via `apiHandler()` for the stack's shared HTTP API gateway. The only layer that touches `aws-cdk-lib`. |
 | `aws-runtime` | `index.aws.ts` | An **inert handle**. At runtime the infrastructure already exists and the handler already runs on it, so the compute provisions nothing; it constructs (so the import succeeds and `{ compute }` references resolve) and `setEnv` is a no-op — config is injected at synth. |
 | `default` / `types` | `index.mock.ts` | Local dev runs the backend in-process with no Lambda, so it reuses the same inert handle. Also backs the public `types`, so the customer-facing type is the CDK-free `Compute` handle. |
 | `browser` | `index.browser.ts` | A stub. The backend module is type-imported by frontends; this keeps `aws-cdk-lib` out of the browser bundle. |
@@ -130,9 +124,9 @@ framework's default compute. It slots into the broader model as follows:
 - **Compute resolution.** `Scope.compute` resolves the compute a handler runs
   on: an explicit assignment on the block or an ancestor scope, else the app's
   default compute.
-- **Resource ownership.** The default compute owns the Lambda function and API
-  Gateway that back a stack's `handler` / `gateway` / `apiUrl`; those stack
-  accessors delegate to it.
+- **Resource ownership.** The default compute owns the Lambda function that backs
+  a stack's `handler`; `gateway` / `apiUrl` resolve to the stack-level shared
+  HTTP API v2 that integrates the compute's `apiHandler()`.
 - **Other compute types.** Sibling packages provide container and
   customer-owned `Compute` implementations; event blocks that need
   compute-specific delivery narrow on the concrete type.
@@ -219,9 +213,10 @@ supplies a concrete factory through a normal `import`.
    runs **before** importing the backend module — so a block that reads
    `this.compute` in its constructor (during that import) resolves to it. That
    call runs `new LambdaCompute(root, 'DefaultCompute')`, provisioning the
-   function + API Gateway.
-4. `Scope.compute` and the delegating `handler` / `gateway` / `apiUrl` accessors
-   read from `_defaultCompute`.
+   function. After the backend import, `create()` builds the single shared HTTP
+   API v2 from the default compute's `apiHandler()`.
+4. `Scope.compute` and the delegating `handler` accessor read from
+   `_defaultCompute`; `gateway` / `apiUrl` read from the shared gateway.
 
 A bare-`@aws-blocks/core` caller must supply `defaultComputeFactory` on the props
 (it is required); any app using `@aws-blocks/blocks` gets it injected for free.

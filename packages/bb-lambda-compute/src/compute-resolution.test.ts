@@ -6,9 +6,9 @@
  *
  * `compute` resolves to the nearest `_compute` assigned on the block or an
  * ancestor scope, else the owning stack/backend's default compute — a
- * LambdaCompute that owns the Lambda function + API Gateway backing the stack's
- * handler/gateway. The `_compute` input is internal until the customer-facing
- * surface exists.
+ * LambdaCompute that owns the Lambda function backing the stack's handler (the
+ * HTTP ingress is the stack's single shared HTTP API gateway). The `_compute`
+ * input is internal until the customer-facing surface exists.
  */
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
@@ -59,20 +59,22 @@ async function makeStack(id: string): Promise<BlocksStack> {
 }
 
 describe('Scope.compute resolution', () => {
-	test('default: resolves to the compute that owns the stack handler + gateway (one function)', async () => {
+	test('default: resolves to the compute that owns the stack handler (one function, one shared gateway)', async () => {
 		const stack = await makeStack('ComputeDefault');
 
 		const block = new Scope('block');
 		const compute = block.compute;
 
 		assert.ok(compute instanceof LambdaCompute, 'default resolves to a LambdaCompute');
-		// The stack's handler/gateway delegate to the default compute's.
+		// The stack's handler delegates to the default compute's function.
 		assert.strictEqual(stack.handler, (compute as LambdaCompute).fn, 'stack.handler is the compute function');
-		assert.strictEqual(stack.gateway, (compute as LambdaCompute).apiGateway, 'stack.gateway is the compute gateway');
+		// The gateway is the stack-level shared HTTP API (not owned by the compute).
+		assert.ok(stack.gateway, 'stack.gateway resolves to the shared HTTP API');
 
-		// Exactly one function + gateway — the default compute's.
+		// Exactly one function + one shared HTTP API v2 gateway (no REST API).
 		const template = Template.fromStack(stack);
-		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+		template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+		template.resourceCountIs('AWS::ApiGateway::RestApi', 0);
 	});
 
 	test('default compute is cached (same instance across reads and blocks)', async () => {
