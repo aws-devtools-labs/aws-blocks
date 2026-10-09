@@ -30,6 +30,8 @@
  *   work. Upstream tracks broader format support in
  *   https://github.com/unjs/ipx/issues/261.
  */
+import { looksLikeSvg } from './ipx_allowlist.js';
+
 export const IPX_LAMBDA_HANDLER_SOURCE = `import { createIPX, createIPXWebServer, ipxHttpStorage } from 'ipx';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { Buffer } from 'node:buffer';
@@ -151,6 +153,35 @@ const isLocalSourceAllowed = (id) => {
 
 const isSvgPath = (id) => /\\.svg(\\?|$)/i.test(String(id));
 
+// SVG gate by CONTENT, not filename. isSvgPath above is only a cheap pre-filter:
+// an origin's Content-Type isn't constrained by its path, so an SVG served from
+// \`/logo\` or \`/logo.png\` sails past an extension check. svgGuard wraps each
+// storage's getData and rejects SVG bytes (415) before IPX processes them —
+// SVGO, which IPX runs on SVG input, is an optimiser, not a sanitiser. The
+// helper is embedded from ipx_allowlist.ts so the tested code is what runs here.
+const looksLikeSvg = ${looksLikeSvg.toString()};
+
+const svgRejected = () =>
+  Object.assign(new Error('SVG sources are not permitted'), {
+    statusCode: 415,
+    statusText: 'Unsupported Media Type',
+  });
+
+const svgGuard = (storage) =>
+  allowSvg
+    ? storage
+    : {
+        ...storage,
+        async getData(id, opts) {
+          const data = await storage.getData(id, opts);
+          if (looksLikeSvg(data)) {
+            log(\`reject SVG content: \${id}\`);
+            throw svgRejected();
+          }
+          return data;
+        },
+      };
+
 
 /**
  * Custom IPX storage adapter that reads originals from S3 using the
@@ -224,9 +255,9 @@ const httpDomains = [
 // for every request IPX makes. An allowlisted host that serves its images via a
 // redirect must be allowlisted at its final location.
 const ipx = createIPX({
-  storage: s3IpxStorage,
+  storage: svgGuard(s3IpxStorage),
   ...(httpDomains.length > 0
-    ? { httpStorage: ipxHttpStorage({ domains: httpDomains, fetchOptions: { redirect: 'error' } }) }
+    ? { httpStorage: svgGuard(ipxHttpStorage({ domains: httpDomains, fetchOptions: { redirect: 'error' } })) }
     : {}),
 });
 
@@ -391,6 +422,12 @@ export const handler = async (event) => {
     }
 
     const res = await ipxServer(req);
+    // Defense in depth: never emit SVG output unless the user opted in, whatever
+    // path the bytes took (e.g. a compressed .svgz source the sniff can't read).
+    if (!allowSvg && /image\\/svg/i.test(res.headers.get('content-type') || '')) {
+      log(\`reject SVG output: \${source}\`);
+      return reject(415, 'SVG sources are not permitted');
+    }
     return await responseToLambda(res);
   } catch (err) {
     log(\`error: \${err?.message ?? err}\`);
