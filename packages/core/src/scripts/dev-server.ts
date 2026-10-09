@@ -23,6 +23,7 @@ import {
   rawRouteErrorFromCatch,
 } from '../rpc.js';
 import { redactToJson } from '../redact.js';
+import { isDispatchableExport, resolveApiMethod } from '../rpc-dispatch.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
 import { killFrontendTree, terminateProcessTree, findListenerPids, killListenerTree } from './process-tree.js';
@@ -700,7 +701,8 @@ export async function startDevServer(options: DevServerOptions) {
   // 5. Collect APIs for runtime
   const apis = new Map<string, any>();
   for (const [exportName, exportValue] of Object.entries(backend)) {
-    if (typeof exportValue === 'function' || typeof exportValue === 'object') {
+    // Same rule as the Lambda handler: no Building Block instances or `_`-private exports.
+    if (isDispatchableExport(exportName, exportValue)) {
       apis.set(exportName, exportValue);
     }
   }
@@ -1226,13 +1228,14 @@ function handleApiRequest(
 
         const apiMethods = typeof apiHandler === 'function' ? apiHandler(context) : apiHandler;
 
-        if (!apiMethods[rpcMethod]) {
+        const apiMethod = resolveApiMethod(apiMethods, rpcMethod);
+        if (!apiMethod) {
           res.writeHead(200, rpcHeaders);
           res.end(methodNotFoundResponse(`'${rpcMethod}' on API '${apiNamespace}'`, rpcId));
           return;
         }
 
-        const result = await apiMethods[rpcMethod](...args);
+        const result = await apiMethod(...args);
 
         const headerObj: Record<string, string | string[]> = {};
         for (const [key, value] of responseHeaders.entries()) {
