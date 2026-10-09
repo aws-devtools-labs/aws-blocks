@@ -18,6 +18,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dbConnectionParameterName } from '../db-naming.js';
 import { getStackName } from './stack-id.js';
+import { resolveDeploymentTarget } from './deployment-target.js';
 
 const CONNECTION_STRING_PATTERN = /_(DB_URL|CONNECTION_STRING)$/;
 
@@ -41,6 +42,7 @@ export function findConnectionString(): { name: string; value: string } | null {
  * parameter name. `projectRoot` locates the committed `.blocks/config.json`
  * that defines the stack name; it must match the root used at synth (the deploy
  * commands pass it explicitly) so the written name equals the name the app reads.
+ * The SSM client uses the same Region and CDK profile as the credential check.
  */
 export async function ensureSecrets(
   stage?: string,
@@ -56,7 +58,8 @@ export async function ensureSecrets(
   const { SSMClient, GetParameterCommand, PutParameterCommand } =
     await import('@aws-sdk/client-ssm');
 
-  const client = new SSMClient();
+  const target = await resolveDeploymentTarget({ projectRoot });
+  const client = new SSMClient({ region: target.region ?? undefined, profile: target.profile });
   const parameterName = dbConnectionParameterName(getStackName({ sandbox: resolvedStage !== 'production', projectRoot }));
 
   let isNew = false;

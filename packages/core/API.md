@@ -215,6 +215,8 @@ export class Scope {
     registerDevAttachment(packageSpecifier: string): void;
     registerLambdaEventHandler(eventSource: string, identifier: string, handler: (record: any) => Promise<void>): void;
     static _resetRegistry(): void;
+    // @internal
+    static _setDefaultBlockForTelemetry(name: string, version: string): void;
 }
 
 // @public (undocumented)

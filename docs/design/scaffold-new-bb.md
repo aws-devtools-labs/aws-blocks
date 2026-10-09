@@ -94,6 +94,13 @@ duplicate them:** `npm run sync-docs` (README catalog table between markers);
 runs `generate-bb-names.mjs` off the vendorize map. So updating touchpoint #3's
 vendorize map is enough for the telemetry allowlist to regenerate.
 
+A BB with no customer-facing export is the exception: it is deliberately absent from
+the vendorize map, so it never reaches the allowlist that way. Add its BB name to
+`NON_VENDORIZED_BB_NAMES` in `scripts/generate-bb-names.mjs` instead, and — because
+that list is keyed by BB name while `packages/blocks/src/vendorize-map.test.ts` keeps
+its own skip list keyed by package name — add the package to that skip list too.
+`LambdaCompute`, the internal default compute, is the only such BB today.
+
 ## 5. Relation to "extending with existing resources" (analysis #4)
 
 The extending guide's **Pattern 3 (Custom BB)** is the *external* mirror of this: a user

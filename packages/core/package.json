@@ -92,6 +92,7 @@
     "@aws-sdk/client-ssm": "^3.700.0",
     "@aws-sdk/client-sts": "^3.700.0",
     "@smithy/protocol-http": "^5.4.5",
+    "@smithy/shared-ini-file-loader": "^4.5.5",
     "@smithy/types": "^4.17.2",
     "ci-info": "^4.0.0",
     "cross-spawn": "^7.0.6",

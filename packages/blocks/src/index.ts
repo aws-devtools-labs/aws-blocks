@@ -7,6 +7,11 @@ export * from '@aws-blocks/core';
 // Override core's untyped getSdkIdentifiers with typed overloads
 export { getSdkIdentifiers } from './sdk-identifiers.js';
 
+import { Scope } from '@aws-blocks/core';
+import { BB_NAME, BB_VERSION } from '@aws-blocks/bb-lambda-compute/version';
+
+Scope._setDefaultBlockForTelemetry(BB_NAME, BB_VERSION);
+
 // ─── Building Block Re-exports ───────────────────────────────────────────────
 //
 // Each export below includes a brief summary of what the Building Block does
