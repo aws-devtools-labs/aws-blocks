@@ -15,7 +15,7 @@ import { OidcClientEngine } from './engines/oidc-client-engine.js';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
 import { mountAuthRoutes, mountStubIdpRoutes } from './routes.js';
-import { resolveProviderIssuerUrl } from './utils.js';
+import { resolveProviderIssuerUrl, scopeFullId } from './utils.js';
 import type { AuthOIDCOptions, ProviderConfig, SessionRow } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -64,7 +64,11 @@ export class AuthOIDC<
 > extends AuthOIDCBase<P> {
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
-		const sessions = new KVStore<SessionRow>(scope, `${id}-sessions`);
+		// Same synthetic parent as the AWS runtime, so both report the identical chain.
+		const sessions = new KVStore<SessionRow>(
+			{ id, fullId: scopeFullId(scope, id), parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION },
+			'sessions',
+		);
 
 		const cookieNamePrefix = `oidc_${mockPrefix(scope, id)}`;
 		const cookieAttributes = {

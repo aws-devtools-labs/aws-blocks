@@ -18,7 +18,7 @@ import { OidcClientEngine } from './engines/oidc-client-engine.js';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
 import { mountAuthRoutes, mountStubIdpRoutes } from './routes.js';
-import { cookieSecretEnvVar, resolveProviderIssuerUrl } from './utils.js';
+import { cookieSecretEnvVar, resolveProviderIssuerUrl, scopeFullId } from './utils.js';
 import type { AuthOIDCOptions, ProviderConfig, SessionRow } from './types.js';
 
 export { AuthOIDCErrors, type AuthOIDCErrorName } from './errors.js';
@@ -65,7 +65,12 @@ export class AuthOIDC<
 		// during codegen but runtime calls still fail fast if misconfigured.
 		const parameterName = process.env[envVarName] ?? '';
 
-		const sessions = new KVStore<SessionRow>(scope, `${id}-sessions`);
+		// The store feeds `engine`, which `super()` consumes, so `this` is unavailable.
+		// A plain parent carries the chain; `fullId` keeps the table name unchanged.
+		const sessions = new KVStore<SessionRow>(
+			{ id, fullId: fullIdForEnv, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION },
+			'sessions',
+		);
 
 		const cookieOpts = {
 			...resolveCookieSecurity({
@@ -155,16 +160,5 @@ export class AuthOIDC<
 			}
 		}
 	}
-}
-
-function scopeFullId(scope: ScopeParent, id: string): string {
-	const segments: string[] = [id];
-	let current: ScopeParent | undefined = scope;
-	while (current && 'parent' in current && current.parent) {
-		segments.unshift(current.id);
-		current = (current as { parent: ScopeParent }).parent;
-	}
-	if (current && 'id' in current) segments.unshift(current.id);
-	return segments.join('-');
 }
 
