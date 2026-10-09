@@ -339,6 +339,11 @@ export class BlocksBackend extends Construct {
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));
 
+		// Mount the per-namespace `/aws-blocks/api/{namespace}` ingress on each
+		// compute now that every ApiNamespace has recorded itself. Additive — the
+		// `/aws-blocks/api` endpoint keeps serving and the client still uses it.
+		for (const compute of getComputes(backend)) compute.mountNamespaceRoutes();
+
 		// Tracing is presence-gated: if the app contains a Tracer, enable X-Ray on
 		// every compute. Runs before the dashboard finalize.
 		finalizeTracing(backend, backend.executionRole);

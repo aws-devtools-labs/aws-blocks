@@ -167,6 +167,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
 
+		// Mount the per-namespace `/aws-blocks/api/{namespace}` ingress on each
+		// compute now that every ApiNamespace has recorded itself. Additive — the
+		// `/aws-blocks/api` endpoint keeps serving and the client still uses it.
+		for (const compute of getComputes(stack)) compute.mountNamespaceRoutes();
+
 		// Tracing is presence-gated: if the app contains a Tracer, enable X-Ray on
 		// every compute. Runs before the dashboard finalize so tracingEnabled is
 		// set when the dashboard reads it.
