@@ -1,5 +1,161 @@
 # @aws-blocks/blocks
 
+## 0.8.0
+
+### Minor Changes
+
+- 8f725b6: fix(bb-data): enable Aurora storage encryption, backup retention, and log export
+  
+  Hardens the Aurora Serverless v2 cluster synthesized by `Database`:
+  
+  - **Storage encryption at rest** is opt-in via the
+    `@aws-blocks/bb-data:encryptStorageByDefault` context flag — set in the new
+    `create-blocks-app` cdk.json templates, so new projects encrypt by default with
+    the AWS-managed `aws/rds` key. A new optional `storageEncryptionKeyArn` (the ARN
+    of a customer-managed KMS key) turns encryption on regardless of the flag and
+    also encrypts the auto-generated credentials secret. When neither is set, the
+    `StorageEncrypted` property is left unset (so an existing cluster is untouched)
+    and a synth warning explains how to opt in.
+  - **Automated backups** are on by default and retained **15 days**; this is also
+    the point-in-time-recovery window. A single `pointInTimeRecovery` option
+    controls it (mirroring every other Blocks block): `true` enables the 15-day
+    window, `{ retentionDays: n }` pins a 1–35-day window, and `false` clamps to the
+    1-day minimum (Aurora cannot disable automated backups). When omitted it follows
+    the stack-wide `defaults.pointInTimeRecovery` (on under `production`, off under
+    `sandbox`).
+  - **CloudWatch log export** — the PostgreSQL engine log is exported to CloudWatch
+    Logs, with retention following the stack-wide `defaults.logRetention`.
+  - `iamAuthentication` remains intentionally off (access is exclusively via the RDS
+    Data API), and automatic secret rotation is documented as a follow-up.
+  
+  `@aws-blocks/create-blocks-app` scaffolds this default into new projects: every
+  template's `cdk.json` now sets the `@aws-blocks/bb-data:encryptStorageByDefault`
+  context flag, and the Amplify overlay sets the same flag via `setContext`. As a
+  result, a `Database` created in a newly scaffolded project encrypts its storage at
+  rest by default.
+  
+  **Breaking for existing stacks (0.x minor = breaking channel):** the
+  backup-retention and CloudWatch log-export changes alter synthesized cluster
+  properties, so existing stacks will show a CloudFormation diff.
+  
+  Storage encryption is **opt-in** specifically so it does **not** silently replace
+  existing clusters: with neither the context flag nor a `storageEncryptionKeyArn`
+  set, the `StorageEncrypted` property is left unset and the existing cluster is
+  untouched. Opting in (setting the flag, or supplying a key) on an
+  already-provisioned, unencrypted cluster requires a **replacement**, and the
+  replacement is destructive: RDS cannot encrypt an existing cluster in place, so
+  CloudFormation creates a **new, empty** encrypted cluster and repoints the stack.
+  There is no in-place path. The migration CustomResource does **not** re-run on a
+  cluster swap — its only CloudFormation properties are the service token and the
+  migrations hash, neither of which changes when the cluster is replaced — so the new
+  cluster comes up with **no schema**; migrations run only when a migration file
+  changes (which changes the migrations hash). Under production (RETAIN) the old
+  cluster is orphaned/unreferenced; under sandbox (DESTROY) it and its data are
+  deleted; under `removalPolicy: 'snapshot'` it is snapshotted as it is replaced
+  (though under production's `deletionProtection: true` the follow-up delete may fail
+  and leave it in place, unverified on a real deploy). The only safe route is to
+  snapshot the existing cluster, restore it with encryption enabled, then cut over.
+  Review the diff and snapshot before deploying. The replacement is symmetric:
+  turning encryption back off — removing the flag (or `storageEncryptionKeyArn`) from
+  a project that already deployed encrypted, e.g. deleting the cdk.json line or a
+  merge dropping it — also changes `StorageEncrypted` and so likewise replaces the
+  cluster (back to unencrypted), with the same new-empty-cluster / no-schema outcome.
+- 6d764f7: `AWS_BLOCKS_DISABLE_TELEMETRY` now accepts `true` and `yes` in addition to `1` (case-insensitive, trimmed).
+  
+  Previously only the exact value `1` disabled telemetry, so `AWS_BLOCKS_DISABLE_TELEMETRY=true` kept telemetry on. Both packages now accept `1`, `true` and `yes`; `0`, `false`, empty and unset keep telemetry enabled. The `blocks-telemetry --help` output lists the accepted values, and the D-010 usage note in `docs/DECISIONS.md` is updated to match.
+  
+  Behavior change (0.x minor = breaking channel): if you already export `AWS_BLOCKS_DISABLE_TELEMETRY=true` or `=yes` for another tool, Blocks telemetry is now disabled where it was previously still on.
+- cb0ec01: `blocks.spec.json` can now carry two top-level OpenRPC extensions,
+  `x-blocks-native-packages` and `x-blocks-native-bindings`, so native codegen can
+  resolve a transferable tag to a package export instead of a hard-coded switch.
+  `generateSpec` and `writeSpec` take a new trailing `SpecGenerationOptions`
+  carrying the declarations, and invalid metadata throws `NativeCatalogError`
+  before any file is written. Nothing populates the declarations yet, so a
+  generated spec is unchanged.
+  
+  `@aws-blocks/blocks` gets the same bump because it re-exports `@aws-blocks/core/scripts`.
+
+### Patch Changes
+
+- e682ba7: `LambdaCompute` now reports `bbName`/`bbVersion` to `Scope`, so it appears in telemetry like every other Building Block.
+  
+  `LambdaCompute` passed no `bbName` to `Scope`, and `Scope` records a block in its registry only when `bbName` is set, so `Scope.getRegisteredBlocks()` could never name the default compute and `product.buildingBlocks` omitted it. The package already carried the standard `prebuild` (`generate-version.mjs LambdaCompute`), which generates the `BB_NAME`/`BB_VERSION` its constructor now passes through — the same wiring the other blocks use.
+  
+  `LambdaCompute` has no customer-facing export, so it is deliberately absent from the umbrella's `aws-blocks.vendorize` map that `scripts/generate-bb-names.mjs` reads. The generator now also emits a `NON_VENDORIZED_BB_NAMES` list, adding it to `OFFICIAL_BB_NAMES` so it is reported as an official block rather than filtered as an unnamed custom one. `@aws-blocks/core` is bumped because that generated file changes; the `cdk` entry point is left alone, as telemetry is reported by the runtime class, not the synth-time construct.
+  
+  The default compute is built only at CDK synth, in a child process whose registry no telemetry path reads, so nothing constructs one where telemetry is emitted. Importing `@aws-blocks/blocks` through its default (Node) entry now declares it instead: `Scope._setDefaultBlockForTelemetry` records its name and version, and `getRegisteredBlocks()` folds that in only when telemetry actually reads the registry.
+  
+  Declaring rather than constructing keeps the import inert — a process that imports the umbrella and emits no telemetry leaves `totalCount` untouched — and the entry is appended after the blocks the app constructed, so it never displaces them in `product.buildingBlocks`. An app-constructed `LambdaCompute` takes precedence over the declaration, so it is never counted twice. `getRegisteredBlocks()` still exposes only names already on the official list, and customer-chosen block names remain counted-but-unnamed.
+- 382dac6: fix(hosting): the image-optimization Lambda no longer follows redirects on remote image fetches
+  
+  The IPX image Lambda validated a remote image URL against the allowlist
+  (`IMAGE_ALLOWED_HOSTNAMES` / `remotePatterns`) once, before fetching — and the
+  fetch then followed HTTP redirects without re-validating the target. An allowlisted
+  host with an open redirect (a user-content CDN, say) could therefore steer the fetch
+  to any host, including `127.0.0.1` inside the Lambda sandbox.
+  
+  Remote fetches now use `fetchOptions: { redirect: 'error' }`, so a 3xx fails the
+  image request instead of being followed, and the allowlist holds for every request
+  the Lambda makes. **If an allowlisted image host serves its images through a redirect,
+  allowlist the final location instead.** The generated Lambda also pins `ipx` to an
+  exact version (`3.1.1`) rather than `^3.0.0`, so the fetch behavior this guard relies
+  on can't change at deploy time.
+- fd10117: Fix `cognitoFederated()` failing at `cdk synth` with `CannotFindAsset`.
+  
+  The published `@aws-blocks/bb-auth-oidc` package was missing the bundled Lambda that registers the identity provider on the user pool (`dist/idp-registration-lambda/index.js`), so any app using `cognitoFederated()` failed to synthesize. This affected both the Cognito-hosted domain prefix and custom domains. The release build now produces the bundle, so it ships with the package again.
+- 2da2fd4: Sanitize RawRoute uncaught exceptions so raw driver/SDK details no longer leak.
+  
+  A RawRoute whose handler throws an uncaught exception previously forwarded that error's raw name and message to the client, the same leak class the RPC path was already fixed for. The RawRoute catch (both the deployed `lambda-handler` and the local `dev-server` paths) now runs the caught throw through core's shared sanitizer: a Building Block or `ApiError` keeps its BB-authored name and message, and everything else — a driver/SDK exception or a bare `Error` — collapses to a generic `500` / `"Internal error"`, with the full error still logged server-side. A handler's own deliberate `ctx.response` writes are untouched; only the uncaught-exception path is sanitized.
+  
+  Two small behavior notes: a RawRoute uncaught exception that previously forwarded its raw name/message now returns a generic 500, and an `ApiError` built with the default name no longer emits `name: "ApiError"` on the wire (status is detected via `isApiErrorLike`, not a name compare).
+- da6d4c7: Scope shared Blocks synth state to the owning backend root (`BlocksStack`/`BlocksBackend`) instead of the enclosing `cdk.Stack`, so two `BlocksBackend`s in one stack — and multiple stacks in one synth — stay independent.
+  
+  - **Registries** (config, compute, dashboard, tracer, VPC requirements) now key on the backend root, resolved by walking the construct tree (`getBlocksRoot`), not on `cdk.Stack.of(scope)`.
+  - **Shared-infra Building Blocks** now provision and dedup their per-backend resources under the backend root: the realtime WebSocket API, the cron scheduler role, and the agent AgentCore runtime grants. Previously a second backend in the same stack could attach to the first's shared infra — most seriously, the agent's Bedrock grants could land on the wrong backend's execution role.
+  - **RawRoute** registrations are tagged with their owning backend root; `Hosting` now adds CloudFront behaviors only for routes owned by the backend its distribution fronts, instead of every route in the process-global registry. The per-owner tag also scopes duplicate-route detection, so two backends may register the same method+path.
+  - **`Hosting` now registers its origin config against the backend it fronts.** `BLOCKS_PUBLIC_ORIGIN` and `CORS_HOSTING_ORIGINS` are written to the backend named by `props.api`, matching the route-behavior owner — not to `this`, which (when two backends share a stack) resolved via the ambient pointer to the last-created backend and left the fronted backend without its origin config.
+  - The config bucket is parented under the resolved backend root rather than read from an ambient process-global, removing a construction-order hazard.
+  - **Stack-scoped exceptions — these deliberately keep a stable logical ID.** The app-setting secret bulk-init (`BlocksSecretsBulk`) and the distributed-table GSI manager provider (`BlocksGsiProvider`) stay direct stack children. Both are referenced by existing resources through immutable fields (a SecureString's physical name; a custom resource's `ServiceToken`), so a logical-ID change would force a replacement that CloudFormation either rejects (`ServiceToken` is immutable → failed upgrade) or that silently deletes the SecureString. Keeping them stack-scoped preserves the logical ID; their deploy-time IAM is still scoped (lazily) to only the parameters/tables that register. (Joins the API Gateway account resource as a documented stack-scoped exception.)
+  
+  **Compatibility.** Single-`BlocksStack` apps (the common case) are byte-identical — no resource replacement. Apps that embed a `BlocksBackend` inside a customer `cdk.Stack` and use **realtime** or **cron** will see those resources re-parent from the stack to the backend construct, which CloudFormation treats as a replacement on upgrade; neither carries persistent data. For realtime specifically, the WebSocket API URL changes and its stack output key changes from `RealtimeWsUrl` to `BlocksRealtimeWsUrl<hash>` — scripts that read that output by name must update. Secret AppSettings and GSI-backed tables are **not** affected (their shared resources stay stack-scoped).
+- f1eb149: fix(telemetry): keep every event written to `--telemetry-file` instead of only the first
+  
+  The sink created the file with `O_CREAT | O_EXCL` and swallowed the resulting `EEXIST`, so a run that emitted more than one event recorded only the first. In `@aws-blocks/core` a `dev` server that retries a port bind emits `dev/FAIL` then `dev/SUCCESS`, and the success was lost. Events after the first are now appended to the same JSON array. A path that already existed when the run started is still left untouched. The container is unchanged — a JSON array, 2-space indented — so a consumer reading the first element is unaffected, but a file can now hold more than one event: anything asserting exactly one needs updating.
+- Updated dependencies [8f725b6]
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [6d764f7]
+- Updated dependencies [382dac6]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [fd10117]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [f1eb149]
+  - @aws-blocks/bb-data@0.4.0
+  - @aws-blocks/bb-lambda-compute@0.5.2
+  - @aws-blocks/core@0.7.0
+  - @aws-blocks/hosting@0.4.1
+  - @aws-blocks/bb-auth-oidc@0.2.2
+  - @aws-blocks/bb-agent@0.6.0
+  - @aws-blocks/bb-cron-job@0.3.0
+  - @aws-blocks/bb-realtime@0.4.0
+  - @aws-blocks/auth-common@0.1.10
+  - @aws-blocks/bb-app-setting@0.3.2
+  - @aws-blocks/bb-async-job@0.2.3
+  - @aws-blocks/bb-auth-basic@0.1.11
+  - @aws-blocks/bb-auth-cognito@0.1.12
+  - @aws-blocks/bb-dashboard@0.2.2
+  - @aws-blocks/bb-distributed-data@0.2.2
+  - @aws-blocks/bb-distributed-table@0.2.2
+  - @aws-blocks/bb-email-client@0.1.9
+  - @aws-blocks/bb-file-bucket@0.3.1
+  - @aws-blocks/bb-knowledge-base@0.2.6
+  - @aws-blocks/bb-kv-store@0.3.1
+  - @aws-blocks/bb-logger@0.2.2
+  - @aws-blocks/bb-metrics@0.1.9
+  - @aws-blocks/bb-tracer@0.2.2
+
 ## 0.7.0
 
 ### Minor Changes

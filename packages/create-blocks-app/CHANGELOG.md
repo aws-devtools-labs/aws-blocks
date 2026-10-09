@@ -1,5 +1,98 @@
 # @aws-blocks/create-blocks-app
 
+## 0.3.0
+
+### Minor Changes
+
+- 8f725b6: fix(bb-data): enable Aurora storage encryption, backup retention, and log export
+  
+  Hardens the Aurora Serverless v2 cluster synthesized by `Database`:
+  
+  - **Storage encryption at rest** is opt-in via the
+    `@aws-blocks/bb-data:encryptStorageByDefault` context flag — set in the new
+    `create-blocks-app` cdk.json templates, so new projects encrypt by default with
+    the AWS-managed `aws/rds` key. A new optional `storageEncryptionKeyArn` (the ARN
+    of a customer-managed KMS key) turns encryption on regardless of the flag and
+    also encrypts the auto-generated credentials secret. When neither is set, the
+    `StorageEncrypted` property is left unset (so an existing cluster is untouched)
+    and a synth warning explains how to opt in.
+  - **Automated backups** are on by default and retained **15 days**; this is also
+    the point-in-time-recovery window. A single `pointInTimeRecovery` option
+    controls it (mirroring every other Blocks block): `true` enables the 15-day
+    window, `{ retentionDays: n }` pins a 1–35-day window, and `false` clamps to the
+    1-day minimum (Aurora cannot disable automated backups). When omitted it follows
+    the stack-wide `defaults.pointInTimeRecovery` (on under `production`, off under
+    `sandbox`).
+  - **CloudWatch log export** — the PostgreSQL engine log is exported to CloudWatch
+    Logs, with retention following the stack-wide `defaults.logRetention`.
+  - `iamAuthentication` remains intentionally off (access is exclusively via the RDS
+    Data API), and automatic secret rotation is documented as a follow-up.
+  
+  `@aws-blocks/create-blocks-app` scaffolds this default into new projects: every
+  template's `cdk.json` now sets the `@aws-blocks/bb-data:encryptStorageByDefault`
+  context flag, and the Amplify overlay sets the same flag via `setContext`. As a
+  result, a `Database` created in a newly scaffolded project encrypts its storage at
+  rest by default.
+  
+  **Breaking for existing stacks (0.x minor = breaking channel):** the
+  backup-retention and CloudWatch log-export changes alter synthesized cluster
+  properties, so existing stacks will show a CloudFormation diff.
+  
+  Storage encryption is **opt-in** specifically so it does **not** silently replace
+  existing clusters: with neither the context flag nor a `storageEncryptionKeyArn`
+  set, the `StorageEncrypted` property is left unset and the existing cluster is
+  untouched. Opting in (setting the flag, or supplying a key) on an
+  already-provisioned, unencrypted cluster requires a **replacement**, and the
+  replacement is destructive: RDS cannot encrypt an existing cluster in place, so
+  CloudFormation creates a **new, empty** encrypted cluster and repoints the stack.
+  There is no in-place path. The migration CustomResource does **not** re-run on a
+  cluster swap — its only CloudFormation properties are the service token and the
+  migrations hash, neither of which changes when the cluster is replaced — so the new
+  cluster comes up with **no schema**; migrations run only when a migration file
+  changes (which changes the migrations hash). Under production (RETAIN) the old
+  cluster is orphaned/unreferenced; under sandbox (DESTROY) it and its data are
+  deleted; under `removalPolicy: 'snapshot'` it is snapshotted as it is replaced
+  (though under production's `deletionProtection: true` the follow-up delete may fail
+  and leave it in place, unverified on a real deploy). The only safe route is to
+  snapshot the existing cluster, restore it with encryption enabled, then cut over.
+  Review the diff and snapshot before deploying. The replacement is symmetric:
+  turning encryption back off — removing the flag (or `storageEncryptionKeyArn`) from
+  a project that already deployed encrypted, e.g. deleting the cdk.json line or a
+  merge dropping it — also changes `StorageEncrypted` and so likewise replaces the
+  cluster (back to unencrypted), with the same new-empty-cluster / no-schema outcome.
+- 6d764f7: `AWS_BLOCKS_DISABLE_TELEMETRY` now accepts `true` and `yes` in addition to `1` (case-insensitive, trimmed).
+  
+  Previously only the exact value `1` disabled telemetry, so `AWS_BLOCKS_DISABLE_TELEMETRY=true` kept telemetry on. Both packages now accept `1`, `true` and `yes`; `0`, `false`, empty and unset keep telemetry enabled. The `blocks-telemetry --help` output lists the accepted values, and the D-010 usage note in `docs/DECISIONS.md` is updated to match.
+  
+  Behavior change (0.x minor = breaking channel): if you already export `AWS_BLOCKS_DISABLE_TELEMETRY=true` or `=yes` for another tool, Blocks telemetry is now disabled where it was previously still on.
+
+### Patch Changes
+
+- b8ec583: fix(create-blocks-app): set the storage-encryption flag in the api-only and sql templates
+  
+  The `api-only` and `sql` template `cdk.json` files did not set the
+  `@aws-blocks/bb-data:encryptStorageByDefault` context flag, so new projects
+  scaffolded from them started with Database storage encryption OFF — unlike every
+  other template. Add the `context` flag (boolean `true`) to both, matching the
+  other templates and the encrypt-by-default contract.
+- f1eb149: fix(telemetry): keep every event written to `--telemetry-file` instead of only the first
+  
+  The sink created the file with `O_CREAT | O_EXCL` and swallowed the resulting `EEXIST`, so a run that emitted more than one event recorded only the first. In `@aws-blocks/core` a `dev` server that retries a port bind emits `dev/FAIL` then `dev/SUCCESS`, and the success was lost. Events after the first are now appended to the same JSON array. A path that already existed when the run started is still left untouched. The container is unchanged — a JSON array, 2-space indented — so a consumer reading the first element is unaffected, but a file can now hold more than one event: anything asserting exactly one needs updating.
+- 74e5581: fix(templates): make the scaffolded e2e dev-server spawn cross-platform on Windows
+  
+  Every template's `test/e2e.test.ts` started the dev server with
+  `spawn('npm', [...])` and no shell, and tore it down with a POSIX
+  process-group kill (`process.kill(-pid)`). On Windows `npm` is `npm.cmd`,
+  which `child_process.spawn` cannot resolve without a shell, so the spawn threw
+  `spawn npm ENOENT`, the server never started, and the readiness probe timed
+  out — a customer running `npm run test:e2e` on Windows hit the same failure.
+  The spawn now passes `shell: isWin`, uses `detached: !isWin` (process groups
+  are POSIX-only), and the teardown reaps the tree with a synchronous
+  `spawnSync('taskkill', ['/T', '/F'])` on Windows (so the process cannot exit
+  before the reap completes) and keeps the existing graceful
+  `process.kill(-pid, 'SIGTERM')` group kill on POSIX. Behaviour on macOS/Linux
+  is unchanged.
+
 ## 0.2.0
 
 ### Minor Changes

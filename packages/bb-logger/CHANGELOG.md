@@ -1,5 +1,19 @@
 # @aws-blocks/bb-logger
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [6d764f7]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [f1eb149]
+  - @aws-blocks/core@0.7.0
+
 ## 0.2.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-lambda-compute",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "keywords": [
     "aws-blocks",
     "lambda",
@@ -53,7 +53,7 @@
     "test": "node --test dist/index.test.js dist/index.cdk.test.js dist/compute-resolution.test.js dist/tracing.cdk.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.6.0"
+    "@aws-blocks/core": "^0.7.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
