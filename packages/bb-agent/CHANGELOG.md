@@ -1,5 +1,206 @@
 # @aws-blocks/bb-agent
 
+## 0.5.0
+
+### Minor Changes
+
+- 8da1d1f: feat(bb-agent): compute-agnostic client streaming API — `createChat` + `realtimeTransport`
+  
+  Adds a redesigned client streaming surface that hides the runtime behind a single
+  transport seam, so the same frontend code works across runtimes:
+  
+  - `createChat({ transport, api })` — the client API. The common case is one call
+    (`chat.sendMessage('Hello')`); subscribe and run are fused so the
+    subscribe-before-send race can't surface. The flexible primitives `run()`
+    (produce) and `subscribe()` (consume) are exposed for fan-out, observer-only
+    attach, and decoupled produce/consume.
+  - `realtimeTransport(...)` — the Lambda + Realtime implementation of the
+    `ChatTransport` seam. Configure it once; call sites never name the runtime. A
+    future runtime supplies a different transport; nothing else on the client changes.
+  
+  Additive and non-breaking. The `stream()` / `getChannel()` / `resume()` server
+  methods are unchanged (the new transport is built on them). Only the `useChat`
+  client hook is now marked `@deprecated`, superseded by `createChat`.
+- 7c24547: fix(bb-agent): `/client` now exports the discriminated-union `ChatMessage` (BREAKING shape change — flagged for maintainer review)
+  
+  `@aws-blocks/bb-agent/client` previously shipped its own **flat** `ChatMessage`
+  (`metadata?: Record<string, any>`), which shadowed the discriminated union
+  `createChat` uses. `/client` now re-exports that union (and `ApprovalMetadata`)
+  from the canonical definition, so the two surfaces agree and the behaviour the
+  README documents is real at the `/client` entry point.
+  
+  **Breaking (type-level) for `/client` consumers of `ChatMessage`:**
+  
+  - `metadata` is no longer `Record<string, any>`. On a `user`/`assistant`
+    message it is `Record<string, JSONValue> | undefined`; on an `approval`
+    message, narrowing on `role === 'approval'` types it as `ApprovalMetadata`.
+  - Code that only reads `id` / `role` / `content` is unaffected. Code that read
+    an arbitrary `metadata.<key>` as `any` on an approval message must now narrow
+    by `role` first (`if (m.role === 'approval') m.metadata?.approved`). This is
+    the no-cast DX the union was introduced for.
+  
+  **Runtime behaviour change on the deprecated `useChat` hook:**
+  
+  - `useChat.loadConversation` now projects history through the same metadata
+    narrow `createChat.loadConversation` uses: non-object metadata (null, a
+    string, an array) on a `user`/`assistant` row now projects to `undefined`
+    rather than passing straight through, and an `approval` row's metadata is
+    projected into the typed `ApprovalMetadata`. A consumer that relied on a
+    non-object `metadata` value surviving on a user/assistant message should read
+    the new behaviour here.
+  
+  Also tightens `UseChatOptions.api.getConversation`'s return `metadata` to
+  `unknown` (from `Record<string, any>`), aligning the deprecated hook's adapter
+  shape with `createChat`'s `ChatConversationApi`. This widens what an adapter may
+  return, so it is not breaking for existing adapters.
+- de3c17c: useChat now forwards an optional consumer-supplied `refresh` callback to the Realtime subscription so reconnects mint fresh tokens and survive past the channel/connect token TTLs on long turns. The callback is channel-aware — `refresh?: (channelId: string) => Promise<ChatChannelDescriptor>` — so it re-mints for the channel actually in use rather than one captured at construction.
+  
+  useChat only holds the channelId plus the consumer's `subscribe` adapter; the channel descriptor is minted inside that adapter, which useChat cannot reach — so it cannot self-mint. `UseChatOptions` accepts the optional `refresh` that useChat binds to the current channelId and forwards to the subscription (as `refresh` on the `ChatSubscribeOptions` object). The transport calls it before each reconnect (never on the initial subscribe) to obtain a freshly-minted connect + channel token, so a subscription can outlive the channel (~1h) and connect (~2h) token TTLs.
+  
+  The same callback is available on the compute-agnostic surfaces: `CreateChatOptions.refresh` lets `createChat` bind the resolved channelId at the subscribe call site and forward it through the transport to the Realtime channel. `realtimeTransport` exposes it as `ChatTransport.subscribe`'s `opts.refresh`, a pure pass-through that the transport forwards into the Realtime channel's subscribe options while holding no refresh state.
+  
+  `refresh` must resolve to the RAW channel descriptor (the wire object with `__blocks`/token fields), not a hydrated channel client. Fully backward compatible: when omitted, a reconnect replays the original tokens exactly as before.
+- 9608dce: `createChat`/`realtimeTransport` (and `useChat`) now survive a mid-turn Realtime WebSocket disconnect/reconnect and send-path failures.
+  
+  Long-running agent turns (up to 8h on AgentCore) can outlive API Gateway's WebSocket limits (2h max connection, 10-min idle). Previously the client subscribed once and assumed the socket stayed healthy for the whole turn, so a reconnect gap could swallow the `done` chunk and leave `loading` stuck true, and a rejected/timed-out send (e.g. a 504 cold dispatch) left the spinner hanging with an orphaned empty assistant bubble. `createChat` is the preferred client API; `realtimeTransport` forwards the reconnect callbacks to the channel automatically, so the standard wiring is reconnect-safe with no extra app code. `useChat` (deprecated) retains the same behavior.
+  
+  - On reconnect, the client re-syncs authoritative state from the database (`getConversation` to recover the final assistant text if the turn completed during the gap; `getPendingInterrupts` to recover a missed interrupt). If the turn is still running, loading is preserved and streaming resumes on the resubscribed channel.
+  - `sendMessage` / `respondToInterrupt` (and the `run`/`resume` send path) now reset `loading` and surface `onError` when the underlying RPC rejects, dropping any empty placeholder.
+  - A bounded failsafe clears `loading` if no terminal chunk arrives within a window after a reconnect, so the spinner can never hang indefinitely.
+  - The `subscribe` seam accepts an options object (`{ onMessage, onDisconnect?, onReconnect? }`) in addition to a bare handler — backward compatible.
+
+### Patch Changes
+
+- 3fac52c: Tag the Agent's Bedrock SDK clients (`BedrockAgentCoreClient` for AgentCore Runtime invocation and `BedrockClient` for the model health check) with the Blocks user-agent chain, matching the other Building Blocks.
+- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
+  
+  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
+  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
+  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
+  and exports `installClientUserAgent`, an SDK middleware that appends the validated
+  token to the outgoing user agent. The 12 participating Building Blocks install it,
+  so native attribution rides the SDK user-agent chain AWS service telemetry already
+  counts. The Kotlin runtime already sends the header, so Kotlin
+  callers are attributed as soon as this ships; Swift and Dart follow.
+- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
+  
+  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
+  
+  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
+  
+  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
+  
+  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
+  
+  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
+  
+  ## Breaking change (why `@aws-blocks/core` is a minor)
+  
+  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
+  
+  ```ts
+  // before — message collapses to "Internal error" on the client
+  throw new Error('Todo not found');
+  
+  // after — status, message, and name all reach the client
+  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  ```
+  
+  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [1f8a412]
+- Updated dependencies [fa0406b]
+- Updated dependencies [251aed2]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [cbedb3c]
+- Updated dependencies [f1d2cd5]
+- Updated dependencies [de3c17c]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-file-bucket@0.3.0
+  - @aws-blocks/bb-distributed-table@0.2.1
+  - @aws-blocks/bb-realtime@0.3.0
+  - @aws-blocks/bb-logger@0.2.1
+
+## 0.4.1
+
+### Patch Changes
+
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
+- 0385f7e: `useChat`: widen `UseChatOptions.api.sendMessage` and `resume` return types from `Promise<void>` to `Promise<unknown>`.
+  
+  The natural backend methods return objects (`agent.stream()` → `{ channelId }`, `resume` wrappers → `{ ok: true }`), but `Promise<{ channelId }>` is not assignable to `Promise<void>` (TS2322), which forced customers into an await-and-discard wrapper. `useChat` awaits both calls only for completion and discards the resolved value, so `Promise<unknown>` — assignable-from both object results and `void` — lets natural-shape backends wire up directly while existing `void`-returning backends keep compiling. Type-only change; no runtime behavior change.
+- daf523a: docs(bb-agent): add a concrete React `useChat` example
+  
+  The `useChat` docs only showed the framework-agnostic callback form and warned
+  that it is "a factory function, not a React hook — call it once, not on every
+  render," without demonstrating the fix. Added a primary React example that holds
+  the instance in a `useRef` (created lazily so it survives re-renders), bridges
+  `onMessagesChange` / `onLoadingChange` into `useState`, cleans up with
+  `chat.destroy()` on unmount, and renders messages plus a send handler — directly
+  resolving the "call once" footgun. Included a one-line Next.js note (same
+  component, keep the `'use client'` directive) and kept the existing
+  framework-agnostic example as the baseline.
+- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
+  
+  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
+  
+  **Building Blocks declare VPC requirements via the constructor, not a method.**
+  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
+  requirements (a value, or a callback for values that depend on `fullId`) and
+  registers them in a central per-stack registry. This keeps the compile-time
+  forcing the previous `abstract getVpcRequirements()` provided — a block can't
+  silently omit its requirements — without a standing method on every subclass, and
+  gives the framework one place to read, deduplicate, and answer "does anything here
+  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
+  
+  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
+  function without a VPC declares `requiresVpc: true`; when one is needed and the
+  customer didn't bring their own, Blocks lazily creates a single shared VPC
+  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
+  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
+  bring-your-own override.
+  
+  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
+  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
+  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
+  compliance requirement to use specific subnets. Omit it to keep the default
+  (prefer isolated, fall back to `private-with-egress`).
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-distributed-table@0.2.0
+  - @aws-blocks/bb-file-bucket@0.2.1
+  - @aws-blocks/bb-logger@0.2.0
+  - @aws-blocks/bb-realtime@0.2.1
+
 ## 0.4.0
 
 ### Minor Changes

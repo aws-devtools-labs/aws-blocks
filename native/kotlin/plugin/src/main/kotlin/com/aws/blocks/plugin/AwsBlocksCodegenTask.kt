@@ -2,6 +2,7 @@ package com.aws.blocks.plugin
 
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
+import com.aws.blocks.kotlin.generator.RelayToRequirement
 import com.aws.blocks.kotlin.parser.OpenRpcParser
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
@@ -46,10 +47,14 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
     @get:Input
     abstract val visibility: Property<GeneratedVisibility>
 
-    /** Custom-scheme URI the app receives after OIDC sign-in completes. */
+    /** URI the backend relays back to once OIDC sign-in completes. */
     @get:Input
     @get:org.gradle.api.tasks.Optional
-    abstract val redirectUrl: Property<String>
+    abstract val relayTo: Property<String>
+
+    /** How strongly this project's targets need a relay target. */
+    @get:Input
+    abstract val relayToRequirement: Property<RelayToRequirement>
 
     /** Directory where generated `.kt` files are written. */
     @get:OutputDirectory
@@ -93,7 +98,8 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
         val generator = KotlinCodeGenerator(
             packageName = packageName.get(),
             internalVisibility = visibility.get() == GeneratedVisibility.Internal,
-            redirectUrl = redirectUrl.orNull,
+            relayTo = relayTo.orNull,
+            relayToRequirement = relayToRequirement.get(),
         )
         val codegenModel = CodegenModelBuilder().build(mergedModel)
         val result = generator.generate(codegenModel)

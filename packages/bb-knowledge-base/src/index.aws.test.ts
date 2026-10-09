@@ -468,7 +468,7 @@ describe('error classification — ValidationException', () => {
 		}
 	});
 
-	test('original error message is preserved in the mapped error for debugging', async () => {
+	test('original error message is preserved on cause (not the wire message) for debugging', async () => {
 		const cleanup = setKbEnv('TEST', 'ERR3');
 		const originalMsg = 'Specific validation error details from Bedrock service';
 		const err = new Error(originalMsg);
@@ -480,9 +480,17 @@ describe('error classification — ValidationException', () => {
 			await assert.rejects(
 				() => kb.retrieve('test', { filter: { x: { equals: 'y' } } }),
 				(e: Error) => {
+					// The wire-visible message is a stable BB string — the raw SDK
+					// text must NOT be interpolated into it (branded messages now
+					// cross the RPC wire). The raw message is retained for debugging
+					// on the non-enumerable `cause`.
 					assert.ok(
-						e.message.includes(originalMsg),
-						'Mapped error should preserve original message for debugging',
+						!e.message.includes(originalMsg),
+						'Wire message must not embed the raw SDK message',
+					);
+					assert.ok(
+						e.cause instanceof Error && e.cause.message.includes(originalMsg),
+						'Original SDK message should be preserved on cause for debugging',
 					);
 					return true;
 				},
@@ -496,7 +504,7 @@ describe('error classification — ValidationException', () => {
 // ── Error classification — other SDK exceptions ────────────────────────────
 
 describe('error classification — other SDK exceptions', () => {
-	test('ResourceNotFoundException maps to NotReady (actionable hint + original SDK message)', async () => {
+	test('ResourceNotFoundException maps to NotReady (actionable hint; raw SDK message on cause)', async () => {
 		const cleanup = setKbEnv('TEST', 'ERR4');
 		const err = new Error('No knowledge base with ID kb-xyz exists');
 		err.name = 'ResourceNotFoundException';
@@ -512,9 +520,15 @@ describe('error classification — other SDK exceptions', () => {
 						e.message.includes('cdk deploy'),
 						'NotReady message should keep the actionable deploy hint',
 					);
+					// The raw SDK message must NOT be appended to the wire-visible
+					// message; it is retained on the non-enumerable `cause`.
 					assert.ok(
-						e.message.includes('No knowledge base with ID kb-xyz exists'),
-						'NotReady message should append the original SDK message',
+						!e.message.includes('No knowledge base with ID kb-xyz exists'),
+						'NotReady wire message must not embed the raw SDK message',
+					);
+					assert.ok(
+						e.cause instanceof Error && e.cause.message.includes('No knowledge base with ID kb-xyz exists'),
+						'Original SDK message should be preserved on cause',
 					);
 					return true;
 				},
@@ -524,10 +538,11 @@ describe('error classification — other SDK exceptions', () => {
 		}
 	});
 
-	test('AccessDeniedException maps to RetrievalFailed and preserves message + original error as a non-enumerable cause', async () => {
+	test('AccessDeniedException maps to RetrievalFailed with a stable message; raw text + $metadata stay off the wire (on non-enumerable cause)', async () => {
 		const cleanup = setKbEnv('TEST', 'ERR5');
-		// Mimic the SDK error shape: $metadata carries a requestId that must never
-		// leak through JSON.stringify of the mapped (caller-facing) error.
+		// Mimic the SDK error shape: $metadata carries a requestId, and the message
+		// embeds the account/role/ARN detail that must never reach the wire — this
+		// is the AccessDenied leak the RPC-sanitization change closes.
 		const err = Object.assign(new Error('User is not authorized to perform bedrock:Retrieve'), {
 			$metadata: { requestId: 'req-abc-123' },
 		});
@@ -540,14 +555,22 @@ describe('error classification — other SDK exceptions', () => {
 				() => kb.retrieve('query'),
 				(e: Error) => {
 					assert.strictEqual(e.name, KnowledgeBaseErrors.RetrievalFailed);
+					// The wire-visible message is a stable BB string — the raw SDK
+					// authorization text (which can carry account id, role, ARN) must
+					// NOT appear in it now that branded messages cross the wire.
 					assert.ok(
-						e.message.includes('not authorized'),
-						'Error message should preserve the original SDK message',
+						!e.message.includes('not authorized'),
+						'Wire message must not leak the raw SDK authorization text',
 					);
 					assert.strictEqual(
 						e.cause,
 						err,
 						'Mapped error should attach the original SDK error as `cause`',
+					);
+					// The raw text is retained for server-side debugging on the cause.
+					assert.ok(
+						e.cause instanceof Error && e.cause.message.includes('not authorized'),
+						'Raw SDK message should be preserved on cause',
 					);
 					// `cause` must be NON-ENUMERABLE so JSON.stringify of the mapped
 					// error does not serialize the SDK error or leak its $metadata.
@@ -559,6 +582,10 @@ describe('error classification — other SDK exceptions', () => {
 					assert.ok(
 						!serialized.includes('req-abc-123'),
 						'SDK error $metadata/requestId must not leak through JSON.stringify',
+					);
+					assert.ok(
+						!serialized.includes('not authorized'),
+						'Raw SDK authorization text must not leak through JSON.stringify',
 					);
 					return true;
 				},
@@ -843,9 +870,16 @@ describe('waitUntilSynced', () => {
 						err.message.includes('last transient error'),
 						'timeout message should flag that the final polls were failing transiently',
 					);
+					// Surfaces the mapped error's stable NAME, never the raw SDK text —
+					// this Timeout error crosses the RPC wire, so 'Rate exceeded' must
+					// not appear in it. ThrottlingException maps to RetrievalFailed.
 					assert.ok(
-						err.message.includes('Rate exceeded'),
-						'timeout message should include the underlying transient detail',
+						err.message.includes(KnowledgeBaseErrors.RetrievalFailed),
+						'timeout message should name the stable mapped transient error',
+					);
+					assert.ok(
+						!err.message.includes('Rate exceeded'),
+						'timeout message must not leak the raw SDK transient text',
 					);
 					return true;
 				},

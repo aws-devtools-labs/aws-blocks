@@ -10,11 +10,13 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, openSync, writeSync, closeSync, constants } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { debuglog } from 'node:util';
+
+import { isCI as ciInfoIsCI } from 'ci-info';
 
 const debug = debuglog('blocks-telemetry');
 
@@ -27,26 +29,32 @@ const blocksVersion: string = JSON.parse(
 
 // ─── Consent ─────────────────────────────────────────────────────────────────
 
-function isCI(): boolean {
-  return !!(
-    process.env.CI ||
-    process.env.CONTINUOUS_INTEGRATION ||
-    process.env.BUILD_NUMBER ||
-    process.env.CODEBUILD_BUILD_ID ||
-    process.env.GITHUB_ACTIONS ||
-    process.env.GITLAB_CI ||
-    process.env.CIRCLECI ||
-    process.env.JENKINS_URL ||
-    process.env.TF_BUILD ||
-    process.env.BITBUCKET_BUILD_NUMBER ||
-    process.env.BUILDKITE ||
-    process.env.RENDER ||
-    process.env.TASKCLUSTER_ROOT_URL
-  );
+// Keep behaviorally identical to packages/core/src/telemetry/environment.ts.
+
+// Checked by the previous implementation; ci-info does not match these alone.
+const EXTRA_CI_ENV_VARS = ['CODEBUILD_BUILD_ID', 'JENKINS_URL', 'BITBUCKET_BUILD_NUMBER', 'TASKCLUSTER_ROOT_URL'];
+
+/** ci-info result (fixed at import) OR per-call extra checks; `CI=false` at startup disables both. */
+export function isCI(): boolean {
+  if (ciInfoIsCI) return true;
+  const env = process.env;
+  if (env.CI === 'false') return false;
+  return EXTRA_CI_ENV_VARS.some((key) => !!env[key]);
+}
+
+/**
+ * Whether an `AWS_BLOCKS_DISABLE_TELEMETRY` value means "disabled".
+ *
+ * Keep behaviorally identical to packages/core/src/telemetry/consent.ts.
+ */
+export function isDisableValue(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
 
 function isTelemetryEnabled(): boolean {
-  if (process.env.AWS_BLOCKS_DISABLE_TELEMETRY === '1') return false;
+  if (isDisableValue(process.env.AWS_BLOCKS_DISABLE_TELEMETRY)) return false;
 
   // Per-project config
   try {
@@ -73,6 +81,7 @@ const FIRST_RUN_NOTICE = `
 AWS Blocks collects anonymous usage data to improve the product.
 No customer content or PII is collected.
 To disable: npx blocks-telemetry --disable (or export AWS_BLOCKS_DISABLE_TELEMETRY=1)
+The env var accepts 1, true, or yes (case-insensitive).
 `;
 
 function getInstallationId(): string {
@@ -150,6 +159,8 @@ export function getTelemetryFilePath(): string | undefined {
   return undefined;
 }
 
+const ownedTelemetryFiles = new Set<string>();
+
 function writeToTelemetryFile(event: Record<string, unknown>): void {
   const filePath = getTelemetryFilePath();
   if (!filePath) return;  // getTelemetryFilePath already rejects empty/whitespace
@@ -165,9 +176,24 @@ function writeToTelemetryFile(event: Record<string, unknown>): void {
     const content = JSON.stringify([event], null, 2);
     writeSync(fd, content);
     closeSync(fd);
+    ownedTelemetryFiles.add(resolve(filePath));
   } catch (err: any) {
-    // EEXIST = file already existed → skip (protects user data)
+    // Appending only to a path this run created leaves a pre-existing file intact.
+    if (err?.code === 'EEXIST' && ownedTelemetryFiles.has(resolve(filePath))) {
+      appendToTelemetryFile(filePath, event);
+    }
     // All other errors silently ignored — telemetry must never affect commands
+  }
+}
+
+function appendToTelemetryFile(filePath: string, event: Record<string, unknown>): void {
+  try {
+    const events = JSON.parse(readFileSync(filePath, 'utf-8'));
+    if (!Array.isArray(events)) throw new Error('telemetry file is not a JSON array');
+    events.push(event);
+    writeFileSync(filePath, JSON.stringify(events, null, 2));
+  } catch (err) {
+    debug('failed to append telemetry event: %s', err instanceof Error ? err.message : String(err));
   }
 }
 

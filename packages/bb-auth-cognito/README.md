@@ -102,7 +102,7 @@ See the `SignInResult` and `SignInNextStep` types for the discriminated-union sh
 | `requireAuth(context)` | `Promise<CognitoUser>` | Throws 401 `NotAuthenticatedException` if no valid session. |
 | `checkAuth(context)` | `Promise<boolean>` | Boolean check — no throw. |
 | `getCurrentUser(context)` | `Promise<CognitoUser \| null>` | Returns user or `null`. Auto-refreshes expired tokens on AWS; the mock has no refresh-token concept, so an expired access token is treated as dead (session dropped, cookie cleared) and `null` is returned. |
-| `requireRole(context, role)` | `Promise<CognitoUser>` | Throws 403 `NotAuthorizedException` if user isn't in the group. |
+| `requireRole(context, role)` | `Promise<CognitoUser>` | Throws 403 `NotAuthorizedException` if user isn't in the group. Reads membership **live** (AWS: `AdminListGroupsForUser`; one extra Cognito call), so admin-driven group changes and revocations take effect on the next request — no re-login. See the session-freshness note under **Admin surface**. |
 | `fetchUserAttributes(context)` | `Promise<Record<string, string>>` | Return the signed-in user's attributes (live fetch from Cognito via `GetUserCommand`). |
 | `fetchAuthSession(context, options?)` | `Promise<AuthSession>` | Return `{ tokens: { idToken, accessToken }, userSub }` for the signed-in user, or `{ tokens: undefined }` when not signed in. Auto-refreshes if the access token has expired; pass `{ forceRefresh: true }` to rotate unconditionally. Shape mirrors Amplify-JS v6 `AuthSession`. Use when calling a non-AWS Blocks AWS service that needs a Cognito JWT — not for identity checks (use `requireAuth` / `getCurrentUser` for those). |
 
@@ -192,7 +192,7 @@ await auth.admin.addUserToGroup('alice', 'admins');   // group narrowed via Grou
 | `admin.scan()` | `AsyncIterable<AdminUser>` | Enumerate all users (paginates internally). |
 | `admin.revokeUserSessions(username)` | `Promise<void>` | Revoke the user's refresh tokens (AWS: `AdminUserGlobalSignOut`; mock: delete session records). New tokens can no longer be minted; see the session-freshness note for when this takes effect. |
 
-> **Session freshness.** A group change does not affect a user's **existing** session until their token refreshes — `requireRole` reads the `cognito:groups` claim, not live state. This is inherent Cognito behavior. The change applies on the next sign-in or `fetchAuthSession({ forceRefresh: true })`.
+> **Session freshness.** `requireRole` reads group membership **live** (AWS: `AdminListGroupsForUser`; mock: in-process state) on every call, so an admin's `addUserToGroup` (grant) and `removeUserFromGroup` (revoke) both take effect on the user's **next request**, with no re-login. The returned `CognitoUser.groups` reflects that live read. Scope note: this tracks *group membership* only, not account state — `admin.disableUser` doesn't touch membership (Cognito still lists a disabled user's groups), so `requireRole` keeps passing for a disabled user's live session until their token expires, even though their next sign-in is blocked; `admin.deleteUser` denies with **403** on the next guarded request (the guard fails closed rather than leaking Cognito's 404). For revoking sessions generally, see the `revokeUserSessions` note below. Note the cost/scope trade-off: this is one extra Cognito call per guarded request, and it applies to authorization only. Repeated `requireRole` calls **within a single request** are deduped to one `AdminListGroupsForUser` (request-scoped memo), so a handler that guards several times pays once. Be aware Cognito's admin-API quota is low and shared: putting this on the hot auth path means throttling can surface as `requireRole` failures across guarded routes at once — size the quota for your guarded traffic. The cheaper identity reads (`requireAuth` / `getCurrentUser` / `signIn`) still surface the `cognito:groups` **token claim**, which lags a live change until the next sign-in or `fetchAuthSession({ forceRefresh: true })`.
 >
 > `admin.revokeUserSessions(username)` revokes the user's **refresh tokens** so no new access tokens can be minted, but it does **not** invalidate an already-issued access token — a Blocks session whose access token is still valid keeps passing `checkAuth` / `requireAuth` until that token expires (verified against live Cognito). It is not an instant kill-switch on AWS. (The mock deletes the session record outright, so it *does* flip immediately there — a known mock-vs-AWS parity difference.) For a hard cap, lower `sessionTtlSeconds` / the access-token validity.
 
@@ -438,6 +438,12 @@ if (hasAuthError(next, AuthCognitoErrors.NotAuthorized)) {
 ```
 
 Rule of thumb: **throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Never match on the human-facing `error` string.
+
+Both `getAuthState()` and `setAuthState()` return an [`AuthState`](../auth-common/README.md#authstate). `AuthCognito` doesn't re-export the type; import it from `@aws-blocks/auth-common`, a direct dependency of this package:
+
+```typescript
+import type { AuthState } from '@aws-blocks/auth-common';
+```
 
 For the `setAuthState()` path, auth failures resolve to an error state instead
 of rejecting the promise. A non-retriable failure returns the normal signed-out

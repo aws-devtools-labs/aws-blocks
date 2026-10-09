@@ -19,6 +19,13 @@ CELL_TMP="/tmp/bench-${TASK:-default}-$$"
 mkdir -p "$CELL_TMP"
 export PW_RESULTS_JSON="${CELL_TMP}/pw-results.json"
 
+# Test-only mock switch, inherited by both the dev server and Playwright. Tasks
+# whose grader needs a server-side test backdoor gate that surface on BLOCKS_MOCK
+# and return null otherwise, so it is inert in a real deployment. Example:
+# cognito-profile's api.getLastCode exposes the most-recently delivered OTP
+# (the grader has no mailbox) only when this is set.
+export BLOCKS_MOCK=true
+
 # Pessimistic defaults up front, updated on success, so a failure still yields well-formed EVIDENCE.
 # build_status defaults "failed" (matches build_succeeded=false); the build step overwrites both.
 {
@@ -73,13 +80,18 @@ else
   } >> "$GITHUB_OUTPUT"
 fi
 
-# ── Dev server: launch fresh + discover its port from the framework banner ───
+# ── Dev server: launch fresh + discover its port two independent ways ────────
 # The verifier OWNS the server. Step 2 may have left a `tsx watch` supervisor alive, so first reap
 # that tree and free the front-door ports (3000/3001 only, never :3100). Under shell isolation the
 # agent's procs are benchagent-owned, so reap/free/probe go through sudo (unprivileged fallback).
-# Discovery anchors on the exact banner `AWS Blocks local server running on http://localhost:<port>`,
-# then a readiness gate waits (~60s) for it to answer HTTP <500; if it never does, APP_BASE_URL stays
-# empty and we proceed (the cell fails honestly rather than hanging).
+# Discovery uses TWO independent paths over a 90-iteration window (either confirms), sharing ONE
+# readiness bar — the app root `/` answers non-5xx (`< 500`). They differ only in how the port is found:
+# Path A parses it from the framework banner `AWS Blocks local server running on http://localhost:<port>`;
+# Path B probes the candidate ports for `/.blocks-sandbox/config.json` (served by our front door the
+# moment it binds), which finds the port independent of banner text/parse timing — its drift-proof win.
+# config.json is a discovery signal only (it answers before the proxied app on :3100 is up), so Path B
+# still confirms readiness with the same root `/` probe. If neither confirms, APP_BASE_URL stays empty
+# and we proceed (the cell fails honestly rather than hanging). See the inline block at the launch site.
 
 # Reap any dev server the agent left running. The framework records each in
 # .blocks-sandbox/dev-server.<port>.pid as {pid, ppid, port}; `ppid` is the `tsx watch` supervisor
@@ -114,12 +126,17 @@ reap_stale_dev_servers() {
 }
 reap_stale_dev_servers
 
-for p in 3000 3001; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
+# The front-door ports the dev server may bind (3000/3001 only, never :3100). Single source of truth:
+# the reap/free-port loop below AND the readiness probe further down both read $DEV_PORTS, so changing
+# the canonical set updates both.
+DEV_PORTS="3000 3001"
+
+for p in $DEV_PORTS; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
 for i in $(seq 1 10); do
   # Probe via sudo too: an isolated squatter is benchagent-owned and invisible to an unprivileged fuser.
-  { sudo -n fuser 3000/tcp 3001/tcp >/dev/null 2>&1 || fuser 3000/tcp 3001/tcp >/dev/null 2>&1; } || break
+  { sudo -n fuser $(printf '%s/tcp ' $DEV_PORTS) >/dev/null 2>&1 || fuser $(printf '%s/tcp ' $DEV_PORTS) >/dev/null 2>&1; } || break
   # Still held — re-issue the privileged kill before waiting.
-  for p in 3000 3001; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
+  for p in $DEV_PORTS; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
   sleep 1
 done
 
@@ -133,20 +150,60 @@ cleanup_dev_server() {
 }
 trap cleanup_dev_server EXIT
 
+# Dev-server stability: readiness is detected two INDEPENDENT ways, so a slow or
+# mismatched startup banner no longer false-negatives `dev_server_started` (which hard-caps
+# selector_contract + functional_completeness in scoring.mjs — a flaky miss was punishing apps that
+# were actually up). Both paths use the SAME readiness bar — the app root `/` answers non-5xx (`< 500`)
+# — and differ only in how they find the port. Path A: parse the port from the startup banner. Path B:
+# probe the candidate ports for `/.blocks-sandbox/config.json`, which OUR front door serves the moment
+# it binds; a hit identifies our port WITHOUT depending on the banner text or grep/parse timing (its
+# win — it survives a banner-string change or a slow/garbled log write). config.json is a PORT-DISCOVERY
+# signal, not a readiness one: it answers 200 before spawnFrontend() brings up the proxied app on :3100
+# (dev-server.ts:1024-1034), so both paths still confirm on the root `/` probe before accepting a port.
+# No NODE_OPTIONS heap cap: an OOM fix needs a repro (none yet), and guessing one could mask it.
 nohup npm run dev > "${CELL_TMP}/dev.log" 2>&1 &
 echo "$!" > "${CELL_TMP}/dev.pid"
 
 APP_BASE_URL=""
-for i in $(seq 1 60); do
+# Up to 90 iterations, one per ~1s idle plus the curl time. NOT a hard 90s wall-clock bound: each
+# iteration issues up to 5 `curl -m 5` probes (Path A root + per DEV_PORT: config.json then, on a hit,
+# the root), and a port that ACCEPTS then hangs — the loaded scenario this targets — can stretch an
+# iteration well past a few seconds, so worst-case wall clock exceeds 90s. The iteration cap, not a
+# timer, is what bounds the loop.
+for i in $(seq 1 90); do
+  # Path A — banner-derived port (exact port, when the banner shows up). Readiness = the app ROOT `/`
+  # answers non-5xx (`< 500`): `/` proxies to the frontend on :3100, so a `< 500` means the proxied app
+  # is actually up (a 502 = front door bound but frontend still booting). Path B below reuses this exact
+  # root check as its readiness bar, so the two paths agree on "ready" — they differ only in how the
+  # port is found (banner grep vs config.json probe).
   port=$(grep -oE 'AWS Blocks local server running on http://localhost:[0-9]+' "${CELL_TMP}/dev.log" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)
   if [ -n "${port:-}" ]; then
     code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${port}") || code=000
     if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
       APP_BASE_URL="http://localhost:${port}"
-      echo "[discover] dev server ready on :${port} (HTTP $code) after ${i}s"
+      echo "[discover] dev server ready on :${port} (HTTP $code) after ${i} iteration(s) (banner)"
       break
     fi
   fi
+  # Path B — drift-proof port DISCOVERY, then the SAME readiness bar as Path A. config.json is served
+  # by OUR front door synchronously (dev-server.ts), so it identifies the right port without depending
+  # on the banner text or grep/parse timing (its real win). But it answers 200 the instant the front
+  # door binds — BEFORE spawnFrontend() brings up the proxied app on :3100 (dev-server.ts:1024-1034),
+  # during which `/` still 502s. So config.json alone is a LAXER "ready" than Path A and would let
+  # dev_server_started=true fire while the app isn't serving. Fix: on a config.json hit (`< 400` =
+  # our app is on this port), confirm readiness with Path A's own root probe (`/` returns `< 500`)
+  # before accepting. Banner-text drift stays covered; the gate is never weaker than Path A.
+  for p in $DEV_PORTS; do
+    ccode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}/.blocks-sandbox/config.json") || ccode=000
+    if [ "$ccode" != "000" ] && [ "$ccode" -lt 400 ]; then
+      rcode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}") || rcode=000
+      if [ "$rcode" != "000" ] && [ "$rcode" -lt 500 ]; then
+        APP_BASE_URL="http://localhost:${p}"
+        echo "[discover] dev server ready on :${p} (config.json $ccode + root $rcode) after ${i} iteration(s) (readiness probe)"
+        break 2
+      fi
+    fi
+  done
   sleep 1
 done
 
@@ -154,9 +211,13 @@ if [ -n "$APP_BASE_URL" ]; then
   echo "dev_server_started=true" >> "$GITHUB_OUTPUT"
   echo "[discover] APP_BASE_URL=${APP_BASE_URL}"
 else
-  # Banner never appeared / port never became ready within the window. Record the signal + a brief
-  # diagnostic (pid liveness + log tail) onto result.json, then proceed with APP_BASE_URL empty.
-  echo "::warning::dev server banner never appeared / port never became ready within ~60s"
+  # Neither the banner NOR the config.json readiness probe confirmed within the window. Record the
+  # signal + a brief diagnostic (pid liveness + log tail) onto result.json, then proceed with
+  # APP_BASE_URL empty.
+  echo "::warning::dev server never became ready within the readiness window (all 90 loop iterations exhausted: no banner and no config.json on :3000/:3001)"
+  # Distinct dead-server / backend-crash signal so downstream can tell this apart from an agent that
+  # built a genuinely broken app (mirrors how build_succeeded/dev_server_started are emitted above).
+  echo "dev_server_status=dead" >> "$GITHUB_OUTPUT"
   dev_pid=""; [ -f "${CELL_TMP}/dev.pid" ] && dev_pid="$(cat "${CELL_TMP}/dev.pid" 2>/dev/null || true)"
   if [ -z "${dev_pid:-}" ]; then dev_pid_status="no-pidfile"
   elif kill -0 "$dev_pid" 2>/dev/null; then dev_pid_status="alive (pid=${dev_pid}) but not serving"
@@ -175,17 +236,45 @@ else
     try { r = JSON.parse(fs.readFileSync(p, "utf-8")); } catch {}
     r.dev_log_tail = process.env.DEV_LOG_TAIL || "";
     r.dev_pid_status = process.env.DEV_PID_STATUS || "";
+    r.dev_server_status = "dead";
     fs.writeFileSync(p, JSON.stringify(r, null, 2));
   ' || echo "::warning::failed to record dev_log_tail on result.json"
 fi
 export APP_BASE_URL
 
+# Only run Playwright when the dev server actually came up. If APP_BASE_URL is empty the server is
+# dead / the backend crashed (see the dead-server branch above) — launching Playwright with an empty
+# BLOCKS_URL would surface as bogus "invalid URL" test failures, so skip Playwright entirely and let
+# the recorded dev_server_status=dead signal drive the score instead. That signal classifies the cell
+# as a real FAIL — verdict 'fail', composite 0, and INCLUDED in the mean (DEAD_SERVER_KLASS in
+# lib/scoring.mjs) — so a backend crash HURTS the score rather than hiding as an excluded 'unknown',
+# while the failure root-cause still attributes owner=framework. The pessimistic defaults (tests 0/0/0,
+# dev_server_started=false) carry the honest signal and control still falls through to the
+# stable-evidence copy below.
+
+# Clear any stale /tmp evidence copies from a PRIOR cell BEFORE the Playwright guard below, so this
+# always runs even when a Playwright-install/chromium early-exit fires inside the guard (those `exit 0`
+# paths would otherwise skip the clear and leave the previous cell's pw-results.json/dev.log/build.log
+# for analyze-cell to misread as this cell's). The fresh `cp` staging stays after the guard (it needs
+# the evidence to exist first); on an early-exit there is nothing to stage, and a cleared /tmp is the
+# honest state — analyze-cell degrades to null on a missing file.
+# /tmp is sticky (+t): a stale copy may be benchagent-owned (the agent's isolated phase wrote it), so a
+# plain `rm` as the runner uid hits EPERM and — under `set -e` — would abort the step. Mirror the
+# reap/fuser lines above: `sudo -n rm` clears benchagent-owned files, unprivileged `rm` is the fallback,
+# and the trailing `|| true` guarantees this cleanup never aborts the step.
+sudo -n rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || true
+
+if [ -n "$APP_BASE_URL" ]; then
 # Record whether Playwright installed; on failure tests can't run, so emit the signal and bail.
 # Both the package install AND the chromium download must succeed before the signal flips true.
 if ! npm install --no-save --silent "@playwright/test@${PW_VERSION}"; then
   echo "::warning::playwright install failed; functional tests will not run"
   exit 0
 fi
+# Chromium is normally pre-provisioned before the agent phase (the "Provision
+# Playwright chromium" workflow step, same job-level PLAYWRIGHT_BROWSERS_PATH), making this a
+# cache-hit no-op. Kept (guarded) as a fallback so step 3 still works standalone; `playwright
+# install` is idempotent, so it self-heals a rare miss.
 if ! npx playwright install chromium > "${CELL_TMP}/pw-install.log" 2>&1; then
   echo "::warning::playwright chromium download failed; functional tests will not run"
   exit 0
@@ -252,6 +341,19 @@ if [ -f "$PW_RESULTS_JSON" ]; then
 else
   echo "::warning::Playwright produced no ${PW_RESULTS_JSON} (probably never ran); defaults retained"
 fi
+else
+  echo "::warning::dev server never came up (dead-server/backend-crash) — skipped Playwright to avoid masking it as invalid-URL test failures; tests stay at pessimistic defaults"
+fi
+
+# Stage the deep-failure evidence to STABLE /tmp paths for the later "analyze cell" step. CELL_TMP is
+# keyed on this script's PID, so it's gone by the time analyze-cell.mjs runs — mirror how the
+# trace/metrics already land at /tmp. Best-effort: a missing source or copy failure must never break
+# the green-regardless exit (analyze-cell degrades to null when a file is absent). Stale copies from a
+# PRIOR cell were already cleared before the Playwright guard above, so these cp's only ever add THIS
+# cell's evidence.
+cp "$PW_RESULTS_JSON" /tmp/pw-results.json 2>/dev/null || true
+cp "${CELL_TMP}/dev.log" /tmp/dev.log 2>/dev/null || true
+cp "${CELL_TMP}/build.log" /tmp/build.log 2>/dev/null || true
 
 # Always exit 0: real failures are already captured as $GITHUB_OUTPUT signals for the judge, and a
 # non-zero exit would break green-regardless.

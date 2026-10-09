@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { DatabaseErrors, wrapError, serializationConflict, uniqueConstraintConflict } from '../errors.js';
+import { DatabaseErrors, wrapError, reTagged, serializationConflict, uniqueConstraintConflict } from '../errors.js';
 
 /** PostgreSQL error code for unique constraint violations. */
 const PG_UNIQUE_VIOLATION = '23505';
@@ -34,13 +34,13 @@ export function translatePgError(e: unknown, engineName: string): never {
       // retriable — a blind retry of the same insert fails identically.
       throw uniqueConstraintConflict(e);
     }
-    if (code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)) {
-      e.name = DatabaseErrors.ConnectionFailed;
-    } else {
-      e.name = DatabaseErrors.QueryFailed;
-    }
-    console.debug(`[${engineName}] ${e.name}`, { code });
-    throw e;
+    const name = code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)
+      ? DatabaseErrors.ConnectionFailed
+      : DatabaseErrors.QueryFailed;
+    console.debug(`[${engineName}] ${name}`, { code });
+    // Brand the re-tagged error (stable BB message, raw driver error kept as
+    // `cause`) so its name crosses the wire without leaking driver text (D-003).
+    throw reTagged(name, e);
   }
   wrapError(e);
 }

@@ -104,6 +104,10 @@ The wire format now carries `name` (the BB-level error name) alongside `message`
 - Section 11 "Alternatives Considered" updated with reversal note
 - Implementation: `ApiError` class + `isBlocksError` in `core/errors.ts`, handler changes in `dev-server.ts` and `lambda-handler.ts`, client proxy in `client/index.ts`
 
+### Amendment (2026-09-30, default): message forwarding for branded BB errors
+
+An intermediate revision of the RPC error-leak sanitizer (`errorResponseFromCatch`) forwarded a Building Block error's `name` over the wire but **dropped its `message`** for a generic `"Internal error"`. That contradicted this decision — the wire is supposed to carry `name` **alongside `message`** — and it was a DX regression, since a BB error's message is BB-authored on purpose ("Batch contains 150 payloads, exceeds the 100 limit"). The serializer now forwards **both** the `name` and the `message` for a branded BB error (an error stamped by `brandBlocksError` / minted via `blocksError`), bringing the code back in line with this decision. The safety net is unchanged: a raw driver/SDK exception is never branded, so it still collapses to a nameless generic `500` with no message, and `Error.cause` still never crosses the wire. The load-bearing invariant this rests on: **a branded error's message must never embed raw driver/SDK text** — the two re-tag / message-copy sites that used to inline driver text (`bb-kv-store` / `bb-distributed-table` item-too-large remaps, and the `bb-data` / `bb-distributed-data` engine re-tag paths) now author a stable BB message and keep the raw error only as `cause`. A repo-scan guard (`packages/blocks/src/brand-coverage.test.ts`) fails when a BB error producer is not made wire-safe.
+
 ## D-004: Auth-first naming convention for auth Building Blocks
 
 **Date**: 2026-04-07
@@ -329,6 +333,7 @@ it is absent — the operational paths read the CA from the environment only.
 
 **Date:** 2026-06-10
 **Authors:** sarayev
+**Status**: Amended by [D-017](#d-017---telemetry-file-appends-every-event-from-the-run-that-created-the-file) (2026-10-05, varshpam) — clause 4 ("One event per file") and Alternative 4 ("Append to existing files") are superseded; a run now appends every event to the file it created. Clause 3 is narrowed: a path this run did not create is still skipped. The decision below is preserved as originally written.
 
 ### Context
 
@@ -343,7 +348,7 @@ Add a `--telemetry-file=/path` flag to all CLI scripts that writes telemetry eve
 3. **Skips pre-existing files** — if the target file already exists, the sink silently does nothing (protects user data)
 4. **One event per file** — each CLI invocation writes exactly one event; if the file already exists, it is skipped
 
-To capture events without sending to the server: combine `--telemetry-file` with `AWS_BLOCKS_DISABLE_TELEMETRY=1`. The file still captures, HTTP does not send.
+To capture events without sending to the server: combine `--telemetry-file` with `AWS_BLOCKS_DISABLE_TELEMETRY` set to `1`, `true`, or `yes` (case-insensitive, trimmed). The file still captures, HTTP does not send.
 
 ### Rationale
 
@@ -660,3 +665,76 @@ Most validators discard unrecognized keys when they produce their output (Zod `.
 - Issue #1007; PR #283 (this change), review threads from @soberm and @sarayev.
 - Per-BB mechanics: `packages/bb-distributed-table/DESIGN.md` D-DT-10.
 - Code: `packages/bb-distributed-table/src/{types.ts, errors.ts, index.aws.ts, index.mock.ts}`.
+
+## D-016: Off-region CloudFront alarm is always-on, with warn-and-skip when the account is unresolved
+
+**Date**: 2026-09-14
+**Authors:** sarayev
+
+### Context
+`AWS/CloudFront` metrics publish only in us-east-1, and a CloudWatch alarm can only evaluate a metric in its own region (rejected by aws-cdk-lib at synth). So Hosting's `CloudFront5xxRate` alarm cannot live in an off-region stack. Off-region it is placed in a synthesized us-east-1 support stack (`<stackName>-CfMonitoring-<addr>`) that owns its own KMS-encrypted SNS topic. Building that cross-region support stack requires a **concrete account at synth time**: CDK's cross-region export writer/reader machinery bakes real ARNs into the template, and a token account (`Aws.ACCOUNT_ID` / `Ref: AWS::AccountId`, the value an environment-agnostic stack carries) is rejected. See issue #481.
+
+Two edge cases have no valid us-east-1 stack we can synthesize:
+1. **Region resolved, account unresolved**: a legitimate single-synth, multi-account pipeline shape (deploy one template to many accounts).
+2. **Region unresolved** (fully env-agnostic): we can't decide at synth whether the deploy target is us-east-1, so we can't know whether a local alarm is even wrong.
+
+### Decision
+Off-region CloudFront alarm placement is **always on; there is no opt-out prop** (the removed `monitoring.cloudFrontAlarm: 'skip' | 'usEast1Stack'`). The notification surface is `monitoring.subscriptions` (endpoint subscriptions applied to every alarm topic) plus `hosting.monitoring.alarms` (raw alarms for custom handling).
+
+For the two edge cases above we **warn and skip only the CloudFront alarm** rather than throw:
+- **Unresolved account** (region resolved, off-region): skip the CloudFront alarm, emit a loud synth warning, and keep every other alarm. Do NOT hard-throw.
+- **Unresolved region** (env-agnostic): create the alarm locally (best effort) but emit a synth warning that it will never fire if the app deploys outside us-east-1.
+
+### Rationale
+- **"No opt-out" is the right default** because #481 was a *silent* dead alarm, and a knob to turn it off invites exactly the silent gap we are fixing.
+- **But a hard throw is too blunt for the unresolved-account case.** The earlier revision threw `MonitoringEnvRequiredError`, whose only escape was `monitoring.enabled: false`, which also drops the working regional SSR/image/DLQ alarms. That punishes a valid pipeline shape (ambient account) by taking down unrelated, correct monitoring.
+- **A loud synth warning is not the #481 failure mode.** #481 was invisible: the alarm read healthy and never fired. A warning in build output is the opposite: the operator is told plainly what is missing and how to get it (`env: { account, region }`). So warn-and-skip preserves the "no silent gap" principle without the collateral damage.
+- We cannot fill the account ourselves: `Stack.of(this).account` returns the same unresolved token, and forwarding it just moves the CDK cross-region synth error one line down.
+
+### Alternatives Considered
+- **Hard-throw `MonitoringEnvRequiredError` (previous revision):** rejected. Takes down all monitoring for a valid pipeline shape; see Rationale.
+- **Keep a `cloudFrontAlarm: 'skip'` opt-out prop (original design):** rejected. A general opt-out re-opens the silent-gap risk #481 is about; the warn-and-skip is narrow (only the genuinely-impossible cases), not a user knob.
+- **Support resource-target (Lambda/SQS) subscriptions in `subscriptions`:** deferred. A Lambda/SQS target in the app-region stack applied to the us-east-1 topic is an unresolvable cross-region reference. `subscriptions` is scoped to endpoint types (`EmailSubscription`/`UrlSubscription`); resource targets use `hosting.monitoring.alarms` / `alarmTopics` instead. Widening later (e.g. via a forwarder) is non-breaking.
+
+### References
+- Issue #481; PR #488
+- AWS CDK `Environment` docs: cross-stack references "require concrete region information and will cause this stack to emit synthesis errors."
+- `packages/hosting/src/constructs/hosting_construct.ts` (monitoring wiring), `us_east_1_monitoring_stack.ts`
+
+## D-017: `--telemetry-file` appends every event from the run that created the file
+
+**Date**: 2026-10-05
+**Authors:** varshpam
+
+### Context
+D-010 clause 4 specified "One event per file — each CLI invocation writes exactly one event". `writeToTelemetryFile` implemented this by opening the path with `O_CREAT | O_EXCL` and swallowing the resulting `EEXIST`, so the second and later events of a single run were discarded with no error. A `dev` server whose first bind fails emits `dev/FAIL`, reclaims the port, then emits `dev/SUCCESS` — and the file kept only the failure. The flag is the supported way to inspect what would be sent, so a run it cannot represent makes it unusable for that purpose.
+
+### Decision
+A run appends every event it emits to the file it created. The create path keeps `O_CREAT | O_EXCL`; on `EEXIST` the event is appended to the existing JSON array only when this process created that path, tracked in a per-process set. A path that already existed when the run started is never read or written. Ownership is keyed by the resolved absolute path, not by file identity, so the same relative spelling under a different working directory is a different file, while a path this run created and the user then replaced is still treated as ours.
+
+### Rationale
+- Clause 4 described the mechanism (`O_EXCL`) rather than a property worth keeping; the silent discard it produced was never argued for in D-010.
+- Alternative 4's stated risk is corrupting *user* files. The ownership set confines every write to a path this process created, so a path it did not create is never opened for read or write.
+- It matches the CDK CLI, which both sinks already cite in their JSDoc (`packages/core/src/telemetry/client.ts`, `packages/create-blocks-app/src/telemetry.ts`). Its `FileTelemetrySink` creates the file, refuses one that already exists, and appends each event to a JSON array with `readJsonSync` / `push` / `writeJSONSync`.
+- The on-disk shape is unchanged (a JSON array of events), so a consumer reading the first element is unaffected.
+
+### Alternatives Considered
+1. **One JSON event per line (JSONL):** rejected. The file is documented and consumed as JSON; every reader parses the whole file, so the format change buys nothing the array does not already give.
+2. **Append unconditionally:** rejected — this is D-010 Alternative 4, and it reverses clause 3 by letting a run modify a path it did not create.
+3. **One file per event (`events.json`, `events.1.json`, …):** rejected. Surprising for a flag that names a single file, and it pushes the joining work onto every consumer.
+4. **Write to a temp file and `rename` into place:** rejected. It would make the append crash-atomic, but `rename` over an existing path fails under transient Windows file locks (npm/cli#9021), and the repo supports Windows while no Windows job exercises this flag (`windows-e2e.yml` is the only one, and it seeds a telemetry id but never passes the flag). A run emits at most a handful of events, so the atomicity gain is small against a platform risk the chosen approach avoids: the create-then-append path was exercised on Windows Server 2022 (Node 22, `win32 x64`) and kept every event, left a pre-existing file byte-identical, and produced `EEXIST` from `O_EXCL` on NTFS.
+
+### Known limitation
+Ownership is per process, so two runs sharing one `--telemetry-file` path keep only the first run's events: the second gets `EEXIST`, finds the path absent from its own set, and writes nothing. That is D-010 clause 3 applied to a path this process did not create, and it is unchanged by this decision — the behavior is identical before and after.
+
+`create-blocks-app` carries a near-copy of the sink, not an identical one: its event parameter is `Record<string, unknown>` rather than `BlocksTelemetryEvent`, and it imports `dirname` directly instead of `path.dirname`. The duplication is deliberate — that package avoids depending on `@aws-blocks/core`, whose postinstall needs devDependencies absent from a registry install (see that file's header). The header justifies a separate implementation; it does not commit the two to parity.
+
+Two asymmetries are left standing on purpose. As of this decision `create-blocks-app` emits one event per process — `trackCommand` has a single call site (`index.ts:781`) and the package declares no `exports` — so its append branch is not reachable in production, and the containment test core carries (`still sends the HTTP event when the append throws`) is not ported to it. Its dispatch also has no enclosing `try/catch`, unlike core's, so a throw escaping the sink would reject `trackCommand`. Both sinks swallow their own errors, so nothing throws today. That gap predates this decision and is unchanged by it.
+
+### Supersedes
+- D-010 clause 4 ("One event per file — each CLI invocation writes exactly one event; if the file already exists, it is skipped") — a run now writes every event it emits to the file it created. The "already exists, it is skipped" half still holds for a path the run did not create.
+- D-010 Alternative 4 ("Append to existing files: Rejected because it risks corrupting user files. Fresh file per invocation is safer.") — that rejection stands for unconditional append. Gating the append on per-process ownership keeps the property the rejection protected: a path the run did not create is never opened for read or write.
+
+### References
+- D-010 (clauses 1–2 unchanged; clause 3 narrowed to paths this run did not create)
+- `aws/aws-cdk-cli`, `packages/aws-cdk/lib/cli/telemetry/sink/file-sink.ts` — create-then-append file sink

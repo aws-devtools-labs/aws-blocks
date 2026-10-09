@@ -16,7 +16,7 @@
  * inline — no separate Lambdas needed.
  */
 
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, brandBlocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { EventEmitter } from 'events';
@@ -50,6 +50,7 @@ export type {
 	RealtimeOptions,
 	SubscribeOptions,
 	DisconnectReason,
+	RealtimeChannelDescriptor,
 } from './types.js';
 
 // ── Connection record type ──────────────────────────────────────────────────
@@ -124,6 +125,7 @@ function getApigw(endpoint?: string, customUserAgent?: [string, string][]): ApiG
 			endpoint: ep,
 			...(customUserAgent ? { customUserAgent } : {}),
 		});
+		installClientUserAgent(client);
 		apigwClients.set(ep, client);
 	}
 	return client;
@@ -265,7 +267,7 @@ function serverSubscribe(
 	if (!wsUrl) {
 		const err = new Error('BLOCKS_RT_WS_URL not set — server-side subscribe unavailable');
 		err.name = 'ConnectionFailedException';
-		return { unsubscribe() {}, established: Promise.reject(err) };
+		return { unsubscribe() {}, established: Promise.reject(brandBlocksError(err)) };
 	}
 
 	const url = `${wsUrl}?token=${encodeURIComponent(connectToken)}`;
@@ -290,7 +292,7 @@ function serverSubscribe(
 			} else if (msg.type === 'error' && msg.channel === channel) {
 				const err = new Error(msg.message || 'Subscription rejected');
 				err.name = 'ConnectionFailedException';
-				rejectEstablished(err);
+				rejectEstablished(brandBlocksError(err));
 			} else if (msg.type === 'message' && msg.channel === channel) {
 				try { handler(msg.data); } catch {}
 			}
@@ -300,14 +302,14 @@ function serverSubscribe(
 	ws.onerror = () => {
 		const err = new Error('WebSocket error');
 		err.name = 'ConnectionFailedException';
-		rejectEstablished(err);
+		rejectEstablished(brandBlocksError(err));
 		if (onDisconnect) try { onDisconnect('error'); } catch {}
 	};
 
 	ws.onclose = (event) => {
 		const err = new Error('WebSocket closed');
 		err.name = 'ConnectionFailedException';
-		rejectEstablished(err);
+		rejectEstablished(brandBlocksError(err));
 		if (onDisconnect) {
 			const reason: import('./types.js').DisconnectReason = event.code === 1001 ? 'timeout' : event.code === 1006 ? 'error' : 'unknown';
 			try { onDisconnect(reason); } catch {}

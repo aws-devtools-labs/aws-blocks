@@ -1,5 +1,58 @@
 # @aws-blocks/auth-common
 
+## 0.1.9
+
+### Patch Changes
+
+- 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
+- fac0e75: fix(auth-common): Enter submits the Authenticator form from any field, not just the last
+  
+  The rendered auth form isn't a native `<form>`, so submit-on-Enter is wired
+  explicitly — but the handler was bound only to the *last* visible input. In any
+  multi-field form, pressing Enter in an earlier field did nothing: the username in
+  a username+password sign-in, or the verification code in a code+newPassword
+  confirm-reset form. Enter now submits from every visible field, matching native
+  form behavior.
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/core@0.6.0
+
+## 0.1.8
+
+### Patch Changes
+
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/core@0.5.0
+
 ## 0.1.7
 
 ### Patch Changes

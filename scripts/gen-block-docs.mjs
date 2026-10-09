@@ -32,25 +32,18 @@
  * Inclusion rule: every package under packages/ that has a README.md and is not in
  * EXCLUDED.
  *
- * NOTE: EXCLUDED + getPackages() are intentionally duplicated in this file and in
- * sync-catalog.mjs so each script stays dependency-free and independently
- * runnable (no shared module to resolve, no build step). They MUST agree on the
- * block set — keep the two in sync when editing. If this pair grows further,
- * extract a shared module instead.
+ * The block set (inclusion rule + EXCLUDED) is shared with sync-catalog.mjs via
+ * block-packages.mjs so the two generators can't drift.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, statSync, rmSync, cpSync } from 'node:fs';
-import { join, dirname, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve, sep } from 'node:path';
+import { getBlockPackages, packagesDir } from './block-packages.mjs';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const packagesDir = join(__dirname, '..', 'packages');
 const blocksDir = join(packagesDir, 'blocks');
 const outDir = join(blocksDir, 'docs');
 
-const EXCLUDED = new Set(['blocks', 'data-common', 'foundations', 'create-blocks-app', 'bb-lambda-compute']);
-
-const packages = getPackages();
+const packages = getBlockPackages();
 
 generatePerBlockDocs();
 copyMarkdown(blocksDir, outDir);
@@ -94,10 +87,3 @@ function copyMarkdown(srcDir, destDir) {
   }
 }
 
-// ─── Package discovery (duplicated from sync-catalog.mjs) ──────────────────────
-
-function getPackages() {
-  return readdirSync(packagesDir).filter(
-    (name) => !name.startsWith('.') && !EXCLUDED.has(name) && existsSync(join(packagesDir, name, 'README.md')),
-  );
-}

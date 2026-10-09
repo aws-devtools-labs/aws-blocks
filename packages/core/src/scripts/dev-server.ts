@@ -10,8 +10,7 @@ import { createConnection, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
-import { ApiError } from '../errors.js';
-import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX } from '../constants.js';
+import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, CLIENT_USER_AGENT_HEADER } from '../constants.js';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
 import { CORS_MAX_AGE } from '../cors.js';
@@ -21,8 +20,10 @@ import {
   successResponse,
   errorResponseFromCatch,
   methodNotFoundResponse,
+  rawRouteErrorFromCatch,
 } from '../rpc.js';
 import { redactToJson } from '../redact.js';
+import { isDispatchableExport, resolveApiMethod } from '../rpc-dispatch.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
 import { killFrontendTree, terminateProcessTree, findListenerPids, killListenerTree } from './process-tree.js';
@@ -59,7 +60,7 @@ export function buildDevCorsHeaders(requestOrigin: string): Record<string, strin
     'Access-Control-Allow-Origin': resolveDevCorsOrigin(requestOrigin),
     'Vary': 'Origin',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': CORS_MAX_AGE,
   };
@@ -449,6 +450,15 @@ export interface BindRetryDeps {
   warn: (msg: string) => void;
 }
 
+/** Schedule a front-door rebind retry; keep it refed so the retry deterministically fires. */
+export function scheduleBindRetry(
+  fn: () => void,
+  delayMs: number,
+  setTimer: (fn: () => void, delayMs: number) => NodeJS.Timeout = setTimeout,
+): NodeJS.Timeout {
+  return setTimer(fn, delayMs);
+}
+
 /**
  * Build the `:3000` front-door EADDRINUSE bind-retry handler. Extracted from the
  * `server.on('error')` closure so the retry *wiring* — the 1-based attempt
@@ -543,10 +553,11 @@ export type SingletonDecision = { action: 'proceed' } | { action: 'exit'; reason
  *
  * - **No / corrupt pidfile** → proceed (first start; startup reclaim covers any orphan socket).
  * - **Same pid** → proceed (defensive; the record is our own).
- * - **Same parent (`ppid`)** → proceed. `tsx watch` is the stable parent across
- *   reloads, so a matching parent means the watcher is relaunching OUR OWN script
- *   — not a competitor. A second `npm run dev` runs under a *different* watcher,
- *   so it never matches here. This carve-out is what preserves hot reload.
+ * - **Same parent (`ppid`) and dead recorded child** → proceed. `tsx watch` is
+ *   the stable parent across reloads, and it relaunches after the old child exits.
+ *   A live recorded child with the same parent can also happen when two
+ *   `npm run dev` jobs share a shell, so that still goes through the live-owner
+ *   check below.
  * - **Different, still-live owner actually holding the port** → exit cleanly with
  *   a clear message (do not spawn a competing supervisor).
  * - **Otherwise** (recorded owner is dead → stale pidfile, or the port is free)
@@ -560,8 +571,9 @@ export function evaluateSingleton(
 ): SingletonDecision {
   if (!existing) return { action: 'proceed' };
   if (existing.pid === self.pid) return { action: 'proceed' };
-  if (existing.ppid === self.ppid) return { action: 'proceed' }; // tsx-watch relaunch of our own supervisor
-  const ownerAlive = isAlive(existing.pid) || (existing.ppid > 1 && isAlive(existing.ppid));
+  const existingPidAlive = isAlive(existing.pid);
+  if (existing.ppid === self.ppid && !existingPidAlive) return { action: 'proceed' }; // tsx-watch relaunch after old child exit
+  const ownerAlive = existingPidAlive || (existing.ppid > 1 && isAlive(existing.ppid));
   if (ownerAlive && portInUse) {
     return { action: 'exit', reason: `dev server already running on :${existing.port} (pid ${existing.pid})` };
   }
@@ -689,7 +701,8 @@ export async function startDevServer(options: DevServerOptions) {
   // 5. Collect APIs for runtime
   const apis = new Map<string, any>();
   for (const [exportName, exportValue] of Object.entries(backend)) {
-    if (typeof exportValue === 'function' || typeof exportValue === 'object') {
+    // Same rule as the Lambda handler: no Building Block instances or `_`-private exports.
+    if (isDispatchableExport(exportName, exportValue)) {
       apis.set(exportName, exportValue);
     }
   }
@@ -1044,7 +1057,7 @@ export async function startDevServer(options: DevServerOptions) {
   const onEaddrinuse = createBindRetryController(port, {
     reclaim: (p) => reclaimPort(p),
     relisten: () => server.listen(port, onListening),
-    scheduleRetry: (fn, delayMs) => { setTimeout(fn, delayMs).unref?.(); },
+    scheduleRetry: (fn, delayMs) => { scheduleBindRetry(fn, delayMs); },
     onExhausted: () => process.exit(1),
     warn: (msg) => console.error(msg),
   });
@@ -1215,13 +1228,14 @@ function handleApiRequest(
 
         const apiMethods = typeof apiHandler === 'function' ? apiHandler(context) : apiHandler;
 
-        if (!apiMethods[rpcMethod]) {
+        const apiMethod = resolveApiMethod(apiMethods, rpcMethod);
+        if (!apiMethod) {
           res.writeHead(200, rpcHeaders);
           res.end(methodNotFoundResponse(`'${rpcMethod}' on API '${apiNamespace}'`, rpcId));
           return;
         }
 
-        const result = await apiMethods[rpcMethod](...args);
+        const result = await apiMethod(...args);
 
         const headerObj: Record<string, string | string[]> = {};
         for (const [key, value] of responseHeaders.entries()) {
@@ -1246,6 +1260,10 @@ function handleApiRequest(
         const errPayload = errorResponseFromCatch(error, rpcId);
         if (!process.env.BLOCKS_DEV_QUIET) {
           console.log('[rpc-err]', `${apiNamespace}.${rpcMethod}`, error?.name ?? 'Error', '-', error?.message);
+          // A re-tagged/branded error carries a stable BB message; the raw driver/SDK
+          // text lives on `cause` (server-side only). Surface it here so a SQL typo or
+          // connection error shows useful text in the local terminal.
+          if (error?.cause) console.log('  cause:', error.cause);
           if (error?.stack) console.log(error.stack);
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1261,14 +1279,21 @@ function handleApiRequest(
     let body = '';
     req.on('data', (chunk: string) => body += chunk);
     req.on('end', async () => {
+      // Hoisted above the try so the error catch below can reuse any headers
+      // the handler set on `ctx.response` before throwing (CORS, Set-Cookie,
+      // custom) — matching the production lambda-handler error path, which also
+      // re-emits `responseHeaders`. Declared inside the try, they would be out
+      // of catch scope and the error response would drop those headers in local
+      // dev while production kept them, hiding a CORS/cookie bug locally.
+      let responseStatus = 200;
+      const responseHeaders = new Headers({ 'Content-Type': 'application/json' });
+
       try {
         const headers = new Headers();
         Object.entries(req.headers).forEach(([k, v]) => {
           headers.set(k, Array.isArray(v) ? v[0] : v || '');
         });
 
-        let responseStatus = 200;
-        const responseHeaders = new Headers({ 'Content-Type': 'application/json' });
         let responseBody: any;
 
         const context = {
@@ -1301,11 +1326,29 @@ function handleApiRequest(
         res.writeHead(responseStatus, headerObj);
         res.end(responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '');
       } catch (error: any) {
-        const status = error instanceof ApiError ? error.status : 500;
-        const errBody: Record<string, any> = { error: error.message };
-        if (error.name && error.name !== 'Error') errBody.name = error.name;
-        res.writeHead(status, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(errBody));
+        if (!process.env.BLOCKS_DEV_QUIET) {
+          console.error('RawRoute Error:', error?.name ?? 'Error', '-', error?.message);
+          // A branded error carries a stable BB message; the raw driver/SDK text
+          // lives on `cause` (server-side only). Surface it here, matching the RPC
+          // catch above, so a developer debugging a raw-route failure sees it.
+          if (error?.cause) console.error('  cause:', error.cause);
+          if (error?.stack) console.error(error.stack);
+        }
+        const { status, body: errBody } = rawRouteErrorFromCatch(error);
+        // Reuse any headers the handler set on `ctx.response` before throwing
+        // (CORS, Set-Cookie, custom), the same way the success path and the
+        // production lambda-handler error path do. The sanitized error body is
+        // JSON, so Content-Type is forced to application/json on top.
+        const headerObj: Record<string, string | string[]> = {};
+        for (const [key, value] of responseHeaders.entries()) {
+          if (key === 'set-cookie') continue;
+          headerObj[key] = value;
+        }
+        const setCookies = responseHeaders.getSetCookie?.() ?? [];
+        if (setCookies.length > 0) headerObj['set-cookie'] = setCookies;
+        headerObj['content-type'] = 'application/json';
+        res.writeHead(status, headerObj);
+        res.end(errBody);
       }
     });
     return;

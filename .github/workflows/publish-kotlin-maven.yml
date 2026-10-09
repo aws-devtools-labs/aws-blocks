@@ -35,10 +35,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # For the merge event, check out main (the merged commit). For a manual
-          # dispatch, fall back to the dispatched ref (empty ref => default). Use a
-          # token that can push the release tag.
+          # dispatch, fall back to the dispatched ref (empty ref => default).
           ref: ${{ github.event_name == 'pull_request' && 'main' || '' }}
-          token: ${{ secrets.OPS_GITHUB_TOKEN }}
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
@@ -92,7 +90,7 @@ jobs:
         # so a failed Maven upload never creates an orphan tag.
         if: inputs.dry_run != true
         env:
-          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           VERSION=$(grep '^VERSION_NAME=' gradle.properties | cut -d= -f2)

@@ -1,5 +1,194 @@
 # @aws-blocks/bb-realtime
 
+## 0.3.0
+
+### Minor Changes
+
+- f1d2cd5: feat(bb-realtime): production Realtime middleware now auto-reconnects and resubscribes after an unexpected WebSocket drop
+  
+  The production (`aws-middleware`) Realtime transport previously gave up when the WebSocket
+  closed unexpectedly (e.g. an API Gateway idle timeout or an abnormal `1006` closure) — only the
+  local mock middleware recovered. It now transparently reconnects with exponential backoff (capped
+  retries), rebuilds the socket URL from the retained connection token, and resubscribes every active
+  channel by replaying its stored per-channel token so the server can re-authorize. The keep-alive
+  ping timer is re-armed on the fresh socket. Only a client-initiated teardown — unsubscribing the last
+  channel (or the internal reset/give-up paths) — is treated as terminal; an unexpected drop reconnects on ANY close code, including a clean `1000`/`1005`.
+  
+  `SubscribeOptions` gains an optional `onReconnect` callback, fired once after a successful
+  reconnect for a channel once THAT channel's resubscribe has been re-confirmed by the server
+  (after the corresponding `onDisconnect` for the drop that triggered it; never on the initial
+  subscribe). Callbacks are routed per-channel: a channel whose resubscribe is rejected (e.g. a
+  stale replayed token) receives `onDisconnect('error')` and NOT `onReconnect`, and never sees a
+  sibling channel's rejection.
+  
+  This change is behavior-additive: existing `subscribe(handler)` / `SubscribeOptions` callers are
+  unaffected and need no changes. Note for maintainers: on a `0.x` package this ships as a `minor`
+  per this repo's convention (minor is the breaking/behavior-change channel pre-1.0), since it alters
+  the runtime reconnect behavior of the production transport.
+- de3c17c: feat(bb-realtime): refresh channel/connect tokens on reconnect so subscriptions outlive token TTLs
+  
+  Adds an optional `refresh` callback to `SubscribeOptions`:
+  
+  ```ts
+  refresh?: () => Promise<RealtimeChannelDescriptor>;
+  ```
+  
+  A reconnect opens a *new* WebSocket, which means API Gateway re-checks the
+  connect token (carried in the socket URL, validated at `$connect`, ~2h TTL) and
+  the server re-checks the channel token on resubscribe (~1h TTL, per `utils.ts`
+  `mintChannelToken`'s 3600s default). Until now both the AWS and mock middlewares
+  replayed the *original* stored `wsUrl` + channel token on every reconnect, so a
+  reconnect more than ~1h after the descriptor was minted failed (the channel
+  token had expired and the resubscribe was rejected), and more than ~2h after
+  failed to even open the socket (`$connect` 403). Token minting is server-only
+  (it needs the signing secret), so the client cannot re-sign locally — it must
+  re-call the server method that produced the descriptor.
+  
+  When `refresh` is provided, both middlewares now call it **before** opening the
+  reconnect socket (never on the initial subscribe), then open with the fresh
+  connect token in the URL and resubscribe each channel with its fresh channel
+  token. `refresh` is registered per-channel: a connection multiplexing several
+  channels re-mints every live channel's token in parallel on reconnect (the
+  instance-scoped connect token taken from any one of them), and a channel whose
+  refresh fails falls back to its stored token with a channel-scoped rejection
+  rather than dropping its siblings. The refresh-before-open ordering is required
+  because the connect token lives in the socket URL and is validated at `$connect`,
+  so it must be fresh at construction time. If `refresh` rejects, the middleware
+  does not crash: it surfaces the failure via the existing `onDisconnect('error')`
+  path and falls back to the normal exponential-backoff reconnect so a later
+  attempt can retry.
+  
+  Fully backward compatible: with no `refresh` callback, a reconnect replays the
+  stored `wsUrl` + token exactly as before, and the initial (non-reconnect) open
+  stays synchronous and unchanged.
+  
+  This is a `minor` bump. `@aws-blocks/bb-realtime` is pre-1.0, where `minor` is
+  this repo's signal for an API addition; the new option is optional and additive,
+  and existing behavior is unchanged when it is omitted.
+
+### Patch Changes
+
+- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
+  
+  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
+  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
+  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
+  and exports `installClientUserAgent`, an SDK middleware that appends the validated
+  token to the outgoing user agent. The 12 participating Building Blocks install it,
+  so native attribution rides the SDK user-agent chain AWS service telemetry already
+  counts. The Kotlin runtime already sends the header, so Kotlin
+  callers are attributed as soon as this ships; Swift and Dart follow.
+- cbedb3c: fix(bb-realtime): validate publish size against the 128 KiB message quota, not the 32 KiB frame quota
+  
+  `publish` rejected payloads above 32 KiB, API Gateway's WebSocket *frame* size — but a
+  message is reassembled from multiple frames, so the real limit is the 128 KiB message
+  quota. Messages between 32 KiB and 128 KiB were refused client-side even though API
+  Gateway would have delivered them. The serialized envelope is now checked against
+  131,072 bytes: 131,072 is accepted and 131,073 is rejected.
+- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
+  
+  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
+  
+  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
+  
+  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
+  
+  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
+  
+  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
+  
+  ## Breaking change (why `@aws-blocks/core` is a minor)
+  
+  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
+  
+  ```ts
+  // before — message collapses to "Internal error" on the client
+  throw new Error('Todo not found');
+  
+  // after — status, message, and name all reach the client
+  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  ```
+  
+  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+- Updated dependencies [0e18d5b]
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/bb-app-setting@0.3.1
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-distributed-table@0.2.1
+  - @aws-blocks/bb-lambda-compute@0.5.1
+  - @aws-blocks/bb-logger@0.2.1
+
+## 0.2.1
+
+### Patch Changes
+
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
+- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
+  
+  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
+  
+  **Building Blocks declare VPC requirements via the constructor, not a method.**
+  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
+  requirements (a value, or a callback for values that depend on `fullId`) and
+  registers them in a central per-stack registry. This keeps the compile-time
+  forcing the previous `abstract getVpcRequirements()` provided — a block can't
+  silently omit its requirements — without a standing method on every subclass, and
+  gives the framework one place to read, deduplicate, and answer "does anything here
+  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
+  
+  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
+  function without a VPC declares `requiresVpc: true`; when one is needed and the
+  customer didn't bring their own, Blocks lazily creates a single shared VPC
+  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
+  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
+  bring-your-own override.
+  
+  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
+  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
+  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
+  compliance requirement to use specific subnets. Omit it to keep the default
+  (prefer isolated, fall back to `private-with-egress`).
+- 302090a: Local dev server: handle raw-socket errors during the WebSocket upgrade instead of crashing.
+  
+  The `upgrade` handlers routed the HTTP upgrade without attaching an `'error'` listener to the raw `net.Socket` first. A stale WebSocket client that reset its connection inside the upgrade window emitted ECONNRESET on a socket with no handler, so Node's default unhandled-`'error'` behaviour killed the dev server process right after port bind. Both upgrade paths now attach `socket.on('error', () => socket.destroy())` as their first statement, the HTTP server answers malformed/aborted requests via a `clientError` handler, and the `noServer` `WebSocketServer` logs server-level errors rather than throwing. The fix is scoped to the vulnerable socket — a genuine error anywhere else still crashes as before.
+- Updated dependencies [7b86b8e]
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/bb-app-setting@0.3.0
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-distributed-table@0.2.0
+  - @aws-blocks/bb-lambda-compute@0.5.0
+  - @aws-blocks/bb-logger@0.2.0
+
 ## 0.2.0
 
 ### Minor Changes

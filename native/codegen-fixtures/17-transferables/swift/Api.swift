@@ -9,7 +9,7 @@ public class Api {
     }
 
     /// Calls `api.getChannel`.
-    public func getChannel() async throws -> RealtimeChannel<ResultMessage> {
+    public func getChannel() async throws -> RealtimeChannel<GetChannel.ResultMessage> {
         let request = BlocksRequest(method: "api.getChannel", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
         guard let result else { throw RPCError(message: "Unexpected null result for api.getChannel") }

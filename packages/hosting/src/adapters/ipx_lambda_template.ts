@@ -216,10 +216,17 @@ const httpDomains = [
   ...parsedRemotePatterns.map((p) => p.hostname),
 ].filter(Boolean);
 
+// Never follow redirects on a remote fetch. isRemoteSourceAllowed and the
+// httpStorage \`domains\` list both validate only the URL the caller supplied;
+// a redirect from an allowlisted host would otherwise be followed to ANY target
+// (another host, or 127.0.0.1 inside the Lambda sandbox) without re-validation.
+// \`redirect: 'error'\` fails the fetch on a 3xx instead, so the allowlist holds
+// for every request IPX makes. An allowlisted host that serves its images via a
+// redirect must be allowlisted at its final location.
 const ipx = createIPX({
   storage: s3IpxStorage,
   ...(httpDomains.length > 0
-    ? { httpStorage: ipxHttpStorage({ domains: httpDomains }) }
+    ? { httpStorage: ipxHttpStorage({ domains: httpDomains, fetchOptions: { redirect: 'error' } }) }
     : {}),
 });
 
@@ -404,7 +411,10 @@ export const IPX_LAMBDA_PACKAGE_JSON = JSON.stringify(
     type: 'module',
     main: 'index.mjs',
     dependencies: {
-      ipx: '^3.0.0',
+      // Pinned exactly: the no-redirect SSRF guard depends on ipx forwarding
+      // `fetchOptions` to its fetch (verified on 3.1.1). A floating range would let
+      // the fetch semantics change at deploy time with no change to AWS Blocks.
+      ipx: '3.1.1',
       sharp: '^0.34.0',
     },
     // @aws-sdk/client-s3 is provided by the Lambda Node 20 runtime;

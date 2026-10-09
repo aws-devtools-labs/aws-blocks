@@ -33,6 +33,7 @@ class OidcClientTest {
         authorizeParamsStatus: HttpStatusCode = HttpStatusCode.OK,
         authorizeParamsErrorResponse: String = "{}",
         onIssuedState: ((String) -> Unit)? = null,
+        onAuthorizeParamsBody: ((String) -> Unit)? = null,
     ): HttpClient {
         return HttpClient(MockEngine) {
             install(HttpCookies)
@@ -53,6 +54,7 @@ class OidcClientTest {
                                 // state envelope so the client's verifyCsrf() check passes.
                                 val csrf = Json.parseToJsonElement((request.body as TextContent).text)
                                     .jsonObject["csrf"]!!.jsonPrimitive.content
+                                onAuthorizeParamsBody?.invoke((request.body as TextContent).text)
                                 val state = signedStateEnvelope(csrf)
                                 onIssuedState?.invoke(state)
                                 respond(
@@ -130,6 +132,29 @@ class OidcClientTest {
 
     private val localServer = BlocksServer("local", "http://localhost:3001")
 
+    /**
+     * Stands in for a platform launcher. [onAwaitRedirect] receives the authorize URL and
+     * returns the relay redirect the browser would have produced.
+     */
+    private class FakeLauncher(
+        private val sessionRelayTo: String = "myapp://auth/callback",
+        private val onAwaitRedirect: suspend (String) -> String,
+    ) : OidcPlatformLauncher {
+        var closeCount = 0
+            private set
+
+        override suspend fun openSession(configuredRelayTo: String): OidcRedirectSession =
+            object : OidcRedirectSession {
+                override val relayTo: String = sessionRelayTo
+                override suspend fun awaitRedirect(authorizeUrl: String): String =
+                    onAwaitRedirect(authorizeUrl)
+
+                override fun close() {
+                    closeCount++
+                }
+            }
+    }
+
     @Test
     fun `fromJson parses providers`() = runTest {
         val httpClient = createMockClient()
@@ -195,11 +220,9 @@ class OidcClientTest {
         val httpClient = createMockClient(onIssuedState = { issuedState = it })
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
-        client.platformLauncher = object : OidcPlatformLauncher {
-            override suspend fun launch(authorizeUrl: String): String {
-                capturedUrl = authorizeUrl
-                return "myapp://auth/callback?code=test-code&state=$issuedState"
-            }
+        client.platformLauncher = FakeLauncher { authorizeUrl ->
+            capturedUrl = authorizeUrl
+            "myapp://auth/callback?code=test-code&state=$issuedState"
         }
 
         val user = client.signIn("google")
@@ -224,9 +247,7 @@ class OidcClientTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
-        client.platformLauncher = object : OidcPlatformLauncher {
-            override suspend fun launch(authorizeUrl: String): String = ""
-        }
+        client.platformLauncher = FakeLauncher { "" }
 
         val exception = shouldThrow<OidcUnknownProviderException> {
             client.signIn("unknown-provider")
@@ -235,25 +256,12 @@ class OidcClientTest {
     }
 
     @Test
-    fun `signIn throws when platform launcher is unavailable`() = runTest {
-        val httpClient = createMockClient()
-        val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
-
-        shouldThrow<Exception> {
-            client.signIn("google")
-        }
-    }
-
-    @Test
     fun `signIn throws on state mismatch`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
-        client.platformLauncher = object : OidcPlatformLauncher {
-            override suspend fun launch(authorizeUrl: String): String {
-                return "myapp://auth/callback?code=test-code&state=wrong-state"
-            }
+        client.platformLauncher = FakeLauncher {
+            "myapp://auth/callback?code=test-code&state=wrong-state"
         }
 
         val exception = shouldThrow<OidcCallbackException> {
@@ -267,10 +275,9 @@ class OidcClientTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
-        client.platformLauncher = object : OidcPlatformLauncher {
-            override suspend fun launch(authorizeUrl: String): String {
-                return "myapp://auth/callback?error=access_denied&error_description=User+cancelled&state=server-signed-state-envelope"
-            }
+        client.platformLauncher = FakeLauncher {
+            "myapp://auth/callback?error=access_denied&error_description=User+cancelled" +
+                "&state=server-signed-state-envelope"
         }
 
         val exception = shouldThrow<OidcCallbackException> {
@@ -287,9 +294,7 @@ class OidcClientTest {
         )
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
-        client.platformLauncher = object : OidcPlatformLauncher {
-            override suspend fun launch(authorizeUrl: String): String = ""
-        }
+        client.platformLauncher = FakeLauncher { "" }
 
         shouldThrow<OidcCallbackException> {
             client.signIn("google")
@@ -301,11 +306,7 @@ class OidcClientTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
-        client.platformLauncher = object : OidcPlatformLauncher {
-            override suspend fun launch(authorizeUrl: String): String {
-                throw OidcCancelledException()
-            }
-        }
+        client.platformLauncher = FakeLauncher { throw OidcCancelledException() }
 
         shouldThrow<OidcCancelledException> {
             client.signIn("google")
@@ -317,10 +318,8 @@ class OidcClientTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
-        client.platformLauncher = object : OidcPlatformLauncher {
-            override suspend fun launch(authorizeUrl: String): String {
-                return "myapp://auth/callback?state=server-signed-state-envelope"
-            }
+        client.platformLauncher = FakeLauncher {
+            "myapp://auth/callback?state=server-signed-state-envelope"
         }
 
         val exception = shouldThrow<OidcCallbackException> {
@@ -334,10 +333,8 @@ class OidcClientTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
-        client.platformLauncher = object : OidcPlatformLauncher {
-            override suspend fun launch(authorizeUrl: String): String {
-                return "myapp://auth/callback?code=test-code"
-            }
+        client.platformLauncher = FakeLauncher {
+            "myapp://auth/callback?code=test-code"
         }
 
         val exception = shouldThrow<OidcCallbackException> {
@@ -431,12 +428,10 @@ class OidcClientTest {
 
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
-        client.platformLauncher = object : OidcPlatformLauncher {
-            override suspend fun launch(authorizeUrl: String): String {
-                // Reflect the issued state back from the authorize URL so it matches the envelope.
-                val state = Url(authorizeUrl).parameters["state"]
-                return "myapp://auth/callback?code=test-code&state=$state"
-            }
+        client.platformLauncher = FakeLauncher { authorizeUrl ->
+            // Reflect the issued state back from the authorize URL so it matches the envelope.
+            val state = Url(authorizeUrl).parameters["state"]
+            "myapp://auth/callback?code=test-code&state=$state"
         }
 
         client.signIn("google")
@@ -470,16 +465,51 @@ class OidcClientTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
-        client.platformLauncher = object : OidcPlatformLauncher {
-            override suspend fun launch(authorizeUrl: String): String {
-                throw OidcCancelledException()
-            }
-        }
+        client.platformLauncher = FakeLauncher { throw OidcCancelledException() }
 
         client.authState.value shouldBe OidcAuthState.Loading
 
         runCatching { client.signIn("google") }
 
         client.authState.value shouldBe OidcAuthState.Loading
+    }
+
+    @Test
+    fun `signIn closes the session when the exchange fails`() = runTest {
+        var issuedState: String? = null
+        val httpClient = createMockClient(
+            exchangeStatus = HttpStatusCode.InternalServerError,
+            onIssuedState = { issuedState = it },
+        )
+        val element = Json.parseToJsonElement(testDescriptor)
+        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val launcher = FakeLauncher { "myapp://auth/callback?code=c&state=$issuedState" }
+        client.platformLauncher = launcher
+
+        shouldThrow<OidcExchangeException> { client.signIn("google") }
+
+        launcher.closeCount shouldBe 1
+    }
+
+    @Test
+    fun `signIn sends the session relay target rather than the configured one`() = runTest {
+        var capturedRelayTo: String? = null
+        var issuedState: String? = null
+        val httpClient = createMockClient(
+            onIssuedState = { issuedState = it },
+            onAuthorizeParamsBody = { body ->
+                capturedRelayTo = Json.parseToJsonElement(body)
+                    .jsonObject["relayTo"]?.jsonPrimitive?.content
+            },
+        )
+        val element = Json.parseToJsonElement(testDescriptor)
+        val client = OidcClient.fromJson(element, httpClient, localServer, "configured://ignored")
+        client.platformLauncher = FakeLauncher(sessionRelayTo = "http://127.0.0.1:9999/oidc/callback") {
+            "http://127.0.0.1:9999/oidc/callback?code=test-code&state=$issuedState"
+        }
+
+        client.signIn("google")
+
+        capturedRelayTo shouldBe "http://127.0.0.1:9999/oidc/callback"
     }
 }

@@ -76,12 +76,15 @@ jobs:
       github.event_name == 'push' ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository)
-    # Union token so the reusable workflow's per-job permissions resolve: both
-    # bench and summary narrow to id-token:write (OIDC -> Bedrock + S3) +
-    # contents:read. No pull-requests:write — the bench posts no PR comment
-    # (the scoreboard is the Actions run summary).
+    # Union token so the reusable workflow's per-job permissions resolve: a reusable workflow's job
+    # permissions are CAPPED DOWN to this caller token, never widened — so every permission any job
+    # in agent-bench.yml needs must be granted HERE. bench narrows to id-token:write (OIDC -> Bedrock
+    # + S3) + contents:read; summary additionally needs pull-requests:write to post the sticky bench
+    # report comment on the PR. Without it here, summary's own pull-requests:write resolves to no
+    # access and the comment step 403s silently.
     permissions:
       id-token: write
       contents: read
+      pull-requests: write
     uses: ./.github/workflows/agent-bench.yml
     secrets: inherit

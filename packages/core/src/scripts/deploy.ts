@@ -10,12 +10,18 @@ import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
-import { runStreaming, buildCdkDeployArgs } from './deploy-stream.js';
+import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
   projectRoot: string;
 }
+
+// Re-exported from deploy-stream (the shared module) so existing importers of
+// `./deploy.js` — including deploy.test.ts — keep resolving it here while
+// sandbox() imports the same helper without pulling in deploy()'s dependency
+// chain.
+export { formatDeploySignal };
 
 export async function deploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
@@ -28,7 +34,7 @@ export async function deploy(options: DeployOptions) {
 
     // Fail fast if AWS credentials are missing/expired, before generating the
     // client and spending time in synth only to hit an opaque CDK credential error.
-    await assertAwsCredentials('deploy');
+    await assertAwsCredentials({ command: 'deploy', projectRoot: options.projectRoot });
 
     // Provision secrets for production. projectRoot must match the root cdk
     // synth uses (passed as --context below) so the written parameter name
@@ -65,6 +71,12 @@ export async function deploy(options: DeployOptions) {
     console.log('   Streaming CloudFormation events below; the deploy keeps running if this');
     console.log('   process is backgrounded (press Ctrl-C, or send SIGTERM twice, to abort).');
 
+    // Captured from the CDK progress stream the moment CloudFront's URL appears
+    // — well before CREATE_COMPLETE and the post-run outputs.json read. Printing
+    // it early means a deploy that is still converging, or gets killed at a
+    // caller's timeout, has already surfaced where the frontend lives.
+    let earlyHostingUrl: string | undefined;
+
     try {
       await runStreaming(
         "npx",
@@ -79,7 +91,17 @@ export async function deploy(options: DeployOptions) {
             ...process.env,
             NODE_OPTIONS: '--conditions=cdk',
             ...getCdkTelemetryEnv('production')
-          }
+          },
+          onHostingUrl: (url) => {
+            earlyHostingUrl = url;
+            // Not the canonical BLOCKS_DEPLOYED line (that needs the API URL,
+            // known only from outputs.json below). This is an early, greppable
+            // frontend-URL line so a caller learns where the app lives even if
+            // the process is killed before the deploy fully completes. Its label
+            // deliberately differs from the final `🌐 Frontend URL:` line so a
+            // naive grep does not match both — the early line says "converging".
+            console.log(`\n🌐 Frontend deploying to: ${url}`);
+          },
         }
       );
     } catch (error) {
@@ -100,7 +122,7 @@ export async function deploy(options: DeployOptions) {
     
     const hostingUrl = Object.entries(stackOutputs).find(([key]) => 
       key.includes('Hosting') && key.includes('Url')
-    )?.[1];
+    )?.[1] ?? earlyHostingUrl;
     
     if (!apiUrl) {
       throw new Error('Could not find API URL in CDK outputs');
@@ -117,5 +139,11 @@ export async function deploy(options: DeployOptions) {
     if (hostingUrl) {
       console.log(`🌐 Frontend URL: ${hostingUrl}`);
     }
+
+    // Machine-readable completion signal — a single stable line a caller (a
+    // coding agent, a CI step, a script) can grep for "deploy done + where it
+    // lives" without parsing CloudFormation output or polling the stack. Always
+    // the LAST line on the success path.
+    console.log(`\n${formatDeploySignal(apiUrl, hostingUrl)}`);
   });
 }
