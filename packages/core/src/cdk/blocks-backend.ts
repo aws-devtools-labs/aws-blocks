@@ -14,6 +14,7 @@ import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
+import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
@@ -286,6 +287,11 @@ export class BlocksBackend extends Construct {
 		this.backendHandlerPath = props.backendHandlerPath;
 		this.backendModulePath = props.backendCDKPath;
 		this._vpcOptions = props.defaults.vpc;
+
+		// Brand as a backend root so getBlocksRoot() finds this by walking the
+		// construct tree — the key that keeps two BlocksBackends in one cdk.Stack
+		// independent (see root-registry.ts). Set before any child BB is built.
+		(this as unknown as Record<symbol, boolean>)[BLOCKS_BACKEND_ROOT] = true;
 
 		// Expose self to Building Blocks at CDK time
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;

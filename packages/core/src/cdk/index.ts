@@ -19,6 +19,7 @@ import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
+import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
@@ -44,6 +45,7 @@ export { finalizeConfigRegistry, getConfigLocation, registerConfig } from './con
 export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
+export { getBlocksRoot, getBlocksRootId, getOrCreateOnRoot } from './root-registry.js';
 export { synthGuard } from './synth-guard.js';
 export { finalizeTracing, registerTracer } from './tracer-registry.js';
 export { getVpcContext } from './vpc.js';
@@ -118,6 +120,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		this.backendModulePath = props.backendCDKPath;
 		this.defaults = props.defaults;
 		this._vpcOptions = props.defaults.vpc;
+
+		// Brand as a backend root so getBlocksRoot() can find this by walking the
+		// construct tree (see root-registry.ts). Set before any child Scope/BB is
+		// constructed below, so their up-walk resolves to this stack.
+		(this as unknown as Record<symbol, boolean>)[BLOCKS_BACKEND_ROOT] = true;
 
 		// Set globalThis so Building Blocks attach directly to this stack
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
@@ -242,13 +249,8 @@ export class Scope extends Construct {
 	 * the constructor; the result is cached in {@link root}.
 	 */
 	private resolveRoot(): BlocksStack | BlocksBackend {
-		let current: Construct = this;
-		while (current.node.scope) {
-			current = current.node.scope as Construct;
-			if (current instanceof BlocksStack || current instanceof BlocksBackend) {
-				return current;
-			}
-		}
+		const found = findBackendRoot(this);
+		if (found) return found as BlocksStack | BlocksBackend;
 		// Fallback to the ambient stack. In production this is always a real
 		// BlocksStack/BlocksBackend; the cast also admits the test doubles that set
 		// globalThis.CURRENT_BLOCKS_STACK to a stub exposing the same surface.
@@ -365,13 +367,8 @@ export class Scope extends Construct {
 		// BlocksStack/BlocksBackend and read its defaults, so several backends in
 		// one stack each keep their own posture. Falls back to the ambient stack,
 		// then to the production preset when none was registered.
-		let current: Construct = this;
-		while (current.node.scope) {
-			current = current.node.scope as Construct;
-			if (current instanceof BlocksStack || current instanceof BlocksBackend) {
-				return current.defaults;
-			}
-		}
+		const found = findBackendRoot(this) as (BlocksStack | BlocksBackend) | undefined;
+		if (found) return found.defaults;
 		const ambient = ((globalThis as any).CURRENT_BLOCKS_STACK as { defaults?: BlocksDefaults } | undefined)
 			?.defaults;
 		if (ambient) return ambient;
