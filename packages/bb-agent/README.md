@@ -150,6 +150,7 @@ Model configuration is optional. When omitted, the agent defaults to `BedrockMod
 | `endpoint` | `string` | API endpoint. For openai-api (defaults to api.openai.com). |
 | `apiKey` | `string \| () => Promise<string>` | API key for openai-api. Accepts a string or async resolver. Falls back to `OPENAI_API_KEY` env var. |
 | `inferenceConfig` | `{ temperature?, topP?, maxTokens?, stopSequences? }` | Optional inference parameters. |
+| `cannedResponses` | `Record<string, string> \| string` | Canned-provider response dictionary, or path to a JSON dictionary. Ignored by real model providers. |
 
 ```typescript
 import { Agent } from '@aws-blocks/bb-agent';
@@ -676,6 +677,28 @@ The CannedProvider is a custom Strands model provider that requires no network o
 - Triggers tool calls when the prompt mentions a tool name (e.g., "get order" triggers `getOrderStatus`)
 - Generates valid tool inputs from Zod schemas, respecting schema `default` values (from `.default()`) before falling back to type-based placeholders (`'sample'`, `1`, `true`, `[]`)
 - Streams responses word by word, matching the same protocol as real providers
+
+#### Custom text responses
+
+Set `cannedResponses` on a canned model configuration to replace the built-in weather/order/help dictionary:
+
+```typescript
+const agent = new Agent(scope, 'assistant', {
+  systemPrompt: 'Help the user.',
+  model: {
+    local: {
+      provider: 'canned',
+      cannedResponses: { 'reset password': 'Open Settings → Security to reset your password.' },
+    },
+  },
+});
+```
+
+Keys match literal phrases in the latest message, case-insensitively with flexible internal whitespace and word boundaries. Punctuation is literal, and the first matching dictionary entry in JavaScript object enumeration order wins: array-index keys such as `"2"` and `"10"` are visited in ascending numeric order before other string keys, which retain insertion order. Values are emitted verbatim, including whitespace and empty strings. Tool-result summaries and tool calls take precedence; unmatched text still receives the generic canned fallback. Omitting `cannedResponses` preserves the existing responses and streaming behavior.
+
+Alternatively, use `cannedResponses: './canned-responses.json'`, with a JSON object such as `{"reset password":"Open Settings → Security."}`. Relative paths resolve against the process working directory when the provider is constructed. The provider rereads and validates the file once per text-response selection, then uses that snapshot for the request; tool paths do not read it. There is no watcher or restart requirement. Missing or unreadable files, malformed JSON, non-object dictionaries, non-string values, and whitespace-only keys fail clearly. The next request retries, so correcting the file allows the same provider to recover.
+
+Runtime writers should write complete JSON to a temporary file in the same directory and atomically rename it over the configured file. This prevents requests from observing a partially written dictionary.
 
 #### Canned Hints — `cannedExamples` and `cannedTriggers`
 

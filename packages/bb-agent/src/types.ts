@@ -19,6 +19,12 @@ export interface ModelConfig {
 	endpoint?: string;
 	/** API key for openai-api provider. Accepts a string or an async resolver (e.g., `() => appSetting.get()`). Falls back to OPENAI_API_KEY env var. */
 	apiKey?: string | (() => Promise<string>);
+	/**
+	 * Canned provider phrase-to-response dictionary, or a path to a JSON dictionary. Custom entries replace built-in keyword responses.
+	 * A path resolves from the current working directory when the model is created and is read once per text selection; tool calls and summaries do not read it.
+	 * Correct a failed file request and retry the next request. Replace files atomically to avoid exposing partial JSON to a selection.
+	 */
+	cannedResponses?: Record<string, string> | string;
 	inferenceConfig?: InferenceConfig;
 	guardrails?: GuardrailsConfig;
 }
