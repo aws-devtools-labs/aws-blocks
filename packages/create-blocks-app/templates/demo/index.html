@@ -3,18 +3,19 @@
 <head>
   <title>AWS Blocks Demo</title>
   <style>
-    body { font-family: sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
-    .section { margin: 30px 0; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
-    button { padding: 10px 20px; margin: 5px; cursor: pointer; }
-    input { padding: 8px; margin: 5px; }
-    .result { margin-top: 10px; padding: 10px; background: #f5f5f5; border-radius: 4px; }
-    .success { color: green; }
-    .error { color: red; }
+    body { font-family: var(--bb-font-family, sans-serif); max-width: 800px; margin: 50px auto; padding: 20px; background: var(--bb-color-bg, #fff); color: var(--bb-color-text, #333); }
+    .section { margin: 30px 0; padding: 20px; border: 1px solid var(--bb-color-border, #ddd); border-radius: var(--bb-radius-md, 8px); background: var(--bb-color-surface, #fff); }
+    button { padding: var(--bb-space-2, 10px) var(--bb-space-4, 20px); margin: 5px; cursor: pointer; border: 1px solid var(--bb-color-border, #ddd); border-radius: var(--bb-radius-sm, 4px); background: var(--bb-color-surface, #f8f8f8); color: var(--bb-color-text, #333); font-family: inherit; }
+    button:hover { border-color: var(--bb-color-accent, #0972d3); }
+    input, select { padding: var(--bb-space-2, 8px); margin: 5px; border: 1px solid var(--bb-color-border, #ddd); border-radius: var(--bb-radius-sm, 4px); background: var(--bb-color-surface, #fff); color: var(--bb-color-text, #333); font-family: inherit; }
+    .result { margin-top: 10px; padding: 10px; background: var(--bb-color-surface-alt, #f5f5f5); border-radius: var(--bb-radius-sm, 4px); }
+    .success { color: var(--bb-color-accent, green); }
+    .error { color: var(--bb-color-danger, red); }
     #auth-status { font-weight: bold; margin-bottom: 10px; }
-    .todo-item { display: flex; align-items: center; gap: 10px; padding: 8px; border-bottom: 1px solid #eee; }
+    .todo-item { display: flex; align-items: center; gap: 10px; padding: 8px; border-bottom: 1px solid var(--bb-color-border, #eee); }
     .todo-item input[type="checkbox"] { cursor: pointer; }
     .todo-item .todo-title { flex: 1; border: none; background: transparent; font-size: inherit; padding: 4px; }
-    .todo-item .todo-title:focus { outline: 1px solid #4CAF50; background: #f9f9f9; }
+    .todo-item .todo-title:focus { outline: 1px solid var(--bb-color-accent, #4CAF50); background: var(--bb-color-surface-alt, #f9f9f9); }
     .todo-item select { padding: 4px; }
     .todo-item button { padding: 5px 10px; }
     #todo-input { flex: 1; }
