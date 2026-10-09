@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
@@ -14,6 +14,7 @@ import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { formatDeploySignal } from './deploy-stream.js';
 import { runSync, spawnCommand } from './run-command.js';
+import { readBackendStack } from './deploy-outputs.js';
 import { terminateProcessTree } from './process-tree.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
@@ -196,8 +197,13 @@ export async function startSandbox(options: SandboxOptions) {
     throw error;
   }
 
-  const outputs = JSON.parse(readFileSync(`${outDir}/outputs.json`, "utf-8"));
-  const stackOutputs = Object.values(outputs)[0] as Record<string, string> || {};
+  // Select the backend stack by the output it carries, not by position: `--all`
+  // deploys every synthesized stack, and an app with a Lambda@Edge route
+  // contributes a second one (`edge-lambda-stack-*`) that has no ApiUrl.
+  const { outputs: stackOutputs } = readBackendStack({
+    stage: 'sandbox',
+    outputsFile: `${outDir}/outputs.json`,
+  });
 
   const apiUrl = stackOutputs.ApiUrl;
   if (!apiUrl) {

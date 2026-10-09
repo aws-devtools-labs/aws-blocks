@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
@@ -11,6 +11,7 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
+import { outputsFilePath, readBackendStack } from './deploy-outputs.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -82,7 +83,10 @@ export async function deploy(options: DeployOptions) {
         "npx",
         buildCdkDeployArgs({
           projectRoot: options.projectRoot,
-          outputsFile: '.blocks-sandbox/outputs.json',
+          // Production's own file. The CDK CLI replaces this document with the
+          // stacks of the current invocation instead of merging, so sharing one
+          // path with the sandbox made each deploy erase the other's record.
+          outputsFile: outputsFilePath('production'),
         }),
         {
           label: 'cdk deploy',
@@ -116,8 +120,13 @@ export async function deploy(options: DeployOptions) {
       throw error;
     }
     
-    const outputs = JSON.parse(readFileSync(join(options.projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
-    const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
+    // Select production's own backend stack out of production's own outputs
+    // file. Reading whichever key came first meant this summary could report
+    // another stack's ApiUrl — the sandbox's, while both stages shared one file.
+    const { outputs: stackOutputs } = readBackendStack({
+      stage: 'production',
+      projectRoot: options.projectRoot,
+    });
     const apiUrl = stackOutputs.ApiUrl;
     
     const hostingUrl = Object.entries(stackOutputs).find(([key]) => 

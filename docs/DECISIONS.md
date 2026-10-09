@@ -699,3 +699,177 @@ For the two edge cases above we **warn and skip only the CloudFront alarm** rath
 - Issue #481; PR #488
 - AWS CDK `Environment` docs: cross-stack references "require concrete region information and will cause this stack to emit synthesis errors."
 - `packages/hosting/src/constructs/hosting_construct.ts` (monitoring wiring), `us_east_1_monitoring_stack.ts`
+
+## D-017: Each stage writes its own CDK outputs file, and the backend stack is selected by output, not by position
+
+**Date**: 2026-09-29
+**Authors:** phandpau
+
+### Context
+`npm run deploy` (production) and `npm run sandbox` both passed
+`--outputs-file .blocks-sandbox/outputs.json`, and three call sites then read the
+document with `Object.values(outputs)[0]` / `Object.keys(outputs)[0]`. Both
+behaviours date to the initial commit (`1aeebe50`); no decision recorded either.
+
+The CDK CLI **replaces** that file with the stacks of the current invocation
+rather than merging, and it does so from a `finally` block — so the write happens
+even when the deploy throws, and a deploy that fails on its first stack writes
+`{}`. Two consequences, both observed:
+
+- A production deploy erased the sandbox's record and vice versa (confirmed live:
+  `.blocks-sandbox/outputs.json` went from holding only the sandbox stack to
+  holding only `<stackId>-prod`).
+- Taking the first key then acted on the *other stage's* stack. Most visibly,
+  `npm run sandbox:console` — a command named "sandbox", shipped in 9 generated
+  apps — opened the **production** stack after a production deploy.
+
+Position is also ambiguous *within* one stage: `cdk deploy --all` deploys every
+synthesized stack, and an app with a Lambda@Edge route contributes a second
+(`edge-lambda-stack-*`) that publishes none of the outputs the caller wants.
+
+### Decision
+1. **One outputs file per stage, both in the gitignored directory.** Production
+   writes and reads `.blocks-sandbox/outputs.production.json`; the sandbox keeps
+   `.blocks-sandbox/outputs.json`. Two distinct file NAMES are what stop one
+   stage erasing the other; the shared DIRECTORY is what keeps either from being
+   committed. `.blocks/` is **not** a candidate: a generated app commits it,
+   because it carries the app's stable `stackId` in `config.json` (D-012), so a
+   per-deploy account-specific file there needs an explicit per-file ignore in
+   all 7 templates, both native examples, both scaffolder paths and the root
+   `.gitignore` — eleven places, any one of which can be forgotten, and the
+   forgetting commits a developer's deployment record. Verified with
+   `git check-ignore`: the root `.gitignore` un-ignores `test-apps/**/.blocks/**`
+   (line 35), so the file would have been tracked there by default, while
+   `.blocks-sandbox/` is already ignored at the root and in every template. The
+   directory's NAME is a historical wart — it holds local per-deploy state for
+   every stage, and `.blocks-sandbox/config.json` is likewise rewritten by a
+   production deploy on purpose — but renaming it is a breaking change to the
+   documented public URL path the Hosting construct serves (`/.blocks-sandbox/*`),
+   so it is out of scope. Putting the production outputs there is safe: Hosting
+   publishes only `<staticAssetsDir>/.blocks-sandbox/config.json`, a placeholder
+   it writes into the *build output* directory, never the project root's copy of
+   the directory, and nothing in the product deletes that directory wholesale.
+2. **Select the backend stack by the output it publishes** (`ApiUrl`), never by
+   position, and fail loudly when zero or several stacks qualify.
+   `selectBackendStack` / `readBackendStack` in
+   `packages/core/src/scripts/deploy-outputs.ts` are the single implementation.
+3. **`console` is stage-driven.** `openConsole({ stage })` resolves the stack from
+   that stage's record, falling back to `getStackName` with a printed note when
+   this checkout has no record of a deploy. Generated apps gain a `console`
+   script (`--production`) beside `sandbox:console`, mirroring the existing
+   `destroy` / `sandbox:destroy` pair.
+4. **`.blocks-sandbox/config.json` is explicitly out of scope.** It looks like the
+   same bug and is not: it is a single-slot *runtime* pointer that every stage
+   rewrites on purpose, a documented public URL path served by the Hosting
+   construct (`packages/core/README.md`, `packages/blocks/TROUBLESHOOTING.md`).
+   Only the *outputs* documents are per-stage.
+5. **`local` is not a third stage, and has no outputs file.** An outputs document
+   is written by `cdk deploy --outputs-file`; `npm run dev` never invokes the CDK
+   CLI and creates no CloudFormation stack, so there is nothing to record. Local
+   state is `.bb-data/<fullId>/` plus the same `.blocks-sandbox/config.json`,
+   which the dev server writes with `environment: 'local'` and a localhost
+   `apiUrl`. `DeployStage` stays the two-valued type, and `parseStageArg` refuses
+   `--local` / `--dev` / `--stage local` with that reason rather than the generic
+   "unknown stage" — `local` is the repo's own third environment word
+   (`BLOCKS_TEST_ENV`, the dev server's `environment` field), so it is a
+   plausible thing to type and deserves a real answer.
+6. **Resolving a console stack writes nothing.** `resolveConsoleStack`'s tier-3
+   fallback reaches this naming scheme through `readSandboxId` + `getStackName`'s
+   `sandboxId` parameter, never through `getSandboxId`, whose get-or-create would
+   `writeFileSync` a fresh `.blocks-sandbox/sandbox-id.txt`. Opening a console is
+   a read, and a machine with no sandbox id has never run `npm run sandbox`, so
+   minting one would both write to the project and name a stack that cannot
+   exist; that case reports "no sandbox stack here" instead. A tree-fingerprint
+   test pins it, because an unasserted purity claim is one that drifts.
+7. **The remaining positional reads in sandbox-only e2e apps are out of scope, deliberately.**
+   `test-apps/hosting-ssr*/`, `hosting-spa/`, `vpc-smoke/` and
+   `test-apps/comprehensive/test/sandbox-admin-e2e.ts` still take
+   `Object.values(outputs)[0]` / `Object.keys(outputs)[0]` from
+   `.blocks-sandbox/outputs.json`. Neither defect reaches them today: they deploy
+   only a sandbox, so nothing overwrites their file, and the second stack that
+   makes position ambiguous — `UsEast1MonitoringStack`, the only other stack in a
+   Blocks app that publishes a `CfnOutput`
+   (`packages/hosting/src/constructs/us_east_1_monitoring_stack.ts`) — is created
+   only when Hosting is given alarm subscriptions, which none of these apps
+   configures. They also fail loudly on a wrong pick, asserting the output key
+   they need by name. Converging them on the exported `selectBackendStack` is a
+   follow-up, not this PR: they run only against real AWS deploys in CI, so the
+   change cannot be verified locally and a mistake costs a full deploy cycle to
+   discover. Any of them that later gains a Lambda@Edge route or alarm
+   subscriptions must switch, and `console-shortcuts.test.ts` is the worked
+   example.
+8. **The console's derived-name fallback covers a MISSING record only.** A record
+   that exists but cannot be read — empty (the CDK CLI's failed-deploy `{}`),
+   ambiguous (two stacks publishing the output), or not JSON — is re-thrown, not
+   downgraded to a note. Substituting a derived name there would discard the
+   diagnosis `selectBackendStack` exists to produce, and for a scaffolded app that
+   name would look authoritative while the file says something is wrong. The two
+   are told apart by `isMissingDeployRecord`, a non-enumerable property marker set
+   on the ENOENT error — not by matching an error message, and not by an error
+   subclass with `instanceof`, which is unreliable when two copies of the module
+   resolve (the same hazard `Stack.isStack()` exists for in `packages/pipeline`).
+9. **The Amplify integration path is correctly untouched.** `addBlocksWorkspace`
+   as called for an Amplify app ships `sandbox`, `sandbox:delete`, `blocks:dev`
+   and `blocks:generate-client` — no `deploy`, no `console` — so no production
+   outputs file can appear there. It already gitignores `.blocks-sandbox`, which
+   under decision 1 is where a production outputs file would land anyway, so
+   nothing is needed even if that path later gains `npm run deploy`. This is a
+   second reason the shared gitignored directory is the right home: it makes the
+   ignore correct by default for consumers nobody remembered to update.
+10. **The `sql` and `api-only` templates were converged on rebase, and the parity
+   is now asserted.** Both landed in #625 while this change was in review, so they
+   arrived carrying the pre-fix shape: `sandbox:console` only, and a `console.ts`
+   that hardcoded `outputsFile: .blocks-sandbox/outputs.json`. Nothing was broken
+   by that — `outputsFile` is still a supported override, and the path they name is
+   still the sandbox's file — but a scaffolded app could `npm run deploy` to
+   production and then had no way to open that stack's console. They are converged
+   here rather than deferred, because they are the same change arriving late, not a
+   new one. The drift is why `cli.test.ts` now asserts the invariant instead of the
+   templates merely happening to agree: every template with a `deploy` script must
+   ship the standard `console` script **and** a `console.ts` that selects by stage,
+   since the script alone would let `--production` be silently ignored. Keyed on
+   `deploy` rather than `sandbox` because it is the production deploy that makes a
+   production console meaningful; the Amplify template has neither (point 9).
+
+### Rationale
+- **Per-stage files, not a merge.** Merging would mean re-reading and rewriting a
+  file the CDK CLI owns, and would preserve stale entries for stacks that have
+  since been destroyed. Separate files make "the record for this stage" a fact
+  rather than an inference.
+- **Selection by content, because the stack NAME is the CDK app's choice, not
+  this package's.** The scaffolded templates derive it with `getStackName`
+  (D-012), but a hand-written `index.cdk.ts` names its stack whatever it likes —
+  every test app in this repo and both native examples do, e.g.
+  `bb-test-prod-<suffix>-<id>`. A lookup keyed on `getStackName` would therefore
+  be wrong for exactly the apps CI runs. `ApiUrl` is the property every Blocks
+  backend stack has, and the one both call sites immediately needed anyway.
+- **Absence is ambiguous and must be reported as such.** A missing entry has
+  three innocent causes (another stage wrote the file last, a failed deploy
+  blanked it, the stack published no outputs), so the errors name the file, the
+  stacks actually present, and the command that rewrites it, instead of treating
+  absence as "not deployed".
+- **A missing record is not fatal for `console`.** Moving production's path would
+  otherwise turn `sandbox:console` into `ENOENT` for a production-only user,
+  trading a bug for a crash — the unguarded `readFileSync` had no fallback.
+
+### Alternatives Considered
+- **Keep one file and merge on write:** rejected. The CDK CLI owns the file; a
+  read-modify-write races its own `finally` write and keeps entries for destroyed
+  stacks.
+- **Key the lookup on `getStackName`:** rejected. Couples the deploy path to a
+  naming convention only the templates follow; would break every e2e in this repo.
+- **Rename `.blocks-sandbox` to something stage-neutral:** rejected here. The
+  directory name is a historical misnomer, but it is baked into a documented
+  public URL path and a CloudFront behaviour; renaming is a separate discussion.
+- **Give `console` a `prod:console` script instead of a stage flag:** rejected in
+  favour of `console`, which matches the existing `destroy` / `sandbox:destroy`
+  pair. The underlying script accepts `--stage`/`--production`/`--sandbox`.
+
+### References
+- `packages/core/src/scripts/deploy-outputs.ts` (+ tests), `deploy.ts`,
+  `sandbox.ts`, `console.ts`
+- D-012 (stack naming), and `packages/core/src/cdk/stack-metadata.ts`
+  (`blocks:deployment-type`)
+- Region recording (`resolveRegion` in `console.ts` / `deploy-history.ts`) is a
+  **related but separate** defect, deliberately not addressed here: the recorded
+  region can disagree with the region CDK deployed to.

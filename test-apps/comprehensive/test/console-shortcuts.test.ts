@@ -11,12 +11,25 @@ function getBaseUrl(): string {
   return apiUrl.replace(/\/aws-blocks\/api$/, '');
 }
 
-function getStackName(): string {
-  const outputs = JSON.parse(readFileSync('.blocks-sandbox/outputs.json', 'utf-8'));
-  return Object.keys(outputs)[0];
-}
-
 const isDeployed = process.env.BLOCKS_TEST_ENV === 'sandbox' || process.env.BLOCKS_TEST_ENV === 'production';
+
+/**
+ * The deployed stack's name, from the stage's own CDK outputs file.
+ *
+ * Mirrors `selectBackendStack` in `@aws-blocks/core/scripts` (not imported: this
+ * suite runs under the `browser` condition): each stage writes its own outputs
+ * file, and the backend stack is the one publishing `ApiUrl` — this app names its
+ * stack itself in `aws-blocks/index.cdk.ts`, so the name is not derivable here.
+ */
+function getStackName(): string {
+  const outputsFile = process.env.BLOCKS_TEST_ENV === 'production'
+    ? '.blocks-sandbox/outputs.production.json'
+    : '.blocks-sandbox/outputs.json';
+  const outputs: Record<string, Record<string, string>> = JSON.parse(readFileSync(outputsFile, 'utf-8'));
+  const backend = Object.entries(outputs).filter(([, values]) => typeof values?.ApiUrl === 'string');
+  assert.strictEqual(backend.length, 1, `expected exactly one stack with an ApiUrl in ${outputsFile}, got ${backend.length}`);
+  return backend[0][0];
+}
 
 export function consoleShortcutTests() {
 

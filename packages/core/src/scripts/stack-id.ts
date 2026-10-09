@@ -58,6 +58,24 @@ export function getSandboxId(projectRoot?: string): string {
 }
 
 /**
+ * Read this machine's sandbox identifier **without creating one**, or
+ * `undefined` when no sandbox command has ever run in this project.
+ *
+ * The read-only half of {@link getSandboxId}. A caller that merely wants to
+ * *name* an existing sandbox stack — rather than deploy one — must not mint an
+ * id: doing so both writes to the project and produces a name for a stack that
+ * cannot exist, since a machine with no sandbox id has never deployed a sandbox.
+ * `undefined` is the honest answer to "what is this machine's sandbox called",
+ * and lets the caller report that nothing is deployed instead.
+ */
+export function readSandboxId(projectRoot?: string): string | undefined {
+	const root = projectRoot || process.cwd();
+	const filePath = join(root, '.blocks-sandbox', 'sandbox-id.txt');
+	if (!existsSync(filePath)) return undefined;
+	return readFileSync(filePath, 'utf-8').trim();
+}
+
+/**
  * The full CloudFormation stack name for a deployment.
  *
  * Single source of truth for the stack-name scheme (D-012): production is
@@ -72,10 +90,16 @@ export function getSandboxId(projectRoot?: string): string {
  * caller reads the same value. Because that file persists and is shared across
  * processes, the secret writer (`ensureSecrets`) and synth resolve identical
  * names. Production does not use the sandbox id.
+ *
+ * Pass `sandboxId` to supply an id already in hand. That is how a READ-ONLY
+ * caller — one naming an existing stack rather than deploying one — reaches this
+ * naming scheme without the get-or-create write: it resolves the id with
+ * {@link readSandboxId} first and decides for itself what an absent one means.
  */
-export function getStackName(opts: { sandbox: boolean; projectRoot?: string }): string {
+export function getStackName(opts: { sandbox: boolean; projectRoot?: string; sandboxId?: string }): string {
   const base = getStackId(opts.projectRoot);
-  return opts.sandbox ? `${base}-${getSandboxId(opts.projectRoot)}` : `${base}-prod`;
+  if (!opts.sandbox) return `${base}-prod`;
+  return `${base}-${opts.sandboxId ?? getSandboxId(opts.projectRoot)}`;
 }
 
 function getUsername(): string {
