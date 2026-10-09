@@ -63,8 +63,26 @@ export class Database extends Scope {
       this.migrationsRun = initPromise;
     } else {
       // Local PGlite for development
-      const engine = new PGliteEngine(`.bb-data/${this.fullId}`);
-      this.base = new RLSEnabledDatabase(engine);
+      if (options?.extensions && options.extensions.length > 0) {
+        // Extensions are resolved by dynamic import (async), so construct the
+        // engine asynchronously and gate queries on it via `migrationsRun`,
+        // which `ensureMigrations()` already awaits before every query. A
+        // placeholder engine is installed synchronously so `getEngine()` and
+        // migration wiring below have a `base` to reference; it is replaced by
+        // the extension-loaded engine before the first query runs.
+        const placeholder = new PGliteEngine(`.bb-data/${this.fullId}`);
+        this.base = new RLSEnabledDatabase(placeholder);
+        const extensions = options.extensions;
+        const dataDir = `.bb-data/${this.fullId}`;
+        this.migrationsRun = PGliteEngine.create(dataDir, extensions).then(async engine => {
+          // Discard the unused placeholder instance so its data dir handle is released.
+          await placeholder.destroy().catch(() => {});
+          this.base = new RLSEnabledDatabase(engine);
+        });
+      } else {
+        const engine = new PGliteEngine(`.bb-data/${this.fullId}`);
+        this.base = new RLSEnabledDatabase(engine);
+      }
     }
 
     if (options?.schema) {
@@ -81,7 +99,13 @@ export class Database extends Scope {
 
     if (options?.migrationsPath) {
       const path = options.migrationsPath;
-      this.migrationsRun = loadMigrationsFromDir(path)
+      // Chain onto any pending engine setup (e.g. the async extension-engine
+      // swap above) so migrations run against the final engine, and so this
+      // does not clobber that promise. `this.base` is read inside the callback,
+      // after the swap has resolved.
+      const pending = this.migrationsRun ?? Promise.resolve();
+      this.migrationsRun = pending
+        .then(() => loadMigrationsFromDir(path))
         .then(m => runMigrations(this.base.getEngine(), m))
         .then(() => {});
     }

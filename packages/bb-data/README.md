@@ -316,6 +316,36 @@ try {
 - **Storage:** `.bb-data/{fullId}/` — persists across restarts, wipe with `rm -rf .bb-data`
 - **Migrations:** Run automatically on first query
 
+### Local Postgres extensions (PostGIS, pgvector)
+
+Aurora PostgreSQL supports extensions such as PostGIS and pgvector natively, but
+the local PGlite engine does not load any by default — so `CREATE EXTENSION postgis`
+works once deployed but fails in local dev, breaking local/production parity.
+
+Declare the extensions your app uses and they load in local dev too:
+
+```typescript
+const db = new Database(scope, 'main', {
+  extensions: ['postgis'],   // or ['pgvector'], or both
+});
+```
+
+- **Local-only.** Like `postgresVersion`, `extensions` is read only by the local
+  PGlite engine and ignored on AWS (Aurora loads these natively). Your app code is
+  unchanged across environments.
+- **Opt-in install.** Each extension ships as its own package, installed only if
+  you declare it:
+  - `postgis` → `npm install @electric-sql/pglite-postgis`
+  - `pgvector` → `npm install @electric-sql/pglite-pgvector`
+
+  If a declared extension's package is missing, the dev server fails at startup
+  with the exact install command.
+- **Still run `CREATE EXTENSION`.** This option only makes the extension available;
+  issue `CREATE EXTENSION <name>` in a migration as you would on Postgres.
+
+Both extension packages are experimental upstream; because the install is opt-in,
+that risk stays with your app rather than every `bb-data` consumer.
+
 ## Configuration
 
 ```typescript
@@ -328,6 +358,13 @@ interface DatabaseOptions {
   schema?: TableSchema;
   /** Aurora PostgreSQL engine version, e.g. '16.13'. Override the Aurora engine version. @default '16.13' */
   postgresVersion?: string;
+  /**
+   * Postgres extensions to load in the LOCAL PGlite engine, by name
+   * (e.g. ['postgis'] or ['pgvector']). Local-only, mirroring postgresVersion:
+   * ignored on Aurora, which supports these natively. Supported: 'postgis',
+   * 'pgvector'. See "Local Postgres extensions" below. @default []
+   */
+  extensions?: string[];
   /**
    * ARN of a customer-managed KMS key for the cluster's storage-at-rest encryption
    * (also encrypts the auto-generated credentials secret). Supplying it turns
