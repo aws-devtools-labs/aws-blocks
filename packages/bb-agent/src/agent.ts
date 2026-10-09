@@ -80,6 +80,32 @@ function validateCap(name: string, value: number | false | undefined): void {
 }
 
 /**
+ * Flattens the deepest diagnostic fields out of an error's `cause` chain for structured
+ * logging. An error may wrap its real cause one or more levels deep (e.g. Strands wraps a
+ * raw AWS error as `SessionError('…', { cause })`), and `.cause` / `$metadata` are often
+ * NON-enumerable, so a logger that serializes only the top-level `name`/`message`/`stack`
+ * never records what actually failed. Walks a bounded chain and returns the deepest
+ * `name` plus the AWS SDK `$metadata` (`httpStatusCode`, `requestId`) it finds — the
+ * concrete shape needed to diagnose an opaque wrapped error in production.
+ */
+function errorCauseShape(error: unknown): { name?: string; httpStatusCode?: number; requestId?: string } {
+	const shape: { name?: string; httpStatusCode?: number; requestId?: string } = {};
+	let current: unknown = error;
+	for (let depth = 0; current !== null && typeof current === 'object' && depth < 5; depth++) {
+		if ('name' in current && typeof current.name === 'string') {
+			shape.name = current.name;
+		}
+		if ('$metadata' in current && current.$metadata !== null && typeof current.$metadata === 'object') {
+			const metadata = current.$metadata;
+			if ('httpStatusCode' in metadata && typeof metadata.httpStatusCode === 'number') shape.httpStatusCode = metadata.httpStatusCode;
+			if ('requestId' in metadata && typeof metadata.requestId === 'string') shape.requestId = metadata.requestId;
+		}
+		current = 'cause' in current ? current.cause : undefined;
+	}
+	return shape;
+}
+
+/**
  * Lazily import the Strands SDK runtime, caching the module after the first load.
  *
  * Importing the Agent BB must not eagerly evaluate `@strands-agents/sdk`: the
@@ -199,9 +225,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @param id - unique agent ID (used in resource names, keep short for AppSync namespace limits)
 	 * @param config - developer-facing agent configuration
 	 * @param modelConfig - which model to use, picked by subclass (model.local or model.deployed)
-	 * @param createSnapshotStorage - factory that receives the internal FileBucket and returns the appropriate SnapshotStorage
+	 * @param createSnapshotStorage - factory that receives the internal FileBucket and the agent's logger and returns the appropriate SnapshotStorage
 	 */
-	constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>, modelConfig: ModelConfig | ModelConfig[] | undefined, createSnapshotStorage: (bucket: FileBucket) => SnapshotStorage) {
+	constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>, modelConfig: ModelConfig | ModelConfig[] | undefined, createSnapshotStorage: (bucket: FileBucket, log: ChildLogger) => SnapshotStorage) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = config?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.config = config;
@@ -212,7 +238,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 		// IDs shortened to keep S3 bucket names within the 63-char limit
 		this.sessionBucket = new FileBucket(this, 'sn');
-		this.snapshotStorage = createSnapshotStorage(this.sessionBucket);
+		this.snapshotStorage = createSnapshotStorage(this.sessionBucket, this.log);
 
 		if (!config.inferenceOnly) {
 			this.conversations = new DistributedTable(this, 'convos', {
@@ -264,7 +290,10 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			await this.runAgent(payload.message, payload.conversationId, payload.channelId, payload.userId, payload.interruptResponses, payload.context);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
-			this.log.error('runAgent error', { error: errorMessage });
+			// Log the deepest cause's name/status/requestId alongside the message: the thrown
+			// error is often an opaque wrapper (e.g. SessionError over a raw AWS error on a
+			// non-enumerable .cause), so err.message alone cannot identify what actually failed.
+			this.log.error('runAgent error', { error: errorMessage, ...errorCauseShape(err) });
 			// Best-effort: persist error to conversation history (don't let DB failure block error chunk)
 			try {
 				if (payload.conversationId && this.messages) {
