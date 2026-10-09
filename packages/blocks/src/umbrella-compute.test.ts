@@ -86,3 +86,87 @@ describe('umbrella injects the Lambda default compute', () => {
 		template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
 	});
 });
+
+describe('apiFrontDoor tier selection', () => {
+	test('regional (the default) exposes the shared gateway directly — no CloudFront', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'RegionalStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			// apiFrontDoor omitted ⇒ resolveFrontDoor defaults it to 'regional'.
+		});
+
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::CloudFront::Distribution', 0);
+
+		// ApiUrl is the raw gateway URL — references execute-api, no CloudFront.
+		const apiUrl = Object.values(template.findOutputs('ApiUrl'))[0];
+		assert.ok(apiUrl, 'expected an ApiUrl output');
+		const value = JSON.stringify(apiUrl.Value);
+		assert.ok(value.includes('execute-api'), `regional ApiUrl should be the gateway URL, got ${value}`);
+		assert.ok(value.includes('aws-blocks/api'), 'ApiUrl should carry the RPC prefix');
+	});
+
+	test('edge provisions one CloudFront distribution whose origin is the shared gateway host', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'EdgeStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'edge',
+		});
+
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+
+		const distribution = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0];
+		const origins = (distribution as { Properties: { DistributionConfig: { Origins: Array<Record<string, unknown>> } } })
+			.Properties.DistributionConfig.Origins;
+		assert.strictEqual(origins.length, 1, 'edge front door forwards to a single origin');
+		const domainName = JSON.stringify(origins[0].DomainName);
+		// The origin host is sliced from the gateway URL in-template (Fn::Select over
+		// the execute-api domain) — it is the shared gateway, not a baked string.
+		assert.ok(domainName.includes('Fn::Select'), `origin host should be derived in-template, got ${domainName}`);
+		assert.ok(domainName.includes('execute-api'), `origin host should be the gateway, got ${domainName}`);
+		assert.strictEqual(origins[0].OriginPath, undefined, 'shared gateway origin takes no OriginPath');
+	});
+
+	test('BlocksBackend.create({ apiFrontDoor: "edge" }) provisions one CloudFront distribution in the parent stack', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'BackendEdgeParent');
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'edge',
+		});
+
+		// BlocksBackend is a construct nested in a caller-owned stack, so the managed
+		// edge distribution lands in the PARENT stack's template — a different topology
+		// from the BlocksStack path above (where the stack IS the owner).
+		const template = Template.fromStack(parent);
+		template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+	});
+
+	test('edge: the ApiUrl output resolves to the CloudFront front-door URL, not the raw gateway', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'EdgeApiUrlStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'edge',
+		});
+
+		const template = Template.fromStack(stack);
+		const distId = Object.keys(template.findResources('AWS::CloudFront::Distribution'))[0];
+		assert.ok(distId, 'expected a CloudFront distribution');
+
+		const apiUrl = Object.values(template.findOutputs('ApiUrl'))[0];
+		const value = JSON.stringify(apiUrl.Value);
+		assert.ok(value.includes(distId), `ApiUrl should reference the CloudFront distribution, got ${value}`);
+		assert.ok(value.includes('DomainName'), 'ApiUrl should resolve the distribution domain');
+		assert.ok(value.includes('/aws-blocks/api'), 'ApiUrl should carry the RPC prefix');
+		assert.ok(!value.includes('execute-api'), 'edge ApiUrl should be the CloudFront URL, not the raw gateway');
+	});
+});

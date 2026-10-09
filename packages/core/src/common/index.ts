@@ -354,6 +354,26 @@ export interface BlocksStackProps extends StackProps {
    * option. See `BlocksDefaults` in `@aws-blocks/core/cdk`.
    */
   defaults: BlocksDefaults;
+  /**
+   * How the app's API is exposed to the internet. Default: `'regional'`.
+   *
+   * - `'regional'` — the shared regional gateway, reached directly on its own
+   *   endpoint. Cheap, and a stable address for a given deployment (no CDN hop).
+   * - `'edge'` — a global, CDN-backed front door in front of that gateway, with
+   *   edge termination. Choose it for a geographically distributed audience.
+   *
+   * The default is a constant `'regional'` — it is NEVER derived from the app's
+   * shape, so adding or removing Building Blocks never silently changes how the
+   * API is exposed.
+   *
+   * ⚠️ **Switching `'regional'` ⇄ `'edge'` changes the API's endpoint domain.**
+   * Browser auth cookies and sessions are bound to the origin they were set on,
+   * so a switch invalidates every existing cookie/session — users are signed out
+   * and must sign in again. (A stable custom domain — a future feature — would
+   * let you move between tiers without this.) Pick a tier before you have real
+   * users, and treat a later change as a breaking migration.
+   */
+  apiFrontDoor?: 'regional' | 'edge';
 }
 
 export class BlocksStack {
