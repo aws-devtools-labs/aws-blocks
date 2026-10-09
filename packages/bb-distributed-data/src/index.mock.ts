@@ -34,9 +34,19 @@ export class DistributedDatabase extends Scope {
 
     if (options?.migrationsPath) {
       const path = options.migrationsPath;
-      this.migrationsRun = loadMigrationsFromDir(path)
+      const run = loadMigrationsFromDir(path)
         .then(m => this.mockEngine.withDdl(() => runMigrations(this.mockEngine, m)))
         .then(() => {});
+      // Migrations start eagerly, before any query awaits them. Without a
+      // handler here, a failure (notably a PGlite `_pg_initdb` WASM trap that
+      // outlasts the init retry — e.g. under CI memory pressure) is an
+      // UNHANDLED promise rejection that terminates the whole dev server
+      // process. Attach a logging handler so the process survives; the same
+      // rejection still reaches every caller via ready() below, so a query
+      // after a failed init surfaces a branded error rather than being
+      // silently swallowed.
+      run.catch((error: unknown) => this.log.error('Migrations failed', { error }));
+      this.migrationsRun = run;
     }
   }
 

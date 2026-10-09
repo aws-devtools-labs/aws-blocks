@@ -45,6 +45,31 @@ export const DEAD_SERVER_STATUS = 'dead';
 export const DEAD_SERVER_KLASS = 'dead_server';
 export const DEAD_SERVER_REASON = 'dev_server_dead';
 
+// A dead_server whose dev-log carries the PGlite `_pg_initdb` WASM abort signature is NOT the agent's
+// fault: PGlite runs PostgreSQL in a WASM module with a fixed linear-memory ceiling (~290 MB resident
+// per instance), and under the CI runner's memory conditions `initdb` can hit an unrecoverable
+// `Aborted(Cannot enlarge memory arrays…)` / `unreachable` trap. The built app is correct; the mock
+// backend's WASM engine ran out of memory. So this ONE dead_server signature is reclassified
+// harness_error (EXCLUDED from the mean) — infra, not a product failure. Every OTHER dead_server stays
+// `dead_server` (counted), so a genuine agent-caused crash can't hide behind this gate.
+//
+// The signature mirrors PGLITE_INIT_TRAP_RE in packages/data-common/src/pglite-init.ts (the same
+// trap the engine's init-retry matches). Kept as a local copy because scoring.mjs is a dependency-free
+// .mjs that runs under bare `node` in CI and must not import a TS package.
+export const PGLITE_INIT_TRAP_RE = /RuntimeError:\s*unreachable\b|wasm trap:\s*unreachable\b|\bAborted\(/i;
+export const PGLITE_OOM_REASON = 'pglite_init_oom';
+
+/**
+ * True when a dead-server dev-log tail shows the PGlite WASM init trap — i.e. the dev server died
+ * because the mock PGlite engine's `initdb` exhausted the WASM memory ceiling, not because the agent's
+ * app is broken. Non-string input → false. Pure.
+ * @param {unknown} devLogTail the captured dev.log tail (result.dev_log_tail)
+ * @returns {boolean}
+ */
+export function isPgliteInitOom(devLogTail) {
+	return typeof devLogTail === 'string' && PGLITE_INIT_TRAP_RE.test(devLogTail);
+}
+
 /**
  * The klasses that are GENUINE failures counted in the mean as composite 0 (verdict 'fail', included
  * by isScoredCell) — as opposed to `harness_error` (excluded) or `scored` (graded on its tests).
@@ -104,8 +129,11 @@ export function isUngracefulStepTwoDeath(result) {
  *     composite 0, INCLUDED). An ungraceful 2-agent teardown is reclassified `harness_error`.
  *   - `dead_server` — the agent finished but the built app's dev-server never served / crashed
  *     (dev_server_status='dead'): a genuine product failure (verdict 'fail', composite 0, INCLUDED).
+ *     EXCEPTION: a dead_server whose dev_log_tail shows the PGlite `_pg_initdb` WASM abort signature
+ *     is reclassified `harness_error` (EXCLUDED) — a WASM memory-ceiling crash in the mock engine, not
+ *     a product failure (see isPgliteInitOom). Every other dead_server stays counted.
  *   - `scored` — reached build/test/judge; its outcome is a real signal.
- * @param {{failed_at?: string|null, status?: string, dev_server_status?: string, stop_reason?: unknown, checkpoint?: unknown}} result
+ * @param {{failed_at?: string|null, status?: string, dev_server_status?: string, dev_log_tail?: string, stop_reason?: unknown, checkpoint?: unknown}} result
  * @returns {{klass: 'scored'|'harness_error'|'agent_fail'|'dead_server', reason: string|null}}
  */
 export function classifyCell(result) {
@@ -138,6 +166,13 @@ export function classifyCell(result) {
 	// Ordered AFTER the harness_error / agent_fail returns so a cancellation or a pre-grade failure —
 	// which never produced a runnable app to begin with — still wins and stays excluded.
 	if (result?.dev_server_status === DEAD_SERVER_STATUS) {
+		// Signature-gated carve-out: a dead_server whose dev-log shows the PGlite WASM `_pg_initdb`
+		// abort is an infra memory ceiling (see isPgliteInitOom), NOT a product failure — reclassify
+		// it harness_error (EXCLUDED). Narrow by design: only this one trap signature is carved out;
+		// every other dead_server stays counted, so a genuine agent-caused crash can't hide here.
+		if (isPgliteInitOom(result?.dev_log_tail)) {
+			return { klass: 'harness_error', reason: PGLITE_OOM_REASON };
+		}
 		return { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON };
 	}
 	return { klass: 'scored', reason: null };
