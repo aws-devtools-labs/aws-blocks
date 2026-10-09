@@ -19,7 +19,7 @@ import { WebSocketApi, WebSocketStage, LogGroupLogDestination } from 'aws-cdk-li
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
-import { BuildingBlockScope, synthGuard, ensureApiGatewayAccount, blocksError } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard, ensureApiGatewayAccount, blocksError, getOrCreateOnRoot } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -59,7 +59,7 @@ const connectionsSchema: StandardSchemaV1<any> = {
 	},
 };
 
-// ── Shared infrastructure (one per stack) ───────────────────────────────────
+// ── Shared infrastructure (one per backend root) ─────────────────────────────
 
 const SHARED_KEY = Symbol.for('BLOCKS_REALTIME_SHARED');
 
@@ -68,92 +68,95 @@ interface SharedInfra {
 	stage: WebSocketStage;
 }
 
-function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunction, parent: BuildingBlockScope): SharedInfra {
-	const existing = (stack as any)[SHARED_KEY] as SharedInfra | undefined;
-	if (existing) return existing;
+function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: BuildingBlockScope): SharedInfra {
+	// The WebSocket API is one-per-backend, so key it on (and parent it under) the
+	// owning backend root — two BlocksBackends in one cdk.Stack each get their own
+	// WS API instead of B silently reusing A's. `ensureApiGatewayAccount` still keys
+	// on the cdk.Stack (the account/region role is a stack-level singleton).
+	return getOrCreateOnRoot(parent, SHARED_KEY, (root): SharedInfra => {
+		const stack = cdk.Stack.of(parent);
 
-	// ── Token secret via AppSetting ─────────────────────────────────────
-	new AppSetting(parent, 'token-secret', { secret: true });
+		// ── Token secret via AppSetting ─────────────────────────────────────
+		new AppSetting(parent, 'token-secret', { secret: true });
 
-	// ── DynamoDB connections table via DistributedTable ──────────────────
-	new DistributedTable(parent, 'connections', {
-		schema: connectionsSchema,
-		key: { partitionKey: 'connectionId', sortKey: 'channel' },
-		indexes: { 'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' } },
-		ttl: 'expiresAt',
-	});
-
-	// ── WebSocket API — all routes point at the Blocks handler Lambda ──────
-	const wsApi = new WebSocketApi(stack, 'BlocksRtWebSocket', {
-		connectRouteOptions: {
-			integration: new WebSocketLambdaIntegration('ConnectInteg', handler),
-		},
-		disconnectRouteOptions: {
-			integration: new WebSocketLambdaIntegration('DisconnectInteg', handler),
-		},
-		defaultRouteOptions: {
-			integration: new WebSocketLambdaIntegration('DefaultInteg', handler),
-		},
-	});
-
-	// Structured JSON access logging on the WebSocket stage, when the stack-wide
-	// default enables it. Needs the account-level CloudWatch Logs role — shared
-	// with (and typically already provisioned by) the core REST API stage.
-	let accessLogGroup: LogGroup | undefined;
-	let apiGatewayAccount: cdk.aws_apigateway.CfnAccount | undefined;
-	if (parent.defaults.accessLogging) {
-		apiGatewayAccount = ensureApiGatewayAccount(stack);
-		accessLogGroup = new LogGroup(stack, 'BlocksRtAccessLogs', {
-			retention: parent.defaults.logRetention,
-			// Access logs are the request audit trail — follow the stack-wide
-			// removal policy (production RETAIN) so they survive a teardown.
-			removalPolicy: parent.defaults.removalPolicy,
+		// ── DynamoDB connections table via DistributedTable ──────────────────
+		new DistributedTable(parent, 'connections', {
+			schema: connectionsSchema,
+			key: { partitionKey: 'connectionId', sortKey: 'channel' },
+			indexes: { 'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' } },
+			ttl: 'expiresAt',
 		});
-	}
 
-	const stage = new WebSocketStage(stack, 'BlocksRtStage', {
-		webSocketApi: wsApi,
-		stageName: 'rt',
-		autoDeploy: true,
-		// Cap message throughput on the connection from the stack-wide default.
-		// On a WebSocket stage the throttle unit is messages/second across the
-		// connection (not HTTP requests) — see DESIGN.md.
-		throttle: {
-			rateLimit: parent.defaults.throttling.rateLimit,
-			burstLimit: parent.defaults.throttling.burstLimit,
-		},
-		...(accessLogGroup
-			? {
-					accessLogSettings: {
-						destination: new LogGroupLogDestination(accessLogGroup),
-						format: AccessLogFormat.jsonWithStandardFields(),
-					},
-				}
-			: {}),
+		// ── WebSocket API — all routes point at the Blocks handler Lambda ──────
+		const wsApi = new WebSocketApi(root, 'BlocksRtWebSocket', {
+			connectRouteOptions: {
+				integration: new WebSocketLambdaIntegration('ConnectInteg', handler),
+			},
+			disconnectRouteOptions: {
+				integration: new WebSocketLambdaIntegration('DisconnectInteg', handler),
+			},
+			defaultRouteOptions: {
+				integration: new WebSocketLambdaIntegration('DefaultInteg', handler),
+			},
+		});
+
+		// Structured JSON access logging on the WebSocket stage, when the stack-wide
+		// default enables it. Needs the account-level CloudWatch Logs role — shared
+		// with (and typically already provisioned by) the core REST API stage.
+		let accessLogGroup: LogGroup | undefined;
+		let apiGatewayAccount: cdk.aws_apigateway.CfnAccount | undefined;
+		if (parent.defaults.accessLogging) {
+			apiGatewayAccount = ensureApiGatewayAccount(stack);
+			accessLogGroup = new LogGroup(root, 'BlocksRtAccessLogs', {
+				retention: parent.defaults.logRetention,
+				// Access logs are the request audit trail — follow the stack-wide
+				// removal policy (production RETAIN) so they survive a teardown.
+				removalPolicy: parent.defaults.removalPolicy,
+			});
+		}
+
+		const stage = new WebSocketStage(root, 'BlocksRtStage', {
+			webSocketApi: wsApi,
+			stageName: 'rt',
+			autoDeploy: true,
+			// Cap message throughput on the connection from the stack-wide default.
+			// On a WebSocket stage the throttle unit is messages/second across the
+			// connection (not HTTP requests) — see DESIGN.md.
+			throttle: {
+				rateLimit: parent.defaults.throttling.rateLimit,
+				burstLimit: parent.defaults.throttling.burstLimit,
+			},
+			...(accessLogGroup
+				? {
+						accessLogSettings: {
+							destination: new LogGroupLogDestination(accessLogGroup),
+							format: AccessLogFormat.jsonWithStandardFields(),
+						},
+					}
+				: {}),
+		});
+
+		// The stage must be created after the account setting is in place.
+		if (apiGatewayAccount) {
+			stage.node.addDependency(apiGatewayAccount);
+		}
+
+		// API Gateway Management API: postToConnection for fan-out + subscribe responses.
+		// Grant to the shared execution role (not a single function) so publish()
+		// works from ANY compute — publishing is compute-agnostic (a public IAM call),
+		// and every compute assumes this role. Mirrors the data-block / AsyncJob grant
+		// pattern (grant the role, not one handler).
+		wsApi.grantManageConnections(parent.executionRole);
+
+		// Env vars for the Blocks handler Lambda
+		registerConfig(parent, 'BLOCKS_RT_WS_URL', stage.url);
+		registerConfig(parent, 'BLOCKS_RT_CALLBACK_URL', stage.callbackUrl);
+
+		// CDK outputs
+		new cdk.CfnOutput(root, 'RealtimeWsUrl', { value: stage.url });
+
+		return { wsApi, stage };
 	});
-
-	// The stage must be created after the account setting is in place.
-	if (apiGatewayAccount) {
-		stage.node.addDependency(apiGatewayAccount);
-	}
-
-	// API Gateway Management API: postToConnection for fan-out + subscribe responses.
-	// Grant to the shared execution role (not a single function) so publish()
-	// works from ANY compute — publishing is compute-agnostic (a public IAM call),
-	// and every compute assumes this role. Mirrors the data-block / AsyncJob grant
-	// pattern (grant the role, not one handler).
-	wsApi.grantManageConnections(parent.executionRole);
-
-	// Env vars for the Blocks handler Lambda
-	registerConfig(parent, 'BLOCKS_RT_WS_URL', stage.url);
-	registerConfig(parent, 'BLOCKS_RT_CALLBACK_URL', stage.callbackUrl);
-
-	// CDK outputs
-	new cdk.CfnOutput(stack, 'RealtimeWsUrl', { value: stage.url });
-
-	const shared: SharedInfra = { wsApi, stage };
-	(stack as any)[SHARED_KEY] = shared;
-	return shared;
 }
 
 // ── Realtime CDK Construct ──────────────────────────────────────────────────
@@ -186,7 +189,7 @@ export class Realtime extends BuildingBlockScope {
 				`Realtime "${this.fullId}" currently requires a Lambda default compute.`,
 			);
 		}
-		getOrCreateSharedInfra(cdk.Stack.of(this), compute.fn, this);
+		getOrCreateSharedInfra(compute.fn, this);
 	}
 
 	static namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M> {

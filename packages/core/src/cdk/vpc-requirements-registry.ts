@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
+import { getBlocksRoot } from './root-registry.js';
 import type { VpcRequirements } from './vpc-types.js';
 
 const REGISTRY_KEY = Symbol.for('BLOCKS_VPC_REQUIREMENTS_REGISTRY');
@@ -14,16 +14,17 @@ export interface RegisteredVpcRequirement {
 }
 
 /**
- * Get or create the VPC-requirements list for a given stack. Stored on the stack
- * object (keyed by a Symbol), so each stack in a multi-stack synth gets its own —
- * a requirement never leaks into another stack's list. Mirrors the compute and
- * config registries, which scope their state the same way.
+ * Get or create the VPC-requirements list for a given backend root. Stored on the
+ * root object (keyed by a Symbol), so each `BlocksStack`/`BlocksBackend` gets its
+ * own — a requirement never leaks into another backend's list, even when two
+ * backends share one `cdk.Stack`. Mirrors the compute and config registries,
+ * which scope their state the same way.
  */
-function getRegistry(stack: cdk.Stack): RegisteredVpcRequirement[] {
-	let list = (stack as any)[REGISTRY_KEY] as RegisteredVpcRequirement[] | undefined;
+function getRegistry(root: Construct): RegisteredVpcRequirement[] {
+	let list = (root as any)[REGISTRY_KEY] as RegisteredVpcRequirement[] | undefined;
 	if (!list) {
 		list = [];
-		(stack as any)[REGISTRY_KEY] = list;
+		(root as any)[REGISTRY_KEY] = list;
 	}
 	return list;
 }
@@ -37,27 +38,27 @@ function getRegistry(stack: cdk.Stack): RegisteredVpcRequirement[] {
  * silently skip declaring its requirements: the constructor won't compile without
  * supplying them (see `BuildingBlockScope`).
  *
- * @param bb - The construct declaring the requirement (used to locate its stack and name it).
+ * @param bb - The construct declaring the requirement (used to locate its backend root and name it).
  * @param requirements - What the BB needs from the VPC.
  */
 export function registerVpcRequirements(
 	bb: Construct & { readonly fullId: string },
 	requirements: VpcRequirements,
 ): void {
-	getRegistry(cdk.Stack.of(bb)).push({ fullId: bb.fullId, requirements });
+	getRegistry(getBlocksRoot(bb)).push({ fullId: bb.fullId, requirements });
 }
 
 /**
- * The VPC requirements registered on the stack that owns `scope`, in construction
- * order. Returns an empty array before any BB is constructed.
+ * The VPC requirements registered on the backend root that owns `scope`, in
+ * construction order. Returns an empty array before any BB is constructed.
  *
- * @param scope - Any construct in the stack (used to locate the stack).
+ * @param scope - Any construct in the backend (used to locate the backend root).
  */
 export function getVpcRequirements(scope: Construct): readonly RegisteredVpcRequirement[] {
-	return getRegistry(cdk.Stack.of(scope));
+	return getRegistry(getBlocksRoot(scope));
 }
 
 /** Clear the registry. **For test cleanup only.** */
-export function _resetVpcRequirementsRegistry(stack: cdk.Stack): void {
-	(stack as any)[REGISTRY_KEY] = [];
+export function _resetVpcRequirementsRegistry(scope: Construct): void {
+	(getBlocksRoot(scope) as any)[REGISTRY_KEY] = [];
 }
