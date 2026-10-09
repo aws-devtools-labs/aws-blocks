@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'aws-blocks';
+
+// npm is npm.cmd on Windows, which spawn won't resolve without a shell.
+const isWin = process.platform === 'win32';
 
 installCookieJar();
 
@@ -18,7 +21,8 @@ test.before(async () => {
     server = spawn('npm', ['run', 'dev'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
+      detached: !isWin,
+      shell: isWin,
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     server.unref();
@@ -44,7 +48,10 @@ test.before(async () => {
 
 test.after(() => {
   if (server?.pid) {
-    try { process.kill(-server.pid, 'SIGTERM'); } catch {}
+    try {
+      if (isWin) spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+      else process.kill(-server.pid, 'SIGTERM');
+    } catch {}
   }
 });
 

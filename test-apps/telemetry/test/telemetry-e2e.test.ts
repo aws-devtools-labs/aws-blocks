@@ -816,6 +816,21 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       assertNotDelivered(result.stderr);
     });
 
+    test('AWS_BLOCKS_DISABLE_TELEMETRY=true prevents telemetry', async () => {
+      tmpHome = createTmpDir('disable-env-true');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+        telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: 'true' }, timeoutMs: 12_000,
+      });
+
+      // --telemetry-file still writes even when HTTP is disabled (D-010 contract)
+      assert.ok(await waitForFile(telemetryFile, 2_000), '--telemetry-file should write even when telemetry is disabled');
+      // but HTTP send should NOT happen
+      assertNotDelivered(result.stderr);
+    });
+
     test('global config telemetry.enabled=false prevents telemetry', async () => {
       tmpHome = createTmpDir('disable-global');
       // Write global config disabling telemetry in real HOME
@@ -869,7 +884,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       }
     });
 
-    test('AWS_BLOCKS_DISABLE_TELEMETRY=0 does NOT disable (only "1" disables)', async () => {
+    test('AWS_BLOCKS_DISABLE_TELEMETRY=0 does NOT disable', async () => {
       tmpHome = createTmpDir('disable-zero');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();

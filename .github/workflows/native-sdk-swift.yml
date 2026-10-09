@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'native/swift/**'
+      - 'native/codegen-fixtures/**'
+      - '.github/workflows/native-sdk-swift.yml'
   workflow_dispatch:
 
 concurrency:
