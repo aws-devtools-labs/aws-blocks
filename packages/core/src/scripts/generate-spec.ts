@@ -27,7 +27,7 @@ import {
 	NATIVE_PACKAGES_EXTENSION,
 	type NativeBindingsCatalog,
 	NativeCatalogError,
-	type NativeDeclarationSource,
+	type NativeDeclarationInput,
 	type NativePackagesCatalog,
 } from './native-catalogs.js';
 import { validateNativeCatalogs } from './validate-native-catalogs.js';
@@ -259,7 +259,7 @@ const defaultLoader: FoundationLoader = (url) => import(url);
  * block's `package.json`.
  */
 export interface SpecGenerationOptions {
-	nativeDeclarations?: readonly NativeDeclarationSource[];
+	nativeDeclarations?: readonly NativeDeclarationInput[];
 }
 
 export async function generateSpec(
@@ -541,10 +541,10 @@ export async function generateSpec(
 	// has to name both declaring blocks, which the catalogs never carry.
 	const nativeDeclarations = options.nativeDeclarations ?? [];
 	if (nativeDeclarations.length > 0) {
-		const nativeErrors = validateNativeCatalogs(nativeDeclarations, methods);
-		if (nativeErrors.length > 0) throw new NativeCatalogError(nativeErrors);
+		const validated = validateNativeCatalogs(nativeDeclarations, methods);
+		if (validated.errors.length > 0) throw new NativeCatalogError(validated.errors);
 
-		const catalogs = buildNativeCatalogs(nativeDeclarations);
+		const catalogs = buildNativeCatalogs(validated.sources);
 		const packagesCatalog = catalogs?.[NATIVE_PACKAGES_EXTENSION];
 		const bindingsCatalog = catalogs?.[NATIVE_BINDINGS_EXTENSION];
 		if (packagesCatalog) doc[NATIVE_PACKAGES_EXTENSION] = packagesCatalog;
