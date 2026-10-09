@@ -46,6 +46,15 @@ bb-data (this package)
 - `pg.Pool` with connection string
 - Used for `fromExisting()` databases (external/managed PostgreSQL providers)
 - Translates pg error codes via shared `translatePgError()`
+- On the AWS runtime, reports the block's BB user-agent chain as the Postgres
+  `application_name` (`Scope.formatUserAgentString()`, e.g.
+  `aws-blocks/<core> bb/Database/<version>`), visible in `pg_stat_activity` on
+  servers that expose it and in provider dashboards (Supabase, Neon). Supplied
+  as pg's `fallback_application_name`, so an `application_name` from the
+  caller's connection string or `PGAPPNAME` wins. Capped at the Postgres
+  63-byte limit, dropping whole parent entries rather than truncating
+  mid-token. Attribution only — no query-behavior impact. Not set on the
+  `DataApiEngine` path (RDS Data API is HTTP, not a pg wire connection).
 
 ## Error Translation
 
@@ -168,6 +177,7 @@ The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResou
 | No cold start penalty | Aurora 0-ACU cold start not simulated | Latency is a production concern |
 | TLS cert verification default (`fromExisting` connection string) | Mock defaults to `rejectUnauthorized: false` (local/self-signed DBs); AWS runtime defaults to verifying (`PgClientEngine` → `rejectUnauthorized: true`) | Intentional. Pass `ssl` to override either layer; the `db pull`-generated wiring sets `ssl: resolveDbSsl()` for both, so the generated path is consistent. A hand-written `fromExisting({ connectionString })` with no `ssl` passes locally but verifies in AWS (pin a provider CA via `ssl.ca`). The mock warns once when `ssl` is omitted so this dev/prod gap surfaces locally. |
 | External migration *apply* | n/a — build/deploy lifecycle step, not a runtime method | No mock needed (intentional; see Schema Migrations above) |
+| `application_name` on the pg connection | Not reported by the mock/local engine; the AWS `PgClientEngine` path reports the BB user-agent chain (see above) | Intentional. Attribution-only. Unset on the RDS Data API path. |
 
 ## Relationship to data-common
 

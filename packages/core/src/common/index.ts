@@ -8,6 +8,9 @@ import { CORE_VERSION } from '../version.js';
 import { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 export { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 
+/** Postgres caps `application_name` at `NAMEDATALEN - 1` bytes. */
+const PG_APPLICATION_NAME_MAX_BYTES = 63;
+
 export interface ScopeOptions {
   parent?: ScopeParent;
   bbName?: string;
@@ -288,6 +291,41 @@ export class Scope {
       chain.push(['bb', `${this.bbName}/${this.bbVersion}`]);
     }
     return chain;
+  }
+
+  /**
+   * Render {@link buildUserAgentChain} as a single space-delimited string,
+   * suitable for a string-typed field such as the Postgres `application_name`
+   * connection parameter (`aws-blocks/<core> bb/AuthBasic/<version> bb/Database/<version>`).
+   *
+   * Shortened here rather than left to the server: Postgres truncates an
+   * over-long `application_name` by raw bytes, cutting mid-token, and preserves
+   * only printable ASCII — any other byte reaches `pg_stat_activity` as a `\xNN`
+   * escape, which is why the gap marker is ASCII `...` and not `…`.
+   *
+   * Returns `''` for an empty chain (e.g. the CDK context), so callers can use a
+   * simple truthiness guard before setting the field.
+   *
+   * @param maxBytes - Byte budget for the rendered string. Defaults to the
+   *   Postgres `application_name` limit. Override for other string sinks.
+   */
+  protected formatUserAgentString(maxBytes = PG_APPLICATION_NAME_MAX_BYTES): string {
+    const entries = this.buildUserAgentChain().map(([k, v]) => `${k}/${v}`);
+    if (entries.length === 0) return '';
+
+    const byteLen = (s: string): number => Buffer.byteLength(s, 'utf8');
+    const full = entries.join(' ');
+    if (byteLen(full) <= maxBytes) return full;
+
+    const origin = entries[0];
+    const leaf = entries[entries.length - 1];
+    const parents = entries.slice(1, -1);
+    while (parents.length > 0) {
+      parents.pop();
+      const elided = [origin, ...parents, '...', leaf].join(' ');
+      if (byteLen(elided) <= maxBytes) return elided;
+    }
+    return byteLen(origin) <= maxBytes ? origin : '';
   }
 }
 
