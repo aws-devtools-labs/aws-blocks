@@ -1,0 +1,20 @@
+- generic [ref=f1e1]:
+  - heading "📝 Notes Manager" [level=1] [ref=f1e2]
+  - paragraph [ref=f1e3]: Ready
+  - generic [ref=f1e22]:
+    - paragraph [ref=f1e23]:
+      - text: Logged in as
+      - strong [ref=f1e24]: e2e-apigw-1757322500@example.com
+      - text: ·
+      - button "Log Out" [ref=f1e25] [cursor=pointer]
+    - heading "Create Note" [level=2] [ref=f1e26]
+    - textbox "Title" [ref=f1e28]
+    - textbox "Content" [ref=f1e30]
+    - button "Create Note" [active] [ref=f1e32] [cursor=pointer]
+    - paragraph
+    - heading "Your Notes" [level=2] [ref=f1e33]
+    - generic [ref=f1e36]:
+      - generic [ref=f1e37]:
+        - strong [ref=f1e38]: Hello API Gateway
+        - paragraph [ref=f1e39]: served with no CloudFront
+      - button "Delete" [ref=f1e40] [cursor=pointer]

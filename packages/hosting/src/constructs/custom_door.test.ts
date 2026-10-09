@@ -1,0 +1,118 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { App, CfnResource, Stack } from 'aws-cdk-lib';
+import type { Construct } from 'constructs';
+import type { AdapterContext, CapabilityId, CapabilityPlan, SupportTier } from '../plan/types.js';
+import { renderCustomDoor } from './custom_door.js';
+import type { FrontDoorLayerAdapter, LayerHandle } from './layer.js';
+
+const staticPlan: CapabilityPlan = {
+	origins: [{ id: 'blocks-s3', kind: 'static' }],
+	routes: { entries: [{ pattern: '/assets/*', kind: 'static' }], redirects: [], headers: [] },
+	policies: { spaFallback: true, hasServer: false, skewEnabled: false },
+	release: { buildId: 'testbuild' },
+};
+
+// A plan that DEMANDS RunServerRender (hasServer → the negotiator requires it).
+const ssrPlan: CapabilityPlan = {
+	origins: [
+		{ id: 'blocks-s3', kind: 'static' },
+		{ id: 'blocks-server', kind: 'server' },
+	],
+	routes: { entries: [{ pattern: '/*', kind: 'server' }], redirects: [], headers: [] },
+	policies: { spaFallback: false, hasServer: true, skewEnabled: false },
+	release: { buildId: 'testbuild' },
+};
+
+// The baseline an SSR-capable door supports as `supported`; each test overrides the
+// contested capability via the `tiers` ctor arg. (An SSR plan demands
+// RunServerRender AND AtomicRelease — the build-id cutover — so both are here.)
+const CORE_BASELINE: ReadonlySet<CapabilityId> = new Set<CapabilityId>([
+	'RouteRequest',
+	'ServeStaticAsset',
+	'RunServerRender',
+	'AtomicRelease',
+]);
+
+/** A minimal customer-authored door: declares tiers, provisions one resource. */
+class FakeDoor implements FrontDoorLayerAdapter {
+	readonly service = 'fake-edge';
+	rendered = false;
+	constructor(private readonly tiers: Partial<Record<CapabilityId, SupportTier>> = {}) {}
+	supports(cap: CapabilityId): SupportTier {
+		if (cap in this.tiers) return this.tiers[cap] as SupportTier;
+		return CORE_BASELINE.has(cap) ? 'supported' : 'unsupported';
+	}
+	renderLayer(scope: Construct, _plan: CapabilityPlan, _ctx: AdapterContext): LayerHandle {
+		this.rendered = true;
+		new CfnResource(scope, 'FakeDoorRes', { type: 'AWS::CloudFormation::WaitConditionHandle' });
+		return { url: 'https://fake.example', originHandle: { domainName: 'fake.example', protocol: 'https' } };
+	}
+}
+
+const stack = () => new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
+
+describe('renderCustomDoor', () => {
+	it('renders the adapter and returns its handle when every demand is met', () => {
+		const door = new FakeDoor();
+		const handle = renderCustomDoor(stack(), staticPlan, door, {});
+		assert.equal(door.rendered, true);
+		assert.equal(handle.url, 'https://fake.example');
+		assert.equal(handle.originHandle.domainName, 'fake.example');
+	});
+
+	it('fails at synth (does not render) when a demanded capability is unsupported', () => {
+		const door = new FakeDoor({ RunServerRender: 'unsupported' });
+		assert.throws(
+			() => renderCustomDoor(stack(), ssrPlan, door, {}),
+			/RunServerRender|cannot serve/,
+			'a demanded, unsupported capability must throw at synth',
+		);
+		assert.equal(door.rendered, false, 'the adapter must not build anything when negotiation fails');
+	});
+
+	it('fails when a demanded unsupported capability is NOT waived via degrade', () => {
+		const door = new FakeDoor({ RunServerRender: 'unsupported' });
+		assert.throws(() => renderCustomDoor(stack(), ssrPlan, door, {}), /RunServerRender/);
+		assert.equal(door.rendered, false);
+	});
+
+	it('renders when an unsupported capability is explicitly waived via degrade', () => {
+		const door = new FakeDoor({ RunServerRender: 'unsupported' });
+		const handle = renderCustomDoor(stack(), ssrPlan, door, {}, { degrade: ['RunServerRender'] });
+		assert.equal(door.rendered, true);
+		assert.equal(handle.url, 'https://fake.example');
+	});
+
+	it('renders when the door fully supports the demanded capability', () => {
+		const door = new FakeDoor({ RunServerRender: 'supported' });
+		renderCustomDoor(stack(), ssrPlan, door, {});
+		assert.equal(door.rendered, true);
+	});
+
+	it("negotiation: 'warn' renders despite an unsupported demanded capability", () => {
+		const door = new FakeDoor({ RunServerRender: 'unsupported' });
+		const handle = renderCustomDoor(stack(), ssrPlan, door, {}, { negotiation: 'warn' });
+		assert.equal(door.rendered, true);
+		assert.equal(handle.url, 'https://fake.example');
+	});
+
+	it("negotiation: 'off' renders without consulting supports() at all", () => {
+		const door = new FakeDoor({ RunServerRender: 'unsupported' });
+		let consulted = 0;
+		const original = door.supports.bind(door);
+		door.supports = (cap: CapabilityId) => {
+			consulted++;
+			return original(cap);
+		};
+		renderCustomDoor(stack(), ssrPlan, door, {}, { negotiation: 'off' });
+		assert.equal(door.rendered, true);
+		assert.equal(consulted, 0, "'off' must skip negotiation entirely");
+	});
+
+	it("negotiation: 'strict' (explicit) behaves like the default", () => {
+		const door = new FakeDoor({ RunServerRender: 'unsupported' });
+		assert.throws(() => renderCustomDoor(stack(), ssrPlan, door, {}, { negotiation: 'strict' }), /RunServerRender/);
+		assert.equal(door.rendered, false);
+	});
+});

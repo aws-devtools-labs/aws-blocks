@@ -1,0 +1,329 @@
+- generic [ref=e1]:
+  - navigation [ref=e2]:
+    - link "Home" [ref=e3] [cursor=pointer]:
+      - /url: /
+    - text: ·
+    - link "About" [ref=e4] [cursor=pointer]:
+      - /url: /about
+    - text: ·
+    - link "Routing" [ref=e5] [cursor=pointer]:
+      - /url: /routing
+    - text: ·
+    - link "Islands" [ref=e6] [cursor=pointer]:
+      - /url: /islands
+    - text: ·
+    - link "Nested" [ref=e7] [cursor=pointer]:
+      - /url: /docs/api/v1/getting-started
+    - text: ·
+    - link "Posts+API" [ref=e8] [cursor=pointer]:
+      - /url: /posts
+  - generic [ref=e9]:
+    - strong [ref=e10]: "Framework:"
+    - code [ref=e11]: Astro
+    - text: ·
+    - strong [ref=e12]: "Variant:"
+    - code [ref=e13]: "static / multi-page (output: static)"
+    - text: ·
+    - strong [ref=e14]: "Render mode:"
+    - code [ref=e15]: Static (prerendered at build)
+    - strong [ref=e16]: "Built:"
+    - code [ref=e17]: Sep 13, 2026, 4:56:36 PM UTC
+    - text: ·
+    - strong [ref=e18]: "Served:"
+    - code [ref=e19]: Sep 13, 2026, 4:56:37 PM UTC
+    - text: ·
+    - emphasis [ref=e20]: "static pages: built == served (frozen at build)"
+  - main [ref=e21]:
+    - heading "Home" [level=1] [ref=e22]
+    - paragraph [ref=e23]:
+      - text: Astro static multi-page stress dashboard. Click
+      - strong [ref=e24]: Run probes
+      - text: to fetch every route from the browser and auto-check status / body / header. Each row maps to a test-matrix ID.
+    - button "▶ Run probes" [active] [ref=e25] [cursor=pointer]
+    - text: 18 pass · 0 fail
+    - group [ref=e26]:
+      - generic "Routing (4)" [ref=e27] [cursor=pointer]
+      - table [ref=e28]:
+        - rowgroup [ref=e29]:
+          - row [ref=e30]:
+            - columnheader "●" [ref=e31]
+            - columnheader "Matrix" [ref=e32]
+            - columnheader "Route / feature" [ref=e33]
+            - columnheader "How to test" [ref=e34]
+            - columnheader "Expected" [ref=e35]
+        - rowgroup [ref=e36]:
+          - row [ref=e294]:
+            - cell "✓" [ref=e295]
+            - cell [ref=e39]:
+              - code [ref=e40]: M1.2
+            - cell "/ Home page The dashboard itself, a static prerendered page served from S3." [ref=e41]:
+              - link / [ref=e42] [cursor=pointer]:
+                - /url: /
+              - generic [ref=e43]: Home page
+              - generic [ref=e44]: The dashboard itself, a static prerendered page served from S3.
+            - cell "GET / → 200 text/html; heading reads \"Home\"." [ref=e45]
+            - cell "200; distinct Home content; served-time frozen at build." [ref=e46]
+          - row [ref=e296]:
+            - cell "✓" [ref=e297]
+            - cell [ref=e49]:
+              - code [ref=e50]: M1.4
+            - 'cell "/about Bare directory path → its own index.html Multi-page routing: /about must serve about/index.html, NOT the home page." [ref=e51]':
+              - link "/about" [ref=e52] [cursor=pointer]:
+                - /url: /about
+              - generic [ref=e53]: Bare directory path → its own index.html
+              - generic [ref=e54]: "Multi-page routing: /about must serve about/index.html, NOT the home page."
+            - cell "GET /about → 200; heading \"About\" (not \"Home\"). This is the spaFallback fix." [ref=e55]
+            - cell "200; About content; proves directory-index resolution (not SPA fallback)." [ref=e56]
+          - row [ref=e298]:
+            - cell "✓" [ref=e299]
+            - cell [ref=e59]:
+              - code [ref=e60]: M1.5
+            - cell "/about/ Trailing-slash form Both /about and /about/ resolve to the same prerendered page." [ref=e61]:
+              - link /about/ [ref=e62] [cursor=pointer]:
+                - /url: /about/
+              - generic [ref=e63]: Trailing-slash form
+              - generic [ref=e64]: Both /about and /about/ resolve to the same prerendered page.
+            - cell "GET /about/ → 200; same body as /about." [ref=e65]
+            - cell "200; About content." [ref=e66]
+          - row [ref=e300]:
+            - cell "✓" [ref=e301]
+            - cell [ref=e69]:
+              - code [ref=e70]: M1.6
+            - cell "/docs/api/v1/getting-started Deep nested static path Multi-segment extensionless path resolves to its own index.html." [ref=e71]:
+              - link "/docs/api/v1/getting-started" [ref=e72] [cursor=pointer]:
+                - /url: /docs/api/v1/getting-started
+              - generic [ref=e73]: Deep nested static path
+              - generic [ref=e74]: Multi-segment extensionless path resolves to its own index.html.
+            - cell "GET /docs/api/v1/getting-started → 200." [ref=e75]
+            - cell "200; nested page content." [ref=e76]
+    - group [ref=e77]:
+      - generic "Errors (1)" [ref=e78] [cursor=pointer]
+      - table [ref=e79]:
+        - rowgroup [ref=e80]:
+          - row [ref=e81]:
+            - columnheader "●" [ref=e82]
+            - columnheader "Matrix" [ref=e83]
+            - columnheader "Route / feature" [ref=e84]
+            - columnheader "How to test" [ref=e85]
+            - columnheader "Expected" [ref=e86]
+        - rowgroup [ref=e87]:
+          - row [ref=e330]:
+            - cell "✓" [ref=e331]
+            - cell [ref=e90]:
+              - code [ref=e91]: M7.1
+            - cell "/this-does-not-exist-xyz Custom 404 (real status) Unknown path returns a real 404 with the custom 404.html body (NOT a 200 SPA fallback)." [ref=e92]:
+              - link "/this-does-not-exist-xyz" [ref=e93] [cursor=pointer]:
+                - /url: /this-does-not-exist-xyz
+              - generic [ref=e94]: Custom 404 (real status)
+              - generic [ref=e95]: Unknown path returns a real 404 with the custom 404.html body (NOT a 200 SPA fallback).
+            - cell "GET /nope → 404; custom 404 page body." [ref=e96]
+            - cell "404 status; custom 404 content." [ref=e97]
+    - group [ref=e98]:
+      - generic "Redirects (3)" [ref=e99] [cursor=pointer]
+      - table [ref=e100]:
+        - rowgroup [ref=e101]:
+          - row [ref=e102]:
+            - columnheader "●" [ref=e103]
+            - columnheader "Matrix" [ref=e104]
+            - columnheader "Route / feature" [ref=e105]
+            - columnheader "How to test" [ref=e106]
+            - columnheader "Expected" [ref=e107]
+        - rowgroup [ref=e108]:
+          - row [ref=e332]:
+            - cell "✓" [ref=e333]
+            - cell [ref=e111]:
+              - code [ref=e112]: AS6.3 / M4.1
+            - 'cell "/legacy-home Lifted permanent redirect (308) astro.config redirects { \"/legacy-home\": { destination:\"/\", status:308 } } lifted onto the CloudFront viewer-request function (edge, no Lambda)." [ref=e113]':
+              - link "/legacy-home" [ref=e114] [cursor=pointer]:
+                - /url: /legacy-home
+              - generic [ref=e115]: Lifted permanent redirect (308)
+              - generic [ref=e116]: "astro.config redirects { \"/legacy-home\": { destination:\"/\", status:308 } } lifted onto the CloudFront viewer-request function (edge, no Lambda)."
+            - 'cell "curl -I /legacy-home → 308 Location: /." [ref=e117]'
+            - 'cell "308 at the edge; Location: /." [ref=e118]'
+          - row [ref=e334]:
+            - cell "✓" [ref=e335]
+            - cell [ref=e121]:
+              - code [ref=e122]: AS6.3 / M4.1
+            - 'cell "/legacy-about Lifted redirect (object → 308) astro.config redirects object form { destination:\"/about\", status:308 } lifted to the edge." [ref=e123]':
+              - link "/legacy-about" [ref=e124] [cursor=pointer]:
+                - /url: /legacy-about
+              - generic [ref=e125]: Lifted redirect (object → 308)
+              - generic [ref=e126]: "astro.config redirects object form { destination:\"/about\", status:308 } lifted to the edge."
+            - 'cell "curl -I /legacy-about → 308 Location: /about." [ref=e127]'
+            - 'cell "308 at the edge; Location: /about." [ref=e128]'
+          - row [ref=e336]:
+            - cell "✓" [ref=e337]
+            - cell [ref=e131]:
+              - code [ref=e132]: AS6.3 / M4.1
+            - 'cell "/redirected Lifted temporary redirect (307) astro.config redirects { \"/redirected\": { destination:\"/\", status:307 } } lifted to the edge as a temporary redirect." [ref=e133]':
+              - link "/redirected" [ref=e134] [cursor=pointer]:
+                - /url: /redirected
+              - generic [ref=e135]: Lifted temporary redirect (307)
+              - generic [ref=e136]: "astro.config redirects { \"/redirected\": { destination:\"/\", status:307 } } lifted to the edge as a temporary redirect."
+            - 'cell "curl -I /redirected → 307 Location: /." [ref=e137]'
+            - 'cell "307 at the edge; Location: /." [ref=e138]'
+    - group [ref=e139]:
+      - generic "Islands (1)" [ref=e140] [cursor=pointer]
+      - table [ref=e141]:
+        - rowgroup [ref=e142]:
+          - row [ref=e143]:
+            - columnheader "●" [ref=e144]
+            - columnheader "Matrix" [ref=e145]
+            - columnheader "Route / feature" [ref=e146]
+            - columnheader "How to test" [ref=e147]
+            - columnheader "Expected" [ref=e148]
+        - rowgroup [ref=e149]:
+          - row [ref=e338]:
+            - cell "✓" [ref=e339]
+            - cell [ref=e152]:
+              - code [ref=e153]: AS (islands)
+            - 'cell "/islands Selective hydration page Static page with Preact islands: client:load (immediate) + client:visible (on scroll). Only islands ship JS." [ref=e154]':
+              - link "/islands" [ref=e155] [cursor=pointer]:
+                - /url: /islands
+              - generic [ref=e156]: Selective hydration page
+              - generic [ref=e157]: "Static page with Preact islands: client:load (immediate) + client:visible (on scroll). Only islands ship JS."
+            - cell "Open /islands; click client:load counter → increments. Scroll to client:visible → hydrates." [ref=e158]
+            - cell "200; island chunks under /_astro/*; counters interactive." [ref=e159]
+    - group [ref=e160]:
+      - generic "Caching (1)" [ref=e161] [cursor=pointer]
+      - table [ref=e162]:
+        - rowgroup [ref=e163]:
+          - row [ref=e164]:
+            - columnheader "●" [ref=e165]
+            - columnheader "Matrix" [ref=e166]
+            - columnheader "Route / feature" [ref=e167]
+            - columnheader "How to test" [ref=e168]
+            - columnheader "Expected" [ref=e169]
+        - rowgroup [ref=e170]:
+          - row [ref=e340]:
+            - cell "✓" [ref=e341]
+            - cell [ref=e173]:
+              - code [ref=e174]: M3.1
+            - cell "/islands Hashed island JS is immutable Island JS under /_astro/* gets a long-lived immutable Cache-Control (immutablePaths)." [ref=e175]:
+              - link "/islands" [ref=e176] [cursor=pointer]:
+                - /url: /islands
+              - generic [ref=e177]: Hashed island JS is immutable
+              - generic [ref=e178]: Island JS under /_astro/* gets a long-lived immutable Cache-Control (immutablePaths).
+            - cell "Find a /_astro/*.js URL in the islands page; GET it → cache-control includes immutable." [ref=e179]
+            - cell "immutable, max-age=31536000 on hashed assets." [ref=e180]
+    - group [ref=e181]:
+      - generic "Headers (1)" [ref=e182] [cursor=pointer]
+      - table [ref=e183]:
+        - rowgroup [ref=e184]:
+          - row [ref=e185]:
+            - columnheader "●" [ref=e186]
+            - columnheader "Matrix" [ref=e187]
+            - columnheader "Route / feature" [ref=e188]
+            - columnheader "How to test" [ref=e189]
+            - columnheader "Expected" [ref=e190]
+        - rowgroup [ref=e191]:
+          - row [ref=e342]:
+            - cell "✓" [ref=e343]
+            - cell [ref=e194]:
+              - code [ref=e195]: M6.5/M6.6/M6.1
+            - cell "/about L3 security headers The L3 attaches HSTS / X-Frame-Options / X-Content-Type-Options on every response." [ref=e196]:
+              - link "/about" [ref=e197] [cursor=pointer]:
+                - /url: /about
+              - generic [ref=e198]: L3 security headers
+              - generic [ref=e199]: The L3 attaches HSTS / X-Frame-Options / X-Content-Type-Options on every response.
+            - cell "curl -I /about → nosniff + SAMEORIGIN + HSTS present." [ref=e200]
+            - cell "Security headers on every page." [ref=e201]
+    - group [ref=e202]:
+      - generic "API (2)" [ref=e203] [cursor=pointer]
+      - table [ref=e204]:
+        - rowgroup [ref=e205]:
+          - row [ref=e206]:
+            - columnheader "●" [ref=e207]
+            - columnheader "Matrix" [ref=e208]
+            - columnheader "Route / feature" [ref=e209]
+            - columnheader "How to test" [ref=e210]
+            - columnheader "Expected" [ref=e211]
+        - rowgroup [ref=e212]:
+          - row [ref=e344]:
+            - cell "✓" [ref=e345]
+            - cell [ref=e215]:
+              - code [ref=e216]: single-origin
+            - cell "POST /aws-blocks/api Blocks API via same origin POST a JSON-RPC call to the relative /aws-blocks/api — CloudFront proxies to the Blocks API GW (no CORS)." [ref=e217]:
+              - link "POST /aws-blocks/api" [ref=e218] [cursor=pointer]:
+                - /url: /aws-blocks/api
+              - generic [ref=e219]: Blocks API via same origin
+              - generic [ref=e220]: POST a JSON-RPC call to the relative /aws-blocks/api — CloudFront proxies to the Blocks API GW (no CORS).
+            - 'cell "POST {method:\"api.ping\"} → 200 JSON with result.ok." [ref=e221]'
+            - cell "200; backend reachable through the same domain." [ref=e222]
+          - row [ref=e346]:
+            - cell "✓" [ref=e347]
+            - cell [ref=e225]:
+              - code [ref=e226]: single-origin
+            - cell "/.blocks-sandbox/config.json Runtime config.json The deployed config.json carries the relative apiUrl." [ref=e227]:
+              - link "/.blocks-sandbox/config.json" [ref=e228] [cursor=pointer]:
+                - /url: /.blocks-sandbox/config.json
+              - generic [ref=e229]: Runtime config.json
+              - generic [ref=e230]: The deployed config.json carries the relative apiUrl.
+            - cell "GET /.blocks-sandbox/config.json → apiUrl is /aws-blocks/api." [ref=e231]
+            - 'cell "200; apiUrl: /aws-blocks/api." [ref=e232]'
+    - group [ref=e233]:
+      - generic "Content (5)" [ref=e234] [cursor=pointer]
+      - table [ref=e235]:
+        - rowgroup [ref=e236]:
+          - row [ref=e237]:
+            - columnheader "●" [ref=e238]
+            - columnheader "Matrix" [ref=e239]
+            - columnheader "Route / feature" [ref=e240]
+            - columnheader "How to test" [ref=e241]
+            - columnheader "Expected" [ref=e242]
+        - rowgroup [ref=e243]:
+          - row [ref=e348]:
+            - cell "✓" [ref=e349]
+            - cell [ref=e246]:
+              - code [ref=e247]: AS (content)
+            - cell "/blog Content Collections listing getCollection('posts') lists Markdown entries; prerendered to /blog/index.html." [ref=e248]:
+              - link "/blog" [ref=e249] [cursor=pointer]:
+                - /url: /blog
+              - generic [ref=e250]: Content Collections listing
+              - generic [ref=e251]: getCollection('posts') lists Markdown entries; prerendered to /blog/index.html.
+            - cell "GET /blog → 200 with both post titles." [ref=e252]
+            - cell "200; entries listed." [ref=e253]
+          - row [ref=e350]:
+            - cell "✓" [ref=e351]
+            - cell [ref=e256]:
+              - code [ref=e257]: AS (content + getStaticPaths)
+            - cell "/blog/hello-astro Content entry detail getStaticPaths prerenders each Markdown entry to /blog/<slug>/index.html with rendered body." [ref=e258]:
+              - link "/blog/hello-astro" [ref=e259] [cursor=pointer]:
+                - /url: /blog/hello-astro
+              - generic [ref=e260]: Content entry detail
+              - generic [ref=e261]: getStaticPaths prerenders each Markdown entry to /blog/<slug>/index.html with rendered body.
+            - cell "GET /blog/hello-astro → 200; Markdown body rendered." [ref=e262]
+            - cell "200; entry rendered." [ref=e263]
+          - row [ref=e352]:
+            - cell "✓" [ref=e353]
+            - cell [ref=e266]:
+              - code [ref=e267]: AS4.1
+            - cell "/image-demo Build-time <Image> optimization astro:assets <Image> emits a hashed /_astro/ optimized asset served from S3." [ref=e268]:
+              - link "/image-demo" [ref=e269] [cursor=pointer]:
+                - /url: /image-demo
+              - generic [ref=e270]: Build-time <Image> optimization
+              - generic [ref=e271]: astro:assets <Image> emits a hashed /_astro/ optimized asset served from S3.
+            - cell "GET /image-demo; the <img> src is an /_astro/ optimized file." [ref=e272]
+            - cell "200; optimized image." [ref=e273]
+          - row [ref=e354]:
+            - cell "✓" [ref=e355]
+            - cell [ref=e276]:
+              - code [ref=e277]: AS10.5
+            - cell "/view-transitions View Transitions (ClientRouter) <ClientRouter /> injects the view-transitions-enabled meta into every page head." [ref=e278]:
+              - link "/view-transitions" [ref=e279] [cursor=pointer]:
+                - /url: /view-transitions
+              - generic [ref=e280]: View Transitions (ClientRouter)
+              - generic [ref=e281]: <ClientRouter /> injects the view-transitions-enabled meta into every page head.
+            - cell "GET /view-transitions → head has the astro-view-transitions-enabled meta." [ref=e282]
+            - cell "200; VT enabled." [ref=e283]
+          - row [ref=e356]:
+            - cell "✓" [ref=e357]
+            - cell [ref=e286]:
+              - code [ref=e287]: AS (sitemap)
+            - cell "/sitemap-index.xml Sitemap integration @astrojs/sitemap emits /sitemap-index.xml (+ /sitemap-0.xml) as static files on S3." [ref=e288]:
+              - link "/sitemap-index.xml" [ref=e289] [cursor=pointer]:
+                - /url: /sitemap-index.xml
+              - generic [ref=e290]: Sitemap integration
+              - generic [ref=e291]: "@astrojs/sitemap emits /sitemap-index.xml (+ /sitemap-0.xml) as static files on S3."
+            - cell "GET /sitemap-index.xml → 200 application/xml." [ref=e292]
+            - cell "200; sitemap XML." [ref=e293]

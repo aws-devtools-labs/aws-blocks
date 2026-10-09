@@ -1,0 +1,12 @@
+- generic [active] [ref=f3e1]:
+  - heading "403 Forbidden" [level=1] [ref=f3e2]
+  - list [ref=f3e3]:
+    - listitem [ref=f3e4]: "Code: AccessDenied"
+    - listitem [ref=f3e5]: "Message: Access Denied"
+    - listitem [ref=f3e6]: "RequestId: M2D1GHNMZHW3DTDJ"
+    - listitem [ref=f3e7]: "HostId: begR0HpmLc0t9SeucNUUssPQh2KnS31CW02UW4DQzqdnGv7nsWrHAPqDqo74vdRIaDFb6DQsodc="
+  - heading "An Error Occurred While Attempting to Retrieve a Custom Error Document" [level=3] [ref=f3e8]
+  - list [ref=f3e9]:
+    - listitem [ref=f3e10]: "Code: AccessDenied"
+    - listitem [ref=f3e11]: "Message: Access Denied"
+  - separator [ref=f3e12]
