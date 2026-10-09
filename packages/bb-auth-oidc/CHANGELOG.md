@@ -1,5 +1,26 @@
 # @aws-blocks/bb-auth-oidc
 
+## 0.2.2
+
+### Patch Changes
+
+- fd10117: Fix `cognitoFederated()` failing at `cdk synth` with `CannotFindAsset`.
+  
+  The published `@aws-blocks/bb-auth-oidc` package was missing the bundled Lambda that registers the identity provider on the user pool (`dist/idp-registration-lambda/index.js`), so any app using `cognitoFederated()` failed to synthesize. This affected both the Cognito-hosted domain prefix and custom domains. The release build now produces the bundle, so it ships with the package again.
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [6d764f7]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [f1eb149]
+  - @aws-blocks/core@0.7.0
+  - @aws-blocks/auth-common@0.1.10
+  - @aws-blocks/bb-app-setting@0.3.2
+  - @aws-blocks/bb-kv-store@0.3.1
+  - @aws-blocks/bb-logger@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes
