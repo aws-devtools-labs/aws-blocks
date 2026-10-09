@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { BlocksContext } from '@aws-blocks/core';
+import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
 import { stubIssuerUrl } from './engines/stub-idp.js';
 import type { ProviderConfig } from './types.js';
 
@@ -18,6 +18,21 @@ import type { ProviderConfig } from './types.js';
  */
 export function cookieSecretEnvVar(fullId: string): string {
 	return `BLOCKS_AUTH_OIDC_COOKIE_SECRET_${fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+}
+
+/**
+ * The scope's fully-qualified ID, resolved the same way `Scope.fullId` does.
+ *
+ * Both runtimes build the session store before `super()` runs, so `this.fullId`
+ * is not available where it is needed.
+ *
+ * @param scope - The parent scope passed to the constructor
+ * @param id - The block's own ID
+ * @returns The fully-qualified ID, e.g. `"myApp-auth"`
+ */
+export function scopeFullId(scope: ScopeParent, id: string): string {
+	const parent = 'fullId' in scope && scope.fullId ? scope.fullId : 'id' in scope && scope.id ? scope.id : undefined;
+	return parent ? `${parent}-${id}` : id;
 }
 
 /** Shared by both runtimes so the stub-vs-real issuer rule stays identical. */
