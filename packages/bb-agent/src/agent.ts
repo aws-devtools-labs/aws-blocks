@@ -558,7 +558,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			const tried = configs.map(c => `${c.provider}${c.modelId ? ` (${c.modelId})` : ''}`).join(', ');
 			throw blocksAgentError(AgentErrors.ModelUnavailable, `No model available. Tried: ${tried}. Check logs for details.`);
 		}
-		const model = await createStrandsModel(resolvedConfig, this.log, cannedHints);
+		const model = await createStrandsModel(resolvedConfig, this.log, cannedHints, this.buildUserAgentChain());
 
 		// SessionManager restores/saves agent state across invocations.
 		// undefined when no conversationId (inference-only calls — no state to persist).
