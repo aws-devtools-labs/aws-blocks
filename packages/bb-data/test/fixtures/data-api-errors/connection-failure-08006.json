@@ -1,0 +1,6 @@
+{
+  "name": "DatabaseErrorException",
+  "message": "ERROR: connection failure; SQLState: 08006",
+  "expected": "ConnectionFailed",
+  "provenance": "SQLState 08xxx classification path. name matches the DatabaseErrorException observed for captured statement errors; message text is constructed (a connection failure was not provoked during capture)"
+}
