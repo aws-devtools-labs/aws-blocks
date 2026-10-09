@@ -1,7 +1,7 @@
  // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { Agent, createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL, URL } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
 import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
@@ -103,6 +103,7 @@ export interface DevServerOptions {
   /**
    * Command to start the frontend dev server (e.g., 'npx vite --port 3100 --strictPort').
    * Omit to run backend-only (no frontend proxy).
+   * The proxy reuses HTTP connections to the frontend and releases its pool on shutdown.
    */
   frontendCommand?: string;
   /** Port the frontend dev server listens on. Default: 3100. */
@@ -712,8 +713,10 @@ export async function startDevServer(options: DevServerOptions) {
 
   // ── Frontend proxy ─────────────────────────────────────────────────────
   let frontendProcess: ChildProcess | null = null;
+  // Reuse frontend sockets so repeated page loads do not exhaust ephemeral ports.
+  const frontendAgent = frontendCommand ? new Agent({ keepAlive: true }) : undefined;
   const frontendProxy = frontendCommand
-    ? httpProxy.createProxyServer({ target: `http://localhost:${frontendPort}`, ws: true })
+    ? httpProxy.createProxyServer({ target: `http://localhost:${frontendPort}`, ws: true, agent: frontendAgent })
     : null;
 
   frontendProxy?.on('error', (_err, _req, res) => {
@@ -1120,6 +1123,7 @@ export async function startDevServer(options: DevServerOptions) {
     // successor may already own it).
     removeOwnPidfile();
     frontendProxy?.close();
+    frontendAgent?.destroy();
     apiProxy?.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref();
@@ -1138,6 +1142,7 @@ export async function startDevServer(options: DevServerOptions) {
   // (a surviving grandchild keeps the group alive) — see POST-EXIT GROUP-KILL
   // POLICY above.
   process.once('exit', () => {
+    frontendAgent?.destroy();
     // Release our singleton pidfile on any exit path (crash, uncaught exception)
     // that bypassed cleanup(), so it never lingers and blocks the next start.
     removeOwnPidfile();
