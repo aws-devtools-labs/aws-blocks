@@ -27,6 +27,39 @@ export const HARNESS_FAIL_REASONS = {
 export const AGENT_FAIL_AT = '2-agent';
 export const AGENT_FAIL_REASON = 'agent_timeout';
 
+// A 2-agent failure whose terminal `builder_error` is a PROVIDER-SIDE 5xx SERVER FAULT (Bedrock
+// `ServiceUnavailableException`/`InternalServerException`, a `$fault=server`, or an `httpStatusCode:5xx`)
+// is NOT the agent under test failing — it is the model backend being unavailable. The invoke layer
+// already RETRIES these (isRetryableModelError treats 5xx/ServiceUnavailable as transient, up to
+// INVOKE_MAX_ATTEMPTS with backoff); this signature only lands as a terminal `builder_error` AFTER
+// those retries were exhausted, i.e. the provider was down for the whole retry window. Scoring that a
+// counted composite-0 `agent_fail` would penalize the framework for AWS Bedrock being briefly down, so
+// this ONE signature is reclassified harness_error (EXCLUDED from the mean) — infra, not the thing
+// under test. Deliberately NARROW: it matches only a 5xx SERVER fault, never a client 4xx, a throttle,
+// a `MaxTokensError`/`ContextWindowOverflowError` (the agent's own budget — genuinely agent_fail), or a
+// wall-clock/cancellation partial. So a real agent failure can't hide behind this gate. Mirrors the
+// PGlite OOM carve-out below (an infra signature on a 2-agent/dead_server failure → harness_error).
+export const PROVIDER_SERVER_FAULT_RE =
+	/\$fault=server\b|httpStatusCode:\s*5\d\d\b|\bserviceunavailable|service_unavailable|\binternalserver|\binternalfailure|\bmodelnotready/i;
+export const PROVIDER_UNAVAILABLE_REASON = 'provider_unavailable';
+
+/**
+ * True when a terminal `builder_error` string shows a provider-side 5xx SERVER fault — i.e. the 2-agent
+ * step failed because the model backend (Bedrock) was unavailable through the whole invoke-retry
+ * window, not because the agent under test failed. Non-string input → false. Pure.
+ *
+ * NARROW BY DESIGN — matches a 5xx server fault only, so it must NOT fire on:
+ *   - a client-side 4xx (ValidationException / AccessDenied / a bad request) — the agent's config fault;
+ *   - a `MaxTokensError` / `ContextWindowOverflowError` — the agent exhausting its own budget (agent_fail);
+ *   - a throttle alone (429) that was retried away or is a quota concern, not an outage;
+ *   - a `wall_clock_timeout` / `cancelled` partial envelope (handled elsewhere in classifyCell).
+ * @param {unknown} builderError the terminal `builder_error` on result.json (from describeModelError)
+ * @returns {boolean}
+ */
+export function isProviderServerFault(builderError) {
+	return typeof builderError === 'string' && PROVIDER_SERVER_FAULT_RE.test(builderError);
+}
+
 // A checkpoint-survived ungraceful 2-agent death UNDER ACTIVE ISOLATION cannot be an agent pkill-storm
 // (cross-uid EPERM stops the agent from signalling the harness) — it is an infra WALL-CLOCK TIMEOUT
 // that killed the process group before a terminal stop_reason could flush. Reclassified harness_error
@@ -102,10 +135,14 @@ export function isUngracefulStepTwoDeath(result) {
  *   - `harness_error` — a pre-grade step failed or the run was CANCELLED (EXCLUDED from the mean).
  *   - `agent_fail` — the agent step failed on its own merits AND exited gracefully (verdict 'fail',
  *     composite 0, INCLUDED). An ungraceful 2-agent teardown is reclassified `harness_error`.
+ *     EXCEPTION: a 2-agent failure whose terminal `builder_error` is a provider-side 5xx SERVER fault
+ *     (the model backend was unavailable through the whole invoke-retry window) is reclassified
+ *     `harness_error` (EXCLUDED) — infra, not the agent (see isProviderServerFault). A client 4xx,
+ *     throttle, or MaxTokensError budget exhaustion stays `agent_fail` (counted).
  *   - `dead_server` — the agent finished but the built app's dev-server never served / crashed
  *     (dev_server_status='dead'): a genuine product failure (verdict 'fail', composite 0, INCLUDED).
  *   - `scored` — reached build/test/judge; its outcome is a real signal.
- * @param {{failed_at?: string|null, status?: string, dev_server_status?: string, stop_reason?: unknown, checkpoint?: unknown}} result
+ * @param {{failed_at?: string|null, status?: string, dev_server_status?: string, builder_error?: unknown, stop_reason?: unknown, checkpoint?: unknown}} result
  * @returns {{klass: 'scored'|'harness_error'|'agent_fail'|'dead_server', reason: string|null}}
  */
 export function classifyCell(result) {
@@ -128,6 +165,14 @@ export function classifyCell(result) {
 	if (failedAt === AGENT_FAIL_AT) {
 		if (isUngracefulStepTwoDeath(result) && result?.isolation_active === true) {
 			return { klass: 'harness_error', reason: AGENT_HARNESS_TIMEOUT_REASON };
+		}
+		// Signature-gated carve-out: a 2-agent failure whose terminal `builder_error` is a provider-side
+		// 5xx SERVER fault (Bedrock unavailable through the whole invoke-retry window) is infra, not the
+		// agent under test → harness_error (EXCLUDED). Narrow by design (see isProviderServerFault): only
+		// a 5xx server fault, never a client 4xx, a throttle, a MaxTokensError budget exhaustion, or a
+		// wall-clock/cancel partial — so a genuine agent failure stays agent_fail (counted).
+		if (isProviderServerFault(result?.builder_error)) {
+			return { klass: 'harness_error', reason: PROVIDER_UNAVAILABLE_REASON };
 		}
 		return { klass: 'agent_fail', reason: AGENT_FAIL_REASON };
 	}
