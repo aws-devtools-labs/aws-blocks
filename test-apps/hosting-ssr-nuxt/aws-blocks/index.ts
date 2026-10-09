@@ -10,17 +10,38 @@ const scope = new Scope('hosting-ssr-test');
 // deployed Lambda this is a no-op so codes never reach CloudWatch.
 const isDeployedLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
 
-let lastDeliveredCode: { username: string; code: string } | null = null;
+const posts = new KVStore(scope, 'posts', {});
+
+// Delivered verification codes are persisted in the existing shared store keyed
+// by username (a distinct key prefix keeps them out of the posts keyspace), with
+// a short TTL so a stale code stops being returned (reads filter expired records;
+// physical reaping would need a ttl-enabled table, unneeded for a throwaway app).
+// See the comprehensive test-app for the full rationale (cross-instance race,
+// per-user keying, expiry).
+const codeKey = (username: string) => `__last-code:${username}`;
+
+// A stored record that somehow fails to parse is treated as absent (the poller
+// then times out on its own message) rather than throwing a SyntaxError out of
+// the API method. Mirrors parseStoredRecord in the comprehensive test-app.
+function parseStoredRecord<T>(key: string, raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    console.warn(`[test-app] ignoring unparseable record at "${key}" (${raw.length} bytes) — treating it as absent`);
+    return null;
+  }
+}
+
 const auth = new AuthBasic(scope, 'auth', {
   sessionDuration: 86400,
   passwordPolicy: { minLength: 6 },
   codeDelivery: async (username, code) => {
-    lastDeliveredCode = { username, code };
+    await posts.put(codeKey(username), JSON.stringify({ username, code }), { ttlSeconds: 3600 });
     if (!isDeployedLambda) console.log(`[AuthBasic] Code for "${username}": ${code}`);
   },
 });
 
-const posts = new KVStore(scope, 'posts', {});
 const postIndex = new KVStore(scope, 'post-index', {});
 const userPosts = new KVStore(scope, 'user-posts', {});
 
@@ -65,8 +86,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return await auth.checkAuth(context);
   },
 
-  async authGetLastCode() {
-    return lastDeliveredCode;
+  async authGetLastCode(username: string) {
+    return parseStoredRecord<{ username: string; code: string }>(codeKey(username), await posts.get(codeKey(username)));
   },
 
   async getProfile() {

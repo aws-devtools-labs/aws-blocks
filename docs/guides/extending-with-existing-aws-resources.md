@@ -483,7 +483,7 @@ Blocks BB ships. Once your BB is generally useful, you can publish it.
 {
   "name": "@your-org/bb-queue",
   "version": "0.1.0",
-  "keywords": ["aws-blocks"],   // <-- TODO: confirm final tag with the Blocks team
+  "keywords": ["aws-blocks", "queue"],
   "exports": { /* ... cdk / aws-runtime / default conditions ... */ }
 }
 ```
@@ -495,9 +495,11 @@ BBs by searching npm:
 npm search keywords:aws-blocks
 ```
 
-> **TODO** — the official discovery tag is pending finalization with the
-> Blocks team. `aws-blocks` is the proposed value; this guide will be
-> updated when the tag is confirmed.
+`aws-blocks` is the confirmed discovery tag — every first-party Blocks package
+carries it, so tagging your BB with it makes it discoverable alongside them.
+You can optionally add functional keywords describing what your BB does (e.g.
+`queue`), but `aws-blocks` is the one that matters for discovery. Keep keywords
+accurate to what your BB actually implements rather than aspirational.
 
 **A few things to get right before publishing:**
 

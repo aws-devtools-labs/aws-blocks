@@ -3,6 +3,7 @@
 
 import { RemovalPolicy } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
+import type { BlocksVpcOptions } from './vpc-types.js';
 
 /**
  * Request-rate limits applied to an API Gateway stage. On a REST API these are
@@ -98,6 +99,17 @@ export interface BlocksDefaults {
 	 * `ensureApiGatewayAccount` for the full multi-stack teardown caveat.
 	 */
 	accessLogging: boolean;
+
+	/**
+	 * Place the app's compute and VPC-resident resources in a VPC. Pass a
+	 * standard CDK VPC — Blocks handles Lambda placement, endpoint provisioning
+	 * (based on which Building Blocks are in scope), and security-group wiring.
+	 *
+	 * Omit for no VPC (the preset default — Lambda runs in the AWS-managed
+	 * network). A Building Block that can't function without a VPC causes Blocks
+	 * to derive one on demand even when this is unset.
+	 */
+	vpc?: BlocksVpcOptions;
 }
 
 /**

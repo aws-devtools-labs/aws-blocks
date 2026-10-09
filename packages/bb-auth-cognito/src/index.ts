@@ -86,6 +86,7 @@ import {
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
+import { declaredGroupNames } from './groups.js';
 
 export * from './types.js';
 export { SessionStore, type SessionRecord } from './sessions.js';
@@ -324,7 +325,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			userSub: user.userSub,
 			enabled: !user.disabled,
 			attributes: { ...user.attributes },
-			groups: Object.keys(this.state.groups).filter((g) => this.state.groups[g].includes(username)),
+			groups: Object.keys(this.state.groups).filter((g) => (this.state.groups[g] ?? []).includes(username)),
 		});
 		// Apply a scan filter in memory, mirroring Cognito's ListUsers Filter.
 		const matchesFilter = (user: AdminUser, filter?: AdminUserFilter): boolean => {
@@ -356,7 +357,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			listGroupsForUser: async (username) => {
 				this.assertAdminAction('groups');
 				requireUser(username);
-				return Object.keys(this.state.groups).filter((g) => this.state.groups[g].includes(username));
+				return Object.keys(this.state.groups).filter((g) => (this.state.groups[g] ?? []).includes(username));
 			},
 			listUsersInGroup: async (group) => {
 				this.assertAdminAction('groups');
@@ -398,7 +399,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 				requireUser(username);
 				delete this.state.users[username];
 				for (const group of Object.keys(this.state.groups)) {
-					this.state.groups[group] = this.state.groups[group].filter((u) => u !== username);
+					this.state.groups[group] = (this.state.groups[group] ?? []).filter((u) => u !== username);
 				}
 				this.flushToDisk();
 			},
@@ -1285,10 +1286,25 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 
 	async requireRole(context: BlocksContext, role: GroupOf<O>): Promise<CognitoUser<O>> {
 		const user = await this.requireAuth(context);
-		if (!user.groups.includes(role)) {
+		// Read membership live from the source of truth rather than the session
+		// token's `cognito:groups` claim — the same reasoning as
+		// `fetchUserAttributes`. An admin who runs `addUserToGroup` /
+		// `removeUserFromGroup` against an already-signed-in user would otherwise
+		// not take effect (grant) or not revoke (removal) until that user's token
+		// next refreshed or they re-logged in. The mock derives membership from
+		// `this.state.groups`; the AWS runtime calls `AdminListGroupsForUser`.
+		const liveGroups = Object.keys(this.state.groups).filter((g) => (this.state.groups[g] ?? []).includes(user.username));
+		if (!liveGroups.includes(role)) {
 			throw new ApiError(`Not in group '${role}'`, 403, { name: AuthCognitoErrors.NotAuthorized });
 		}
-		return user;
+		// Narrow the returned list to the declared groups — same as the AWS runtime.
+		// `state.groups` can hold a key that outlived a change to `options.groups`
+		// (rehydrated from a stale `.bb-data` blob), which isn't in the declared
+		// union `CognitoUser<O>.groups` promises. The membership decision above used
+		// the raw read. No declared groups → `GroupOf<O>` is `string`, so raw is sound.
+		const declared = declaredGroupNames(this.options.groups);
+		const groups = declared ? liveGroups.filter((g) => declared.has(g)) : liveGroups;
+		return { ...user, groups: groups as GroupOf<O>[] };
 	}
 
 	/**
@@ -1384,7 +1400,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 		const signed = await this.requireAuth(context);
 		delete this.state.users[signed.username];
 		for (const group of Object.keys(this.state.groups)) {
-			this.state.groups[group] = this.state.groups[group].filter((u) => u !== signed.username);
+			this.state.groups[group] = (this.state.groups[group] ?? []).filter((u) => u !== signed.username);
 		}
 		this.flushToDisk();
 		const id = await this.sessionIdFromCookie(context);

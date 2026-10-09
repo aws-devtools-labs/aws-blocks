@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import { Scope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KnowledgeBaseOptions, ChunkingConfig } from './types.js';
 import * as path from 'node:path';
@@ -186,9 +187,9 @@ function generateMetadataSidecars(sourceDir: string): string | undefined {
  * @param id - Unique identifier within the scope.
  * @param options - Knowledge base configuration (source, chunking, embedding dimensions, description).
  */
-export class KnowledgeBase extends Scope {
+export class KnowledgeBase extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: KnowledgeBaseOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
 
 		const dimensions = options.embeddingDimensions ?? 1024;
 

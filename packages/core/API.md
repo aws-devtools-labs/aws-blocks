@@ -10,6 +10,7 @@ import { isConfig } from '@aws-blocks/hosting';
 import { isManagedValue } from '@aws-blocks/hosting';
 import { isSecret } from '@aws-blocks/hosting';
 import { ManagedValue } from '@aws-blocks/hosting';
+import type { MiddlewareStack } from '@smithy/types';
 import { secret } from '@aws-blocks/hosting';
 import { SecretValue } from '@aws-blocks/hosting';
 import { ValueKind } from '@aws-blocks/hosting';
@@ -61,6 +62,9 @@ export type BlocksContext = {
 export function blocksError(name: string, message: string): Error;
 
 // @public
+export function brandBlocksError<T extends Error>(err: T): T;
+
+// @public
 export interface BuildingBlockMeta {
     readonly bbName: string;
     readonly bbVersion: string;
@@ -106,6 +110,11 @@ export function hasAuthError<T extends {
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS';
 
 // @public
+export function installClientUserAgent<Input extends object, Output extends object>(client: {
+    middlewareStack: Pick<MiddlewareStack<Input, Output>, 'add' | 'addRelativeTo' | 'identify'>;
+}): void;
+
+// @public
 export function isBlocksError<N extends string>(e: unknown, name: N): e is Error & {
     name: N;
 };
@@ -115,6 +124,9 @@ export { isConfig }
 export { isManagedValue }
 
 export { isSecret }
+
+// @public
+export function isWireSafeError(e: unknown): e is Error;
 
 // @public
 export function loadConfigToProcessEnv(): Promise<void>;
@@ -159,6 +171,7 @@ export interface RegisteredRoute {
     handler: (context: BlocksContext) => Promise<void>;
     // (undocumented)
     method: string;
+    ownerRootId?: string;
     paramNames: string[];
     path: string;
     pattern: RegExp;
@@ -167,6 +180,7 @@ export interface RegisteredRoute {
 // @public
 export function registerRoute(options: RawRouteOptions & {
     path: string;
+    ownerRootId?: string;
 }): void;
 
 // @public
@@ -203,6 +217,8 @@ export class Scope {
     registerDevAttachment(packageSpecifier: string): void;
     registerLambdaEventHandler(eventSource: string, identifier: string, handler: (record: any) => Promise<void>): void;
     static _resetRegistry(): void;
+    // @internal
+    static _setDefaultBlockForTelemetry(name: string, version: string): void;
 }
 
 // @public (undocumented)

@@ -32,13 +32,13 @@ jobs:
       - run: npm install -g npm-check-updates
 
       - name: Bump root + workspace packages
-        run: ncu -u --root --workspaces
+        run: ncu -u --target minor --root --workspaces
 
       - name: Bump templates
         run: |
           for dir in packages/create-blocks-app/templates/*/; do
             echo "Updating $dir"
-            ncu -u --cwd "$dir"
+            ncu -u --target minor --cwd "$dir"
           done
 
       - name: Install and build
@@ -53,22 +53,31 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BRANCH="chore/dependency-update-$(date +%Y-%m-%d)"
+          # Target the branch this run was triggered on: on the schedule that's
+          # main; a manual run from the Actions menu against a feature branch bumps
+          # (and PRs into) THAT branch, so the PR merges cleanly instead of carrying
+          # the branch's own commits into a main-targeted PR.
+          TARGET="$GITHUB_REF_NAME"
+          DATE="$(date +%Y-%m-%d)"
+          BRANCH="chore/dependency-update-${TARGET}-${DATE}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add -A
+          # Stage only dependency manifests + the lockfile, so a run from a feature
+          # branch can't sweep that branch's unrelated changes into the bump PR.
+          git add -- ':(glob)**/package.json' package-lock.json
           if git diff --cached --quiet; then
             echo "No dependency changes found."
             exit 0
           fi
-          git commit -m "chore: weekly dependency bump $(date +%Y-%m-%d)"
+          git commit -m "chore: weekly dependency bump for ${TARGET} (${DATE})"
           git push -u origin "$BRANCH"
           gh pr create \
-            --title "chore: weekly dependency bump $(date +%Y-%m-%d)" \
-            --body "Automated aggressive dependency bump via \`npm-check-updates\`.
+            --title "chore: weekly dependency bump for ${TARGET} (${DATE})" \
+            --body "Automated dependency bump via \`npm-check-updates\` (\`--target minor\`).
 
-          **Scope:** root, all workspace packages, and templates.
+          Target branch: \`${TARGET}\`
+          Scope: root, all workspace packages, and templates.
 
           Build and local e2e passed. Please review and merge." \
-            --base main
+            --base "$TARGET"

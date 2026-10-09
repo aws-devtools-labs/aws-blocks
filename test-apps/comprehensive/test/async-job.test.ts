@@ -5,6 +5,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout } from 'node:timers/promises';
 import type { api as apiType } from 'aws-blocks';
+import { isBlocksError } from '@aws-blocks/core';
+import { AsyncJobErrors } from '@aws-blocks/bb-async-job';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isDeployed = ENV === 'sandbox' || ENV === 'production';
@@ -99,7 +101,9 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       const api = getApi();
       await assert.rejects(
         () => api.asyncJobSubmitTooLarge(),
-        /PayloadTooLargeException/
+        // The branded BB name must survive the RPC wire (D-003) even though the
+        // #227 gate sanitizes the message, so assert on the name via isBlocksError.
+        (e: unknown) => isBlocksError(e, AsyncJobErrors.PayloadTooLarge)
       );
     });
 
@@ -131,7 +135,7 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       const api = getApi();
       await assert.rejects(
         () => api.asyncJobSubmitValidated('not-an-email', 'Subject', 'Body'),
-        /ValidationFailedException/
+        (e: unknown) => isBlocksError(e, AsyncJobErrors.ValidationFailed)
       );
     });
 
@@ -142,7 +146,7 @@ export function asyncJobTests(getApi: () => typeof apiType) {
           { to: 'alice@example.com', subject: 'Hi', body: 'Hello' },
           { to: 'bad-email', subject: 'Hi', body: 'Hello' },
         ]),
-        /ValidationFailedException/
+        (e: unknown) => isBlocksError(e, AsyncJobErrors.ValidationFailed)
       );
     });
 

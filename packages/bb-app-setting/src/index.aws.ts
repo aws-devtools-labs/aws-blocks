@@ -6,7 +6,7 @@ import {
 	GetParameterCommand,
 	PutParameterCommand,
 } from '@aws-sdk/client-ssm';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, brandBlocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { AppSettingErrors } from './errors.js';
@@ -18,13 +18,17 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 // Re-export public types from types module (canonical source)
 export { AppSettingErrors } from './errors.js';
 export type { AppSettingOptions } from './types.js';
+export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+// Prefixes the message with the error `name`. The `blocksError` in validation.ts
+// is deliberately UNPREFIXED to preserve the CDK synth error text — keep these
+// separate; do not merge them into one prefixing helper. @see validation.ts
 function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }
 
 async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value: unknown): Promise<void> {
@@ -93,6 +97,7 @@ export class AppSetting<T = string> extends Scope {
 		this.client = new SSMClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(this.client);
 		registerSdkIdentifiers(this.fullId, { parameterName });
 	}
 

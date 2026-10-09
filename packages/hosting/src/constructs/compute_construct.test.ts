@@ -4,11 +4,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { App, Duration, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { ComputeConstruct } from './compute_construct.js';
 import { HostingError } from '../hosting_error.js';
-import { ComputeResource } from '../manifest/types.js';
+import type { ComputeResource } from '../manifest/types.js';
 
 // ---- Test helpers ----
 
@@ -290,6 +290,39 @@ void describe('ComputeConstruct', () => {
           return true;
         },
       );
+    });
+
+    // EOL runtimes are still accepted (an explicit pin must not hard-break a
+    // deployed function at synth), but they emit a deprecation warning (#378).
+    for (const runtime of ['nodejs20.x', 'nodejs18.x'] as const) {
+      void it(`accepts ${runtime} but warns it is end-of-life`, () => {
+        const bundle = createBundleDir();
+        const stack = createStack();
+
+        new ComputeConstruct(stack, 'Compute', {
+          name: 'serverFn',
+          computeResource: { ...handlerResource(bundle), runtime },
+        });
+
+        const template = Template.fromStack(stack);
+        template.hasResourceProperties('AWS::Lambda::Function', { Runtime: runtime });
+        Annotations.fromStack(stack).hasWarning(
+          '*',
+          Match.stringLikeRegexp(`'serverFn' pins '${runtime.replace('.', '\\.')}'.*deprecation`),
+        );
+      });
+    }
+
+    void it('does NOT warn for a supported runtime', () => {
+      const bundle = createBundleDir();
+      const stack = createStack();
+
+      new ComputeConstruct(stack, 'Compute', {
+        name: 'default',
+        computeResource: { ...handlerResource(bundle), runtime: 'nodejs22.x' },
+      });
+
+      Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('end-of-life|deprecation'));
     });
   });
 
