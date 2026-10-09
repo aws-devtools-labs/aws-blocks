@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
@@ -14,6 +14,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
+import { AUDIT_WARNING, AUDIT_WARNING_ACK_TAG } from './audit-warning-matcher.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
@@ -471,5 +472,99 @@ describe('VPC placement', () => {
 				'handler must not have VpcConfig when no VPC is configured',
 			);
 		}
+	});
+});
+
+describe('production access-logging audit-gap synth warning', () => {
+	// Matchers are shared with blocks-stack.test.ts (see audit-warning-matcher.ts)
+	// so both synth paths assert the same contract: AUDIT_WARNING pins the message,
+	// the opt-in remedy, and the id (anchored on the `[ack: …]` tag addWarningV2
+	// appends); AUDIT_WARNING_ACK_TAG matches that tag alone for the negative cases.
+
+	test('durable posture with accessLogging off warns at synth (message, remedy, and id pinned)', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditWarnProdStack');
+
+		// BlocksPresets.production is durable (RETAIN) with accessLogging: false
+		// (opt-in), so the audit-gap warning must fire. The single matcher asserts
+		// the message, the `accessLogging: true` remedy, and the warning id together.
+		await makeBackend(parent, 'Blocks', sideEffectBackendPath);
+
+		Annotations.fromStack(parent).hasWarning('*', AUDIT_WARNING);
+	});
+
+	test('durable posture with deletionProtection off still warns (keyed on durability, not the delete guard)', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditWarnNoDeleteGuardStack');
+
+		// The documented customization `{ ...production, deletionProtection: false }`
+		// is still a durable (RETAIN) stack, so it is still an audit gap and must
+		// warn — the predicate keys on the removal policy, not deletion protection.
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: { ...BlocksPresets.production, deletionProtection: false },
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		Annotations.fromStack(parent).hasWarning('*', AUDIT_WARNING);
+	});
+
+	test('SNAPSHOT removal policy with accessLogging off warns (durable, not DESTROY)', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditWarnSnapshotStack');
+
+		// SNAPSHOT retains data on teardown — durable, so the audit gap applies even
+		// though it is neither RETAIN nor a named preset.
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: { ...BlocksPresets.production, removalPolicy: cdk.RemovalPolicy.SNAPSHOT },
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		Annotations.fromStack(parent).hasWarning('*', AUDIT_WARNING);
+	});
+
+	test('production posture with accessLogging overridden to true does NOT warn', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditNoWarnOptInStack');
+
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: { ...BlocksPresets.production, accessLogging: true },
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		Annotations.fromStack(parent).hasNoWarning('*', AUDIT_WARNING_ACK_TAG);
+	});
+
+	test('sandbox posture (DESTROY) does NOT warn (disposable stack, not a durable audit gap)', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditNoWarnSandboxStack');
+
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.sandbox,
+			defaultComputeFactory: stubComputeFactory,
+		});
+
+		Annotations.fromStack(parent).hasNoWarning('*', AUDIT_WARNING_ACK_TAG);
+	});
+
+	test('acknowledging the warning after create() on the returned backend suppresses it', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'AuditAckAfterCreateStack');
+
+		// The working acknowledge form documented on BlocksDefaults.accessLogging:
+		// ack on the stack/backend RETURNED by create(), after it resolves (acking
+		// on the App before create() would not suppress it). Covers the ack path,
+		// which no other test exercises.
+		const backend = await makeBackend(parent, 'Blocks', sideEffectBackendPath);
+		cdk.Annotations.of(backend).acknowledgeWarning('blocks:apigateway:access-logging-disabled');
+
+		Annotations.fromStack(parent).hasNoWarning('*', AUDIT_WARNING_ACK_TAG);
 	});
 });

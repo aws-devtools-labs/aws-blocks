@@ -14,8 +14,8 @@ import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
-import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
+import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
 
@@ -80,6 +80,57 @@ export interface CoreBlocksBackendProps extends BlocksBackendProps {
 }
 
 /**
+ * Emit a synth-time warning when the stack is deployed with a durable removal
+ * policy but API Gateway access logging is off — so the tradeoff is visible at
+ * `cdk synth` rather than discovered as a missing audit trail later.
+ *
+ * `accessLogging` is deliberately off by default in BOTH presets (see the
+ * {@link BlocksDefaults.accessLogging} field doc): enabling it provisions the
+ * account/region-level API Gateway CloudWatch Logs role, an AWS-side singleton a
+ * second Blocks stack can repoint on deploy or break on teardown. We must NOT
+ * flip that default, but a durable deployment silently having no request-level
+ * audit trail is worth surfacing.
+ *
+ * The gap is detected from the resolved defaults rather than by identity to a
+ * preset object (which any per-field override would break): the trigger is a
+ * durable removal policy (any removal policy other than DESTROY) with access
+ * logging off. Keying on durability alone also covers postures the old RETAIN +
+ * deletion-protection check missed — a durable stack that turns deletion
+ * protection off (`{ ...BlocksPresets.production, deletionProtection: false }`),
+ * and the SNAPSHOT and RETAIN_ON_UPDATE_OR_DELETE removal policies. The sandbox
+ * posture (DESTROY) and any explicit `accessLogging: true` override are correctly
+ * excluded; any other falsy `accessLogging` still warns, so a plain-JS caller
+ * who omits the field gets both the default-off behavior AND this warning (the
+ * truthiness check matches how consumer blocks read `defaults.accessLogging`).
+ * Warning only — never throws — and fires at most once per
+ * BlocksStack/BlocksBackend (so multiple backends in one stack each warn for
+ * their own posture).
+ *
+ * To silence it deliberately, acknowledge the warning on the stack or backend
+ * returned by `create()` after it resolves — see the message for the exact call.
+ */
+function warnIfDurableWithoutAccessLogging(scope: Construct, defaults: BlocksDefaults): void {
+	const isDurableAuditGap = defaults.removalPolicy !== cdk.RemovalPolicy.DESTROY && !defaults.accessLogging;
+	if (!isDurableAuditGap) return;
+
+	cdk.Annotations.of(scope).addWarningV2(
+		'blocks:apigateway:access-logging-disabled',
+		'This deployment has a durable removal policy (its stateful resources are not destroyed on ' +
+			'teardown) but API Gateway access logging is disabled, so it has no request-level audit ' +
+			'trail. It is off by default because enabling it provisions the account/region-level API ' +
+			'Gateway CloudWatch Logs role — an AWS-side singleton that a second Blocks stack in the same ' +
+			'account+region can repoint on deploy or leave broken on teardown (see the `accessLogging` ' +
+			'field docs on the backend `defaults`). Once you have confirmed a single Blocks stack owns ' +
+			"that role in the region, opt in by setting `accessLogging: true` in this backend's " +
+			'`defaults`; opting in also enables S3 server access logging for any FileBucket, each of ' +
+			'which then gets its own log bucket. If leaving it off is deliberate (for example a ' +
+			'multi-stack deployment where another stack owns access logging), acknowledge this warning ' +
+			"by calling `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:access-logging-disabled')` " +
+			'on the stack or backend returned by `create()`.',
+	);
+}
+
+/**
  * Shared infra setup — provisions the stack-level resources that are NOT owned
  * by a compute: the shared execution role, resource groups, and console-redirect
  * routes.
@@ -95,6 +146,10 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 				'`@aws-blocks/core/cdk` — typically `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.',
 		);
 	}
+
+	// Surface the audit-trail tradeoff at synth when running a durable posture
+	// with access logging off. Non-fatal: warning only.
+	warnIfDurableWithoutAccessLogging(scope, props.defaults);
 
 	// ── Shared execution role ───────────────────────────────────────────────
 	// A single IAM role that every Building Block grants to. Provisioned here so
