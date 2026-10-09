@@ -86,6 +86,7 @@
     "@aws-blocks/bb-realtime": "^0.3.0",
     "@aws-blocks/bb-data": "^0.3.1",
     "@aws-blocks/bb-distributed-data": "^0.2.1",
+    "@aws-blocks/bb-database": "^0.1.0",
     "@aws-blocks/bb-async-job": "^0.2.2",
     "@aws-blocks/bb-cron-job": "^0.2.2",
     "@aws-blocks/bb-file-bucket": "^0.3.0",
@@ -115,6 +116,9 @@
       ],
       "@aws-blocks/bb-distributed-data": [
         "DistributedDatabase"
+      ],
+      "@aws-blocks/bb-database": [
+        "Database"
       ],
       "@aws-blocks/bb-async-job": [
         "AsyncJob"

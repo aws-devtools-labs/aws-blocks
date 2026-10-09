@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
+import { runDatabasePredeploy } from './database-predeploy-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
@@ -47,6 +48,10 @@ export async function deploy(options: DeployOptions) {
     // Apply external-database migrations to the production database before
     // deploying. No-op unless this app uses an external DB and has ./migrations.
     await applyExternalMigrations({ stage: 'production' });
+
+    // bb-database: the deploy guard (a Database keeps its cluster for life) and
+    // host-side migrations for fromExisting() clusters. No-op without bb-database.
+    runDatabasePredeploy({ stage: 'production', projectRoot: options.projectRoot });
     
     // Import backend to populate BB registry for telemetry
     const foundationPath = resolve(options.projectRoot, 'aws-blocks/index.ts');

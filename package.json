@@ -14,6 +14,7 @@
     "packages/bb-app-setting",
     "packages/bb-data",
     "packages/bb-distributed-data",
+    "packages/bb-database",
     "packages/bb-auth-basic",
     "packages/bb-auth-cognito",
     "packages/bb-auth-oidc",
