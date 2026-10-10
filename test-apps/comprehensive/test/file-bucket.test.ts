@@ -250,6 +250,48 @@ export function fileBucketTests(getApi: () => typeof apiType) {
     // ── Versioned FileBucket ──────────────────────────────────────────────
 
     describe('Versioned', () => {
+      test('deleting the current version promotes the previous version through the API', async () => {
+        const api = getApi();
+        const path = `v/delete-current-${crypto.randomUUID()}.txt`;
+        try {
+          await api.vFilePut(path, 'old', 'text/plain');
+          await api.vFilePut(path, 'new content', 'text/csv');
+          const [latest, previous] = await api.vFileListVersions(path);
+          await api.vFileDelete(path, latest.versionId);
+          const file = await api.vFileGet(path);
+          assert.ok(file);
+          assert.strictEqual(file.body, 'old');
+          assert.strictEqual(file.contentType, 'text/plain');
+          assert.strictEqual(file.size, 3);
+          assert.strictEqual(await api.vFileGet(path, latest.versionId), null);
+          const remaining = await api.vFileListVersions(path);
+          assert.strictEqual(remaining.length, 1);
+          assert.strictEqual(remaining[0].versionId, previous.versionId);
+          assert.strictEqual(remaining[0].isCurrent, true);
+          const files = await api.vFileScan(path);
+          assert.strictEqual(files.length, 1);
+          assert.strictEqual(files[0].size, 3);
+        } finally {
+          await api.vFilePurge(path);
+        }
+      });
+
+      test('permanently deleting every version removes the object from reads and scans', async () => {
+        const api = getApi();
+        const path = `v/delete-all-${crypto.randomUUID()}.txt`;
+        try {
+          await api.vFilePut(path, 'old');
+          await api.vFilePut(path, 'new content');
+          const versions = await api.vFileListVersions(path);
+          for (const version of versions) await api.vFileDelete(path, version.versionId);
+          assert.deepStrictEqual(await api.vFileListVersions(path), []);
+          assert.strictEqual(await api.vFileGet(path), null);
+          assert.deepStrictEqual(await api.vFileScan(path), []);
+        } finally {
+          await api.vFilePurge(path);
+        }
+      });
+
       // Clean up any leftover versions from previous runs
       test.before(async () => {
         const api = getApi();
