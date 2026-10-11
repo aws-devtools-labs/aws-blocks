@@ -5,6 +5,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import http from 'node:http';
 import http2 from 'node:http2';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AddressInfo } from 'node:net';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -197,5 +198,79 @@ describe('Agent inference user-agent (Strands-owned BedrockRuntimeClient)', () =
 			inference.userAgent.includes(`bb/${BB_NAME}-${BB_VERSION}`),
 			`x-amz-user-agent missing Agent BB: ${inference.userAgent}`,
 		);
+	});
+});
+
+/**
+ * The per-request native token is stored by `lambda-handler`, so only the
+ * `BedrockAgentCoreClient` can carry it: `stream()` reaches it inside the
+ * Lambda, while the health and inference clients run in the AgentCore Runtime
+ * where no request scope exists.
+ */
+describe('Agent forwards the native client user-agent on the AgentCore request', () => {
+	const STORE_KEY = '__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__';
+
+	// Drive one InvokeAgentRuntime, capture the built user-agent at the request
+	// handler, then abort before the network. `dispatchTurn` builds the client
+	// lazily, so the first call creates it and the second one is captured.
+	async function capturedUserAgentFor(id: string, token: string | undefined): Promise<string | undefined> {
+		const prevEnv: Record<string, string | undefined> = {};
+		for (const key of [...ENV_KEYS, 'AWS_PROFILE'] as const) prevEnv[key] = process.env[key];
+		delete process.env.AWS_PROFILE;
+		delete process.env.AWS_SESSION_TOKEN;
+		// Port 1 is closed, so the dispatch that builds the client fails locally.
+		process.env.AWS_ENDPOINT_URL = 'http://127.0.0.1:1';
+		process.env.AWS_REGION = 'us-east-1';
+		process.env.AWS_ACCESS_KEY_ID = 'AKIDTEST';
+		process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+		const prevStore = (globalThis as Record<string, unknown>)[STORE_KEY];
+		const als = new AsyncLocalStorage<string | undefined>();
+		(globalThis as Record<string, unknown>)[STORE_KEY] = als;
+		let captured: string | undefined;
+		const swallowCapture = async (run: () => Promise<void>) => {
+			try {
+				await run();
+			} catch (err) {
+				if (!(err instanceof Error) || err.message !== '__captured__') throw err;
+			}
+		};
+		try {
+			const agent = new Agent({ id: 'ua-app' }, id, { systemPrompt: 'test', inferenceOnly: true });
+			const arnKey = `BB_AGENT_${agent.fullId}_RUNTIME_ARN`;
+			process.env[arnKey] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/test-runtime';
+			const dispatch = () => (agent as unknown as { dispatchTurn(p: unknown): Promise<void> })
+				.dispatchTurn({ message: 'hi', channelId: 'channel-token', userId: 'user-1' });
+			try {
+				await dispatch().catch(() => undefined);
+				(agent as unknown as { _agentCore: { config: { requestHandler: unknown } } })._agentCore.config.requestHandler = {
+					handle: async (req: { headers: Record<string, string> }) => {
+						captured = req.headers['user-agent'] ?? req.headers['x-amz-user-agent'];
+						throw new Error('__captured__');
+					},
+				};
+				await als.run(token, () => swallowCapture(dispatch));
+			} finally {
+				delete process.env[arnKey];
+			}
+		} finally {
+			if (prevStore === undefined) delete (globalThis as Record<string, unknown>)[STORE_KEY];
+			else (globalThis as Record<string, unknown>)[STORE_KEY] = prevStore;
+			for (const [key, value] of Object.entries(prevEnv)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+		return captured;
+	}
+
+	test('appends the request-scoped token to the outgoing user-agent header', async () => {
+		const ua = await capturedUserAgentFor('ua-token', 'client/kotlin/1.0.0');
+		assert.match(ua ?? '', / client\/kotlin\/1\.0\.0$/);
+	});
+
+	test('does not append a native token when none is set for the request', async () => {
+		const ua = await capturedUserAgentFor('ua-token-none', undefined);
+		assert.ok(ua && ua.length > 0, 'user-agent header should still be present');
+		assert.doesNotMatch(ua ?? '', /client\/[a-z]+\//);
 	});
 });
