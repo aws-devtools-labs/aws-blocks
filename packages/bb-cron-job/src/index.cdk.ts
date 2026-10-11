@@ -73,23 +73,19 @@ export class CronJob<T = void> extends Scope {
 // ── Shared Scheduler Role (one per backend root) ─────────────────────────────
 
 const SCHEDULER_ROLE_KEY = Symbol.for('BLOCKS_SCHEDULER_ROLE');
-
-interface SchedulerRoleState {
-	role: iam.Role;
-	handlerArns: Set<string>;
-}
+const SCHEDULER_GRANTS_KEY = Symbol.for('BLOCKS_SCHEDULER_ROLE_GRANTS');
 
 // Keyed on (and parented under) the owning backend root, so two BlocksBackends in
 // one cdk.Stack each get their own scheduler role. Within a backend, grant each
 // targeted compute once rather than only the first schedule's handler.
 function getOrCreateSchedulerRole(scope: Construct, handlerArn: string): iam.Role {
-	const state = getOrCreateOnRoot<SchedulerRoleState>(scope, SCHEDULER_ROLE_KEY, (root) => {
+	const role = getOrCreateOnRoot(scope, SCHEDULER_ROLE_KEY, (root) => {
 		// The trust is limited to EventBridge Scheduler schedules in this account and region.
 		// Scheduler reports the schedule GROUP ARN (not the individual schedule ARN) as aws:SourceArn,
 		// so the ArnLike pattern matches `schedule-group/*`. Same shape as the AgentCore Runtime trust
 		// in bb-agent/src/agentcore-runtime.cdk.ts.
 		const stack = cdk.Stack.of(root);
-		const role = new iam.Role(root, 'BlocksSchedulerRole', {
+		return new iam.Role(root, 'BlocksSchedulerRole', {
 			assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com', {
 				conditions: {
 					StringEquals: { 'aws:SourceAccount': stack.account },
@@ -99,14 +95,14 @@ function getOrCreateSchedulerRole(scope: Construct, handlerArn: string): iam.Rol
 				},
 			}),
 		});
-		return { role, handlerArns: new Set<string>() };
 	});
-	if (!state.handlerArns.has(handlerArn)) {
-		state.role.addToPolicy(new iam.PolicyStatement({
+	const handlerArns = getOrCreateOnRoot(scope, SCHEDULER_GRANTS_KEY, () => new Set<string>());
+	if (!handlerArns.has(handlerArn)) {
+		role.addToPolicy(new iam.PolicyStatement({
 			actions: ['lambda:InvokeFunction'],
 			resources: [handlerArn],
 		}));
-		state.handlerArns.add(handlerArn);
+		handlerArns.add(handlerArn);
 	}
-	return state.role;
+	return role;
 }
