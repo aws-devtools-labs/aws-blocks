@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { Scope, isBlocksError } from '@aws-blocks/core';
+import { Scope, isBlocksError, isWireSafeError } from '@aws-blocks/core';
 import { FileBucket as AwsFileBucket } from './index.aws.js';
 import { FileBucket as MockFileBucket } from './index.mock.js';
 import { validatePresignedUrlExpiry } from './presigned-url.js';
@@ -21,6 +21,14 @@ test('rejects invalid presigned URL expiration values', () => {
 			`expiresIn=${String(expiresIn)} should throw ValidationFailed`,
 		);
 	}
+});
+
+test('presigned URL validation errors are branded for RPC serialization', () => {
+	assert.throws(() => validatePresignedUrlExpiry(0), (error: unknown) => {
+		assert.ok(isBlocksError(error, 'ValidationFailed'));
+		assert.ok(isWireSafeError(error), 'validation errors must be branded for RPC serialization');
+		return true;
+	});
 });
 
 test('mock and AWS runtimes reject invalid expiration values before URL generation', async () => {

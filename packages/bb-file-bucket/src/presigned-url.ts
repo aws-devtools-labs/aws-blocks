@@ -1,13 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { brandBlocksError } from '@aws-blocks/core';
+
 const MIN_PRESIGNED_URL_EXPIRY_SECONDS = 1;
 const MAX_PRESIGNED_URL_EXPIRY_SECONDS = 7 * 24 * 60 * 60;
 
 function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }
 
 /**
