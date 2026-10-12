@@ -106,10 +106,8 @@ The WebSocket stage adopts the stack-wide `BlocksDefaults`:
   `defaults.removalPolicy` — production RETAINs the audit trail on teardown,
   sandbox DESTROYs). This requires the account-level API Gateway
   CloudWatch Logs role, provisioned once per stack via
-  `ensureApiGatewayAccount()` (a `Symbol.for`-keyed lookup, so only one
-  `AWS::ApiGateway::Account` is emitted per stack, even when other access-logging
-  REST/WebSocket stages share it). The backend's shared HTTP API stage does not
-  need this role — HTTP API access logging works without it.
+  `ensureApiGatewayAccount()` (shared with the core REST API stage through a
+  `Symbol.for`-keyed lookup, so only one `AWS::ApiGateway::Account` is emitted).
   The stage is given an explicit dependency on that account so a clean-account
   first deploy applies the account setting before the stage is created.
   Note: a production (RETAINed) access-log group is **orphaned** on stack

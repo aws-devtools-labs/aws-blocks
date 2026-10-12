@@ -25,7 +25,7 @@ import { getVpcContext } from './vpc.js';
 // A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
 // @aws-blocks/blocks), which core's own tests can't depend on. Use an
 // equivalent inline stub: a Compute that owns a NodejsFunction and exposes it
-// via apiHandler(), so create() can build the default + the shared HTTP API
+// via apiHandler(), so create() can build the default + the shared REST API
 // gateway and the handler/gateway/apiUrl accessors have something real to
 // resolve to. It is passed to each create() via the internal
 // `defaultComputeFactory` option (see makeBackend), exactly as
@@ -131,7 +131,7 @@ describe('ESM cache-busting (multi-stage)', () => {
 });
 
 describe('synth shape (drop into existing stack)', () => {
-	test('BlocksBackend lives inside the parent stack and synthesizes Lambda + shared HTTP API', async () => {
+	test('BlocksBackend lives inside the parent stack and synthesizes Lambda + shared REST API', async () => {
 		const app = new cdk.App();
 		const parent = new cdk.Stack(app, 'MyExistingStack');
 
@@ -143,11 +143,10 @@ describe('synth shape (drop into existing stack)', () => {
 		assert.ok(backend.apiUrl, 'BlocksBackend should expose .apiUrl');
 
 		// Synth produces the expected resources inside the parent stack —
-		// no separate stack is created. The gateway is a single shared HTTP API v2.
+		// no separate stack is created. The gateway is a single shared REST API.
 		const template = Template.fromStack(parent);
 		template.hasResourceProperties('AWS::Lambda::Function', {});
-		template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
-		template.resourceCountIs('AWS::ApiGateway::RestApi', 0);
+		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
 	});
 
 	test('multiple BlocksBackends in the same parent stack do not collide', async () => {
@@ -158,7 +157,7 @@ describe('synth shape (drop into existing stack)', () => {
 		await makeBackend(parent, 'BackendB', sideEffectBackendPath);
 
 		const template = Template.fromStack(parent);
-		template.resourceCountIs('AWS::ApiGatewayV2::Api', 2);
+		template.resourceCountIs('AWS::ApiGateway::RestApi', 2);
 	});
 });
 

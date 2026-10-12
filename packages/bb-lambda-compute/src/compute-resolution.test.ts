@@ -7,7 +7,7 @@
  * `compute` resolves to the nearest `_compute` assigned on the block or an
  * ancestor scope, else the owning stack/backend's default compute — a
  * LambdaCompute that owns the Lambda function backing the stack's handler (the
- * HTTP ingress is the stack's single shared HTTP API gateway). The `_compute`
+ * HTTP ingress is the stack's single shared REST API gateway). The `_compute`
  * input is internal until the customer-facing surface exists.
  */
 import { test, describe, before, after } from 'node:test';
@@ -68,13 +68,18 @@ describe('Scope.compute resolution', () => {
 		assert.ok(compute instanceof LambdaCompute, 'default resolves to a LambdaCompute');
 		// The stack's handler delegates to the default compute's function.
 		assert.strictEqual(stack.handler, (compute as LambdaCompute).fn, 'stack.handler is the compute function');
-		// The gateway is the stack-level shared HTTP API (not owned by the compute).
-		assert.ok(stack.gateway, 'stack.gateway resolves to the shared HTTP API');
+		// The gateway is the stack-level shared REST API. It is built in the default
+		// compute's scope under the id the compute used when it owned the gateway, so
+		// its logical IDs (and a deployed app's API + URL) are unchanged on upgrade.
+		assert.strictEqual(
+			stack.gateway.node.path,
+			`${compute.node.path}/API`,
+			'shared gateway keeps the per-compute gateway construct path',
+		);
 
-		// Exactly one function + one shared HTTP API v2 gateway (no REST API).
+		// Exactly one function + one shared REST API gateway.
 		const template = Template.fromStack(stack);
-		template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
-		template.resourceCountIs('AWS::ApiGateway::RestApi', 0);
+		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
 	});
 
 	test('default compute is cached (same instance across reads and blocks)', async () => {

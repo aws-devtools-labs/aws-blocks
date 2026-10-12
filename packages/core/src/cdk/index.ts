@@ -83,16 +83,16 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	public readonly defaults: BlocksDefaults;
 	/** The default compute (owns the Lambda function); set in `create()`. @internal */
 	_defaultCompute?: Compute;
-	/** The single shared HTTP API v2 gateway fronting the default compute; built in `create()`. @internal */
+	/** The single shared REST API gateway fronting the default compute; built in `create()`. @internal */
 	_sharedGateway?: SharedGateway;
 
 	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
 	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
 		return this.requireDefaultCompute().fn;
 	}
-	/** The stack's shared HTTP API v2 gateway. To be removed once consumers move to the multi-compute model. */
-	get gateway(): cdk.aws_apigatewayv2.IHttpApi {
-		return this.requireSharedGateway().httpApi;
+	/** The stack's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
+	get gateway(): cdk.aws_apigateway.RestApi {
+		return this.requireSharedGateway().restApi;
 	}
 	/** The shared gateway's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
 	get apiUrl(): string {
@@ -183,17 +183,23 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 				);
 			}
 		}
-		// Build the single shared HTTP API v2 gateway now that the backend module
-		// has imported and every compute exists. It fronts the default compute's
+		// Build the single shared REST API gateway now that the backend module has
+		// imported and every compute exists. It fronts the default compute's
 		// function (its apiHandler()) and backs .gateway/.apiUrl — the HTTP ingress
-		// is no longer owned per-compute. The default compute is always a Lambda
-		// compute today, so apiHandler() is defined; guard with a clear error if a
-		// worker-only default is ever injected.
-		const defaultApiHandler = stack.requireDefaultCompute().apiHandler();
+		// is no longer owned per-compute. It is built in the default compute's scope
+		// so its logical IDs match the per-compute gateway it replaces (existing
+		// deployments keep their API and URL). The default compute is always a
+		// Lambda compute today, so apiHandler() is defined; guard with a clear error
+		// if a worker-only default is ever injected.
+		const defaultCompute = stack.requireDefaultCompute();
+		const defaultApiHandler = defaultCompute.apiHandler();
 		if (!defaultApiHandler) {
-			throw new Error('Default compute exposes no apiHandler() — the shared HTTP API gateway needs an HTTP front door.');
+			throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
 		}
-		stack._sharedGateway = createSharedGateway(stack, { handler: defaultApiHandler, defaults: stack.defaults });
+		stack._sharedGateway = createSharedGateway(defaultCompute, {
+			handler: defaultApiHandler,
+			defaults: stack.defaults,
+		});
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));

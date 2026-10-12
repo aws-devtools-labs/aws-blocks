@@ -6,7 +6,7 @@
  *
  * LambdaCompute is not yet instantiated by the default app and is not reachable
  * by customers. These tests exercise it directly to pin its shape: the function
- * it owns (fronted by the stack's shared HTTP API gateway, not a per-compute
+ * it owns (fronted by the stack's shared REST API gateway, not a per-compute
  * one), shared role, distinct construct paths, and owner-derived identity.
  */
 
@@ -89,9 +89,8 @@ describe('LambdaCompute', () => {
 
 		const template = Template.fromStack(stack);
 		// The compute itself provisions NO gateway — HTTP ingress is the stack's
-		// single shared HTTP API v2, built by BlocksStack/BlocksBackend.create().
+		// single shared REST API, built by BlocksStack/BlocksBackend.create().
 		template.resourceCountIs('AWS::ApiGateway::RestApi', 0);
-		template.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
 
 		const roles = template.findResources('AWS::IAM::Role');
 		const blocksRoleId = Object.keys(roles).find((k) => k.includes('BlocksRole'));
@@ -243,7 +242,7 @@ describe('LambdaCompute architecture (Graviton default)', () => {
 
 // The compute owns the handler log group, so the stack-wide logRetention
 // default is adopted here (throttling / access logging now live on the shared
-// HTTP API gateway at the stack level).
+// REST API gateway at the stack level).
 describe('LambdaCompute handler log-group retention (defaults.logRetention)', () => {
 	test('production keeps handler logs for a year (365 days)', () => {
 		const { stack, parent } = setup('LambdaComputeLogProd', BlocksPresets.production);
@@ -291,7 +290,7 @@ describe('LambdaCompute logRetention prop', () => {
 });
 
 // Stage throttling and access logging moved from the per-compute REST stage to
-// the stack-level shared HTTP API v2 gateway — covered in
+// the stack-level shared REST API gateway — covered in
 // packages/core/src/cdk/shared-gateway.test.ts.
 
 // Observability surface the Dashboard reads off the compute. Logging is always

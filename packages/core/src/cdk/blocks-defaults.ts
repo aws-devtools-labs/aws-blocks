@@ -6,10 +6,10 @@ import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { BlocksVpcOptions } from './vpc-types.js';
 
 /**
- * Request-rate limits applied to an API Gateway stage. On the shared HTTP API
- * stage these are requests/second; on a WebSocket API the unit is messages/second
- * across the connection. `rateLimit` is the steady-state ceiling and `burstLimit`
- * the token-bucket size for short spikes.
+ * Request-rate limits applied to an API Gateway stage. On a REST API these are
+ * requests/second; on a WebSocket API the unit is messages/second across the
+ * connection. `rateLimit` is the steady-state ceiling and `burstLimit` the
+ * token-bucket size for short spikes.
  */
 export interface BlocksThrottling {
 	/** Steady-state request (or WebSocket message) rate ceiling, per second. */
@@ -75,7 +75,7 @@ export interface BlocksDefaults {
 
 	/**
 	 * Request-rate limits applied to every Blocks-managed API Gateway stage: the
-	 * core shared HTTP API stage and the `bb-realtime` WebSocket stage. Protects
+	 * core shared REST API stage and the `bb-realtime` WebSocket stage. Protects
 	 * the backend from runaway clients and caps blast radius.
 	 * The sandbox preset caps tighter (200/400) than production (1000/2000) so a
 	 * disposable stack is well-protected without throttling real production
@@ -90,16 +90,13 @@ export interface BlocksDefaults {
 	 *
 	 * **Off by default in both presets** — opt in with a per-stack override
 	 * (`defaults: { ...BlocksPresets.production, accessLogging: true }`). It is
-	 * off by default (rather than on for production) because, for the
-	 * `bb-realtime` WebSocket stage, enabling it provisions the account-level API
-	 * Gateway CloudWatch Logs role, which is an
+	 * off by default (rather than on for production) because enabling it
+	 * provisions the account-level API Gateway CloudWatch Logs role, which is an
 	 * account/region-level singleton: a second Blocks stack in the same
 	 * account+region that also enables access logging can repoint that role on
 	 * deploy or, on teardown, leave the survivor's access logging broken.
 	 * Enabling it is therefore safe for **one Blocks stack per region** — see
-	 * `ensureApiGatewayAccount` for the full multi-stack teardown caveat. The core
-	 * backend's shared HTTP API stage needs no such role, so enabling access
-	 * logging on it alone touches no account-level setting.
+	 * `ensureApiGatewayAccount` for the full multi-stack teardown caveat.
 	 */
 	accessLogging: boolean;
 
