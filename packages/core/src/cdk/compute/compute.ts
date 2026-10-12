@@ -37,8 +37,9 @@ export abstract class Compute extends Scope {
 	 * compute that hosts it. The shared gateway reads this to add per-namespace
 	 * resources routed to this compute's function for every non-default compute;
 	 * namespaces on the default compute are served by the gateway's catch-all
-	 * resources and need no explicit entry. Populated via the internal `_compute` assignment seam —
-	 * there is no public, customer-facing compute-assignment surface yet.
+	 * resources and need no explicit entry. Populated via the internal `_compute`
+	 * assignment seam — there is no public, customer-facing compute-assignment
+	 * surface yet.
 	 */
 	readonly namespaces: string[] = [];
 

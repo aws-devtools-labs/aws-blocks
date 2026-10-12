@@ -169,7 +169,7 @@ A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway REST AP
 - **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), which the gateway can route to a different compute without changing the app's endpoint.
 - **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000). **Structured JSON access logs** are opt-in via `defaults.accessLogging`; each entry records the resource path, so traffic can be broken down per route.
 - **Limits:** the gateway times out a request after 29 seconds and caps payloads at 10 MB. Run longer work in an `AsyncJob`.
-- **WAF** is not included by default. Associate a WebACL with the gateway's stage (`new wafv2.CfnWebACLAssociation(stack, 'ApiWaf', { resourceArn: stack.gateway.deploymentStage.stageArn, webAclArn })`), or with the CloudFront distribution when you use `Hosting` (`waf: { enabled: true }`).
+- **WAF** is not included by default. Associate a `REGIONAL` WebACL with the gateway's stage (`new wafv2.CfnWebACLAssociation(stack, 'ApiWaf', { resourceArn: stack.gateway.deploymentStage.stageArn, webAclArn })`, with `wafv2` from `aws-cdk-lib/aws-wafv2`), or enable it on the CloudFront distribution when you use `Hosting` (`waf: { enabled: true }`).
 
 ### API front door
 
