@@ -19,6 +19,7 @@ let compiledDir: string;
 const requiredTests = ['home page loads', 'app: server serves its Blocks config', 'greet returns message and timestamp'];
 
 function assertTemplateTestsRan(report: string) {
+  // Completion events come from our own reporter; this annotation does not validate their shape.
   const events: TestEvent[] = report.split('\n').flatMap((line, index) => {
     if (!line) return [];
     try {
@@ -28,6 +29,7 @@ function assertTemplateTestsRan(report: string) {
     }
   });
   const completed = events.filter((event) => event.type === 'test:pass' || event.type === 'test:fail');
+  // Only checks execution; callers assert the expected exit code, including intentional failures.
   for (const name of requiredTests) {
     const results = completed.filter((event) => event.data.name === name);
     assert.strictEqual(results.length, 1, `Expected one completed result for ${name}\n${report}`);
@@ -142,6 +144,7 @@ async function runTemplateTests(env: NodeJS.ProcessEnv, timeout = 15000, killSig
   }
 }
 
+// Intentionally compile and execute the real template in npm test to catch scaffold and module-resolution regressions.
 describe('Next.js template E2E assertions', () => {
   before(() => {
     compiledDir = mkdtempSync(join(tmpdir(), 'blocks-nextjs-e2e-'));
