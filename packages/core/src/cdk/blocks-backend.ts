@@ -337,25 +337,6 @@ export class BlocksBackend extends Construct {
 		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
 		// imports the concrete compute class.
 		backend._defaultCompute = props.defaultComputeFactory(backend);
-		// Build the single shared REST API gateway right after the default compute,
-		// before importing the backend, so .gateway/.apiUrl are readable during that
-		// import (the backend's default export receives this backend) — as they were when
-		// the compute owned the gateway. It fronts the default compute's function
-		// (its apiHandler()); the HTTP ingress is no longer owned per-compute. It is
-		// built in the default compute's scope so its logical IDs match the
-		// per-compute gateway it replaces (existing deployments keep their API and
-		// URL). The default compute is always a Lambda compute today, so
-		// apiHandler() is defined; guard with a clear error if a worker-only default
-		// is ever injected.
-		const defaultCompute = backend.requireDefaultCompute();
-		const defaultApiHandler = defaultCompute.apiHandler();
-		if (!defaultApiHandler) {
-			throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
-		}
-		backend._sharedGateway = createSharedGateway(defaultCompute, {
-			handler: defaultApiHandler,
-			defaults: backend.defaults,
-		});
 		// file:// URL (not a raw path) so the cache-busting query works on Windows,
 		// where an absolute path like `D:\...` is rejected as URL scheme `d:`.
 		const backendUrl = pathToFileURL(props.backendCDKPath);
@@ -372,6 +353,24 @@ export class BlocksBackend extends Construct {
 			}
 		}
 		addBlocksStackMetadata(cdk.Stack.of(backend));
+
+		// Build the single shared REST API gateway now that the backend module has
+		// imported and every compute exists. It fronts the default compute's
+		// function (its apiHandler()) and backs .gateway/.apiUrl — the HTTP ingress
+		// is no longer owned per-compute. It is built in the default compute's scope
+		// so its logical IDs match the per-compute gateway it replaces (existing
+		// deployments keep their API and URL). The default compute is always a
+		// Lambda compute today, so apiHandler() is defined; guard with a clear error
+		// if a worker-only default is ever injected.
+		const defaultCompute = backend.requireDefaultCompute();
+		const defaultApiHandler = defaultCompute.apiHandler();
+		if (!defaultApiHandler) {
+			throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
+		}
+		backend._sharedGateway = createSharedGateway(defaultCompute, {
+			handler: defaultApiHandler,
+			defaults: backend.defaults,
+		});
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));
