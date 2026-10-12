@@ -47,9 +47,13 @@ supplies the implementation.
 
 The HTTP ingress is **not** owned here. `LambdaCompute.apiHandler()` returns `fn`,
 and the stack-level **shared HTTP API v2** (see
-`packages/core/src/cdk/shared-gateway.ts`) integrates it with a `$default`
-catch-all route that forwards every path/method (including the root `/`) to the
-function; the Lambda handler does the routing. Request **throttling**
+`packages/core/src/cdk/shared-gateway.ts`) integrates it. The **default**
+compute's function backs the `$default` catch-all route, which forwards every
+path/method (including the root `/`) to it; the Lambda handler does the routing.
+A **non-default** `LambdaCompute` that hosts namespaces gets its own integration
+plus explicit `ANY /aws-blocks/api/{namespace}` (and `{proxy+}` subtree) routes
+for each namespace it hosts (`Compute.namespaces`); a compute hosting no
+namespace gets no route. Request **throttling**
 (`defaults.throttling`) and optional JSON **access logging**
 (`defaults.accessLogging`) live on that shared gateway's stage. HTTP API v2
 access logging needs no account-level CloudWatch role (`AWS::ApiGateway::Account`),
@@ -214,7 +218,8 @@ supplies a concrete factory through a normal `import`.
    `this.compute` in its constructor (during that import) resolves to it. That
    call runs `new LambdaCompute(root, 'DefaultCompute')`, provisioning the
    function. After the backend import, `create()` builds the single shared HTTP
-   API v2 from the default compute's `apiHandler()`.
+   API v2 from every registered compute's `apiHandler()` — `$default` to the
+   default compute, per-namespace routes to the others.
 4. `Scope.compute` and the delegating `handler` accessor read from
    `_defaultCompute`; `gateway` / `apiUrl` read from the shared gateway.
 

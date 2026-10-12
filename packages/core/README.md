@@ -162,6 +162,17 @@ cat .blocks-sandbox/config.json
 
 So a real config problem looks like the client throwing `Blocks API URL not configured` (or `... is not configured (source: ...)`), not like a `404` on `/config.json`. If a **deployed** origin keeps serving `{"_placeholder":true}` after a successful deploy, that is a genuine bug: the config upload or the CloudFront invalidation did not land.
 
+### Shared API gateway
+
+A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway HTTP API** in front of the whole backend (see [API front door](#api-front-door) for how it is exposed):
+
+- **Every path reaches your backend.** A `$default` catch-all route forwards every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), which the gateway can route to a different compute without changing the app's endpoint.
+- **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000). **Structured JSON access logs** are opt-in via `defaults.accessLogging`; each entry records the matched `routeKey`, so traffic can be broken down per route.
+- **Limits:** requests time out after 30 seconds and payloads are capped at 10 MB. Run longer work in an `AsyncJob`.
+- **WAF:** AWS WAF can't attach to an HTTP API. Enable it on the CloudFront distribution in front instead: `new Hosting(stack, 'Web', { api: backend, waf: { enabled: true } })`. The `execute-api` URL itself stays directly reachable.
+
+Why an HTTP API rather than a REST API is recorded as decision D-018 in the source repo's `docs/DECISIONS.md`.
+
 ### API front door
 
 How the backend's HTTP API is exposed to the internet is chosen with the `apiFrontDoor` prop on `BlocksStack` / `BlocksBackend` (default `'regional'`):

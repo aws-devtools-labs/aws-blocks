@@ -738,3 +738,48 @@ Two asymmetries are left standing on purpose. As of this decision `create-blocks
 ### References
 - D-010 (clauses 1–2 unchanged; clause 3 narrowed to paths this run did not create)
 - `aws/aws-cdk-cli`, `packages/aws-cdk/lib/cli/telemetry/sink/file-sink.ts` — create-then-append file sink
+
+## D-018: Backend ingress is one shared HTTP API (v2), not a REST API (v1) per compute
+
+**Date**: 2026-10-12
+**Authors:** zimzha
+
+### Context
+Each `LambdaCompute` used to provision its own API Gateway **REST API (v1)** in front of its function: a proxy resource tree that sent every path to that one function. That works with one compute but not with several. Each compute got its own endpoint and domain, so serving them from one origin meant a CloudFront origin per compute. CloudFront became mandatory for any app with more than one compute, and container compute behind an ALB had no natural place to attach. Every request also hit the same proxy method, so the gateway couldn't tell one API from another for metrics or throttling. And REST API access logging needs the account-level, per-region `AWS::ApiGateway::Account` CloudWatch role, which Blocks had to provision once per stack and order the stage after.
+
+### Decision
+A `BlocksStack` / `BlocksBackend` provisions **one shared HTTP API (v2)** at finalize time (`packages/core/src/cdk/shared-gateway.ts`). Computes no longer own a gateway; each exposes `apiHandler()`, and the gateway integrates it.
+- **Routes.** A `$default` route sends everything (the RPC root, auth, `RawRoute`s, `/`, and every namespace on the default compute) to the default compute's function, which does the in-process routing as before. A namespace on another compute gets explicit `ANY /aws-blocks/api/{namespace}` and `ANY /aws-blocks/api/{namespace}/{proxy+}` routes to that compute's function. The client calls the per-namespace path (`POST /aws-blocks/api/{namespace}`), so the gateway can route on the URL instead of the JSON-RPC body.
+- **Payload format 2.0.** The Lambda handler is v2-only and has no REST v1 event path.
+- **Stage settings.** Stage throttling (`defaults.throttling`) and opt-in JSON access logging (`defaults.accessLogging`) move to the shared stage. Access-log entries record the `routeKey`. Per-route throttle overrides are written to the stage's `routeSettings`, keyed by route.
+- **CORS stays in the Lambda** (`CORS_ALLOWED_ORIGINS`). Native HTTP API CORS only accepts exact origins or `*`, not the regex patterns Blocks uses, so OPTIONS goes through to the function.
+- **Front door.** The gateway is the `regional` front door. `apiFrontDoor: 'edge'` puts CloudFront in front of it as a single origin.
+
+### Rationale
+- **Per-route observability and control.** This is the main reason. Each namespace becomes a real route on the gateway rather than one more request through a shared proxy method. HTTP API route settings are keyed by route, so throttling and CloudWatch metrics can be set and read per route, and access logs carry the matched `routeKey`. That lets an operator see and cap one hot or abusive API without touching the rest. The plumbing (per-route `routeSettings`) ships now; a public per-compute `throttling` option arrives with the compute-assignment surface. Today, namespaces on the default compute still share the `$default` route.
+- **One ingress for N computes.** Fan-out happens inside the gateway (path → integration), so the app keeps one domain, and on the `edge` tier CloudFront keeps a single origin. This is the same shape as one ALB routing to many containers.
+- **Path to containers.** HTTP API VPC links integrate directly with ALB, NLB and Cloud Map, which is the planned route to container compute under the `regional` tier.
+- **Cost.** HTTP API requests cost about 70% less than REST API requests (us-east-1 list price for the first tier: $1.00 vs $3.50 per million). This matters for a platform of many small Lambda-only apps.
+- **Latency.** HTTP API is the lighter-weight proxy, with lower per-request overhead than REST API.
+- **Less account-level infrastructure.** HTTP API access logging doesn't need the account-level CloudWatch role, so the backend no longer touches the `AWS::ApiGateway::Account` singleton. Only the `bb-realtime` WebSocket stage still needs it.
+- **Simpler event contract.** Payload 2.0 carries `rawPath`, `rawQueryString` and a `cookies` array (no `multiValueHeaders`), and `$default` covers `/`, which `ANY /{proxy+}` does not.
+- **No feature regression.** The REST API used only stage throttling, access logging and a proxy route, with CORS handled in the Lambda. All of these exist on HTTP API.
+
+### What we give up (REST-only features Blocks did not use)
+- **AWS WAF can't attach to an HTTP API.** Attach it to the CloudFront distribution in front instead (Hosting's `waf` option). The `execute-api` URL stays directly reachable.
+- **No API keys or usage plans, request validation, mapping templates, API caching, or X-Ray active tracing** on the gateway.
+- **Integration timeout is capped at 30 s** (REST regional APIs can request a higher limit). Long-running work belongs in `AsyncJob` or a container; no tier lifts this for Lambda.
+- **No edge-optimized or private endpoint types.** `apiFrontDoor: 'edge'` provides the edge case with Blocks-managed CloudFront.
+
+An app that needs one of these can add its own REST API through the CDK escape hatch.
+
+### Alternatives Considered
+1. **Keep a REST API per compute, with CloudFront fan-out** (the drafted #569/#580/#581 approach): rejected. CloudFront becomes mandatory for multi-compute (slow distribution deploys, CDN cost for small apps), there's an origin per compute, and observability is split across N gateways.
+2. **One shared REST API (v1):** rejected. REST does offer method-level throttling and metrics, so a single REST gateway could also model per-namespace routes. But it keeps the higher per-request cost and the account-level logging role, and Blocks uses none of the REST-only features that would justify them.
+3. **Lambda Function URLs:** rejected. That's one URL per function, so it doesn't solve multi-compute, and there's no throttling, routing or access logging.
+4. **Native HTTP API CORS:** rejected. It can't express the regex origin patterns local dev relies on.
+
+### References
+- #734 (shared HTTP API v2), #735 (`apiFrontDoor` tiers), #736 (per-namespace routing and multi-compute fan-out)
+- Code: `packages/core/src/cdk/shared-gateway.ts`, `packages/core/src/lambda-handler.ts`, `packages/core/src/cdk/api-front-door.ts`, `packages/bb-lambda-compute/src/index.cdk.ts`
+- Supersedes the per-compute REST API described in earlier `bb-lambda-compute` DESIGN.md revisions
