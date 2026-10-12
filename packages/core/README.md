@@ -176,7 +176,7 @@ A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway REST AP
 How the backend's API is exposed to the internet is chosen with the `apiFrontDoor` prop on `BlocksStack` / `BlocksBackend` (default `'regional'`):
 
 - **`'regional'`** (default) — the shared regional REST API gateway, reached directly on its own `execute-api` endpoint. Cheap, with a stable address per deployment and no extra CDN hop.
-- **`'edge'`** — a global, CloudFront-backed front door in front of that same gateway (a single origin). Choose it for a geographically distributed audience; requests terminate at the nearest edge.
+- **`'edge'`** — a global, CloudFront-backed front door in front of that same gateway (a single origin). Choose it for a geographically distributed audience; requests terminate at the nearest edge. Under `edge`, the `ApiUrl` stack output is the CloudFront URL + `/aws-blocks/api`.
 
 The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
 
@@ -188,7 +188,9 @@ POST /aws-blocks/api/{namespace}
 
 where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form — namespace taken from the request body's `method` — still works for back-compat. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function.
 
-**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). This holds for both tiers.
+**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `edge`, Hosting's distribution takes the front-door role and no second distribution is created.
+
+Neither tier makes CloudFront the only way in: the gateway's own `execute-api` URL stays publicly reachable, so a WebACL on a CloudFront distribution doesn't cover direct calls to it.
 
 > ⚠️ **Switching `'regional'` ⇄ `'edge'` changes the API's endpoint domain.** Browser auth cookies and sessions are bound to the origin that set them, so a switch invalidates every existing cookie/session — users are signed out and must sign in again. Pick a tier before you have real users, and treat a later change as a breaking migration.
 

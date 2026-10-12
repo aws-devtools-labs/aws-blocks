@@ -556,8 +556,7 @@ describe('Hosting', () => {
       // The managed edge front door is scheduled on the backend stack; a Hosting
       // built in a SEPARATE stack claims the role on the backend object (a live
       // reference), so the aspect — scheduled on that same object — reads the claim
-      // and stands the managed distribution down. The previous Symbol.for per-stack
-      // state could not cross stacks, so the backend stack got a second distribution.
+      // and stands the managed distribution down.
       const api: BlocksStackApi = {
         apiUrl: MOCK_API.apiUrl,
         claimApiFrontDoor: (url) => claimApiFrontDoor(backendStack, url),
@@ -567,8 +566,14 @@ describe('Hosting', () => {
 
       // Managed edge distribution stood down in the backend stack (claimed cross-stack)...
       Template.fromStack(backendStack).resourceCountIs('AWS::CloudFront::Distribution', 0);
-      // ...and only Hosting's distribution exists, in the frontend stack.
-      Template.fromStack(frontendStack).resourceCountIs('AWS::CloudFront::Distribution', 1);
+      // ...and only Hosting's distribution exists, in the frontend stack — carrying
+      // the API behaviors, so the API is actually served from it.
+      const frontend = Template.fromStack(frontendStack);
+      frontend.resourceCountIs('AWS::CloudFront::Distribution', 1);
+      const distConfig = Object.values(frontend.findResources('AWS::CloudFront::Distribution'))[0].Properties
+        .DistributionConfig;
+      const patterns = (distConfig.CacheBehaviors ?? []).map((b: { PathPattern: string }) => b.PathPattern);
+      assert.ok(patterns.includes(BLOCKS_RPC_PREFIX), 'Hosting distribution carries the RPC behavior');
     });
   });
 

@@ -24,7 +24,8 @@ await BlocksStack.create(app, 'App', {
   edge termination. One catch-all behavior forwards every request to the gateway
   origin — uncached, all methods, forwards everything except `Host`, HTTP→HTTPS.
   In `edge` mode the `ApiUrl` stack output (what `deploy` / `sandbox` hand a client
-  as `BLOCKS_API_URL`) resolves to the CloudFront URL + `/aws-blocks/api`.
+  as `BLOCKS_API_URL`) resolves to the CloudFront URL + `/aws-blocks/api`. Under
+  `regional` it stays the gateway URL, even when `Hosting` fronts the API.
 
 The default is a constant `'regional'` — it is **never** derived from the app's
 shape, so adding or removing Building Blocks never silently changes how the API is

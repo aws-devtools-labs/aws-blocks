@@ -12,7 +12,7 @@ import type { BlocksDefaults } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
-import { claimApiFrontDoor, resolveApiFrontDoor, scheduleApiFrontDoor } from './api-front-door.js';
+import { type ApiFrontDoorOwner, claimApiFrontDoor, resolveApiFrontDoor, scheduleApiFrontDoor } from './api-front-door.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
@@ -227,7 +227,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
  * // blocks.apiUrl, blocks.handler, blocks.gateway available
  * ```
  */
-export class BlocksBackend extends Construct {
+export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	public readonly backendHandlerPath: string;
 	/**
 	 * Path to the app's backend module (`props.backendCDKPath`). Exposed so Building Blocks that
@@ -372,10 +372,10 @@ export class BlocksBackend extends Construct {
 	static async create(scope: Construct, id: string, props: CoreBlocksBackendProps) {
 		assertCdkConditionActive();
 		const backend = new BlocksBackend(scope, id, props);
-		// Create the default compute before importing the backend: it OWNS the
-		// Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
-		// a block reading `this.compute` in its constructor (during that import)
-		// must resolve to it. The factory is supplied by the umbrella
+		// Create the default compute before importing the backend: it owns the
+		// Lambda function (which backs .handler and is the shared gateway's
+		// target), and a block reading `this.compute` in its constructor (during
+		// that import) must resolve to it. The factory is supplied by the umbrella
 		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
 		// imports the concrete compute class.
 		backend._defaultCompute = props.defaultComputeFactory(backend);

@@ -1371,7 +1371,8 @@ function handleApiRequest(
   res.end(
     JSON.stringify({
       error: message,
-      expected: { method: 'POST', path: BLOCKS_RPC_PREFIX },
+      // On an RPC path, echo the path the caller hit (e.g. `/aws-blocks/api/{namespace}`).
+      expected: { method: 'POST', path: wrongMethodOnApi ? url.pathname : BLOCKS_RPC_PREFIX },
     }),
   );
 }
