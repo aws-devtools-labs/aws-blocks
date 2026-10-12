@@ -16,7 +16,14 @@ function run(args: string[], cwd?: string, env?: Record<string, string>): { stdo
       encoding: 'utf-8',
       timeout: 30000,
       cwd,
-      env: env ? { ...process.env, ...env } : undefined,
+      // Every run spawns the real CLI, which calls trackCommand. Opt out, and point the
+      // endpoint at a dead port so a regression cannot reach the production collector.
+      env: {
+        ...process.env,
+        AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+        BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
+        ...env,
+      },
     });
     return { stdout, stderr: '', exitCode: 0 };
   } catch (err: any) {
@@ -594,6 +601,12 @@ describe('create-blocks-app bin-symlink invocation', () => {
         execFileSync('node', [linkPath, targetDir, '-y', '--skip-install'], {
           encoding: 'utf-8',
           timeout: 30000,
+          // This spawn bypasses run(), so it needs the same telemetry guard.
+          env: {
+            ...process.env,
+            AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+            BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
+          },
         });
       } catch (err: any) {
         exitCode = err.status ?? 1;
