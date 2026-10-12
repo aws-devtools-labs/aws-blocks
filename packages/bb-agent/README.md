@@ -132,13 +132,11 @@ Each `Message` returned by `getConversation()` carries a `metadata` object. The 
 | `metadata` field | Type | Set on |
 |------|------|--------|
 | `toolName` | `string` | `tool-call`, `tool-result` — the tool invoked. |
-| `toolInput` | `object` | `tool-call` — the tool's parsed arguments (same shape as the tool's `parameters` schema). |
+| `toolInput` | `JSONValue` | `tool-call` — the tool's parsed arguments (same shape as the tool's `parameters` schema). |
 | `toolOutput` | `JSONValue` | `tool-result` — the Strands tool-result **content** (an array of content blocks that wraps the handler's return), parsed from JSON — not the handler's raw return value directly. |
 | `usage` | `{ inputTokens, outputTokens, totalTokens }` | `assistant` — token usage for the turn. |
 | `latencyMs` | `number` | `assistant` — turn latency. |
 | `error` | `string` | any row where the turn errored. |
-
-> **Note:** the exported `MessageMetadata` type currently still declares `toolInput` and `toolOutput` as `string`, so an IDE shows `string` even though `getConversation()` returns the parsed object/array described above. Treat the runtime shape (and this table) as authoritative; a follow-up tightens the type to match.
 
 #### Tool-approval (HITL) row sequence
 
