@@ -88,7 +88,7 @@ function validateCap(name: string, value: number | false | undefined): void {
  * `name` plus the AWS SDK `$metadata` (`httpStatusCode`, `requestId`) it finds — the
  * concrete shape needed to diagnose an opaque wrapped error in production.
  */
-function errorCauseShape(error: unknown): { name?: string; httpStatusCode?: number; requestId?: string } {
+export function errorCauseShape(error: unknown): { name?: string; httpStatusCode?: number; requestId?: string } {
 	const shape: { name?: string; httpStatusCode?: number; requestId?: string } = {};
 	let current: unknown = error;
 	for (let depth = 0; current !== null && typeof current === 'object' && depth < 5; depth++) {
