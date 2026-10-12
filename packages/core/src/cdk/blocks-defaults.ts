@@ -6,10 +6,10 @@ import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { BlocksVpcOptions } from './vpc-types.js';
 
 /**
- * Request-rate limits applied to an API Gateway stage. On an HTTP or REST API
- * these are requests/second; on a WebSocket API the unit is messages/second across the
- * connection. `rateLimit` is the steady-state ceiling and `burstLimit` the
- * token-bucket size for short spikes.
+ * Request-rate limits applied to an API Gateway stage. On the shared HTTP API
+ * stage these are requests/second; on a WebSocket API the unit is messages/second
+ * across the connection. `rateLimit` is the steady-state ceiling and `burstLimit`
+ * the token-bucket size for short spikes.
  */
 export interface BlocksThrottling {
 	/** Steady-state request (or WebSocket message) rate ceiling, per second. */
@@ -75,8 +75,8 @@ export interface BlocksDefaults {
 
 	/**
 	 * Request-rate limits applied to every Blocks-managed API Gateway stage: the
-	 * core shared HTTP API, the SSR/hosting REST API, and the `bb-realtime` WebSocket
-	 * stage. Protects the backend from runaway clients and caps blast radius.
+	 * core shared HTTP API stage and the `bb-realtime` WebSocket stage. Protects
+	 * the backend from runaway clients and caps blast radius.
 	 * The sandbox preset caps tighter (200/400) than production (1000/2000) so a
 	 * disposable stack is well-protected without throttling real production
 	 * traffic. See {@link BlocksThrottling}.
