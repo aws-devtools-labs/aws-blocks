@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { Scope } from './index.js';
+import { OFFICIAL_BB_NAMES, Scope } from './index.js';
 import type { ScopeParent } from './index.js';
 import { CORE_VERSION } from '../version.js';
 
@@ -26,6 +26,13 @@ class TestBB extends Scope {
 	/** Expose protected method for testing */
 	public testBuildUserAgentChain(): [string, string][] {
 		return this.buildUserAgentChain();
+	}
+
+	/** Expose protected method for testing */
+	public testFormatUserAgentString(maxBytes?: number): string {
+		return maxBytes === undefined
+			? this.formatUserAgentString()
+			: this.formatUserAgentString(maxBytes);
 	}
 }
 
@@ -238,5 +245,167 @@ describe('buildUserAgentChain', () => {
 
 		assert.strictEqual(chain[0][0], 'aws-blocks');
 		assert.strictEqual(chain[0][1], CORE_VERSION);
+	});
+});
+
+// ── formatUserAgentString: string rendering + Postgres 63-byte limit ────────
+
+describe('formatUserAgentString', () => {
+	test('renders the chain as a space-delimited string', () => {
+		const root = { id: 'my-app' };
+		const bb = new TestBB('db', { parent: root, bbName: 'Database', bbVersion: '0.2.6' });
+
+		assert.strictEqual(
+			bb.testFormatUserAgentString(),
+			`aws-blocks/${CORE_VERSION} bb/Database/0.2.6`,
+		);
+	});
+
+	test('empty chain (no official BB) renders as empty string', () => {
+		const root = { id: 'my-app' };
+		// A Scope with no official bbName produces a chain of just [aws-blocks/x];
+		// force the fully-empty case via a subclass whose chain is empty.
+		class EmptyChainBB extends TestBB {
+			public override testFormatUserAgentString(): string {
+				return this.formatUserAgentString();
+			}
+			protected override buildUserAgentChain(): [string, string][] {
+				return [];
+			}
+		}
+		const bb = new EmptyChainBB('x', { parent: root });
+		assert.strictEqual(bb.testFormatUserAgentString(), '');
+	});
+
+	test('a chain within 63 bytes is returned unchanged', () => {
+		const root = { id: 'my-app' };
+		const auth = new TestBB('auth', { parent: root, bbName: 'AuthBasic', bbVersion: '1.0.1' });
+		const db = new TestBB('db', { parent: auth, bbName: 'Database', bbVersion: '0.2.6' });
+
+		const s = db.testFormatUserAgentString();
+		assert.ok(Buffer.byteLength(s, 'utf8') <= 63);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/AuthBasic/1.0.1 bb/Database/0.2.6`);
+	});
+
+	test('a chain exceeding 63 bytes drops parents from inside until it fits', () => {
+		const root = { id: 'my-app' };
+		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '1.2.3' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '4.5.6' });
+		const p3 = new TestBB('c', { parent: p2, bbName: 'AuthCognito', bbVersion: '7.8.9' });
+		const leaf = new TestBB('db', { parent: p3, bbName: 'Database', bbVersion: '0.2.6' });
+
+		const full = leaf.testBuildUserAgentChain().map(([k, v]) => `${k}/${v}`).join(' ');
+		assert.ok(Buffer.byteLength(full, 'utf8') > 63, 'precondition: full string must exceed 63 bytes');
+
+		const s = leaf.testFormatUserAgentString();
+		assert.ok(Buffer.byteLength(s, 'utf8') <= 63, `result must fit in 63 bytes, got ${Buffer.byteLength(s, 'utf8')}`);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/KnowledgeBase/1.2.3 ... bb/Database/0.2.6`);
+	});
+
+	test('never truncates mid-token: result is always a fitting subset', () => {
+		const root = { id: 'my-app' };
+		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '10.20.30' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedDatabase', bbVersion: '10.20.30' });
+		const leaf = new TestBB('db', { parent: p2, bbName: 'Database', bbVersion: '10.20.30' });
+
+		const s = leaf.testFormatUserAgentString();
+		assert.ok(Buffer.byteLength(s, 'utf8') <= 63);
+		for (const tok of s.split(' ')) {
+			assert.ok(tok === '...' || /^[a-z-]+\/\S+$/.test(tok), `token "${tok}" is malformed`);
+		}
+	});
+
+	test('a custom (non-official) leaf BB name never appears in the string', () => {
+		const root = { id: 'my-app' };
+		assert.ok(!OFFICIAL_BB_NAMES.has('MyPrivateBlock'), 'precondition: the name must not be official');
+		const leaf = new TestBB('db', { parent: root, bbName: 'MyPrivateBlock', bbVersion: '9.9.9' });
+
+		const s = leaf.testFormatUserAgentString();
+		assert.ok(!s.includes('MyPrivateBlock'), `custom leaf name leaked into "${s}"`);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION}`);
+	});
+
+	test('the origin is kept when the leaf cannot fit alongside it', () => {
+		const root = { id: 'my-app' };
+		const auth = new TestBB('auth', { parent: root, bbName: 'AuthBasic', bbVersion: '1.0.1' });
+		const leaf = new TestBB('db', { parent: auth, bbName: 'Database', bbVersion: '0.2.6' });
+
+		// 20 bytes admits `aws-blocks/<core>` but not the marker plus the leaf.
+		const s = leaf.testFormatUserAgentString(20);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION}`);
+	});
+
+	test('drops the fewest parents needed, nearest the leaf first', () => {
+		const root = { id: 'my-app' };
+		const outer = new TestBB('a', { parent: root, bbName: 'Agent', bbVersion: '0.0.0' });
+		const inner = new TestBB('b', { parent: outer, bbName: 'Logger', bbVersion: '0.0.0' });
+		const leaf = new TestBB('kv', { parent: inner, bbName: 'KVStore', bbVersion: '0.0.0' });
+
+		const full = leaf.testBuildUserAgentChain().map(([k, v]) => `${k}/${v}`).join(' ');
+		assert.ok(
+			Buffer.byteLength(full, 'utf8') > 63,
+			`precondition: ${Buffer.byteLength(full, 'utf8')} bytes must overflow`,
+		);
+
+		const s = leaf.testFormatUserAgentString();
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/Agent/0.0.0 ... bb/KVStore/0.0.0`);
+	});
+
+	test('a value that cannot be rendered as whole entries is omitted', () => {
+		// Omitted rather than carrying a mangled half-token.
+		const twoByte = 'é'.repeat(30);
+		class MultiByteBB extends TestBB {
+			protected override buildUserAgentChain(): [string, string][] {
+				return [['aws-blocks', twoByte]];
+			}
+		}
+		const bb = new MultiByteBB('x', { parent: { id: 'my-app' } });
+		assert.ok(Buffer.byteLength(`aws-blocks/${twoByte}`, 'utf8') > 40, 'precondition: must overflow');
+
+		assert.strictEqual(bb.testFormatUserAgentString(40), '');
+	});
+
+	test('a multi-entry chain is measured in bytes before it is shortened', () => {
+		const leafEntry = `bb/${'é'.repeat(20)}/1.0.0`;
+		class MultiByteChainBB extends TestBB {
+			protected override buildUserAgentChain(): [string, string][] {
+				return [
+					['aws-blocks', CORE_VERSION],
+					['bb', `${'é'.repeat(20)}/1.0.0`],
+				];
+			}
+		}
+		const bb = new MultiByteChainBB('x', { parent: { id: 'my-app' } });
+
+		const full = `aws-blocks/${CORE_VERSION} ${leafEntry}`;
+		assert.ok(full.length <= 50, `precondition: ${full.length} characters must look like it fits`);
+		assert.ok(
+			Buffer.byteLength(full, 'utf8') > 50,
+			`precondition: ${Buffer.byteLength(full, 'utf8')} bytes must actually overflow`,
+		);
+
+		const s = bb.testFormatUserAgentString(50);
+		assert.ok(
+			Buffer.byteLength(s, 'utf8') <= 50,
+			`result must fit in 50 bytes, got ${Buffer.byteLength(s, 'utf8')}`,
+		);
+	});
+
+	test('every byte is printable ASCII, which is all Postgres preserves', () => {
+		const root = { id: 'my-app' };
+		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '1.2.3' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '4.5.6' });
+		const leaf = new TestBB('db', { parent: p2, bbName: 'Database', bbVersion: '0.2.6' });
+
+		const s = leaf.testFormatUserAgentString();
+		assert.ok(s.includes('...'), `expected an elision marker in "${s}"`);
+		// Postgres rewrites any other byte as a `\xNN` escape, so a non-ASCII
+		// marker would reach pg_stat_activity mangled.
+		for (const byte of Buffer.from(s, 'utf8')) {
+			assert.ok(
+				byte >= 0x20 && byte <= 0x7e,
+				`byte 0x${byte.toString(16)} is not printable ASCII, in "${s}"`,
+			);
+		}
 	});
 });
