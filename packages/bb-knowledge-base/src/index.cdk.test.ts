@@ -39,9 +39,10 @@ const FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'test-fi
 const VECTOR_BUCKET_TYPE = s3vectors.CfnVectorBucket.CFN_RESOURCE_TYPE_NAME;
 const VECTOR_INDEX_TYPE = s3vectors.CfnIndex.CFN_RESOURCE_TYPE_NAME;
 
-// Minimal BlocksStack-shaped parent — KnowledgeBase calls
-// `this.handler.addToRolePolicy(...)` and `cdk.Stack.of(this)`, both of which
-// resolve through CURRENT_BLOCKS_STACK (mirrors the production BlocksStack).
+// Minimal BlocksStack-shaped parent — KnowledgeBase grants to
+// `this.executionRole` and reads `cdk.Stack.of(this)`, both of which resolve
+// through CURRENT_BLOCKS_STACK (mirrors the production BlocksStack). The stub
+// function stands in for a compute that assumes the shared role.
 class StubBlocksStack extends cdk.Stack {
   public readonly handler: cdk.aws_lambda.Function;
   public readonly executionRole: cdk.aws_iam.IRole;
@@ -182,9 +183,9 @@ test('CDK: registers the DATA_SOURCE_ID config (wired to the data source) and su
   // BucketDeployment; the rendered config blob in the synthesized template
   // carries the DATA_SOURCE_ID key bound to the data source's DataSourceId, and
   // the handler is wired to read it from S3. (Mirrors bb-auth-cognito's CDK test.)
-  // Grant config read to the handler's role and stamp the coordinates on the
-  // handler — the same target as before the shared-role refactor.
-  finalizeConfigRegistry(stack, stack.handler.role!, [
+  // Grant config read to the shared execution role and stamp the coordinates on
+  // the stub compute's function.
+  finalizeConfigRegistry(stack, stack.executionRole, [
     { setEnv: (k: string, v: string) => stack.handler.addEnvironment(k, v) } as any,
   ]);
   const template = Template.fromStack(stack);

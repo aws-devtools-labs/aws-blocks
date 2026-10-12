@@ -315,7 +315,7 @@ export class BlocksBackend extends Construct {
 		assertCdkConditionActive();
 		const backend = new BlocksBackend(scope, id, props);
 		// Create the default compute before importing the backend: it OWNS the
-		// Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
+		// Lambda function + API Gateway (which back .gateway/.apiUrl), and
 		// a block reading `this.compute` in its constructor (during that import)
 		// must resolve to it. The factory is supplied by the umbrella
 		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never

@@ -158,6 +158,8 @@ export function finalizeConfigRegistry(
 	// getConfigLocation). If a co-located BB created the bucket, still upload (even an empty {}) and
 	// wire the handler so that compute's loadConfigToProcessEnv() resolves instead of 404-ing forever.
 	// Otherwise remember what a later registerConfig() needs to deploy it then.
+	// The computes are captured now: every compute is created during the backend
+	// import, before `create()` resolves, so none can appear after this point.
 	if (registry.entries.size === 0 && !registry.bucket) {
 		registry.deferred = { root, executionRole, computes };
 		return;
