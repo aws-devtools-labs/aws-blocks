@@ -13,7 +13,19 @@ export { listConfig, removeConfig, runConfigCli, setConfig } from './config.js';
 export { type ConsoleOptions, openConsole } from './console.js';
 export { type DeployOptions, deploy } from './deploy.js';
 export { type DestroyOptions, destroy } from './destroy.js';
-export { type DevServerOptions, startDevServer } from './dev-server.js';
+export {
+	type DevServerOptions,
+	type StatusResult,
+	type StopResult,
+	runStatusCli,
+	runStopCli,
+	startDevServer,
+	statusDevServer,
+	statusMessage,
+	stopAllDevServers,
+	stopDevServer,
+	stopMessage,
+} from './dev-server.js';
 export { ensureSecrets, loadEnvFile, loadProductionEnv } from './ensure-secrets.js';
 export { generateClientCode, writeClientCode } from './generate-client.js';
 export { generateSpec, type SpecGenerationOptions, writeSpec } from './generate-spec.js';

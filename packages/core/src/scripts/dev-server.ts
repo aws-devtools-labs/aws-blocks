@@ -4,7 +4,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL, URL } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
-import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync, readdirSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
@@ -1145,6 +1145,320 @@ export async function startDevServer(options: DevServerOptions) {
     if (!child) return;
     killFrontendTree(child, 'SIGKILL');
   });
+}
+
+// ── Stop / status (`npm run dev:stop`) ──────────────────────────────────────
+// A sanctioned way to stop a dev server started with `npm run dev` — so an
+// operator (or an agent) never reaches for `pkill -f tsx`/`killall node`, which
+// matches by process NAME and also kills the caller's own shell/agent process.
+// We reuse the exact machinery `startDevServer` already relies on: the per-port
+// pidfile it writes ({pid, ppid, port}) and the port-reclaim teardown
+// (findListenerPids + killListenerTree + waitForPortFree), rather than inventing
+// a second kill mechanism.
+
+/** The per-port pidfile path a dev server records its supervisor identity in. */
+export function devPidfilePath(port: number): string {
+  return join(BLOCKS_SANDBOX_DIR, `dev-server.${port}.pid`);
+}
+
+/** Pidfile name pattern: `dev-server.<port>.pid`. */
+const DEV_PIDFILE_RE = /^dev-server\.(\d+)\.pid$/;
+
+/**
+ * Discover the front-door ports of every dev server that recorded a pidfile in
+ * `.blocks-sandbox/`. Lets the `dev:stop`/`dev:status` wrappers be identical
+ * across templates (which bind different ports — 3000 with a 3100 frontend, or a
+ * backend-only 3001) instead of each hardcoding its own port. Best-effort:
+ * returns `[]` when the dir is absent/unreadable. `readDir` is injected for tests.
+ */
+export function findDevServerPorts(
+  readDir: (dir: string) => string[] = (dir) => readdirSync(dir),
+): number[] {
+  let names: string[];
+  try {
+    names = readDir(BLOCKS_SANDBOX_DIR);
+  } catch {
+    return [];
+  }
+  const ports: number[] = [];
+  for (const name of names) {
+    const m = DEV_PIDFILE_RE.exec(name);
+    if (m) {
+      const p = Number(m[1]);
+      if (Number.isInteger(p) && p > 0) ports.push(p);
+    }
+  }
+  return ports;
+}
+
+/** Outcome of {@link stopDevServer}. */
+export interface StopResult {
+  /** The front-door port acted on. */
+  port: number;
+  /** True when a listener (or a recorded live supervisor) was found and signalled. */
+  stopped: boolean;
+  /** True when nothing was running (idempotent no-op). */
+  alreadyStopped: boolean;
+  /** Supervisor identity read from the pidfile, when one was present. */
+  record: DevServerPidRecord | null;
+  /** Listener PIDs discovered and signalled across the front-door + frontend ports. */
+  pids: number[];
+  /** True when, after signalling, both ports are confirmed free. */
+  portsFree: boolean;
+}
+
+/** Injectable seams for {@link stopDevServer} (real implementations by default). */
+export interface StopDevServerDeps {
+  /** Read a pidfile body, or null when absent/unreadable. */
+  readPidfile: (path: string) => string | null;
+  /** Delete the pidfile once the server is stopped. */
+  removePidfile: (path: string) => void;
+  /** True iff a port is currently bound (both loopback families). */
+  probe: (port: number) => Promise<boolean>;
+  /** PIDs of the listener(s) holding a port. */
+  listPids: (port: number) => number[];
+  /** Terminate a listener PID's tree (POSIX group kill / Windows taskkill). */
+  killTree: (pid: number, signal: NodeJS.Signals) => void;
+  /** Wait (bounded) for a port to be released. */
+  waitFree: (port: number, timeoutMs?: number) => Promise<void>;
+}
+
+function defaultStopDeps(): StopDevServerDeps {
+  return {
+    readPidfile: (p) => {
+      try {
+        return readFileSync(p, 'utf-8');
+      } catch {
+        return null;
+      }
+    },
+    removePidfile: (p) => {
+      try {
+        unlinkSync(p);
+      } catch {
+        /* already gone */
+      }
+    },
+    probe: (p) => isPortOpen(p),
+    listPids: (p) => findListenerPids(p),
+    killTree: (pid, sig) => killListenerTree(pid, sig),
+    waitFree: (p, t) => waitForPortFree(p, t),
+  };
+}
+
+/**
+ * Stop a dev server started by {@link startDevServer} on `port` (and reap its
+ * `--strictPort` frontend on `frontendPort`), by SIGTERM→SIGKILL of whatever
+ * listener holds each port, then removing the singleton pidfile.
+ *
+ * Idempotent and best-effort: when nothing is listening and no live supervisor
+ * is recorded, it returns `alreadyStopped: true` without error. It targets the
+ * ports by their OS listener PID (the same `lsof`/`netstat` discovery the
+ * startup reclaim uses) — never by process name — so it can never hit an
+ * unrelated `tsx`/`node` the way `pkill -f` does. A stale pidfile (its recorded
+ * supervisor already dead) is cleaned up as part of the stop.
+ *
+ * Dependencies are injected for tests; the defaults wire the real fs/port/kill
+ * seams. Never throws.
+ */
+export async function stopDevServer(
+  port = 3000,
+  frontendPort = 3100,
+  deps: Partial<StopDevServerDeps> = {},
+): Promise<StopResult> {
+  const d = { ...defaultStopDeps(), ...deps };
+  const pidfilePath = devPidfilePath(port);
+
+  const body = d.readPidfile(pidfilePath);
+  const record = body != null ? parsePidRecord(body) : null;
+
+  // Discover whatever is actually holding the ports right now (an orphaned
+  // backend/Vite from a crashed server has no live pidfile owner but still binds
+  // the port — reclaim it too).
+  const ports = frontendPort && frontendPort !== port ? [port, frontendPort] : [port];
+  const signalled = new Set<number>();
+  let anyBound = false;
+
+  for (const p of ports) {
+    if (!(await d.probe(p))) continue;
+    anyBound = true;
+    const pids = d.listPids(p);
+    for (const pid of pids) {
+      d.killTree(pid, 'SIGTERM');
+      signalled.add(pid);
+    }
+    await d.waitFree(p, 2000);
+    if (await d.probe(p)) {
+      // Still held after SIGTERM — escalate. Re-list first: the owner set can
+      // change during the wait (mirrors reclaimPort's escalation).
+      const killPids = d.listPids(p);
+      for (const pid of (killPids.length ? killPids : pids)) {
+        d.killTree(pid, 'SIGKILL');
+        signalled.add(pid);
+      }
+      await d.waitFree(p, 2000);
+    }
+  }
+
+  // Clean up the pidfile whenever one was present (it is ours to remove once the
+  // server is down; a stale record for a dead owner is also cleared here).
+  if (record) d.removePidfile(pidfilePath);
+
+  const portsFree = !(await Promise.all(ports.map((p) => d.probe(p)))).some(Boolean);
+
+  return {
+    port,
+    stopped: anyBound,
+    alreadyStopped: !anyBound,
+    record,
+    pids: [...signalled],
+    portsFree,
+  };
+}
+
+/** Human-readable one-liner describing a {@link StopResult}, for the CLI. */
+export function stopMessage(result: StopResult): string {
+  if (result.alreadyStopped) {
+    return `No dev server was running on :${result.port} (nothing to stop).`;
+  }
+  const who = result.pids.length ? ` (pid${result.pids.length > 1 ? 's' : ''} ${result.pids.join(', ')})` : '';
+  if (result.portsFree) {
+    return `🛑 Stopped the dev server on :${result.port}${who}.`;
+  }
+  return (
+    `⚠️  Signalled the dev server on :${result.port}${who}, but a port is still bound — ` +
+    `another process may be holding it; check with \`npm run dev:status\`.`
+  );
+}
+
+/** Outcome of {@link statusDevServer}. */
+export interface StatusResult {
+  port: number;
+  /** True when the front-door port is currently bound. */
+  running: boolean;
+  /** Supervisor identity from the pidfile, when present. */
+  record: DevServerPidRecord | null;
+  /** True when a pidfile exists but its recorded supervisor is no longer alive. */
+  stalePidfile: boolean;
+}
+
+/** Injectable seams for {@link statusDevServer}. */
+export interface StatusDevServerDeps {
+  readPidfile: (path: string) => string | null;
+  probe: (port: number) => Promise<boolean>;
+  isAlive: (pid: number) => boolean;
+}
+
+/**
+ * Report whether a dev server is running on `port`: whether the front door is
+ * bound, the recorded supervisor identity, and whether a pidfile is stale (owner
+ * dead). Read-only; never signals anything. Dependencies injected for tests.
+ */
+export async function statusDevServer(
+  port = 3000,
+  deps: Partial<StatusDevServerDeps> = {},
+): Promise<StatusResult> {
+  const readPidfile = deps.readPidfile ?? ((p) => {
+    try {
+      return readFileSync(p, 'utf-8');
+    } catch {
+      return null;
+    }
+  });
+  const probe = deps.probe ?? ((p) => isPortOpen(p));
+  const isAlive = deps.isAlive ?? ((pid) => isPidAlive(pid));
+
+  const body = readPidfile(devPidfilePath(port));
+  const record = body != null ? parsePidRecord(body) : null;
+  const running = await probe(port);
+  const ownerAlive = record ? (isAlive(record.pid) || (record.ppid > 1 && isAlive(record.ppid))) : false;
+  return {
+    port,
+    running,
+    record,
+    stalePidfile: record != null && !ownerAlive && !running,
+  };
+}
+
+/** Human-readable one-liner describing a {@link StatusResult}, for the CLI. */
+export function statusMessage(result: StatusResult): string {
+  if (result.running) {
+    const who = result.record ? ` (pid ${result.record.pid})` : '';
+    return `✅ Dev server is running on :${result.port}${who}.`;
+  }
+  if (result.stalePidfile) {
+    return `Dev server is not running on :${result.port} (a stale pidfile is present; it will be cleared on the next start/stop).`;
+  }
+  return `Dev server is not running on :${result.port}.`;
+}
+
+/**
+ * Stop every dev server this app has a pidfile for — the port-agnostic entry the
+ * `npm run dev:stop` template wrapper calls, so one identical wrapper works for a
+ * template on :3000/:3100 and a backend-only template on :3001. When no explicit
+ * `ports` are given it scans `.blocks-sandbox/` ({@link findDevServerPorts}); the
+ * caller may pass explicit ports to target a non-default setup. Each port is
+ * stopped via {@link stopDevServer} (which also reaps the paired `+100` frontend
+ * port by convention). Returns one {@link StopResult} per port acted on; an empty
+ * array means nothing was running. Never throws.
+ */
+export async function stopAllDevServers(ports?: number[]): Promise<StopResult[]> {
+  const targets = ports && ports.length ? ports : findDevServerPorts();
+  const results: StopResult[] = [];
+  for (const p of targets) {
+    results.push(await stopDevServer(p, p + 100));
+  }
+  return results;
+}
+
+/**
+ * CLI entry for the `dev:stop` template script. Stops all discovered dev servers
+ * (or an explicit `--port N`), prints one {@link stopMessage} per server, and —
+ * when nothing was running — says so. Never throws; resolves after printing.
+ */
+export async function runStopCli(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+  const portArg = parsePortArg(argv);
+  const results = await stopAllDevServers(portArg != null ? [portArg] : undefined);
+  if (results.length === 0) {
+    console.log(
+      portArg != null
+        ? `No dev server was running on :${portArg} (nothing to stop).`
+        : 'No dev server was running (nothing to stop).',
+    );
+    return;
+  }
+  for (const r of results) console.log(stopMessage(r));
+}
+
+/**
+ * CLI entry for the `dev:status` template script. Reports every dev server with
+ * a pidfile (or an explicit `--port N`), read-only. Never throws.
+ */
+export async function runStatusCli(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+  const portArg = parsePortArg(argv);
+  const ports = portArg != null ? [portArg] : findDevServerPorts();
+  if (ports.length === 0) {
+    console.log('No dev server is running.');
+    return;
+  }
+  for (const p of ports) console.log(statusMessage(await statusDevServer(p)));
+}
+
+/** Parse `--port <n>` / `--port=<n>` from argv; `null` when absent/invalid. Pure. */
+export function parsePortArg(argv: readonly string[]): number | null {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--port' && i + 1 < argv.length) {
+      const n = Number(argv[i + 1]);
+      return Number.isInteger(n) && n > 0 ? n : null;
+    }
+    const m = /^--port=(\d+)$/.exec(a);
+    if (m) {
+      const n = Number(m[1]);
+      return Number.isInteger(n) && n > 0 ? n : null;
+    }
+  }
+  return null;
 }
 
 // ── Local API handler ────────────────────────────────────────────────────────

@@ -65,7 +65,7 @@ const res = await api.ping('world');   // { message: 'hi world' }
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
 2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
-3. For faster iteration: run `npm run dev &` in the background, then run `npm run test:e2e` repeatedly (reuses the running server)
+3. For faster iteration: run `npm run dev &` in the background, then run `npm run test:e2e` repeatedly (reuses the running server). Stop the background server with `npm run dev:stop` (and `npm run dev:status` to check it) — do **not** use `pkill -f`/`killall` on `tsx`/`node`, which match by process name and will also kill your own shell/agent process.
 4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
 
 ### Calling the API directly (troubleshooting only)
