@@ -16,13 +16,13 @@ capability inference.
 
 `Compute` is a **composition**: it `extends BuildingBlockScope`, constructs the
 backing as a child, and holds it in a private `#backing` exposed through a
-`get compute()` getter. It satisfies the `ComputeProvider` contract
-(`{ compute: ComputeBase }`), so a workload handed a `Compute` reads `.compute`
-to get the real, branded backing the framework's delivery logic (`AsyncJob`) and
-finalize steps recognize. A raw backing (`LambdaCompute`/`ContainerCompute`) also
-satisfies `ComputeProvider` by providing itself (`get compute()` returns `this`),
-so the public block and a raw backing are interchangeable wherever a
-`ComputeProvider` is accepted.
+`resolve()` method. It satisfies the `ComputeProvider` contract
+(`{ resolve(): ComputeBase }`), so a workload handed a `Compute` calls
+`resolve()` to get the real, branded backing the framework's delivery logic
+(`AsyncJob`) and finalize steps recognize. A raw backing
+(`LambdaCompute`/`ContainerCompute`) also satisfies `ComputeProvider` by
+resolving to itself (`resolve()` returns `this`), so the public block and a raw
+backing are interchangeable wherever a `ComputeProvider` is accepted.
 
 Only the backing registers as a compute on the stack — the `Compute` wrapper is
 an ordinary `BuildingBlockScope` node, so the compute registry/finalize census
@@ -50,5 +50,5 @@ a customer is getting, which contradicts the Cloud-not-AWS goal.
 
 Standard four-entry conditional export. The CDK entry provisions; the
 `aws-runtime`/`mock`/`browser` entries own an inert backing and expose it via the
-same `compute` getter, so a `{ compute }` reference resolves in every phase and
-`import`-time construction of the backend succeeds.
+same `resolve()` method, so a `ComputeProvider` reference resolves in every phase
+and `import`-time construction of the backend succeeds.

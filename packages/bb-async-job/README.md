@@ -1,6 +1,6 @@
 # @aws-blocks/bb-async-job
 
-Background job processing backed by SQS and Lambda.
+Background job processing backed by SQS, run on Lambda or a container.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 

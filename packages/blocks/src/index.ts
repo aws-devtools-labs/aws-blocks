@@ -89,12 +89,14 @@ export type {
 	WaitUntilCompleteOptions,
 } from '@aws-blocks/bb-async-job';
 /**
- * **Background job processing backed by SQS and Lambda.**
+ * **Background job processing backed by SQS, run on Lambda or a container.**
  *
  * Use for fire-and-forget async work: sending emails, processing uploads,
- * generating reports, or any task that shouldn't block an API response.
- * Supports single and batch submission (up to 10), optional delay, schema
- * validation, and automatic retries with dead-letter queue.
+ * generating reports, or any task that shouldn't block an API response. Runs on
+ * the app's default serverless compute, or assign a container `Compute` (Fargate)
+ * for long-running or high-memory jobs. Supports single and batch submission (up
+ * to 10,000 per call), optional delay, schema validation, and automatic retries
+ * with dead-letter queue.
  *
  * Package: `@aws-blocks/bb-async-job`
  * Full docs: `README.md` in the package directory above.

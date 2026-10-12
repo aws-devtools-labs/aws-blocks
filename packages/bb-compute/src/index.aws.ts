@@ -4,8 +4,8 @@
 /**
  * AWS-runtime entry for the generic `Compute` block. At runtime a compute is
  * inert (its infrastructure was created at synth), so this owns an inert backing
- * selected by the explicit `type` and exposes it via `compute` — matching the
- * CDK block's `ComputeProvider` shape so a `{ compute }` reference resolves in
+ * selected by the explicit `type` and exposes it via `resolve()` — matching the
+ * CDK block's `ComputeProvider` shape so a `ComputeProvider` reference resolves in
  * every phase.
  */
 import type { ComputeType, ScopeParent } from '@aws-blocks/core';

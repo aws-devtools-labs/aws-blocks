@@ -48,7 +48,7 @@ const MAX_PAYLOAD_BYTES = 256 * 1024;
 const MAX_BATCH_PAYLOADS = 10_000;
 
 /**
- * Background job processing backed by SQS and Lambda.
+ * Background job processing backed by SQS, run on Lambda or a container.
  *
  * Submit a payload, get a job ID back, and a handler processes it
  * asynchronously with automatic retries and dead-letter handling.
@@ -64,7 +64,11 @@ const MAX_BATCH_PAYLOADS = 10_000;
  * - Set `visibilityTimeout` to at least 2x the expected handler duration
  *
  * **Scaling (AWS):** SQS standard queues support nearly unlimited throughput.
- * A dedicated Lambda function processes jobs with automatic concurrency scaling.
+ * By default a dedicated Lambda function processes jobs with automatic
+ * concurrency scaling. Assign a container `Compute` (via the `compute` option)
+ * to run the handler on Fargate instead — for long-running or high-memory jobs —
+ * where a self-started poller drains the queue and the service autoscales on
+ * backlog depth.
  *
  * @example
  * ```typescript
