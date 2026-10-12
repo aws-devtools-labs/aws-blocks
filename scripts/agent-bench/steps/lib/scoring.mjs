@@ -39,8 +39,19 @@ export const AGENT_FAIL_REASON = 'agent_timeout';
 // a `MaxTokensError`/`ContextWindowOverflowError` (the agent's own budget — genuinely agent_fail), or a
 // wall-clock/cancellation partial. So a real agent failure can't hide behind this gate. Mirrors the
 // PGlite OOM carve-out below (an infra signature on a 2-agent/dead_server failure → harness_error).
+//
+// COUPLING: the `$fault=server` and `httpStatusCode:5xx` tokens are matched against the FLATTENED
+// string that describeModelError() (bedrock-retry.mjs) writes onto result.json's `builder_error` —
+// `${name}: ${msg} $fault=${fault} $metadata={httpStatusCode:${status},…}`. Only that string survives
+// to the finalize boundary; the structured `$metadata.httpStatusCode` / `$fault` the retry layer reads
+// via errorChain() is gone by scoring time. So this regex depends on describeModelError's exact output
+// format: if that describer ever stops emitting `$fault=` / `httpStatusCode:` (a format tidy-up), this
+// gate would silently stop firing and these cells would quietly fall back to counted agent_fail. The
+// cross-module test in scoring.test.mjs ("drift guard") pins that contract — it runs describeModelError
+// on a synthetic 503 cause-chain and asserts isProviderServerFault() fires, so a describer format change
+// breaks a test rather than silently disabling the carve-out.
 export const PROVIDER_SERVER_FAULT_RE =
-	/\$fault=server\b|httpStatusCode:\s*5\d\d\b|\bserviceunavailable|service_unavailable|\binternalserver|\binternalfailure|\bmodelnotready/i;
+	/\$fault=server\b|httpStatusCode:\s*5\d\d\b|\bservice[_ ]?unavailable|\binternalserver|\binternalfailure|\bmodelnotready/i;
 export const PROVIDER_UNAVAILABLE_REASON = 'provider_unavailable';
 
 /**

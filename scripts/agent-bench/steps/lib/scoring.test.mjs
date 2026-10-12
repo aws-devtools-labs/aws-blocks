@@ -32,6 +32,10 @@ import {
 	verdict,
 	verdictOf,
 } from './scoring.mjs';
+// The real producer of the `builder_error` string the carve-out matches. Imported so a drift-guard
+// test can feed describeModelError's ACTUAL output into isProviderServerFault — pinning the format
+// contract between the two sibling .mjs modules (see the "drift guard" test below).
+import { describeModelError } from './bedrock-retry.mjs';
 
 describe('composite(tr, j) == round(60*tr + 4*j*min(1, 4*tr), 1)', () => {
 	it('tr=0 floors the judge term to 0 regardless of judge score', () => {
@@ -351,6 +355,49 @@ describe('provider-5xx carve-out: a 2-agent failure caused by a Bedrock SERVER f
 		const cell = { failed_at: '3-build-test', status: 'error', builder_error: '$fault=server httpStatusCode:503' };
 		assert.notEqual(classifyCell(cell).reason, PROVIDER_UNAVAILABLE_REASON);
 		assert.notEqual(classifyCell(cell).klass, 'harness_error');
+	});
+
+	// Drift guard: the carve-out matches a FLATTENED string, but the only thing that produces that
+	// string in production is describeModelError (bedrock-retry.mjs), written onto result.json by
+	// 2-agent-run.ts. BEDROCK_503 above is hand-written to look like that output; if describeModelError's
+	// format ever changes (drops `$fault=` / `httpStatusCode:`), the hand-written literal would keep
+	// passing while the REAL gate silently goes dark. So feed describeModelError's actual output through
+	// the predicate here: a describer format change breaks THIS test instead of disabling the gate unseen.
+	it('drift guard: describeModelError on a real 503 cause-chain is matched by isProviderServerFault', () => {
+		// A synthetic cause chain shaped exactly like the AWS SDK v3 error the invoke layer sees: an outer
+		// ModelError wrapper ← the Bedrock ServiceUnavailableException carrying $fault/$metadata.
+		const bedrock503 = {
+			name: 'ServiceUnavailableException',
+			message: 'Bedrock is unable to process your request.',
+			$fault: 'server',
+			$metadata: { httpStatusCode: 503, requestId: 'd72cb143' },
+		};
+		const wrapped = { name: 'ModelError', message: 'Bedrock is unable to process your request.', cause: bedrock503 };
+		const produced = describeModelError(wrapped);
+
+		assert.equal(
+			isProviderServerFault(produced),
+			true,
+			`describeModelError output must still carry a 5xx server-fault signature; got: ${produced}`,
+		);
+
+		// And the full classifyCell path on a cell carrying that produced string → excluded.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'error', builder_error: produced };
+		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: PROVIDER_UNAVAILABLE_REASON });
+		assert.equal(isScoredCell(cell), false);
+	});
+
+	it('drift guard: describeModelError on a client 4xx is NOT matched (stays counted agent_fail)', () => {
+		// The negative half of the contract: a real ValidationException (400) must still read as the
+		// agent's own fault through the describer, so the gate can't start swallowing client errors.
+		const validation = {
+			name: 'ValidationException',
+			message: 'malformed request',
+			$fault: 'client',
+			$metadata: { httpStatusCode: 400, requestId: 'abc123' },
+		};
+		const produced = describeModelError(validation);
+		assert.equal(isProviderServerFault(produced), false, `a 4xx client fault must not match; got: ${produced}`);
 	});
 });
 
