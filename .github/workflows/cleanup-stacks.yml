@@ -693,3 +693,185 @@ jobs:
             fi
           done <<< "$POLICIES"
           echo "✅ Cleanup complete. Deleted $DELETED orphaned policies, skipped $SKIPPED in-use policies."
+
+      - name: Cleanup orphaned IAM roles
+        if: always()
+        run: |
+          # errexit + pipefail (see the e2e step): catch a failure anywhere in a pipe.
+          set -eo pipefail
+          # IAM roles are capped per ACCOUNT (RolesPerAccount, 3000). When it
+          # saturates, the first CreateRole of every E2E deploy fails with 409
+          # ServiceLimitExceeded and all deploy-dependent lanes go red. The stack
+          # delete steps above never retain a role, but a role can still outlive its
+          # stack — notably CloudFront SSR edge-function roles, whose teardown lags
+          # the stack delete, so CloudFormation reports DELETE_COMPLETE while the
+          # role lingers. Nothing reclaims a role whose stack is already gone, so
+          # sweep them here: a role in scope is owned by NO live CloudFormation stack.
+          # This mirrors the REST-API sweep above; see its comments for the rationale
+          # behind each gate.
+          echo "🔍 Checking for orphaned IAM roles..."
+
+          # Ground-truth ownership: the set of role NAMES that ARE resources of a live
+          # stack — never delete a role in this set. For AWS::IAM::Role the
+          # PhysicalResourceId is the role name, and role names are unique per
+          # account, so this is an exact match. Same live-stack status filter as the
+          # REST-API sweep (every non-terminal status, including IMPORT_*).
+          #
+          # FAIL-SAFE ON A DESCRIBE ERROR (same as the REST-API sweep): if ANY
+          # per-stack describe errors, ownership is incomplete and a live role could
+          # be missing from OWNED_ROLES, so ALL role deletes are deferred this run.
+          LIVE_STACKS=$(aws cloudformation list-stacks \
+            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE \
+            --query "StackSummaries[].StackName" --output text 2>/dev/null | tr '\t' '\n' | sort -u || echo "")
+
+          OWNED_ROLES=""
+          OWNERSHIP_INCOMPLETE=0
+          for S in $LIVE_STACKS; do
+            [ -z "$S" ] && continue
+            if NAMES=$(aws cloudformation describe-stack-resources --stack-name "$S" \
+              --query "StackResources[?ResourceType=='AWS::IAM::Role'].PhysicalResourceId" \
+              --output text 2>/dev/null); then
+              NAMES=$(echo "$NAMES" | tr '\t' '\n')
+              [ -n "$NAMES" ] && OWNED_ROLES="$OWNED_ROLES"$'\n'"$NAMES"
+            else
+              echo "  ⚠️ describe-stack-resources failed for $S — ownership set is incomplete this run"
+              OWNERSHIP_INCOMPLETE=1
+            fi
+          done
+          OWNED_ROLES=$(echo "$OWNED_ROLES" | sed '/^$/d' | sort -u)
+
+          # All roles with name, creation date and path (the CLI paginates list-roles
+          # automatically and returns every page).
+          ROLES=$(aws iam list-roles \
+            --query "Roles[].[RoleName,CreateDate,Path]" --output text 2>/dev/null || echo "")
+
+          # Only sweep roles that (a) match a test-artifact name shape, (b) are old
+          # enough to be clearly abandoned (>6h), and (c) are owned by NO live stack
+          # (by name — see OWNED_ROLES above). All three must hold; the ownership gate
+          # is the hard safety, the name+age gates are conservative belt-and-suspenders.
+          STUCK_CUTOFF=$(date -d '6 hours ago' +%s)
+          DELETED=0
+          DELETE_FAILED=0
+          SKIPPED_YOUNG=0
+          SKIPPED_UNMATCHED=0
+          SKIPPED_OWNED=0
+          DEFERRED=0
+
+          # Wall-clock budget (same 15-min cap as the REST-API sweep) so the step
+          # breaks out cleanly and the summary always prints; the next scheduled run
+          # (every 2h) drains the remainder.
+          SWEEP_DEADLINE=$((SECONDS + 900))
+
+          if [ -z "$ROLES" ]; then
+            echo "✅ No IAM roles found"
+          fi
+
+          while IFS=$'\t' read -r ROLE CREATED ROLE_PATH; do
+            [ -z "$ROLE" ] && continue
+
+            # (c) HARD SAFETY: owned by a live stack, matched by exact role name.
+            # Checked first so an owned role is never at risk regardless of its name.
+            if echo "$OWNED_ROLES" | grep -qxF "$ROLE" 2>/dev/null; then
+              SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
+              continue
+            fi
+
+            # HARD SAFETY (throttle fail-safe): incomplete ownership set → delete
+            # nothing this run.
+            if [ "$OWNERSHIP_INCOMPLETE" -ne 0 ]; then
+              DEFERRED=$((DEFERRED + 1))
+              continue
+            fi
+
+            # (a) test-artifact name shape only. A name match is NOT a safety signal —
+            # a live role is protected SOLELY by the ownership gate (c) above. CDK
+            # bootstrap roles (cdk-hnb659fds-*) are shared account infrastructure and
+            # are excluded outright, ahead of the cdk-* test pattern; service-linked
+            # roles (/aws-service-role/ path) are never in scope.
+            case "$ROLE_PATH" in
+              /aws-service-role/*)
+                SKIPPED_UNMATCHED=$((SKIPPED_UNMATCHED + 1))
+                continue
+                ;;
+            esac
+            case "$ROLE" in
+              cdk-hnb659fds-*)
+                SKIPPED_UNMATCHED=$((SKIPPED_UNMATCHED + 1))
+                continue
+                ;;
+              blocks-hosting-* | bb-test-* | bb-telemetry-* | bb-vpc-smoke-* | amplify-amplifygen2-* | amplify-amplifyinteroptest-* | my-app-* | *-e2e-* | cdk-*) ;;
+              *)
+                SKIPPED_UNMATCHED=$((SKIPPED_UNMATCHED + 1))
+                continue
+                ;;
+            esac
+
+            # (b) age gate. list-roles renders CreateDate as ISO-8601, so normalize
+            # with `date -d`. A value that fails to parse becomes 0, i.e. treated as
+            # OLD, so the age dimension fails CLOSED (still gated by ownership + name).
+            if [ -n "$CREATED" ] && [ "$CREATED" != "None" ]; then
+              CREATED_TS=$(date -d "$CREATED" +%s 2>/dev/null || echo 0)
+              if [ "$CREATED_TS" -gt "$STUCK_CUTOFF" ] 2>/dev/null; then
+                SKIPPED_YOUNG=$((SKIPPED_YOUNG + 1))
+                continue
+              fi
+            fi
+
+            # Wall-clock budget spent? Only genuine delete candidates reach here, so
+            # the young/owned/unmatched counts stay exact.
+            if [ "$SECONDS" -ge "$SWEEP_DEADLINE" ]; then
+              DEFERRED=$((DEFERRED + 1))
+              continue
+            fi
+
+            # IAM mutations are throttled far less aggressively than REST-API
+            # deletes; a short gap between roles is enough.
+            if [ "$DELETED" -gt 0 ] || [ "$DELETE_FAILED" -gt 0 ]; then
+              sleep 1
+            fi
+
+            # A role cannot be deleted while it has dependents: drop inline policies,
+            # detach managed policies, and remove it from any instance profile first.
+            # Each is tolerant — a missing dependent is fine, and a real failure
+            # surfaces as a failed delete-role below (retried next run).
+            for P in $(aws iam list-role-policies --role-name "$ROLE" \
+              --query "PolicyNames[]" --output text 2>/dev/null || true); do
+              aws iam delete-role-policy --role-name "$ROLE" --policy-name "$P" 2>/dev/null || true
+            done
+            for ARN in $(aws iam list-attached-role-policies --role-name "$ROLE" \
+              --query "AttachedPolicies[].PolicyArn" --output text 2>/dev/null || true); do
+              aws iam detach-role-policy --role-name "$ROLE" --policy-arn "$ARN" 2>/dev/null || true
+            done
+            for IP in $(aws iam list-instance-profiles-for-role --role-name "$ROLE" \
+              --query "InstanceProfiles[].InstanceProfileName" --output text 2>/dev/null || true); do
+              aws iam remove-role-from-instance-profile --role-name "$ROLE" --instance-profile-name "$IP" 2>/dev/null || true
+            done
+
+            if aws iam delete-role --role-name "$ROLE" 2>/dev/null; then
+              echo "🗑️ Deleted orphaned IAM role: $ROLE"
+              DELETED=$((DELETED + 1))
+            else
+              echo "  ⚠️ delete-role failed for $ROLE (will retry next run)"
+              DELETE_FAILED=$((DELETE_FAILED + 1))
+            fi
+          done <<< "$ROLES"
+
+          # Report current headroom against the account role quota.
+          ROLE_COUNT=$(aws iam get-account-summary --query "SummaryMap.Roles" --output text 2>/dev/null || echo "?")
+          ROLE_QUOTA=$(aws iam get-account-summary --query "SummaryMap.RolesQuota" --output text 2>/dev/null || echo "?")
+
+          echo ""
+          echo "## IAM Role Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Orphaned IAM roles deleted: $DELETED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Delete-role call failed: $DELETE_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (< 6h old): $SKIPPED_YOUNG" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (owned by live stack): $SKIPPED_OWNED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (non-test name or shared infra): $SKIPPED_UNMATCHED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Deferred to next run (15-min budget reached or ownership incomplete): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- IAM roles remaining: $ROLE_COUNT (quota $ROLE_QUOTA)" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$DEFERRED" -gt 0 ] 2>/dev/null; then
+            echo "::warning::IAM role sweep deferred $DEFERRED candidate(s) — remainder defers to the next scheduled run"
+          fi
+          if [ "$ROLE_COUNT" != "?" ] && [ "$ROLE_COUNT" -ge 2800 ] 2>/dev/null; then
+            echo "::warning::$ROLE_COUNT/$ROLE_QUOTA IAM roles in use — approaching the RolesPerAccount quota"
+          fi
