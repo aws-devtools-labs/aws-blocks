@@ -90,9 +90,9 @@ export interface BlocksDefaults {
 	 *
 	 * **Off by default in both presets** — opt in with a per-stack override
 	 * (`defaults: { ...BlocksPresets.production, accessLogging: true }`). It is
-	 * off by default (rather than on for production) because, for the REST and
-	 * WebSocket stages (e.g. `bb-realtime`), enabling it provisions the
-	 * account-level API Gateway CloudWatch Logs role, which is an
+	 * off by default (rather than on for production) because, for the
+	 * `bb-realtime` WebSocket stage, enabling it provisions the account-level API
+	 * Gateway CloudWatch Logs role, which is an
 	 * account/region-level singleton: a second Blocks stack in the same
 	 * account+region that also enables access logging can repoint that role on
 	 * deploy or, on teardown, leave the survivor's access logging broken.
