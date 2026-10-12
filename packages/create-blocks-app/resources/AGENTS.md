@@ -96,4 +96,6 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 - `npm run deploy` — full production deploy to AWS
 - `npm run sandbox:destroy` — tear down sandbox resources
 
+**Stack naming.** You do **not** choose or pass a stack name — it is derived from `stackId` in `.blocks/config.json` (generated at scaffold time from the project name plus a random suffix, e.g. `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId` in `.blocks/config.json`; for dynamic naming, edit `aws-blocks/index.cdk.ts`. Don't search the framework source for a naming convention — this is it.
+
 On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). Grep that one line for "deploy finished + where it lives"; don't poll CloudFormation or hunt the URL out of the streamed output.
