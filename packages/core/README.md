@@ -402,14 +402,18 @@ The sandbox CLI automatically sets `CORS_ALLOWED_ORIGINS=^https?://(localhost|12
 
 ### Production (frontend hosted separately)
 
-If your frontend is hosted on a different domain (e.g., Vercel, Netlify), set the `CORS_ALLOWED_ORIGINS` environment variable on your Lambda:
+If your frontend is hosted on a different domain (e.g., Vercel, Netlify), list its origins in the stack's `defaults.allowedOrigins` — every Blocks compute gets them as `CORS_ALLOWED_ORIGINS`:
 
 ```typescript
 // aws-blocks/index.cdk.ts
-blocksStack.handler.addEnvironment(
-  'CORS_ALLOWED_ORIGINS',
-  'https://myapp\\.com,https://staging\\.myapp\\.com'
-);
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: {
+    ...BlocksPresets.production,
+    allowedOrigins: ['https://myapp\\.com', 'https://staging\\.myapp\\.com'],
+  },
+});
 ```
 
 Each entry is treated as a **regex pattern** (anchored with `^` and `$`). Examples:

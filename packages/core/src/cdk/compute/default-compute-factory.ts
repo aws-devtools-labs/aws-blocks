@@ -8,7 +8,7 @@ import type { BlocksBackend } from '../blocks-backend.js';
 
 /**
  * Lambda-shaped surface of the default compute that the legacy
- * `handler` / `gateway` / `apiUrl` accessors on BlocksStack/BlocksBackend read.
+ * `gateway` / `apiUrl` / `handlerLogGroup` accessors on BlocksStack/BlocksBackend read.
  * The default compute (`LambdaCompute` from `@aws-blocks/bb-lambda-compute`)
  * satisfies this structurally, so core exposes those accessors without
  * importing the concrete class. To be removed with those accessors once
@@ -17,7 +17,6 @@ import type { BlocksBackend } from '../blocks-backend.js';
  * @internal
  */
 export interface LambdaShapedCompute extends Compute {
-	readonly fn: cdk.aws_lambda_nodejs.NodejsFunction;
 	readonly apiGateway: cdk.aws_apigateway.RestApi;
 	readonly apiUrl: string;
 	readonly logGroup: cdk.aws_logs.ILogGroup;

@@ -202,7 +202,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
  *   backendHandlerPath: join(__dirname, 'handler.ts'),
  *   backendCDKPath: join(__dirname, 'infra.ts'),
  * });
- * // blocks.apiUrl, blocks.handler, blocks.gateway available
+ * // blocks.apiUrl, blocks.gateway, blocks.executionRole available
  * ```
  */
 export class BlocksBackend extends Construct {
@@ -220,10 +220,6 @@ export class BlocksBackend extends Construct {
 	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
 	_defaultCompute?: Compute;
 
-	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
-	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
-		return this.requireDefaultCompute().fn;
-	}
 	/** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
 	get gateway(): apigateway.RestApi {
 		return this.requireDefaultCompute().apiGateway;
@@ -242,7 +238,7 @@ export class BlocksBackend extends Construct {
 	private requireDefaultCompute(): LambdaShapedCompute {
 		if (!this._defaultCompute) {
 			throw new Error(
-				'Blocks backend not fully initialized — access .handler/.gateway/.apiUrl after BlocksBackend.create() resolves.',
+				'Blocks backend not fully initialized — access .gateway/.apiUrl after BlocksBackend.create() resolves.',
 			);
 		}
 		return this._defaultCompute as LambdaShapedCompute;

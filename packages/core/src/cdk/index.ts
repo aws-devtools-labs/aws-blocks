@@ -83,10 +83,6 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
 	_defaultCompute?: Compute;
 
-	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
-	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
-		return this.requireDefaultCompute().fn;
-	}
 	/** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
 	get gateway(): cdk.aws_apigateway.RestApi {
 		return this.requireDefaultCompute().apiGateway;
@@ -105,7 +101,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	private requireDefaultCompute(): LambdaShapedCompute {
 		if (!this._defaultCompute) {
 			throw new Error(
-				'Blocks stack not fully initialized — access .handler/.gateway/.apiUrl after BlocksStack.create() resolves.',
+				'Blocks stack not fully initialized — access .gateway/.apiUrl after BlocksStack.create() resolves.',
 			);
 		}
 		return this._defaultCompute as LambdaShapedCompute;
@@ -255,10 +251,6 @@ export class Scope extends Construct {
 		// BlocksStack/BlocksBackend; the cast also admits the test doubles that set
 		// globalThis.CURRENT_BLOCKS_STACK to a stub exposing the same surface.
 		return (globalThis as any).CURRENT_BLOCKS_STACK as BlocksStack | BlocksBackend;
-	}
-
-	get handler() {
-		return this.root.handler;
 	}
 
 	/**

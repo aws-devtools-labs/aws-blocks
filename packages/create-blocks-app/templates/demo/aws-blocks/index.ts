@@ -20,10 +20,7 @@ const scope = new Scope('my-app');
 // Building Blocks: Use these instead of creating custom storage
 const store = new KVStore(scope, 'app-store', {});
 
-
-const auth = new AuthBasic(scope, 'auth', {
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
-});
+const auth = new AuthBasic(scope, 'auth');
 
 // DistributedTable: Use Zod schemas for type-safe tables
 const todoSchema = z.object({

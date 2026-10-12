@@ -14,7 +14,7 @@ Creates one `aws-cdk-lib/aws-ssm.StringParameter` per AppSetting instance:
 - **Parameter type:** String (standard tier, 4 KB limit, free)
 - **Initial value:** Serialized form of `options.value` (JSON string for objects, raw string for strings)
 - **Removal policy:** DESTROY (parameter cleaned up on stack deletion)
-- **Permissions granted to `this.handler`:**
+- **Permissions granted to the shared execution role (`this.executionRole`):**
   - `ssm:GetParameter` on the parameter ARN
   - `ssm:PutParameter` on the parameter ARN
 - **Environment variable:** SSM parameter name passed to the Lambda handler via `BLOCKS_SSM_PARAM_{ID}` so the AWS runtime can discover the parameter
@@ -33,7 +33,7 @@ CloudFormation cannot natively create SSM SecureString parameters. The CDK imple
 
 - **KMS encryption:** Uses the default `aws/ssm` managed KMS key (no custom key needed, $0/month). Set `kmsKeyArn` to encrypt with a **customer-managed key** instead: the bulk-init Custom Resource passes it as `KeyId` on `PutParameter`, the handler is granted `kms:Decrypt`/`Encrypt` on that specific key ARN, and the runtime `put()` re-specifies the key on overwrite (SSM would otherwise fall back to `aws/ssm`). Changing `kmsKeyArn` later re-encrypts the existing value (see the Update behavior above). The CMK's own key policy must permit the app's execution role.
 
-- **Handler permissions (the runtime `this.handler`):**
+- **Runtime permissions (the shared execution role, `this.executionRole`):**
   - `ssm:GetParameter` on the parameter ARN
   - `ssm:PutParameter` on the parameter ARN
   - Default `aws/ssm` key: `kms:Decrypt` **and** `kms:Encrypt` with a `kms:ViaService` condition restricting usage to `ssm.{region}.amazonaws.com`
