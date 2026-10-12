@@ -21,8 +21,8 @@ import {
 	scheduleApiFrontDoor,
 } from './api-front-door.js';
 
-/** A shared gateway URL has the shape `https://{host}/aws-blocks/api` — no stage segment. */
-const GATEWAY_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/aws-blocks/api';
+/** A shared gateway URL has the shape `https://{host}/{stage}/aws-blocks/api`. */
+const GATEWAY_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api';
 
 function distributionWith(stack: cdk.Stack, origin: IOrigin): Distribution {
 	return new Distribution(stack, 'D', { defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS } });
@@ -40,18 +40,17 @@ function soleDistributionConfig(stack: cdk.Stack): {
 }
 
 describe('httpOriginFromEndpoint', () => {
-	test('takes just the host — the shared gateway URL has no stage segment, so no OriginPath', () => {
-		// The shared HTTP API v2 `$default` stage serves at the API root, so the
-		// origin is the bare host with no `originPath`. A stray OriginPath (a leftover
-		// from the old per-compute REST shape) would prefix every forwarded request
-		// and 403 at the gateway — invisible until deploy.
+	test('takes the host as the domain and the /{stage} segment as the OriginPath', () => {
+		// The REST API URL embeds its stage. Without it as `originPath`, a viewer
+		// request for /aws-blocks/api would reach the gateway without a stage and
+		// 403 — invisible until deploy.
 		const stack = new cdk.Stack(new cdk.App(), 'S');
-		distributionWith(stack, httpOriginFromEndpoint('https://abc123.execute-api.us-east-1.amazonaws.com/aws-blocks/api'));
+		distributionWith(stack, httpOriginFromEndpoint(GATEWAY_URL));
 
 		const origins = soleDistributionConfig(stack).Origins;
 		assert.strictEqual(origins.length, 1);
 		assert.strictEqual(origins[0].DomainName, 'abc123.execute-api.us-east-1.amazonaws.com');
-		assert.strictEqual(origins[0].OriginPath, undefined, 'no stage segment ⇒ no OriginPath');
+		assert.strictEqual(origins[0].OriginPath, '/prod', 'the stage becomes the OriginPath');
 	});
 
 	test('splits a tokenized gateway URL through CloudFormation intrinsics', () => {
@@ -59,13 +58,14 @@ describe('httpOriginFromEndpoint', () => {
 		// Doing it in JS would slice the unresolved placeholder text and silently
 		// produce a nonsense domain.
 		const stack = new cdk.Stack(new cdk.App(), 'S');
-		const api = new cdk.aws_apigatewayv2.HttpApi(stack, 'Api');
+		const api = new cdk.aws_apigateway.RestApi(stack, 'Api');
+		api.root.addMethod('ANY');
 		const gatewayUrl = `${api.url}aws-blocks/api`;
 		distributionWith(stack, httpOriginFromEndpoint(gatewayUrl));
 
 		const origin = soleDistributionConfig(stack).Origins[0];
 		assert.ok(JSON.stringify(origin.DomainName).includes('Fn::Select'), 'DomainName should be derived in-template');
-		assert.strictEqual(origin.OriginPath, undefined, 'no OriginPath for the shared gateway');
+		assert.ok(JSON.stringify(origin.OriginPath).includes('Fn::Select'), 'OriginPath should be derived in-template');
 	});
 });
 
@@ -103,7 +103,7 @@ describe('scheduleApiFrontDoor', () => {
 		assert.strictEqual(config.CacheBehaviors, undefined, 'expected no per-path behaviors');
 		assert.strictEqual(config.Origins.length, 1, 'expected a single origin');
 		assert.strictEqual(config.Origins[0].DomainName, 'abc123.execute-api.us-east-1.amazonaws.com');
-		assert.strictEqual(config.Origins[0].OriginPath, undefined, 'the shared gateway origin takes no OriginPath');
+		assert.strictEqual(config.Origins[0].OriginPath, '/prod', 'the gateway stage is the OriginPath');
 	});
 
 	test('edge: records the CloudFront origin as resolvedApiFrontDoorUrl (feeds the ApiUrl output)', () => {

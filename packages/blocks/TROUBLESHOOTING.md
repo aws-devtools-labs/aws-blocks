@@ -7,8 +7,8 @@ The API URL is always in `.blocks-sandbox/config.json`:
 ```bash
 cat .blocks-sandbox/config.json
 # Local dev:  {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
-# Sandbox:    {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/aws-blocks/api","environment":"sandbox"}
-# Production: {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/aws-blocks/api","environment":"production"}
+# Sandbox:    {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api","environment":"sandbox"}
+# Production: {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api","environment":"production"}
 ```
 
 In production with Hosting, browser requests go through CloudFront (same-origin at `/aws-blocks/api`), but `config.json` still contains the underlying API Gateway URL.

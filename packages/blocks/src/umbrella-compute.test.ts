@@ -45,7 +45,7 @@ after(() => {
 });
 
 describe('umbrella injects the Lambda default compute', () => {
-	test('BlocksStack.create() resolves the default to a LambdaCompute fronted by one shared HTTP API', async () => {
+	test('BlocksStack.create() resolves the default to a LambdaCompute fronted by one shared REST API', async () => {
 		const app = new cdk.App();
 		const stack = await BlocksStack.create(app, 'UmbrellaStack', {
 			backendHandlerPath: handlerPath,
@@ -55,17 +55,16 @@ describe('umbrella injects the Lambda default compute', () => {
 
 		// The umbrella wrapper injected LambdaCompute (not a stub); the stack's
 		// handler delegates to it and gateway/apiUrl resolve to the stack's single
-		// shared HTTP API v2. (The `fn` member lives on the CDK-typed LambdaCompute;
+		// shared REST API. (The `fn` member lives on the CDK-typed LambdaCompute;
 		// TS resolves the import to the mock type here, so we assert through the
 		// stack's typed getters instead.)
 		assert.ok(stack._defaultCompute instanceof LambdaCompute, 'default compute should be a LambdaCompute');
 		assert.ok(stack.handler, 'stack.handler resolves through the default compute');
-		assert.ok(stack.gateway, 'stack.gateway resolves to the shared HTTP API');
-		assert.ok(stack.apiUrl, 'stack.apiUrl resolves to the shared HTTP API');
+		assert.ok(stack.gateway, 'stack.gateway resolves to the shared REST API');
+		assert.ok(stack.apiUrl, 'stack.apiUrl resolves to the shared REST API');
 
 		const template = Template.fromStack(stack);
-		template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
-		template.resourceCountIs('AWS::ApiGateway::RestApi', 0);
+		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
 		template.hasResourceProperties('AWS::Lambda::Function', {});
 	});
 
@@ -80,10 +79,10 @@ describe('umbrella injects the Lambda default compute', () => {
 
 		assert.ok(backend._defaultCompute instanceof LambdaCompute, 'default compute should be a LambdaCompute');
 		assert.ok(backend.handler, 'backend.handler resolves through the default compute');
-		assert.ok(backend.apiUrl, 'backend.apiUrl resolves to the shared HTTP API');
+		assert.ok(backend.apiUrl, 'backend.apiUrl resolves to the shared REST API');
 
 		const template = Template.fromStack(parent);
-		template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
 	});
 });
 
@@ -129,7 +128,9 @@ describe('apiFrontDoor tier selection', () => {
 		// the execute-api domain) — it is the shared gateway, not a baked string.
 		assert.ok(domainName.includes('Fn::Select'), `origin host should be derived in-template, got ${domainName}`);
 		assert.ok(domainName.includes('execute-api'), `origin host should be the gateway, got ${domainName}`);
-		assert.strictEqual(origins[0].OriginPath, undefined, 'shared gateway origin takes no OriginPath');
+		// The REST API stage (part of the gateway URL) is carried as the OriginPath.
+		const originPath = JSON.stringify(origins[0].OriginPath);
+		assert.ok(originPath.includes('Fn::Select'), `OriginPath should be the gateway stage, got ${originPath}`);
 	});
 
 	test('BlocksBackend.create({ apiFrontDoor: "edge" }) provisions one CloudFront distribution in the parent stack', async () => {

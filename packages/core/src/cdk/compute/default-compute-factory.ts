@@ -14,7 +14,7 @@ import type { BlocksBackend } from '../blocks-backend.js';
  * class. To be removed with those accessors once consumers move to the
  * multi-compute model.
  *
- * The HTTP ingress is no longer compute-owned: the single shared HTTP API v2
+ * The HTTP ingress is no longer compute-owned: the single shared REST API
  * gateway (built by `create()`) backs `gateway` / `apiUrl` and integrates the
  * default compute's `apiHandler()` (defined on {@link Compute}).
  *

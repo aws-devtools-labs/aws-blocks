@@ -118,7 +118,7 @@ export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
  * instance but kept structural so Hosting doesn't depend on the concrete class.
  */
 export interface BlocksStackApi {
-  /** Fully-qualified HTTP API v2 RPC URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/aws-blocks/api`). The `$default` stage carries no stage path segment. */
+  /** Fully-qualified API Gateway URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks`). */
   readonly apiUrl: string;
   /**
    * Claim the API front-door role for this `Hosting` distribution, suppressing
@@ -961,9 +961,8 @@ export class Hosting extends Construct {
     // different stack. Optional: a bare `{ apiUrl }` origin simply isn't claimed.
     api.claimApiFrontDoor?.(hosting.distributionUrl);
 
-    // The shared HTTP API v2 `$default` stage serves at the API root, so the
-    // execute-api origin takes no stage path segment (unlike the old REST API,
-    // whose URL embedded a `/{stage}` prefix that had to be set as `originPath`).
+    // The REST API URL embeds its `/{stage}` prefix, which the origin carries as
+    // `originPath` (see httpOriginFromEndpoint).
     const apiGatewayOrigin = httpOriginFromEndpoint(apiUrl);
 
     hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);

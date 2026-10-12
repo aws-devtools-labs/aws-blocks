@@ -67,7 +67,7 @@ export abstract class Compute extends Scope {
 	abstract setEnv(key: string, value: string): void;
 
 	/**
-	 * The Lambda function the stack's single shared HTTP API gateway integrates
+	 * The Lambda function the stack's single shared API gateway integrates
 	 * so this compute is reachable over HTTP — or `undefined` for a worker-only
 	 * compute that owns no HTTP ingress (e.g. a background/queue consumer).
 	 *

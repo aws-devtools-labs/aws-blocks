@@ -77,8 +77,8 @@ infra.
 
 | Shape | What it is | When to use |
 |---|---|---|
-| **`BlocksStack`** | A whole new `cdk.Stack` containing the Blocks Lambda + shared HTTP API | Greenfield, or you want Blocks isolated in its own deploy unit |
-| **`BlocksBackend`** | A `Construct` (Lambda + shared HTTP API) you drop *into* an existing stack | Brownfield — you already have stacks and want Blocks to live alongside your other Lambdas |
+| **`BlocksStack`** | A whole new `cdk.Stack` containing the Blocks Lambda + API Gateway | Greenfield, or you want Blocks isolated in its own deploy unit |
+| **`BlocksBackend`** | A `Construct` (Lambda + API Gateway) you drop *into* an existing stack | Brownfield — you already have stacks and want Blocks to live alongside your other Lambdas |
 
 Once instantiated, you can:
 

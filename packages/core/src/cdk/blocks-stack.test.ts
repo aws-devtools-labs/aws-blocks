@@ -20,7 +20,7 @@ import { BlocksPresets, BlocksStack, Scope } from './index.js';
 // A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
 // @aws-blocks/blocks), which core's own tests can't depend on. Use an
 // equivalent inline stub: a Compute that owns a NodejsFunction and exposes it
-// via apiHandler(), so create() can build the default + the shared HTTP API
+// via apiHandler(), so create() can build the default + the shared REST API
 // gateway and the handler/gateway/apiUrl accessors have something real to
 // resolve to. It is passed to each create() via the internal
 // `defaultComputeFactory` option (see makeStack / makeBackend), exactly as

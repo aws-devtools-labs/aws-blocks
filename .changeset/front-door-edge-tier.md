@@ -5,7 +5,7 @@
 
 feat(core): add the `apiFrontDoor` selection surface and the `edge` (CloudFront) tier
 
-A Blocks app's API is served by the stack's single shared HTTP API v2 gateway. By
+A Blocks app's API is served by the stack's single shared API Gateway REST API. By
 default it is reached directly on that gateway's own regional endpoint — the new
 `'regional'` tier. You can now put a global, CDN-backed CloudFront distribution in
 front of it instead with a new prop on `BlocksStackProps` / `BlocksBackendProps`:
