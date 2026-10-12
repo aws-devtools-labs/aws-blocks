@@ -171,6 +171,7 @@ export interface RegisteredRoute {
     handler: (context: BlocksContext) => Promise<void>;
     // (undocumented)
     method: string;
+    ownerRootId?: string;
     paramNames: string[];
     path: string;
     pattern: RegExp;
@@ -179,6 +180,7 @@ export interface RegisteredRoute {
 // @public
 export function registerRoute(options: RawRouteOptions & {
     path: string;
+    ownerRootId?: string;
 }): void;
 
 // @public
