@@ -41,6 +41,22 @@ function toBodyStream(text: string): ReadableStream<Uint8Array> | null {
 export const LOCALHOST_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
 /**
+ * Resolve the interface the dev server binds: an explicit `host` option, then
+ * `BLOCKS_DEV_HOST`, else IPv4 loopback. Loopback by default — never every
+ * interface — because the dev server exposes the full API with no auth.
+ */
+export function resolveDevHost(option: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
+  const chosen = option?.trim() || env.BLOCKS_DEV_HOST?.trim();
+  return chosen || '127.0.0.1';
+}
+
+/** Whether `host` is a loopback address/name (reachable only from this machine). */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '');
+  return h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h);
+}
+
+/**
  * Resolve the CORS origin for the dev server.
  * Reflects back origins matching localhost/127.0.0.1; otherwise returns the fallback.
  */
@@ -108,6 +124,15 @@ export interface DevServerOptions {
   /** Port the frontend dev server listens on. Default: 3100. */
   frontendPort?: number;
   /**
+   * Interface the dev server binds. Default: `127.0.0.1` (loopback only). The dev
+   * server proxies your whole Blocks API — with local mock auth, which
+   * authenticates nothing — against the local mock datastore, so it must not be
+   * reachable from other machines by default. Set a wider host (e.g. `0.0.0.0`)
+   * only for container / remote-devbox setups where you control who can reach the
+   * port. Overridable with the `BLOCKS_DEV_HOST` environment variable.
+   */
+  host?: string;
+  /**
    * Watch `secret()` / `config()` calls and regenerate the type-safe key
    * augmentation (so `getSecret`/`getConfig` autocomplete and reject typos) as you
    * edit — all under this one `npm run dev`, no second command. Auto-detected: a
@@ -163,12 +188,11 @@ async function deployLocal(backend: Record<string, any>): Promise<void> {
  *
  * When `host` is omitted the port is probed on BOTH loopback families —
  * `127.0.0.1` (IPv4) and `::1` (IPv6) — and reported open if EITHER answers.
- * This matters because `server.listen(port, …)` (below) passes no host, so Node
- * binds dual-stack on `::` (all interfaces, both families). A single `localhost`
- * probe resolves to only one of `::1`/`127.0.0.1` on a given host, so an orphan
- * holding the port on the *other* family would be invisible — leaving the
- * startup/EADDRINUSE reclaim path blind to a port that `listen` will still
- * reject. Probing both families keeps every "is the port bound" check in
+ * This matters because an orphan dev server (or an older version of it, which
+ * bound dual-stack on `::`) can hold the port on either loopback family. A single
+ * `localhost` probe resolves to only one of `::1`/`127.0.0.1` on a given host, so
+ * an orphan on the *other* family would be invisible — leaving the
+ * startup/EADDRINUSE reclaim path blind to a port that is still contended. Probing both families keeps every "is the port bound" check in
  * agreement with what `listen` actually contends for. Pass an explicit `host`
  * to probe only that address.
  *
@@ -354,9 +378,9 @@ export interface ReclaimPortDeps {
  * logging/assertions. Best-effort: never throws.
  *
  * Probe contract: the default `probe` is {@link isPortOpen} with no host, which
- * checks BOTH `127.0.0.1` and `::1`. `server.listen` binds dual-stack on `::`,
- * so an orphan holding the port on either loopback family is detected (and thus
- * reclaimed) — a single-family `localhost` probe could miss it and no-op.
+ * checks BOTH `127.0.0.1` and `::1`, so an orphan holding the port on either
+ * loopback family is detected (and thus reclaimed) — a single-family `localhost`
+ * probe could miss it and no-op.
  */
 export async function reclaimPort(port: number, deps: Partial<ReclaimPortDeps> = {}): Promise<ReclaimResult> {
   const probe = deps.probe ?? ((p) => isPortOpen(p));
@@ -440,7 +464,7 @@ export function evaluatePortBindRetry(
 export interface BindRetryDeps {
   /** Reclaim the contended port; its result drives the operator message. */
   reclaim: (port: number) => Promise<ReclaimResult>;
-  /** Re-attempt the bind (`server.listen(port, onListening)` in prod). */
+  /** Re-attempt the bind (`server.listen(port, host, onListening)` in prod). */
   relisten: () => void;
   /** Schedule the next attempt after a backoff (`setTimeout` in prod). */
   scheduleRetry: (fn: () => void, delayMs: number) => void;
@@ -581,6 +605,16 @@ export function evaluateSingleton(
 }
 
 export async function startDevServer(options: DevServerOptions) {
+  // Bind loopback unless the developer explicitly opts into a wider interface.
+  const host = resolveDevHost(options.host);
+  if (!isLoopbackHost(host)) {
+    console.warn(
+      `\n⚠️  AWS Blocks dev server is binding ${host}, not loopback. Anyone who can reach this ` +
+        'machine on that interface can call every API method against your local mock data ' +
+        '(local auth authenticates nothing). Use this only in a container or devbox whose ' +
+        'port you control.\n',
+    );
+  }
   const {
     port = 3000,
     backendPath,
@@ -707,7 +741,7 @@ export async function startDevServer(options: DevServerOptions) {
     }
   }
 
-  registerBuiltinRoutes();
+  registerBuiltinRoutes({ localDev: true });
   lockRouteRegistry();
 
   // ── Frontend proxy ─────────────────────────────────────────────────────
@@ -1056,7 +1090,7 @@ export async function startDevServer(options: DevServerOptions) {
   // testable {@link createBindRetryController}; telemetry stays here.
   const onEaddrinuse = createBindRetryController(port, {
     reclaim: (p) => reclaimPort(p),
-    relisten: () => server.listen(port, onListening),
+    relisten: () => server.listen(port, host, onListening),
     scheduleRetry: (fn, delayMs) => { scheduleBindRetry(fn, delayMs); },
     onExhausted: () => process.exit(1),
     warn: (msg) => console.error(msg),
@@ -1090,7 +1124,7 @@ export async function startDevServer(options: DevServerOptions) {
     process.exit(1);
   });
 
-  server.listen(port, onListening);
+  server.listen(port, host, onListening);
 
   // ── Cleanup ────────────────────────────────────────────────────────────
   const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];

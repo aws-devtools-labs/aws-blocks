@@ -116,7 +116,7 @@ describe('WebSocket server: subscribe authorization', () => {
 		intruder.close();
 	});
 
-	it('uses the data key when forwarding a client publish', async () => {
+	it('uses the data key when broadcasting a server-side publish', async () => {
 		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
 		const { ws: subscriber } = await subscribe({ channel: CHANNEL, token });
 
@@ -127,19 +127,70 @@ describe('WebSocket server: subscribe authorization', () => {
 			});
 		});
 
-		const publisher = new WebSocket(`ws://localhost:${port}/realtime`);
-		await new Promise<void>((resolve, reject) => {
-			publisher.on('open', resolve);
-			publisher.on('error', reject);
-		});
-		publisher.send(JSON.stringify({ action: 'publish', channel: CHANNEL, payload: { text: 'from client' } }));
+		localRealtimeBus.emit('broadcast', { channel: CHANNEL, data: { text: 'from server' } });
 
 		const message = await received;
-		assert.deepStrictEqual(message.data, { text: 'from client' });
+		assert.deepStrictEqual(message.data, { text: 'from server' });
 		assert.strictEqual('payload' in message, false, 'local messages must use the AWS runtime data key');
 
+		subscriber.close();
+	});
+});
+
+// Parity with the deployed WebSocket handler (index.aws.ts), which accepts only
+// subscribe / unsubscribe / ping. A client-originated `publish` used to be
+// broadcast locally with NO authorization of any kind, so any connected client
+// could inject payloads into any channel.
+describe('WebSocket server: client publish is not supported (parity with AWS)', () => {
+	it('never broadcasts a client-originated publish, and tells the sender', async () => {
+		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+		const { ws: subscriber } = await subscribe({ channel: CHANNEL, token });
+		let leaked = false;
+		subscriber.on('message', (data) => { if (JSON.parse(data.toString()).type === 'message') leaked = true; });
+
+		const publisher = new WebSocket(`ws://localhost:${port}/realtime`);
+		await new Promise<void>((resolve, reject) => { publisher.on('open', resolve); publisher.on('error', reject); });
+		const reply = new Promise<{ type: string; message: string }>((resolve) => publisher.on('message', (d) => resolve(JSON.parse(d.toString()))));
+		publisher.send(JSON.stringify({ action: 'publish', channel: CHANNEL, payload: { text: 'injected' } }));
+
+		const r = await reply;
+		assert.strictEqual(r.type, 'error');
+		assert.match(r.message, /publish/i);
+		await new Promise((res) => setTimeout(res, 150));
+		assert.strictEqual(leaked, false, 'a client publish must never reach subscribers');
 		publisher.close();
 		subscriber.close();
+	});
+});
+
+// WebSocket handshakes are exempt from CORS, so without an Origin check any page
+// the developer visits could open ws://localhost:3000/realtime (cross-site
+// WebSocket hijacking).
+describe('WebSocket server: Origin validation on upgrade', () => {
+	const open = (origin?: string) =>
+		new Promise<'open' | number>((resolve) => {
+			const ws = new WebSocket(`ws://localhost:${port}/realtime`, origin ? { origin } : {});
+			ws.on('open', () => { ws.close(); resolve('open'); });
+			ws.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
+			ws.on('error', () => resolve(0));
+		});
+
+	it('rejects a cross-site Origin with 403', async () => {
+		assert.strictEqual(await open('https://evil.example'), 403);
+	});
+
+	it('rejects a lookalike Origin (localhost as a subdomain)', async () => {
+		assert.strictEqual(await open('http://localhost.evil.example:3000'), 403);
+	});
+
+	it('accepts loopback Origins (the dev server and its frontend)', async () => {
+		assert.strictEqual(await open('http://localhost:3000'), 'open');
+		assert.strictEqual(await open('http://127.0.0.1:3100'), 'open');
+		assert.strictEqual(await open('http://[::1]:3000'), 'open');
+	});
+
+	it('accepts a client that sends no Origin (non-browser tools, server-side tests)', async () => {
+		assert.strictEqual(await open(), 'open');
 	});
 });
 
