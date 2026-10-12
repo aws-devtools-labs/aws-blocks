@@ -29,10 +29,13 @@ self-starts the SQS pollers for the event handlers assigned to it.
 wires Application Auto Scaling from `scaling`:
 
 - `minInstances`/`maxInstances` → `autoScaleTaskCount({ minCapacity, maxCapacity })`.
-- Each `ScalingSignal` → a target-tracking policy: `cpu`/`memory` on the ECS
-  utilization metrics; `queue-depth` on a CloudWatch metric-math sum of
+- Each `ScalingSignal` → an autoscaling policy: `cpu`/`memory` as a
+  **target-tracking** policy on the ECS utilization metrics; `queue-depth` as a
+  **step-scaling** policy on a CloudWatch metric-math sum of
   `ApproximateNumberOfMessagesVisible` across every queue the compute drains,
-  targeting `backlogPerInstance`.
+  with `backlogPerInstance` as the per-step threshold. (Queue-depth can't use
+  target tracking — that API rejects a metric-math expression — so it steps
+  capacity up as the backlog grows and down to the floor as it drains.)
 - The compute's queues are discovered via `registerOwnedQueue`, which an AsyncJob
   assigned here calls at synth. Autoscaling is wired at `finalize()` precisely so
   every owned queue is known first.

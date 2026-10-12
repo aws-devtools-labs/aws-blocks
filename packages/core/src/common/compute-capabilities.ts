@@ -120,7 +120,6 @@ export type ComputeOptions =
 	| ({ type: 'container' } & ContainerComputeOptions);
 
 /**
-/**
  * Per-instance concurrency for a job on a container: `maxConcurrencyPerCPU`
  * multiplied by the compute's vCPU count, rounded up, floored at one. A
  * fractional-vCPU instance still runs at least one unit of work, and rounding up

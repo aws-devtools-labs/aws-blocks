@@ -25,7 +25,8 @@ appears in the API. The concrete backing computes stay internal and extend
 - `serverless`: `memory`, `maxTimeoutSeconds` (the function's runtime ceiling).
 - `container`: `size` (a valid `{ vcpu, memory }` combination — invalid pairs are
   unrepresentable), `scaling` (real Application Auto Scaling —
-  `min/maxInstances` + `cpu`/`memory`/`queue-depth` target-tracking policies;
+  `min/maxInstances` + `cpu`/`memory` target-tracking and `queue-depth`
+  step-scaling policies;
   queue-depth sums the messages across the queues the compute drains), and a
   custom `image`.
 
