@@ -73,7 +73,7 @@ The typed `import { api } from 'aws-blocks'` client is the normal path. The HTTP
 `POST` to the RPC path `/aws-blocks/api`:
 
 - Local dev: `http://localhost:3000/aws-blocks/api` (the default template serves the backend and frontend from a single front door on `:3000`). Only the `backend` and `amplify` templates serve the API on `:3001`.
-- Deployed: the API Gateway stage URL + `/aws-blocks/api`
+- Deployed: the shared HTTP API URL + `/aws-blocks/api` (the `ApiUrl` stack output; no stage segment)
 
 The body is JSON-RPC 2.0:
 
@@ -156,7 +156,7 @@ curl http://localhost:3000/.blocks-sandbox/config.json
 
 # After a deploy: written by the deploy script and uploaded to the origin
 cat .blocks-sandbox/config.json
-# → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api", "environment": "production" }
+# → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/aws-blocks/api", "environment": "production" }
 ```
 
 So a real config problem looks like the client throwing `Blocks API URL not configured` (or `... is not configured (source: ...)`), not like a `404` on `/config.json`. If a **deployed** origin keeps serving `{"_placeholder":true}` after a successful deploy, that is a genuine bug: the config upload or the CloudFront invalidation did not land.
@@ -310,7 +310,7 @@ Registration rules worth knowing before you hit them at runtime:
 - Routes must be constructed while the backend module is loading (top level of `aws-blocks/index.ts`, or from a block's constructor). Registering after the handler is created throws.
 - `/aws-blocks` itself and `/aws-blocks/api` (plus anything under it) are reserved for RPC dispatch, and `/` is not routable, so use a sub-path.
 - The same `method` + `path` twice throws `RawRouteErrors.DuplicateRoute`; catch it with `isBlocksError(e, RawRouteErrors.DuplicateRoute)`.
-- No extra AWS resources are created. The existing API Gateway proxy already forwards every path to the same Lambda, which checks the route registry before falling through to RPC.
+- No extra AWS resources are created. The shared HTTP API's `$default` catch-all route already forwards every path to the same Lambda, which checks the route registry before falling through to RPC.
 
 ### Pipeline
 
