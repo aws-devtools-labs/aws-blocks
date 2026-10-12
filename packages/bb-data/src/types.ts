@@ -57,9 +57,10 @@ export interface DatabaseOptions {
    *
    * Each declared extension is distributed as its own optional package and is
    * loaded by dynamic import, so only projects that declare one pay its install
-   * cost. A declared extension whose package is not installed fails the dev
-   * server at startup with the exact `npm install` command. Supported names:
-   * `postgis`, `pgvector`.
+   * cost. A declared extension whose package is not installed (or an unknown
+   * name) fails on the first database interaction with an actionable error — the
+   * exact `npm install` command for a missing package, or the list of supported
+   * names for an unknown one. Supported names: `postgis`, `pgvector`.
    *
    * You still run `CREATE EXTENSION <name>` in a migration — this option only
    * makes the extension available for `CREATE EXTENSION` to succeed locally.

@@ -20,8 +20,8 @@ iteration.
   an **optional peer dependency** and loaded by dynamic import, so only projects
   that declare an extension install it: `postgis` → `@electric-sql/pglite-postgis`,
   `pgvector` → `@electric-sql/pglite-pgvector`. A declared extension whose package is
-  missing fails the dev server at startup with the exact `npm install` command; an
-  unknown name fails with the list of supported names.
+  missing (or an unknown name) fails on the first database interaction with an
+  actionable error — the exact `npm install` command, or the list of supported names.
 - You still run `CREATE EXTENSION <name>` in a migration — the option only makes the
   extension available for `CREATE EXTENSION` to succeed locally.
 

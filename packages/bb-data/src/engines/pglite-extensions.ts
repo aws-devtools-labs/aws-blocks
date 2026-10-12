@@ -57,11 +57,11 @@ function isModuleNotFound(error: unknown): boolean {
 /**
  * Resolve declared extension names to PGlite's `{ namespace: extension }` object.
  *
- * Fails fast (before the dev server serves a request) with an actionable error:
- * an unknown name lists the supported ones, and a missing package names the exact
- * `npm install` command. Both are developer-time configuration mistakes, so a
- * loud startup failure is better DX than a confusing `CREATE EXTENSION` error
- * several queries later.
+ * Fails with an actionable error on the first database interaction (the dynamic
+ * import runs lazily, when the engine is first used): an unknown name lists the
+ * supported ones, and a missing package names the exact `npm install` command.
+ * Both are developer-time configuration mistakes, so a clear, early error is
+ * better DX than a confusing `CREATE EXTENSION` error several queries later.
  *
  * @param names - extension names from `DatabaseOptions.extensions`.
  * @returns the object to pass as PGlite's `extensions` option (empty when `names`

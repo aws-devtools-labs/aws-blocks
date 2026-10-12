@@ -338,8 +338,9 @@ const db = new Database(scope, 'main', {
   - `postgis` → `npm install @electric-sql/pglite-postgis`
   - `pgvector` → `npm install @electric-sql/pglite-pgvector`
 
-  If a declared extension's package is missing, the dev server fails at startup
-  with the exact install command.
+  If a declared extension's package is missing (or the name is unknown), the
+  first database interaction fails with an actionable error — the exact install
+  command for a missing package, or the list of supported names.
 - **Still run `CREATE EXTENSION`.** This option only makes the extension available;
   issue `CREATE EXTENSION <name>` in a migration as you would on Postgres.
 

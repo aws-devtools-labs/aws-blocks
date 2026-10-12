@@ -4,6 +4,7 @@
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { PGliteEngine } from './engines/pglite-engine.js';
+import { LazyEngine } from './engines/lazy-engine.js';
 import { PgClientEngine } from './engines/pg-client-engine.js';
 import { RLSEnabledDatabase } from './database.js';
 import { runMigrations, loadMigrationsFromDir } from '@aws-blocks/data-common';
@@ -64,21 +65,19 @@ export class Database extends Scope {
     } else {
       // Local PGlite for development
       if (options?.extensions && options.extensions.length > 0) {
-        // Extensions are resolved by dynamic import (async), so construct the
-        // engine asynchronously and gate queries on it via `migrationsRun`,
-        // which `ensureMigrations()` already awaits before every query. A
-        // placeholder engine is installed synchronously so `getEngine()` and
-        // migration wiring below have a `base` to reference; it is replaced by
-        // the extension-loaded engine before the first query runs.
-        const placeholder = new PGliteEngine(`.bb-data/${this.fullId}`);
-        this.base = new RLSEnabledDatabase(placeholder);
+        // Extensions are resolved by dynamic import (async), which the sync
+        // constructor cannot await. Install ONE stable engine — a LazyEngine
+        // that builds the extension-loaded PGliteEngine on first use and
+        // memoizes it — so `this.base` is never reassigned. Every data path
+        // (query/execute/transaction/withRLS and the crud() handlers, which
+        // capture `this.base` synchronously) therefore shares the same engine
+        // and sees the extensions once they resolve. The factory import()s the
+        // extension packages lazily, so a Database that declares extensions but
+        // is never queried never loads them.
         const extensions = options.extensions;
         const dataDir = `.bb-data/${this.fullId}`;
-        this.migrationsRun = PGliteEngine.create(dataDir, extensions).then(async engine => {
-          // Discard the unused placeholder instance so its data dir handle is released.
-          await placeholder.destroy().catch(() => {});
-          this.base = new RLSEnabledDatabase(engine);
-        });
+        const lazyEngine = new LazyEngine(() => PGliteEngine.create(dataDir, extensions));
+        this.base = new RLSEnabledDatabase(lazyEngine);
       } else {
         const engine = new PGliteEngine(`.bb-data/${this.fullId}`);
         this.base = new RLSEnabledDatabase(engine);
@@ -99,10 +98,11 @@ export class Database extends Scope {
 
     if (options?.migrationsPath) {
       const path = options.migrationsPath;
-      // Chain onto any pending engine setup (e.g. the async extension-engine
-      // swap above) so migrations run against the final engine, and so this
-      // does not clobber that promise. `this.base` is read inside the callback,
-      // after the swap has resolved.
+      // Chain onto any pending engine setup (the AppSetting-connection branch
+      // sets `migrationsRun`) so this does not clobber that promise. `this.base`
+      // is stable (never reassigned); when it wraps a LazyEngine the extensions
+      // resolve on the first engine call `runMigrations` makes, so migrations
+      // run against the extension-loaded engine.
       const pending = this.migrationsRun ?? Promise.resolve();
       this.migrationsRun = pending
         .then(() => loadMigrationsFromDir(path))
