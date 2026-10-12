@@ -157,9 +157,25 @@ curl http://localhost:3000/.blocks-sandbox/config.json
 # After a deploy: written by the deploy script and uploaded to the origin
 cat .blocks-sandbox/config.json
 # → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api", "environment": "production" }
+#   (under apiFrontDoor:'edge' this is the CloudFront domain + /aws-blocks/api instead)
 ```
 
 So a real config problem looks like the client throwing `Blocks API URL not configured` (or `... is not configured (source: ...)`), not like a `404` on `/config.json`. If a **deployed** origin keeps serving `{"_placeholder":true}` after a successful deploy, that is a genuine bug: the config upload or the CloudFront invalidation did not land.
+
+### API front door
+
+How the backend's API is exposed to the internet is chosen with the `apiFrontDoor` prop on `BlocksStack` / `BlocksBackend` (default `'regional'`):
+
+- **`'regional'`** (default) — the shared regional REST API gateway, reached directly on its own `execute-api` endpoint. Cheap, with a stable address per deployment and no extra CDN hop.
+- **`'edge'`** — a global, CloudFront-backed front door in front of that same gateway (a single origin). Choose it for a geographically distributed audience; requests terminate at the nearest edge. Under `edge`, the `ApiUrl` stack output is the CloudFront URL + `/aws-blocks/api`.
+
+The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
+
+**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `edge`, Hosting's distribution takes the front-door role and no second distribution is created.
+
+Neither tier makes CloudFront the only way in: the gateway's own `execute-api` URL stays publicly reachable, so a WebACL on a CloudFront distribution doesn't cover direct calls to it.
+
+> ⚠️ **Switching `'regional'` ⇄ `'edge'` changes the API's endpoint domain.** Browser auth cookies and sessions are bound to the origin that set them, so a switch invalidates every existing cookie/session — users are signed out and must sign in again. Pick a tier before you have real users, and treat a later change as a breaking migration.
 
 ### ApiError / isBlocksError / hasAuthError
 

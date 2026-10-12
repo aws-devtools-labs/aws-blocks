@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
+import { Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -120,6 +121,41 @@ describe('factory function support', () => {
 
 		const marker = stack.node.tryFindChild('FactoryMarker');
 		assert.ok(marker, 'Factory function should have created FactoryMarker on the stack');
+	});
+});
+
+describe('ApiUrl output and the Hosting front-door claim', () => {
+	// Hosting claims the front-door role whenever it fronts the API. Only the
+	// `edge` tier may move the ApiUrl output to that distribution; under
+	// `regional` it stays the gateway URL, so adding Hosting never changes the
+	// domain a client is bound to.
+	const apiUrlOutput = (stack: BlocksStack): string =>
+		JSON.stringify(Object.values(Template.fromStack(stack).findOutputs('ApiUrl'))[0]?.Value);
+
+	test('regional: a Hosting claim leaves ApiUrl on the gateway', async () => {
+		const app = new cdk.App();
+		const stack = await makeStack(app, 'RegionalClaimStack', sideEffectBackendPath);
+		stack.claimApiFrontDoor('https://d123.cloudfront.net');
+		const value = apiUrlOutput(stack);
+		assert.ok(!value.includes('d123.cloudfront.net'), `regional ApiUrl must not follow the claim, got ${value}`);
+		assert.ok(value.includes('execute-api'), `regional ApiUrl should be the gateway URL, got ${value}`);
+	});
+
+	test('edge: a Hosting claim moves ApiUrl to that distribution', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'EdgeClaimStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: stubComputeFactory,
+			apiFrontDoor: 'edge',
+		});
+		stack.claimApiFrontDoor('https://d123.cloudfront.net');
+		const value = apiUrlOutput(stack);
+		assert.ok(
+			value.includes('https://d123.cloudfront.net/aws-blocks/api'),
+			`edge ApiUrl should follow the claim, got ${value}`,
+		);
 	});
 });
 

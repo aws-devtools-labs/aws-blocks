@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import type { ScopeOptions } from '../../common/index.js';
 import { Scope } from '../index.js';
 import { registerCompute } from './compute-registry.js';
@@ -78,7 +79,7 @@ export abstract class Compute extends Scope {
 	 * overrides this to return its function. Defaults to `undefined` so a new
 	 * worker-only compute need not implement it.
 	 */
-	apiHandler(): import('aws-cdk-lib/aws-lambda').IFunction | undefined {
+	apiHandler(): IFunction | undefined {
 		return undefined;
 	}
 

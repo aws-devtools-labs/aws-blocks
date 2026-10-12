@@ -17,7 +17,13 @@ import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
-import { claimApiFrontDoor, resolveApiFrontDoor, resolvedApiFrontDoorUrl, scheduleApiFrontDoor } from './api-front-door.js';
+import {
+	type ApiFrontDoorOwner,
+	claimApiFrontDoor,
+	resolveApiFrontDoor,
+	resolvedApiFrontDoorUrl,
+	scheduleApiFrontDoor,
+} from './api-front-door.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
@@ -70,7 +76,7 @@ export interface CoreBlocksStackProps extends BlocksStackProps {
 	defaultComputeFactory: DefaultComputeFactory;
 }
 
-export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
+export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontDoorOwner {
 	public readonly id: string;
 	public readonly backendHandlerPath: string;
 	/**
@@ -183,10 +189,10 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		const actualScope = pipelineScope || scope;
 
 		const stack = new BlocksStack(actualScope, id, props);
-		// Create the default compute before importing the backend: it OWNS the
-		// Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
-		// a block reading `this.compute` in its constructor (during that import)
-		// must resolve to it. The factory is supplied by the umbrella
+		// Create the default compute before importing the backend: it owns the
+		// Lambda function (which backs .handler and is the shared gateway's
+		// target), and a block reading `this.compute` in its constructor (during
+		// that import) must resolve to it. The factory is supplied by the umbrella
 		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
 		// imports the concrete compute class.
 		stack._defaultCompute = props.defaultComputeFactory(stack);
@@ -205,6 +211,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 				);
 			}
 		}
+
 		// Build the single shared REST API gateway now that the backend module has
 		// imported and every compute exists. It fronts the default compute's
 		// function (its apiHandler()) and backs .gateway/.apiUrl — the HTTP ingress
@@ -268,14 +275,18 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		// aspect that runs after this. Resolving eagerly here would bake in the raw
 		// gateway URL and bypass the front door entirely.
 		//
-		// The front-door URL is an origin base (`https://{host}`), so the RPC prefix
-		// is appended; the `regional` fallback (`stack.apiUrl`) already carries it.
-		// `deploy.ts` / `sandbox.ts` read this output and hand it to a client as
-		// `BLOCKS_API_URL`.
+		// Only the `edge` tier moves it: under `regional` the output stays the
+		// gateway's own URL even when a `Hosting` distribution fronts the API, so
+		// adding Hosting never changes the domain a client (and its cookies) is
+		// bound to. The front-door URL is an origin base (`https://{host}`), so the
+		// RPC prefix is appended; the `regional` value (`stack.apiUrl`) already
+		// carries it. `deploy.ts` / `sandbox.ts` read this output and hand it to a
+		// client as `BLOCKS_API_URL`.
+		const edge = resolveApiFrontDoor(props.apiFrontDoor) === 'edge';
 		new cdk.CfnOutput(stack, 'ApiUrl', {
 			value: cdk.Lazy.string({
 				produce: () => {
-					const frontDoorUrl = resolvedApiFrontDoorUrl(stack);
+					const frontDoorUrl = edge ? resolvedApiFrontDoorUrl(stack) : undefined;
 					return frontDoorUrl ? `${frontDoorUrl}${BLOCKS_RPC_PREFIX}` : stack.apiUrl;
 				},
 			}),

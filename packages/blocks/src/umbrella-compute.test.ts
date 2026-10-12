@@ -93,7 +93,7 @@ describe('apiFrontDoor tier selection', () => {
 			backendHandlerPath: handlerPath,
 			backendCDKPath: backendPath,
 			defaults: BlocksPresets.production,
-			// apiFrontDoor omitted ⇒ resolveFrontDoor defaults it to 'regional'.
+			// apiFrontDoor omitted ⇒ resolveApiFrontDoor defaults it to 'regional'.
 		});
 
 		const template = Template.fromStack(stack);
