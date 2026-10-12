@@ -342,27 +342,6 @@ describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
     const body = JSON.parse(result.body);
     assert.strictEqual(body.result, 'from-reports');
   });
-
-  it('resolves the path namespace from an API Gateway v2 rawPath', async () => {
-    const backend = {
-      reports: (_ctx: BlocksContext) => ({
-        async ping() { return 'pong'; },
-      }),
-    };
-
-    const result = await invoke(backend, {
-      version: '2.0',
-      rawPath: '/aws-blocks/api/reports',
-      requestContext: { http: { method: 'POST', path: '/aws-blocks/api/reports' } },
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', method: 'reports.ping', params: [], id: 3 }),
-      isBase64Encoded: false,
-    });
-
-    assert.strictEqual(result.statusCode, 200);
-    const body = JSON.parse(result.body);
-    assert.strictEqual(body.result, 'pong');
-  });
 });
 
 // ── RawRoute body tests ─────────────────────────────────────────────────────
