@@ -10,7 +10,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, openSync, writeSync, closeSync, constants } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -159,6 +159,8 @@ export function getTelemetryFilePath(): string | undefined {
   return undefined;
 }
 
+const ownedTelemetryFiles = new Set<string>();
+
 function writeToTelemetryFile(event: Record<string, unknown>): void {
   const filePath = getTelemetryFilePath();
   if (!filePath) return;  // getTelemetryFilePath already rejects empty/whitespace
@@ -174,9 +176,24 @@ function writeToTelemetryFile(event: Record<string, unknown>): void {
     const content = JSON.stringify([event], null, 2);
     writeSync(fd, content);
     closeSync(fd);
+    ownedTelemetryFiles.add(resolve(filePath));
   } catch (err: any) {
-    // EEXIST = file already existed → skip (protects user data)
+    // Appending only to a path this run created leaves a pre-existing file intact.
+    if (err?.code === 'EEXIST' && ownedTelemetryFiles.has(resolve(filePath))) {
+      appendToTelemetryFile(filePath, event);
+    }
     // All other errors silently ignored — telemetry must never affect commands
+  }
+}
+
+function appendToTelemetryFile(filePath: string, event: Record<string, unknown>): void {
+  try {
+    const events = JSON.parse(readFileSync(filePath, 'utf-8'));
+    if (!Array.isArray(events)) throw new Error('telemetry file is not a JSON array');
+    events.push(event);
+    writeFileSync(filePath, JSON.stringify(events, null, 2));
+  } catch (err) {
+    debug('failed to append telemetry event: %s', err instanceof Error ? err.message : String(err));
   }
 }
 

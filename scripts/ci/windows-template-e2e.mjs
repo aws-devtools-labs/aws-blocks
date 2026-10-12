@@ -5,13 +5,13 @@
 // repo root after `npm ci`, `npm run build`, and `npm run publish:local`,
 // with AWS creds in the env. Fail-fast; always tears down what it deployed.
 
-import { spawn, spawnSync, execSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { isWin, killTree, runOrThrow, runSpawn, httpUp, startRegistry } from './_proc.mjs';
 
-const isWin = process.platform === 'win32';
 const ROOT = process.cwd();
 const REGISTRY = 'http://localhost:4873/registry/';
 
@@ -22,41 +22,21 @@ if (!existsSync(join(ROOT, 'dist-registry'))) {
 
 const children = [];
 
-function killTree(pid) {
-  if (!pid) return;
-  try {
-    if (isWin) execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
-    else process.kill(-pid, 'SIGKILL');
-  } catch { /* already gone */ }
-}
-
 function shutdown() {
   for (const c of children) killTree(c.pid);
 }
 
 /** Run a one-shot command; throw on non-zero exit. */
-function run(cmd, args, opts = {}) {
-  console.log(`\n$ ${cmd} ${args.join(' ')}  (cwd: ${opts.cwd ?? ROOT})`);
-  const r = spawnSync(cmd, args, { stdio: 'inherit', shell: isWin, ...opts });
-  if (r.error) throw r.error;
-  if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} exited with ${r.status}`);
-}
+const run = (cmd, args, opts = {}) => runOrThrow(cmd, args, opts, ROOT);
 
 /** Run a one-shot command; never throw (best-effort cleanup). */
 function runBestEffort(cmd, args, opts = {}) {
   console.log(`\n$ ${cmd} ${args.join(' ')}  (best-effort, cwd: ${opts.cwd ?? ROOT})`);
   try {
-    spawnSync(cmd, args, { stdio: 'inherit', shell: isWin, ...opts });
+    runSpawn(cmd, args, opts, ROOT, { log: false });
   } catch (e) {
     console.warn(`  (cleanup ignored: ${e?.message ?? e})`);
   }
-}
-
-async function httpUp(url) {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
-    return res.status > 0;
-  } catch { return false; }
 }
 
 /**
@@ -89,15 +69,7 @@ function devOrigin(appDir) {
 
 async function main() {
   // ── Local registry (node.exe + tsx loader — no shim needed) ──────────────
-  const registry = spawn(process.execPath, ['--import', 'tsx', 'scripts/publish/serve-local-registry.ts'], {
-    cwd: ROOT, stdio: 'inherit', detached: !isWin,
-  });
-  children.push(registry);
-  for (let i = 0; ; i++) {
-    if (await httpUp(`${REGISTRY}@aws-blocks/blocks`)) break;
-    if (i > 30) throw new Error('Local registry did not start on :4873');
-    await sleep(1000);
-  }
+  await startRegistry({ root: ROOT, registryUrl: REGISTRY, children });
   console.log('Local registry is up.');
 
   // Scaffold under RUNNER_TEMP (a long path) — os.tmpdir() on Windows runners
@@ -120,7 +92,7 @@ async function main() {
   {
     const dev = await startUntilReady('npm', ['run', 'dev'], inApp, async () => {
       const origin = devOrigin(app);
-      return origin ? await httpUp(origin) : false;
+      return origin ? await httpUp(origin, { okOnly: false }) : false;
     }, 3 * 60_000);
     killTree(dev.pid);
     console.log('OK: npm run dev booted and is reachable');

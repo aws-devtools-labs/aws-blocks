@@ -17,6 +17,7 @@ import {
 } from './rpc.js';
 import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
+import { resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -602,8 +603,9 @@ function createHandler(backend: any) {
         },
       };
 
-      // Get the API by export name
-      const apiHandler = backend[apiNamespace];
+      // Get the API by export name. resolveApiNamespace refuses exported Building
+      // Block instances and `_`-private exports, so only an API surface is callable.
+      const apiHandler = resolveApiNamespace(backend, apiNamespace);
       if (!apiHandler) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId) };
       }
@@ -613,11 +615,13 @@ function createHandler(backend: any) {
         ? apiHandler(context)
         : apiHandler;
 
-      if (!apiMethods[method]) {
+      // Own/declared callable methods only — never an inherited Object.prototype member.
+      const apiMethod = resolveApiMethod(apiMethods, method);
+      if (!apiMethod) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId) };
       }
 
-      const result = await apiMethods[method](...args);
+      const result = await apiMethod(...args);
 
       return {
         statusCode: responseStatus,

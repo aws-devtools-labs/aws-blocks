@@ -328,6 +328,126 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
+  it('keeps every event when one run emits several', async () => {
+    const tmp = join(tmpdir(), `cba-telemetry-multi-${Date.now()}`);
+    const filePath = join(tmp, 'events.json');
+    process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
+
+    try {
+      await assert.rejects(trackCommand('create', async () => { throw new Error('npm install failed'); }));
+      await trackCommand('create', async () => {});
+      await trackCommand('create', async () => {});
+
+      const events = JSON.parse(readFileSync(filePath, 'utf-8'));
+      assert.strictEqual(events.length, 3, 'A run emitting several events must keep all of them');
+      assert.deepStrictEqual(
+        events.map((e: { event: { state: string } }) => e.event.state),
+        ['FAIL', 'SUCCESS', 'SUCCESS'],
+        'Events must be kept in emission order',
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves the file alone when its content stops being a JSON array mid-run', async () => {
+    const tmp = join(tmpdir(), `cba-telemetry-clobber-${Date.now()}`);
+    const filePath = join(tmp, 'events.json');
+    process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
+
+    try {
+      await trackCommand('create', async () => {});
+      writeFileSync(filePath, 'not json');
+      await trackCommand('create', async () => {});
+
+      assert.strictEqual(readFileSync(filePath, 'utf-8'), 'not json');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the appended file 2-space indented, as the first write leaves it', async () => {
+    const tmp = join(tmpdir(), `cba-telemetry-shape-${Date.now()}`);
+    const filePath = join(tmp, 'events.json');
+    process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
+
+    try {
+      await trackCommand('create', async () => {});
+      const afterFirst = JSON.parse(readFileSync(filePath, 'utf-8'));
+      await trackCommand('create', async () => {});
+      const afterSecond = JSON.parse(readFileSync(filePath, 'utf-8'));
+
+      assert.strictEqual(
+        readFileSync(filePath, 'utf-8'),
+        JSON.stringify([afterFirst[0], afterSecond[1]], null, 2),
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  describe('pre-existing file handling (shared case table)', () => {
+    interface TelemetryFileCase {
+      name: string;
+      preExisting: string | null;
+      emits: number;
+      preserved: boolean;
+      expectedLength: number | null;
+    }
+
+    const { cases }: { cases: TelemetryFileCase[] } = JSON.parse(
+      readFileSync(new URL('../../core/src/telemetry/telemetry-file-append-cases.test.json', import.meta.url), 'utf-8'),
+    );
+
+    it('pins the shared case table contents', () => {
+      assert.deepStrictEqual(
+        cases.map((c) => [c.name, c.preExisting, c.emits, c.preserved, c.expectedLength]),
+        [
+          ['no pre-existing file, one event', null, 1, false, 1],
+          ['file created by this run, two events', null, 2, false, 2],
+          ['file created by this run, three events', null, 3, false, 3],
+          ['pre-existing JSON array', '[{"existing":true}]', 1, true, null],
+          ['pre-existing JSON array, several events', '[{"existing":true}]', 3, true, null],
+          ['pre-existing bare object', '{"existing":true}', 1, true, null],
+          ['pre-existing non-JSON text', 'this is not json', 1, true, null],
+          ['pre-existing empty file', '', 1, true, null],
+        ],
+      );
+    });
+
+    for (const testCase of cases) {
+      it(testCase.name, async () => {
+        const tmp = join(tmpdir(), `cba-own-case-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        const filePath = join(tmp, 'events.json');
+        mkdirSync(tmp, { recursive: true });
+        if (testCase.preExisting !== null) writeFileSync(filePath, testCase.preExisting);
+
+        process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+        process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
+
+        try {
+          for (let i = 0; i < testCase.emits; i++) {
+            await trackCommand('create', async () => {});
+          }
+
+          const content = readFileSync(filePath, 'utf-8');
+          if (testCase.preserved) {
+            assert.strictEqual(content, testCase.preExisting, 'a pre-existing file must be left untouched');
+          } else {
+            const events = JSON.parse(content);
+            assert.ok(Array.isArray(events), 'sink must write a JSON array');
+            assert.strictEqual(events.length, testCase.expectedLength);
+            assert.strictEqual(events[events.length - 1].event.command, 'create');
+          }
+        } finally {
+          rmSync(tmp, { recursive: true, force: true });
+        }
+      });
+    }
+  });
 });
 
 describe('create-blocks-app telemetry/opt-out persists no identifiers', () => {
