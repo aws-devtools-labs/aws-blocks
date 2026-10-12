@@ -96,13 +96,17 @@ test('finalize uploads + wires the computes even with zero entries when a bucket
 	});
 });
 
-test('finalize is a no-op with zero entries and no bucket', () => {
+test('finalize deploys + wires the config even with zero entries and no bucket', () => {
+	// The deployment must exist so config registered later (before synth) is still uploaded.
 	const { stack, role, computes } = stackWithCompute('EmptyNoBucket');
 	finalizeConfigRegistry(stack, role, computes);
 
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 0, 'no config bucket created');
-	t.resourceCountIs('Custom::CDKBucketDeployment', 0);
+	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 1, 'one config bucket');
+	t.resourceCountIs('Custom::CDKBucketDeployment', 1);
+	t.hasResourceProperties('AWS::Lambda::Function', {
+		Environment: { Variables: Match.objectLike({ BLOCKS_CONFIG_KEY: 'blocks-config.json' }) },
+	});
 });
 
 /**

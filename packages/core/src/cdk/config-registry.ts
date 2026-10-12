@@ -18,14 +18,6 @@ interface ConfigRegistryState {
 	finalized: boolean;
 	/** The shared config bucket, created once per backend root by {@link getConfigLocation}. */
 	bucket?: s3.Bucket;
-	/**
-	 * Set when {@link finalizeConfigRegistry} ran with nothing to deploy. The first
-	 * {@link registerConfig} after that (e.g. app code after `create()` resolves)
-	 * uses it to deploy the config then, instead of the entry being dropped.
-	 */
-	deferred?: { root: Construct; executionRole: cdk.aws_iam.IRole; computes: readonly Compute[] };
-	/** Whether the config deployment has been created. */
-	deployed?: boolean;
 }
 
 /**
@@ -73,12 +65,6 @@ function getRegistry(root: Construct): ConfigRegistryState {
 export function registerConfig(scope: Construct, key: string, value: unknown): void {
 	const registry = getRegistry(getBlocksRoot(scope));
 	registry.entries.set(key, value);
-	// Registered after finalize found nothing to deploy: deploy now. Entries are
-	// read lazily at synth, so anything registered later is still included.
-	if (registry.deferred && !registry.deployed) {
-		const { root, executionRole, computes } = registry.deferred;
-		deployConfig(registry, root, executionRole, computes);
-	}
 }
 
 /**
@@ -119,7 +105,9 @@ function ensureConfigBucket(scope: Construct): s3.Bucket {
 			autoDeleteObjects: true,
 			encryption: s3.BucketEncryption.S3_MANAGED,
 			blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-			lifecycleRules: [{ noncurrentVersionExpiration: cdk.Duration.days(1) }],
+			lifecycleRules: [
+				{ noncurrentVersionExpiration: cdk.Duration.days(1) },
+			],
 		});
 	}
 	return registry.bucket;
@@ -154,32 +142,9 @@ export function finalizeConfigRegistry(
 	if (registry.finalized) return;
 	registry.finalized = true;
 
-	// Nothing to do yet only if no config was registered AND no bucket was created (via
-	// getConfigLocation). If a co-located BB created the bucket, still upload (even an empty {}) and
-	// wire the handler so that compute's loadConfigToProcessEnv() resolves instead of 404-ing forever.
-	// Otherwise remember what a later registerConfig() needs to deploy it then.
-	// The computes are captured now: every compute is created during the backend
-	// import, before `create()` resolves, so none can appear after this point.
-	if (registry.entries.size === 0 && !registry.bucket) {
-		registry.deferred = { root, executionRole, computes };
-		return;
-	}
-
-	deployConfig(registry, root, executionRole, computes);
-}
-
-/**
- * Upload the config JSON, grant read to the shared execution role, and stamp the
- * config coordinates onto every compute. Runs once per backend root.
- */
-function deployConfig(
-	registry: ConfigRegistryState,
-	root: Construct,
-	executionRole: cdk.aws_iam.IRole,
-	computes: readonly Compute[],
-): void {
-	registry.deployed = true;
-
+	// Always deploy, even with zero entries so far: the JSON is a Lazy read at synth, so config
+	// registered after this point (e.g. by app code after `create()` resolves) is still included —
+	// as long as the deployment exists. An empty registry uploads `{}`.
 	// Ensure the bucket exists (a co-located BB may already have created it via getConfigLocation).
 	const configBucket = ensureConfigBucket(root);
 	const configKey = CONFIG_KEY;
