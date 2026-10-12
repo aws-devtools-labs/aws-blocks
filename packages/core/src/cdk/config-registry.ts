@@ -6,6 +6,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import type { Construct } from 'constructs';
 import type { Compute } from './compute/compute.js';
+import { getBlocksRoot } from './root-registry.js';
 
 const REGISTRY_KEY = Symbol.for('BLOCKS_CONFIG_REGISTRY');
 
@@ -15,20 +16,22 @@ const CONFIG_KEY = 'blocks-config.json';
 interface ConfigRegistryState {
 	entries: Map<string, unknown>;
 	finalized: boolean;
-	/** The shared config bucket, created once per stack by {@link getConfigLocation}. */
+	/** The shared config bucket, created once per backend root by {@link getConfigLocation}. */
 	bucket?: s3.Bucket;
 }
 
 /**
- * Get or create the config registry for a given stack.
- * The registry collects BB config entries (env var key → CDK token value)
- * and serializes them to an S3 JSON file at synth time.
+ * Get or create the config registry for a given backend root. Stored on the root
+ * object (keyed by a Symbol), so each `BlocksStack`/`BlocksBackend` gets its own —
+ * a config entry never leaks into another backend's registry, even when two
+ * backends share one `cdk.Stack`. The registry collects BB config entries (env var
+ * key → CDK token value) and serializes them to an S3 JSON file at synth time.
  */
-function getRegistry(stack: cdk.Stack): ConfigRegistryState {
-	let state = (stack as any)[REGISTRY_KEY] as ConfigRegistryState | undefined;
+function getRegistry(root: Construct): ConfigRegistryState {
+	let state = (root as any)[REGISTRY_KEY] as ConfigRegistryState | undefined;
 	if (!state) {
 		state = { entries: new Map(), finalized: false };
-		(stack as any)[REGISTRY_KEY] = state;
+		(root as any)[REGISTRY_KEY] = state;
 	}
 	return state;
 }
@@ -40,13 +43,12 @@ function getRegistry(stack: cdk.Stack): ConfigRegistryState {
  * The entry will be serialized into a JSON config file in S3, loaded
  * by the Lambda at cold start. This avoids the 4KB env var limit.
  *
- * @param scope - The CDK construct (used to find the parent stack)
+ * @param scope - The CDK construct (used to find the owning backend root)
  * @param key - The config key (same string the runtime will use to look it up)
  * @param value - The config value (can be a CDK token that resolves at deploy time)
  */
 export function registerConfig(scope: Construct, key: string, value: unknown): void {
-	const stack = cdk.Stack.of(scope);
-	const registry = getRegistry(stack);
+	const registry = getRegistry(getBlocksRoot(scope));
 	registry.entries.set(key, value);
 }
 
@@ -64,27 +66,26 @@ export function registerConfig(scope: Construct, key: string, value: unknown): v
  * does. IAM is not granted here — `finalizeConfigRegistry` grants read on the config
  * object to the shared execution role, which such compute inherits.
  *
- * @param scope - Any construct in the stack; the bucket is created under the stack.
+ * @param scope - Any construct in the backend; the bucket is created under the backend root.
  */
 export function getConfigLocation(scope: Construct): { bucketName: string; key: string } {
 	return { bucketName: ensureConfigBucket(scope).bucketName, key: CONFIG_KEY };
 }
 
 /**
- * Create-or-return the shared config bucket (memoized on the per-stack registry). Created under the
- * owning `BlocksStack`/`BlocksBackend` (`globalThis.CURRENT_BLOCKS_STACK` — the construct finalize
- * historically used), so its logical ID is stable regardless of which caller creates it first: a
+ * Create-or-return the shared config bucket (memoized on the per-backend-root registry). Created
+ * under the owning `BlocksStack`/`BlocksBackend` (resolved by walking the construct tree, see
+ * `getBlocksRoot`), so its logical ID is stable regardless of which caller creates it first: a
  * co-located BB (e.g. the AgentCore Runtime, a deep construct) may be the first to call it, and a
  * `BlocksBackend` embedded in a customer stack must keep `Blocks/BlocksConfigBucket` (no replacement).
- * Falls back to the stack when no owner is registered (isolated unit tests). Returns a concrete
- * `s3.Bucket` so callers don't need a non-null assertion.
+ * Keying on the resolved root (not `cdk.Stack.of`) also keeps two backends in one stack independent —
+ * each gets its own bucket. Returns a concrete `s3.Bucket` so callers don't need a non-null assertion.
  */
 function ensureConfigBucket(scope: Construct): s3.Bucket {
-	const stack = cdk.Stack.of(scope);
-	const registry = getRegistry(stack);
+	const root = getBlocksRoot(scope);
+	const registry = getRegistry(root);
 	if (!registry.bucket) {
-		const owner = ((globalThis as any).CURRENT_BLOCKS_STACK as Construct | undefined) ?? stack;
-		registry.bucket = new s3.Bucket(owner, 'BlocksConfigBucket', {
+		registry.bucket = new s3.Bucket(root, 'BlocksConfigBucket', {
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 			autoDeleteObjects: true,
 			encryption: s3.BucketEncryption.S3_MANAGED,
@@ -111,7 +112,7 @@ function ensureConfigBucket(scope: Construct): s3.Bucket {
  * import completes in BlocksStack.create() / BlocksBackend.create()).
  *
  * @param root - The construct to create the config resources under (also used
- *   to locate the owning stack).
+ *   to locate the owning backend root).
  * @param executionRole - The shared role every compute assumes; config read is
  *   granted to it once.
  * @param computes - The computes to stamp `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` on.
@@ -121,8 +122,7 @@ export function finalizeConfigRegistry(
 	executionRole: cdk.aws_iam.IRole,
 	computes: readonly Compute[],
 ): void {
-	const stack = cdk.Stack.of(root);
-	const registry = getRegistry(stack);
+	const registry = getRegistry(getBlocksRoot(root));
 
 	if (registry.finalized) return;
 	registry.finalized = true;
