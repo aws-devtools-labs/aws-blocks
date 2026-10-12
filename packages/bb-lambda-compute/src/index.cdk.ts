@@ -118,8 +118,7 @@ export class LambdaCompute extends Compute {
 		// Allowed CORS origins come from the stack's `defaults` (e.g. the sandbox
 		// preset allows localhost so a local dev frontend can reach the deployed
 		// API). Comma-joined to match how the runtime `getCorsPatterns()` parses
-		// CORS_ALLOWED_ORIGINS. The shared gateway does not configure CORS, so the
-		// Lambda enforces it at runtime from this env var.
+		// CORS_ALLOWED_ORIGINS.
 		const allowedOrigins = this.defaults.allowedOrigins;
 		if (allowedOrigins.length > 0) {
 			this.fn.addEnvironment('CORS_ALLOWED_ORIGINS', allowedOrigins.join(','));

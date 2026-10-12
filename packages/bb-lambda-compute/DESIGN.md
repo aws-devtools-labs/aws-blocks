@@ -4,8 +4,8 @@ Design document for `@aws-blocks/bb-lambda-compute`. For usage, see [README.md](
 
 **Package:** `@aws-blocks/bb-lambda-compute`
 **Type:** Compute (framework infrastructure, not a customer-facing data block)
-**AWS Services:** Lambda (`NodejsFunction`). The HTTP ingress is a single
-stack-level shared API Gateway REST API, provisioned by core — not owned per compute.
+**AWS Services:** Lambda (`NodejsFunction`). The API Gateway REST API in front of
+it is a single stack-level shared gateway, provisioned by core — not owned per compute.
 
 ## Why a compute is a Building Block
 
@@ -39,18 +39,30 @@ supplies the implementation.
   Named `logGroup` (not `handlerLogGroup`) to avoid clashing with the inherited
   `Scope.handlerLogGroup` accessor. `RemovalPolicy.DESTROY` — the handler's
   operational stdout is not durable state.
-- **A `CORS_ALLOWED_ORIGINS` env var** on the function (only when
-  `defaults.allowedOrigins` is non-empty) so the Lambda enforces CORS at runtime.
-  The gateway doesn't configure CORS — OPTIONS flows through to the function.
-
-The HTTP ingress is **not** owned here. `LambdaCompute.apiHandler()` returns `fn`,
-and the stack-level **shared REST API** (see
-`packages/core/src/cdk/shared-gateway.ts`) integrates it: a root `/{proxy+}`,
-`/aws-blocks/{proxy+}`, and `POST`/`OPTIONS` on `/aws-blocks/api` all forward to
-the function, and the Lambda handler does the routing. Request **throttling**
-(`defaults.throttling`) and optional JSON **access logging**
-(`defaults.accessLogging`, which provisions the account-level CloudWatch role via
-`ensureApiGatewayAccount()`) live on that shared gateway's stage.
+The API Gateway REST API is **not** owned here. `LambdaCompute.apiHandler()`
+returns `fn`, and the stack-level **shared REST API** (built by core in
+`packages/core/src/cdk/shared-gateway.ts`) integrates it:
+  - the `/aws-blocks` resource gets a proxy so `RawRoute` sub-paths reach the
+    function;
+  - `/aws-blocks/api` gets explicit `POST` + `OPTIONS` methods (the JSON-RPC
+    endpoint);
+  - the root gets a catch-all proxy so all other paths reach the function.
+  - **Throttling** — the stage's method throttle comes from `defaults.throttling`
+    (sandbox 200/400, production 1000/2000).
+  - **Access logging** — when `defaults.accessLogging` is true (opt-in; off in
+    both presets), the stage writes structured JSON access logs to a dedicated
+    CloudWatch log group (retention = `defaults.logRetention`, removal policy =
+    `defaults.removalPolicy` — production RETAINs the audit trail on teardown,
+    sandbox DESTROYs). `cloudWatchRole` is disabled on the `RestApi` so it does
+    not mint its own `AWS::ApiGateway::Account`; instead the shared account-level
+    CloudWatch Logs role is provisioned once per stack via
+    `ensureApiGatewayAccount()`, and the stage depends on it so a clean-account
+    first deploy applies the account setting before the stage is created.
+    Note: a production (RETAINed) access-log group is **orphaned** on stack
+    teardown and is the operator's to clean up. The group is intentionally left
+    unnamed (CDK-generated physical name) so a teardown-then-redeploy mints a
+    fresh name and can't collide — do not pin a stable `logGroupName`, or a
+    RETAINed group from a prior delete would fail the next create.
 
 The shared gateway is built in the **default compute's** construct scope with the
 ids this compute used when it owned the gateway (`API`, `ApiAccessLogs`), so its
