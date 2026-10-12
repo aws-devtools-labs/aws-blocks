@@ -15,12 +15,12 @@ The AWS-provisioned path is the default when no `connection` option is supplied.
 The CDK layer creates:
 
 - Aurora Serverless v2 PostgreSQL with the RDS Data API enabled
-- an isolated VPC and security group for the cluster
+- a security group for the cluster and, by default, a standalone VPC with isolated subnets; when a shared VPC is configured, the cluster uses it instead and honors subnet selection
 - a Secrets Manager secret for database credentials
 - runtime configuration for the cluster ARN, secret ARN, and database name
 - IAM permissions for the application execution role to use the Data API and read the generated secret
 
-The application Lambda does not open a PostgreSQL connection to the cluster and this construct does not create an RDS Proxy. The RDS Data API manages request access to Aurora without placing the application Lambda in the database VPC.
+The application Lambda does not open a PostgreSQL connection to the cluster and this construct does not create an RDS Proxy. The RDS Data API manages request access to Aurora without requiring the application Lambda to be placed in the database VPC.
 
 ## Migrations
 
@@ -34,4 +34,4 @@ In local development, migrations run against PGlite before the first query. See 
 
 ## Future Work
 
-The block does not currently provision a managed direct-connection architecture such as an RDS Proxy, VPC-connected application Lambda, or `LISTEN`/`NOTIFY` support. Those would be separate capabilities from the existing Aurora Data API path.
+The block does not currently provision a managed direct-connection database path with an RDS Proxy or `LISTEN`/`NOTIFY` support. Applications can already configure VPC placement for their compute, but that does not change Database's existing Aurora Data API path.

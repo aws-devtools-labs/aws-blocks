@@ -269,7 +269,7 @@ try {
 - **Migration Lambda** — Runs `.sql` files on deploy via a CustomResource when `migrationsPath` is set
 - **IAM** — RDS Data API actions and `secretsmanager:GetSecretValue` granted to the application execution role
 
-The application Lambda accesses an AWS-provisioned database through the RDS Data API. `Database` does not provision an RDS Proxy or place the application Lambda in the database VPC. For an existing PostgreSQL database, `fromExisting()` uses a direct PostgreSQL client connection; network access and connection pooling remain the application's responsibility.
+The application Lambda accesses an AWS-provisioned database through the RDS Data API. `Database` does not provision an RDS Proxy or require the application Lambda to be placed in the database VPC. For an existing PostgreSQL database, `fromExisting()` uses a direct PostgreSQL client connection; network access and connection pooling remain the application's responsibility.
 
 > **Access model:** the database is reached exclusively over the RDS Data API
 > (HTTPS + Secrets Manager credentials), never a raw Postgres socket. Database-level
