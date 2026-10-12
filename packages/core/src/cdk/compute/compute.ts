@@ -3,7 +3,6 @@
 
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { ScopeOptions } from '../../common/index.js';
-import type { BlocksThrottling } from '../blocks-defaults.js';
 import { Scope } from '../index.js';
 import { registerCompute } from './compute-registry.js';
 
@@ -42,28 +41,6 @@ export abstract class Compute extends Scope {
 	 * surface yet.
 	 */
 	readonly namespaces: string[] = [];
-
-	/**
-	 * Optional throttle override for this compute's gateway routes. When set, the
-	 * shared gateway applies it as method-level stage settings on each of this
-	 * compute's per-namespace resources; when `undefined` the stage's default
-	 * throttle applies. Set by a subclass — there is no public,
-	 * customer-facing setter yet (that lands with the compute-assignment release);
-	 * this is only the internal seam.
-	 *
-	 * @internal Read by the shared gateway via {@link routeThrottle}.
-	 */
-	protected _routeThrottle?: BlocksThrottling;
-
-	/**
-	 * Read-only view of {@link _routeThrottle} the shared gateway reads to decide
-	 * this compute's route-level throttle. `undefined` ⇒ inherit the stage default.
-	 *
-	 * @internal
-	 */
-	get routeThrottle(): BlocksThrottling | undefined {
-		return this._routeThrottle;
-	}
 
 	/**
 	 * Whether tracing has been enabled on this compute — flipped by

@@ -84,9 +84,8 @@ export interface SharedGateway {
  * reflects allowed origins from `CORS_ALLOWED_ORIGINS`.
  *
  * The stage carries request throttling from `defaults.throttling` so a runaway
- * client cannot saturate the backend, plus any per-namespace throttle a compute
- * carries (method-level stage settings on that namespace's resources), and
- * optional structured JSON access logging when `defaults.accessLogging` is on.
+ * client cannot saturate the backend, and optional structured JSON access
+ * logging when `defaults.accessLogging` is on.
  * REST access logging requires the account-level CloudWatch Logs role,
  * provisioned once per stack via {@link ensureApiGatewayAccount}; the stage
  * depends on it so a clean-account first deploy applies the account setting
@@ -114,30 +113,6 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		if (compute === defaultCompute || compute.namespaces.length === 0) continue;
 		const handler = compute.apiHandler();
 		if (handler) routedComputes.push({ compute, handler });
-	}
-
-	// Per-namespace throttle overrides become method-level stage settings, keyed
-	// `/{resource path}/{method}` (CDK encodes the path). `*` covers every method
-	// on the resource, including the ANY method the namespace resources carry.
-	//
-	// TODO(compute-assignment): `routeThrottle` is read here but no public setter
-	// exists yet (and a non-default compute only has namespaces once the
-	// compute-assignment surface ships), so this per-namespace throttle path is
-	// unreachable in production today. When that surface lands, add a public
-	// `throttling` option that sets `_routeThrottle`, and verify the method
-	// settings appear in the synthesized CFN for a compute carrying a throttle.
-	const methodOptions: Record<string, apigateway.MethodDeploymentOptions> = {};
-	for (const { compute } of routedComputes) {
-		const throttle = compute.routeThrottle;
-		if (!throttle) continue;
-		for (const name of compute.namespaces) {
-			for (const path of [`${BLOCKS_RPC_PREFIX}/${name}`, `${BLOCKS_RPC_PREFIX}/${name}/{proxy+}`]) {
-				methodOptions[`${path}/*`] = {
-					throttlingRateLimit: throttle.rateLimit,
-					throttlingBurstLimit: throttle.burstLimit,
-				};
-			}
-		}
 	}
 
 	// Structured JSON access logging on the stage, when the stack-wide default
@@ -169,7 +144,6 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 			// client can't saturate the backend Lambda.
 			throttlingRateLimit: defaults.throttling.rateLimit,
 			throttlingBurstLimit: defaults.throttling.burstLimit,
-			...(Object.keys(methodOptions).length > 0 ? { methodOptions } : {}),
 			...(accessLogGroup
 				? {
 						accessLogDestination: new apigateway.LogGroupLogDestination(accessLogGroup),

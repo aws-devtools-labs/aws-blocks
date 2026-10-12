@@ -18,7 +18,6 @@ import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Code, type IFunction, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import type { Construct } from 'constructs';
 import { ApiNamespace } from '../api.js';
-import type { BlocksThrottling } from './blocks-defaults.js';
 import { BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
@@ -39,10 +38,8 @@ class StubCompute extends Compute {
 		scope: Construct,
 		id: string,
 		readonly fn: IFunction,
-		throttle?: BlocksThrottling,
 	) {
 		super(id, { parent: scope as never });
-		this._routeThrottle = throttle;
 	}
 
 	override apiHandler(): IFunction {
@@ -245,43 +242,6 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 
 		const resources = Template.fromStack(stack).toJSON().Resources as CfnResources;
 		assert.strictEqual(Object.keys(resourcePaths(resources)).length, 5, 'only the catch-all tree');
-	});
-
-	test('a non-default compute throttle override lands as per-namespace method settings', () => {
-		const app = new cdk.App();
-		const stack = new cdk.Stack(app, 'FanOutThrottle');
-		const defaultCompute = new StubCompute(stack, 'DefaultCompute', makeFn(stack, 'DefaultFn'));
-		const reports = new StubCompute(stack, 'ReportsCompute', makeFn(stack, 'ReportsFn'), {
-			rateLimit: 5,
-			burstLimit: 7,
-		});
-		assignNamespace(stack, reports, 'reports');
-
-		createSharedGateway(stack, {
-			computes: getComputes(stack),
-			defaultCompute,
-			defaults: BlocksPresets.production,
-		});
-
-		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
-			MethodSettings: Match.arrayWith([
-				// The stack-wide default on every method…
-				Match.objectLike({ HttpMethod: '*', ResourcePath: '/*', ThrottlingRateLimit: 1000 }),
-				// …and the namespace override on its resources (CDK encodes `/` as `~1`).
-				Match.objectLike({
-					HttpMethod: '*',
-					ResourcePath: '/~1aws-blocks~1api~1reports',
-					ThrottlingRateLimit: 5,
-					ThrottlingBurstLimit: 7,
-				}),
-				Match.objectLike({
-					HttpMethod: '*',
-					ResourcePath: '/~1aws-blocks~1api~1reports~1{proxy+}',
-					ThrottlingRateLimit: 5,
-					ThrottlingBurstLimit: 7,
-				}),
-			]),
-		});
 	});
 });
 
