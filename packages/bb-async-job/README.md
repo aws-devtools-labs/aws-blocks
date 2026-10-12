@@ -123,8 +123,9 @@ In local dev mode, AsyncJob uses an in-process queue. Jobs process via `setTimeo
 ## AWS Deployment
 
 Automatically provisions an SQS queue, dead-letter queue, and attaches the event
-source to the resolved Lambda compute. Failed jobs become visible for retry after
-900 seconds (matching the Lambda timeout).
+source to the resolved Lambda compute. Failed jobs become visible for retry when
+the configured visibility timeout elapses: the 900-second Lambda timeout plus
+`maxBatchingWindowSeconds`.
 
 ## How Do I Know My Job Ran?
 
