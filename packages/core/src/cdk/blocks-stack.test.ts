@@ -76,6 +76,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const handlerPath = join(__dirname, '__fixtures__', 'handler.js');
 const sideEffectBackendPath = join(__dirname, '__fixtures__', 'side-effect-backend.js');
 const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js');
+const gatewayReadingBackendPath = join(__dirname, '__fixtures__', 'gateway-reading-backend.js');
 
 // Wrap create(), injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
@@ -120,6 +121,26 @@ describe('factory function support', () => {
 
 		const marker = stack.node.tryFindChild('FactoryMarker');
 		assert.ok(marker, 'Factory function should have created FactoryMarker on the stack');
+	});
+});
+
+describe('shared gateway is readable during the backend import', () => {
+	// The backend's default export receives the stack/backend while create() is
+	// still importing it. `.apiUrl` / `.gateway` must already resolve there, as
+	// they did when the default compute owned the gateway.
+	test('BlocksStack: the default export can read .apiUrl and .gateway', async () => {
+		const app = new cdk.App();
+		const stack = await makeStack(app, 'GatewayDuringImportStack', gatewayReadingBackendPath);
+		assert.ok(stack.node.tryFindChild('ApiUrlDuringImport'), 'default export read .apiUrl');
+		assert.ok(stack.node.tryFindChild('GatewayPathDuringImport'), 'default export read .gateway');
+	});
+
+	test('BlocksBackend: the default export can read .apiUrl and .gateway', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'GatewayDuringImportParent');
+		const backend = await makeBackend(parent, 'GatewayDuringImportBackend', gatewayReadingBackendPath);
+		assert.ok(backend.node.tryFindChild('ApiUrlDuringImport'), 'default export read .apiUrl');
+		assert.ok(backend.node.tryFindChild('GatewayPathDuringImport'), 'default export read .gateway');
 	});
 });
 

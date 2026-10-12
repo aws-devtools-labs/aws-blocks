@@ -78,9 +78,9 @@ Public surface (CDK layer):
 | `apiHandler()` | `IFunction` | The function the stack's shared REST API gateway integrates (the `Compute` contract; returns `fn`). |
 | `setEnv(key, value)` | `void` | Inject a runtime env var onto the function — the `Compute` contract the framework calls instead of `handler.addEnvironment` directly. |
 
-`fn` exists only on the CDK layer (it is an `aws-cdk-lib` construct); `setEnv` and
-`apiHandler` are part of the `Compute` contract present in every layer (a no-op /
-undefined in the non-CDK layers — see below).
+`fn` and `apiHandler` exist only on the CDK layer (they are `aws-cdk-lib`
+constructs/contracts); `setEnv` is part of the `Compute` contract present in every
+layer (a no-op in the non-CDK layers — see below).
 
 ## Owner-derived identity
 
