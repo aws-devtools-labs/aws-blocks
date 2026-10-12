@@ -211,7 +211,6 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 				);
 			}
 		}
-
 		// Build the single shared REST API gateway now that the backend module has
 		// imported and every compute exists. It fronts the default compute's
 		// function (its apiHandler()) and backs .gateway/.apiUrl — the HTTP ingress
