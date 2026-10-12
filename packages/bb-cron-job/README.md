@@ -108,6 +108,8 @@ CronJobErrors.InvalidTimezone  // timezone string is not a valid IANA timezone
 CronJobErrors.UnsupportedCompute // resolved compute is not Lambda (thrown at synth time)
 ```
 
+`InvalidSchedule` and `InvalidTimezone` are thrown at construction time (fail-fast validation).
+
 ## Compute Compatibility
 
 CronJob targets its resolved compute. It currently supports Lambda compute only;
