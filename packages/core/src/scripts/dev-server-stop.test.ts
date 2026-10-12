@@ -141,9 +141,9 @@ describe('stopMessage', () => {
 
 describe('statusDevServer', () => {
   it('reports running with the recorded pid', async () => {
-    const r = await statusDevServer(3000, {
+    const r = await statusDevServer(3000, 3100, {
       readPidfile: () => JSON.stringify({ pid: 55, ppid: 50, port: 3000 }),
-      probe: async () => true,
+      probe: async (p) => p === 3000,
       isAlive: () => true,
     });
     assert.equal(r.running, true);
@@ -152,24 +152,38 @@ describe('statusDevServer', () => {
   });
 
   it('reports not-running with no pidfile', async () => {
-    const r = await statusDevServer(3000, {
+    const r = await statusDevServer(3000, 3100, {
       readPidfile: () => null,
       probe: async () => false,
       isAlive: () => false,
     });
     assert.equal(r.running, false);
     assert.equal(r.stalePidfile, false);
+    assert.equal(r.frontendRunning, false);
     assert.match(statusMessage(r), /not running on :3000\./);
   });
 
   it('flags a stale pidfile when the owner is dead and the port is free', async () => {
-    const r = await statusDevServer(3000, {
+    const r = await statusDevServer(3000, 3100, {
       readPidfile: () => JSON.stringify({ pid: 55, ppid: 50, port: 3000 }),
       probe: async () => false,
       isAlive: () => false,
     });
     assert.equal(r.stalePidfile, true);
     assert.match(statusMessage(r), /stale pidfile/);
+  });
+
+  it('surfaces an orphaned frontend port when the front door is down', async () => {
+    // Front door :3000 free, but :3100 still bound (orphaned Vite after a crash).
+    const r = await statusDevServer(3000, 3100, {
+      readPidfile: () => null,
+      probe: async (p) => p === 3100,
+      isAlive: () => false,
+    });
+    assert.equal(r.running, false);
+    assert.equal(r.frontendRunning, true);
+    assert.match(statusMessage(r), /:3100 is still bound/);
+    assert.match(statusMessage(r), /npm run dev:stop/);
   });
 });
 

@@ -1336,6 +1336,14 @@ export interface StatusResult {
   port: number;
   /** True when the front-door port is currently bound. */
   running: boolean;
+  /** The paired frontend port probed alongside the front door (`port + 100`). */
+  frontendPort: number;
+  /**
+   * True when the paired frontend port is bound. Surfaced so `dev:status` and
+   * `dev:stop` describe the same port set — notably the crashed-server case
+   * where the front door is down but an orphaned Vite still holds `:3100`.
+   */
+  frontendRunning: boolean;
   /** Supervisor identity from the pidfile, when present. */
   record: DevServerPidRecord | null;
   /** True when a pidfile exists but its recorded supervisor is no longer alive. */
@@ -1351,11 +1359,17 @@ export interface StatusDevServerDeps {
 
 /**
  * Report whether a dev server is running on `port`: whether the front door is
- * bound, the recorded supervisor identity, and whether a pidfile is stale (owner
- * dead). Read-only; never signals anything. Dependencies injected for tests.
+ * bound, the recorded supervisor identity, whether a pidfile is stale (owner
+ * dead), and whether the paired frontend port (`frontendPort`, default
+ * `port + 100`) is bound. Probing the frontend too keeps `dev:status` and
+ * `dev:stop` describing the same port set — an orphaned Vite on `:3100` after a
+ * half-finished stop shows up here, instead of a misleading "not running" while
+ * `stopDevServer` still has a port to reap. Read-only; never signals anything.
+ * Dependencies injected for tests.
  */
 export async function statusDevServer(
   port = 3000,
+  frontendPort = port + 100,
   deps: Partial<StatusDevServerDeps> = {},
 ): Promise<StatusResult> {
   const readPidfile = deps.readPidfile ?? ((p) => {
@@ -1371,10 +1385,13 @@ export async function statusDevServer(
   const body = readPidfile(devPidfilePath(port));
   const record = body != null ? parsePidRecord(body) : null;
   const running = await probe(port);
+  const frontendRunning = frontendPort !== port ? await probe(frontendPort) : false;
   const ownerAlive = record ? (isAlive(record.pid) || (record.ppid > 1 && isAlive(record.ppid))) : false;
   return {
     port,
     running,
+    frontendPort,
+    frontendRunning,
     record,
     stalePidfile: record != null && !ownerAlive && !running,
   };
@@ -1385,6 +1402,16 @@ export function statusMessage(result: StatusResult): string {
   if (result.running) {
     const who = result.record ? ` (pid ${result.record.pid})` : '';
     return `✅ Dev server is running on :${result.port}${who}.`;
+  }
+  // Front door down but the paired frontend is still bound — the crashed-server
+  // case this feature targets. Name the orphaned port so `dev:status` matches
+  // what `dev:stop` would act on, and point at the stop command.
+  if (result.frontendRunning) {
+    return (
+      `⚠️  Dev server front door :${result.port} is down, but the frontend port ` +
+      `:${result.frontendPort} is still bound (likely an orphaned dev server) — ` +
+      `run \`npm run dev:stop\` to reap it.`
+    );
   }
   if (result.stalePidfile) {
     return `Dev server is not running on :${result.port} (a stale pidfile is present; it will be cleared on the next start/stop).`;
@@ -1403,6 +1430,13 @@ export function statusMessage(result: StatusResult): string {
  * array means nothing was running. Never throws.
  */
 export async function stopAllDevServers(ports?: number[]): Promise<StopResult[]> {
+  // INVARIANT: only front-door supervisors write a `dev-server.<port>.pid` file,
+  // so a scanned port is always a front door and its frontend is reaped via the
+  // `+100` pairing below — never discovered as its own pidfile. If a future
+  // caller/template ever recorded a pidfile for a frontend port, this would both
+  // reap it as a frontend (via its front door's +100) and again as its own
+  // front-door entry; it stays harmless (idempotent + probe-gated), but the
+  // single-pidfile-per-front-door assumption is what keeps it from double-targeting.
   const targets = ports && ports.length ? ports : findDevServerPorts();
   const results: StopResult[] = [];
   for (const p of targets) {
