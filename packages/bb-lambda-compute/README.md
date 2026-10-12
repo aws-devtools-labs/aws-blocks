@@ -1,9 +1,9 @@
 # @aws-blocks/bb-lambda-compute
 
 The Lambda-backed **compute** for AWS Blocks: a `NodejsFunction` that backs the
-handler code an app's Building Blocks run on. HTTP ingress is the stack's single
-shared API Gateway REST API (provisioned by core), which integrates this
-compute's function — not a per-compute gateway.
+handler code an app's Building Blocks run on. The stack's single shared API
+Gateway REST API (provisioned by core) integrates this compute's function — not
+a per-compute gateway.
 
 > **Internal / not yet customer-facing.** `LambdaCompute` is not re-exported
 > from the public `@aws-blocks/blocks` surface, and nothing in the default app
