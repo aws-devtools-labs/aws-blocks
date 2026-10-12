@@ -5,7 +5,7 @@ Design document for `@aws-blocks/bb-lambda-compute`. For usage, see [README.md](
 **Package:** `@aws-blocks/bb-lambda-compute`
 **Type:** Compute (framework infrastructure, not a customer-facing data block)
 **AWS Services:** Lambda (`NodejsFunction`). The HTTP ingress is a single
-stack-level shared HTTP API v2, provisioned by core — not owned per compute.
+stack-level shared API Gateway REST API, provisioned by core — not owned per compute.
 
 ## Why a compute is a Building Block
 
@@ -41,23 +41,26 @@ supplies the implementation.
   operational stdout is not durable state.
 - **A `CORS_ALLOWED_ORIGINS` env var** on the function (only when
   `defaults.allowedOrigins` is non-empty) so the Lambda enforces CORS at runtime.
-  The allowed origins are regex patterns, which native HTTP API v2 CORS can't
-  express, so the gateway doesn't configure native CORS — OPTIONS flows through
-  to the function.
+  The gateway doesn't configure CORS — OPTIONS flows through to the function.
 
 The HTTP ingress is **not** owned here. `LambdaCompute.apiHandler()` returns `fn`,
-and the stack-level **shared HTTP API v2** (see
+and the stack-level **shared REST API** (see
 `packages/core/src/cdk/shared-gateway.ts`) integrates it. The **default**
-compute's function backs the `$default` catch-all route, which forwards every
-path/method (including the root `/`) to it; the Lambda handler does the routing.
-A **non-default** `LambdaCompute` that hosts namespaces gets its own integration
-plus explicit `ANY /aws-blocks/api/{namespace}` (and `{proxy+}` subtree) routes
-for each namespace it hosts (`Compute.namespaces`); a compute hosting no
-namespace gets no route. Request **throttling**
+compute's function backs the catch-all resources — a root `/{proxy+}`,
+`/aws-blocks/{proxy+}`, `POST`/`OPTIONS` on `/aws-blocks/api`, and
+`/aws-blocks/api/{proxy+}` — so every path reaches it and the Lambda handler does
+the routing. A **non-default** `LambdaCompute` that hosts namespaces gets its own
+integration plus literal `/aws-blocks/api/{namespace}` (ANY) and `{proxy+}`
+subtree resources for each namespace it hosts (`Compute.namespaces`); a compute
+hosting no namespace gets no resource. Request **throttling**
 (`defaults.throttling`) and optional JSON **access logging**
-(`defaults.accessLogging`) live on that shared gateway's stage. HTTP API v2
-access logging needs no account-level CloudWatch role (`AWS::ApiGateway::Account`),
-so none is provisioned for it.
+(`defaults.accessLogging`, which provisions the account-level CloudWatch role via
+`ensureApiGatewayAccount()`) live on that shared gateway's stage.
+
+The shared gateway is built in the **default compute's** construct scope with the
+ids this compute used when it owned the gateway (`API`, `ApiAccessLogs`), so its
+logical IDs are unchanged: an app deployed before the gateway moved keeps its
+REST API and `execute-api` URL on upgrade.
 
 Public surface (CDK layer):
 
@@ -65,7 +68,7 @@ Public surface (CDK layer):
 |--------|------|-------------|
 | `fn` | `NodejsFunction` | The function backing this compute. |
 | `logGroup` | `LogGroup` | The function's CloudWatch log group (retention from `defaults.logRetention`). |
-| `apiHandler()` | `IFunction` | The function the stack's shared HTTP API gateway integrates (the `Compute` contract; returns `fn`). |
+| `apiHandler()` | `IFunction` | The function the stack's shared REST API gateway integrates (the `Compute` contract; returns `fn`). |
 | `setEnv(key, value)` | `void` | Inject a runtime env var onto the function — the `Compute` contract the framework calls instead of `handler.addEnvironment` directly. |
 
 `fn` exists only on the CDK layer (it is an `aws-cdk-lib` construct); `setEnv` and
@@ -100,7 +103,7 @@ exports:
 
 | Condition | Entry | Role |
 |-----------|-------|------|
-| `cdk` | `index.cdk.ts` | Provisions the `NodejsFunction` (above) and exposes it via `apiHandler()` for the stack's shared HTTP API gateway. The only layer that touches `aws-cdk-lib`. |
+| `cdk` | `index.cdk.ts` | Provisions the `NodejsFunction` (above) and exposes it via `apiHandler()` for the stack's shared REST API gateway. The only layer that touches `aws-cdk-lib`. |
 | `aws-runtime` | `index.aws.ts` | An **inert handle**. At runtime the infrastructure already exists and the handler already runs on it, so the compute provisions nothing; it constructs (so the import succeeds and `{ compute }` references resolve) and `setEnv` is a no-op — config is injected at synth. |
 | `default` / `types` | `index.mock.ts` | Local dev runs the backend in-process with no Lambda, so it reuses the same inert handle. Also backs the public `types`, so the customer-facing type is the CDK-free `Compute` handle. |
 | `browser` | `index.browser.ts` | A stub. The backend module is type-imported by frontends; this keeps `aws-cdk-lib` out of the browser bundle. |
@@ -130,7 +133,7 @@ framework's default compute. It slots into the broader model as follows:
   default compute.
 - **Resource ownership.** The default compute owns the Lambda function that backs
   a stack's `handler`; `gateway` / `apiUrl` resolve to the stack-level shared
-  HTTP API v2 that integrates the compute's `apiHandler()`.
+  REST API that integrates the compute's `apiHandler()`.
 - **Other compute types.** Sibling packages provide container and
   customer-owned `Compute` implementations; event blocks that need
   compute-specific delivery narrow on the concrete type.
@@ -217,9 +220,10 @@ supplies a concrete factory through a normal `import`.
    runs **before** importing the backend module — so a block that reads
    `this.compute` in its constructor (during that import) resolves to it. That
    call runs `new LambdaCompute(root, 'DefaultCompute')`, provisioning the
-   function. After the backend import, `create()` builds the single shared HTTP
-   API v2 from every registered compute's `apiHandler()` — `$default` to the
-   default compute, per-namespace routes to the others.
+   function. After the backend import, `create()` builds the single shared REST
+   API in the default compute's scope from every registered compute's
+   `apiHandler()` — catch-all resources to the default compute, per-namespace
+   resources to the others.
 4. `Scope.compute` and the delegating `handler` accessor read from
    `_defaultCompute`; `gateway` / `apiUrl` read from the shared gateway.
 

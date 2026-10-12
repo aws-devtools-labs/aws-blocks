@@ -34,19 +34,19 @@ export abstract class Compute extends Scope {
 	/**
 	 * API namespaces assigned to run on this compute — recorded (as each
 	 * `ApiNamespace` is constructed) so request routing can map a namespace to the
-	 * compute that hosts it. The shared gateway reads this to add a per-namespace
-	 * route to this compute's function for every non-default compute; namespaces
-	 * on the default compute are served by the gateway's `$default` route and need
-	 * no explicit entry. Populated via the internal `_compute` assignment seam —
+	 * compute that hosts it. The shared gateway reads this to add per-namespace
+	 * resources routed to this compute's function for every non-default compute;
+	 * namespaces on the default compute are served by the gateway's catch-all
+	 * resources and need no explicit entry. Populated via the internal `_compute` assignment seam —
 	 * there is no public, customer-facing compute-assignment surface yet.
 	 */
 	readonly namespaces: string[] = [];
 
 	/**
-	 * Optional route-level throttle override for this compute's gateway routes.
-	 * When set, the shared gateway applies it as HTTP API v2 `RouteSettings` on
-	 * each of this compute's explicit per-namespace routes; when `undefined` the
-	 * stage's default throttle applies. Set by a subclass — there is no public,
+	 * Optional throttle override for this compute's gateway routes. When set, the
+	 * shared gateway applies it as method-level stage settings on each of this
+	 * compute's per-namespace resources; when `undefined` the stage's default
+	 * throttle applies. Set by a subclass — there is no public,
 	 * customer-facing setter yet (that lands with the compute-assignment release);
 	 * this is only the internal seam.
 	 *
@@ -94,7 +94,7 @@ export abstract class Compute extends Scope {
 	abstract setEnv(key: string, value: string): void;
 
 	/**
-	 * The Lambda function the stack's single shared HTTP API gateway integrates
+	 * The Lambda function the stack's single shared API gateway integrates
 	 * so this compute is reachable over HTTP — or `undefined` for a worker-only
 	 * compute that owns no HTTP ingress (e.g. a background/queue consumer).
 	 *

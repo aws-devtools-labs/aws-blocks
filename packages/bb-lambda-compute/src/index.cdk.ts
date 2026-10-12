@@ -24,7 +24,7 @@ const LAMBDA_COMPUTE_BRAND: unique symbol = Symbol.for('blocks:LambdaCompute');
 
 /**
  * A Lambda-backed {@link Compute}: a `NodejsFunction` the stack's single shared
- * HTTP API v2 gateway fronts. The compute *owns* the function (and its log
+ * API Gateway REST API fronts. The compute *owns* the function (and its log
  * group); the HTTP ingress is provisioned once at the stack level and integrates
  * this compute's {@link apiHandler}. A BlocksStack / BlocksBackend's `handler`
  * delegates to this compute's `fn`; its `gateway` / `apiUrl` resolve to the
@@ -118,9 +118,8 @@ export class LambdaCompute extends Compute {
 		// Allowed CORS origins come from the stack's `defaults` (e.g. the sandbox
 		// preset allows localhost so a local dev frontend can reach the deployed
 		// API). Comma-joined to match how the runtime `getCorsPatterns()` parses
-		// CORS_ALLOWED_ORIGINS. The shared HTTP API does not configure native CORS
-		// (the allowed origins are regex patterns it can't express), so the Lambda
-		// still enforces CORS at runtime from this env var.
+		// CORS_ALLOWED_ORIGINS. The shared gateway does not configure CORS, so the
+		// Lambda enforces it at runtime from this env var.
 		const allowedOrigins = this.defaults.allowedOrigins;
 		if (allowedOrigins.length > 0) {
 			this.fn.addEnvironment('CORS_ALLOWED_ORIGINS', allowedOrigins.join(','));
@@ -132,7 +131,7 @@ export class LambdaCompute extends Compute {
 	}
 
 	/**
-	 * The function the stack's shared HTTP API v2 gateway integrates — this
+	 * The function the stack's shared REST API gateway integrates — this
 	 * compute's Lambda. Request throttling and access logging live on that shared
 	 * gateway's stage, not here; the gateway forwards every path to the function
 	 * and the Lambda handler does the routing.

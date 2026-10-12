@@ -3,7 +3,7 @@
 
 import { pathToFileURL } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
-import type { IHttpApi } from 'aws-cdk-lib/aws-apigatewayv2';
+import type * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
@@ -212,7 +212,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 
 /**
  * Standalone CDK construct that provisions the Blocks backend: a single Lambda
- * function fronted by one shared HTTP API v2 gateway with RPC + catch-all routing.
+ * function fronted by one shared API Gateway REST API with RPC + catch-all proxy routing.
  *
  * Use this to embed a Blocks backend into any existing CDK stack. Building Blocks
  * instantiated during the `backendCDKPath` import will automatically attach to
@@ -241,7 +241,7 @@ export class BlocksBackend extends Construct {
 	public readonly defaults: BlocksDefaults;
 	/** The default compute (owns the Lambda function); set in `create()`. @internal */
 	_defaultCompute?: Compute;
-	/** The single shared HTTP API v2 gateway fronting the default compute; built in `create()`. @internal */
+	/** The single shared REST API gateway fronting the default compute; built in `create()`. @internal */
 	_sharedGateway?: SharedGateway;
 	/** Set when a `Hosting` distribution has claimed the API front-door role (see {@link claimApiFrontDoor}). @internal */
 	_apiFrontDoorClaimedByHosting?: boolean;
@@ -262,9 +262,9 @@ export class BlocksBackend extends Construct {
 	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
 		return this.requireDefaultCompute().fn;
 	}
-	/** The backend's shared HTTP API v2 gateway. To be removed once consumers move to the multi-compute model. */
-	get gateway(): IHttpApi {
-		return this.requireSharedGateway().httpApi;
+	/** The backend's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
+	get gateway(): apigateway.RestApi {
+		return this.requireSharedGateway().restApi;
 	}
 	/**
 	 * The shared gateway's direct RPC endpoint URL (the `regional` tier). Always
@@ -396,14 +396,17 @@ export class BlocksBackend extends Construct {
 		}
 		addBlocksStackMetadata(cdk.Stack.of(backend));
 
-		// Build the single shared HTTP API v2 gateway now that the backend module
-		// has imported and every compute exists. Its `$default` catch-all fronts the
+		// Build the single shared REST API gateway now that the backend module has
+		// imported and every compute exists. Its catch-all resources front the
 		// default compute's function (its apiHandler()); every other compute's
 		// namespaces are routed to that compute's function. It backs .gateway/.apiUrl
-		// — the HTTP ingress is no longer owned per-compute.
-		const sharedGateway = createSharedGateway(backend, {
+		// — the HTTP ingress is no longer owned per-compute. It is built in the
+		// default compute's scope so its logical IDs match the per-compute gateway it
+		// replaces (existing deployments keep their API and URL).
+		const defaultCompute = backend.requireDefaultCompute();
+		const sharedGateway = createSharedGateway(defaultCompute, {
 			computes: getComputes(backend),
-			defaultCompute: backend.requireDefaultCompute(),
+			defaultCompute,
 			defaults: backend.defaults,
 		});
 		backend._sharedGateway = sharedGateway;

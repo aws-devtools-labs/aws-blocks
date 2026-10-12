@@ -4,7 +4,7 @@
 /**
  * The `edge` tier: a managed CloudFront front door for API traffic.
  *
- * The stack's single shared HTTP API v2 gateway is reachable directly on its own
+ * The stack's single shared REST API gateway is reachable directly on its own
  * regional `execute-api` domain — that is the implicit `regional` tier, and the
  * default. The `edge` tier puts one CloudFront distribution in front of that
  * gateway so the API is served from a global, CDN-backed domain instead
@@ -34,6 +34,7 @@ import {
 } from 'aws-cdk-lib/aws-cloudfront';
 import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import type { Construct, IConstruct } from 'constructs';
+import { BLOCKS_RPC_PREFIX } from '../constants.js';
 
 /** Construct id of the managed distribution. */
 const FRONT_DOOR_ID = 'ApiFrontDoor';
@@ -81,20 +82,21 @@ export interface ApiFrontDoorOwner {
 }
 
 /**
- * Build a CloudFront origin from the shared gateway's URL.
+ * Build a CloudFront origin from the shared gateway's RPC URL.
  *
- * The shared HTTP API v2 `$default` stage serves at the API root, so the URL is
- * `https://{host}/aws-blocks/api` with NO `/{stage}` segment: the origin is just
- * the host, with no `originPath` (unlike the old per-compute REST URL, whose
- * `/{stage}` prefix had to be re-added as `originPath`). The URL is a
- * CloudFormation token, so the host is sliced out in-template via `Fn::Split`
- * rather than in JS — string methods here would operate on the unresolved
- * placeholder text.
+ * The shared REST API's URL is `https://{host}/{stage}/aws-blocks/api`. The
+ * origin is the host, with the `/{stage}` segment set as its `originPath` so a
+ * viewer request for `/aws-blocks/api` reaches `/{stage}/aws-blocks/api` on the
+ * gateway. The URL is a CloudFormation token, so host and stage are sliced out
+ * in-template via `Fn::Split` rather than in JS — string methods here would
+ * operate on the unresolved placeholder text.
  */
 export function httpOriginFromEndpoint(gatewayUrl: string): IOrigin {
-	const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', gatewayUrl));
+	const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, gatewayUrl));
+	const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
 	const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
-	return new HttpOrigin(hostname);
+	const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
+	return new HttpOrigin(hostname, { originPath: `/${stage}` });
 }
 
 /**
@@ -229,7 +231,7 @@ export function resolveApiFrontDoor(apiFrontDoor: 'regional' | 'edge' | undefine
  *   identity that routes are registered under — and a `BlocksBackend` is a
  *   construct inside a stack it does not own, possibly alongside siblings.
  * @param provision whether to build the `edge` CloudFront distribution
- * @param gatewayUrl the shared HTTP API v2 gateway URL (`https://{host}/aws-blocks/api`),
+ * @param gatewayUrl the shared REST API gateway URL (`https://{host}/{stage}/aws-blocks/api`),
  *   the origin the distribution forwards to
  */
 export function scheduleApiFrontDoor(

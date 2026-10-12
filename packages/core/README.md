@@ -73,7 +73,7 @@ The typed `import { api } from 'aws-blocks'` client is the normal path. The HTTP
 `POST` to the RPC path `/aws-blocks/api`:
 
 - Local dev: `http://localhost:3000/aws-blocks/api` (the default template serves the backend and frontend from a single front door on `:3000`). Only the `backend` and `amplify` templates serve the API on `:3001`.
-- Deployed: the shared HTTP API URL + `/aws-blocks/api` (the `ApiUrl` stack output; no stage segment)
+- Deployed: the API Gateway stage URL + `/aws-blocks/api`
 
 The body is JSON-RPC 2.0:
 
@@ -156,28 +156,26 @@ curl http://localhost:3000/.blocks-sandbox/config.json
 
 # After a deploy: written by the deploy script and uploaded to the origin
 cat .blocks-sandbox/config.json
-# → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/aws-blocks/api", "environment": "production" }
-#   (the shared HTTP API v2 `$default` stage serves at the API root — no `/{stage}` segment; under apiFrontDoor:'edge' this is the CloudFront domain instead)
+# → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api", "environment": "production" }
+#   (under apiFrontDoor:'edge' this is the CloudFront domain + /aws-blocks/api instead)
 ```
 
 So a real config problem looks like the client throwing `Blocks API URL not configured` (or `... is not configured (source: ...)`), not like a `404` on `/config.json`. If a **deployed** origin keeps serving `{"_placeholder":true}` after a successful deploy, that is a genuine bug: the config upload or the CloudFront invalidation did not land.
 
 ### Shared API gateway
 
-A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway HTTP API** in front of the whole backend (see [API front door](#api-front-door) for how it is exposed):
+A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway REST API** in front of the whole backend (see [API front door](#api-front-door) for how it is exposed). It is the stack's `gateway`, and its RPC URL is the `ApiUrl` stack output.
 
-- **Every path reaches your backend.** A `$default` catch-all route forwards every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), which the gateway can route to a different compute without changing the app's endpoint.
-- **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000). **Structured JSON access logs** are opt-in via `defaults.accessLogging`; each entry records the matched `routeKey`, so traffic can be broken down per route.
-- **Limits:** requests time out after 30 seconds and payloads are capped at 10 MB. Run longer work in an `AsyncJob`.
-- **WAF:** AWS WAF can't attach to an HTTP API. Enable it on the CloudFront distribution in front instead: `new Hosting(stack, 'Web', { api: backend, waf: { enabled: true } })`. The `execute-api` URL itself stays directly reachable.
-
-Why an HTTP API rather than a REST API is recorded as decision D-018 in the source repo's `docs/DECISIONS.md`.
+- **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), which the gateway can route to a different compute without changing the app's endpoint.
+- **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000). **Structured JSON access logs** are opt-in via `defaults.accessLogging`; each entry records the resource path, so traffic can be broken down per route.
+- **Limits:** the gateway times out a request after 29 seconds and caps payloads at 10 MB. Run longer work in an `AsyncJob`.
+- **WAF** is not included by default. Associate a WebACL with the gateway's stage (`new wafv2.CfnWebACLAssociation(stack, 'ApiWaf', { resourceArn: stack.gateway.deploymentStage.stageArn, webAclArn })`), or with the CloudFront distribution when you use `Hosting` (`waf: { enabled: true }`).
 
 ### API front door
 
-How the backend's HTTP API is exposed to the internet is chosen with the `apiFrontDoor` prop on `BlocksStack` / `BlocksBackend` (default `'regional'`):
+How the backend's API is exposed to the internet is chosen with the `apiFrontDoor` prop on `BlocksStack` / `BlocksBackend` (default `'regional'`):
 
-- **`'regional'`** (default) — the shared regional HTTP API v2 gateway, reached directly on its own `execute-api` endpoint. Cheap, with a stable address per deployment and no extra CDN hop.
+- **`'regional'`** (default) — the shared regional REST API gateway, reached directly on its own `execute-api` endpoint. Cheap, with a stable address per deployment and no extra CDN hop.
 - **`'edge'`** — a global, CloudFront-backed front door in front of that same gateway (a single origin). Choose it for a geographically distributed audience; requests terminate at the nearest edge.
 
 The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
@@ -343,7 +341,7 @@ Registration rules worth knowing before you hit them at runtime:
 - Routes must be constructed while the backend module is loading (top level of `aws-blocks/index.ts`, or from a block's constructor). Registering after the handler is created throws.
 - `/aws-blocks` itself and `/aws-blocks/api` (plus anything under it) are reserved for RPC dispatch, and `/` is not routable, so use a sub-path.
 - The same `method` + `path` twice throws `RawRouteErrors.DuplicateRoute`; catch it with `isBlocksError(e, RawRouteErrors.DuplicateRoute)`.
-- No extra AWS resources are created. The shared HTTP API's `$default` catch-all route already forwards every path to the same Lambda, which checks the route registry before falling through to RPC.
+- No extra AWS resources are created. The existing API Gateway proxy already forwards every path to the same Lambda, which checks the route registry before falling through to RPC.
 
 ### Pipeline
 
