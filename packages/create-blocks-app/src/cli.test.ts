@@ -223,6 +223,8 @@ describe('create-blocks-app auto-detection', () => {
       const generateClientPath = join(tmpDir, 'aws-blocks', 'scripts', 'generate-client.ts');
       const cognitoVerifierPath = join(tmpDir, 'aws-blocks', 'cognito-verifier.ts');
       assert.strictEqual(packageJson.scripts['blocks:dev'], 'tsx watch aws-blocks/scripts/server.ts');
+      assert.strictEqual(packageJson.scripts['blocks:stop'], 'tsx aws-blocks/scripts/stop.ts');
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'stop.ts')));
       assert.ok(existsSync(serverPath));
       assert.match(readFileSync(serverPath, 'utf-8'), /startDevServer/);
       assert.match(readFileSync(generateClientPath, 'utf-8'), /from '@aws-blocks\/blocks\/scripts'/);
@@ -478,6 +480,10 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(result.exitCode, 0);
       const serverContent = readFileSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
       assert.match(serverContent, /vite/, 'default template should start the Vite dev server');
+      // The existing-project path must also wire the sanctioned stop command.
+      const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+      assert.strictEqual(pkg.scripts['dev:stop'], 'tsx aws-blocks/scripts/stop.ts');
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'stop.ts')));
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

@@ -415,6 +415,35 @@ describe('createLambdaHandler — RawRoute body handling', () => {
   });
 });
 
+// ── RPC errors never carry ARNs / AWS SDK detail ────────────────────────────
+
+describe('createLambdaHandler — AWS SDK AccessDenied detail never reaches the RPC client', () => {
+  it('collapses an AccessDenied (role + resource ARNs in the message, $metadata attached) to a generic error', async () => {
+    const roleArn = 'arn:aws:sts::123456789012:assumed-role/app-backend-HandlerRole-ABC123/app-backend-handler';
+    const resourceArn = 'arn:aws:dynamodb:us-west-2:123456789012:table/app-backend-orders-prod';
+    const sdkError = Object.assign(
+      new Error(`User: ${roleArn} is not authorized to perform: dynamodb:PutItem on resource: ${resourceArn}`),
+      { name: 'AccessDeniedException', $fault: 'client', $metadata: { httpStatusCode: 400, requestId: 'REQ-123' } },
+    );
+    const backend = { api: (_ctx: BlocksContext) => ({ async write() { throw sdkError; } }) };
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke(backend, makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.write', params: [], id: 1 }) }));
+    } finally {
+      console.error = originalError;
+    }
+
+    const body: string = result.body;
+    for (const leak of ['arn:aws', '123456789012', 'HandlerRole', 'app-backend-orders-prod', 'AccessDeniedException', 'REQ-123', 'dynamodb:PutItem']) {
+      assert.ok(!body.includes(leak), `client-visible error body leaked "${leak}": ${body}`);
+    }
+    assert.ok(JSON.parse(body).error, 'the call must still fail');
+  });
+});
+
 // ── RawRoute uncaught-exception sanitization ────────────────────────────────
 
 describe('createLambdaHandler — RawRoute uncaught exceptions', () => {

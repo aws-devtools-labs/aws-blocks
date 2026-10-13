@@ -395,6 +395,19 @@ const posts = await withAuth(() => api.listMyPosts(), request.headers.get('cooki
 
 In local dev mode, Building Blocks use mock implementations. No AWS resources needed.
 
+The dev server (`npm run dev`) listens on **`127.0.0.1` (loopback) only**, so nothing on your network can reach it. It serves your whole API against the local mock data, and local auth authenticates nothing. In a container or a remote devbox where you control who can reach the port, opt into a wider interface:
+
+```bash
+BLOCKS_DEV_HOST=0.0.0.0 npm run dev   # prints a warning: anyone who can reach this interface can call your API
+```
+
+You can also pass `host` to `startDevServer({ host })` in `aws-blocks/scripts/server.ts`. The local realtime WebSocket (`/realtime`) accepts upgrades only from loopback origins, or from the host you opted into:
+
+- With a **wildcard** (`BLOCKS_DEV_HOST=0.0.0.0`), open the app **by IP address** (e.g. `http://192.168.1.10:3000`). Same-origin pages reached by IP are accepted; DNS names are not, because a same-origin check against a name can be defeated by DNS rebinding.
+- To open it by **hostname** (e.g. `http://mybox.example.com:3000`), set `BLOCKS_DEV_HOST=mybox.example.com` instead.
+
+Only server-side `Realtime.publish()` can publish. Clients can subscribe, but not publish, exactly as in a deployed app.
+
 ## CORS Configuration
 
 By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. CORS behavior is controlled entirely by the `CORS_ALLOWED_ORIGINS` environment variable.
@@ -418,14 +431,18 @@ The sandbox CLI automatically sets `CORS_ALLOWED_ORIGINS=^https?://(localhost|12
 
 ### Production (frontend hosted separately)
 
-If your frontend is hosted on a different domain (e.g., Vercel, Netlify), set the `CORS_ALLOWED_ORIGINS` environment variable on your Lambda:
+If your frontend is hosted on a different domain (e.g., Vercel, Netlify), list its origins in the stack's `defaults.allowedOrigins` — every Blocks compute gets them as `CORS_ALLOWED_ORIGINS`:
 
 ```typescript
 // aws-blocks/index.cdk.ts
-blocksStack.handler.addEnvironment(
-  'CORS_ALLOWED_ORIGINS',
-  'https://myapp\\.com,https://staging\\.myapp\\.com'
-);
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: {
+    ...BlocksPresets.production,
+    allowedOrigins: ['https://myapp\\.com', 'https://staging\\.myapp\\.com'],
+  },
+});
 ```
 
 Each entry is treated as a **regex pattern** (anchored with `^` and `$`). Examples:

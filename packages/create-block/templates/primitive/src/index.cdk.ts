@@ -17,11 +17,11 @@ export type { __BB_CLASS__Options } from './types.js';
 export class __BB_CLASS__ extends Scope {
 	constructor(scope: ScopeParent, id: string, _options?: __BB_CLASS__Options) {
 		super(id, { parent: scope });
-		// TODO: provision your infrastructure and grant the shared Lambda access.
+		// TODO: provision your infrastructure and grant the shared execution role access.
 		// Name resources off `this.fullId` so the runtime can derive the same name.
 		// Example:
 		//   const table = new Table(this, 'table', { tableName: this.fullId.substring(0, 255), ... });
-		//   table.grantReadWriteData(this.handler);
+		//   table.grantReadWriteData(this.executionRole);
 		//   registerConfig(this, 'BLOCKS_THING_FLAG', '...'); // extra (non-name) config only
 	}
 
