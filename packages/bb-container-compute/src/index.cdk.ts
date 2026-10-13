@@ -27,7 +27,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ContainerScaling, ScalingSignal, ScopeParent } from '@aws-blocks/core';
-import { getConfigLocation } from '@aws-blocks/core/cdk';
+import { getConfigDeployment, getConfigLocation } from '@aws-blocks/core/cdk';
 import {
 	ComputeBase,
 	getOrCreateVpc,
@@ -209,6 +209,17 @@ export class ContainerCompute extends ComputeBase {
 	 * import. No-op when scaling is absent or bounded to a single instance.
 	 */
 	override finalize(): void {
+		// Order the service after the config upload: the container parent loads
+		// config once at boot (loadConfigToProcessEnv) and never retries, so if the
+		// task starts before the config object exists it registers zero pollers and
+		// sits idle while the health check still reports ok. The dependency is on
+		// the deployment that writes blocks-config.json; getConfigDeployment is
+		// available here because finalize() runs after finalizeConfigRegistry.
+		if (this.service) {
+			const configDeployment = getConfigDeployment(this);
+			if (configDeployment) this.service.node.addDependency(configDeployment);
+		}
+
 		const cfg = this.scalingConfig;
 		if (!this.service || !cfg || cfg.maxInstances <= 1) return;
 
@@ -236,7 +247,7 @@ export class ContainerCompute extends ComputeBase {
 			} else if (signal.on === 'memory') {
 				scalable.scaleOnMemoryUtilization(`MemoryScaling`, { targetUtilizationPercent: signal.targetPercent });
 			} else {
-				// queue-depth: sum visible messages across every owned queue and step
+				// queue-depth: sum the backlog across every owned queue and step
 				// scale on the total. Target tracking rejects a math expression (CDK's
 				// scaleToTrackCustomMetric wants a direct metric), so the sum-across-
 				// queues signal uses step scaling: add capacity as the backlog grows in
@@ -245,12 +256,19 @@ export class ContainerCompute extends ComputeBase {
 				if (ownedQueues.length === 0) continue;
 				const using: Record<string, cloudwatch.IMetric> = {};
 				ownedQueues.forEach((q, i) => {
-					using[`m${i}`] = q.metricApproximateNumberOfMessagesVisible();
+					// Count BOTH visible and in-flight (NotVisible) messages. Visible
+					// alone drops to 0 the instant a long-running job picks a message up,
+					// so a queue fully drained into still-running jobs would read empty
+					// and scale a task in from under an in-flight delivery. Including
+					// NotVisible keeps the backlog non-zero until the work actually
+					// finishes, so scale-in waits for the jobs, not just the queue.
+					using[`v${i}`] = q.metricApproximateNumberOfMessagesVisible();
+					using[`n${i}`] = q.metricApproximateNumberOfMessagesNotVisible();
 				});
 				const backlog = new cloudwatch.MathExpression({
 					expression: Object.keys(using).join(' + '),
 					usingMetrics: using,
-					label: 'BacklogVisible',
+					label: 'Backlog',
 					period: cdk.Duration.minutes(1),
 				});
 				const per = signal.backlogPerInstance;

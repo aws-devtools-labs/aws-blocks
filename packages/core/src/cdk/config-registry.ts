@@ -18,6 +18,13 @@ interface ConfigRegistryState {
 	finalized: boolean;
 	/** The shared config bucket, created once per backend root by {@link getConfigLocation}. */
 	bucket?: s3.Bucket;
+	/**
+	 * The S3 deployment that uploads the config JSON, set by
+	 * {@link finalizeConfigRegistry}. A compute that loads config at boot (e.g. a
+	 * container's parent process) depends on this so CloudFormation doesn't start
+	 * the service before the config object exists. See {@link getConfigDeployment}.
+	 */
+	deployment?: s3deploy.BucketDeployment;
 }
 
 /**
@@ -70,6 +77,24 @@ export function registerConfig(scope: Construct, key: string, value: unknown): v
  */
 export function getConfigLocation(scope: Construct): { bucketName: string; key: string } {
 	return { bucketName: ensureConfigBucket(scope).bucketName, key: CONFIG_KEY };
+}
+
+/**
+ * The config S3 deployment for the backend root that owns `scope`, or `undefined`
+ * if no config was registered (so no deployment was created). A compute that reads
+ * config at boot — a container parent calls `loadConfigToProcessEnv()` once at
+ * startup, with no later retry — should add a CDK dependency on this so
+ * CloudFormation finishes uploading the config object before the service starts.
+ * Without the dependency the ordering is a race (a Lambda tolerates it because it
+ * reloads config per request; a long-lived container does not).
+ *
+ * Call from a compute's `finalize()` — it runs after `finalizeConfigRegistry`, so
+ * the deployment exists by then.
+ *
+ * @param scope - Any construct in the backend (used to locate the backend root).
+ */
+export function getConfigDeployment(scope: Construct): s3deploy.BucketDeployment | undefined {
+	return getRegistry(getBlocksRoot(scope)).deployment;
 }
 
 /**
@@ -140,11 +165,12 @@ export function finalizeConfigRegistry(
 		produce: () => Object.fromEntries(registry.entries),
 	});
 
-	new s3deploy.BucketDeployment(root, 'BlocksConfigDeployment', {
+	const deployment = new s3deploy.BucketDeployment(root, 'BlocksConfigDeployment', {
 		sources: [s3deploy.Source.jsonData(configKey, configObject)],
 		destinationBucket: configBucket,
 		prune: false,
 	});
+	registry.deployment = deployment;
 
 	// Grant read once to the shared role (scoped to the config key), so every
 	// compute assuming the role can read it. We intentionally use `grantRead`

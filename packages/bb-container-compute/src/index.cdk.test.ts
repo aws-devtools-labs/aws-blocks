@@ -127,3 +127,84 @@ describe('ContainerCompute — Fargate in the shared VPC', () => {
 		template.resourceCountIs('AWS::ECS::Service', 1);
 	});
 });
+
+describe('ContainerCompute — review-finding fixes', () => {
+	test('the Fargate service depends on the config deployment (boots after config exists)', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'ContainerConfigDepStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			size: { vcpu: 0.5, memory: 1024 },
+		});
+		// Register at least one config entry so finalizeConfigRegistry creates the
+		// BucketDeployment the service must order itself after.
+		const { registerConfig } = await import('@aws-blocks/core/cdk');
+		registerConfig(compute as never, 'BLOCKS_SMOKE_FLAG', 'on');
+
+		// finalizeConfigRegistry runs before compute.finalize() in create(); mirror
+		// that ordering here so the deployment exists when finalize wires the dep.
+		const { finalizeConfigRegistry } = await import('@aws-blocks/core/cdk');
+		finalizeConfigRegistry(stack as never, (stack as never as { executionRole: unknown }).executionRole as never, [
+			compute as never,
+		]);
+		compute.finalize();
+
+		const template = Template.fromStack(stack as unknown as cdk.Stack);
+		// Find the config BucketDeployment custom resource and the service, and
+		// assert the service's DependsOn includes that deployment's logical id.
+		const deployments = template.findResources('Custom::CDKBucketDeployment');
+		const deploymentIds = Object.keys(deployments);
+		assert.ok(deploymentIds.length >= 1, 'expected a config BucketDeployment');
+		const services = template.findResources('AWS::ECS::Service');
+		const service = Object.values(services)[0] as { DependsOn?: string[] };
+		assert.ok(service.DependsOn, 'service should declare DependsOn');
+		assert.ok(
+			deploymentIds.some((id) => service.DependsOn!.includes(id)),
+			`service DependsOn ${JSON.stringify(service.DependsOn)} should include a config deployment (${JSON.stringify(deploymentIds)})`,
+		);
+	});
+
+	test('queue-depth autoscaling counts in-flight (NotVisible) messages, not just Visible', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'ContainerQueueDepthStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			size: { vcpu: 0.5, memory: 1024 },
+			scaling: { minInstances: 1, maxInstances: 5, strategy: { on: 'queue-depth', backlogPerInstance: 100 } },
+		});
+		// Give the compute a queue to drain so the queue-depth policy is wired.
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		const q = new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue');
+		compute.registerOwnedQueue(q);
+		compute.finalize();
+
+		const template = Template.fromStack(stack as unknown as cdk.Stack);
+		// Step scaling renders a StepScaling policy plus CloudWatch alarms whose
+		// metric math carries the SQS metrics. The backlog math must reference BOTH
+		// the Visible and NotVisible metrics — otherwise a drained-but-processing
+		// queue reads 0 and a task is scaled in from under an in-flight job.
+		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalingPolicy', {
+			PolicyType: 'StepScaling',
+		});
+		const alarms = template.findResources('AWS::CloudWatch::Alarm');
+		const serialized = JSON.stringify(Object.values(alarms).map((a) => (a as { Properties?: unknown }).Properties));
+		assert.ok(
+			serialized.includes('ApproximateNumberOfMessagesVisible'),
+			'queue-depth alarm metric math should include ApproximateNumberOfMessagesVisible',
+		);
+		assert.ok(
+			serialized.includes('ApproximateNumberOfMessagesNotVisible'),
+			'queue-depth alarm metric math should include ApproximateNumberOfMessagesNotVisible (in-flight)',
+		);
+	});
+});

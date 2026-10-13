@@ -302,6 +302,18 @@ export class AsyncJob<T = unknown, C extends ComputeProvider = ComputeProvider<'
 								`${result.timedOut ? ' (wall-clock timeout — worker terminated)' : ''}: ${result.error}`,
 						);
 					}
+				} catch (err) {
+					// Must not escape: handleMessage runs detached (`void handleMessage(m)`),
+					// so any rejection here — a DeleteMessage that still rejects after SDK
+					// retries (throttle/network), or a synchronous throw from
+					// dispatchJobToWorker (e.g. `new Worker(...)` failing) — would surface
+					// as an unhandled rejection and, under Node's default, kill main.js and
+					// every in-flight worker on the task (all of them redrive). Swallow it:
+					// the message is simply left undeleted, so SQS redrives it normally.
+					this.log.error?.(
+						`AsyncJob "${this._id}" delivery raised for ${record.messageId} (message left for redrive): ` +
+							`${err instanceof Error ? err.message : String(err)}`,
+					);
 				} finally {
 					releaseSlot();
 				}

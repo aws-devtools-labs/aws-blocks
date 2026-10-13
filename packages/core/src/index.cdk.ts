@@ -48,6 +48,7 @@ export {
 	finalizeTracing,
 	getBlocksRoot,
 	getBlocksRootId,
+	getConfigDeployment,
 	getConfigLocation,
 	getOrCreateOnRoot,
 	getVpcContext,
