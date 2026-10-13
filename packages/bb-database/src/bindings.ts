@@ -79,7 +79,6 @@ export function removedClusterResources(deployed: Bindings | undefined, next: Bi
 	return removed;
 }
 
-/** An empty record. */
 export function emptyBindings(): Bindings {
 	return { databases: {}, clusters: {} };
 }

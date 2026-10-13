@@ -47,8 +47,9 @@ export interface KindOf<K extends ClusterKind> {
 }
 
 /**
- * The descriptor a `Database` exposes as `db.cluster`. Every entry point checks
- * `kind` at runtime; nothing about the kind is read from the type.
+ * The descriptor a `Database` exposes as `db.cluster`. It is a plain value, so
+ * a handler can return it to the client and the runtime can branch on `kind`
+ * without trusting the type parameter.
  */
 export interface ClusterRef<K extends ClusterKind = ClusterKind> {
 	/** Which kind of cluster the block runs on. */
@@ -74,7 +75,7 @@ export interface DistributedClusterOptions {
 /** Constructor options for a `DatabaseCluster`, narrowed by `type`. */
 export type DatabaseClusterOptions = DistributedClusterOptions;
 
-/** The options object for a given {@link ClusterType}. */
+/** The options object for a given {@link ClusterType}. Conditional so a second type adds a branch, not a new overload. */
 export type ClusterOptionsOf<T extends ClusterType> = T extends 'distributed' ? DistributedClusterOptions : never;
 
 /** Options every `Database` block accepts, whichever cluster it runs on. */

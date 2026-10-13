@@ -22,7 +22,7 @@ export const MIGRATION_TOTAL_TIMEOUT_MINUTES = 120;
 /** How often the custom-resource provider polls an asynchronous DDL job, in seconds. */
 export const MIGRATION_POLL_INTERVAL_SECONDS = 30;
 
-/** Default connection pool size for the pooled (pg) engines. */
+/** Connection pool size of the DSQL engine's `pg.Pool`, per Lambda container. */
 export const DEFAULT_POOL_SIZE = 5;
 
 /** Default max retry attempts for OCC conflicts when `retryOnConflict` is enabled. */

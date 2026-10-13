@@ -25,7 +25,11 @@ interface Segment {
 	literal: boolean;
 }
 
-/** Split SQL into literal (quoted / dollar-quoted / comment) and code segments so rewrites never touch literals. */
+/**
+ * Split SQL into literal (quoted / dollar-quoted / comment) and code segments so
+ * rewrites never touch literals. `stripLiteralsAndComments` in validation.ts
+ * drops them for matching; this keeps them so the output is still the user's SQL.
+ */
 function segments(sql: string): Segment[] {
 	const out: Segment[] = [];
 	let code = '';

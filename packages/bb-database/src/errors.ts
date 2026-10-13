@@ -4,9 +4,10 @@
 import { ApiError, brandBlocksError } from '@aws-blocks/core';
 
 /**
- * Error names for query and transaction failures, the same on every cluster
- * kind. Match with `isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)`
- * on either side of the RPC wire. See the README's Errors table for when each
+ * Error names for query and transaction failures. Match with
+ * `isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)` on either side of
+ * the RPC wire. The strings are bb-data's, so an app moving between the two
+ * blocks keeps its catch clauses. See the README's Errors table for when each
  * is raised and how it is retried.
  */
 export const DatabaseErrors = {
@@ -119,8 +120,9 @@ export function isDsqlTransactionLimit(e: unknown): boolean {
 }
 
 /**
- * Translate a PostgreSQL-protocol driver error (pg, PGlite, DSQL over pg) to a
- * {@link DatabaseErrors} name. Used by every socket-based engine.
+ * Translate a PostgreSQL-protocol driver error (pg against DSQL, or PGlite) to a
+ * {@link DatabaseErrors} name. Only the name and a fixed message reach the
+ * client; the driver error, with its SQLSTATE, stays on the server-side `cause`.
  */
 export function translatePgError(e: unknown, engineName: string): never {
 	if (e instanceof Error) {

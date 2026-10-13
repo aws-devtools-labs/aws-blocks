@@ -160,7 +160,12 @@ describe('deploy guard: change-set backstop', () => {
 
 	test('helpers', () => {
 		assert.strictEqual(clusterRemovalPolicy({ Resources: { A: dsql('Delete') } }), 'delete');
-		assert.strictEqual(clusterRemovalPolicy({ Resources: { A: { Type: 'AWS::DSQL::Cluster' } } }), 'retain');
+		assert.strictEqual(
+			clusterRemovalPolicy({ Resources: { A: { Type: 'AWS::DSQL::Cluster' } } }),
+			'delete',
+			'no policy means CloudFormation deletes',
+		);
+		assert.strictEqual(clusterRemovalPolicy({ Resources: { A: dsql('Retain'), B: dsql('Delete') } }), 'retain');
 	});
 });
 

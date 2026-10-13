@@ -90,6 +90,8 @@ class FunctionsWaitForMigration implements cdk.IAspect {
 
 	visit(node: IConstruct): void {
 		if (!(node instanceof CfnFunction) || !node.role) return;
+		// Compare resolved values: the same role gives the same Fn::GetAtt whether the
+		// function got the role object or its ARN string.
 		const same =
 			JSON.stringify(this.stack.resolve(node.role)) === JSON.stringify(this.stack.resolve(this.executionRoleArn));
 		if (same) node.addDependency(this.migration);

@@ -62,12 +62,16 @@ export type CfnTemplate = {
 	Metadata?: Record<string, unknown>;
 };
 
-/** Lower-cased removal policy of the stack's cluster resources, when they agree. */
+/**
+ * Lower-cased removal policy of the stack's cluster resources, for the binding
+ * stop message. `retain` when the clusters disagree, because the message speaks
+ * about the stack as a whole; CloudFormation deletes a resource with no policy.
+ */
 export function clusterRemovalPolicy(template: CfnTemplate | undefined): string {
 	const policies = new Set<string>();
 	for (const res of Object.values(template?.Resources ?? {})) {
 		if (res.Type && GUARDED_RESOURCE_TYPES.has(res.Type))
-			policies.add((res.DeletionPolicy ?? 'Retain').toLowerCase());
+			policies.add((res.DeletionPolicy ?? 'Delete').toLowerCase());
 	}
 	return policies.size === 1 ? [...policies][0] : 'retain';
 }

@@ -75,9 +75,10 @@ export class DatabaseCluster<T extends ClusterType = ClusterType> extends Scope 
  * cluster; pass a {@link DatabaseCluster} to share one.
  *
  * Locally this is PGlite under `.bb-data/`, with dsql-lint and the DSQL
- * transaction limits applied when the cluster is `distributed`. Migrations in `./aws-blocks/migrations/{id}`
- * run on first use. `simulateConflict()` makes the next commit fail with
- * `SerializationFailure` so retry logic can be tested on every kind.
+ * transaction limits applied when the cluster is `distributed`. Migrations in
+ * `./aws-blocks/migrations/{id}` run on first use. `simulateConflict()` makes
+ * the next commit fail with `SerializationFailure` so retry logic can be tested
+ * without a deployed cluster.
  *
  * @example
  * import { Database, sql } from '@aws-blocks/bb-database';
@@ -85,7 +86,7 @@ export class DatabaseCluster<T extends ClusterType = ClusterType> extends Scope 
  * const user = await db.queryOne<User>(sql`SELECT id, email FROM users WHERE id = ${id}`);
  */
 export class Database<K extends ClusterKind = 'distributed'> extends Scope {
-	/** Which cluster this block runs on. Anchors `K`. */
+	/** Which cluster this block runs on. */
 	readonly cluster: ClusterRef<K>;
 	/** The schema this block's tables live in. */
 	readonly schemaName: string;
@@ -145,6 +146,7 @@ export class Database<K extends ClusterKind = 'distributed'> extends Scope {
 		};
 
 		this.core = new DatabaseCore({ kind, engine: buildEngine, fullId: this.fullId });
+		// An owned cluster is named after its block; a shared one after the DatabaseCluster.
 		registerSdkIdentifiers(this.fullId, {
 			clusterId: resolved.ref.id === DEFAULT_CLUSTER_ID ? this.fullId : resolved.ref.id,
 			schemaName: this.schemaName,
@@ -206,8 +208,8 @@ export class Database<K extends ClusterKind = 'distributed'> extends Scope {
 
 	/**
 	 * Test helper (local mode only): make the next commit raise
-	 * `SerializationFailure`, on every kind of cluster, so retry logic can be
-	 * exercised without a deployed DSQL cluster.
+	 * `SerializationFailure`, so retry logic can be exercised without a deployed
+	 * DSQL cluster.
 	 */
 	simulateConflict(): void {
 		if (this.mock) this.mock.simulateConflict();

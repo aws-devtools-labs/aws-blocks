@@ -4,8 +4,8 @@
 /**
  * The local-mode decorator every mock `Database` wraps its engine in.
  *
- * - `simulateConflict()` makes the next commit raise `SerializationFailure` on
- *   every kind, so retry tests do not depend on which cluster is deployed.
+ * - `simulateConflict()` makes the next commit raise `SerializationFailure`, so
+ *   retry tests need no deployed cluster.
  * - On a `distributed` cluster it runs each statement through dsql-lint, so
  *   unsupported statements are rejected before they reach PGlite, DDL on the app connection is refused
  *   (parity with the deployed DML-only grant), `ASYNC` DDL is run synchronously,
@@ -105,6 +105,7 @@ export class MockEngine implements DatabaseEngine {
 		const handle = await this.beginTransaction();
 		try {
 			const result = await this.executeInTransaction(handle, sql, params);
+			// Commit on the inner engine: a pending simulateConflict() is for the user's next transaction, not this one.
 			await this.inner.commitTransaction(handle);
 			(handle as TrackedHandle).tracker?.reset();
 			return result;
@@ -182,7 +183,8 @@ export class MockEngine implements DatabaseEngine {
 			try {
 				children = await this.inner.queryInTransaction<{ child: string }>(
 					handle,
-					"SELECT DISTINCT conrelid::regclass::text AS child FROM pg_constraint WHERE contype = 'f' AND confdeltype = 'c' AND confrelid = $1::regclass",
+					// to_regclass() returns NULL for an unknown table; a failed cast would abort the user's transaction.
+					"SELECT DISTINCT conrelid::regclass::text AS child FROM pg_constraint WHERE contype = 'f' AND confdeltype = 'c' AND confrelid = to_regclass($1)",
 					[parent],
 				);
 			} catch {
