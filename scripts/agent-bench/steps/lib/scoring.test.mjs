@@ -13,7 +13,10 @@ import {
 	DEAD_SERVER_REASON,
 	DEAD_SERVER_STATUS,
 	PGLITE_OOM_REASON,
+	PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL,
+	PGLITE_INIT_TRAP_RE,
 	isPgliteInitOom,
+	isDataLayerUnavailable,
 	PRICING,
 	buildCapDecision,
 	cellCost,
@@ -38,6 +41,11 @@ import {
 // test can feed describeModelError's ACTUAL output into isProviderServerFault — pinning the format
 // contract between the two sibling .mjs modules (see the "drift guard" test below).
 import { describeModelError } from './bedrock-retry.mjs';
+// For the regex/sentinel drift-guard tests: read the TS source of truth and assert this .mjs's local
+// copies still match it (this .mjs cannot import the TS package, so the copies are coupled by VALUE).
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 describe('composite(tr, j) == round(60*tr + 4*j*min(1, 4*tr), 1)', () => {
 	it('tr=0 floors the judge term to 0 regardless of judge score', () => {
@@ -572,8 +580,9 @@ describe('dead_server PGlite-init-OOM carve-out: a WASM memory-ceiling crash is 
 	// A dead_server whose dev-log shows the PGlite `_pg_initdb` WASM abort is the mock engine running
 	// out of WASM linear memory under the CI runner — the built app is fine, so it must NOT count
 	// against the agent. Reclassified harness_error (EXCLUDED). The carve-out is signature-gated and
-	// narrow: ONLY this trap reclassifies; every other dead_server stays counted.
-	const base = { task: 'oidc-dsql-notes', template: 'default', dev_server_status: 'dead', tests_passed: 0, tests_failed: 0 };
+	// narrow: ONLY this trap reclassifies AND only when the process actually EXITED; every other
+	// dead_server stays counted.
+	const base = { task: 'oidc-dsql-notes', template: 'default', dev_server_status: 'dead', dev_pid_status: 'exited (pid=1)', tests_passed: 0, tests_failed: 0 };
 
 	it('Aborted(Cannot enlarge memory arrays) in the dev-log → harness_error, EXCLUDED', () => {
 		const cell = { ...base, dev_log_tail: 'postgres: Aborted(Cannot enlarge memory arrays to 0x...)' };
@@ -615,6 +624,102 @@ describe('dead_server PGlite-init-OOM carve-out: a WASM memory-ceiling crash is 
 		assert.equal(isPgliteInitOom(''), false);
 		assert.equal(isPgliteInitOom(undefined), false);
 		assert.equal(isPgliteInitOom(null), false);
+	});
+
+	// --- Tightened fallback gate (review finding: presence ≠ causation) ------------------------------
+	it("a survived trap on an 'alive but not serving' server stays dead_server (counted) — not an exit", () => {
+		// The server did not exit; it logged a trap it SURVIVED and then failed to serve for another
+		// reason (an agent's broken frontend). dev_pid_status does not start with 'exited', so the
+		// trap carve-out must NOT fire — this is a real product failure and stays counted.
+		const cell = {
+			...base,
+			dev_pid_status: 'alive (pid=123) but not serving',
+			dev_log_tail: '[PGliteEngine] init trap on attempt 1 ... Aborted(Cannot enlarge memory arrays)\n[vite] Internal server error: Failed to resolve import',
+		};
+		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
+		assert.equal(isScoredCell(cell), true);
+	});
+
+	it("an unrelated lowercase 'aborted(' + an agent TypeError stays dead_server (case-sensitive gate)", () => {
+		// Case matters: the real trap is `Aborted(` / `RuntimeError: unreachable`. A lowercase
+		// `request aborted(client closed)` from arbitrary app output must NOT match, so an agent's own
+		// crash is not laundered into an excluded harness_error.
+		const cell = {
+			...base,
+			dev_pid_status: 'exited (pid=1)',
+			dev_log_tail: 'request aborted(client closed)\nTypeError: cannot read properties of undefined',
+		};
+		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
+		assert.equal(isScoredCell(cell), true);
+	});
+
+	// --- Primary causal sentinel: fires for ANY class, including a scored cell with failing DB tests --
+	describe('data_layer_unavailable sentinel — the PRIMARY causal carve-out (server stays alive)', () => {
+		it('a SCORED cell with failing DB tests but the sentinel → harness_error, EXCLUDED', () => {
+			// This is the leak L1 creates: bb-data keeps the server alive through a trap, Playwright runs,
+			// DB tests fail, dev_server_status is NOT 'dead' — so the dead_server gate never sees it. The
+			// sentinel proves the trap caused it, so it is excluded rather than counted against the agent.
+			const cell = {
+				task: 'auth-notes', template: 'demo', dev_server_status: undefined,
+				tests_passed: 0, tests_failed: 11, data_layer_unavailable: true,
+			};
+			assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: PGLITE_OOM_REASON });
+			assert.equal(isScoredCell(cell), false);
+			assert.equal(isDataLayerUnavailable(cell), true);
+		});
+
+		it('the sentinel also rescues a dead_server cell (no exited/signature needed)', () => {
+			const cell = { task: 'x', template: 'y', dev_server_status: 'dead', data_layer_unavailable: true };
+			assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: PGLITE_OOM_REASON });
+		});
+
+		it('the sentinel does NOT override a cancellation or a pre-grade harness failure (precedence)', () => {
+			const cancelled = { status: 'cancelled', data_layer_unavailable: true };
+			assert.equal(classifyCell(cancelled).reason, 'cancelled');
+			const preGrade = { failed_at: '1-init', data_layer_unavailable: true };
+			// a pre-grade harness failure keeps its own reason, not the sentinel's
+			assert.equal(classifyCell(preGrade).klass, 'harness_error');
+			assert.notEqual(classifyCell(preGrade).reason, PGLITE_OOM_REASON);
+		});
+
+		it('without the sentinel a scored cell with failing tests stays scored (counted)', () => {
+			const cell = { task: 'x', template: 'y', tests_passed: 0, tests_failed: 11 };
+			assert.equal(classifyCell(cell).klass, 'scored');
+			assert.equal(isDataLayerUnavailable(cell), false);
+		});
+
+		it('isDataLayerUnavailable requires strict true (not truthy)', () => {
+			assert.equal(isDataLayerUnavailable({ data_layer_unavailable: true }), true);
+			assert.equal(isDataLayerUnavailable({ data_layer_unavailable: 'yes' }), false);
+			assert.equal(isDataLayerUnavailable({ data_layer_unavailable: 1 }), false);
+			assert.equal(isDataLayerUnavailable({}), false);
+			assert.equal(isDataLayerUnavailable(null), false);
+		});
+	});
+
+	// --- Drift guards: the local copies must track the TS source of truth (review finding) -----------
+	describe('drift guards vs packages/data-common/src/pglite-init.ts (local copies, no TS import)', () => {
+		const pgliteInitSrc = readFileSync(
+			join(dirname(fileURLToPath(import.meta.url)), '../../../../packages/data-common/src/pglite-init.ts'),
+			'utf-8',
+		);
+
+		it('PGLITE_INIT_TRAP_RE matches the TS source regex SOURCE (case flag intentionally differs)', () => {
+			const m = pgliteInitSrc.match(/const PGLITE_INIT_TRAP_RE = (\/.*\/[a-z]*);/);
+			assert.ok(m, 'could not find PGLITE_INIT_TRAP_RE literal in the TS source');
+			const tsSource = m[1].slice(1, m[1].lastIndexOf('/'));
+			// The match-set (source) must stay identical; the TS copy is /i (it runs against the fixed
+			// SELECT 1 probe), while this scorer copy drops /i on purpose (it scans arbitrary dev-log
+			// text). So assert SOURCE equality but NOT flags — the divergence is deliberate.
+			assert.equal(PGLITE_INIT_TRAP_RE.source, tsSource);
+			assert.equal(PGLITE_INIT_TRAP_RE.flags, '', 'scorer copy is intentionally case-sensitive (no /i)');
+		});
+
+		it('PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL equals the TS source literal exactly', () => {
+			const m = pgliteInitSrc.match(/PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL = '([^']*)'/);
+			assert.ok(m, 'could not find the sentinel literal in the TS source');
+			assert.equal(PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL, m[1]);
+		});
 	});
 });
 

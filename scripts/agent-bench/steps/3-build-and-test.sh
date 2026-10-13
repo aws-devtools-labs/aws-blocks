@@ -242,6 +242,28 @@ else
 fi
 export APP_BASE_URL
 
+# Data-layer sentinel scan (runs whether or not the server came up). When a mock Database's eager
+# migration run dies on a PGlite WASM init trap, bb-data KEEPS THE DEV SERVER ALIVE (so the front door
+# serves and the dead-server branch above never fires) but logs a fixed sentinel to dev.log, and every
+# DB-backed query then rejects. Without this, such a cell would be `scored` with failing DB tests and
+# counted against the agent — an INFRA memory crash blamed on the framework. We grep the dev.log for
+# the exact literal sentinel (not a fuzzy trap regex over 100 arbitrary log lines) and stamp a boolean
+# on result.json; lib/scoring.mjs reclassifies a cell carrying it as harness_error (EXCLUDED) for ANY
+# class, which closes the server-stays-up-but-wedged leak. A fixed literal keeps the gate causal
+# (the sentinel is emitted ONLY on an init-trap path), unlike a signature that merely appears in a tail.
+DATA_LAYER_SENTINEL='[bb-data] PGlite init trap: data layer unavailable'
+if [ -f "${CELL_TMP}/dev.log" ] && grep -qF "$DATA_LAYER_SENTINEL" "${CELL_TMP}/dev.log" 2>/dev/null; then
+  echo "[data-layer] sentinel found in dev.log — mock data layer wedged by a PGlite init trap (infra)"
+  RESULT_PATH="${RESULT_PATH:-/tmp/result.json}" node -e '
+    const fs = require("fs");
+    const p = process.env.RESULT_PATH;
+    let r = {};
+    try { r = JSON.parse(fs.readFileSync(p, "utf-8")); } catch {}
+    r.data_layer_unavailable = true;
+    fs.writeFileSync(p, JSON.stringify(r, null, 2));
+  ' || echo "::warning::failed to record data_layer_unavailable on result.json"
+fi
+
 # Only run Playwright when the dev server actually came up. If APP_BASE_URL is empty the server is
 # dead / the backend crashed (see the dead-server branch above) — launching Playwright with an empty
 # BLOCKS_URL would surface as bogus "invalid URL" test failures, so skip Playwright entirely and let

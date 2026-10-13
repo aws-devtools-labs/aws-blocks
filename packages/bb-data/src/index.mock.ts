@@ -6,7 +6,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { PGliteEngine } from './engines/pglite-engine.js';
 import { PgClientEngine } from './engines/pg-client-engine.js';
 import { RLSEnabledDatabase } from './database.js';
-import { runMigrations, loadMigrationsFromDir } from '@aws-blocks/data-common';
+import { runMigrations, loadMigrationsFromDir, trackEager } from '@aws-blocks/data-common';
 import { createCrudHandlers } from './crud/index.js';
 import type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';
 import type { Transaction, SqlQuery } from '@aws-blocks/data-common';
@@ -30,6 +30,12 @@ import { BB_NAME, BB_VERSION } from './version.js';
 export class Database extends Scope {
   private base!: RLSEnabledDatabase;
   private migrationsRun: Promise<void> | null = null;
+  /**
+   * Restart the eager migration run. Set only when the Database was constructed
+   * with `migrationsPath`. Invoked by {@link ensureMigrations} to re-run
+   * migrations after a transient PGlite init trap cleared the cached promise.
+   */
+  private startMigrations?: () => Promise<void>;
   private schema?: TableSchema;
 
   /** @internal Logger for internal operations. Defaults to error-level when not provided. */
@@ -60,7 +66,11 @@ export class Database extends Scope {
           ssl,
         }));
       });
-      this.migrationsRun = initPromise;
+      // Same eager-rejection hazard as the migrationsPath branch below: AppSetting.get()
+      // rejects (ParameterNotFound / ValidationFailed) for a missing or invalid .env.local
+      // value, which would otherwise be an unhandled rejection killing `npm run dev`. This is
+      // not a PGlite path, so no trap-retry (onTrap) — just the keep-alive logging guard.
+      this.migrationsRun = trackEager(initPromise, this.log, 'Database connection setup failed');
     } else {
       // Local PGlite for development
       const engine = new PGliteEngine(`.bb-data/${this.fullId}`);
@@ -81,25 +91,40 @@ export class Database extends Scope {
 
     if (options?.migrationsPath) {
       const path = options.migrationsPath;
-      const run = loadMigrationsFromDir(path)
-        .then(m => runMigrations(this.base.getEngine(), m))
-        .then(() => {});
-      // Migrations start eagerly, before any query awaits them. Without a
-      // handler here, a failure (notably a PGlite `_pg_initdb` WASM trap that
-      // outlasts the init retry — e.g. under CI memory pressure) is an
-      // UNHANDLED promise rejection that terminates the whole dev server
-      // process. Attach a logging handler so the process survives; the same
-      // rejection still reaches every caller via ensureMigrations() below, so a
-      // query after a failed init surfaces a branded error rather than being
-      // silently swallowed.
-      run.catch((error: unknown) => this.log.error('Migrations failed', { error }));
-      this.migrationsRun = run;
+      // Migrations start eagerly, before any query awaits them. Two things matter:
+      //  1. A rejection on this eager promise with no handler is an UNHANDLED
+      //     rejection that terminates the whole dev server process (notably a
+      //     PGlite `_pg_initdb` WASM trap under CI memory pressure). trackEager
+      //     attaches a logging handler so the process survives; the same
+      //     rejection still reaches every caller via ensureMigrations() below.
+      //  2. The failure must NOT be cached forever. The engine below deliberately
+      //     recovers (`PGliteEngine.ensureReady()` discards the dead WASM instance
+      //     so a later query can retry once memory eases), so caching the rejected
+      //     promise would wedge this Database permanently against a layer built to
+      //     heal. On an init trap, onTrap clears `migrationsRun` so the next query
+      //     re-runs migrations (runMigrations is idempotent — it skips files
+      //     already recorded in `_migrations`).
+      const startMigrations = () => {
+        const run = loadMigrationsFromDir(path)
+          .then(m => runMigrations(this.base.getEngine(), m))
+          .then(() => {});
+        this.migrationsRun = trackEager(run, this.log, 'Migrations failed', () => {
+          this.migrationsRun = null;
+        });
+        return run;
+      };
+      this.startMigrations = startMigrations;
+      startMigrations();
     }
     registerSdkIdentifiers(this.fullId, { clusterArn: `mock-cluster-${this.fullId}`, secretArn: `mock-secret-${this.fullId}` });
   }
 
   /** Ensure migrations have completed before any query. */
   private async ensureMigrations(): Promise<void> {
+    // A prior init trap may have cleared the cached promise (see the migrationsPath
+    // branch): re-run migrations once so a query after a transient WASM-memory trap
+    // can succeed, rather than caching the failure for the life of the process.
+    if (!this.migrationsRun && this.startMigrations) this.startMigrations();
     if (this.migrationsRun) await this.migrationsRun;
   }
 
@@ -135,7 +160,7 @@ export class Database extends Scope {
     if (!this.schema) {
       throw new Error('crud() requires schema metadata. Pass `schema: tableMeta` to the Database constructor.');
     }
-    return createCrudHandlers(this.base, this.schema, options) as any;
+    return createCrudHandlers(this.base, this.schema, options, () => this.ensureMigrations()) as any;
   }
 
   /** @internal Get the underlying DatabaseEngine. Used by createKyselyAdapter(). */

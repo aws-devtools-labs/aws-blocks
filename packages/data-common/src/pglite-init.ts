@@ -193,3 +193,66 @@ export async function initializePgliteWithRetry<T extends PgliteLike>(
     }
   }
 }
+
+
+/**
+ * Marker string a mock Database logs when an eager migration run dies on a
+ * PGlite WASM init trap, so the data layer is up-but-broken (every query will
+ * reject until migrations re-run). It is a STABLE, UNIQUE token — not prose —
+ * so two very different consumers can key on it without a fuzzy match:
+ *
+ *  - a developer greps the dev-server log for it, and
+ *  - the agent-bench scorer (`scripts/agent-bench/steps/lib/scoring.mjs`)
+ *    reclassifies the cell as a harness (infra) failure rather than counting
+ *    the WASM-memory crash against the agent under test.
+ *
+ * The scorer reads this exact literal (it is a dependency-free `.mjs` and cannot
+ * import this module), so the two are coupled by VALUE: a drift test in
+ * `scoring.test.mjs` asserts the scorer's copy equals this constant. Changing
+ * the text here is a breaking change to that contract — update both together.
+ */
+export const PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL = '[bb-data] PGlite init trap: data layer unavailable';
+
+/**
+ * Attach a logging handler to an EAGER, unawaited initialization promise so a
+ * rejection cannot escape as an unhandled rejection (which, in a mock Database
+ * constructor, terminates the whole `npm run dev` process). The returned promise
+ * is the ORIGINAL `promise` untouched — callers still `await` it through their
+ * ready-gate, so the same rejection reaches every query as a branded error.
+ *
+ * On a PGlite WASM init trap specifically, the logged line carries
+ * {@link PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL} and an actionable message
+ * (the raw `Aborted(...)` cause is logged alongside, because the bb-logger
+ * serializer keeps `name/message/stack` but DROPS `Error.cause`), and the
+ * handler reports the trap to `onTrap` so the caller can clear its cached
+ * promise and let the next query re-run idempotent migrations. A non-trap
+ * failure (e.g. a bad `.env.local` AppSetting) is logged plainly and is NOT
+ * reported as a trap, so it is not retried.
+ *
+ * @param promise the eager init/migrations promise to guard
+ * @param log a logger with an `error(msg, meta)` method
+ * @param label short human label for the log line (e.g. `'Migrations failed'`)
+ * @param onTrap invoked (once) only when the rejection is a PGlite init trap
+ * @returns the same `promise`, so the caller can store/await it unchanged
+ */
+export function trackEager<T>(
+  promise: Promise<T>,
+  log: { error: (message: string, meta?: Record<string, unknown>) => void },
+  label: string,
+  onTrap?: () => void,
+): Promise<T> {
+  promise.catch((error: unknown) => {
+    const cause = (error as { cause?: unknown })?.cause;
+    if (isPgliteUnreachableTrap(error)) {
+      log.error(
+        `${label}: ${PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL} (WASM memory). ` +
+          'Database queries will fail until migrations re-run; restart the dev server if this persists.',
+        { error, cause: cause ?? String(error) },
+      );
+      onTrap?.();
+    } else {
+      log.error(label, { error, cause: cause ?? undefined });
+    }
+  });
+  return promise;
+}
