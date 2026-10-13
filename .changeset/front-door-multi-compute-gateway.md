@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/core": minor
+"@aws-blocks/create-blocks-app": patch
 ---
 
 feat(core): multi-compute routing — per-namespace RPC paths + shared-gateway fan-out
