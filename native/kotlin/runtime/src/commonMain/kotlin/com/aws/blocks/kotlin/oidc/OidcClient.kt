@@ -39,7 +39,28 @@ class OidcClient internal constructor(
     // Blocks backend does not append padding
     private val base64 = Base64.UrlSafe.withPadding(Base64.PaddingOption.PRESENT_OPTIONAL)
 
-    suspend fun signIn(provider: String): OidcUser {
+    /**
+     * Signs the user in through [provider], opening the system browser and suspending until
+     * the flow finishes.
+     *
+     * ```kotlin
+     * val user = client.signIn("google")
+     * ```
+     *
+     * @param provider one of [providers]; anything else throws [OidcUnknownProviderException].
+     * @param options per-attempt settings. Only the JVM target has any, controlling what the
+     *   browser is shown once sign-in finishes; see `OidcSignInPlatformOptions` in `jvmMain`.
+     * @return the signed-in user, which also becomes the value of [authState].
+     * @throws OidcUnknownProviderException if [provider] is not one the backend configured.
+     * @throws OidcCancelledException if the user abandoned the flow, or it timed out.
+     * @throws OidcCallbackException if the identity provider reported an error, or the
+     *   callback's state or CSRF value did not match what was sent.
+     * @throws OidcExchangeException if the backend rejected the authorization code.
+     */
+    suspend fun signIn(
+        provider: String,
+        options: OidcSignInOptions = OidcSignInOptions(),
+    ): OidcUser {
         if (provider !in config.providers) {
             throw OidcUnknownProviderException(provider)
         }
@@ -50,7 +71,7 @@ class OidcClient internal constructor(
 
         // The session owns the relay target: a loopback launcher binds a socket to learn its
         // own port, which has to happen before the authorize-params request carries it.
-        val session = platformLauncher.openSession(config.relayTo)
+        val session = platformLauncher.openSession(config.relayTo, options)
         try {
             // Step 1: POST to /auth/authorize-params/<provider> to get the signed state envelope.
             val params = fetchAuthorizeParams(provider, csrf, session.relayTo)
@@ -63,39 +84,76 @@ class OidcClient internal constructor(
             // backend's callback, the backend decodes the state envelope, and 302s to the relay target.
             val resultUri = session.awaitRedirect(authorizeUrl)
 
-            // Step 4: Validate the callback.
-            val resultParams = Url(resultUri).parameters
-
-            val error = resultParams["error"]
-            if (error != null) {
-                val description = resultParams["error_description"] ?: ""
-                throw OidcCallbackException("IdP error: $error — $description")
+            // Steps 4-6 decide the outcome, and the session cannot know it before they run:
+            // a callback carrying a `code` still fails if the state or CSRF value does not
+            // match, or if the exchange is rejected.
+            val user = try {
+                completeSignIn(resultUri, params, csrf, verifier, provider, callbackUrl)
+            } catch (failure: Throwable) {
+                session.reportOutcome(failureOutcome(failure, resultUri))
+                throw failure
             }
-
-            val code = resultParams["code"]
-                ?: throw OidcCallbackException("Callback URI missing 'code' parameter")
-            val returnedState = resultParams["state"]
-                ?: throw OidcCallbackException("Callback URI missing 'state' parameter")
-
-            if (returnedState != params.state) {
-                throw OidcCallbackException("State mismatch in callback")
-            }
-
-            // Step 5: Verify the CSRF value inside the state envelope matches what we sent.
-            verifyCsrf(returnedState, csrf)
-
-            // Step 6: Exchange the code for tokens.
-            return exchange(
-                code = code,
-                verifier = verifier,
-                state = params.state,
-                nonce = params.nonce ?: "",
-                provider = provider,
-                callbackUrl = callbackUrl,
-                iss = resultParams["iss"]
-            )
+            session.reportOutcome(OidcSignInOutcome.Succeeded)
+            return user
         } finally {
             session.close()
+        }
+    }
+
+    private suspend fun completeSignIn(
+        resultUri: String,
+        params: AuthorizeParamsResponse,
+        csrf: String,
+        verifier: String,
+        provider: String,
+        callbackUrl: String,
+    ): OidcUser {
+        // Step 4: Validate the callback.
+        val resultParams = Url(resultUri).parameters
+
+        val error = resultParams["error"]
+        if (error != null) {
+            val description = resultParams["error_description"] ?: ""
+            throw OidcCallbackException("IdP error: $error — $description")
+        }
+
+        val code = resultParams["code"]
+            ?: throw OidcCallbackException("Callback URI missing 'code' parameter")
+        val returnedState = resultParams["state"]
+            ?: throw OidcCallbackException("Callback URI missing 'state' parameter")
+
+        if (returnedState != params.state) {
+            throw OidcCallbackException("State mismatch in callback")
+        }
+
+        // Step 5: Verify the CSRF value inside the state envelope matches what we sent.
+        verifyCsrf(returnedState, csrf)
+
+        // Step 6: Exchange the code for tokens.
+        return exchange(
+            code = code,
+            verifier = verifier,
+            state = params.state,
+            nonce = params.nonce ?: "",
+            provider = provider,
+            callbackUrl = callbackUrl,
+            iss = resultParams["iss"]
+        )
+    }
+
+    /**
+     * Describes [failure] for the user. The identity provider's own values are preferred when
+     * it reported the failure; anything rejected locally gets a short code of ours instead,
+     * since the provider said nothing about it.
+     */
+    private fun failureOutcome(failure: Throwable, resultUri: String): OidcSignInOutcome.Failed {
+        val resultParams = runCatching { Url(resultUri).parameters }.getOrNull()
+        val idpError = resultParams?.get("error")
+        return if (idpError != null) {
+            OidcSignInOutcome.Failed(idpError, resultParams["error_description"])
+        } else {
+            val code = if (failure is OidcExchangeException) "exchange_failed" else "invalid_callback"
+            OidcSignInOutcome.Failed(code, failure.message)
         }
     }
 
