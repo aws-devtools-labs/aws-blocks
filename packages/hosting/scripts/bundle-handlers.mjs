@@ -41,6 +41,11 @@ await Promise.all(
       outfile: h.outfile,
       bundle: true,
       platform: 'node',
+      // Resolve @aws-blocks/* conditional exports to their real AWS-runtime
+      // entry (defense-in-depth). This handler's graph has no @aws-blocks/*
+      // imports today, but pinning the condition keeps a future import from
+      // silently resolving a mock entry in the deployed bundle.
+      conditions: ['aws-runtime', 'node'],
       // Match the Lambda runtime (DEFAULT_NODE_RUNTIME). Bump together.
       target: 'node24',
       format: 'esm',

@@ -524,6 +524,26 @@ accurate to what your BB actually implements rather than aspirational.
   Blocks' build system relies on the `cdk` and `aws-runtime` conditions to
   pick the right entry point.
 
+### Deploying to a compute target Blocks doesn't own
+
+Blocks' own deploy path (`npm run deploy` / `npm run sandbox`) bundles your
+backend with the `aws-runtime` condition for you. If you deploy Blocks to a
+compute target the framework does **not** own — your own esbuild/webpack
+config, a custom container image, or another serverless platform — you MUST
+configure that bundler to resolve the `aws-runtime` export condition:
+
+```bash
+esbuild --conditions=aws-runtime ...
+# or, in an esbuild build() config:
+#   conditions: ['aws-runtime', 'node']
+```
+
+Without it, module resolution falls back to each BB's `default` (mock) entry,
+and your deployed function runs in-memory stubs instead of the real AWS
+implementations. The auth Building Blocks now **fail closed** in this case: a
+mock loaded in a deployed environment (detected via `AWS_LAMBDA_FUNCTION_NAME`)
+throws at startup rather than silently accepting stub sessions.
+
 **Found an issue with a first-party BB before publishing your own?** Consider
 opening a PR upstream against [`aws-blocks`](https://github.com/aws-devtools-labs/aws-blocks) — the team would
 rather absorb a generally useful change than have N forks of the same idea.
