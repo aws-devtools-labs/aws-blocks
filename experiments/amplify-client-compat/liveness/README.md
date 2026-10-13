@@ -81,6 +81,33 @@ The headless UI run gets through sign-in, session creation, camera start and a
 out with "Face didn't fit inside oval", as expected, because the fake camera
 shows no face. A real pass or fail score needs a person in front of a camera.
 
+## Token-exchange spike: the default `<FaceLivenessDetector>`
+
+`web/default-detector.html` (`src/default-detector.tsx`) uses the default
+detector with no `config.credentialProvider`, so it reads credentials from
+Amplify's `fetchAuthSession`. Amplify is configured with a
+`credentialsProvider` backed by the Blocks session cookie:
+
+```ts
+Amplify.configure({}, { Auth: { credentialsProvider, tokenProvider: { getTokens: async () => null } } });
+// credentialsProvider -> liveness.getStreamingCredentials(activeSessionId)
+```
+
+Amplify's provider interface has no liveness session id, so the app records the
+active session after `createSession`, and the API keeps its owner check. Import
+`Amplify` from `aws-amplify` here: the detector's `fetchAuthSession` resolves to
+the core nested under `aws-amplify@6.17.0` (the opposite of Storage, which uses
+the top-level core).
+
+```bash
+cd web && ../node_modules/.bin/vite &     # localhost:5174
+CHROME_PATH=<chrome-headless-shell> node default-detector-smoke.mjs ../.live/outputs.json ../screenshots/default-detector
+```
+
+Expected: credentials come from Blocks through `fetchAuthSession`, the stream to
+`wss://streaming-rekognition.<region>.amazonaws.com` opens, and the oval check
+runs. With `?noprovider=1` the detector stops with "No credentials provided".
+
 ## Known gaps
 
 - Blocks has no Rekognition block, so the handler calls the SDK directly and
