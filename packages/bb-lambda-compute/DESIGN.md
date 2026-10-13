@@ -67,7 +67,15 @@ returns `fn`, and the stack-level **shared REST API** (built by core in
 The shared gateway is built in the **default compute's** construct scope with the
 ids this compute used when it owned the gateway (`API`, `ApiAccessLogs`), so its
 logical IDs are unchanged: an app deployed before the gateway moved keeps its
-REST API and `execute-api` URL on upgrade.
+REST API and `execute-api` URL on upgrade. `umbrella-compute.test.ts` pins those
+logical IDs for both `BlocksStack` and `BlocksBackend`.
+
+The gateway's access-log group takes its retention from the stack-wide
+`defaults.logRetention`, not from a compute's `logRetention` option. The gateway
+fronts every compute, so a stack-level setting governs it; a compute's
+`logRetention` governs that compute's own handler log group. (When the compute
+owned the gateway, its `logRetention` covered both. The default compute is built
+without options, so nothing changes for existing apps.)
 
 Public surface (CDK layer):
 

@@ -12,7 +12,13 @@ import {
 	type ScopeOptions,
 	type ScopeParent,
 } from '../common/index.js';
-import { assertCdkConditionActive, BlocksBackend, setupBlocksInfra } from './blocks-backend.js';
+import {
+	assertCdkConditionActive,
+	BlocksBackend,
+	buildSharedGateway,
+	requireSharedGateway,
+	setupBlocksInfra,
+} from './blocks-backend.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
@@ -20,7 +26,7 @@ import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/defau
 import { finalizeConfigRegistry } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
-import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
+import type { SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
@@ -115,12 +121,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	}
 
 	private requireSharedGateway(): SharedGateway {
-		if (!this._sharedGateway) {
-			throw new Error(
-				'Blocks stack not fully initialized — access .gateway/.apiUrl after BlocksStack.create() resolves.',
-			);
-		}
-		return this._sharedGateway;
+		return requireSharedGateway(this, 'BlocksStack');
 	}
 
 	private _vpcOptions?: BlocksVpcOptions;
@@ -184,22 +185,8 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 			}
 		}
 		// Build the single shared REST API gateway now that the backend module has
-		// imported and every compute exists. It fronts the default compute's
-		// function (its apiHandler()) and backs .gateway/.apiUrl — the HTTP ingress
-		// is no longer owned per-compute. It is built in the default compute's scope
-		// so its logical IDs match the per-compute gateway it replaces (existing
-		// deployments keep their API and URL). The default compute is always a
-		// Lambda compute today, so apiHandler() is defined; guard with a clear error
-		// if a worker-only default is ever injected.
-		const defaultCompute = stack.requireDefaultCompute();
-		const defaultApiHandler = defaultCompute.apiHandler();
-		if (!defaultApiHandler) {
-			throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
-		}
-		stack._sharedGateway = createSharedGateway(defaultCompute, {
-			handler: defaultApiHandler,
-			defaults: stack.defaults,
-		});
+		// imported and every compute exists (see buildSharedGateway).
+		buildSharedGateway(stack);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
