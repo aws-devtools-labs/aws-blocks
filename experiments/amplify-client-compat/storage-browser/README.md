@@ -100,6 +100,10 @@ Run (after deploying the stack as above):
 ```bash
 cd web
 node --import ../../../../node_modules/tsx/dist/loader.mjs live-token-exchange.ts ../.live/outputs.json
+
+# browser build (XHR handler, HttpOnly cookie): page src/token-exchange.ts
+node_modules/.bin/vite &                       # localhost:5173 (bucket CORS)
+CHROME_PATH=<chrome-headless-shell> node token-exchange-smoke.mjs ../.live/outputs.json
 ```
 
 Import `Amplify`/`fetchAuthSession`/`decodeJWT` from `@aws-amplify/core`, not
