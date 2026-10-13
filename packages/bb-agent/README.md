@@ -42,7 +42,7 @@ const agent = new Agent(scope, id, config)
 | `stream(message, options?)` | `Promise<AgentStreamResult>` | Submit a message. Returns immediately with `{ channelId, channel, complete }`. |
 | `resume(channelId, responses, options?)` | `Promise<void>` | Resume an interrupted agent with user responses. Chunks publish to the same channel. |
 | `createConversationId(userId)` | `Promise<string>` | Generate a new conversation ID (UUID). |
-| `getConversation(id, options?)` | `Promise<Message[]>` | Get messages in a conversation. Pass `{ limit }` for most recent N. |
+| `getConversation(id, options?)` | `Promise<Message[]>` | Get messages in a conversation, returned **oldest-first** (chronological). Pass `{ limit }` to return only the **most recent N**, still ordered oldest-first. See [Reading conversation history](#reading-conversation-history). |
 | `listConversations(userId)` | `Promise<Conversation[]>` | List all conversations for a user. |
 | `deleteConversation(id, userId)` | `Promise<void>` | Delete a conversation and its session data. |
 | `getPendingInterrupts(conversationId)` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). |
@@ -124,6 +124,44 @@ Messages stored in conversation history use these roles:
 | `interrupt` | Agent paused — snapshot of pending interrupts. |
 
 The `useChat` hook only surfaces `user`, `assistant`, and `approval` messages to the UI. Use `agent.getConversation()` directly to access the full history including tool-call/tool-result records.
+
+#### Persisted message shape
+
+Each `Message` returned by `getConversation()` carries a `metadata` object. The tool-related fields are populated on `tool-call` and `tool-result` rows. The whole `metadata` object is JSON-serialized into a single DynamoDB column, but `getConversation()` parses it back before returning — so `toolInput` is the tool's parsed arguments object and `toolOutput` is the tool's parsed return value, not strings.
+
+| `metadata` field | Type | Set on |
+|------|------|--------|
+| `toolName` | `string` | `tool-call`, `tool-result` — the tool invoked. |
+| `toolInput` | `JSONValue` | `tool-call` — the tool's parsed arguments (same shape as the tool's `parameters` schema). |
+| `toolOutput` | `JSONValue` | `tool-result` — the Strands tool-result **content** (an array of content blocks that wraps the handler's return), parsed from JSON — not the handler's raw return value directly. |
+| `usage` | `{ inputTokens, outputTokens, totalTokens }` | `assistant` — token usage for the turn. |
+| `latencyMs` | `number` | `assistant` — turn latency. |
+| `error` | `string` | any row where the turn errored. |
+
+#### Tool-approval (HITL) row sequence
+
+A single human-in-the-loop turn that calls an approved tool persists this sequence of rows (oldest-first, as `getConversation()` returns them):
+
+```
+user → interrupt → approval → tool-call → tool-result → assistant
+```
+
+- `interrupt` is written when the agent pauses for approval; `approval` records the user's approve/deny response from `resume()`.
+- A denied tool still persists `tool-call` and `tool-result` rows (the result records the denial) — the tool does not execute, but the paired records are kept for audit. Assert on the agent's observable outcome, not on the absence of a tool-call row.
+- A turn that invokes no tool at all collapses to `user → assistant`. An autonomous (non-approval) tool still persists its own `tool-call`/`tool-result` rows — it just omits the `interrupt`/`approval` pair.
+
+#### Reading conversation history
+
+`getConversation(id)` returns the full history **oldest-first (chronological)**. Internally the store is read newest-first and the result is reversed before returning, so:
+
+- With no `limit`, you get every message in chronological order.
+- With `{ limit: N }`, you get the **most recent N** messages, still ordered oldest-first (not the first N). `limit: 0` (or any negative value) returns an empty array.
+
+```typescript
+const recent = await agent.getConversation(id, { limit: 10 }); // last 10, oldest-first
+const first = recent[0];           // oldest of the 10
+const last  = recent.at(-1);       // newest message
+```
 
 ### AgentConfig
 
@@ -300,6 +338,15 @@ const agent = new Agent(scope, 'agent', {
 #### AWS Credentials (Bedrock)
 
 The `bedrock` provider uses your configured AWS credentials. See [Strands quickstart](https://strandsagents.com/docs/user-guide/quickstart/typescript/#configuring-credentials) for setup instructions.
+
+**Model access must be enabled in your account.** The deployed agent's runtime role already grants the Bedrock invoke permissions (`bedrock:InvokeModel`, `InvokeModelWithResponseStream`, `GetInferenceProfile`, and foundation-model/inference-profile reads) — you do **not** add IAM for this. What you *do* need is **model access enabled for the specific inference profile you select**, granted per-account in the Bedrock console (Model access). A model whose access is not enabled fails the health check and, with no other candidate, throws `AgentErrors.ModelUnavailable`; a direct invoke of an un-enabled profile returns `AccessDeniedException` (403) — Bedrock's **account-level model-access** denial, not an IAM-policy denial, so the fix is enabling model access in the Bedrock console, not editing the runtime role.
+
+A **global** inference profile (`global.…`, used by the [Bedrock presets](#bedrock-presets)) and a **regional** one (`us.…`, `eu.…`, `apac.…`) are **separate profiles with separate access grants** — enabling the regional profile does not enable the global one. If a preset is reported unavailable but you know the model is enabled, confirm access is enabled for the **`global.`** profile specifically, or pass an explicit regional `modelId` your account has enabled:
+
+```typescript
+// Explicit regional profile instead of a global-profile preset
+model: { deployed: { provider: 'bedrock', modelId: 'us.anthropic.claude-opus-4-8' } }
+```
 
 #### Bedrock via Mantle
 

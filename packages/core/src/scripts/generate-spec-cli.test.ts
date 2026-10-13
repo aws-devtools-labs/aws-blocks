@@ -37,6 +37,9 @@ function makeBackend(dir: string, ext: 'ts' | 'js'): string {
 			async echo(s) { return s; },
 		}));
 	`);
+	// tsx resolves a relative `./api.js` only with a `package.json` up-tree, and
+	// `os.tmpdir()` has none, so the TypeScript case fails without this.
+	writeFileSync(join(dir, 'package.json'), JSON.stringify({ type: 'module' }));
 	// tsconfig that allows JS so the spec emitter's TypeScript pass succeeds
 	// regardless of which extension the entry point uses.
 	writeFileSync(join(dir, 'tsconfig.json'), JSON.stringify({

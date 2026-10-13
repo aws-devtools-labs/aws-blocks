@@ -16,12 +16,12 @@ Tests automatically discover all fixtures and assert codegen output matches gold
 
 **Kotlin:**
 ```bash
-cd native/kotlin && ./gradlew :codegen:test --tests "com.amazonaws.blocks.kotlin.CodegenFixturesTest"
+cd native/kotlin && ./gradlew :codegen:test --tests "com.aws.blocks.kotlin.CodegenFixturesTest"
 ```
 
 **Swift:**
 ```bash
-swift test --filter GoldenFileTests
+cd native/swift && swift test --filter GoldenFileTests
 ```
 
 **Dart:**
@@ -45,7 +45,7 @@ cd native/kotlin && ./gradlew :codegen:regenerateFixtures
 
 **Swift only:**
 ```bash
-REGENERATE_FIXTURES=1 swift test --filter GoldenFileTests
+cd native/swift && REGENERATE_FIXTURES=1 swift test --filter GoldenFileTests
 ```
 
 **Dart only:**
