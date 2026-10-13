@@ -93,7 +93,7 @@ At its first deploy, a block is bound to its cluster by id and type. The CDK lay
 
 ### 6.2 Deploy-time verification
 
-Before `cdk deploy` in the production stage, `bb-database predeploy` synthesizes the application and applies two checks to each stack (R4). Core's deploy script invokes this command when the package is installed.
+Before `cdk deploy` in the production stage, the block's pre-deploy hook (`src/predeploy.ts`) applies two checks to each synthesized stack (R4). The package declares the hook in `package.json` under `aws-blocks.predeploy` with `stages: ['production']`; core's deploy script discovers hooks from the app's installed `@aws-blocks/*` packages, synthesizes once, and runs them. Core therefore carries no code that names this block. `npx bb-database predeploy` runs the same function by hand.
 
 1. The new binding record is compared with the deployed template. This detects a block moving between two clusters that both retain other blocks, a change CloudFormation does not consider destructive.
 2. A change set is created, inspected and deleted. Any `Replace` of an Aurora or DSQL cluster stops the deploy. A `Remove` stops it unless the resource belongs to a block or `DatabaseCluster` that is absent from the new record and the deployed resource's `DeletionPolicy` is `Retain`: that is deleting a block, which keeps its data. A `Remove` of a cluster whose owner is still in the record is a renamed construct, and stops.

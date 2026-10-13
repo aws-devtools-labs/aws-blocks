@@ -44,6 +44,14 @@
       "default": "./dist/index.mock.js"
     }
   },
+  "aws-blocks": {
+    "predeploy": {
+      "module": "./dist/predeploy.js",
+      "stages": [
+        "production"
+      ]
+    }
+  },
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs Database",
     "build": "tsc --build",

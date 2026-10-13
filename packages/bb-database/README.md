@@ -239,7 +239,7 @@ Data on the default cluster is retained (removal policy: retain).
 
 Production has no override. Sandbox deploys skip the check, since a sandbox stack is destroyed anyway. The dev server keeps it with a marker file at `.bb-data/{fullId}/binding.json`; delete `.bb-data` to reset it.
 
-The guard runs before `cdk deploy` in production. It compares the bindings recorded in the stack's metadata with the deployed template. It also builds a change set and stops if the deploy would remove or replace a DSQL or Aurora cluster, which catches a renamed `Database` or `DatabaseCluster` id. Deleting a `Database` block is allowed: its cluster, or its schema on a shared cluster, stays under the removal policy. Deleting a block whose cluster has `removalPolicy: 'destroy'` in production is a stop, because that deploy would delete the data; deploy once with `retain` first.
+The guard runs before `cdk deploy` in production, as a pre-deploy hook that `npm run deploy` discovers from this package. It compares the bindings recorded in the stack's metadata with the deployed template. It also builds a change set and stops if the deploy would remove or replace a DSQL or Aurora cluster, which catches a renamed `Database` or `DatabaseCluster` id. Deleting a `Database` block is allowed: its cluster, or its schema on a shared cluster, stays under the removal policy. Deleting a block whose cluster has `removalPolicy: 'destroy'` in production is a stop, because that deploy would delete the data; deploy once with `retain` first.
 
 **To move a block's data:**
 
@@ -268,7 +268,7 @@ The adapter connects on its first query, so creating it at module scope is safe 
 | Command | What it does |
 |---|---|
 | `npx bb-database migrate --explain [dir]` | Prints the migration steps and the foreign keys they define |
-| `npx bb-database predeploy --stage production --project-root .` | Runs the guard; `npm run deploy` calls it. The sandbox stage returns at once |
+| `npx bb-database predeploy --stage production --project-root .` | Runs the guard by hand. `npm run deploy` runs the same hook itself, declared in this package's `aws-blocks.predeploy` manifest field. The sandbox stage returns at once |
 | `npx bb-database guard --stack <name> --template <cdk.out/…template.json>` | Runs the guard against one synthesized template |
 
 ## What it provisions (AWS)

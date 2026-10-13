@@ -10,20 +10,20 @@
  *       every foreign key whose referential action the migration defines.
  *
  *   predeploy --stage sandbox|production --project-root <dir> [--app <cdk app>]
- *       The pre-`cdk deploy` step the AWS Blocks deploy script invokes:
- *       synthesizes the app and runs the deploy guard. The sandbox stage
- *       returns at once: a sandbox stack and its clusters are destroyed anyway.
+ *       Run the block's pre-deploy hook by hand: synthesize the app and run the
+ *       deploy guard. `npm run deploy` runs the same hook itself, discovered
+ *       from this package's `aws-blocks.predeploy` manifest field.
  *
  *   guard --stack <name> --template <path>
  *       Run the deploy guard against one synthesized template.
  */
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { type DeployStage, synthesizeApp } from '@aws-blocks/core/scripts';
 import { guardDeploy } from './deploy-guard.js';
 import { buildMigrationPlan, formatMigrationPlan } from './migrations/plan.js';
 import { loadMigrationFiles } from './migrations/runner.js';
+import { predeploy as runPredeploy } from './predeploy.js';
 
 const rawArgs = process.argv.slice(2);
 const command = rawArgs[0];
@@ -69,61 +69,26 @@ async function migrate(args: string[]): Promise<void> {
 		console.log(`\nForeign keys whose referential action these migrations define:\n  ${fks.join('\n  ')}`);
 }
 
-interface SynthesizedStack {
-	stackName: string;
-	template: Record<string, unknown>;
-}
-
-/** Synthesize the app into a temp directory and return every stack's template. */
-function synthesize(
-	projectRoot: string,
-	stage: string,
-	app: string | undefined,
-): { stacks: SynthesizedStack[]; cleanup: () => void } {
-	const out = mkdtempSync(join(tmpdir(), 'bb-database-synth-'));
-	const args = ['cdk', 'synth', '--quiet', '--output', out, '--context', `projectRoot=${projectRoot}`];
-	if (stage === 'sandbox') args.push('--context', 'sandboxMode=true');
-	if (app) args.push('--app', app);
-	const result = spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', args, {
-		cwd: projectRoot,
-		stdio: ['ignore', 'ignore', 'inherit'],
-		env: { ...process.env, NODE_OPTIONS: '--conditions=cdk' },
-	});
-	if (result.status !== 0) {
-		rmSync(out, { recursive: true, force: true });
-		fail(`cdk synth failed (exit ${result.status}); the deploy guard could not run.`);
-	}
-	const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf-8')) as {
-		artifacts?: Record<string, { type: string; properties?: { templateFile?: string; stackName?: string } }>;
-	};
-	const stacks: SynthesizedStack[] = [];
-	for (const [id, artifact] of Object.entries(manifest.artifacts ?? {})) {
-		if (artifact.type !== 'aws:cloudformation:stack' || !artifact.properties?.templateFile) continue;
-		stacks.push({
-			stackName: artifact.properties.stackName ?? id,
-			template: JSON.parse(readFileSync(join(out, artifact.properties.templateFile), 'utf-8')),
-		});
-	}
-	return { stacks, cleanup: () => rmSync(out, { recursive: true, force: true }) };
-}
-
 async function predeploy(args: string[]): Promise<void> {
-	const stage = takeFlag(args, '--stage') ?? 'production';
+	const stage = (takeFlag(args, '--stage') ?? 'production') as DeployStage;
 	const projectRoot = resolve(takeFlag(args, '--project-root') ?? process.cwd());
 	const app = takeFlag(args, '--app');
+	if (stage !== 'sandbox' && stage !== 'production') fail(`--stage must be sandbox or production (got '${stage}').`);
 
-	// The sandbox stage skips the guard: a sandbox stack and its clusters are destroyed anyway.
-	if (stage !== 'production') return;
-
-	const { stacks, cleanup } = synthesize(projectRoot, stage, app);
+	let synthesized: ReturnType<typeof synthesizeApp> | undefined;
 	try {
-		for (const stack of stacks) {
-			const result = await guardDeploy({ stackName: stack.stackName, template: stack.template });
-			for (const note of result.notes) console.log(`[bb-database] ${note}`);
-			if (result.stops.length > 0) fail(result.stops.join('\n\n'));
-		}
+		const result = await runPredeploy({
+			stage,
+			projectRoot,
+			async synth() {
+				synthesized ??= synthesizeApp({ stage, projectRoot, app });
+				return synthesized.stacks;
+			},
+		});
+		for (const note of result.notes ?? []) console.log(`[bb-database] ${note}`);
+		if (result.stops?.length) fail(result.stops.join('\n\n'));
 	} finally {
-		cleanup();
+		synthesized?.cleanup();
 	}
 }
 
