@@ -12,6 +12,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = new cdk.App();
 
 const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
+
+// Bridge the deploy mode to the backend module (aws-blocks/index.ts), which
+// `BlocksStack.create` imports below. That module gates its stub OIDC providers
+// on this flag: bb-auth-oidc's synth guard rejects a stub IdP (`kind: 'stub'`)
+// outside sandbox mode, so the comprehensive backend must only instantiate stub
+// IdPs in sandbox deploys. `sandboxMode` is CDK context and is not in scope in
+// the backend module, so it is forwarded here. The dev server imports index.ts
+// directly (this file never runs in `npm run dev`), so an unset flag there is
+// treated as sandbox and the local stub sign-in flow keeps working.
+process.env.BLOCKS_TESTAPP_SANDBOX = String(sandboxMode);
+
 const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 
 const suffix = process.env.BLOCKS_STACK_SUFFIX;

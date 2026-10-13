@@ -4,7 +4,7 @@
 // Comprehensive test backend covering all Building Blocks
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
-import { ApiNamespace, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, customOidc, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
@@ -211,10 +211,27 @@ async function readSignIn(instance: string, userId: string): Promise<SignInRecor
   return parseStoredRecord<SignInRecord>(key, await oidcProfiles.get(key));
 }
 
-const oidcProviders = [
-  stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
-  stubIdp({ name: 'corporate', onAuthorize: (req) => req.users[0] }),
-] as const;
+// The stub IdP mints forgeable, unauthenticated identities, so bb-auth-oidc's
+// synth guard rejects it (`kind: 'stub'`) outside sandbox mode. Gate the stub
+// providers on the deploy mode: sandbox and local dev keep the stub sign-in flow,
+// while a non-sandbox deploy (e.g. the required e2e-production stack, synthesized
+// with no sandboxMode context) falls back to non-stub placeholder providers.
+// AuthOIDC requires at least one provider, so we cannot simply drop them — the
+// placeholders keep the routes/API surface mounted and let synth pass the guard.
+// `BLOCKS_TESTAPP_SANDBOX` is forwarded by aws-blocks/index.cdk.ts for CDK
+// deploys and is unset when the dev server imports this module directly
+// (`npm run dev`), which is local dev and treated as sandbox.
+const sandboxMode = process.env.BLOCKS_TESTAPP_SANDBOX !== 'false';
+
+const oidcProviders = sandboxMode
+  ? [
+      stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
+      stubIdp({ name: 'corporate', onAuthorize: (req) => req.users[0] }),
+    ]
+  : [
+      google({ clientId: 'placeholder-client-id', clientSecret: 'placeholder-client-secret' }),
+      customOidc({ name: 'corporate', issuerUrl: 'https://oidc.placeholder.invalid', clientId: 'placeholder-client-id', clientSecret: 'placeholder-client-secret' }),
+    ];
 
 const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
   providers: oidcProviders,
@@ -227,9 +244,10 @@ const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
 // upsert pattern and bearer-token auth for native clients. Uses custom paths
 // to avoid colliding with the first instance.
 const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
-  providers: [
-    stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] }),
-  ],
+  // Stub-gated like `oidc-auth` above; non-sandbox deploys use a placeholder.
+  providers: sandboxMode
+    ? [stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] })]
+    : [customOidc({ name: 'google-extras', issuerUrl: 'https://oidc.placeholder.invalid', clientId: 'placeholder-client-id', clientSecret: 'placeholder-client-secret' })],
   callbackPath: '/aws-blocks/auth/extras/callback',
   signOutPath: '/aws-blocks/auth/extras/signout',
   // Bearer-token auth is enabled on this instance so e2e tests can exercise
@@ -253,9 +271,10 @@ const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
 // Uses custom paths to avoid colliding with the other instances.
 // allowedRelayOrigins declares which custom-scheme URIs the relay may redirect to.
 const oidcAuthRelay = new AuthOIDC(scope, 'oidc-auth-relay', {
-  providers: [
-    stubIdp({ name: 'google-relay', onAuthorize: (req) => req.users[0] }),
-  ],
+  // Stub-gated like `oidc-auth` above; non-sandbox deploys use a placeholder.
+  providers: sandboxMode
+    ? [stubIdp({ name: 'google-relay', onAuthorize: (req) => req.users[0] })]
+    : [customOidc({ name: 'google-relay', issuerUrl: 'https://oidc.placeholder.invalid', clientId: 'placeholder-client-id', clientSecret: 'placeholder-client-secret' })],
   callbackPath: '/aws-blocks/auth/relay/callback',
   signOutPath: '/aws-blocks/auth/relay/signout',
   allowBearerAuth: true,

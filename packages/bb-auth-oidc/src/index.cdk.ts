@@ -51,7 +51,7 @@ import {
 	DEFAULT_CALLBACK_PATH,
 	DEFAULT_SIGNOUT_PATH,
 } from './auth-oidc.js';
-import { cookieSecretEnvVar } from './utils.js';
+import { cookieSecretEnvVar, sandboxFlagEnvVar } from './utils.js';
 
 export { AuthOIDCErrors, type AuthOIDCErrorName } from './errors.js';
 export {
@@ -110,10 +110,42 @@ export class AuthOIDC<
 		// Gateway with a single CloudFront behavior. The Lambda's RawRoute
 		// registry (wired by the AWS runtime entry) does the actual dispatch.
 
+		// Sandbox detection. Mirrors the `sandboxMode` CDK-context check in
+		// `@aws-blocks/core`'s `addBlocksStackMetadata` (see
+		// packages/core/src/cdk/stack-metadata.ts): `npm run sandbox` sets this
+		// context key. It's a synth-time-only signal — the deployed Lambda has no
+		// CDK context — so we also stamp it into runtime config below for the
+		// matching guard in the AWS runtime entry (`index.aws.ts`).
+		const sandboxCtx = cdk.Stack.of(this).node.tryGetContext('sandboxMode');
+		const isSandbox = sandboxCtx === 'true' || sandboxCtx === true;
+
+		// Security guard (CWE-798 / CWE-489 / CWE-290): the stub IdP mints
+		// identities with no real credential check and is trivially forgeable, so
+		// it is strictly a local-development tool and must never reach a deployed,
+		// internet-facing app. Fail the synth loudly when a stub provider is
+		// configured outside sandbox mode. This is the primary defense; the AWS
+		// runtime entry carries a matching guard as defense-in-depth.
+		const stubProvider = options.providers.find((p) => p.kind === 'stub');
+		if (stubProvider && !isSandbox) {
+			throw new Error(
+				`AuthOIDC: stub IdP provider '${stubProvider.name}' cannot be deployed outside sandbox mode. ` +
+					'The stub IdP issues identities with no real authentication and is trivially forgeable, so it is ' +
+					'a local-development tool only. Remove the stubIdp() provider before deploying, or deploy in ' +
+					'sandbox mode (`npm run sandbox`) if this is an intentional throwaway environment.',
+			);
+		}
+
 		// Cookie-signing secret. The env var value must match AppSetting's
 		// default parameter name: `/${appSetting.fullId}`.
 		new AppSetting(this, `cookie-secret-${id}`, { secret: true });
 		registerConfig(this, cookieSecretEnvVar(this.fullId), `/${this.fullId}-cookie-secret-${id}`);
+
+		// Propagate the sandbox bit to the runtime. CDK context does not exist in
+		// the deployed Lambda, so stamp it into the S3-backed runtime config via
+		// the same `registerConfig` path the cookie-secret env var uses; the AWS
+		// runtime entry reads it (`process.env`) to enforce the stub-IdP guard as
+		// defense-in-depth against a stale or hand-rolled artifact.
+		registerConfig(this, sandboxFlagEnvVar(this.fullId), String(isSandbox));
 
 		// Session store — always provisioned.
 		new KVStore(this, 'sessions');

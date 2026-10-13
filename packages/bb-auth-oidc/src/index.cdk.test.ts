@@ -24,7 +24,7 @@ import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
-import { AuthOIDC, cognitoFederated, google } from './index.cdk.js';
+import { AuthOIDC, cognitoFederated, google, stubIdp } from './index.cdk.js';
 import type { AppSettingLike } from './providers.js';
 
 class StubBlocksStack extends cdk.Stack {
@@ -48,6 +48,18 @@ afterEach(() => {
 
 function setup(): { stack: StubBlocksStack; parent: Scope } {
 	const app = new cdk.App();
+	const stack = new StubBlocksStack(app, 'TestStack');
+	const parent = new Scope('app');
+	return { stack, parent };
+}
+
+/**
+ * Like {@link setup}, but seeds CDK app context (e.g. `{ sandboxMode: 'true' }`)
+ * so tests can exercise the sandbox-vs-production synth guard. `sandboxMode`
+ * resolves up the construct tree from the AuthOIDC construct to the app.
+ */
+function setupWithContext(context?: Record<string, unknown>): { stack: StubBlocksStack; parent: Scope } {
+	const app = new cdk.App(context ? { context } : undefined);
 	const stack = new StubBlocksStack(app, 'TestStack');
 	const parent = new Scope('app');
 	return { stack, parent };
@@ -219,4 +231,42 @@ test('CDK: two providers with the same identityProvider fail fast at synth', () 
 		}),
 		/duplicate cognitoFederated identityProvider 'Google'/,
 	);
+});
+
+
+// Security guard (CWE-798/489/290): the stub IdP is a forgeable, dev-only
+// identity source, so `cdk synth` must fail fast if one is configured for a
+// non-sandbox deploy. The AWS runtime entry carries a matching guard (see
+// index.aws.test.ts).
+describe('CDK: stub IdP deploy guard', () => {
+	test('throws when a stub provider is configured outside sandbox mode', () => {
+		const { parent } = setupWithContext();
+		assert.throws(
+			() => new AuthOIDC(parent, 'auth', { providers: [stubIdp({ name: 'dev' })] }),
+			/stub IdP provider 'dev' cannot be deployed outside sandbox mode/,
+		);
+	});
+
+	test('does NOT throw when sandboxMode context is the string "true"', () => {
+		const { parent } = setupWithContext({ sandboxMode: 'true' });
+		assert.doesNotThrow(
+			() => new AuthOIDC(parent, 'auth', { providers: [stubIdp({ name: 'dev' })] }),
+		);
+	});
+
+	test('does NOT throw when sandboxMode context is boolean true', () => {
+		const { parent } = setupWithContext({ sandboxMode: true });
+		assert.doesNotThrow(
+			() => new AuthOIDC(parent, 'auth', { providers: [stubIdp({ name: 'dev' })] }),
+		);
+	});
+
+	test('a non-stub provider (google) synths fine outside sandbox mode', () => {
+		const { parent } = setupWithContext();
+		assert.doesNotThrow(
+			() => new AuthOIDC(parent, 'auth', {
+				providers: [google({ clientId: async () => 'id', clientSecret: async () => 'secret' })],
+			}),
+		);
+	});
 });
