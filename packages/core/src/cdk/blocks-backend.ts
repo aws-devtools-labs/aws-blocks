@@ -255,7 +255,7 @@ export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksSta
  *   backendHandlerPath: join(__dirname, 'handler.ts'),
  *   backendCDKPath: join(__dirname, 'infra.ts'),
  * });
- * // blocks.apiUrl, blocks.handler, blocks.gateway available
+ * // blocks.apiUrl, blocks.gateway, blocks.executionRole available
  * ```
  */
 export class BlocksBackend extends Construct {
@@ -275,10 +275,6 @@ export class BlocksBackend extends Construct {
 	/** The single shared REST API gateway fronting the default compute; built in `create()`. @internal */
 	_sharedGateway?: SharedGateway;
 
-	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
-	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
-		return this.requireDefaultCompute().fn;
-	}
 	/** The backend's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
 	get gateway(): apigateway.RestApi {
 		return this.requireSharedGateway().restApi;
@@ -297,7 +293,7 @@ export class BlocksBackend extends Construct {
 	private requireDefaultCompute(): LambdaShapedCompute {
 		if (!this._defaultCompute) {
 			throw new Error(
-				'Blocks backend not fully initialized — access .handler/.gateway/.apiUrl after BlocksBackend.create() resolves.',
+				'Blocks backend not fully initialized — access .gateway/.apiUrl after BlocksBackend.create() resolves.',
 			);
 		}
 		return this._defaultCompute as LambdaShapedCompute;
@@ -378,9 +374,9 @@ export class BlocksBackend extends Construct {
 		assertCdkConditionActive();
 		const backend = new BlocksBackend(scope, id, props);
 		// Create the default compute before importing the backend: it owns the
-		// Lambda function (which backs .handler and is the shared gateway's
-		// target), and a block reading `this.compute` in its constructor (during
-		// that import) must resolve to it. The factory is supplied by the umbrella
+		// Lambda function (the shared gateway's target), and a block reading
+		// `this.compute` in its constructor (during that import) must resolve to
+		// it. The factory is supplied by the umbrella
 		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
 		// imports the concrete compute class.
 		backend._defaultCompute = props.defaultComputeFactory(backend);

@@ -66,8 +66,6 @@ describe('Scope.compute resolution', () => {
 		const compute = block.compute;
 
 		assert.ok(compute instanceof LambdaCompute, 'default resolves to a LambdaCompute');
-		// The stack's handler delegates to the default compute's function.
-		assert.strictEqual(stack.handler, (compute as LambdaCompute).fn, 'stack.handler is the compute function');
 		// The gateway is the stack-level shared REST API. It is built in the default
 		// compute's scope under the id the compute used when it owned the gateway, so
 		// its logical IDs (and a deployed app's API + URL) are unchanged on upgrade.
