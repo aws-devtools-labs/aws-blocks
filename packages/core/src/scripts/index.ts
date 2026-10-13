@@ -14,6 +14,7 @@ export { type ConsoleOptions, openConsole } from './console.js';
 export { type DeployOptions, deploy } from './deploy.js';
 export { type DestroyOptions, destroy } from './destroy.js';
 export { type DevServerOptions, startDevServer } from './dev-server.js';
+export { hasDatabasePackage, runDatabasePredeploy } from './database-predeploy-step.js';
 export { ensureSecrets, loadEnvFile, loadProductionEnv } from './ensure-secrets.js';
 export { generateClientCode, writeClientCode } from './generate-client.js';
 export { generateSpec, type SpecGenerationOptions, writeSpec } from './generate-spec.js';

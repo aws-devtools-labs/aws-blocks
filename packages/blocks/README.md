@@ -167,6 +167,7 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | bb-cron-job | Scheduled task execution backed by EventBridge Scheduler and Lambda. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
 | bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
 | bb-data | Full PostgreSQL database — provisions Aurora Serverless v2 by default, or connects to an existing PostgreSQL database (Supabase, Neon, etc.) via `fromExisting()`. | — |
+| bb-database | One `Database` block for every PostgreSQL cluster kind. | — |
 | bb-distributed-data | Serverless SQL database backed by Amazon Aurora DSQL. | — |
 | bb-distributed-table | Structured data storage backed by DynamoDB with secondary indexes and rich query capabilities. | — |
 | bb-email-client | Transactional email sending via Amazon SES. | — |
