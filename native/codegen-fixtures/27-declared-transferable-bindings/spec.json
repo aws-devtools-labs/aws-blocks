@@ -1,0 +1,200 @@
+{
+  "openrpc": "1.3.2",
+  "info": { "title": "test", "version": "1.0.0" },
+  "methods": [
+    {
+      "name": "api.getDeviceHandle",
+      "params": [
+        { "name": "deviceId", "required": true, "schema": { "type": "string" } }
+      ],
+      "result": {
+        "name": "GetDeviceHandleResult",
+        "schema": { "x-blocks-transferable": "example-iot/device-handle" }
+      }
+    },
+    {
+      "name": "api.connectDevice",
+      "params": [
+        { "name": "deviceId", "required": true, "schema": { "type": "string" } }
+      ],
+      "result": {
+        "name": "ConnectDeviceResult",
+        "schema": {
+          "x-blocks-transferable": "example-iot/device-link",
+          "x-blocks-type-args": [
+            {
+              "type": "object",
+              "properties": {
+                "temperature": { "type": "number" },
+                "humidity": { "type": "number" }
+              },
+              "required": ["temperature", "humidity"]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "api.findDeviceHandle",
+      "params": [
+        { "name": "serialNumber", "required": true, "schema": { "type": "string" } }
+      ],
+      "result": {
+        "name": "FindDeviceHandleResult",
+        "schema": { "x-blocks-transferable": "example-iot/device-handle" }
+      }
+    },
+    {
+      "name": "api.openSensorStream",
+      "params": [
+        { "name": "sensorId", "required": true, "schema": { "type": "string" } }
+      ],
+      "result": {
+        "name": "OpenSensorStreamResult",
+        "schema": { "x-blocks-transferable": "example-sensor/stream" }
+      }
+    },
+    {
+      "name": "api.openGatewayLink",
+      "params": [
+        { "name": "gatewayId", "required": true, "schema": { "type": "string" } }
+      ],
+      "result": {
+        "name": "OpenGatewayLinkResult",
+        "schema": { "x-blocks-transferable": "example-gateway/link" }
+      }
+    },
+    {
+      "name": "api.getFirmwareSession",
+      "params": [
+        { "name": "deviceId", "required": true, "schema": { "type": "string" } }
+      ],
+      "result": {
+        "name": "GetFirmwareSessionResult",
+        "schema": { "x-blocks-transferable": "example-iot/firmware-session" }
+      }
+    }
+  ],
+  "x-blocks-native-packages": {
+    "schemaVersion": 1,
+    "packages": {
+      "example-gateway-native": {
+        "platforms": {
+          "android": {
+            "package": {
+              "group": "com.example.blocks",
+              "artifact": "gateway-native",
+              "kotlinPackage": "com.example.blocks.gateway"
+            }
+          }
+        }
+      },
+      "example-iot-native": {
+        "platforms": {
+          "dart": {
+            "package": {
+              "name": "example_iot_native",
+              "library": "example_iot_native.dart"
+            }
+          },
+          "swift": {
+            "package": {
+              "identity": "example-iot-native",
+              "product": "ExampleIotNative",
+              "module": "ExampleIotNative"
+            }
+          },
+          "android": {
+            "package": {
+              "group": "com.example.blocks",
+              "artifact": "iot-native",
+              "kotlinPackage": "com.example.blocks.iot"
+            }
+          }
+        }
+      },
+      "example-sensor-native": {
+        "platforms": {
+          "dart": {
+            "package": {
+              "name": "example_sensor_native",
+              "library": "example_sensor_native.dart"
+            }
+          },
+          "swift": {
+            "package": {
+              "identity": "example-sensor-native",
+              "product": "ExampleSensorNative",
+              "module": "ExampleSensorNative"
+            }
+          }
+        }
+      },
+      "example-unused-native": {
+        "platforms": {
+          "dart": {
+            "package": {
+              "name": "example_unused_native",
+              "library": "example_unused_native.dart"
+            }
+          },
+          "swift": {
+            "package": {
+              "identity": "example-unused-native",
+              "product": "ExampleUnusedNative",
+              "module": "ExampleUnusedNative"
+            }
+          },
+          "android": {
+            "package": {
+              "group": "com.example.blocks",
+              "artifact": "unused-native",
+              "kotlinPackage": "com.example.blocks.unused"
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-blocks-native-bindings": {
+    "schemaVersion": 1,
+    "bindings": [
+      {
+        "id": "example-device-handle",
+        "kind": "transferable",
+        "tag": "example-iot/device-handle",
+        "package": "example-iot-native",
+        "export": "deviceHandle",
+        "abi": "blocks-transferable-v1",
+        "genericArity": 0
+      },
+      {
+        "id": "example-device-link",
+        "kind": "transferable",
+        "tag": "example-iot/device-link",
+        "package": "example-iot-native",
+        "export": "deviceLink",
+        "abi": "blocks-transferable-v1",
+        "genericArity": 1
+      },
+      {
+        "id": "example-gateway-link",
+        "kind": "transferable",
+        "tag": "example-gateway/link",
+        "package": "example-gateway-native",
+        "export": "gatewayLink",
+        "abi": "blocks-transferable-v1",
+        "genericArity": 0
+      },
+      {
+        "id": "example-sensor-stream",
+        "kind": "transferable",
+        "tag": "example-sensor/stream",
+        "package": "example-sensor-native",
+        "export": "sensorStream",
+        "abi": "blocks-transferable-v1",
+        "genericArity": 0
+      }
+    ]
+  }
+}

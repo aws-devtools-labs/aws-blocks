@@ -66,9 +66,9 @@ const res = await api.ping('world');   // { message: 'hi world' }
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
 2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
 3. For faster iteration, keep one dev server running and rerun tests against it:
-   - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev &`, and record its handle/PID.
+   - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev &`.
    - Run `npm run test:e2e` as often as needed; it reuses the running server.
-   - When finished, stop only the server you started, using that recorded handle (your harness's process tool, or the whole process tree you launched). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
+   - When finished, stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
 4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
 
 ### Calling the API directly (troubleshooting only)

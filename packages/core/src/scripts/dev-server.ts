@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { pathToFileURL, URL } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
 import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createConnection, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
@@ -640,8 +640,8 @@ export async function startDevServer(options: DevServerOptions) {
     if (decision.action === 'exit') {
       console.error(
         `\n⚠️  ${decision.reason}.\n` +
-        `   Not starting a second dev server. Stop the other process (or run the ` +
-        `cleanup script) and retry \`npm run dev\`.\n`,
+        `   Not starting a second dev server. Stop the running one with ` +
+        `\`npm run dev:stop\` and retry \`npm run dev\`.\n`,
       );
       process.exit(0);
     }
@@ -1145,6 +1145,254 @@ export async function startDevServer(options: DevServerOptions) {
     if (!child) return;
     killFrontendTree(child, 'SIGKILL');
   });
+}
+
+// ── Stop / status (`npm run dev:stop`) ──────────────────────────────────────
+// A sanctioned way to stop a dev server started with `npm run dev` — so an
+// operator (or an agent) never reaches for `pkill -f tsx`/`killall node`, which
+// matches by process NAME and also kills the caller's own shell/agent process.
+//
+// Ownership is proven, never guessed. We act ONLY on the supervisor identity the
+// dev server itself recorded in its per-port pidfile ({pid, ppid, port}) — we
+// never scan a port and signal whatever happens to be listening, so a stale
+// pidfile or a same-port process from an unrelated project is never touched. The
+// `ppid` is the stable `tsx watch` watcher; SIGTERM-ing it is what actually stops
+// `npm run dev` (tsx relays the signal to its child, whose own `cleanup()` drains
+// the frontend and removes the pidfile). Killing only the listener child would
+// leave the watcher alive to relaunch on the next file edit — so the watcher is
+// the primary target, and the recorded child's listener tree is only a fallback
+// when the watcher is already gone.
+
+/** The per-port pidfile path a dev server records its supervisor identity in. */
+export function devPidfilePath(port: number): string {
+  return join(BLOCKS_SANDBOX_DIR, `dev-server.${port}.pid`);
+}
+
+/** Outcome of {@link stopDevServer}. */
+export interface StopResult {
+  /** The front-door port acted on. */
+  port: number;
+  /** True when a recorded supervisor was found and signalled. */
+  stopped: boolean;
+  /** True when no pidfile / no live recorded supervisor was found (idempotent no-op). */
+  alreadyStopped: boolean;
+  /** Supervisor identity read from the pidfile, when one was present. */
+  record: DevServerPidRecord | null;
+  /**
+   * How the server was stopped:
+   *  - `watcher`  — SIGTERM to the recorded `tsx watch` ppid (the clean path).
+   *  - `listener` — fallback: killed the recorded child pid's listener tree
+   *                 (watcher was already gone / not a tsx watcher).
+   *  - `none`     — nothing live was recorded.
+   */
+  via: 'watcher' | 'listener' | 'none';
+  /** PIDs signalled. */
+  pids: number[];
+  /** True when, after signalling, the front-door port is confirmed free. */
+  portFree: boolean;
+}
+
+/** Injectable seams for {@link stopDevServer} (real implementations by default). */
+export interface StopDevServerDeps {
+  /** Read a pidfile body, or null when absent/unreadable. */
+  readPidfile: (path: string) => string | null;
+  /** Delete the pidfile. */
+  removePidfile: (path: string) => void;
+  /** True iff a signal can be delivered to `pid` (it exists). */
+  isAlive: (pid: number) => boolean;
+  /** The command line of `pid`, for confirming a ppid is really a `tsx` watcher. */
+  commandOf: (pid: number) => string;
+  /** Send a signal to a single pid (the watcher path). */
+  signal: (pid: number, sig: NodeJS.Signals) => void;
+  /** True iff the front-door port is currently bound. */
+  probe: (port: number) => Promise<boolean>;
+  /** PIDs of the listener(s) holding a port (fallback path only). */
+  listPids: (port: number) => number[];
+  /** Terminate a listener PID's tree (fallback path only). */
+  killTree: (pid: number, sig: NodeJS.Signals) => void;
+  /** Wait (bounded) for a port to be released. */
+  waitFree: (port: number, timeoutMs?: number) => Promise<void>;
+}
+
+/** Read `pid`'s command line (`ps -o command=`), '' on any failure or Windows. */
+function pidCommand(pid: number): string {
+  if (process.platform === 'win32') return '';
+  try {
+    const { stdout } = spawnSync('ps', ['-o', 'command=', '-p', String(pid)], {
+      encoding: 'utf-8',
+      windowsHide: true,
+      timeout: 3000,
+    });
+    return (stdout ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function defaultStopDeps(): StopDevServerDeps {
+  return {
+    readPidfile: (p) => {
+      try {
+        return readFileSync(p, 'utf-8');
+      } catch {
+        return null;
+      }
+    },
+    removePidfile: (p) => {
+      try {
+        unlinkSync(p);
+      } catch {
+        /* already gone */
+      }
+    },
+    isAlive: (pid) => isPidAlive(pid),
+    commandOf: (pid) => pidCommand(pid),
+    signal: (pid, sig) => process.kill(pid, sig),
+    probe: (p) => isPortOpen(p),
+    listPids: (p) => findListenerPids(p),
+    killTree: (pid, sig) => killListenerTree(pid, sig),
+    waitFree: (p, t) => waitForPortFree(p, t),
+  };
+}
+
+/** True iff `command` looks like a `tsx watch` supervisor (not a bare shell). */
+function isTsxWatcher(command: string): boolean {
+  return /\btsx\b/.test(command) && /\bwatch\b/.test(command);
+}
+
+/**
+ * Stop the dev server recorded for `port` by SIGTERM-ing its `tsx watch`
+ * supervisor — the only thing that actually ends `npm run dev` (killing just the
+ * listener child leaves the watcher to relaunch on the next edit).
+ *
+ * Ownership is PROVEN, not guessed: this acts only on the pids the dev server
+ * wrote to its own pidfile ({pid, ppid, port}). It never scans the port and
+ * signals an arbitrary listener, so a stale pidfile or an unrelated same-port
+ * process is never killed — the exact failure a `pkill -f`/port-scan stop has.
+ *
+ *  1. No pidfile, or neither recorded pid alive → nothing of ours is running
+ *     (`alreadyStopped`, idempotent).
+ *  2. Recorded `ppid` is alive AND its command is a `tsx watch` → SIGTERM it.
+ *     tsx relays the signal to its child, whose own `cleanup()` drains the
+ *     frontend and removes the pidfile. (A bare `node server.ts` start has the
+ *     caller's SHELL as ppid, which is NOT a tsx watcher, so we never signal it —
+ *     that would be the self-kill this command exists to prevent.)
+ *  3. Watcher gone / not a tsx watcher but the recorded child `pid` still holds
+ *     the port → fall back to SIGTERM→SIGKILL of that child's listener tree.
+ *
+ * The pidfile is removed only once the port is confirmed free (or no owner is
+ * left alive), so a server that survived the signal keeps its singleton guard.
+ * Dependencies are injected for tests; defaults wire the real seams. Never throws.
+ */
+export async function stopDevServer(
+  port = 3000,
+  deps: Partial<StopDevServerDeps> = {},
+): Promise<StopResult> {
+  const d = { ...defaultStopDeps(), ...deps };
+  const pidfilePath = devPidfilePath(port);
+
+  const body = d.readPidfile(pidfilePath);
+  const record = body != null ? parsePidRecord(body) : null;
+
+  const result = (via: StopResult['via'], pids: number[], portFree: boolean): StopResult => ({
+    port,
+    stopped: via !== 'none',
+    alreadyStopped: via === 'none',
+    record,
+    via,
+    pids,
+    portFree,
+  });
+
+  if (!record) return result('none', [], !(await d.probe(port)));
+
+  const watcherAlive = record.ppid > 1 && d.isAlive(record.ppid);
+  const childAlive = d.isAlive(record.pid);
+
+  // Nothing we recorded is alive — stale pidfile. Clear it, report no-op.
+  if (!watcherAlive && !childAlive) {
+    d.removePidfile(pidfilePath);
+    return result('none', [], !(await d.probe(port)));
+  }
+
+  // Primary path: SIGTERM the recorded tsx watch supervisor.
+  if (watcherAlive && isTsxWatcher(d.commandOf(record.ppid))) {
+    try {
+      d.signal(record.ppid, 'SIGTERM');
+    } catch {
+      /* raced away */
+    }
+    await d.waitFree(port, 3000);
+    const portFree = !(await d.probe(port));
+    if (portFree) d.removePidfile(pidfilePath);
+    return result('watcher', [record.ppid], portFree);
+  }
+
+  // Fallback: the watcher is gone (or ppid is not a tsx watcher), but the
+  // recorded child still holds the port. Reap exactly that child's listener
+  // tree — still ownership-scoped to the recorded pid, never an arbitrary scan.
+  if (childAlive && (await d.probe(port)) && d.listPids(port).includes(record.pid)) {
+    d.killTree(record.pid, 'SIGTERM');
+    await d.waitFree(port, 2000);
+    if (await d.probe(port)) {
+      d.killTree(record.pid, 'SIGKILL');
+      await d.waitFree(port, 2000);
+    }
+    const portFree = !(await d.probe(port));
+    if (portFree) d.removePidfile(pidfilePath);
+    return result('listener', [record.pid], portFree);
+  }
+
+  // The recorded owner is alive but no longer holds the port (e.g. already
+  // shutting down). Clear the pidfile if the port is free.
+  const portFree = !(await d.probe(port));
+  if (portFree) d.removePidfile(pidfilePath);
+  return result('none', [], portFree);
+}
+
+/** Human-readable one-liner describing a {@link StopResult}, for the CLI. */
+export function stopMessage(result: StopResult): string {
+  if (result.alreadyStopped) {
+    return `No dev server was running on :${result.port} (nothing to stop).`;
+  }
+  const who = result.pids.length ? ` (pid${result.pids.length > 1 ? 's' : ''} ${result.pids.join(', ')})` : '';
+  if (result.portFree) {
+    return `🛑 Stopped the dev server on :${result.port}${who}.`;
+  }
+  return (
+    `⚠️  Signalled the dev server on :${result.port}${who}, but the port is still ` +
+    `bound — it may still be shutting down, or another process now holds it.`
+  );
+}
+
+/**
+ * CLI entry for the `dev:stop` template script. Stops the dev server on the
+ * front-door port (`--port N`, default 3000), prints one {@link stopMessage},
+ * and sets a non-zero exit code when the stop did not free the port (agents read
+ * the exit status, not the emoji). Never throws.
+ */
+export async function runStopCli(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+  const port = parsePortArg(argv) ?? 3000;
+  const r = await stopDevServer(port);
+  console.log(stopMessage(r));
+  if (!r.alreadyStopped && !r.portFree) process.exitCode = 1;
+}
+
+/** Parse `--port <n>` / `--port=<n>` from argv; `null` when absent/invalid. Pure. */
+export function parsePortArg(argv: readonly string[]): number | null {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--port' && i + 1 < argv.length) {
+      const n = Number(argv[i + 1]);
+      return Number.isInteger(n) && n > 0 ? n : null;
+    }
+    const m = /^--port=(\d+)$/.exec(a);
+    if (m) {
+      const n = Number(m[1]);
+      return Number.isInteger(n) && n > 0 ? n : null;
+    }
+  }
+  return null;
 }
 
 // ── Local API handler ────────────────────────────────────────────────────────
