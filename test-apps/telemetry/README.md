@@ -11,8 +11,11 @@ test apps:
   `test-apps/comprehensive`).
 - A suite-level `before()` seeds the pinned installation-id in `$HOME/.blocks/`
   so telemetry state is deterministic without affecting other suites.
-- Each captured event is written to a unique `--telemetry-file` path (the sink
-  creates the file with `O_EXCL`, so paths are never reused).
+- Each captured event is written to a unique `--telemetry-file` path, so no test
+  depends on another's file. The reader takes the first element of the array, so a
+  command emitting more than one event is asserted on its first. Multi-event
+  ordering and length are covered by the unit suites (`packages/core/src/telemetry/
+  telemetry.test.ts`, "keeps every event when one run emits several").
 
 ## Pinned installation ID
 

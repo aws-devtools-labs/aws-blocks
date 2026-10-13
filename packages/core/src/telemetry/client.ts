@@ -47,6 +47,8 @@ export function getTelemetryFilePath(): string | undefined {
   return undefined;
 }
 
+const ownedTelemetryFiles = new Set<string>();
+
 // File sink: writes to --telemetry-file path (user-facing, for debugging/testing)
 function writeToTelemetryFile(event: BlocksTelemetryEvent): void {
   const filePath = getTelemetryFilePath();
@@ -63,9 +65,24 @@ function writeToTelemetryFile(event: BlocksTelemetryEvent): void {
     const content = JSON.stringify([event], null, 2);
     writeSync(fd, content);
     closeSync(fd);
+    ownedTelemetryFiles.add(path.resolve(filePath));
   } catch (err: any) {
-    // EEXIST = file already existed → skip (protects user data)
+    // Appending only to a path this run created leaves a pre-existing file intact.
+    if (err?.code === 'EEXIST' && ownedTelemetryFiles.has(path.resolve(filePath))) {
+      appendToTelemetryFile(filePath, event);
+    }
     // All other errors silently ignored — telemetry must never affect commands
+  }
+}
+
+function appendToTelemetryFile(filePath: string, event: BlocksTelemetryEvent): void {
+  try {
+    const events = JSON.parse(readFileSync(filePath, 'utf-8'));
+    if (!Array.isArray(events)) throw new Error('telemetry file is not a JSON array');
+    events.push(event);
+    writeFileSync(filePath, JSON.stringify(events, null, 2));
+  } catch (err) {
+    debug('failed to append telemetry event: %s', err instanceof Error ? err.message : String(err));
   }
 }
 

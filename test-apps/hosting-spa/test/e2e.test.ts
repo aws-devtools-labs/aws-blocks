@@ -100,6 +100,26 @@ test.describe('Notes Manager — SPA Hosting', () => {
     await expect(page.locator('#notes-empty')).toContainText('No notes yet');
   });
 
+  test('4b. authGetLastCode is keyed per-user', async ({ request }) => {
+    // Pins the contract this fix introduces: the delivered-code read is scoped
+    // to the username, so a code is never returned for a user who never signed
+    // up, and the record returned belongs to the user asked for. Called over
+    // JSON-RPC directly — testUser signed up in the previous serial test.
+    const rpc = async (method: string, args: unknown[]) => {
+      const resp = await request.post(`${hostingUrl}/aws-blocks/api`, {
+        headers: { 'Content-Type': 'application/json' },
+        data: { jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 },
+      });
+      expect(resp.ok()).toBeTruthy();
+      return (await resp.json()).result;
+    };
+
+    expect(await rpc('authGetLastCode', ['never-signed-up@example.com'])).toBeNull();
+
+    const mine = await rpc('authGetLastCode', [testUser]);
+    expect(mine?.username).toBe(testUser);
+  });
+
   test('5. Create first note "Shopping List"', async ({ page }) => {
     await page.goto(hostingUrl);
     await expect(page.locator('#app-status')).toHaveText('Ready');

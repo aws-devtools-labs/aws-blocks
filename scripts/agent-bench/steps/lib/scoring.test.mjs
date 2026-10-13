@@ -22,14 +22,20 @@ import {
 	HARNESS_FAIL_REASONS,
 	hardCapPlan,
 	isCountedFailKlass,
+	isProviderServerFault,
 	isScoredCell,
 	isUngracefulStepTwoDeath,
+	PROVIDER_UNAVAILABLE_REASON,
 	scorePerDollar,
 	testRate,
 	testStats,
 	verdict,
 	verdictOf,
 } from './scoring.mjs';
+// The real producer of the `builder_error` string the carve-out matches. Imported so a drift-guard
+// test can feed describeModelError's ACTUAL output into isProviderServerFault — pinning the format
+// contract between the two sibling .mjs modules (see the "drift guard" test below).
+import { describeModelError } from './bedrock-retry.mjs';
 
 describe('composite(tr, j) == round(60*tr + 4*j*min(1, 4*tr), 1)', () => {
 	it('tr=0 floors the judge term to 0 regardless of judge score', () => {
@@ -282,6 +288,116 @@ describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness
 			['graceful', 'good'],
 			'the ungraceful teardown must be excluded from the scored set',
 		);
+	});
+});
+
+describe('provider-5xx carve-out: a 2-agent failure caused by a Bedrock SERVER fault → harness_error', () => {
+	// The real builder_error string describeModelError produced for the kb-chat-agent cell that
+	// prompted this gate (PR follow-up): Bedrock returned a 503 through the whole invoke-retry window.
+	const BEDROCK_503 =
+		'ModelError: Bedrock is unable to process your request. ← caused by ServiceUnavailableException: ' +
+		'Bedrock is unable to process your request. $fault=server $metadata={httpStatusCode:503,requestId:d72cb143}';
+
+	it('isProviderServerFault matches a 5xx server fault, not a 4xx / throttle / budget error', () => {
+		assert.equal(isProviderServerFault(BEDROCK_503), true);
+		assert.equal(isProviderServerFault('InternalServerException: transient $metadata={httpStatusCode:500}'), true);
+		assert.equal(isProviderServerFault('ModelError $fault=server'), true);
+		// Must NOT fire on the cases that are genuinely the agent's own fault:
+		assert.equal(isProviderServerFault('MaxTokensError: Model reached maximum token limit.'), false);
+		assert.equal(isProviderServerFault('ContextWindowOverflowError: too long'), false);
+		assert.equal(
+			isProviderServerFault('ValidationException: bad request $metadata={httpStatusCode:400}'),
+			false,
+		);
+		assert.equal(
+			isProviderServerFault('ThrottlingException: slow down $metadata={httpStatusCode:429}'),
+			false,
+		);
+		assert.equal(isProviderServerFault(undefined), false);
+		assert.equal(isProviderServerFault(null), false);
+	});
+
+	it('a 2-agent failure with a Bedrock 503 builder_error → harness_error (EXCLUDED), reason provider_unavailable', () => {
+		const cell = {
+			failed_at: AGENT_FAIL_AT,
+			status: 'error',
+			stop_reason: 'error',
+			builder_error: BEDROCK_503,
+			tokens_in: 42_000,
+		};
+		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: PROVIDER_UNAVAILABLE_REASON });
+		assert.equal(isScoredCell(cell), false); // EXCLUDED — the provider was down, not the agent
+		assert.equal(verdictOf(cell), 'harness_error');
+	});
+
+	it('a MaxTokensError budget exhaustion stays agent_fail (INCLUDED) — the agent spent its own budget', () => {
+		// The cognito-profile cell: same failed_at/stop_reason, but the error is the agent's budget, not infra.
+		const cell = {
+			failed_at: AGENT_FAIL_AT,
+			status: 'error',
+			stop_reason: 'error',
+			builder_error: 'MaxTokensError: Model reached maximum token limit. This is an unrecoverable state.',
+			tokens_in: 1_000_000,
+		};
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_FAIL_REASON });
+		assert.equal(isScoredCell(cell), true); // INCLUDED — poor budget management is the agent failing
+	});
+
+	it('a plain invoke-exhausted sentinel with no 5xx builder_error stays agent_fail (no over-broadening)', () => {
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'error', builder_error: 'ModelError: unknown' };
+		assert.equal(classifyCell(cell).klass, 'agent_fail');
+	});
+
+	it('the carve-out is gated to 2-agent — a 5xx builder_error on a non-agent step is NOT reclassified by this gate', () => {
+		// A 5xx-looking string on a build-step failure must not become provider_unavailable: the gate
+		// only inspects builder_error inside the 2-agent branch. (3-build-test isn't a HARNESS_FAIL_REASONS
+		// key and isn't dead_server, so it falls through to 'scored' — the point is it's NOT excluded here.)
+		const cell = { failed_at: '3-build-test', status: 'error', builder_error: '$fault=server httpStatusCode:503' };
+		assert.notEqual(classifyCell(cell).reason, PROVIDER_UNAVAILABLE_REASON);
+		assert.notEqual(classifyCell(cell).klass, 'harness_error');
+	});
+
+	// Drift guard: the carve-out matches a FLATTENED string, but the only thing that produces that
+	// string in production is describeModelError (bedrock-retry.mjs), written onto result.json by
+	// 2-agent-run.ts. BEDROCK_503 above is hand-written to look like that output; if describeModelError's
+	// format ever changes (drops `$fault=` / `httpStatusCode:`), the hand-written literal would keep
+	// passing while the REAL gate silently goes dark. So feed describeModelError's actual output through
+	// the predicate here: a describer format change breaks THIS test instead of disabling the gate unseen.
+	it('drift guard: describeModelError on a real 503 cause-chain is matched by isProviderServerFault', () => {
+		// A synthetic cause chain shaped exactly like the AWS SDK v3 error the invoke layer sees: an outer
+		// ModelError wrapper ← the Bedrock ServiceUnavailableException carrying $fault/$metadata.
+		const bedrock503 = {
+			name: 'ServiceUnavailableException',
+			message: 'Bedrock is unable to process your request.',
+			$fault: 'server',
+			$metadata: { httpStatusCode: 503, requestId: 'd72cb143' },
+		};
+		const wrapped = { name: 'ModelError', message: 'Bedrock is unable to process your request.', cause: bedrock503 };
+		const produced = describeModelError(wrapped);
+
+		assert.equal(
+			isProviderServerFault(produced),
+			true,
+			`describeModelError output must still carry a 5xx server-fault signature; got: ${produced}`,
+		);
+
+		// And the full classifyCell path on a cell carrying that produced string → excluded.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'error', builder_error: produced };
+		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: PROVIDER_UNAVAILABLE_REASON });
+		assert.equal(isScoredCell(cell), false);
+	});
+
+	it('drift guard: describeModelError on a client 4xx is NOT matched (stays counted agent_fail)', () => {
+		// The negative half of the contract: a real ValidationException (400) must still read as the
+		// agent's own fault through the describer, so the gate can't start swallowing client errors.
+		const validation = {
+			name: 'ValidationException',
+			message: 'malformed request',
+			$fault: 'client',
+			$metadata: { httpStatusCode: 400, requestId: 'abc123' },
+		};
+		const produced = describeModelError(validation);
+		assert.equal(isProviderServerFault(produced), false, `a 4xx client fault must not match; got: ${produced}`);
 	});
 });
 
