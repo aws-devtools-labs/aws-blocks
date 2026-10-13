@@ -1077,6 +1077,46 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.environment.os, platform(), 'os should match process platform');
     });
+
+    test('environment.ci is true when a CI vendor variable is set', async () => {
+      tmpHome = createTmpDir('env-ci-true');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      // CI is cleared because ci-info bypasses every vendor check when it inherits CI=false.
+      const result = await spawnDevServer({
+        port, telemetryFile,
+        env: { CI: undefined, GITHUB_ACTIONS: 'true', BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable' },
+      });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000));
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.environment.ci, true, 'ci should be true under GITHUB_ACTIONS');
+    });
+
+    test('environment.ci is false when CI=false disables both detection paths', async () => {
+      tmpHome = createTmpDir('env-ci-false');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      // CI=false at startup disables both paths: ci-info skips its vendor loop, the guard blocks the
+      // extra vars; the endpoint is redirected so these forged variables never reach the collector.
+      const result = await spawnDevServer({
+        port, telemetryFile,
+        env: {
+          CI: 'false',
+          GITHUB_ACTIONS: 'true',
+          CODEBUILD_BUILD_ID: 'b',
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
+        },
+      });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000));
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.environment.ci, false, 'ci should be false when CI=false');
+    });
   });
 
   // ── 9. --telemetry-file sink ───────────────────────────────────────────────

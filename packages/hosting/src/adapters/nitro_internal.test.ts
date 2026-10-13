@@ -12,6 +12,7 @@ import {
   warnIfNitroOutOfRange,
 } from './nitro.js';
 import { IPX_LAMBDA_HANDLER_SOURCE, IPX_LAMBDA_PACKAGE_JSON } from './ipx_lambda_template.js';
+import { looksLikeSvg } from './ipx_allowlist.js';
 
 /**
  * Regression tests for the Nitro adapter internals that have caused
@@ -401,6 +402,33 @@ describe('parseNuxtImageDomains (image.domains allowlist scan)', () => {
   });
 });
 
+void describe('IPX_LAMBDA_HANDLER_SOURCE — SVG gate decides by content, not filename', () => {
+  // The extension check (isSvgPath) is bypassed by an SVG served from `/logo` or
+  // `/logo.png` (verified against a live ipx@3.1.1: served with image/svg+xml,
+  // `<set attributeName="onload">` intact — SVGO is an optimiser, not a sanitiser).
+  it('embeds the unit-tested looksLikeSvg verbatim (no hand-copied drift)', () => {
+    assert.ok(
+      IPX_LAMBDA_HANDLER_SOURCE.includes(`const looksLikeSvg = ${looksLikeSvg.toString()};`),
+      'handler must embed looksLikeSvg.toString() from ipx_allowlist.ts',
+    );
+  });
+
+  it('guards BOTH storages (S3 originals and remote httpStorage) with svgGuard', () => {
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /storage: svgGuard\(s3IpxStorage\)/);
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /httpStorage: svgGuard\(ipxHttpStorage\(/);
+    // The guard rejects with a 415 IPX surfaces as the response status.
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /statusCode: 415/);
+  });
+
+  it('also refuses SVG output unless IMAGE_ALLOW_SVG is set (defense in depth)', () => {
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /!allowSvg && \/image\\\/svg\/i\.test\(res\.headers\.get\('content-type'\)/);
+  });
+
+  it('keeps the extension check as a cheap pre-filter', () => {
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /if \(isSvgPath\(source\) && !allowSvg\)/);
+  });
+});
+
 void describe('IPX_LAMBDA_HANDLER_SOURCE — remote fetch never follows redirects (SSRF)', () => {
   // isRemoteSourceAllowed and the httpStorage `domains` list both validate only
   // the caller-supplied URL. If the fetch followed a 3xx, an allowlisted host
@@ -430,7 +458,8 @@ void describe('IPX_LAMBDA_HANDLER_SOURCE — remote source support (issue #2)', 
     // IPX_RESOURCE_NOT_FOUND. It must be imported and wired, gated on the
     // allowlist domains.
     assert.match(IPX_LAMBDA_HANDLER_SOURCE, /ipxHttpStorage/);
-    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /httpStorage: ipxHttpStorage\(\{ domains: httpDomains, /);
+    // (wrapped in svgGuard so remote SVG bytes are rejected by content — see below)
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /httpStorage: svgGuard\(ipxHttpStorage\(\{ domains: httpDomains, /);
     // Domains come from the same allowlist the handler enforces.
     assert.match(IPX_LAMBDA_HANDLER_SOURCE, /const httpDomains = \[/);
   });
