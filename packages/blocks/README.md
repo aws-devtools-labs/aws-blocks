@@ -241,7 +241,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - Always attach a schema to KVStore/AppSetting that accepts user data — the RPC layer validates structure but not business logic
 - Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
 - Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
-- Configure `CORS_ALLOWED_ORIGINS` explicitly for production — avoid wildcards
+- Configure `defaults.allowedOrigins` explicitly for production — avoid wildcards
 - For cross-domain deployments, pass `crossDomain: true` to auth constructors (enables `SameSite=None; Secure; Partitioned`)
 - Enable `monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only)
 - Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default
