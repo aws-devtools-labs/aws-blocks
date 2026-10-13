@@ -154,13 +154,32 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, cu
 }
 
 /**
+ * Renders a `buildUserAgentChain()` chain for Strands' string-typed
+ * `clientConfig.customUserAgent`.
+ *
+ * Strands interpolates the value into a template literal
+ * (`` `${clientConfig.customUserAgent} strands-agents-ts-sdk` ``), so handing it
+ * the `[string, string][]` chain stringifies to `aws-blocks,0.6.0,bb,Agent/0.5.0`.
+ * Rendered the way the SDK's own user-agent middleware renders a tuple —
+ * `key/value`, with `/` inside the value replaced by `-`, since the SDK's value
+ * escape rejects it.
+ */
+function formatUserAgentChain(chain: [string, string][]): string {
+	return chain.map(([key, value]) => `${key}/${value.replace(/\//g, '-')}`).join(' ');
+}
+
+/**
  * Maps Blocks' ModelConfig to the corresponding Strands model provider.
  * The developer configures one unified ModelConfig shape — this factory
  * translates it to BedrockModel, OpenAIModel, or CannedProvider internally.
  *
+ * Strands builds the `BedrockRuntimeClient` that carries
+ * `Converse`/`ConverseStream` internally, so `customUserAgent` reaches it
+ * through `clientConfig` rather than a client we hold.
+ *
  * @see https://strandsagents.com/docs/user-guide/concepts/model-providers/
  */
-export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger, cannedHints?: Map<string, CannedToolHints>): Promise<Model<BaseModelConfig>> {
+export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger, cannedHints?: Map<string, CannedToolHints>, customUserAgent?: [string, string][]): Promise<Model<BaseModelConfig>> {
 	if (!config || config.provider === 'canned') {
 		const { CannedProvider } = await import('./providers/canned.js');
 		return new CannedProvider({ hints: cannedHints });
@@ -180,6 +199,9 @@ export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger
 		const { BedrockModel } = await import('@strands-agents/sdk');
 		return new BedrockModel({
 			modelId: config.modelId,
+			...(customUserAgent && {
+				clientConfig: { customUserAgent: formatUserAgentChain(customUserAgent) },
+			}),
 			...(config.inferenceConfig && {
 				temperature: config.inferenceConfig.temperature,
 				topP: config.inferenceConfig.topP,

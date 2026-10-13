@@ -1,0 +1,7 @@
+---
+"@aws-blocks/bb-agent": patch
+---
+
+Tag the Agent's inference traffic with the Blocks user-agent chain. The two Bedrock clients this package constructs itself already carried it, but `Converse`/`ConverseStream` goes through a `BedrockRuntimeClient` that `@strands-agents/sdk` builds internally, so inference went out unattributed. `createStrandsModel` now takes the chain, the same way `checkModelHealth` already does, and passes it to `BedrockModel` through `clientConfig`.
+
+Rendered to a string rather than the `[string, string][]` chain, because Strands interpolates the value into a template literal. Strands appends its own identifier to that value and hands the result to the client as one section, so the outgoing `x-amz-user-agent` reads `aws-blocks/0.6.0-bb/AuthBasic-1.0.1-bb/Agent-0.5.0-strands-agents-ts-sdk`, where a block passing the chain as tuples emits `aws-blocks/0.6.0 bb/AuthBasic-1.0.1 bb/KVStore-0.2.4`. The SDK substitutes a hyphen for each space because `/` is not a `tchar`, so the section does not match the User Agent 2.0 `metadata` grammar; the identifier Strands already set on this client does not match it either. Each `aws-blocks/<version>` and `bb/<Name>-<version>` token is still present as a substring, which the API Metrics `fact_daily_requests` schema supports filtering on with `like`. The per-request native client token is not forwarded here — it is stored by `lambda-handler`, and the Agent loop runs in the AgentCore Runtime, where no such request scope exists.
