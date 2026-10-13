@@ -333,6 +333,7 @@ it is absent — the operational paths read the CA from the environment only.
 
 **Date:** 2026-06-10
 **Authors:** sarayev
+**Status**: Amended by [D-017](#d-017---telemetry-file-appends-every-event-from-the-run-that-created-the-file) (2026-10-05, varshpam) — clause 4 ("One event per file") and Alternative 4 ("Append to existing files") are superseded; a run now appends every event to the file it created. Clause 3 is narrowed: a path this run did not create is still skipped. The decision below is preserved as originally written.
 
 ### Context
 
@@ -699,3 +700,41 @@ For the two edge cases above we **warn and skip only the CloudFront alarm** rath
 - Issue #481; PR #488
 - AWS CDK `Environment` docs: cross-stack references "require concrete region information and will cause this stack to emit synthesis errors."
 - `packages/hosting/src/constructs/hosting_construct.ts` (monitoring wiring), `us_east_1_monitoring_stack.ts`
+
+## D-017: `--telemetry-file` appends every event from the run that created the file
+
+**Date**: 2026-10-05
+**Authors:** varshpam
+
+### Context
+D-010 clause 4 specified "One event per file — each CLI invocation writes exactly one event". `writeToTelemetryFile` implemented this by opening the path with `O_CREAT | O_EXCL` and swallowing the resulting `EEXIST`, so the second and later events of a single run were discarded with no error. A `dev` server whose first bind fails emits `dev/FAIL`, reclaims the port, then emits `dev/SUCCESS` — and the file kept only the failure. The flag is the supported way to inspect what would be sent, so a run it cannot represent makes it unusable for that purpose.
+
+### Decision
+A run appends every event it emits to the file it created. The create path keeps `O_CREAT | O_EXCL`; on `EEXIST` the event is appended to the existing JSON array only when this process created that path, tracked in a per-process set. A path that already existed when the run started is never read or written. Ownership is keyed by the resolved absolute path, not by file identity, so the same relative spelling under a different working directory is a different file, while a path this run created and the user then replaced is still treated as ours.
+
+### Rationale
+- Clause 4 described the mechanism (`O_EXCL`) rather than a property worth keeping; the silent discard it produced was never argued for in D-010.
+- Alternative 4's stated risk is corrupting *user* files. The ownership set confines every write to a path this process created, so a path it did not create is never opened for read or write.
+- It matches the CDK CLI, which both sinks already cite in their JSDoc (`packages/core/src/telemetry/client.ts`, `packages/create-blocks-app/src/telemetry.ts`). Its `FileTelemetrySink` creates the file, refuses one that already exists, and appends each event to a JSON array with `readJsonSync` / `push` / `writeJSONSync`.
+- The on-disk shape is unchanged (a JSON array of events), so a consumer reading the first element is unaffected.
+
+### Alternatives Considered
+1. **One JSON event per line (JSONL):** rejected. The file is documented and consumed as JSON; every reader parses the whole file, so the format change buys nothing the array does not already give.
+2. **Append unconditionally:** rejected — this is D-010 Alternative 4, and it reverses clause 3 by letting a run modify a path it did not create.
+3. **One file per event (`events.json`, `events.1.json`, …):** rejected. Surprising for a flag that names a single file, and it pushes the joining work onto every consumer.
+4. **Write to a temp file and `rename` into place:** rejected. It would make the append crash-atomic, but `rename` over an existing path fails under transient Windows file locks (npm/cli#9021), and the repo supports Windows while no Windows job exercises this flag (`windows-e2e.yml` is the only one, and it seeds a telemetry id but never passes the flag). A run emits at most a handful of events, so the atomicity gain is small against a platform risk the chosen approach avoids: the create-then-append path was exercised on Windows Server 2022 (Node 22, `win32 x64`) and kept every event, left a pre-existing file byte-identical, and produced `EEXIST` from `O_EXCL` on NTFS.
+
+### Known limitation
+Ownership is per process, so two runs sharing one `--telemetry-file` path keep only the first run's events: the second gets `EEXIST`, finds the path absent from its own set, and writes nothing. That is D-010 clause 3 applied to a path this process did not create, and it is unchanged by this decision — the behavior is identical before and after.
+
+`create-blocks-app` carries a near-copy of the sink, not an identical one: its event parameter is `Record<string, unknown>` rather than `BlocksTelemetryEvent`, and it imports `dirname` directly instead of `path.dirname`. The duplication is deliberate — that package avoids depending on `@aws-blocks/core`, whose postinstall needs devDependencies absent from a registry install (see that file's header). The header justifies a separate implementation; it does not commit the two to parity.
+
+Two asymmetries are left standing on purpose. As of this decision `create-blocks-app` emits one event per process — `trackCommand` has a single call site (`index.ts:781`) and the package declares no `exports` — so its append branch is not reachable in production, and the containment test core carries (`still sends the HTTP event when the append throws`) is not ported to it. Its dispatch also has no enclosing `try/catch`, unlike core's, so a throw escaping the sink would reject `trackCommand`. Both sinks swallow their own errors, so nothing throws today. That gap predates this decision and is unchanged by it.
+
+### Supersedes
+- D-010 clause 4 ("One event per file — each CLI invocation writes exactly one event; if the file already exists, it is skipped") — a run now writes every event it emits to the file it created. The "already exists, it is skipped" half still holds for a path the run did not create.
+- D-010 Alternative 4 ("Append to existing files: Rejected because it risks corrupting user files. Fresh file per invocation is safer.") — that rejection stands for unconditional append. Gating the append on per-process ownership keeps the property the rejection protected: a path the run did not create is never opened for read or write.
+
+### References
+- D-010 (clauses 1–2 unchanged; clause 3 narrowed to paths this run did not create)
+- `aws/aws-cdk-cli`, `packages/aws-cdk/lib/cli/telemetry/sink/file-sink.ts` — create-then-append file sink
