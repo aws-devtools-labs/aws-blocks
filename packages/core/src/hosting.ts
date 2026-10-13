@@ -10,7 +10,7 @@ import {
   type FrameworkAdapterFn,
   getAdapter,
   normalizeBasePath,
-  withComputeArch,
+  withComputeTarget,
 } from '@aws-blocks/hosting/adapters';
 import {
   generateBuildId,
@@ -70,8 +70,9 @@ export type ComputeConfig = {
    *   Node.js server runs directly on Lambda behind CloudFront (origin access
    *   control, no API Gateway). One execution environment serves many
    *   concurrent requests and is billed for active CPU — fewer cold starts and
-   *   lower cost for I/O-bound SSR. Needs an HTTP-server build (Astro,
-   *   SvelteKit, Nuxt/Nitro with `preset: 'node-server'`) and a Region where Web
+   *   lower cost for I/O-bound SSR. Works with Astro, SvelteKit, Nuxt/Nitro and
+   *   Next.js — the adapters build an HTTP server automatically (Nitro
+   *   `node-server` preset, OpenNext `node` wrapper) — in a Region where Web
    *   Functions are available (us-east-1, us-east-2, us-west-2,
    *   ap-northeast-1, eu-west-1). Runs on Node.js 24 / Arm64 with 2 GB per
    *   environment, so `memorySize` and `reservedConcurrency` don't apply —
@@ -644,12 +645,10 @@ export class Hosting extends Construct {
       process.env.BLOCKS_API_URL = props.api.apiUrl;
     }
     const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
-    // Web Functions run on Arm64: adapters that ship native modules into the
-    // server bundle (Astro's sharp) read the target architecture from here.
-    const manifest: DeployManifest = withComputeArch(
-      props.compute?.type === 'web-function' ? 'arm64' : 'x64',
-      () => adapter(root),
-    );
+    // Adapters build for the selected compute: Web Functions need a plain
+    // Node.js HTTP server (OpenNext `node` wrapper, Nitro `node-server`) and
+    // Arm64 native modules (Astro's sharp).
+    const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () => adapter(root));
 
     // ── 4b. Ensure buildId is set on the manifest ────────────────
     if (!manifest.buildId) {

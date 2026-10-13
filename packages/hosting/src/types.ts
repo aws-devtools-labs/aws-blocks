@@ -176,7 +176,9 @@ export type HostingProps = {
      *   origin access control. Each execution environment serves many
      *   concurrent requests and is billed for active CPU, so I/O-bound SSR
      *   gets fewer cold starts and lower cost. Requires an HTTP-server build
-     *   (Astro, SvelteKit, Nitro `node-server`, OpenNext `docker` origin) and a
+     *   (Astro, SvelteKit, Nitro `node-server`, OpenNext `node` wrapper /
+     *   `docker` origin — the built-in adapters produce these automatically
+     *   when the run targets Web Functions, see `withComputeTarget`) and a
      *   Region where Web Functions are available (us-east-1, us-east-2,
      *   us-west-2, ap-northeast-1, eu-west-1). Runs on Node.js 24, Arm64, with
      *   2 GB per environment — `memorySize`, `reservedConcurrency`,

@@ -342,11 +342,20 @@ CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framewor
 | Runtime | Node.js 18–24, x86_64 | Node.js 24, Arm64, 2 GB per environment |
 
 **Requirements.**
-- An **HTTP-server build**: Astro (`@astrojs/node` standalone), SvelteKit
-  (`adapter-node`), Nuxt/Nitro with `nitro: { preset: 'node-server' }`, or an
-  OpenNext `docker` origin.
-- Event-handler builds (OpenNext's default `aws-lambda` wrapper, Nitro's
-  `aws-lambda` preset) fail synth with `WebFunctionUnsupportedComputeError`.
+- An **HTTP-server build**. With `@aws-blocks/blocks`' `Hosting` every built-in
+  framework works unchanged, because the adapters switch their output when
+  Web Functions are selected:
+  - **Astro** (`@astrojs/node` standalone) and **SvelteKit** (`adapter-node`)
+    already emit an HTTP server.
+  - **Nuxt/Nitro** builds with the `node-server` preset instead of `aws-lambda`.
+  - **Next.js** builds with OpenNext's `node` wrapper/converter as a container
+    origin. A user `open-next.config.ts` must then set `wrapper: 'node'`,
+    `converter: 'node'` and `generateDockerfile: true`.
+- If you run an adapter yourself in front of `HostingConstruct`, wrap the run in
+  `withComputeTarget('web-function', …)` from `@aws-blocks/hosting/adapters` to
+  get the same output.
+- An event-handler build (an OpenNext `aws-lambda` wrapper or a Nitro
+  `aws-lambda` preset) fails synth with `WebFunctionUnsupportedComputeError`.
 - Synth also fails with `WebFunctionUnsupportedRegionError` outside the
   supported Regions. If Web Functions have since launched in your Region,
   bypass the check with `skipRegionValidation: true`.

@@ -540,6 +540,14 @@ jobs:
             app-dir: test-apps/hosting-ssr-sveltekit
             script: test:e2e:hosting-ssr-sveltekit
             compute-type: web-function
+          - framework: nextjs-web-function
+            app-dir: test-apps/hosting-ssr
+            script: test:e2e:hosting-ssr
+            compute-type: web-function
+          - framework: nuxt-web-function
+            app-dir: test-apps/hosting-ssr-nuxt
+            script: test:e2e:hosting-ssr-nuxt
+            compute-type: web-function
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}

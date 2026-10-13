@@ -36,7 +36,7 @@ import { createJiti } from 'jiti';
 import { getPackageInfoSync, isPackageExists } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
-import { type ComputeArch, targetComputeArch } from './shared/compute_arch.js';
+import { type ComputeArch, targetComputeArch } from './shared/compute_target.js';
 import type { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
 
 export type AstroAdapterOptions = {
