@@ -11,10 +11,50 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
+import { waitForLiveBuild } from './wait-live.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
   projectRoot: string;
+  /**
+   * When true, after `cdk deploy` completes, block until the new frontend
+   * build is actually being served through CloudFront before emitting
+   * `BLOCKS_DEPLOYED`. Prevents a caller's immediate self-test
+   * from hitting a stale bundle during edge propagation. No-op for a
+   * backend-only app (no frontend to serve).
+   */
+  waitLive?: boolean;
+  /** Overall budget for the liveness wait, in seconds. Defaults to 180. */
+  waitLiveTimeoutSec?: number;
+}
+
+/** Default liveness-wait budget (seconds) when `--wait-live` is given without a value. */
+export const DEFAULT_WAIT_LIVE_TIMEOUT_SEC = 180;
+/** Poll interval for the liveness wait, in milliseconds. */
+export const WAIT_LIVE_INTERVAL_MS = 5_000;
+
+/**
+ * Parse the `--wait-live` family of flags from a process argv tail. Pure and
+ * exported so flag handling is unit-tested without spawning a deploy.
+ *
+ * Accepts `--wait-live` (opt in, default timeout) and
+ * `--wait-live-timeout=<seconds>` (override the budget). An out-of-range or
+ * non-numeric timeout falls back to the default rather than failing the deploy.
+ */
+export function parseWaitLiveArgs(argv: readonly string[]): {
+  waitLive: boolean;
+  waitLiveTimeoutSec: number;
+} {
+  const waitLive = argv.includes('--wait-live');
+  let waitLiveTimeoutSec = DEFAULT_WAIT_LIVE_TIMEOUT_SEC;
+  const timeoutArg = argv.find((a) => a.startsWith('--wait-live-timeout='));
+  if (timeoutArg) {
+    const raw = Number(timeoutArg.slice('--wait-live-timeout='.length));
+    if (Number.isFinite(raw) && raw > 0 && raw <= 3600) {
+      waitLiveTimeoutSec = Math.floor(raw);
+    }
+  }
+  return { waitLive, waitLiveTimeoutSec };
 }
 
 // Re-exported from deploy-stream (the shared module) so existing importers of
@@ -26,6 +66,13 @@ export { formatDeploySignal };
 export async function deploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
     console.log('🏗️  Preparing deployment...');
+
+    // Resolve the liveness-wait config: an explicit option wins; otherwise read
+    // the `--wait-live` / `--wait-live-timeout=` flags from argv, so the thin
+    // template wrapper (which just calls `deploy({...})`) needs no arg plumbing.
+    const argvWaitLive = parseWaitLiveArgs(process.argv.slice(2));
+    const waitLive = options.waitLive ?? argvWaitLive.waitLive;
+    const waitLiveTimeoutSec = options.waitLiveTimeoutSec ?? argvWaitLive.waitLiveTimeoutSec;
 
     // Load production environment (from .env.production or CI env vars)
     loadProductionEnv();
@@ -140,10 +187,50 @@ export async function deploy(options: DeployOptions) {
       console.log(`🌐 Frontend URL: ${hostingUrl}`);
     }
 
+    // Liveness gate: `cdk deploy` returning does NOT mean the new
+    // build is being served — CloudFront takes a short window to propagate the
+    // new viewer-request function and config. When `--wait-live` is set, block
+    // until the deployed frontend actually serves the new build before emitting
+    // the completion signal, so a caller's immediate self-test can't hit a
+    // stale bundle. Skipped for a backend-only app (no frontend to verify).
+    if (waitLive && hostingUrl) {
+      const timeoutMs = waitLiveTimeoutSec * 1000;
+      console.log(`\n⏳ Waiting for the new build to go live at ${hostingUrl} (up to ${timeoutMs / 1000}s)…`);
+      const result = await waitForLiveBuild({
+        hostingUrl,
+        timeoutMs,
+        intervalMs: WAIT_LIVE_INTERVAL_MS,
+        fetch: (url) => fetch(url, { cache: 'no-store' }),
+        now: () => Date.now(),
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        onAttempt: ({ attempt, result: r, detail }) => {
+          if (r !== 'live') {
+            console.log(`   …not live yet (attempt ${attempt}: ${r}${detail ? ` — ${detail}` : ''})`);
+          }
+        },
+      });
+      if (!result.live) {
+        // Never emit a false "live" signal. Report the timeout honestly and
+        // exit non-zero so a caller treats it as "could not confirm", not done.
+        console.log(
+          `\n⚠️  Could not confirm the new build is live after ${Math.round(result.elapsedMs / 1000)}s ` +
+            `(${result.attempts} attempts). The deploy itself SUCCEEDED, but CloudFront may still be ` +
+            `serving the previous build — re-check the frontend before trusting a self-test.`,
+        );
+        console.log(`\n📡 API URL: ${apiUrl}`);
+        if (hostingUrl) console.log(`🌐 Frontend URL: ${hostingUrl}`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`\n✅ New build is live (confirmed in ${Math.round(result.elapsedMs / 1000)}s).`);
+    }
+
     // Machine-readable completion signal — a single stable line a caller (a
     // coding agent, a CI step, a script) can grep for "deploy done + where it
     // lives" without parsing CloudFormation output or polling the stack. Always
-    // the LAST line on the success path.
+    // the LAST line on the success path. With `--wait-live` it is emitted only
+    // after the new build is confirmed live, so a request issued immediately
+    // after it returns the new asset.
     console.log(`\n${formatDeploySignal(apiUrl, hostingUrl)}`);
   });
 }
