@@ -6,8 +6,8 @@
  * Wires to an in-process stub IdP via `OidcClientEngine`.
  */
 
-import { type ScopeParent, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
-import { computeScopeFullId, getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { buildingBlockParent, getSdkIdentifiers, registerSdkIdentifiers, type ScopeParent } from '@aws-blocks/core';
+import { getMockDataDir } from '@aws-blocks/core/bb-utils';
 import { resolveCookieSecurity } from '@aws-blocks/auth-common/cookies';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AuthOIDC as AuthOIDCBase, DEFAULT_CALLBACK_PATH } from './auth-oidc.js';
@@ -65,15 +65,11 @@ export class AuthOIDC<
 > extends AuthOIDCBase<P> {
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
-		const fullId = computeScopeFullId({ id, parent: scope });
+		const self = buildingBlockParent({ id, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+		const sessions = new KVStore<SessionRow>(self, 'sessions');
 
-		// Same synthetic parent as the AWS runtime, so both report the identical chain.
-		const sessions = new KVStore<SessionRow>(
-			{ id, fullId, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION },
-			'sessions',
-		);
-
-		const cookieNamePrefix = `oidc_${mockPrefix(scope, id)}`;
+		// The same expression as the AWS runtime; `user-agent.test.ts` pins the pair.
+		const cookieNamePrefix = `oidc_${self.fullId}`;
 		const cookieAttributes = {
 			...resolveCookieSecurity({
 				crossDomain: options.crossDomain ?? false,
@@ -161,16 +157,4 @@ export class AuthOIDC<
 			}
 		}
 	}
-}
-
-/** Mock-runtime scope prefix for cookie naming (avoids collisions between instances). */
-function mockPrefix(scope: ScopeParent, id: string): string {
-	const segments: string[] = [id];
-	let current: ScopeParent | undefined = scope;
-	while (current && 'parent' in current && current.parent) {
-		segments.unshift(current.id);
-		current = (current as { parent: ScopeParent }).parent;
-	}
-	if (current && 'id' in current) segments.unshift(current.id);
-	return segments.join('_');
 }
