@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, brandBlocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { randomUUID } from 'node:crypto';
@@ -245,7 +245,7 @@ export class AsyncJob<T = unknown> extends Scope {
 				`${AsyncJobErrors.BatchEmpty}: Batch is empty, must contain at least 1 payload`
 			);
 			err.name = AsyncJobErrors.BatchEmpty;
-			throw err;
+			throw brandBlocksError(err);
 		}
 
 		if (payloads.length > MAX_BATCH_PAYLOADS) {
@@ -253,7 +253,7 @@ export class AsyncJob<T = unknown> extends Scope {
 				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`
 			);
 			err.name = AsyncJobErrors.BatchTooLarge;
-			throw err;
+			throw brandBlocksError(err);
 		}
 
 		// Validate every payload before enqueuing any, so one bad payload fails the
@@ -279,7 +279,7 @@ export class AsyncJob<T = unknown> extends Scope {
 				const msg = result.issues[0]?.message ?? 'Validation failed';
 				const err = new Error(`${AsyncJobErrors.ValidationFailed}: ${msg}`);
 				err.name = AsyncJobErrors.ValidationFailed;
-				throw err;
+				throw brandBlocksError(err);
 			}
 		}
 
@@ -292,7 +292,7 @@ export class AsyncJob<T = unknown> extends Scope {
 				`${AsyncJobErrors.PayloadTooLarge}: Serialized payload is ${kb} KB, exceeds 256 KB limit`
 			);
 			err.name = AsyncJobErrors.PayloadTooLarge;
-			throw err;
+			throw brandBlocksError(err);
 		}
 	}
 

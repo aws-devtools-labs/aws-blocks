@@ -6,7 +6,7 @@
  * injecting their own `AuthEngine`.
  */
 
-import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, BLOCKS_AUTH_PREFIX } from '@aws-blocks/core';
+import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, BLOCKS_AUTH_PREFIX, brandBlocksError } from '@aws-blocks/core';
 import type { AuthActionInput, AuthState, AuthAction, BlocksAuth } from '@aws-blocks/auth-common';
 import type { AuthEngine, ExchangeInput, ExchangeResult, AuthorizeParams, AuthorizeParamsRequest, BearerRefreshResult } from './engine.js';
 import type {
@@ -651,13 +651,13 @@ function notAuthenticated(): ApiError {
 function providerNotConfigured(name: string): Error {
 	const err = new Error(`Provider not configured: ${name}`);
 	err.name = 'ProviderNotConfiguredException';
-	return err;
+	return brandBlocksError(err);
 }
 
 function invalidConfig(message: string): Error {
 	const err = new Error(`AuthOIDC config error: ${message}`);
 	err.name = 'AuthOIDCConfigError';
-	return err;
+	return brandBlocksError(err);
 }
 
 /** Result of the relay-aware callback dispatch. */

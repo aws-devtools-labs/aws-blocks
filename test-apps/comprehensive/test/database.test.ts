@@ -83,8 +83,10 @@ export function databaseTests(getApi: () => typeof apiType) {
       await api.dbInsert(a, 'sender', 50);
       await api.dbInsert(b, 'receiver', 0);
 
-      // Transfer more than balance — should fail
-      await assert.rejects(() => api.dbTransfer(a, b, 999), /Insufficient balance/);
+      // Transfer more than balance — should fail. The handler throws a raw
+      // Error, which the RPC gate collapses to a generic 500 (message
+      // sanitized); the rollback itself is asserted by the unchanged values below.
+      await assert.rejects(() => api.dbTransfer(a, b, 999), ApiError);
 
       // Values unchanged
       const sender = await api.dbGet(a);

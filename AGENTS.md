@@ -20,7 +20,7 @@ You're an engineer working **on AWS Blocks itself** — the framework and its Bu
 3. Inject BB config with **`registerConfig()`**, never `handler.addEnvironment()` (Lambda env has a ~4 KB cap).
 4. Call BB data methods **only inside request/job handlers** — never at module top level or during synth (the CDK class stubs them with `synthGuard` to throw).
 5. **Never attach `Error.cause` enumerably** — it leaks SDK metadata (`$metadata`, ARNs) when an error is serialized to the client.
-6. Errors cross the wire by **`name`, not `code`** — match with `isBlocksError(e, SomeErrors.Foo)` (works the same server- and client-side).
+6. Errors cross the wire by **`name`, not `code`** — match with `isBlocksError(e, SomeErrors.Foo)` (works the same server- and client-side). A named error's `name` only survives the RPC serializer when the error is **branded** as an intentional BB error: throw it through `blocksError()`, or stamp a hand-built named `Error` with `brandBlocksError()` (both from `@aws-blocks/core`). An unbranded named `Error` collapses to a nameless `500` — that is deliberate, so a raw driver/SDK class name (`PostgresError`) never leaks.
 7. **`get()`-style reads return `null`** for not-found — throw only for violated preconditions (e.g. a failed conditional write). Without this → callers need try/catch for normal control flow, and missing-item checks become invisible.
 8. Keep customer-facing code cast-free: **no `as any` / `: any` / `@ts-ignore`** (a cast usually means a public type is wrong — fix the type).
 9. Every API method is a public, internet-reachable RPC endpoint with no auth by default — **gate inside each method** with `await auth.requireAuth(context)`.
@@ -119,7 +119,7 @@ packages/bb-{name}/
   src/
     version.ts         # GENERATED (prebuild) — BB_NAME, BB_VERSION
     types.ts           # TYPES ONLY — `import type` only; no const/function/class
-    errors.ts          # XxxErrors as-const + blocksError()
+    errors.ts          # XxxErrors as-const + blocksError() (brand via core's brandBlocksError so the name crosses the wire)
     index.mock.ts      # default + types entry
     index.aws.ts       # aws-runtime entry
     index.cdk.ts       # cdk entry

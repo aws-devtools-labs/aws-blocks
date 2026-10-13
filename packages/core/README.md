@@ -57,6 +57,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 The local mock applies no auth either, so an ungated method passes every local check and still ships callable by anyone. See your auth block's README (e.g. `@aws-blocks/bb-auth-cognito`) for `requireAuth` / `requireRole`.
 
+#### What the RPC endpoint can reach
+
+The RPC endpoint dispatches `<exportName>.<method>` against your backend module's exports. Export **`ApiNamespace` values** for anything the client should call — and keep Building Block instances unexported (or reach them only through a gated method):
+
+- An exported **Building Block instance** (e.g. `export const todos = new DistributedTable(scope, 'todos')`) is **not** callable over RPC — calling `todos.put` returns *method not found*. Its data plane is only reachable through the `ApiNamespace` methods you write, where your `requireAuth` gates run.
+- **`_`-prefixed exports** are private: they get no client proxy and are not dispatched.
+- **`secret()` / `config()` markers** are deferred values, not APIs: they get no client proxy and are not dispatched.
+- Only **callable methods** are dispatched; members inherited from `Object.prototype` (`toString`, `constructor`, `hasOwnProperty`, …) are never reachable.
+
 #### Calling the API over HTTP (JSON-RPC 2.0)
 
 The typed `import { api } from 'aws-blocks'` client is the normal path. The HTTP form below is for manual verification (curl/Postman) and non-JS clients.

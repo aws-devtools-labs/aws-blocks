@@ -120,7 +120,7 @@ export function App() {
         This starter app demonstrates:
         {' '}<strong>authentication</strong> with cross-tab coordination,
         {' '}<strong>real-time sync</strong> across browser tabs,
-        and <strong>todos stored in a distributed table</strong> with secondary index queries.
+        and <strong>todos stored in a distributed table</strong> with per-user isolation.
       </p>
       {!user && <p>Sign in to get started.</p>}
       {user && <TodoApp />}

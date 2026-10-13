@@ -1,7 +1,7 @@
 /**
  * Backend — aws-blocks/index.ts
  *
- * Real-time todo app with per-user isolation, optimistic locking, and secondary indexes.
+ * Real-time todo app with per-user isolation and optimistic locking.
  *
  * This file defines your API, auth, data model, and real-time channels.
  * The frontend imports these exports directly via `import { ... } from 'aws-blocks'`.
@@ -15,7 +15,7 @@
  *   node_modules/@aws-blocks/blocks/README.md
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, Scope, AuthBasic, DistributedTable, Realtime } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, AuthBasic, DistributedTable, Realtime } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -42,12 +42,6 @@ const todoSchema = z.object({
 const todos = new DistributedTable(scope, 'todos', {
   schema: todoSchema,
   key: { partitionKey: 'userId', sortKey: 'todoId' },
-  indexes: {
-    // Secondary indexes: query todos sorted by priority or title.
-    // The partition key is always userId (per-user isolation), the sort key varies.
-    byPriority: { partitionKey: 'userId', sortKey: 'priority' },
-    byTitle: { partitionKey: 'userId', sortKey: 'title' },
-  },
 });
 
 // ─── Realtime ────────────────────────────────────────────────────────────────
@@ -85,19 +79,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return todo;
   },
 
-  /** List todos, optionally sorted by a secondary index. */
+  /** List todos, optionally sorted by priority or title. */
   async listTodos(sortBy?: 'priority' | 'title') {
     const user = await auth.requireAuth(context);
-    if (sortBy) {
-      const index = sortBy === 'priority' ? 'byPriority' : 'byTitle';
-      return await Array.fromAsync(
-        todos.query({ index, where: { userId: { equals: user.username } } })
-      );
-    }
-    // Default: sorted by todoId (creation order)
-    return await Array.fromAsync(
+    const list = await Array.fromAsync(
       todos.query({ where: { userId: { equals: user.username } } })
     );
+    // Sort in the API (not via a secondary index) — a per-user todo list is
+    // small, so an in-memory sort is simpler and avoids provisioning GSIs.
+    if (sortBy === 'priority') return list.sort((a, b) => a.priority - b.priority);
+    if (sortBy === 'title') return list.sort((a, b) => a.title.localeCompare(b.title));
+    // Default: creation order (sorted by todoId).
+    return list;
   },
 
   /**
@@ -108,7 +101,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async toggleTodo(todoId: string) {
     const user = await auth.requireAuth(context);
     const todo = await todos.get({ userId: user.username, todoId });
-    if (!todo) throw new Error('Todo not found');
+    if (!todo) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
     await todos.put(
       { ...todo, completed: !todo.completed, version: todo.version + 1 },
       { ifFieldEquals: { version: todo.version } },
@@ -121,7 +114,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async updatePriority(todoId: string, priority: number) {
     const user = await auth.requireAuth(context);
     const todo = await todos.get({ userId: user.username, todoId });
-    if (!todo) throw new Error('Todo not found');
+    if (!todo) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
     await todos.put(
       { ...todo, priority, version: todo.version + 1 },
       { ifFieldEquals: { version: todo.version } },

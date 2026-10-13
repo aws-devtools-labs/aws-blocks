@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { type DeploymentTargetOptions, resolveDeploymentTarget } from './deployment-target.js';
+
 /**
  * Pre-deploy AWS credential check.
  *
@@ -34,23 +36,11 @@ const CREDENTIAL_ERROR_NAMES = new Set([
 ]);
 
 /**
- * Resolve the region for the STS probe from the environment. Returns `null`
- * when neither `AWS_REGION` nor `AWS_DEFAULT_REGION` is set — the caller then
- * skips the probe rather than guessing a region, because a hardcoded guess
- * (e.g. `us-east-1`) belongs to a different **partition** than GovCloud
- * (`us-gov-*`) or China (`cn-*`) and would fail against a partition the user
- * isn't even deploying to.
- */
-export function resolveProbeRegion(env: NodeJS.ProcessEnv = process.env): string | null {
-	return env.AWS_REGION || env.AWS_DEFAULT_REGION || null;
-}
-
-/**
  * Probe that resolves when valid AWS credentials are available for `region` and
  * rejects otherwise. Injectable so the guard can be unit-tested without network
  * or real credentials; production callers use the default {@link stsProbe}.
  */
-export type CredentialProbe = (region: string) => Promise<void>;
+export type CredentialProbe = (region: string, profile?: string) => Promise<void>;
 
 /**
  * Default probe: STS GetCallerIdentity via the SDK's standard credential chain
@@ -61,10 +51,11 @@ export type CredentialProbe = (region: string) => Promise<void>;
  * short request timeout and a single attempt (matching `common/config.ts`) so a
  * bad network can't make this hang *longer* than the synth it's replacing.
  */
-const stsProbe: CredentialProbe = async (region) => {
+const stsProbe: CredentialProbe = async (region, profile) => {
 	const { STSClient, GetCallerIdentityCommand } = await import('@aws-sdk/client-sts');
 	const client = new STSClient({
 		region,
+		profile,
 		maxAttempts: 1,
 		requestHandler: { connectionTimeout: 2000, requestTimeout: 3000 },
 	});
@@ -75,35 +66,41 @@ const stsProbe: CredentialProbe = async (region) => {
 	}
 };
 
+/** Options for {@link assertAwsCredentials}. */
+export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
+	/** The npm script name, used in the messages (e.g. `sandbox`, `deploy`). */
+	command: string;
+	/** Credential probe; defaults to STS GetCallerIdentity. Override in tests. */
+	probe?: CredentialProbe;
+}
+
 /**
  * Verify AWS credentials before a deploy command spends time synthesizing, and
  * fail fast with actionable guidance when they're missing, expired, or invalid.
  *
- * Skips silently (with a warning) when no region can be resolved from the
- * environment, and treats network/service errors as non-fatal — see the module
- * doc for the rationale.
+ * The check uses the Region and the profile from {@link resolveDeploymentTarget}.
+ * If no Region is set, the check shows a warning and does not send a request.
+ * Network and service errors are not fatal; see the module doc.
  *
- * @param command - The npm script name, used in the messages (e.g. `sandbox`, `deploy`).
- * @param probe - Credential probe; defaults to STS GetCallerIdentity. Override in tests.
- * @param env - Environment to resolve the region from. Defaults to `process.env`.
- * @throws {Error} With actionable guidance when the probe reports a credential error.
+ * @throws {Error} With actionable guidance when the probe reports a credential error,
+ * or when the CDK configuration cannot be read.
  */
-export async function assertAwsCredentials(
-	command: string,
-	probe: CredentialProbe = stsProbe,
-	env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
-	const region = resolveProbeRegion(env);
+export async function assertAwsCredentials({
+	command,
+	probe = stsProbe,
+	...options
+}: AssertAwsCredentialsOptions): Promise<void> {
+	const { region, profile } = await resolveDeploymentTarget(options);
 	if (!region) {
 		console.warn(
-			`⚠️  Skipping the AWS credential pre-check for \`npm run ${command}\`: ` +
-				'no region set in AWS_REGION / AWS_DEFAULT_REGION. The deploy will surface any credential error itself.',
+			`⚠️  Skipping the AWS credential pre-check for \`npm run ${command}\`: no Region is set. ` +
+				'Set AWS_REGION, or set region in your AWS profile. The deploy will surface any credential error itself.',
 		);
 		return;
 	}
 
 	try {
-		await probe(region);
+		await probe(region, profile);
 	} catch (error) {
 		// Use the error *name* only — never the raw message, which for an STS
 		// authorization failure embeds the caller ARN and account id (and this

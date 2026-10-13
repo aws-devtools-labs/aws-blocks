@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { brandBlocksError } from '@aws-blocks/core';
+
 import type { BatchSubmitResult } from './types.js';
 
 /**
@@ -52,5 +54,6 @@ export class BatchSubmitFailedError extends Error {
 		super(`${AsyncJobErrors.BatchSubmitFailed}: ${message}`);
 		this.jobIds = jobIds;
 		this.failed = failed;
+		brandBlocksError(this);
 	}
 }

@@ -8,6 +8,9 @@ import { CORE_VERSION } from '../version.js';
 import { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 export { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 
+/** Postgres caps `application_name` at `NAMEDATALEN - 1` bytes. */
+const PG_APPLICATION_NAME_MAX_BYTES = 63;
+
 export interface ScopeOptions {
   parent?: ScopeParent;
   bbName?: string;
@@ -143,6 +146,9 @@ export class Scope {
   /** Static registry — collects BB names as they're instantiated */
   private static _bbRegistry: Map<string, { version: string; count: number }> = new Map();
 
+  /** Deferred default block, folded in by {@link getRegisteredBlocks}. */
+  private static _defaultBlock: { name: string; version: string } | undefined;
+
   constructor(id: string, options?: ScopeOptions) {
     this.id = id;
     this.parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK || {
@@ -181,12 +187,29 @@ export class Scope {
         customBlocksCount += count;
       }
     }
+    const fallback = Scope._defaultBlock;
+    if (fallback && !Scope._bbRegistry.has(fallback.name) && OFFICIAL_BB_NAMES.has(fallback.name)) {
+      blocks.push(fallback);
+      totalCount += 1;
+    }
     return { blocks, totalCount, customBlocksCount };
+  }
+
+  /**
+   * Folded in only when {@link getRegisteredBlocks} is called, so importing the
+   * declaring package never mutates the registry, and the entry lands after
+   * every block the app actually constructed.
+   *
+   * @internal
+   */
+  static _setDefaultBlockForTelemetry(name: string, version: string): void {
+    Scope._defaultBlock = { name, version };
   }
 
   /** Reset registry (useful for testing). */
   static _resetRegistry(): void {
     Scope._bbRegistry.clear();
+    Scope._defaultBlock = undefined;
   }
 
   get fullId(): string {
@@ -268,6 +291,41 @@ export class Scope {
       chain.push(['bb', `${this.bbName}/${this.bbVersion}`]);
     }
     return chain;
+  }
+
+  /**
+   * Render {@link buildUserAgentChain} as a single space-delimited string,
+   * suitable for a string-typed field such as the Postgres `application_name`
+   * connection parameter (`aws-blocks/<core> bb/AuthBasic/<version> bb/Database/<version>`).
+   *
+   * Shortened here rather than left to the server: Postgres truncates an
+   * over-long `application_name` by raw bytes, cutting mid-token, and preserves
+   * only printable ASCII — any other byte reaches `pg_stat_activity` as a `\xNN`
+   * escape, which is why the gap marker is ASCII `...` and not `…`.
+   *
+   * Returns `''` for an empty chain (e.g. the CDK context), so callers can use a
+   * simple truthiness guard before setting the field.
+   *
+   * @param maxBytes - Byte budget for the rendered string. Defaults to the
+   *   Postgres `application_name` limit. Override for other string sinks.
+   */
+  protected formatUserAgentString(maxBytes = PG_APPLICATION_NAME_MAX_BYTES): string {
+    const entries = this.buildUserAgentChain().map(([k, v]) => `${k}/${v}`);
+    if (entries.length === 0) return '';
+
+    const byteLen = (s: string): number => Buffer.byteLength(s, 'utf8');
+    const full = entries.join(' ');
+    if (byteLen(full) <= maxBytes) return full;
+
+    const origin = entries[0];
+    const leaf = entries[entries.length - 1];
+    const parents = entries.slice(1, -1);
+    while (parents.length > 0) {
+      parents.pop();
+      const elided = [origin, ...parents, '...', leaf].join(' ');
+      if (byteLen(elided) <= maxBytes) return elided;
+    }
+    return byteLen(origin) <= maxBytes ? origin : '';
   }
 }
 

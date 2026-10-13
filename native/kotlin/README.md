@@ -84,7 +84,7 @@ val todos: List<Todo> = api.listTodos(sortBy = ListTodos.SortBy.Priority)
 api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = true))
 ```
 
-When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. This covers a bare direct result only; an unbound tag wrapped in a nullable, list, or nested type still fails code generation.
+When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable result still fails code generation.
 
 ## Gradle Tasks
 

@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { brandBlocksError } from '@aws-blocks/core';
+
 /**
  * Typed error constants for Agent BB. Use with `isBlocksError()` in catch blocks.
  *
@@ -32,7 +34,7 @@ export const AgentErrors = {
 export function blocksAgentError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }
 
 export class InterruptError extends Error {
@@ -42,5 +44,6 @@ export class InterruptError extends Error {
 		super(`${AgentErrors.InterruptRequired}: ${message}`);
 		this.name = AgentErrors.InterruptRequired;
 		this.interrupts = interrupts;
+		brandBlocksError(this);
 	}
 }

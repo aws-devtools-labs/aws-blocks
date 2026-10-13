@@ -124,6 +124,14 @@ rather than an inline template string. It:
   merges them into `ProviderDetails`, and calls `CreateIdentityProvider` (falling
   back to `UpdateIdentityProvider` on `DuplicateProviderException` for idempotency).
 
+Packaging: the release publishes what the root `npm run build` produces, so
+`build:lambda` must also be listed in the root `build:bundles` script. The
+package's own `build` and `pretest` running it is not enough: the published
+package would ship without `dist/idp-registration-lambda/`, and `cdk synth` in a
+consuming app would fail with `CannotFindAsset`. `npm run check:packed-assets`
+fails when a packed tarball lacks a directory that `Code.fromAsset(join(__dirname, ...))`
+loads.
+
 Ordering: each IdP custom resource takes an explicit CloudFormation dependency on
 bb-app-setting's shared `BlocksSecretsBulk` resource (located by construct id via
 `Stack.of(this).node.tryFindChild('BlocksSecretsBulk')`, since it is a direct

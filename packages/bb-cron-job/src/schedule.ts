@@ -7,6 +7,7 @@
  * so an invalid `rate()`/`cron()` fails fast instead of being rejected by
  * EventBridge minutes into a deploy).
  */
+import { brandBlocksError } from '@aws-blocks/core';
 import { CronJobErrors } from './errors.js';
 
 /** Parsed rate expression. */
@@ -40,7 +41,7 @@ function scheduleError(expr: string): Error {
 		: 'expected "rate(<n> minutes|hours|days)" or a 6-field "cron(...)" expression';
 	const err = new Error(`${CronJobErrors.InvalidSchedule}: "${expr}" is not a valid schedule — ${detail}`);
 	err.name = CronJobErrors.InvalidSchedule;
-	return err;
+	return brandBlocksError(err);
 }
 
 /**
@@ -96,7 +97,7 @@ export function parseScheduleForMock(expr: string): ParsedSchedule {
 				'Deploy to a sandbox to exercise it.',
 		);
 		e.name = CronJobErrors.ScheduleNotSupported;
-		throw e;
+		throw brandBlocksError(e);
 	}
 }
 
@@ -175,7 +176,7 @@ export function validateTimezone(tz: string): void {
 	} catch {
 		const err = new Error(`${CronJobErrors.InvalidTimezone}: "${tz}" is not a valid IANA timezone`);
 		err.name = CronJobErrors.InvalidTimezone;
-		throw err;
+		throw brandBlocksError(err);
 	}
 }
 

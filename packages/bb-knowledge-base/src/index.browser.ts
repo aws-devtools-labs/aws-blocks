@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { brandBlocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, WaitUntilSyncedOptions } from './types.js';
 import { KnowledgeBaseErrors } from './errors.js';
@@ -18,7 +19,7 @@ const BROWSER_ERROR = 'KnowledgeBase is server-side only. Use it in server actio
 function browserError(): Error {
 	const err = new Error(`${KnowledgeBaseErrors.BrowserNotSupported}: ${BROWSER_ERROR}`);
 	err.name = KnowledgeBaseErrors.BrowserNotSupported;
-	return err;
+	return brandBlocksError(err);
 }
 
 /**

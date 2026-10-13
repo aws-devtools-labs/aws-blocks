@@ -3,7 +3,7 @@
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, DeleteCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, ApiError, installClientUserAgent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, ApiError, installClientUserAgent, brandBlocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -93,7 +93,7 @@ export class KVStore<T = string> extends Scope {
 			if (resolved.issues) {
 				const err = new Error(`ValidationFailedException: ${resolved.issues[0].message}`);
 				err.name = 'ValidationFailedException';
-				throw err;
+				throw brandBlocksError(err);
 			}
 		}
 
@@ -135,9 +135,14 @@ export class KVStore<T = string> extends Scope {
 			await this.docClient.send(new PutCommand(command));
 		} catch (err: unknown) {
 			if (err instanceof Error && err.name === 'ValidationException' && /size has exceeded/i.test(err.message)) {
-				const sized = new Error(err.message);
+				// Author a STABLE BB message (parity with the mock) rather than
+				// forwarding DynamoDB's raw `err.message`: the branded name AND the
+				// message now cross the wire (D-003), so the message must not embed
+				// raw driver text. The original DynamoDB error is retained as `cause`
+				// for server-side diagnostics (kept server-side by the serializer).
+				const sized = new Error(`${KVStoreErrors.ItemTooLarge}: Item size has exceeded the maximum allowed size of 400 KB`, { cause: err });
 				sized.name = KVStoreErrors.ItemTooLarge;
-				throw sized;
+				throw brandBlocksError(sized);
 			}
 			// A failed conditional write is a Conflict, not an
 			// InternalServerError: map DynamoDB's raw

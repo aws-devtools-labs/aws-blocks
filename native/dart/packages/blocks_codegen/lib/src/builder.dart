@@ -262,6 +262,7 @@ class CodegenModelBuilder {
     final namespaceMap = <String, List<Operation>>{};
     // Formatted after Pass 3 so type-arg names reflect any collision rename.
     final unboundResults = <(String, TransferableType)>[];
+    final nonHydratableChannels = <(String, TransferableType)>[];
     for (final method in rpc.methods) {
       final parts = method.name.split('.');
       final ns = parts.length > 1
@@ -308,6 +309,20 @@ class CodegenModelBuilder {
         unboundResults.add((method.name, resultType));
       }
 
+      // A bound `realtime/channel` whose message type cannot be hydrated by the
+      // `Map`-only runtime is declared `RealtimeChannel<T>` but returned raw.
+      // Unwrap a nullable result first: `RealtimeChannel<T>?` emits the same raw
+      // body as the direct form, so it must be diagnosed too. Direct-result
+      // scope only (no field or nested scan).
+      final channelType = resultType is NullableType
+          ? resultType.inner
+          : resultType;
+      if (channelType is TransferableType &&
+          channelType.blocksType == 'realtime/channel' &&
+          !_channelMessageHydratable(channelType.typeArgs)) {
+        nonHydratableChannels.add((method.name, channelType));
+      }
+
       namespaceMap
           .putIfAbsent(ns, () => [])
           .add(
@@ -326,6 +341,10 @@ class CodegenModelBuilder {
 
     for (final (operation, transferable) in unboundResults) {
       _warnings.add(_formatUnboundTransferable(operation, transferable));
+    }
+
+    for (final (operation, transferable) in nonHydratableChannels) {
+      _warnings.add(_formatNonHydratableChannel(operation, transferable));
     }
 
     final namespaces = namespaceMap.entries
@@ -742,6 +761,43 @@ class CodegenModelBuilder {
         'with $typeArgClause.';
   }
 
+  /// Whether a bound `realtime/channel` message type-arg can be hydrated by the
+  /// generated client. Delegates to the shared [channelMessageHydratable] so
+  /// this diagnostic and the generator's channel deserializer decide "raw vs
+  /// hydrated" from one place and cannot drift.
+  bool _channelMessageHydratable(List<ResolvedType> typeArgs) =>
+      channelMessageHydratable(typeArgs, _types);
+
+  /// A readable Dart-type label for a channel message type, for diagnostics.
+  String _messageTypeLabel(ResolvedType t) => switch (t) {
+    PrimitiveType(dartType: final dt) => dt,
+    NullableType(inner: final i) => '${_messageTypeLabel(i)}?',
+    ListType(items: final i) => 'List<${_messageTypeLabel(i)}>',
+    MapType(valueType: final v) => 'Map<String, ${_messageTypeLabel(v)}>',
+    RecordType(name: final n) => n,
+    EnumType(name: final n) => n,
+    SealedClassType(name: final n) => n,
+    SchemaReference(name: final n) => n,
+    TransferableType(blocksType: final kt) => kt,
+    TupleType(items: final items) =>
+      '(${items.map(_messageTypeLabel).join(', ')})',
+  };
+
+  /// Builds the `AWSBLOCKS-NATIVE-002` diagnostic: a bound `realtime/channel`
+  /// whose message type the `Map`-only runtime cannot decode, so the value is
+  /// returned un-hydrated. Names the operation and the message type only.
+  String _formatNonHydratableChannel(
+    String operation,
+    TransferableType transferable,
+  ) {
+    final messageLabel = transferable.typeArgs.isEmpty
+        ? 'dynamic'
+        : _messageTypeLabel(transferable.typeArgs.first);
+    return 'AWSBLOCKS-NATIVE-002: $operation returns realtime/channel with a '
+        "non-hydratable message type '$messageLabel' on dart; the value is "
+        'returned un-hydrated (not supported yet).';
+  }
+
   /// Structural identity of a named type. Two types with the same display name
   /// but different fingerprints are a genuine conflict; identical fingerprints
   /// are the (already-merged) dedup case and must not be flagged.
@@ -887,4 +943,27 @@ class CodegenModelBuilder {
 
   String _capitalize(String s) =>
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+}
+
+/// Single source of truth for whether a bound `realtime/channel` message
+/// type-arg can be hydrated by the `Map`-only runtime. An object (record or
+/// sealed class, including via `$ref` and the nullable `T?` form) hydrates via
+/// `fromJson`, a `Map` hydrates per-value, and a `dynamic`/`dynamic?`/absent
+/// arg gets an identity decoder. A concrete primitive, list, enum, or tuple
+/// has no decoder and is returned raw. Both the generator's channel
+/// deserializer (the "raw vs hydrated" gate) and the builder's
+/// `AWSBLOCKS-NATIVE-002` diagnostic consult this, so they cannot drift.
+bool channelMessageHydratable(
+  List<ResolvedType> typeArgs,
+  Map<String, ResolvedType> allTypes,
+) {
+  if (typeArgs.isEmpty) return true;
+  final arg = typeArgs[0] is NullableType
+      ? (typeArgs[0] as NullableType).inner
+      : typeArgs[0];
+  final resolved = arg is SchemaReference ? allTypes[arg.name] : arg;
+  return resolved is RecordType ||
+      resolved is SealedClassType ||
+      resolved is MapType ||
+      (resolved is PrimitiveType && resolved.dartType == 'dynamic');
 }

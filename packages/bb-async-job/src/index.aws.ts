@@ -3,7 +3,7 @@
 
 import { SQSClient, SendMessageCommand, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import type { SendMessageBatchCommandOutput } from '@aws-sdk/client-sqs';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, brandBlocksError } from '@aws-blocks/core';
 import { EventSourceMapping, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -183,7 +183,7 @@ export class AsyncJob<T = unknown> extends Scope {
 				const msg = result.issues[0]?.message ?? 'Validation failed';
 				const err = new Error(`${AsyncJobErrors.ValidationFailed}: ${msg}`);
 				err.name = AsyncJobErrors.ValidationFailed;
-				throw err;
+				throw brandBlocksError(err);
 			}
 		}
 
@@ -195,7 +195,7 @@ export class AsyncJob<T = unknown> extends Scope {
 				`${AsyncJobErrors.PayloadTooLarge}: Serialized payload is ${kb} KB, exceeds 256 KB limit`
 			);
 			err.name = AsyncJobErrors.PayloadTooLarge;
-			throw err;
+			throw brandBlocksError(err);
 		}
 
 		return serialized;
@@ -328,7 +328,7 @@ export class AsyncJob<T = unknown> extends Scope {
 				`${AsyncJobErrors.BatchEmpty}: Batch is empty, must contain at least 1 payload`
 			);
 			err.name = AsyncJobErrors.BatchEmpty;
-			throw err;
+			throw brandBlocksError(err);
 		}
 
 		if (payloads.length > MAX_BATCH_PAYLOADS) {
@@ -336,7 +336,7 @@ export class AsyncJob<T = unknown> extends Scope {
 				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`
 			);
 			err.name = AsyncJobErrors.BatchTooLarge;
-			throw err;
+			throw brandBlocksError(err);
 		}
 
 		// Validate and serialize every payload before enqueuing anything, so one bad

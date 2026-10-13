@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { brandBlocksError } from '@aws-blocks/core';
+
 /**
  * Typed error constants for KnowledgeBase. Use with `isBlocksError()` in catch blocks.
  *
@@ -44,5 +46,5 @@ export type KnowledgeBaseErrorName = (typeof KnowledgeBaseErrors)[keyof typeof K
 export function blocksError(name: KnowledgeBaseErrorName, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }

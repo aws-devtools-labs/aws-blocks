@@ -166,4 +166,86 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     assert.strictEqual(payload.expected?.method, 'POST');
     assert.strictEqual(payload.expected?.path, '/aws-blocks/api');
   });
+
+  it('sanitizes an uncaught RawRoute exception to a generic 500 while preserving a handler-set header', async () => {
+    const port = await getAvailablePort();
+    tempDir = join(tmpdir(), `dev-rawroute-err-test-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+    // A RawRoute whose handler sets a CORS header on ctx.response and THEN throws
+    // a raw driver/SDK-style error carrying identifying text. The error path must
+    // (a) collapse to a generic 500 { error: 'Internal error' } with no leaked
+    // name/message, and (b) still emit the handler-set header — matching the
+    // production lambda-handler error path, which reuses responseHeaders.
+    writeFileSync(join(tempDir, 'backend.ts'), `
+import { RawRoute } from '${join(__dirname, '..', 'index.js').replace(/\\\\/g, '/')}';
+new RawRoute({ id: 'test' }, 'boom', {
+  method: 'GET',
+  path: '/boom',
+  handler: async (ctx) => {
+    ctx.response.headers.set('Access-Control-Allow-Origin', 'https://app.example.com');
+    const err = new Error('connect ECONNREFUSED 10.0.0.5:5432 secret-cluster.internal');
+    err.name = 'SequelizeConnectionRefusedError';
+    throw err;
+  },
+});
+export const testApi = { pingVoid: async () => undefined };
+`);
+    writeFileSync(join(tempDir, 'preload.mjs'), `
+if (!process.loadEnvFile) {
+  process.loadEnvFile = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+}
+`);
+    writeFileSync(join(tempDir, 'run-dev.ts'), `
+import { startDevServer } from '${join(__dirname, 'dev-server.js').replace(/\\\\/g, '/')}';
+startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\\\/g, '/')}', port: ${port} });
+`);
+
+    const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
+    // Quiet mode: the sanitized error path must NOT spam the full error+stack to
+    // stderr when BLOCKS_DEV_QUIET is set (it gates logging like the RPC catch).
+    devProcess = spawn(tsxBin, ['--import', join(tempDir, 'preload.mjs'), join(tempDir, 'run-dev.ts')], {
+      cwd: tempDir,
+      env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    devProcess.stdout?.on('data', chunk => { stdout += chunk.toString(); });
+    devProcess.stderr?.on('data', chunk => { stderr += chunk.toString(); });
+
+    const deadline = Date.now() + 15_000;
+    let response: Response | undefined;
+    let lastError: unknown;
+    while (!response && Date.now() < deadline) {
+      try {
+        response = await fetch(`http://127.0.0.1:${port}/boom`, { method: 'GET' });
+      } catch (error) {
+        lastError = error;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    assert.ok(response, `Dev server did not respond: ${String(lastError)}\nstdout: ${stdout}\nstderr: ${stderr}`);
+    assert.strictEqual(response.status, 500);
+    assert.strictEqual(response.headers.get('content-type'), 'application/json');
+    // The handler-set CORS header survives the error response.
+    assert.strictEqual(response.headers.get('access-control-allow-origin'), 'https://app.example.com');
+
+    const raw = await response.text();
+    const payload = JSON.parse(raw) as { error?: string; name?: string };
+    assert.strictEqual(payload.error, 'Internal error');
+    // No raw driver name/message/host leaks anywhere in the serialized body.
+    assert.ok(!raw.includes('ECONNREFUSED'), `Leaked raw driver message: ${raw}`);
+    assert.ok(!raw.includes('secret-cluster.internal'), `Leaked raw host: ${raw}`);
+    assert.ok(!raw.includes('SequelizeConnectionRefusedError'), `Leaked raw error name: ${raw}`);
+
+    // Quiet mode suppresses the error log and never leaks the raw text to stderr.
+    const logDeadline = Date.now() + 500;
+    while (Date.now() < logDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    assert.ok(!stderr.includes('ECONNREFUSED'), `Quiet mode leaked raw text to stderr: ${stderr}`);
+    assert.ok(!stderr.includes('RawRoute Error'), `Quiet mode should suppress the RawRoute error log: ${stderr}`);
+  });
 });

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, brandBlocksError } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -45,7 +45,7 @@ function writeSettings(scope: Scope, data: Record<string, unknown>): void {
 function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }
 
 async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value: unknown): Promise<void> {

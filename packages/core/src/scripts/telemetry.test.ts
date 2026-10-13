@@ -73,6 +73,7 @@ describe('telemetry CLI', () => {
       assert.ok(result.stdout.includes('--enable'));
       assert.ok(result.stdout.includes('--disable'));
       assert.ok(result.stdout.includes('--global'));
+      assert.ok(result.stdout.includes('AWS_BLOCKS_DISABLE_TELEMETRY=1|true|yes'));
     });
 
     it('-h shows usage', () => {

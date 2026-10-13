@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'native/kotlin/**'
+      - 'native/codegen-fixtures/**'
       - '.github/workflows/native-kotlin-analysis.yml'
   workflow_dispatch:
 

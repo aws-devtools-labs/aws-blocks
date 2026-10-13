@@ -1,5 +1,70 @@
 # @aws-blocks/bb-auth-cognito
 
+## 0.1.11
+
+### Patch Changes
+
+- bd9a1b8: fix(bb-auth-cognito): stop leaking raw Cognito SDK text in ApiError wire messages
+  
+  Cognito SDK failures are now translated to a BB-authored message keyed on the exception name; the raw SDK error stays on the non-enumerable `cause`. Error `name`, HTTP status, and `retriable` are unchanged. `auth.admin.scan()` now translates SDK failures the same way as every other admin method.
+- 2e72825: fix(bb-auth-cognito): `requireRole` reads group membership live so admin group changes take effect without a re-login
+  
+  `requireRole` checked the signed-in user's `cognito:groups` **token claim**, which
+  is a snapshot from sign-in. After an admin ran `auth.admin.addUserToGroup(user,
+  'admins')`, that user's live session kept getting **403** until their token
+  refreshed or they re-logged in — the "admin surface is unreachable / `requireRole`
+  returns 403 for everyone" symptom. The mirror bug: `removeUserFromGroup` did **not**
+  revoke a live session, so a removed member kept access until their stale token
+  expired.
+  
+  `requireRole` now reads membership live at call time — AWS: `AdminListGroupsForUser`
+  (paginated); mock: in-process `state.groups` — mirroring how `fetchUserAttributes`
+  reads live rather than trusting the token. The returned `CognitoUser.groups`
+  reflects the live read. Grants and revocations now apply on the user's next
+  request, with no re-login.
+  
+  - Costs one extra Cognito call per guarded request. The cheaper identity reads
+    (`requireAuth` / `getCurrentUser` / `signIn`) still surface the cached
+    `cognito:groups` claim — use `requireRole` when you need live membership.
+  - `cognito-idp:AdminListGroupsForUser` is now granted to the execution role
+    unconditionally (it backs a client-facing guard), independent of the opt-in
+    `admin` surface. Every other `Admin*` action still requires opt-in.
+  - Added `admin.test.ts` cases covering the sign-in-then-mutate ordering in both
+    directions (grant is honored, revocation locks out); updated the CDK IAM
+    least-privilege test for the new baseline grant.
+- 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
+- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
+  
+  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
+  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
+  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
+  and exports `installClientUserAgent`, an SDK middleware that appends the validated
+  token to the outgoing user agent. The 12 participating Building Blocks install it,
+  so native attribution rides the SDK user-agent chain AWS service telemetry already
+  counts. The Kotlin runtime already sends the header, so Kotlin
+  callers are attributed as soon as this ships; Swift and Dart follow.
+- Updated dependencies [4456fd7]
+- Updated dependencies [fac0e75]
+- Updated dependencies [0e18d5b]
+- Updated dependencies [20be3f0]
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [5454763]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/auth-common@0.1.9
+  - @aws-blocks/bb-app-setting@0.3.1
+  - @aws-blocks/bb-kv-store@0.3.0
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-logger@0.2.1
+
 ## 0.1.10
 
 ### Patch Changes

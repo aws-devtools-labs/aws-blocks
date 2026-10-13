@@ -236,12 +236,79 @@ try {
 
 ## What It Provisions (AWS)
 
-- **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs
+- **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs. Storage
+  encryption at rest is **opt-in via a context flag** so new projects are secure by
+  default without replacing an existing cluster. New `create-blocks-app` projects
+  set `"@aws-blocks/bb-data:encryptStorageByDefault": true` in `cdk.json`, which
+  turns on encryption with the account's AWS-managed `aws/rds` key. Passing a
+  `storageEncryptionKeyArn` (the ARN of a customer-managed KMS key) also turns
+  encryption on regardless of the flag and uses that key instead (it also encrypts
+  the generated credentials secret). When neither the flag nor a key is set, the
+  cluster is synthesized without the `StorageEncrypted` property (an existing,
+  unencrypted cluster is left untouched) and a synth warning explains how to opt
+  in. The key is **imported** (Blocks can't modify its policy), so its policy
+  must already grant the deploying principal `kms:CreateGrant` + `kms:DescribeKey`
+  (RDS uses a grant to encrypt the storage volume) and grant `kms:Decrypt` to the
+  principal that reads the credentials secret over the Data API. The key must be in
+  the **same account and region** as the cluster.
+- **Automated backups** — on by default, retained **15 days**, which is also the
+  point-in-time-recovery window. Controlled by the single `pointInTimeRecovery`
+  option (mirrors every other Blocks block): `true` enables the 15-day window,
+  `{ retentionDays: n }` pins a 1–35-day window, and `false` clamps to the 1-day
+  minimum (Aurora cannot turn automated backups off). When omitted it follows the
+  stack-wide `defaults.pointInTimeRecovery` (on under `production`, off under
+  `sandbox` — which lands on the 1-day minimum).
+- **CloudWatch log export** — the PostgreSQL engine log is exported to CloudWatch
+  Logs. Log-group retention follows the stack-wide `defaults.logRetention` when
+  set; otherwise it uses the account default.
 - **VPC** — Private subnets (isolated, no NAT)
-- **RDS Proxy** — Connection pooling
-- **Secrets Manager** — Auto-generated credentials, auto-rotated
+- **Secrets Manager** — Auto-generated credentials. Automatic rotation is not yet
+  wired up (a rotation Lambda in the cluster VPC is a planned follow-up); the
+  secret is encrypted with your `storageEncryptionKeyArn` when one is supplied.
 - **Migration Lambda** — Runs `.sql` files on deploy via CustomResource
 - **IAM** — `rds-data:*` and `secretsmanager:GetSecretValue` granted to the app Lambda
+
+> **Access model:** the database is reached exclusively over the RDS Data API
+> (HTTPS + Secrets Manager credentials), never a raw Postgres socket. Database-level
+> IAM authentication (`iamAuthentication`) is therefore intentionally left off — it
+> does not apply to the Data API access path.
+>
+> **Enabling encryption on an existing unencrypted cluster requires a
+> replacement — and a replacement is destructive.** RDS cannot encrypt an
+> already-provisioned unencrypted cluster in place, so turning storage encryption
+> on (or changing the KMS key) makes CloudFormation create a **new, empty**
+> encrypted cluster and repoint the stack at it. There is **no in-place path**.
+> What happens to the old cluster and its data depends on the removal policy:
+> - **Production (RETAIN):** the old cluster is left behind, orphaned and no
+>   longer referenced by the stack. The app comes back pointed at the new **empty**
+>   cluster. The migration CustomResource does **not** re-run on a cluster swap —
+>   its only CloudFormation properties are the service token and the migrations
+>   hash, and neither changes when the cluster is replaced, so CloudFormation never
+>   invokes it. The replacement cluster therefore comes up with **no schema**;
+>   migrations run only when a migration file changes (which changes the migrations
+>   hash). Your data still exists on the orphaned cluster but is not restored.
+> - **Sandbox (DESTROY):** the old cluster and all of its data are **deleted**.
+> - **Snapshot (`removalPolicy: 'snapshot'`):** the old cluster is snapshotted as
+>   it is replaced. Under production's `deletionProtection: true`, the follow-up
+>   delete of the old cluster may fail and leave it in place; this cleanup path is
+>   unverified on a real deploy.
+>
+> **The replacement is symmetric.** Turning encryption back **off** — removing the
+> flag (or `storageEncryptionKeyArn`) from a project that already deployed
+> encrypted, whether by deleting the `cdk.json` line or by a merge that drops it —
+> also changes the `StorageEncrypted` property, so it **likewise replaces the
+> cluster** (back to unencrypted) with the same new-empty-cluster / no-schema
+> outcome described above. Review the diff and snapshot before removing the flag
+> too, not only before adding it.
+>
+> The only safe route is to carry the data across yourself: **snapshot** the
+> existing cluster, **restore** that snapshot into a new cluster with encryption
+> enabled, then cut over to it. Review the CloudFormation diff and take a snapshot
+> before deploying this change to any cluster whose data you need. Adding or
+> changing the KMS key also replaces the cluster's generated credentials secret (a
+> new logical id, hence a new generated password), so record the existing
+> credentials — or reset the master password on the old cluster — if you still
+> need access to the orphaned cluster.
 
 ## Local Development
 
@@ -261,6 +328,24 @@ interface DatabaseOptions {
   schema?: TableSchema;
   /** Aurora PostgreSQL engine version, e.g. '16.13'. Override the Aurora engine version. @default '16.13' */
   postgresVersion?: string;
+  /**
+   * ARN of a customer-managed KMS key for the cluster's storage-at-rest encryption
+   * (also encrypts the auto-generated credentials secret). Supplying it turns
+   * storage encryption on regardless of the `@aws-blocks/bb-data:encryptStorageByDefault`
+   * context flag. When omitted, encryption follows that flag — on with the
+   * account's AWS-managed `aws/rds` key when set, otherwise left unset. The key is
+   * imported, so its policy must already grant the deploying principal
+   * `kms:CreateGrant` + `kms:DescribeKey` and grant `kms:Decrypt` to the principal
+   * reading the credentials secret; it must be in the same account + region.
+   */
+  storageEncryptionKeyArn?: string;
+  /**
+   * Automated-backup retention, which is also the point-in-time-recovery (PITR)
+   * window. `true` enables the 15-day window; `{ retentionDays: n }` pins a
+   * 1–35-day window; `false` clamps to the 1-day minimum (Aurora cannot disable
+   * automated backups). When omitted, follows `defaults.pointInTimeRecovery`.
+   */
+  pointInTimeRecovery?: boolean | { retentionDays: number };
 }
 ```
 
@@ -281,7 +366,7 @@ interface DatabaseOptions {
 ## Performance
 
 - **Query latency:** 10-50ms (warm), ~500ms cold start from 0 ACUs
-- **Throughput:** Thousands of concurrent connections via RDS Proxy
+- **Throughput:** Requests go over the RDS Data API (HTTPS) rather than pooled database connections, so there is no connection-pool ceiling or RDS Proxy; concurrency is bounded by the Data API request limits and the cluster's ACU scaling.
 - **Storage:** Up to 128 TiB, auto-scales in 10 GiB increments
 - **Cost:** ~$0.12/ACU-hour + ~$0.10/GB-month storage
 - **Durability:** 6 copies across 3 AZs, 99.99% availability

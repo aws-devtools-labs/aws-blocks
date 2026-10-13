@@ -3,7 +3,7 @@
 
 import { createDefu } from 'defu';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError, brandBlocksError } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { ReadValidationMode } from './types.js';
 
@@ -98,7 +98,7 @@ export const DistributedTableErrors = {
 export function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }
 
 /**
@@ -185,14 +185,16 @@ export const DistributedTableMessages = {
  * other `ValidationException` causes (malformed expressions, type mismatches) are
  * left untouched and propagate as-is. This mirrors the mock's client-side size
  * check so both layers are catchable with `isBlocksError(e, ItemTooLarge)`. The
- * original DynamoDB error is preserved as `cause` (kept server-side per D-003) so
- * its stack and requestId remain available for debugging.
+ * re-mapped error carries a STABLE BB-authored message (not DynamoDB's raw text):
+ * the branded name AND message now cross the wire (D-003), so the message must not
+ * embed raw driver text. The original DynamoDB error is preserved as `cause` (kept
+ * server-side per D-003) so its stack and requestId remain available for debugging.
  */
 export function remapItemTooLarge(err: unknown): unknown {
 	if (err instanceof Error && err.name === 'ValidationException' && /size has exceeded/i.test(err.message)) {
-		const remapped = new Error(err.message, { cause: err });
+		const remapped = new Error(`${DistributedTableErrors.ItemTooLarge}: Item size has exceeded the maximum allowed size of 400 KB`, { cause: err });
 		remapped.name = DistributedTableErrors.ItemTooLarge;
-		return remapped;
+		return brandBlocksError(remapped);
 	}
 	return err;
 }

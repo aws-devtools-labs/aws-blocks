@@ -3,7 +3,8 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { extractUserAttributes, memoizePerContext } from './index.aws.js';
+import { extractUserAttributes, memoizePerContext, toCognitoApiError, AuthCognitoErrors } from './index.aws.js';
+import { ApiError } from '@aws-blocks/core';
 
 describe('extractUserAttributes (JWT allow-shape)', () => {
 	test('passes through standard OIDC attributes', () => {
@@ -139,5 +140,94 @@ describe('memoizePerContext (requireRole per-request dedupe)', () => {
 		const second = await memoizePerContext(memo, ctx, 'alice', factory);
 		assert.strictEqual(second, 2, 'the retry re-runs the factory rather than replaying the cached rejection');
 		assert.strictEqual(calls, 2);
+	});
+});
+
+describe('toCognitoApiError (wire-safe SDK error translation)', () => {
+	const rawText =
+		'User: arn:aws:sts::123456789012:assumed-role/app-role/session is not authorized at https://cognito-idp.us-east-1.amazonaws.com';
+
+	function cognitoError(name: string, message: string): Error {
+		const e = new Error(message);
+		e.name = name;
+		return e;
+	}
+
+	test('non-Error input → generic 500 ApiError', () => {
+		const err = toCognitoApiError('boom');
+		assert.ok(err instanceof ApiError);
+		assert.strictEqual(err.message, 'Unknown error');
+		assert.strictEqual(err.status, 500);
+		assert.strictEqual(err.cause, undefined);
+	});
+
+	test('raw Cognito message never reaches ApiError.message or its JSON form', () => {
+		const raw = cognitoError(AuthCognitoErrors.NotAuthorized, rawText);
+		const err = toCognitoApiError(raw);
+		assert.strictEqual(err.message, 'Not authorized');
+		assert.ok(!err.message.includes('123456789012'));
+		assert.ok(!JSON.stringify(err).includes('123456789012'));
+		assert.ok(!JSON.stringify({ ...err }).includes('123456789012'));
+	});
+
+	test('raw SDK error is kept on a non-enumerable cause', () => {
+		const raw = cognitoError(AuthCognitoErrors.NotAuthorized, rawText);
+		const err = toCognitoApiError(raw);
+		assert.strictEqual(err.cause, raw);
+		assert.strictEqual(Object.getOwnPropertyDescriptor(err, 'cause')?.enumerable, false);
+		assert.ok(!Object.keys(err).includes('cause'));
+	});
+
+	test('name, status, and retriable flag are preserved', () => {
+		const notAuthorized = toCognitoApiError(cognitoError(AuthCognitoErrors.NotAuthorized, rawText));
+		assert.strictEqual(notAuthorized.name, AuthCognitoErrors.NotAuthorized);
+		assert.strictEqual(notAuthorized.status, 401);
+		assert.strictEqual(notAuthorized.retriable, false);
+
+		const codeMismatch = toCognitoApiError(cognitoError(AuthCognitoErrors.CodeMismatch, rawText));
+		assert.strictEqual(codeMismatch.name, AuthCognitoErrors.CodeMismatch);
+		assert.strictEqual(codeMismatch.status, 400);
+		assert.strictEqual(codeMismatch.retriable, true);
+		assert.strictEqual(codeMismatch.message, 'Invalid code');
+
+		const throttled = toCognitoApiError(cognitoError(AuthCognitoErrors.TooManyRequests, rawText));
+		assert.strictEqual(throttled.status, 429);
+	});
+
+	test('unknown exception name → BB default message, raw text still withheld', () => {
+		const err = toCognitoApiError(cognitoError('AccessDeniedException', rawText));
+		assert.strictEqual(err.name, 'AccessDeniedException');
+		assert.strictEqual(err.message, 'Authentication request failed');
+		assert.ok(!JSON.stringify(err).includes('123456789012'));
+	});
+
+	test('every AuthCognitoErrors name maps to a BB-authored message, never the raw text', () => {
+		for (const name of Object.values(AuthCognitoErrors)) {
+			const err = toCognitoApiError(cognitoError(name, rawText));
+			assert.strictEqual(err.name, name);
+			assert.ok(!err.message.includes(rawText), `${name} leaked raw Cognito text`);
+			assert.notStrictEqual(err.message, 'Authentication request failed', `${name} has no dedicated message`);
+		}
+	});
+
+	test('no own-enumerable field of the raw SDK error is copied onto the ApiError', () => {
+		// A real Cognito SDK exception carries extra own-enumerable fields
+		// ($metadata, $fault, Code, ...) that can embed identifying text. The
+		// contract is that the raw error lives ONLY on the non-enumerable cause,
+		// so none of those raw-specific keys should appear on the ApiError even
+		// if the construction later changes to a field-spreading shape. `name` is
+		// excluded: it is the deliberately-preserved BB-level field (D-003 allows
+		// the name over the wire), not raw SDK text.
+		const raw = Object.assign(cognitoError(AuthCognitoErrors.NotAuthorized, rawText), {
+			$metadata: { httpStatusCode: 401, requestId: 'req-123456789012' },
+			$fault: 'client',
+			Code: 'NotAuthorizedException',
+		});
+		const err = toCognitoApiError(raw);
+		const rawOnlyKeys = Object.keys(raw).filter((k) => k !== 'name');
+		for (const key of rawOnlyKeys) {
+			assert.ok(!Object.keys(err).includes(key), `raw SDK field '${key}' was copied onto the ApiError`);
+		}
+		assert.ok(!JSON.stringify(err).includes('req-123456789012'));
 	});
 });

@@ -35,7 +35,10 @@ export {
 	finalizeConfigRegistry,
 	finalizeDashboards,
 	finalizeTracing,
+	getBlocksRoot,
+	getBlocksRootId,
 	getConfigLocation,
+	getOrCreateOnRoot,
 	getVpcContext,
 	registerConfig,
 	registerDashboardFinalizer,
@@ -54,7 +57,7 @@ export {
 	registerSdkIdentifiers,
 } from './common/sdk-registry.js';
 export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
-export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
+export { ApiError, blocksError, brandBlocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError, isWireSafeError } from './errors.js';
 export {
 	type BlocksStackApi,
 	type ComputeConfig,
