@@ -21,13 +21,11 @@ import { ClusterInfra } from './infra/cluster-infra.js';
 import { resolveMigrationsPath } from './migrations/runner.js';
 import { registerSchema, registerUniqueId } from './registry.js';
 import type {
-	ClusterKind,
-	ClusterOptionsOf,
 	ClusterRef,
 	ClusterType,
+	DatabaseClusterOptions,
 	DatabaseOptions,
 	DistributedDatabaseOptions,
-	KindOf,
 	OwnedDatabaseOptions,
 } from './types.js';
 
@@ -48,16 +46,15 @@ function projectRootOf(scope: BuildingBlockScope): string {
  * `BuildingBlockScope` only because that is how a construct declares its VPC
  * requirements and reaches the stack's execution role and defaults.
  */
-export class DatabaseCluster<T extends ClusterType = ClusterType> extends BuildingBlockScope {
-	readonly type: T;
-	readonly kind: T;
+export class DatabaseCluster extends BuildingBlockScope {
+	/** The category this cluster was constructed with. */
+	readonly type: ClusterType;
 	/** @internal */
 	readonly infra: ClusterInfra;
 
-	constructor(scope: ScopeParent, id: string, options: { type: T } & ClusterOptionsOf<T>) {
+	constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions) {
 		super(id, { parent: scope, vpc: VPC_REQUIREMENTS });
 		this.type = options.type;
-		this.kind = options.type;
 		registerUniqueId('DatabaseCluster', id, this.fullId);
 		this.infra = new ClusterInfra({
 			owner: this,
@@ -76,20 +73,20 @@ export class DatabaseCluster<T extends ClusterType = ClusterType> extends Buildi
  * SQL database on PostgreSQL, infrastructure build. Owns a `distributed` cluster
  * when `cluster` is omitted; otherwise attaches to the given cluster.
  */
-export class Database<K extends ClusterKind = 'distributed'> extends BuildingBlockScope {
-	readonly cluster: ClusterRef<K>;
+export class Database extends BuildingBlockScope {
+	readonly cluster: ClusterRef;
 	readonly schemaName: string;
 	readonly migrationsPath: string | undefined;
 
 	constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
-	constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions & { cluster: KindOf<K> });
+	constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions);
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		// A shared cluster declared its own requirements; an owned one needs egress to DSQL.
 		super(id, { parent: scope, vpc: options.cluster ? {} : VPC_REQUIREMENTS });
 		registerUniqueId('Database', id, this.fullId);
 
 		const resolved = resolveCluster(id, this.fullId, options);
-		this.cluster = resolved.ref as ClusterRef<K>;
+		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;
 		const clusterFullId = resolved.ref.id === DEFAULT_CLUSTER_ID ? this.fullId : resolved.ref.id;
 		registerSchema(clusterFullId, this.schemaName, this.fullId);

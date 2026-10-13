@@ -12,12 +12,11 @@ import { AUTOCOMMIT_CONFLICT_BACKOFF_MS, DEFAULT_MAX_RETRIES } from './constants
 import { runInTransactionScope } from './engines/tx-scope.js';
 import { isSerializationConflict } from './errors.js';
 import { asTransactionError, TransactionImpl } from './transaction.js';
-import type { ClusterKind, TransactionOptions } from './types.js';
+import type { TransactionOptions } from './types.js';
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export interface DatabaseCoreOptions {
-	kind: ClusterKind;
 	/** Produces (and memoizes) the engine; may run migrations first. */
 	engine: () => Promise<DatabaseEngine>;
 	/** Names the block in error messages. */

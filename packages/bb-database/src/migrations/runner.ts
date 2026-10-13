@@ -16,35 +16,31 @@ import { configError } from '../errors.js';
 import type { MigrationPlan, PlanStep } from '../types.js';
 
 /** Error name for a migration that failed mid-plan. */
-export const MIGRATION_FAILED_ERROR_NAME = 'MigrationFailedException';
+const MIGRATION_FAILED_ERROR_NAME = 'MigrationFailedException';
 
 export interface RunPlanOptions {
 	/** The block's schema. Created if missing (unless `public`). */
 	schemaName: string;
 	/** Where progress lines go. @default console.log */
 	log?: (message: string) => void;
-	/**
-	 * What to do at a `wait-job` step whose DSQL job is still running.
-	 * `wait` blocks the session with `sys.wait_for_job`; `defer` records the
-	 * job in `_migration_progress` and returns, so a later call (the
-	 * custom-resource provider's `isComplete` poll) picks up where it left off.
-	 * @default 'wait'
-	 */
-	asyncJobs?: 'wait' | 'defer';
 }
 
 /** A DSQL job the plan is waiting on. */
-export interface PendingJob {
+interface PendingJob {
 	file: string;
 	/** Index of the `wait-job` step. */
 	step: number;
 	jobId: string;
 }
 
-export interface RunPlanResult {
+interface RunPlanResult {
 	/** Files applied to completion in this call. */
 	applied: string[];
-	/** Set only with `asyncJobs: 'defer'`, when a job is still running. Call again later. */
+	/**
+	 * The DSQL job the plan stopped at because it was still running. The job is
+	 * recorded in `_migration_progress`; call again later to resume (the
+	 * custom-resource provider's `isComplete` poll does).
+	 */
 	waitingOn?: PendingJob;
 }
 
@@ -60,7 +56,7 @@ export async function ensureMigrationTables(engine: DatabaseEngine, schemaName: 
 }
 
 /** Names of the files already recorded in `_migrations`. */
-export async function appliedMigrations(engine: DatabaseEngine): Promise<Set<string>> {
+async function appliedMigrations(engine: DatabaseEngine): Promise<Set<string>> {
 	const rows = await engine.query<{ name: string }>('SELECT name FROM _migrations ORDER BY name');
 	return new Set(rows.map((r) => r.name));
 }
@@ -113,10 +109,7 @@ type JobStatus = 'running' | 'completed' | 'failed';
  * view is treated as completed: DSQL purges finished jobs after 30 minutes, and
  * a failed index or constraint would have failed the job while it was listed.
  */
-export async function jobStatus(
-	engine: DatabaseEngine,
-	jobId: string,
-): Promise<{ status: JobStatus; details?: string }> {
+async function jobStatus(engine: DatabaseEngine, jobId: string): Promise<{ status: JobStatus; details?: string }> {
 	const rows = await engine.query<{ status: string; details: string | null }>(
 		'SELECT status, details FROM sys.jobs WHERE job_id = $1',
 		[jobId],
@@ -128,20 +121,9 @@ export async function jobStatus(
 	return { status: 'running' };
 }
 
-const quoteLiteral = (value: string) => `'${value.replace(/'/g, "''")}'`;
-
-/** Block the session until the job finishes; throw when it failed. */
-async function waitForJob(engine: DatabaseEngine, jobId: string): Promise<void> {
-	const rows = await engine.query<{ ok: boolean }>(`SELECT sys.wait_for_job(${quoteLiteral(jobId)}) AS ok`);
-	if (rows[0]?.ok === false) {
-		const status = await jobStatus(engine, jobId);
-		throw new Error(`DSQL job ${jobId} failed${status.details ? `: ${status.details}` : ''}`);
-	}
-}
-
 /**
- * Apply every pending file of `plan`. Returns the names applied and, with
- * `asyncJobs: 'defer'`, the job it stopped at when one is still running.
+ * Apply every pending file of `plan`. Returns the names applied and, when a
+ * DSQL job is still running, the job it stopped at.
  *
  * Consecutive transactional steps share one transaction; a non-transactional
  * step (DDL on a `distributed` cluster, a job wait, a constraint validation)
@@ -154,7 +136,6 @@ export async function runMigrationPlan(
 	options: RunPlanOptions,
 ): Promise<RunPlanResult> {
 	const log = options.log ?? ((m: string) => console.log(m));
-	const defer = options.asyncJobs === 'defer';
 	await ensureMigrationTables(engine, options.schemaName);
 	const applied = await appliedMigrations(engine);
 	const results: string[] = [];
@@ -208,17 +189,13 @@ export async function runMigrationPlan(
 				}
 				if (step.kind === 'wait-job') {
 					if (lastJobId) {
-						if (defer) {
-							const status = await jobStatus(engine, lastJobId);
-							if (status.status === 'failed')
-								throw new Error(`DSQL job ${lastJobId} failed: ${status.details ?? ''}`);
-							if (status.status === 'running') {
-								await recordProgress(engine, null, file.file, i, lastJobId);
-								log(`[bb-database] ${file.file}: waiting for DSQL job ${lastJobId}`);
-								return { applied: results, waitingOn: { file: file.file, step: i, jobId: lastJobId } };
-							}
-						} else {
-							await waitForJob(engine, lastJobId);
+						const status = await jobStatus(engine, lastJobId);
+						if (status.status === 'failed')
+							throw new Error(`DSQL job ${lastJobId} failed: ${status.details ?? ''}`);
+						if (status.status === 'running') {
+							await recordProgress(engine, null, file.file, i, lastJobId);
+							log(`[bb-database] ${file.file}: waiting for DSQL job ${lastJobId}`);
+							return { applied: results, waitingOn: { file: file.file, step: i, jobId: lastJobId } };
 						}
 					}
 					lastJobId = undefined;

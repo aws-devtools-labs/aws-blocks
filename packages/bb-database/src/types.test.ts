@@ -20,17 +20,17 @@ declare const DatabaseCluster: typeof DatabaseClusterType;
 declare const scope: Scope;
 
 function typeChecks(): void {
-	// 1. Default: the block owns a distributed cluster.
+	// 1. Default: the block owns a distributed cluster. The classes are not generic.
 	const owned = new Database(scope, 'db');
-	type _Owned = Expect<Equal<typeof owned, DatabaseType<'distributed'>>>;
+	type _Owned = Expect<Equal<typeof owned, DatabaseType>>;
 	const ownedWithOptions = new Database(scope, 'db2', { migrationsPath: './x', removalPolicy: 'destroy' });
-	type _OwnedOpts = Expect<Equal<typeof ownedWithOptions, DatabaseType<'distributed'>>>;
+	type _OwnedOpts = Expect<Equal<typeof ownedWithOptions, DatabaseType>>;
 
-	// 2. A shared cluster; its type parameter is inferred from `type`, and the block's kind from the cluster.
+	// 2. A shared cluster. `type` is required so a second category is an additive change.
 	const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
-	type _Shared = Expect<Equal<typeof shared, DatabaseClusterType<'distributed'>>>;
+	type _Shared = Expect<Equal<typeof shared, DatabaseClusterType>>;
 	const onShared = new Database(scope, 'orders', { cluster: shared, schemaName: 'orders_v2' });
-	type _OnShared = Expect<Equal<typeof onShared, DatabaseType<'distributed'>>>;
+	type _OnShared = Expect<Equal<typeof onShared, DatabaseType>>;
 
 	// query / queryOne / execute / transaction on every kind; the descriptor carries the kind.
 	void onShared.query;

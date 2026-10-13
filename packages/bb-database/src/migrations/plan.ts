@@ -8,13 +8,12 @@
  * cache, `CREATE INDEX` to `ASYNC` plus a job wait, `ADD CONSTRAINT` to
  * `NOT VALID` plus an asynchronous validation, one DDL statement per
  * transaction), then runs the rewritten SQL through AWS's `dsql-lint` and
- * rejects, naming the file and the rule, what DSQL still cannot run. Other
- * kinds run the files as written, minus `ASYNC`.
+ * rejects, naming the file and the rule, what DSQL still cannot run.
  */
 import { brandBlocksError } from '@aws-blocks/core';
 import { DOLLAR_QUOTE_TAG_RE, splitStatements } from '@aws-blocks/data-common';
 import { DSQL_IDENTITY_CACHE } from '../constants.js';
-import type { ClusterKind, FilePlan, MigrationPlan, PlanStep } from '../types.js';
+import type { FilePlan, MigrationPlan, PlanStep } from '../types.js';
 import { ALTER_TABLE_DOC, classifyStatement, findStatementIssues, stripLiteralsAndComments } from '../validation.js';
 
 /** Error name for a migration directory the target cluster cannot run. */
@@ -223,7 +222,6 @@ function rewriteSequence(sql: string): { sql: string; notes: string[] } {
 
 const CREATE_INDEX = /^\s*CREATE\s+(UNIQUE\s+)?INDEX\b/i;
 const CREATE_INDEX_ASYNC = /^\s*CREATE\s+(UNIQUE\s+)?INDEX\s+ASYNC\b/i;
-const CREATE_INDEX_CONCURRENTLY = /^\s*CREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\b/i;
 /** `ADD [CONSTRAINT name] CHECK | FOREIGN KEY`. The name is what the validation step needs; without it the constraint stays NOT VALID. */
 const ADD_CONSTRAINT =
 	/^\s*ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?((?:"[^"]+"|[\w.])+)\s+ADD\s+(?:CONSTRAINT\s+((?:"[^"]+"|\w+))\s+)?(CHECK|FOREIGN\s+KEY)\b/i;
@@ -250,25 +248,9 @@ const waitStep = (what: string): PlanStep => ({
 	note: `waits for the ${what} job DSQL returned`,
 });
 
-/** Rewrite one statement for the target, producing one or more plan steps. */
-function rewriteStatement(statement: string, target: ClusterKind): PlanStep[] {
-	const distributed = target === 'distributed';
+/** Rewrite one statement for DSQL, producing one or more plan steps. */
+function rewriteStatement(statement: string): PlanStep[] {
 	const cleaned = stripLiteralsAndComments(statement);
-
-	if (!distributed) {
-		// Portable: strip DSQL-only ASYNC; CONCURRENTLY cannot run inside a transaction.
-		if (CREATE_INDEX_ASYNC.test(cleaned) || ALTER_TABLE_ASYNC_VALIDATE.test(cleaned)) {
-			const sql = replaceOutsideLiterals(
-				statement,
-				/\b((?:CREATE\s+(?:UNIQUE\s+)?INDEX)|ALTER\s+TABLE)\s+ASYNC\b/i,
-				'$1',
-			);
-			return [{ kind: 'statement', sql, transactional: true, note: 'ASYNC (DSQL-only) removed' }];
-		}
-		const transactional = !CREATE_INDEX_CONCURRENTLY.test(cleaned);
-		return [{ kind: 'statement', sql: statement, transactional }];
-	}
-
 	const isDdl = classifyStatement(statement) === 'ddl';
 	const notes: string[] = [];
 	let sql = statement;
@@ -329,9 +311,9 @@ function rewriteStatement(statement: string, target: ClusterKind): PlanStep[] {
 }
 
 /**
- * Build the plan for a set of migration files (name → SQL) against a cluster
- * kind. Throws a branded `DsqlMigrationValidationError` listing every statement
- * the target cannot run, each with the file name and the doc page checked.
+ * Build the plan for a set of migration files (name → SQL). Throws a branded
+ * `DsqlMigrationValidationError` listing every statement DSQL cannot run, each
+ * with the file name and the doc page checked.
  */
 export interface BuildPlanOptions {
 	/**
@@ -343,12 +325,8 @@ export interface BuildPlanOptions {
 	validate?: boolean;
 }
 
-export function buildMigrationPlan(
-	migrations: Record<string, string>,
-	target: ClusterKind,
-	options: BuildPlanOptions = {},
-): MigrationPlan {
-	const validate = options.validate !== false && target === 'distributed';
+export function buildMigrationPlan(migrations: Record<string, string>, options: BuildPlanOptions = {}): MigrationPlan {
+	const validate = options.validate !== false;
 	const errors: string[] = [];
 	const files: FilePlan[] = [];
 	/** Primary-key columns per table, from the CREATE TABLE statements seen so far. */
@@ -358,28 +336,26 @@ export function buildMigrationPlan(
 		const steps: PlanStep[] = [];
 		const foreignKeys: string[] = [];
 		for (const statement of statements) {
-			if (target === 'distributed') {
-				// The block's own checks: what dsql-lint cannot see from one statement
-				// (a primary key declared earlier) or does not care about (a constraint
-				// the rewriter can add NOT VALID but cannot validate without a name).
-				const cleaned = stripLiteralsAndComments(statement);
-				const pk = primaryKeyColumns(statement);
-				if (pk) primaryKeys.set(pk.table, new Set(pk.columns));
-				const dropped = droppedColumn(statement);
-				if (dropped && primaryKeys.get(dropped.table)?.has(dropped.column)) {
-					errors.push(
-						`${file}: DSQL cannot drop primary-key column '${dropped.column}' of '${dropped.table}'. Create a new table and copy the rows. Checked against ${ALTER_TABLE_DOC}`,
-					);
-				}
-				const added = ADD_CONSTRAINT.exec(cleaned);
-				if (added && !added[2]) {
-					errors.push(
-						`${file}: Name the constraint (ADD CONSTRAINT name CHECK … / FOREIGN KEY …). DSQL adds it NOT VALID and validates it by name in a separate job. Checked against ${ALTER_TABLE_DOC}`,
-					);
-				}
+			// The block's own checks: what dsql-lint cannot see from one statement
+			// (a primary key declared earlier) or does not care about (a constraint
+			// the rewriter can add NOT VALID but cannot validate without a name).
+			const cleaned = stripLiteralsAndComments(statement);
+			const pk = primaryKeyColumns(statement);
+			if (pk) primaryKeys.set(pk.table, new Set(pk.columns));
+			const dropped = droppedColumn(statement);
+			if (dropped && primaryKeys.get(dropped.table)?.has(dropped.column)) {
+				errors.push(
+					`${file}: DSQL cannot drop primary-key column '${dropped.column}' of '${dropped.table}'. Create a new table and copy the rows. Checked against ${ALTER_TABLE_DOC}`,
+				);
+			}
+			const added = ADD_CONSTRAINT.exec(cleaned);
+			if (added && !added[2]) {
+				errors.push(
+					`${file}: Name the constraint (ADD CONSTRAINT name CHECK … / FOREIGN KEY …). DSQL adds it NOT VALID and validates it by name in a separate job. Checked against ${ALTER_TABLE_DOC}`,
+				);
 			}
 			foreignKeys.push(...foreignKeysOf(statement));
-			steps.push(...rewriteStatement(statement, target));
+			steps.push(...rewriteStatement(statement));
 		}
 		if (validate) {
 			// Lint what will actually run: the rewritten statements, as one text so dsql-lint sees the file.
@@ -393,20 +369,19 @@ export function buildMigrationPlan(
 		files.push({ file, steps, foreignKeys });
 	}
 	if (errors.length > 0) {
-		const err = new Error(`Migration validation failed for a '${target}' cluster:\n  ${errors.join('\n  ')}`);
+		const err = new Error(`Migration validation failed for a 'distributed' cluster:\n  ${errors.join('\n  ')}`);
 		err.name = MIGRATION_VALIDATION_ERROR_NAME;
 		throw brandBlocksError(err);
 	}
-	return { target, files };
+	return { target: 'distributed', files };
 }
 
 /** Render a plan the way `bb-database migrate --explain` prints it. */
-export function formatMigrationPlan(plan: MigrationPlan, options: { pending?: Set<string> } = {}): string {
+export function formatMigrationPlan(plan: MigrationPlan): string {
 	const lines: string[] = [`Migration plan (target: ${plan.target})`];
 	if (plan.files.length === 0) lines.push('  (no migration files)');
 	for (const file of plan.files) {
-		const status = options.pending ? (options.pending.has(file.file) ? 'pending' : 'applied') : '';
-		lines.push(`\n${file.file}${status ? ` [${status}]` : ''}`);
+		lines.push(`\n${file.file}`);
 		let txOpen = false;
 		file.steps.forEach((step, i) => {
 			if (step.transactional && !txOpen) {

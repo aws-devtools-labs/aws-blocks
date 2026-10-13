@@ -7,7 +7,7 @@
  */
 import { DEFAULT_CLUSTER_ID, DEFAULT_SCHEMA, sanitizeSchemaName } from './constants.js';
 import { configError } from './errors.js';
-import type { ClusterKind, ClusterRef, ClusterType, DatabaseClusterLike, DatabaseOptions } from './types.js';
+import type { ClusterRef, DatabaseClusterLike, DatabaseOptions } from './types.js';
 
 /** Whether a `cluster` option value looks like a `DatabaseCluster` (any entry point's class). */
 export function isDatabaseClusterLike(value: unknown): value is DatabaseClusterLike {
@@ -59,9 +59,4 @@ export function resolveCluster(
 		};
 	}
 	throw configError(`Database '${blockFullId}': 'cluster' must be a DatabaseCluster.`);
-}
-
-/** Whether a kind is one `DatabaseCluster` provisions. */
-export function isClusterType(kind: ClusterKind): kind is ClusterType {
-	return kind === 'distributed';
 }

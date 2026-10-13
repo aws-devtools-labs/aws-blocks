@@ -21,7 +21,6 @@ import { DsqlEngine } from './engines/dsql-engine.js';
 import { DatabaseErrors, pgErrorCode } from './errors.js';
 import { buildMigrationPlan } from './migrations/plan.js';
 import { ensureMigrationTables, runMigrationPlan } from './migrations/runner.js';
-import type { ClusterKind } from './types.js';
 
 const MAX_RETRIES = 8;
 const INITIAL_DELAY_MS = 1000;
@@ -138,15 +137,13 @@ async function loadMigrationsAsset(bucket: string, key: string): Promise<Record<
 	return body ? (JSON.parse(body) as Record<string, string>) : {};
 }
 
-function buildEngine(kind: ClusterKind, schemaName: string): DatabaseEngine {
-	if (kind !== 'distributed') throw new Error(`Unsupported CLUSTER_KIND '${kind}'`);
+function buildEngine(schemaName: string): DatabaseEngine {
 	const endpoint = process.env.DSQL_ENDPOINT;
 	const region = process.env.DSQL_REGION;
 	if (!endpoint || !region) throw new Error(`Missing env: DSQL_ENDPOINT=${endpoint}, DSQL_REGION=${region}`);
 	const signer = new DsqlSigner({ hostname: endpoint, region });
 	return new DsqlEngine({
 		endpoint,
-		region,
 		role: 'admin',
 		getAuthToken: () => signer.getDbConnectAdminAuthToken(),
 		searchPath: schemaName !== 'public' ? schemaName : undefined,
@@ -160,18 +157,15 @@ function buildEngine(kind: ClusterKind, schemaName: string): DatabaseEngine {
  * block is fully migrated.
  */
 async function migrateBlock(props: MigrationProperties): Promise<boolean> {
-	const kind = (process.env.CLUSTER_KIND ?? 'distributed') as ClusterKind;
 	const schemaName = props.schemaName || 'public';
-	const engine = buildEngine(kind, schemaName);
+	const engine = buildEngine(schemaName);
 	try {
 		if (props.migrationsBucket && props.migrationsKey) {
 			// Validated at synth; the dsql-lint binary is not deployed with the Lambda.
-			const plan = buildMigrationPlan(
-				await loadMigrationsAsset(props.migrationsBucket, props.migrationsKey),
-				kind,
-				{ validate: false },
-			);
-			const result = await withRetry(() => runMigrationPlan(engine, plan, { schemaName, asyncJobs: 'defer' }));
+			const plan = buildMigrationPlan(await loadMigrationsAsset(props.migrationsBucket, props.migrationsKey), {
+				validate: false,
+			});
+			const result = await withRetry(() => runMigrationPlan(engine, plan, { schemaName }));
 			console.log('[bb-database] Applied:', result.applied.length ? result.applied : '(none pending)');
 			if (result.waitingOn) {
 				console.log(

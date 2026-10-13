@@ -13,14 +13,8 @@ import { join } from 'node:path';
 import { after, afterEach, beforeEach, describe, test } from 'node:test';
 import { ApiError, isBlocksError, Scope } from '@aws-blocks/core';
 import { _closeAllPgliteClusters } from './engines/pglite-cluster.js';
-import {
-	_resetDatabaseRegistry,
-	createKyselyAdapter,
-	Database,
-	DatabaseCluster,
-	DatabaseErrors,
-	sql,
-} from './index.mock.js';
+import { createKyselyAdapter, Database, DatabaseCluster, DatabaseErrors, sql } from './index.mock.js';
+import { _resetDatabaseRegistry } from './registry.js';
 
 const DATA_DIR = join(process.cwd(), '.bb-data');
 let counter = 0;
@@ -409,6 +403,6 @@ async function withMigrations(db: Database, files: Record<string, string>): Prom
 	const { loadMigrationFiles, runMigrationPlan } = await import('./migrations/runner.js');
 	const { MockEngine } = await import('./engines/mock-engine.js');
 	const engine = (await db.getEngine()) as InstanceType<typeof MockEngine>;
-	const plan = buildMigrationPlan(loadMigrationFiles(dir), db.cluster.kind);
+	const plan = buildMigrationPlan(loadMigrationFiles(dir));
 	await engine.withDdl(() => runMigrationPlan(engine, plan, { schemaName: db.schemaName, log: () => {} }));
 }

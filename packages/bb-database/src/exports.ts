@@ -8,15 +8,10 @@ export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
  * true for everything but the two classes.
  */
 export { createKyselyAdapter, sql } from '@aws-blocks/data-common';
-export { diffBindings, formatBindingStop } from './bindings.js';
 export { DatabaseErrors } from './errors.js';
-export { buildMigrationPlan, formatMigrationPlan } from './migrations/plan.js';
-export { _resetDatabaseRegistry } from './registry.js';
 export type {
 	Bindings,
 	ClusterBinding,
-	ClusterKind,
-	ClusterOptionsOf,
 	ClusterRef,
 	ClusterType,
 	DatabaseBinding,
@@ -27,7 +22,6 @@ export type {
 	DistributedClusterOptions,
 	DistributedDatabaseOptions,
 	FilePlan,
-	KindOf,
 	MigrationPlan,
 	OwnedDatabaseOptions,
 	PlanStep,

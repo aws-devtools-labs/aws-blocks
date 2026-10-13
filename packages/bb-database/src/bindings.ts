@@ -9,9 +9,9 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { BINDING_MARKER_FILE, DEFAULT_CLUSTER_ID, EXTERNAL_CLUSTER_ID } from './constants.js';
+import { BINDING_MARKER_FILE, DEFAULT_CLUSTER_ID } from './constants.js';
 import { configError } from './errors.js';
-import type { Bindings, ClusterKind, DatabaseBinding } from './types.js';
+import type { Bindings, ClusterType, DatabaseBinding } from './types.js';
 
 /** A binding change the guard refuses. */
 export interface BindingChange {
@@ -23,7 +23,6 @@ export interface BindingChange {
 /** Describe a cluster for the stop message: `its default cluster (distributed)` or `'app-main' (distributed)`. */
 export function describeCluster(binding: DatabaseBinding): string {
 	if (binding.cluster === DEFAULT_CLUSTER_ID) return `its default cluster (${binding.type})`;
-	if (binding.cluster === EXTERNAL_CLUSTER_ID) return 'an external cluster';
 	return `'${binding.cluster}' (${binding.type})`;
 }
 
@@ -90,7 +89,7 @@ export function readBindingMarker(dataDir: string): DatabaseBinding | undefined 
 	try {
 		const parsed = JSON.parse(readFileSync(file, 'utf-8')) as Partial<DatabaseBinding>;
 		if (typeof parsed.cluster === 'string' && typeof parsed.type === 'string') {
-			return { cluster: parsed.cluster, type: parsed.type as ClusterKind };
+			return { cluster: parsed.cluster, type: parsed.type as ClusterType };
 		}
 	} catch {
 		/* unreadable marker → treat as absent; it is rewritten below */

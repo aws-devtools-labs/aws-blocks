@@ -25,13 +25,11 @@ import { buildMigrationPlan } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath, runMigrationPlan } from './migrations/runner.js';
 import { registerSchema, registerUniqueId } from './registry.js';
 import type {
-	ClusterKind,
-	ClusterOptionsOf,
 	ClusterRef,
 	ClusterType,
+	DatabaseClusterOptions,
 	DatabaseOptions,
 	DistributedDatabaseOptions,
-	KindOf,
 	OwnedDatabaseOptions,
 	TransactionOptions,
 } from './types.js';
@@ -49,17 +47,14 @@ import { BB_NAME, BB_VERSION } from './version.js';
  * const users  = new Database(scope, 'users',  { cluster: shared });
  * const orders = new Database(scope, 'orders', { cluster: shared });
  */
-export class DatabaseCluster<T extends ClusterType = ClusterType> extends Scope {
+export class DatabaseCluster extends Scope {
 	/** The category this cluster was constructed with. */
-	readonly type: T;
-	/** Same as `type`; the discriminant a `Database` infers its kind from. */
-	readonly kind: T;
+	readonly type: ClusterType;
 
-	constructor(scope: ScopeParent, id: string, options: { type: T } & ClusterOptionsOf<T>) {
+	constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions) {
 		// Plain scope: the cluster is part of the Database block, not a block itself.
 		super(id, { parent: scope });
 		this.type = options.type;
-		this.kind = options.type;
 		registerUniqueId('DatabaseCluster', id, this.fullId);
 		registerSdkIdentifiers(this.fullId, { clusterEndpoint: `mock-endpoint-${this.fullId}` });
 	}
@@ -85,9 +80,9 @@ export class DatabaseCluster<T extends ClusterType = ClusterType> extends Scope 
  * const db = new Database(scope, 'db');
  * const user = await db.queryOne<User>(sql`SELECT id, email FROM users WHERE id = ${id}`);
  */
-export class Database<K extends ClusterKind = 'distributed'> extends Scope {
+export class Database extends Scope {
 	/** Which cluster this block runs on. */
-	readonly cluster: ClusterRef<K>;
+	readonly cluster: ClusterRef;
 	/** The schema this block's tables live in. */
 	readonly schemaName: string;
 	/** The resolved migrations directory, or `undefined` when the block has none. */
@@ -102,14 +97,14 @@ export class Database<K extends ClusterKind = 'distributed'> extends Scope {
 	/** The block owns a `distributed` cluster. */
 	constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
 	/** The block runs on a shared `distributed` cluster. */
-	constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions & { cluster: KindOf<K> });
+	constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions);
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options.logger ?? new Logger(this, 'logger', { level: 'error' });
 		registerUniqueId('Database', id, this.fullId);
 
 		const resolved = resolveCluster(id, this.fullId, options);
-		this.cluster = resolved.ref as ClusterRef<K>;
+		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;
 		const clusterKey = resolved.owned ? this.fullId : resolved.ref.id;
 		registerSchema(clusterKey, this.schemaName, this.fullId);
@@ -117,8 +112,6 @@ export class Database<K extends ClusterKind = 'distributed'> extends Scope {
 		const dataDir = getMockDataDir(this);
 		enforceLocalBinding(dataDir, this.fullId, id, { cluster: resolved.ref.id, type: resolved.ref.kind });
 		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId);
-
-		const kind = resolved.ref.kind;
 
 		const buildEngine = async (): Promise<DatabaseEngine> => {
 			let inner: DatabaseEngine;
@@ -131,12 +124,12 @@ export class Database<K extends ClusterKind = 'distributed'> extends Scope {
 					`Database '${this.fullId}': 'cluster' must be a DatabaseCluster from the same entry point.`,
 				);
 			}
-			const mock = new MockEngine(inner, { dialect: kind === 'distributed' ? 'distributed' : 'postgres' });
+			const mock = new MockEngine(inner);
 			if (this.pendingConflict) mock.simulateConflict();
 			this.mock = mock;
 			await mock.withDdl(async () => {
 				if (this.migrationsPath) {
-					const plan = buildMigrationPlan(loadMigrationFiles(this.migrationsPath), kind);
+					const plan = buildMigrationPlan(loadMigrationFiles(this.migrationsPath));
 					await runMigrationPlan(mock, plan, { schemaName: this.schemaName, log: (m) => this.log.info(m) });
 				} else if (this.schemaName !== 'public') {
 					await mock.execute(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(this.schemaName)}`);
@@ -145,7 +138,7 @@ export class Database<K extends ClusterKind = 'distributed'> extends Scope {
 			return mock;
 		};
 
-		this.core = new DatabaseCore({ kind, engine: buildEngine, fullId: this.fullId });
+		this.core = new DatabaseCore({ engine: buildEngine, fullId: this.fullId });
 		// An owned cluster is named after its block; a shared one after the DatabaseCluster.
 		registerSdkIdentifiers(this.fullId, {
 			clusterId: resolved.ref.id === DEFAULT_CLUSTER_ID ? this.fullId : resolved.ref.id,

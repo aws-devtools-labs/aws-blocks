@@ -43,9 +43,6 @@ export const TRANSACTION_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 /** Reserved cluster id for a `Database` that owns its cluster. */
 export const DEFAULT_CLUSTER_ID = 'default';
 
-/** Reserved cluster id for a `Database` on a PostgreSQL you already have (a later release). Never a `DatabaseCluster` id. */
-export const EXTERNAL_CLUSTER_ID = 'external';
-
 /** Schema a `Database` that owns its cluster uses. */
 export const DEFAULT_SCHEMA = 'public';
 

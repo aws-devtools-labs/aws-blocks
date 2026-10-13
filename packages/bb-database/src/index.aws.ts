@@ -16,13 +16,11 @@ import { DsqlEngine } from './engines/dsql-engine.js';
 import { configError } from './errors.js';
 import { registerSchema, registerUniqueId } from './registry.js';
 import type {
-	ClusterKind,
-	ClusterOptionsOf,
 	ClusterRef,
 	ClusterType,
+	DatabaseClusterOptions,
 	DatabaseOptions,
 	DistributedDatabaseOptions,
-	KindOf,
 	OwnedDatabaseOptions,
 	TransactionOptions,
 } from './types.js';
@@ -36,15 +34,14 @@ function readClusterConfig(clusterFullId: string): Record<string, string> {
 }
 
 /** At runtime a cluster only names the deployed resource; each block opens its own connections. */
-export class DatabaseCluster<T extends ClusterType = ClusterType> extends Scope {
-	readonly type: T;
-	readonly kind: T;
+export class DatabaseCluster extends Scope {
+	/** The category this cluster was constructed with. */
+	readonly type: ClusterType;
 
-	constructor(scope: ScopeParent, id: string, options: { type: T } & ClusterOptionsOf<T>) {
+	constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions) {
 		// Plain scope: the cluster is part of the Database block, not a block itself.
 		super(id, { parent: scope });
 		this.type = options.type;
-		this.kind = options.type;
 		registerUniqueId('DatabaseCluster', id, this.fullId);
 		registerSdkIdentifiers(this.fullId, readClusterConfig(this.fullId));
 	}
@@ -54,8 +51,8 @@ export class DatabaseCluster<T extends ClusterType = ClusterType> extends Scope 
  * SQL database on PostgreSQL, Lambda runtime build. See the package README for the
  * full API; the surface is identical to local mode.
  */
-export class Database<K extends ClusterKind = 'distributed'> extends Scope {
-	readonly cluster: ClusterRef<K>;
+export class Database extends Scope {
+	readonly cluster: ClusterRef;
 	readonly schemaName: string;
 	/** Migrations run at deploy time; the path is not resolved in the Lambda. */
 	readonly migrationsPath: string | undefined = undefined;
@@ -65,16 +62,15 @@ export class Database<K extends ClusterKind = 'distributed'> extends Scope {
 	protected log: ChildLogger;
 
 	constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
-	constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions & { cluster: KindOf<K> });
+	constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions);
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options.logger ?? new Logger(this, 'logger', { level: 'error' });
 		registerUniqueId('Database', id, this.fullId);
 
 		const resolved = resolveCluster(id, this.fullId, options);
-		this.cluster = resolved.ref as ClusterRef<K>;
+		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;
-		const kind = resolved.ref.kind;
 		const clusterFullId = resolved.ref.id === DEFAULT_CLUSTER_ID ? this.fullId : resolved.ref.id;
 		registerSchema(clusterFullId, this.schemaName, this.fullId);
 
@@ -96,14 +92,13 @@ export class Database<K extends ClusterKind = 'distributed'> extends Scope {
 			const signer = new DsqlSigner({ hostname: clusterEndpoint, region });
 			return new DsqlEngine({
 				endpoint: clusterEndpoint,
-				region,
 				role: sanitizeDbRoleName(clusterFullId),
 				getAuthToken: () => signer.getDbConnectAuthToken(),
 				searchPath,
 			});
 		};
 
-		this.core = new DatabaseCore({ kind, engine: buildEngine, fullId: this.fullId });
+		this.core = new DatabaseCore({ engine: buildEngine, fullId: this.fullId });
 	}
 
 	query<T>(query: SqlQuery): Promise<T[]> {

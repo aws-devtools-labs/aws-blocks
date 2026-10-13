@@ -46,11 +46,11 @@ export { DatabaseErrors } from './errors.js';
 export type {
 	Bindings,
 	ClusterBinding,
-	ClusterKind,
 	ClusterRef,
 	ClusterType,
 	DatabaseBinding,
 	DatabaseBlockOptions,
+	DatabaseClusterLike,
 	DatabaseClusterOptions,
 	DatabaseOptions,
 	DistributedClusterOptions,

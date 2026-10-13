@@ -37,7 +37,7 @@ A block that owns its cluster uses the `public` schema. A block on a shared clus
 
 ## 3. Type system
 
-`Database<K>` is generic over the cluster kind, and `K` is inferred from the constructor's `cluster` argument: with no `cluster`, `K` is `'distributed'`; a `DatabaseCluster<T>` yields `Database<T>`. Cluster options are narrowed by `type`. The runtime does not rely on the static type: every entry point resolves the `cluster` option into a descriptor, `db.cluster = { kind, id }`, through one shared function in `cluster-ref.ts`. When a kind lacks a method, that method will carry a `this: Database<…>` parameter so the call is a compile error, and the runtime will check `kind` again; nothing in this release needs that yet. `types.test.ts` asserts the rules with `@ts-expect-error`.
+`Database` and `DatabaseCluster` are not generic. `ClusterType` has one member, and `type: 'distributed'` is required on `DatabaseCluster` so that a second cluster type, which a later pull request adds, is an additive union change rather than a new call shape. Every entry point resolves the `cluster` option into a plain descriptor, `db.cluster = { kind, id }`, through one shared function in `cluster-ref.ts`. The two `Database` constructor overloads (owned, shared) exist so that an option that belongs to the other shape, such as `removalPolicy` next to `cluster`, is a compile error; `types.test.ts` asserts the option rules with `@ts-expect-error`.
 
 ## 4. Execution environments
 
@@ -63,7 +63,7 @@ Two checks stay in the block because they need more than one statement, or exist
 
 ### 5.2 Plan construction
 
-Each block has one directory of ordinary PostgreSQL migration files. `buildMigrationPlan` converts them into an ordered list of steps for the target kind. For `distributed` clusters it applies these rewrites:
+Each block has one directory of ordinary PostgreSQL migration files. `buildMigrationPlan` converts them into an ordered list of steps for a `distributed` cluster, applying these rewrites:
 
 - `SERIAL`, `BIGSERIAL` and `SMALLSERIAL`, and identity columns on `smallint` or `integer`, become `BIGINT GENERATED … AS IDENTITY (CACHE 65536)`; an identity column or `CREATE SEQUENCE` without a cache gets `CACHE 65536`, and a sequence typed smaller than `bigint` becomes `bigint`;
 - `CREATE INDEX` becomes `CREATE INDEX ASYNC` followed by a wait on the index job;
@@ -93,7 +93,7 @@ At its first deploy, a block is bound to its cluster by id and type. The CDK lay
 
 ### 6.2 Deploy-time verification
 
-Before `cdk deploy` in the production stage, the block's pre-deploy hook (`src/predeploy.ts`) applies two checks to each synthesized stack (R4). The package declares the hook in `package.json` under `aws-blocks.predeploy` with `stages: ['production']`; core's deploy script discovers hooks from the app's installed `@aws-blocks/*` packages, synthesizes once, and runs them. Core therefore carries no code that names this block. `npx bb-database predeploy` runs the same function by hand.
+Before `cdk deploy` in the production stage, the block's pre-deploy hook (`src/predeploy.ts`) applies two checks to each synthesized stack (R4). The package declares the hook in `package.json` under `aws-blocks.predeploy` with `stages: ['production']`; core's deploy script discovers hooks from the app's installed `@aws-blocks/*` packages, synthesizes once, and runs them. Core therefore carries no code that names this block. `npx bb-database predeploy` is a dry run of the same hooks through core's runner.
 
 1. The new binding record is compared with the deployed template. This detects a block moving between two clusters that both retain other blocks, a change CloudFormation does not consider destructive.
 2. A change set is created, inspected and deleted. Any `Replace` of an Aurora or DSQL cluster stops the deploy. A `Remove` stops it unless the resource belongs to a block or `DatabaseCluster` that is absent from the new record and the deployed resource's `DeletionPolicy` is `Retain`: that is deleting a block, which keeps its data. A `Remove` of a cluster whose owner is still in the record is a renamed construct, and stops.

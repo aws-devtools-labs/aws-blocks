@@ -11,7 +11,6 @@ import { isStaleSchemaCache, translatePgError } from '../errors.js';
 
 export interface DsqlEngineConfig {
 	endpoint: string;
-	region: string;
 	getAuthToken: () => Promise<string>;
 	poolSize?: number;
 	/** PostgreSQL role name to connect as (mapped from IAM via `AWS IAM GRANT`). */

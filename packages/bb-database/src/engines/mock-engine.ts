@@ -6,8 +6,8 @@
  *
  * - `simulateConflict()` makes the next commit raise `SerializationFailure`, so
  *   retry tests need no deployed cluster.
- * - On a `distributed` cluster it runs each statement through dsql-lint, so
- *   unsupported statements are rejected before they reach PGlite, DDL on the app connection is refused
+ * - It runs each statement through dsql-lint, so unsupported statements are
+ *   rejected before they reach PGlite, DDL on the app connection is refused
  *   (parity with the deployed DML-only grant), `ASYNC` DDL is run synchronously,
  *   and the per-transaction limits (one DDL statement, no DDL with DML, 3,000
  *   changed rows with cascades counted, 10 MiB of data) are enforced, for
@@ -33,21 +33,13 @@ interface TrackedHandle {
 	tracker?: TransactionTracker;
 }
 
-export interface MockEngineOptions {
-	/** `distributed` enables dsql-lint, the DML-only guard, and the transaction limits. */
-	dialect: 'distributed' | 'postgres';
-}
-
 const DELETE_TARGET = /^\s*DELETE\s+FROM\s+(?:ONLY\s+)?((?:"[^"]+"|[\w.])+)/i;
 
 export class MockEngine implements DatabaseEngine {
 	private shouldConflict = false;
 	private allowDdl = false;
 
-	constructor(
-		private readonly inner: DatabaseEngine,
-		private readonly options: MockEngineOptions,
-	) {}
+	constructor(private readonly inner: DatabaseEngine) {}
 
 	/** Test helper: make the next commit raise `SerializationFailure`. */
 	simulateConflict(): void {
@@ -65,13 +57,8 @@ export class MockEngine implements DatabaseEngine {
 		}
 	}
 
-	private get distributed(): boolean {
-		return this.options.dialect === 'distributed';
-	}
-
-	/** Validate, guard, and normalize a statement for the local `distributed` mock. */
+	/** Validate, guard, and normalize a statement for the local mock. */
 	private preprocess(sql: string): string {
-		if (!this.distributed) return sql;
 		validateStatement(sql);
 		if (!this.allowDdl && classifyStatement(sql) === 'ddl') {
 			const err = new Error(DDL_NOT_ALLOWED_MESSAGE);
@@ -90,7 +77,7 @@ export class MockEngine implements DatabaseEngine {
 
 	async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
 		const normalized = this.preprocess(sql);
-		if (!this.distributed || classifyStatement(sql) !== 'dml') return this.inner.execute(normalized, params);
+		if (classifyStatement(sql) !== 'dml') return this.inner.execute(normalized, params);
 
 		// Inside a transaction() callback: the statement joins the open transaction; count it there.
 		const ambient = currentTransactionHandle() as TrackedHandle | undefined;
@@ -117,7 +104,7 @@ export class MockEngine implements DatabaseEngine {
 
 	async beginTransaction(): Promise<TransactionHandle> {
 		const handle = await this.inner.beginTransaction();
-		if (this.distributed && typeof handle === 'object' && handle !== null) {
+		if (typeof handle === 'object' && handle !== null) {
 			(handle as TrackedHandle).tracker = new TransactionTracker();
 		}
 		return handle;

@@ -100,7 +100,7 @@ Block options:
 | `removalPolicy` | `'retain' \| 'destroy'` | Only when `cluster` is omitted. With a shared cluster, set it on the `DatabaseCluster`. |
 | `logger` | `ChildLogger` | Logger for internal operations. Defaults to a `Logger` at error level. |
 
-`Database` and `DatabaseCluster` ids are unique per app; a second block with the same id is an error at construction. `Database<K>` carries the cluster kind as a type parameter inferred from `cluster`; with one kind today it is always `Database<'distributed'>`, and `db.cluster.kind` is the same value at runtime.
+`Database` and `DatabaseCluster` ids are unique per app; a second block with the same id is an error at construction.
 
 ## Sharing a cluster
 
@@ -268,8 +268,7 @@ The adapter connects on its first query, so creating it at module scope is safe 
 | Command | What it does |
 |---|---|
 | `npx bb-database migrate --explain [dir]` | Prints the migration steps and the foreign keys they define |
-| `npx bb-database predeploy --stage production --project-root .` | Runs the guard by hand. `npm run deploy` runs the same hook itself, declared in this package's `aws-blocks.predeploy` manifest field. The sandbox stage returns at once |
-| `npx bb-database guard --stack <name> --template <cdk.out/…template.json>` | Runs the guard against one synthesized template |
+| `npx bb-database predeploy --project-root .` | Dry run of the production pre-deploy hooks that `npm run deploy` runs, including this block's deploy guard. Prints their notes and exits non-zero on a stop; nothing is deployed |
 
 ## What it provisions (AWS)
 

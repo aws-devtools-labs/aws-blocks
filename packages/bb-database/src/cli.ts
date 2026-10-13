@@ -5,25 +5,20 @@
 /**
  * bb-database CLI.
  *
- *   migrate --explain [dir] [--target distributed]
+ *   migrate --explain [dir]
  *       Print the plan the rewriter would run, without running it, and list
  *       every foreign key whose referential action the migration defines.
  *
- *   predeploy --stage sandbox|production --project-root <dir> [--app <cdk app>]
- *       Run the block's pre-deploy hook by hand: synthesize the app and run the
- *       deploy guard. `npm run deploy` runs the same hook itself, discovered
- *       from this package's `aws-blocks.predeploy` manifest field.
- *
- *   guard --stack <name> --template <path>
- *       Run the deploy guard against one synthesized template.
+ *   predeploy [--project-root <dir>]
+ *       Dry run of the production pre-deploy hooks `npm run deploy` runs,
+ *       including this block's deploy guard. Prints their notes; exits
+ *       non-zero on a stop. Nothing is deployed.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { type DeployStage, synthesizeApp } from '@aws-blocks/core/scripts';
-import { guardDeploy } from './deploy-guard.js';
+import { runPredeployHooks } from '@aws-blocks/core/scripts';
 import { buildMigrationPlan, formatMigrationPlan } from './migrations/plan.js';
 import { loadMigrationFiles } from './migrations/runner.js';
-import { predeploy as runPredeploy } from './predeploy.js';
 
 const rawArgs = process.argv.slice(2);
 const command = rawArgs[0];
@@ -53,8 +48,6 @@ function fail(message: string): never {
 async function migrate(args: string[]): Promise<void> {
 	const explain = args.includes('--explain');
 	if (explain) args.splice(args.indexOf('--explain'), 1);
-	const target = takeFlag(args, '--target') ?? 'distributed';
-	if (target !== 'distributed') fail(`--target accepts only 'distributed' in this release (got '${target}').`);
 	if (!explain) {
 		fail(
 			'migrate runs only with --explain. Locally a block applies its migrations on first use; on AWS the migration Lambda applies them at deploy.',
@@ -62,7 +55,7 @@ async function migrate(args: string[]): Promise<void> {
 	}
 	const dir = resolve(args[0] ?? './aws-blocks/migrations');
 	if (!existsSync(dir)) fail(`Migrations directory not found: ${dir}`);
-	const plan = buildMigrationPlan(loadMigrationFiles(dir), target);
+	const plan = buildMigrationPlan(loadMigrationFiles(dir));
 	console.log(formatMigrationPlan(plan));
 	const fks = plan.files.flatMap((f) => f.foreignKeys.map((fk) => `${f.file}: ${fk}`));
 	if (fks.length > 0)
@@ -70,37 +63,14 @@ async function migrate(args: string[]): Promise<void> {
 }
 
 async function predeploy(args: string[]): Promise<void> {
-	const stage = (takeFlag(args, '--stage') ?? 'production') as DeployStage;
 	const projectRoot = resolve(takeFlag(args, '--project-root') ?? process.cwd());
-	const app = takeFlag(args, '--app');
-	if (stage !== 'sandbox' && stage !== 'production') fail(`--stage must be sandbox or production (got '${stage}').`);
-
-	let synthesized: ReturnType<typeof synthesizeApp> | undefined;
-	try {
-		const result = await runPredeploy({
-			stage,
-			projectRoot,
-			async synth() {
-				synthesized ??= synthesizeApp({ stage, projectRoot, app });
-				return synthesized.stacks;
-			},
-		});
-		for (const note of result.notes ?? []) console.log(`[bb-database] ${note}`);
-		if (result.stops?.length) fail(result.stops.join('\n\n'));
-	} finally {
-		synthesized?.cleanup();
-	}
-}
-
-async function guard(args: string[]): Promise<void> {
-	const stackName = takeFlag(args, '--stack');
-	const templatePath = takeFlag(args, '--template');
-	if (!stackName || !templatePath) fail('guard needs --stack <name> and --template <path>');
-	const template = JSON.parse(readFileSync(resolve(templatePath as string), 'utf-8'));
-	const result = await guardDeploy({ stackName: stackName as string, template });
-	for (const note of result.notes) console.log(`[bb-database] ${note}`);
-	if (result.stops.length > 0) fail(result.stops.join('\n\n'));
-	console.log('[bb-database] Deploy guard passed.');
+	// Notes print as the hooks run; a stop throws and main() reports it.
+	const { ran } = await runPredeployHooks({ stage: 'production', projectRoot });
+	console.log(
+		ran.length
+			? `[bb-database] Pre-deploy hooks passed: ${ran.join(', ')}`
+			: '[bb-database] No pre-deploy hooks declared.',
+	);
 }
 
 async function main(): Promise<void> {
@@ -110,13 +80,10 @@ async function main(): Promise<void> {
 			return migrate(args);
 		case 'predeploy':
 			return predeploy(args);
-		case 'guard':
-			return guard(args);
 		default:
-			console.log('Usage: bb-database <migrate|predeploy|guard> [options]\n');
-			console.log('  migrate --explain [dir] [--target distributed]');
-			console.log('  predeploy --stage sandbox|production --project-root <dir> [--app <cdk app>]');
-			console.log('  guard --stack <name> --template <path>');
+			console.log('Usage: bb-database <migrate|predeploy> [options]\n');
+			console.log('  migrate --explain [dir]');
+			console.log('  predeploy [--project-root <dir>]');
 			process.exit(command ? 1 : 0);
 	}
 }

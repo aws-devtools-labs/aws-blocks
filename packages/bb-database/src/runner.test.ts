@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The resumable runner against a scripted engine: DSQL job waits are deferred
- * across calls (the custom-resource provider's `isComplete` polls), progress is
- * recorded per step, and a failed job fails the file at its wait step.
+ * The resumable runner against a scripted engine: a running DSQL job stops the
+ * run and is picked up by the next call (the custom-resource provider's
+ * `isComplete` polls), progress is recorded per step, and a failed job fails
+ * the file at its wait step.
  */
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
@@ -32,12 +33,6 @@ class ScriptedEngine implements DatabaseEngine {
 		if (/^SELECT status, details FROM sys\.jobs/.test(sql)) {
 			const job = this.jobs.get(params[0] as string);
 			return (job ? [{ status: job.status, details: job.details ?? null }] : []) as T[];
-		}
-		if (/^SELECT sys\.wait_for_job\('(\w+)'\)/.test(sql)) {
-			const id = /'(\w+)'/.exec(sql)?.[1] as string;
-			const job = this.jobs.get(id);
-			if (job && job.status !== 'failed') job.status = 'completed';
-			return [{ ok: job?.status === 'completed' }] as T[];
 		}
 		if (/\bASYNC\b/.test(sql)) {
 			const jobId = `job${++this.nextJob}`;
@@ -88,11 +83,11 @@ const files = {
 const quiet = { log: () => {} };
 
 describe('migration runner', () => {
-	test('defer: stops at a running job, records it, and resumes once the job completes', async () => {
+	test('stops at a running job, records it, and resumes once the job completes', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files, 'distributed');
+		const plan = buildMigrationPlan(files);
 
-		const first = await runMigrationPlan(engine, plan, { schemaName: 'public', asyncJobs: 'defer', ...quiet });
+		const first = await runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet });
 		assert.deepStrictEqual(first.applied, []);
 		assert.deepStrictEqual(first.waitingOn, { file: '001_t.sql', step: 2, jobId: 'job1' });
 		assert.deepStrictEqual(engine.progress.get('001_t.sql'), { step: 2, jobId: 'job1' });
@@ -101,7 +96,7 @@ describe('migration runner', () => {
 
 		// Still running: the same answer, nothing re-run.
 		const before = engine.statements.length;
-		const second = await runMigrationPlan(engine, plan, { schemaName: 'public', asyncJobs: 'defer', ...quiet });
+		const second = await runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet });
 		assert.deepStrictEqual(second.waitingOn, first.waitingOn);
 		assert.ok(
 			!engine.statements.slice(before).some((s) => /CREATE (TABLE t|INDEX)/.test(s)),
@@ -110,7 +105,7 @@ describe('migration runner', () => {
 
 		// Completed: the file finishes, the seed runs in one transaction, both files are recorded.
 		engine.jobs.set('job1', { status: 'completed' });
-		const third = await runMigrationPlan(engine, plan, { schemaName: 'public', asyncJobs: 'defer', ...quiet });
+		const third = await runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet });
 		assert.deepStrictEqual(third.applied, ['001_t.sql', '002_seed.sql']);
 		assert.strictEqual(third.waitingOn, undefined);
 		assert.deepStrictEqual([...engine.migrations], ['001_t.sql', '002_seed.sql']);
@@ -125,13 +120,13 @@ describe('migration runner', () => {
 		);
 	});
 
-	test('defer: a failed job fails the file at its wait step with the job details', async () => {
+	test('a failed job fails the file at its wait step with the job details', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files, 'distributed');
-		await runMigrationPlan(engine, plan, { schemaName: 'public', asyncJobs: 'defer', ...quiet });
+		const plan = buildMigrationPlan(files);
+		await runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet });
 		engine.jobs.set('job1', { status: 'failed', details: 'Found duplicate key while validating index' });
 		await assert.rejects(
-			runMigrationPlan(engine, plan, { schemaName: 'public', asyncJobs: 'defer', ...quiet }),
+			runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet }),
 			(e: Error) =>
 				e.name === 'MigrationFailedException' &&
 				/001_t\.sql failed at step 3\/3 \(wait-job\)/.test(e.message) &&
@@ -140,20 +135,12 @@ describe('migration runner', () => {
 		assert.ok(!engine.migrations.has('001_t.sql'));
 	});
 
-	test('wait: blocks on sys.wait_for_job and continues', async () => {
-		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files, 'distributed');
-		const result = await runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet });
-		assert.deepStrictEqual(result.applied, ['001_t.sql', '002_seed.sql']);
-		assert.ok(engine.statements.includes("SELECT sys.wait_for_job('job1') AS ok"));
-	});
-
 	test('a job missing from sys.jobs counts as completed (DSQL purges finished jobs)', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files, 'distributed');
-		await runMigrationPlan(engine, plan, { schemaName: 'public', asyncJobs: 'defer', ...quiet });
+		const plan = buildMigrationPlan(files);
+		await runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet });
 		engine.jobs.delete('job1');
-		const result = await runMigrationPlan(engine, plan, { schemaName: 'public', asyncJobs: 'defer', ...quiet });
+		const result = await runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet });
 		assert.deepStrictEqual(result.applied, ['001_t.sql', '002_seed.sql']);
 	});
 
@@ -163,7 +150,11 @@ describe('migration runner', () => {
 			if (/VALUES \('b'/.test(sql)) throw new Error('boom');
 			return ScriptedEngine.prototype.execute.call(engine, sql, params);
 		};
-		const plan = buildMigrationPlan(files, 'distributed');
+		const plan = buildMigrationPlan(files);
+		// The first run stops at the index job; once it completes, the seed file fails at its second statement.
+		const first = await runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet });
+		assert.strictEqual(first.waitingOn?.jobId, 'job1');
+		engine.jobs.set('job1', { status: 'completed' });
 		await assert.rejects(
 			runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet }),
 			/002_seed\.sql failed at step 2\/2 \(statement\): INSERT INTO t VALUES \('b', 2\)\nboom/,

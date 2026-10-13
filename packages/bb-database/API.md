@@ -23,11 +23,6 @@ export interface Bindings {
     };
 }
 
-// Warning: (ae-forgotten-export) The symbol "BuildPlanOptions" needs to be exported by the entry point index.mock.d.ts
-//
-// @public (undocumented)
-export function buildMigrationPlan(migrations: Record<string, string>, target: ClusterKind, options?: BuildPlanOptions): MigrationPlan;
-
 // @public
 export interface ClusterBinding {
     resource?: string;
@@ -36,15 +31,9 @@ export interface ClusterBinding {
 }
 
 // @public
-export type ClusterKind = ClusterType;
-
-// @public
-export type ClusterOptionsOf<T extends ClusterType> = T extends 'distributed' ? DistributedClusterOptions : never;
-
-// @public
-export interface ClusterRef<K extends ClusterKind = ClusterKind> {
+export interface ClusterRef {
     readonly id: string;
-    readonly kind: K;
+    readonly kind: ClusterType;
 }
 
 // @public
@@ -53,12 +42,10 @@ export type ClusterType = 'distributed';
 export { createKyselyAdapter }
 
 // @public
-export class Database<K extends ClusterKind = 'distributed'> extends Scope {
+export class Database extends Scope {
     constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
-    constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions & {
-        cluster: KindOf<K>;
-    });
-    readonly cluster: ClusterRef<K>;
+    constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions);
+    readonly cluster: ClusterRef;
     execute(query: SqlQuery): Promise<{
         rowCount: number;
     }>;
@@ -79,7 +66,7 @@ export interface DatabaseBinding {
     cluster: string;
     resource?: string;
     // (undocumented)
-    type: ClusterKind;
+    type: ClusterType;
 }
 
 // @public
@@ -90,21 +77,17 @@ export interface DatabaseBlockOptions {
 }
 
 // @public
-export class DatabaseCluster<T extends ClusterType = ClusterType> extends Scope {
-    constructor(scope: ScopeParent, id: string, options: {
-        type: T;
-    } & ClusterOptionsOf<T>);
+export class DatabaseCluster extends Scope {
+    constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions);
     // @internal
     engineFor(schemaName: string): DatabaseEngine;
-    readonly kind: T;
-    readonly type: T;
+    readonly type: ClusterType;
 }
 
 // @public
-export interface DatabaseClusterLike<T extends ClusterType = ClusterType> {
+export interface DatabaseClusterLike {
     readonly fullId: string;
-    readonly kind: T;
-    readonly type: T;
+    readonly type: ClusterType;
 }
 
 // @public
@@ -123,11 +106,6 @@ export const DatabaseErrors: {
 // @public
 export type DatabaseOptions = OwnedDatabaseOptions | DistributedDatabaseOptions;
 
-// Warning: (ae-forgotten-export) The symbol "BindingChange" needs to be exported by the entry point index.mock.d.ts
-//
-// @public
-export function diffBindings(deployed: Bindings | undefined, next: Bindings): BindingChange[];
-
 // @public
 export interface DistributedClusterOptions {
     removalPolicy?: 'retain' | 'destroy';
@@ -138,7 +116,7 @@ export interface DistributedClusterOptions {
 // @public
 export interface DistributedDatabaseOptions extends DatabaseBlockOptions {
     // (undocumented)
-    cluster: DatabaseClusterLike<'distributed'>;
+    cluster: DatabaseClusterLike;
 }
 
 // @public
@@ -151,28 +129,11 @@ export interface FilePlan {
 }
 
 // @public
-export function formatBindingStop(change: BindingChange, options?: {
-    removalPolicy?: string;
-    shortId?: string;
-}): string;
-
-// @public
-export function formatMigrationPlan(plan: MigrationPlan, options?: {
-    pending?: Set<string>;
-}): string;
-
-// @public
-export interface KindOf<K extends ClusterKind> {
-    // (undocumented)
-    readonly kind: K;
-}
-
-// @public
 export interface MigrationPlan {
     // (undocumented)
     files: FilePlan[];
     // (undocumented)
-    target: ClusterKind;
+    target: ClusterType;
 }
 
 // @public
@@ -189,9 +150,6 @@ export interface PlanStep {
     sql: string;
     transactional: boolean;
 }
-
-// @public
-export function _resetDatabaseRegistry(): void;
 
 export { sql }
 

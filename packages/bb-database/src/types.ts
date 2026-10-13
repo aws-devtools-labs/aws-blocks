@@ -21,29 +21,15 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 export type ClusterType = 'distributed';
 
 /**
- * Every kind of cluster a `Database` can run on. Today the same as
- * {@link ClusterType}; a later release adds `external` for a PostgreSQL you
- * already have.
- */
-export type ClusterKind = ClusterType;
-
-/**
  * The structural shape of a `DatabaseCluster<T>` as a `Database` constructor
  * sees it. Lets `types.ts` stay free of class imports while still narrowing the
  * `cluster` option by cluster type.
  */
-export interface DatabaseClusterLike<T extends ClusterType = ClusterType> {
+export interface DatabaseClusterLike {
 	/** The category this cluster was constructed with. */
-	readonly type: T;
-	/** Same as `type`; the discriminant a `Database` infers its kind from. */
-	readonly kind: T;
+	readonly type: ClusterType;
 	/** The cluster's scoped id (drives resource naming and the binding record). */
 	readonly fullId: string;
-}
-
-/** Anything with a `kind`. Used to infer a `Database`'s kind from its `cluster` option. */
-export interface KindOf<K extends ClusterKind> {
-	readonly kind: K;
 }
 
 /**
@@ -51,9 +37,9 @@ export interface KindOf<K extends ClusterKind> {
  * a handler can return it to the client and the runtime can branch on `kind`
  * without trusting the type parameter.
  */
-export interface ClusterRef<K extends ClusterKind = ClusterKind> {
+export interface ClusterRef {
 	/** Which kind of cluster the block runs on. */
-	readonly kind: K;
+	readonly kind: ClusterType;
 	/**
 	 * `'default'` when the block owns its cluster, otherwise the
 	 * `DatabaseCluster`'s full id. The same value is written to the binding record.
@@ -74,9 +60,6 @@ export interface DistributedClusterOptions {
 
 /** Constructor options for a `DatabaseCluster`, narrowed by `type`. */
 export type DatabaseClusterOptions = DistributedClusterOptions;
-
-/** The options object for a given {@link ClusterType}. Conditional so a second type adds a branch, not a new overload. */
-export type ClusterOptionsOf<T extends ClusterType> = T extends 'distributed' ? DistributedClusterOptions : never;
 
 /** Options every `Database` block accepts, whichever cluster it runs on. */
 export interface DatabaseBlockOptions {
@@ -108,7 +91,7 @@ export interface OwnedDatabaseOptions extends DatabaseBlockOptions {
 
 /** Options for a `Database` on a shared `distributed` cluster. */
 export interface DistributedDatabaseOptions extends DatabaseBlockOptions {
-	cluster: DatabaseClusterLike<'distributed'>;
+	cluster: DatabaseClusterLike;
 }
 
 /** Every options shape a `Database` constructor accepts. */
@@ -141,7 +124,7 @@ export interface Bindings {
 export interface DatabaseBinding {
 	/** `'default'` when the block owns its cluster, otherwise the cluster's full id. */
 	cluster: string;
-	type: ClusterKind;
+	type: ClusterType;
 	/**
 	 * CloudFormation logical id of the cluster resource the block owns. Present
 	 * only in stack metadata, only for a block that owns its cluster; lets the
@@ -184,6 +167,6 @@ export interface FilePlan {
 
 /** The plan for a migration directory against a cluster kind. */
 export interface MigrationPlan {
-	target: ClusterKind;
+	target: ClusterType;
 	files: FilePlan[];
 }

@@ -144,7 +144,6 @@ export class ClusterInfra {
 		new cdk.CfnOutput(props.owner, 'DsqlEndpoint', { value: endpoint });
 
 		const lambdaEnv: Record<string, string> = {
-			CLUSTER_KIND: props.type,
 			DSQL_ENDPOINT: endpoint,
 			DSQL_REGION: stack.region,
 			DB_ROLE_NAME: this.dbRole,

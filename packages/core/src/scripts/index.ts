@@ -14,21 +14,17 @@ export { type ConsoleOptions, openConsole } from './console.js';
 export { type DeployOptions, deploy } from './deploy.js';
 export { type DestroyOptions, destroy } from './destroy.js';
 export { type DevServerOptions, startDevServer } from './dev-server.js';
-export {
-	type DeployStage,
-	discoverPredeployHooks,
-	type PredeployContext,
-	type PredeployHook,
-	type PredeployHookRef,
-	type PredeployResult,
-	runPredeployHooks,
-	type SynthesizedStack,
-	synthesizeApp,
-} from './predeploy-hooks.js';
 export { ensureSecrets, loadEnvFile, loadProductionEnv } from './ensure-secrets.js';
 export { generateClientCode, writeClientCode } from './generate-client.js';
 export { generateSpec, type SpecGenerationOptions, writeSpec } from './generate-spec.js';
 export { NativeCatalogError, type NativeDeclarationSource } from './native-catalogs.js';
+export {
+	type DeployStage,
+	type PredeployContext,
+	type PredeployResult,
+	runPredeployHooks,
+	type SynthesizedStack,
+} from './predeploy-hooks.js';
 export { destroySandbox, type SandboxOptions, startSandbox } from './sandbox.js';
 export { listSecrets, removeSecret, runSecretCli, setSecret } from './secret.js';
 export { getSandboxId, getStackId, getStackName } from './stack-id.js';
