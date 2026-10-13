@@ -42,6 +42,25 @@ export function secretTests(getApi: () => typeof apiType) {
       );
     });
 
+    test('Secret - an unset secret reads null before any put', async () => {
+      const api = getApi();
+      // secretGetUnset maps to a Secret created without `generate` and never
+      // written. On AWS the default L2 behavior would seed a random 32-char
+      // value; the empty-secret fix makes this null, matching the mock.
+      const { value } = await api.secretGetUnset();
+      assert.strictEqual(value, null);
+    });
+
+    test('Secret - a generated secret has a non-null value before any put', async () => {
+      const api = getApi();
+      // `generate: true` seeds a random value on first create, so get() returns
+      // a non-null string with no prior put().
+      const { value } = await api.secretGetGenerated();
+      assert.ok(value !== null, 'generated secret should have a value before any put');
+      assert.strictEqual(typeof value, 'string');
+      assert.ok(value.length > 0);
+    });
+
     test('Secret - named secret put then get round-trips', async () => {
       const api = getApi();
       await api.secretPutNamed('whsec_abc123');

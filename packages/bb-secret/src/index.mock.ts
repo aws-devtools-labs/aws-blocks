@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -98,6 +98,15 @@ function safeJsonParse(raw: string): unknown {
 	}
 }
 
+/**
+ * Produce a random 32-character value for a `generate: true` secret, mirroring
+ * (locally) the random string Secrets Manager's generator seeds on first deploy.
+ * Only the length/shape matters for parity — the mock is dev-only plaintext.
+ */
+function generateMockValue(): string {
+	return randomBytes(24).toString('base64url').slice(0, 32);
+}
+
 // The local mock persists secret values as plaintext on disk (.bb-data). Warn
 // once per process so developers never mistake it for a secure store — real
 // credentials must never be used in local development.
@@ -186,6 +195,26 @@ export class Secret<T = string> extends Scope {
 				'Secret: the local mock stores secret values as plaintext in .bb-data/settings.json. Do not use real credentials in local development.',
 			);
 			plaintextWarningLogged = true;
+		}
+
+		// `generate: true` — seed a random value on first creation so the secret
+		// EXISTS immediately (parity with the AWS generator). Only when not
+		// wrapping an external secret and only if unset, so a re-instantiation
+		// (dev restart, another test) does not clobber an existing/`put()` value —
+		// mirroring deploy-once creation. A generated value is a random string, so
+		// it is never seeded for a schema'd secret (it would not be valid JSON).
+		if (options?.generate === true && !this.external && !this.schema) {
+			const settings = readSettings(this);
+			if (!(this.storeKey in settings)) {
+				const seeded = generateMockValue();
+				settings[this.storeKey] = seeded;
+				writeSettings(this, settings);
+				const all = readVersions(this);
+				all[this.storeKey] = [
+					{ versionId: randomUUID(), stages: ['AWSCURRENT'], createdDate: new Date(), value: seeded },
+				];
+				writeVersions(this, all);
+			}
 		}
 	}
 
@@ -295,8 +324,10 @@ export class Secret<T = string> extends Scope {
 	 * the values. Pass a returned {@link SecretVersionInfo} to `get({ version })`
 	 * to read that version's value.
 	 *
-	 * Locally the mock keeps the current and previous versions (deeper history is
-	 * an AWS-only capability); against AWS this returns the full retained history.
+	 * Returns the **labeled** versions — current and previous. Both the mock and
+	 * the AWS layer surface only these two; deeper history (unlabeled versions
+	 * Secrets Manager still retains) is reachable via the AWS SDK against the
+	 * secret, but is intentionally not exposed here.
 	 *
 	 * @returns The versions, newest first (`stages` includes `'AWSCURRENT'` / `'AWSPREVIOUS'`).
 	 */

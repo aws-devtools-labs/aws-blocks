@@ -58,6 +58,25 @@ export interface SecretOptions<T = string> {
 	 */
 	removalPolicy?: 'destroy' | 'retain';
 	/**
+	 * Seed the secret with a random value when it is first created, instead of
+	 * leaving it unset.
+	 *
+	 * By default (`false`) a BB-created secret starts **empty**: `get()` returns
+	 * `null` until a value is set via `put()`, the console, or the CLI — matching
+	 * the "configure after deploy" model and the local mock. Set `generate: true`
+	 * for secrets that only need to *exist* and never have a human-provided value
+	 * — e.g. a webhook/HMAC signing key or an app-internal encryption key — so the
+	 * app has a usable value immediately on first deploy without a manual step.
+	 *
+	 * On AWS this uses Secrets Manager's generator (a 32-character random string).
+	 * The mock seeds an equivalent random string on first construction so local
+	 * and deployed behavior match. Do **not** combine with `schema`: a generated
+	 * random string is not valid JSON, so a typed secret must be set explicitly.
+	 *
+	 * Ignored when wrapping an existing secret via {@link Secret.fromExisting}.
+	 */
+	generate?: boolean;
+	/**
 	 * Optional logger for internal Secret operations. Accepts a `Logger` instance
 	 * or any `ChildLogger` from `@aws-blocks/bb-logger`.
 	 *
@@ -84,9 +103,11 @@ export interface ExternalSecretRef {
  * The minimal handle identifying a specific stored version of a secret —
  * everything `get({ version })` needs to fetch it, and nothing more.
  *
- * You never construct one by hand or type a raw version id: obtain a
- * {@link SecretVersionInfo} from {@link Secret.listVersions} and pass it to
- * {@link Secret.get}, or use the `'current'` / `'previous'` shorthands.
+ * The intended way to obtain one is {@link Secret.listVersions} (its
+ * {@link SecretVersionInfo} extends this), then pass it to {@link Secret.get};
+ * the `'current'` / `'previous'` shorthands cover the common cases. This is a
+ * plain structural handle, so a hand-built `{ versionId }` also type-checks — a
+ * `versionId` that does not exist simply reads back as `null`.
  */
 export interface SecretVersion {
 	/** Opaque version identifier. Meaningful only as a handle back to `get()`. */
@@ -101,9 +122,9 @@ export interface SecretVersion {
  */
 export interface SecretVersionInfo extends SecretVersion {
 	/**
-	 * Staging labels attached to this version. AWS maintains `['AWSCURRENT']` for
-	 * the live value and `['AWSPREVIOUS']` for the value before the last change;
-	 * a version with no label (superseded, awaiting pruning) has `[]`.
+	 * Staging labels attached to this version. `listVersions()` returns the
+	 * labeled versions, so this is `['AWSCURRENT']` for the live value and
+	 * `['AWSPREVIOUS']` for the value before the last change.
 	 */
 	readonly stages: string[];
 	/** When this version was created. */

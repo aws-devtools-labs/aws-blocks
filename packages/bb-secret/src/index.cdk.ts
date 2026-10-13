@@ -62,13 +62,27 @@ export class Secret extends BuildingBlockScope {
 						? RemovalPolicy.RETAIN
 						: this.defaults.removalPolicy;
 
-			this.secret = new secretsmanager.Secret(this, 'secret', {
+			const l2 = new secretsmanager.Secret(this, 'secret', {
 				// Use the caller's explicit, well-known name when provided (so a
 				// team/CI pipeline can target it with `aws secretsmanager …`); else
 				// derive a unique name from the scope tree.
 				secretName: (options?.name ?? this.fullId).substring(0, 255),
 				removalPolicy,
 			});
+
+			// Default: an EMPTY secret, so an unset secret reads back as `null`
+			// (`GetSecretValue` returns no `SecretString`), matching the mock and the
+			// "configure after deploy" contract. The L2 construct otherwise emits
+			// `GenerateSecretString: {}`, which seeds a random 32-char value — so a
+			// never-set `get()` would return that string instead of `null`. Opt into
+			// that generator only when `generate: true` (signing/HMAC keys that just
+			// need to exist). CloudFormation treats a secret with neither
+			// `GenerateSecretString` nor `SecretString` as empty.
+			if (options?.generate !== true) {
+				const cfn = l2.node.defaultChild as secretsmanager.CfnSecret;
+				cfn.addPropertyDeletionOverride('GenerateSecretString');
+			}
+			this.secret = l2;
 
 			// Tag the BB-created secret so it joins the stack's `-settings` resource
 			// group alongside AppSetting parameters (the group matches
@@ -98,7 +112,13 @@ export class Secret extends BuildingBlockScope {
 
 		// Pass the ARN to the runtime via the config registry (never
 		// handler.addEnvironment — the 4 KB Lambda env cap is managed centrally).
-		registerConfig(this, configKey(id), this.secret.secretArn);
+		// Key on the scoped `fullId`, not the bare construct `id`: two secrets with
+		// the same `id` in different scopes (e.g. per-tenant) would otherwise
+		// normalize to one config key and the last registration would silently win,
+		// so both instances would read/write a single secret. `fullId` is unique
+		// within the stack, and the runtime derives the identical key from its own
+		// `fullId`.
+		registerConfig(this, configKey(this.fullId), this.secret.secretArn);
 	}
 
 	// ── Runtime methods are not available during CDK synth ────────────────
@@ -119,9 +139,11 @@ export class Secret extends BuildingBlockScope {
 
 /**
  * The config key used to pass a Secret's ARN to the runtime. Derived from the
- * construct `id` (same derivation as the runtime layer, so the two agree without
- * handing a value between them). The `BLOCKS_` prefix is framework-reserved.
+ * scoped `fullId` (same derivation as the runtime layer, so the two agree
+ * without handing a value between them) — unique within the stack, so same-`id`
+ * secrets in different scopes get distinct keys. The `BLOCKS_` prefix is
+ * framework-reserved.
  */
-function configKey(id: string): string {
-	return `BLOCKS_SECRET_ARN_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+function configKey(fullId: string): string {
+	return `BLOCKS_SECRET_ARN_${fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 }

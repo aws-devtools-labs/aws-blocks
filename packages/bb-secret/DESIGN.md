@@ -33,6 +33,16 @@ For a stack-managed secret it creates one `aws-cdk-lib/aws-secretsmanager.Secret
   instance `fullId` (`.substring(0, 255)`). Names are derived, not handed off —
   the runtime resolves by the ARN the CDK layer registers, and the mock keys the
   local store by the same `name`/`fullId`.
+- **Empty by default:** the L2 `Secret` construct otherwise emits
+  `GenerateSecretString: {}`, seeding a random 32-char value — so a never-set
+  `get()` would return that string instead of `null`, breaking the
+  configure-after-deploy contract and diverging from the mock. The construct
+  removes that property (`addPropertyDeletionOverride('GenerateSecretString')`),
+  creating an **empty** secret (CloudFormation treats a secret with neither
+  `GenerateSecretString` nor `SecretString` as empty → no `SecretString` on read
+  → `null`). `generate: true` keeps the generator for secrets that only need to
+  exist (signing/HMAC keys); the mock seeds an equivalent random value so the two
+  layers match.
 - **Encryption:** default `aws/secretsmanager` KMS key.
 - **Removal policy:** `options.removalPolicy` (`'destroy'`/`'retain'`) when set,
   otherwise the stack-wide `this.defaults.removalPolicy` (production RETAIN,
@@ -47,9 +57,12 @@ For a stack-managed secret it creates one `aws-cdk-lib/aws-secretsmanager.Secret
   `-settings` group query includes `AWS::SecretsManager::Secret` alongside
   `AWS::SSM::Parameter` for this reason.
 - **Config:** the created secret's ARN is passed to the runtime via
-  `registerConfig(this, 'BLOCKS_SECRET_ARN_<ID>', arn)` — never
+  `registerConfig(this, 'BLOCKS_SECRET_ARN_<FULLID>', arn)` — never
   `handler.addEnvironment()` (the 4 KB Lambda env cap is managed centrally). The
-  `BLOCKS_` prefix is framework-reserved.
+  key is derived from the scoped `fullId`, not the bare construct `id`, so two
+  secrets with the same `id` in different scopes (per-tenant) get distinct keys
+  instead of silently colliding on one ARN. The `BLOCKS_` prefix is
+  framework-reserved.
 
 For an **external** secret (`Secret.fromExisting(arn)` → `options.secret`) it
 imports the secret with `Secret.fromSecretCompleteArn` and grants read/write to
@@ -105,13 +118,16 @@ The read surface is designed to grow without breaking:
   `SecretVersionInfo extends SecretVersion` (adds `stages`, `createdDate`) is
   what `listVersions()` produces. The consumer takes the base, the producer emits
   the richer subtype — so a `listVersions()` item passes straight to `get()`.
-- A raw `versionId` is never a string input; it only ever travels inside a
-  `SecretVersion` obtained from `listVersions()`, so callers can't fabricate ids.
+- `SecretVersion` is a plain structural handle; the intended source is
+  `listVersions()`, but a hand-built `{ versionId }` also type-checks. A
+  non-existent id is harmless — it simply reads back as `null`.
 
-Deeper access (reading by arbitrary id outside the retained window, custom
+Deeper access (reading by arbitrary id outside the labeled window, custom
 staging labels, full history) is intentionally **not** proxied — use the AWS SDK
-against `secret.secretArn`. If a real need appears, add optional fields to
-`SecretReadOptions` and/or widen `SecretVersionInfo` — both non-breaking.
+against the secret ARN (exposed on the CDK construct as `secret.secretArn`; the
+runtime/mock classes don't expose AWS primitives). If a real need appears, add
+optional fields to `SecretReadOptions` and/or widen `SecretVersionInfo` — both
+non-breaking.
 
 ## Schema handling
 
@@ -133,10 +149,11 @@ consumer's choice (`zod` is a `devDependency` here, used only by tests).
 | Aspect | Mock (`index.mock.ts`) | AWS (`index.aws.ts`) |
 |--------|------------------------|----------------------|
 | Storage | Plaintext entry in the shared `.bb-data/settings.json` (keyed by `name`/`fullId`), alongside `AppSetting` — so the `/aws-blocks/settings` route surfaces it | Secrets Manager secret (KMS-encrypted) |
-| ARN source | none (keyed by `name`/`fullId`) | `BLOCKS_SECRET_ARN_<ID>` config, or `fromExisting` ARN |
+| ARN source | none (keyed by `name`/`fullId`) | `BLOCKS_SECRET_ARN_<FULLID>` config, or `fromExisting` ARN |
+| Unset value | key absent → `null`; `generate: true` seeds a random 32-char value on first construction | empty secret (neither `GenerateSecretString` nor `SecretString`) → `GetSecretValue` has no `SecretString` → `null`; `generate: true` emits `GenerateSecretString` so a random value exists on deploy |
 | Missing value | key absent → `null` | `SecretString` absent / `ResourceNotFound` → `null` |
 | `put` on missing secret | always writes the entry | may throw `SecretNotFound` if the secret resource is gone |
-| Version history | current + previous, in a `.bb-data/secret-versions.json` sidecar (synthetic version ids) | full retained history in Secrets Manager (real version ids + staging labels) |
+| Version history | current + previous, in a `.bb-data/secret-versions.json` sidecar (synthetic version ids) | current + previous via `ListSecretVersionIds` with `IncludeDeprecated: false` (labeled only — real version ids + staging labels) |
 | Read caching | none — every `get()` reads fresh from `settings.json` | per-instance in-memory cache keyed by version selector, cleared by `put()` (steady-state reads skip the API) |
 | Security | **plaintext, insecure — dev only** | KMS-encrypted at rest |
 

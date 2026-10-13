@@ -27,6 +27,31 @@ describe('Secret (mock)', () => {
 		assert.strictEqual(await secret.get(), null);
 	});
 
+	test('generate:true seeds a non-null random value on first construction', async () => {
+		const secret = new Secret(freshScope(), 'signing-key', { generate: true });
+		const value = await secret.get();
+		assert.ok(value !== null, 'generated secret should have a value before any put');
+		assert.strictEqual(typeof value, 'string');
+		assert.ok(value.length > 0);
+	});
+
+	test('generate:true does not overwrite an existing value on re-construction', async () => {
+		const scope = freshScope();
+		const first = new Secret(scope, 'signing-key', { generate: true });
+		const seeded = await first.get();
+		// A second instance of the same secret must not re-seed (deploy-once).
+		const second = new Secret(scope, 'signing-key', { generate: true });
+		assert.strictEqual(await second.get(), seeded);
+	});
+
+	test('generate:true leaves an explicitly put() value intact', async () => {
+		const scope = freshScope();
+		const secret = new Secret(scope, 'signing-key', { generate: true });
+		await secret.put('explicit');
+		const reopened = new Secret(scope, 'signing-key', { generate: true });
+		assert.strictEqual(await reopened.get(), 'explicit');
+	});
+
 	test('put then get round-trips an opaque string', async () => {
 		const secret = new Secret(freshScope(), 'api-key');
 		await secret.put('sk_live_abc123');

@@ -168,15 +168,16 @@ export class Secret<T = string> extends Scope {
 	 * generation — where the Lambda config env is not present — never throws;
 	 * the ARN is only needed when a data method actually runs. When wrapping an
 	 * existing secret via `fromExisting()`, the ARN is known directly; otherwise
-	 * it comes from the config key the CDK layer registered
-	 * (`BLOCKS_SECRET_ARN_<ID>`).
+	 * it comes from the config key the CDK layer registered, derived from the
+	 * scoped `fullId` (`BLOCKS_SECRET_ARN_<FULLID>`) so same-`id` secrets in
+	 * different scopes resolve distinct ARNs.
 	 */
 	private resolveSecretArn(): string {
-		const secretArn = this.externalArn ?? process.env[configKey(this.constructId)];
+		const secretArn = this.externalArn ?? process.env[configKey(this.fullId)];
 		if (!secretArn) {
 			throw blocksError(
 				SecretErrors.NotSupported,
-				`Secret '${this.constructId}' is missing its secret ARN. The CDK layer must register it (config key ${configKey(this.constructId)}), or pass an existing secret via Secret.fromExisting().`,
+				`Secret '${this.constructId}' is missing its secret ARN. The CDK layer must register it (config key ${configKey(this.fullId)}), or pass an existing secret via Secret.fromExisting().`,
 			);
 		}
 		return secretArn;
@@ -264,7 +265,13 @@ export class Secret<T = string> extends Scope {
 	 * the values. Pass a returned {@link SecretVersionInfo} to `get({ version })`
 	 * to read that version's value.
 	 *
-	 * @returns The retained versions, newest first (`stages` includes `'AWSCURRENT'` / `'AWSPREVIOUS'`).
+	 * Returns the **labeled** versions only — current (`AWSCURRENT`) and previous
+	 * (`AWSPREVIOUS`). The underlying `ListSecretVersionIds` call uses
+	 * `IncludeDeprecated: false`, so unlabeled versions Secrets Manager still
+	 * retains are not returned; reach for the AWS SDK against the secret for
+	 * deeper history.
+	 *
+	 * @returns The labeled versions, newest first (`stages` includes `'AWSCURRENT'` / `'AWSPREVIOUS'`).
 	 */
 	async listVersions(): Promise<SecretVersionInfo[]> {
 		const secretArn = this.resolveSecretArn();
@@ -358,9 +365,10 @@ export class Secret<T = string> extends Scope {
 
 /**
  * The config-registry / environment key the CDK layer uses to pass a Secret's
- * ARN to the runtime. Derived from the construct `id` (same derivation on both
- * layers). The `BLOCKS_` prefix is framework-reserved.
+ * ARN to the runtime. Derived from the scoped `fullId` (same derivation on both
+ * layers), so same-`id` secrets in different scopes resolve distinct keys. The
+ * `BLOCKS_` prefix is framework-reserved.
  */
-function configKey(id: string): string {
-	return `BLOCKS_SECRET_ARN_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+function configKey(fullId: string): string {
+	return `BLOCKS_SECRET_ARN_${fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 }

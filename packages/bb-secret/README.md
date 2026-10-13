@@ -63,18 +63,20 @@ if (key === null) throw new Error('Stripe key not configured');
 
 ### Auto-generated signing key (the app creates the value)
 
-Declare it and never set a value — Secrets Manager creates a random one on first deploy. Good for a JWT/session signing key or HMAC key, where the app generates the secret and nobody needs to read it.
+Pass `generate: true` and never set a value — Secrets Manager creates a random one on first deploy (the mock seeds an equivalent value locally). Good for a JWT/session signing key or HMAC key, where the app generates the secret and nobody needs to read it.
 
 ```typescript
-const signingKey = new Secret(scope, 'session-signing-key');
+const signingKey = new Secret(scope, 'session-signing-key', { generate: true });
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async issueToken(userId: string) {
-    const key = await signingKey.get(); // random value, created on deploy
+    const key = await signingKey.get(); // random value, created on first deploy
     // sign(userId, key)...
   },
 }));
 ```
+
+> Without `generate: true`, a BB-created secret starts **empty**: `get()` returns `null` until a value is set. Don't combine `generate` with `schema` — a random string isn't valid JSON.
 
 ### Manually-configured credential (you set an externally-issued value)
 
@@ -133,7 +135,7 @@ A `Secret` declaration carries only the *name* — never the value. How you set 
 
 ### 1. Auto-generated (random) — no value to set
 
-If you never call `put()` and never set a value out-of-band, the secret is created with a **random value** on first deploy. Use this for opaque values nobody needs to know — session signing keys, HMAC keys. Read it with `get()`; it is stable across redeploys.
+Pass `generate: true` and never call `put()`: the secret is created with a **random value** on first deploy (the mock seeds an equivalent value locally). Use this for opaque values nobody needs to know — session signing keys, HMAC keys. Read it with `get()`; it is stable across redeploys. Without `generate: true` the secret starts empty and `get()` returns `null` until you set a value.
 
 ### 2. Set via the settings endpoint → console — the default for most apps
 
@@ -197,7 +199,7 @@ const versions = await signingKey.listVersions();
 const value = await signingKey.get({ version: versions[1] });  // read a specific version
 ```
 
-For anything deeper than the current/previous pair (full history, custom staging labels), use the AWS SDK directly against `secret.secretArn` — the BB covers the common path and leaves the raw resource reachable.
+For anything deeper than the current/previous pair (full history, custom staging labels, reading by an arbitrary id), use the AWS SDK directly against the secret — the BB covers the common path and leaves the raw resource reachable. The secret's ARN is exposed on the **CDK construct** (`secret.secretArn`, available at synth) — pass it where you build the SDK client; the runtime/mock classes deliberately don't expose AWS primitives.
 
 ## Scaling & cost (AWS)
 
@@ -205,7 +207,7 @@ For anything deeper than the current/previous pair (full history, custom staging
 - **Latency:** low-tens-of-ms per API call; the runtime caches the fetched value per cold start, so steady-state reads hit the cache, not the API.
 - **Throughput:** GetSecretValue scales to thousands of requests/sec per account (default quotas, raisable). Reads are the hot path; `put()` is rare.
 - **Value size limit:** 64 KB per secret value.
-- **Version history:** current + previous are always retained; AWS keeps additional versions until there are >100 unlabeled (never removing any created in the last 24h).
+- **Version history:** `listVersions()` returns the **labeled** versions — current + previous. Secrets Manager retains additional unlabeled versions internally (until >100, never removing any created in the last 24h), but the BB surfaces only current/previous; reach for the AWS SDK for deeper history.
 - **Encryption:** KMS at rest, using the default `aws/secretsmanager` key.
 - **IAM:** the construct grants the shared execution role `secretsmanager:GetSecretValue` + `PutSecretValue` scoped to the single secret (not a wildcard), plus the KMS grants Secrets Manager attaches.
 - **Deletion:** recoverable by default (30-day recovery window); `--force-delete-without-recovery` to delete immediately.

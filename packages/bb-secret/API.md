@@ -38,6 +38,7 @@ export const SecretErrors: {
 
 // @public
 export interface SecretOptions<T = string> {
+    generate?: boolean;
     logger?: ChildLogger;
     name?: string;
     removalPolicy?: 'destroy' | 'retain';

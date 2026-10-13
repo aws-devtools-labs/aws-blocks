@@ -601,6 +601,19 @@ const namedSecret = new Secret(scope, 'secret-named', {
   removalPolicy: 'destroy',
 });
 
+// Unset secret: created empty (no `generate`), so get() returns null until a
+// value is set. Exercises the "unset reads null on AWS, not a random string"
+// contract — this instance is deliberately never written in the e2e suite.
+const unsetSecret = new Secret(scope, 'secret-unset', { removalPolicy: 'destroy' });
+
+// Auto-generated secret: `generate: true` seeds a random value on first create,
+// so get() returns a non-null string before any put() — a signing/HMAC key that
+// just needs to exist.
+const generatedSecret = new Secret(scope, 'secret-generated', {
+  generate: true,
+  removalPolicy: 'destroy',
+});
+
 // CronJob - Scheduled task execution
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
 const cronResults = new KVStore(scope, 'cron-results', {});
@@ -2223,6 +2236,17 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const versions = await apiKeySecret.listVersions();
     // Return client-safe metadata (versionId + stages count), never values.
     return versions.map((v) => ({ versionId: v.versionId, stages: v.stages }));
+  },
+
+  // Unset secret: never written, so get() must return null (not a random
+  // generated string) on AWS — the "unset reads null" contract.
+  async secretGetUnset() {
+    return { value: await unsetSecret.get() };
+  },
+
+  // Generated secret: get() before any put() returns the seeded random value.
+  async secretGetGenerated() {
+    return { value: await generatedSecret.get() };
   },
   // CronJob Tests
   // ------------------------------------------------------------------------

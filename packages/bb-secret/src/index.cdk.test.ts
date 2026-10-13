@@ -53,6 +53,35 @@ test('CDK: default Secret provisions a Secrets Manager secret', () => {
 	Template.fromStack(stack).resourceCountIs('AWS::SecretsManager::Secret', 1);
 });
 
+test('CDK: default secret is created EMPTY (no GenerateSecretString → unset reads null)', () => {
+	const { stack, parent } = setup();
+	new Secret(parent, 'stripe-key');
+	// The L2 construct would emit GenerateSecretString: {} by default, seeding a
+	// random value. The empty-secret fix removes it, so an unset get() → null.
+	Template.fromStack(stack).hasResource('AWS::SecretsManager::Secret', {
+		Properties: Match.not(Match.objectLike({ GenerateSecretString: Match.anyValue() })),
+	});
+});
+
+test('CDK: generate:true keeps GenerateSecretString (a random value on deploy)', () => {
+	const { stack, parent } = setup();
+	new Secret(parent, 'signing-key', { generate: true });
+	Template.fromStack(stack).hasResourceProperties('AWS::SecretsManager::Secret', {
+		GenerateSecretString: Match.anyValue(),
+	});
+});
+
+test('CDK: same id in different scopes yields distinct fullIds (no config-key collision)', () => {
+	const { parent } = setup();
+	const tenantA = new Scope('tenant-a', { parent });
+	const tenantB = new Scope('tenant-b', { parent });
+	const a = new Secret(tenantA, 'api-key');
+	const b = new Secret(tenantB, 'api-key');
+	// The config key is derived from fullId (not the bare `id`), so distinct
+	// scopes resolve distinct ARNs instead of silently colliding on one key.
+	assert.notStrictEqual(a.fullId, b.fullId);
+});
+
 test('CDK: Secret.fromExisting does NOT provision a secret', () => {
 	const { stack, parent } = setup();
 	new Secret(parent, 'legacy-key', {
