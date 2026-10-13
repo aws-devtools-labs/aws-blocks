@@ -15,14 +15,9 @@ export { type DeployOptions, deploy } from './deploy.js';
 export { type DestroyOptions, destroy } from './destroy.js';
 export {
 	type DevServerOptions,
-	type StatusResult,
 	type StopResult,
-	runStatusCli,
 	runStopCli,
 	startDevServer,
-	statusDevServer,
-	statusMessage,
-	stopAllDevServers,
 	stopDevServer,
 	stopMessage,
 } from './dev-server.js';
