@@ -47,7 +47,8 @@ function getRegistry(root: Construct): ConfigRegistryState {
  * Every compute loads the same config, so at runtime the entry is available as
  * `process.env[key]` on all of them — before the backend module is imported, so
  * module-level reads see it. An existing environment variable of the same name
- * wins. It can be called from a Building Block constructor or from app code
+ * wins; if its value differs, the compute logs a warning at cold start naming
+ * the ignored key. It can be called from a Building Block constructor or from app code
  * after `BlocksStack.create()` / `BlocksBackend.create()` resolves:
  *
  * ```ts
