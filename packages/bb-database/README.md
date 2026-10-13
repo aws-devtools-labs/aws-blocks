@@ -102,6 +102,20 @@ Block options:
 
 `Database` and `DatabaseCluster` ids are unique per app; a second block with the same id is an error at construction. `Database<K>` carries the cluster kind as a type parameter inferred from `cluster`; with one kind today it is always `Database<'distributed'>`, and `db.cluster.kind` is the same value at runtime.
 
+## Sharing a cluster
+
+```ts
+const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
+const audit = new Database(scope, 'audit', { cluster: shared });
+const search = new Database(scope, 'search', { cluster: shared });
+```
+
+The `DatabaseCluster` is the only thing that provisions: one DSQL cluster, one pair of migration Lambdas, and one database role for the app, `blocks_app_{clusterId}`. Each `Database` on it adds a schema named after its id, a custom resource that applies that block's migrations into the schema, and grants on the schema's tables. At request time each block opens its own connection pool to the same cluster as the same role, with `search_path` set to its schema, so ``audit.query(sql`SELECT * FROM events`)`` reads `audit.events` and the same text on `search` reads `search.events`. Locally the cluster is one PGlite and the blocks are two schemas in it, the same layout as on AWS.
+
+**Isolation is by namespace, not by permission.** Both blocks connect as one role that has DML on every schema on the cluster. A query that qualifies a table name, ``sql`SELECT * FROM search.events` `` from `audit`, works, and so does a join across the two schemas in one statement. Treat the schema as a naming convention that keeps two blocks' tables apart, not as a boundary between tenants or trust levels; a block that must not see another block's data belongs on its own cluster.
+
+**Why share on DSQL.** A DSQL cluster costs nothing when idle, so sharing saves no money, unlike Aurora where a cluster has a capacity minimum. Share when you want one migration pipeline instead of one per block, when you need to query across the blocks' tables, or to stay under the default quota of 20 clusters per account and Region, which per-developer sandboxes count against. Keep separate clusters when the blocks have different lifecycles: the removal policy is set on the cluster, blocks on one cluster migrate one at a time, and a block never moves to another cluster later (see [The binding rule](#the-binding-rule)).
+
 ## Migrations
 
 Each block has one directory of ordinary PostgreSQL files, `./aws-blocks/migrations/{id}` unless `migrationsPath` says otherwise. Files run in name order, once each:
