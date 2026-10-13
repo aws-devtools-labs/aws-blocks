@@ -12,7 +12,13 @@ import {
 	type ScopeOptions,
 	type ScopeParent,
 } from '../common/index.js';
-import { assertCdkConditionActive, BlocksBackend, setupBlocksInfra } from './blocks-backend.js';
+import {
+	assertCdkConditionActive,
+	BlocksBackend,
+	buildSharedGateway,
+	requireSharedGateway,
+	setupBlocksInfra,
+} from './blocks-backend.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
@@ -22,12 +28,11 @@ import {
 	claimApiFrontDoor,
 	resolveApiFrontDoor,
 	resolvedApiFrontDoorUrl,
-	scheduleApiFrontDoor,
 } from './api-front-door.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
-import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
+import type { SharedGateway } from './shared-gateway.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
@@ -143,12 +148,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	}
 
 	private requireSharedGateway(): SharedGateway {
-		if (!this._sharedGateway) {
-			throw new Error(
-				'Blocks stack not fully initialized — access .gateway/.apiUrl after BlocksStack.create() resolves.',
-			);
-		}
-		return this._sharedGateway;
+		return requireSharedGateway(this, 'BlocksStack');
 	}
 
 	private _vpcOptions?: BlocksVpcOptions;
@@ -212,26 +212,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 			}
 		}
 		// Build the single shared REST API gateway now that the backend module has
-		// imported and every compute exists. Its catch-all resources front the
-		// default compute's function (its apiHandler()); every other compute's
-		// namespaces are routed to that compute's function. It backs .gateway/.apiUrl
-		// — the HTTP ingress is no longer owned per-compute. It is built in the
-		// default compute's scope so its logical IDs match the per-compute gateway it
-		// replaces (existing deployments keep their API and URL).
-		const defaultCompute = stack.requireDefaultCompute();
-		const sharedGateway = createSharedGateway(defaultCompute, {
-			computes: getComputes(stack),
-			defaultCompute,
-			defaults: stack.defaults,
-		});
-		stack._sharedGateway = sharedGateway;
-
-		// Decide the API front door now that the shared gateway (the origin) exists.
-		// Deferred to synth via an aspect: a `Hosting` built after this resolves may
-		// claim the front-door role, in which case no managed `edge` distribution is
-		// provisioned. `edge` ⇒ a CloudFront distribution in front of the gateway;
-		// `regional` (the default) ⇒ the gateway is reached directly.
-		scheduleApiFrontDoor(stack, resolveApiFrontDoor(props.apiFrontDoor) === 'edge', sharedGateway.apiUrl);
+		// imported and every compute exists, and schedule the API front door
+		// (see buildSharedGateway).
+		buildSharedGateway(stack, props.apiFrontDoor);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));

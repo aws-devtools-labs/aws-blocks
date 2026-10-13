@@ -120,8 +120,9 @@ describe('apiFrontDoor tier selection', () => {
 		template.resourceCountIs('AWS::CloudFront::Distribution', 1);
 
 		const distribution = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0];
-		const origins = (distribution as { Properties: { DistributionConfig: { Origins: Array<Record<string, unknown>> } } })
-			.Properties.DistributionConfig.Origins;
+		const origins = (
+			distribution as { Properties: { DistributionConfig: { Origins: Array<Record<string, unknown>> } } }
+		).Properties.DistributionConfig.Origins;
 		assert.strictEqual(origins.length, 1, 'edge front door forwards to a single origin');
 		const domainName = JSON.stringify(origins[0].DomainName);
 		// The origin host is sliced from the gateway URL in-template (Fn::Select over
@@ -169,5 +170,56 @@ describe('apiFrontDoor tier selection', () => {
 		assert.ok(value.includes('DomainName'), 'ApiUrl should resolve the distribution domain');
 		assert.ok(value.includes('/aws-blocks/api'), 'ApiUrl should carry the RPC prefix');
 		assert.ok(!value.includes('execute-api'), 'edge ApiUrl should be the CloudFront URL, not the raw gateway');
+	});
+});
+
+// The shared gateway replaced a gateway each LambdaCompute owned. It is built in
+// the default compute's scope with the same construct ids, so CloudFormation sees
+// the same logical IDs and an upgrade keeps the deployed REST API, its stage, and
+// its execute-api URL (and, in production, the RETAINed access-log group's audit
+// trail). These are the IDs `main` synthesized before the move — a change here
+// replaces the REST API for every deployed app, so it must be deliberate.
+describe('shared gateway keeps the pre-move logical IDs', () => {
+	const defaults = { ...BlocksPresets.production, accessLogging: true };
+	const gatewayIds = (stack: cdk.Stack) => {
+		const resources = Template.fromStack(stack).toJSON().Resources as Record<string, { Type: string }>;
+		const ids = (type: string, filter: (id: string) => boolean = () => true) =>
+			Object.keys(resources)
+				.filter((id) => resources[id].Type === type && filter(id))
+				.sort();
+		return {
+			restApi: ids('AWS::ApiGateway::RestApi'),
+			stage: ids('AWS::ApiGateway::Stage'),
+			accessLogs: ids('AWS::Logs::LogGroup', (id) => id.includes('ApiAccessLogs')),
+		};
+	};
+
+	test('BlocksStack', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'PinStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults,
+		});
+		assert.deepStrictEqual(gatewayIds(stack), {
+			restApi: ['DefaultComputeAPI5E5CE44A'],
+			stage: ['DefaultComputeAPIDeploymentStageprodBEAFD421'],
+			accessLogs: ['DefaultComputeApiAccessLogs6AADB91E'],
+		});
+	});
+
+	test('BlocksBackend', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'PinParent');
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults,
+		});
+		assert.deepStrictEqual(gatewayIds(parent), {
+			restApi: ['BlocksDefaultComputeAPI11DA76BF'],
+			stage: ['BlocksDefaultComputeAPIDeploymentStageprod70A875D5'],
+			accessLogs: ['BlocksDefaultComputeApiAccessLogsBEFB0011'],
+		});
 	});
 });

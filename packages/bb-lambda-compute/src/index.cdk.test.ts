@@ -140,7 +140,7 @@ describe('LambdaCompute', () => {
 		// ...and it's a brand check, not an `instanceof` — so a plausible duck
 		// (a Compute-shaped object without the Symbol.for brand) is rejected,
 		// which is exactly how it survives a duplicate bb-lambda-compute copy.
-		assert.ok(!LambdaCompute.isLambdaCompute({ fn: {}, apiGateway: {} }));
+		assert.ok(!LambdaCompute.isLambdaCompute({ fn: {}, logGroup: {} }));
 		assert.ok(!LambdaCompute.isLambdaCompute({}));
 		assert.ok(!LambdaCompute.isLambdaCompute(null));
 		assert.ok(!LambdaCompute.isLambdaCompute(undefined));
