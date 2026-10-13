@@ -492,6 +492,45 @@ void describe('CdnConstruct', () => {
       });
     });
 
+    void it('SsrRestApi does not auto-create a per-deploy API Gateway CloudWatch role', () => {
+      // Regression guard for the RolesPerAccount leak: cloudWatchRole:false must
+      // keep the SSR RestApi from minting an unused CloudWatch role per deploy.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: ssrManifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+      });
+
+      const template = Template.fromStack(stack);
+      // The SSR REST API itself is still created.
+      template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+      // But no account-level CloudWatch wiring is synthesized.
+      template.resourceCountIs('AWS::ApiGateway::Account', 0);
+      const roles = template.findResources('AWS::IAM::Role', {
+        Properties: {
+          AssumeRolePolicyDocument: {
+            Statement: Match.arrayWith([
+              Match.objectLike({
+                Principal: { Service: 'apigateway.amazonaws.com' },
+              }),
+            ]),
+          },
+        },
+      });
+      assert.strictEqual(
+        Object.keys(roles).length,
+        0,
+        'SsrRestApi must not synthesize an apigateway.amazonaws.com CloudWatch role',
+      );
+    });
+
     void it('uses a custom CachePolicy that honors origin Cache-Control on SSR (B21)', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');

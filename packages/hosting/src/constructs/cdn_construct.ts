@@ -426,6 +426,10 @@ export class CdnConstruct extends Construct {
       // double-proxy and cap streaming idle timeout at 30s.
       restApi = new RestApi(this, 'SsrRestApi', {
         endpointTypes: [EndpointType.REGIONAL],
+        // No access logging on this stage, so skip the account-level CloudWatch
+        // role RestApi creates by default — it would be an unused IAM role minted
+        // per deploy, exhausting the shared account's RolesPerAccount quota.
+        cloudWatchRole: false,
         deployOptions: { stageName: 'prod' },
         // Treat all bodies as binary. Without this, API Gateway base64-encodes
         // request bodies (Lambda then sees 2× size) and re-encodes responses,
