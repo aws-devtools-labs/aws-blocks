@@ -229,10 +229,10 @@ export const PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL = '[bb-data] PGlite init tra
  * failure (e.g. a bad `.env.local` AppSetting) is logged plainly and is NOT
  * reported as a trap, so it is not retried.
  *
- * @param promise the eager init/migrations promise to guard
- * @param log a logger with an `error(msg, meta)` method
- * @param label short human label for the log line (e.g. `'Migrations failed'`)
- * @param onTrap invoked (once) only when the rejection is a PGlite init trap
+ * @param promise - the eager init/migrations promise to guard
+ * @param log - a logger with an `error(msg, meta)` method
+ * @param label - short human label for the log line (e.g. `'Migrations failed'`)
+ * @param onTrap - invoked (once) only when the rejection is a PGlite init trap
  * @returns the same `promise`, so the caller can store/await it unchanged
  */
 export function trackEager<T>(
