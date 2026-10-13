@@ -65,7 +65,10 @@ const res = await api.ping('world');   // { message: 'hi world' }
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
 2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
-3. For faster iteration: run `npm run dev &` in the background, then run `npm run test:e2e` repeatedly (reuses the running server). When you background it this way, stop it with shell job control for **that** job — `kill %1` (or `kill <pid>` using the PID the `&` printed). Do **not** use `pkill -f`/`killall` on a name like `tsx` or `node`: those match by process name and will also kill your own shell/agent process, aborting whatever you are doing.
+3. For faster iteration, keep one dev server running and rerun tests against it:
+   - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev &`, and record its handle/PID.
+   - Run `npm run test:e2e` as often as needed; it reuses the running server.
+   - When finished, stop only the server you started, using that recorded handle (your harness's process tool, or the whole process tree you launched). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
 4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
 
 ### Calling the API directly (troubleshooting only)
@@ -96,8 +99,8 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 - `npm run deploy` — full production deploy to AWS
 - `npm run sandbox:destroy` — tear down sandbox resources
 
-**Deploy runs for several minutes** — the first production deploy provisions a lot of infrastructure and routinely takes longer than a short shell timeout. Let the single `npm run deploy` command run to completion (background it if your shell has a command time limit); wait for the `BLOCKS_DEPLOYED` line below. Do **not** interrupt it and start polling CloudFormation by hand — one `npm run deploy` invocation does the whole deploy and reports when it is done.
+`npm run deploy` does the whole deploy in one command. A first production deploy can take 10+ minutes — longer than many shell command timeouts — so run it in the background (your harness's background-process feature, or `npm run deploy > deploy.log 2>&1 &`) and let it finish.
 
-**Stack naming.** You do **not** choose or pass a stack name — it is derived from `stackId` in `.blocks/config.json` (generated at scaffold time from the project name plus a random suffix, e.g. `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId` in `.blocks/config.json`; for dynamic naming, edit `aws-blocks/index.cdk.ts`. Don't search the framework source for a naming convention — this is it.
+It ends by printing one machine-readable line: `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (backend-only apps omit `url=`). Wait for that line — it confirms the deploy finished and gives the URLs, so there's no need to poll CloudFormation or search the streamed output.
 
-On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). Grep that one line for "deploy finished + where it lives"; don't poll CloudFormation or hunt the URL out of the streamed output.
+**Stack naming.** The deploy scripts name stacks from `stackId` in `.blocks/config.json` (generated at scaffold time, e.g. `my-app-a3x9kf`): production is `<stackId>-prod`, sandbox is `<stackId>-<username>-<random>`. Use these names when inspecting stacks (e.g. `aws cloudformation describe-stacks --stack-name <stackId>-prod`). To rename, edit `stackId`; for computed names, edit `aws-blocks/index.cdk.ts`.
