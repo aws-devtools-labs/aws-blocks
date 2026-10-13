@@ -12,7 +12,12 @@ import type { BlocksDefaults } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
-import { type ApiFrontDoorOwner, claimApiFrontDoor, resolveApiFrontDoor, scheduleApiFrontDoor } from './api-front-door.js';
+import {
+	type ApiFrontDoorOwner,
+	claimApiFrontDoor,
+	resolveApiFrontDoor,
+	scheduleApiFrontDoor,
+} from './api-front-door.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
@@ -210,6 +215,71 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	return { executionRole };
 }
 
+/** What {@link buildSharedGateway} reads and writes on a `BlocksStack` / `BlocksBackend`. @internal */
+export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
+	readonly _defaultCompute?: Compute;
+	readonly defaults: BlocksDefaults;
+	_sharedGateway?: SharedGateway;
+}
+
+/**
+ * Build the single shared REST API gateway for a `BlocksStack` / `BlocksBackend`
+ * and record it on the owner (backs `.gateway` / `.apiUrl`). Shared by both
+ * entry points' `create()` so they can't drift.
+ *
+ * Call once, after the backend module has imported and every compute exists.
+ * The gateway fronts the default compute's function (its `apiHandler()`) and is
+ * built in the default compute's construct scope, so its logical IDs match the
+ * per-compute gateway it replaced — existing deployments keep their REST API and
+ * `execute-api` URL. The default compute is always a Lambda compute today, so
+ * `apiHandler()` is defined; a worker-only default fails with a clear error.
+ *
+ * Also schedules the API front door now that its origin exists. That decision is
+ * deferred to synth via an aspect: a `Hosting` built after `create()` resolves
+ * may claim the front-door role, in which case no managed `edge` distribution is
+ * provisioned. `edge` ⇒ a CloudFront distribution in front of the gateway;
+ * `regional` (the default) ⇒ the gateway is reached directly.
+ *
+ * @internal
+ */
+export function buildSharedGateway(
+	owner: SharedGatewayOwner,
+	apiFrontDoor: 'regional' | 'edge' | undefined,
+): SharedGateway {
+	const defaultCompute = owner._defaultCompute;
+	if (!defaultCompute) {
+		throw new Error('Default compute not initialized — create() must build it before the shared gateway.');
+	}
+	const defaultApiHandler = defaultCompute.apiHandler();
+	if (!defaultApiHandler) {
+		throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
+	}
+	const sharedGateway = createSharedGateway(defaultCompute, {
+		handler: defaultApiHandler,
+		defaults: owner.defaults,
+	});
+	owner._sharedGateway = sharedGateway;
+	scheduleApiFrontDoor(owner, resolveApiFrontDoor(apiFrontDoor) === 'edge', sharedGateway.apiUrl);
+	return sharedGateway;
+}
+
+/**
+ * Return the owner's shared gateway, or throw the "not fully initialized" error:
+ * `.gateway` / `.apiUrl` are only available once `create()` resolves (the gateway
+ * is built after the backend module import).
+ *
+ * @internal
+ */
+export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksStack' | 'BlocksBackend'): SharedGateway {
+	if (!owner._sharedGateway) {
+		const noun = kind === 'BlocksStack' ? 'stack' : 'backend';
+		throw new Error(
+			`Blocks ${noun} not fully initialized — access .gateway/.apiUrl after ${kind}.create() resolves.`,
+		);
+	}
+	return owner._sharedGateway;
+}
+
 /**
  * Standalone CDK construct that provisions the Blocks backend: a single Lambda
  * function fronted by one shared API Gateway REST API with RPC + catch-all proxy routing.
@@ -294,12 +364,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	}
 
 	private requireSharedGateway(): SharedGateway {
-		if (!this._sharedGateway) {
-			throw new Error(
-				'Blocks backend not fully initialized — access .gateway/.apiUrl after BlocksBackend.create() resolves.',
-			);
-		}
-		return this._sharedGateway;
+		return requireSharedGateway(this, 'BlocksBackend');
 	}
 
 	/**
@@ -397,30 +462,9 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		addBlocksStackMetadata(cdk.Stack.of(backend));
 
 		// Build the single shared REST API gateway now that the backend module has
-		// imported and every compute exists. It fronts the default compute's
-		// function (its apiHandler()) and backs .gateway/.apiUrl — the HTTP ingress
-		// is no longer owned per-compute. It is built in the default compute's scope
-		// so its logical IDs match the per-compute gateway it replaces (existing
-		// deployments keep their API and URL). The default compute is always a
-		// Lambda compute today, so apiHandler() is defined; guard with a clear error
-		// if a worker-only default is ever injected.
-		const defaultCompute = backend.requireDefaultCompute();
-		const defaultApiHandler = defaultCompute.apiHandler();
-		if (!defaultApiHandler) {
-			throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
-		}
-		const sharedGateway = createSharedGateway(defaultCompute, {
-			handler: defaultApiHandler,
-			defaults: backend.defaults,
-		});
-		backend._sharedGateway = sharedGateway;
-
-		// Decide the API front door now that the shared gateway (the origin) exists.
-		// Deferred to synth via an aspect: a `Hosting` built after this resolves may
-		// claim the front-door role, in which case no managed `edge` distribution is
-		// provisioned. `edge` ⇒ a CloudFront distribution in front of the gateway;
-		// `regional` (the default) ⇒ the gateway is reached directly.
-		scheduleApiFrontDoor(backend, resolveApiFrontDoor(props.apiFrontDoor) === 'edge', sharedGateway.apiUrl);
+		// imported and every compute exists, and schedule the API front door
+		// (see buildSharedGateway).
+		buildSharedGateway(backend, props.apiFrontDoor);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));

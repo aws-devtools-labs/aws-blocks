@@ -93,6 +93,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const handlerPath = join(__dirname, '__fixtures__', 'handler.js');
 const sideEffectBackendPath = join(__dirname, '__fixtures__', 'side-effect-backend.js');
 const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js');
+const gatewayReadingBackendPath = join(__dirname, '__fixtures__', 'gateway-reading-backend.js');
 const fullIdConstructBackendPath = join(__dirname, '__fixtures__', 'fullid-construct-backend.js');
 const EXECUTION_ROLE_MARKER_ACTION = 'blocks-test:MarkerAction';
 const importMetaHandlerPath = join(__dirname, '__fixtures__', 'import-meta-handler.js');
@@ -518,5 +519,37 @@ describe('VPC placement', () => {
 				'handler must not have VpcConfig when no VPC is configured',
 			);
 		}
+	});
+});
+
+// `create()` hands the backend's `defaults` to the shared gateway: throttling and
+// access logging on the stage must follow them (sandbox preset ⇒ 200/400).
+describe('shared gateway stage follows the backend defaults (BlocksBackend)', () => {
+	test('sandbox throttling + opt-in access logging reach the stage', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'DefaultsToStageParent');
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: { ...BlocksPresets.sandbox, accessLogging: true },
+			defaultComputeFactory: stubComputeFactory,
+		});
+		Template.fromStack(parent).hasResourceProperties('AWS::ApiGateway::Stage', {
+			MethodSettings: Match.arrayWith([
+				Match.objectLike({ ThrottlingRateLimit: 200, ThrottlingBurstLimit: 400 }),
+			]),
+			AccessLogSetting: Match.objectLike({ DestinationArn: Match.anyValue() }),
+		});
+	});
+});
+
+// The shared gateway is built after the backend module import, so `.gateway` /
+// `.apiUrl` are only available once `create()` resolves — including inside the
+// backend's default export.
+describe('gateway is not available during the backend import (BlocksBackend)', () => {
+	test('reading .gateway in the default export fails with the "not fully initialized" error', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'GatewayDuringImportParent');
+		await assert.rejects(makeBackend(parent, 'Blocks', gatewayReadingBackendPath), /not fully initialized/);
 	});
 });
