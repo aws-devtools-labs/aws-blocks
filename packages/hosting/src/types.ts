@@ -13,6 +13,7 @@ import type {
 } from 'aws-cdk-lib/aws-sns-subscriptions';
 import type { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
 import type { FrameworkAdapterFn } from './adapters/index.js';
+import type { WebFunctionOptions } from './constructs/web_function_construct.js';
 
 /**
  * Alarm subscription types supported by Hosting monitoring.
@@ -165,6 +166,34 @@ export type HostingProps = {
    * Ignored for SPA and static site deployments.
    */
   compute?: {
+    /**
+     * Where the SSR server runs. Default: `'lambda'`.
+     *
+     * - `'lambda'` — a Lambda function behind API Gateway (Lambda Web Adapter
+     *   for HTTP-server frameworks). Available in every Region.
+     * - `'web-function'` — **AWS Lambda Web Functions**: the framework's own
+     *   Node.js server runs directly on Lambda, fronted by CloudFront with
+     *   origin access control. Each execution environment serves many
+     *   concurrent requests and is billed for active CPU, so I/O-bound SSR
+     *   gets fewer cold starts and lower cost. Requires an HTTP-server build
+     *   (Astro, SvelteKit, Nitro `node-server`, OpenNext `docker` origin) and a
+     *   Region where Web Functions are available (us-east-1, us-east-2,
+     *   us-west-2, ap-northeast-1, eu-west-1). Runs on Node.js 24, Arm64, with
+     *   2 GB per environment — `memorySize`, `reservedConcurrency`,
+     *   `provisionedConcurrency` and `warmup` don't apply (tune with
+     *   {@link webFunction} instead).
+     *
+     * @example
+     * ```typescript
+     * defineHosting({
+     *   framework: 'astro',
+     *   compute: { type: 'web-function', webFunction: { maxEnvironments: 20 } },
+     * });
+     * ```
+     */
+    type?: 'lambda' | 'web-function';
+    /** Lambda Web Functions tuning. Only used when `type` is `'web-function'`. */
+    webFunction?: WebFunctionOptions;
     /** Lambda memory size in MB. Default: 1024 */
     memorySize?: number;
     /**

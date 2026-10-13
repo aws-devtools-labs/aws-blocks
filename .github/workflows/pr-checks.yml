@@ -534,8 +534,15 @@ jobs:
           - framework: sveltekit
             app-dir: test-apps/hosting-ssr-sveltekit
             script: test:e2e:hosting-ssr-sveltekit
+          # Same suite with the SSR server on AWS Lambda Web Functions
+          # (compute.type: 'web-function'); the app reads HOSTING_COMPUTE_TYPE.
+          - framework: sveltekit-web-function
+            app-dir: test-apps/hosting-ssr-sveltekit
+            script: test:e2e:hosting-ssr-sveltekit
+            compute-type: web-function
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
+      HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
       - uses: actions/checkout@v7

@@ -307,6 +307,74 @@ immediate — SSM Parameter Store has no recovery window.)
 └──────────────────────────────────────────────┘
 ```
 
+## SSR compute: Lambda or Lambda Web Functions
+
+By default the SSR server runs on a Lambda function behind an API Gateway REST
+API (`compute.type: 'lambda'`). HTTP-server frameworks run inside it via the
+Lambda Web Adapter. Set `compute.type: 'web-function'` to run it on
+[AWS Lambda Web Functions](https://docs.aws.amazon.com/lambda/latest/dg/web-functions.html)
+instead. The framework's own Node.js server then runs directly on Lambda, and
+CloudFront reaches it through origin access control (OAC):
+
+```ts
+new HostingConstruct(stack, 'Hosting', {
+  manifest,
+  compute: {
+    type: 'web-function',
+    timeout: Duration.seconds(60),
+    webFunction: { maxEnvironments: 20 }, // optional tuning
+  },
+});
+```
+
+```
+CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framework server
+```
+
+| | `'lambda'` (default) | `'web-function'` |
+|---|---|---|
+| Path | CloudFront → API Gateway → Lambda (+ Lambda Web Adapter) | CloudFront → Web Function endpoint |
+| Requests per environment | 1 | many (dynamic, up to `webFunction.maxConcurrencyPerEnvironment`, 1–128, default 64) |
+| Billing | duration × memory | active CPU + memory over the environment lifetime |
+| Origin auth | shared-secret header checked by API Gateway | IAM: OAC-signed, endpoint grants only this distribution |
+| Warm capacity | `provisionedConcurrency` / `warmup` | automatic headroom (scales to zero when idle) |
+| Regions | all | us-east-1, us-east-2, us-west-2, ap-northeast-1, eu-west-1 |
+| Runtime | Node.js 18–24, x86_64 | Node.js 24, Arm64, 2 GB per environment |
+
+**Requirements.**
+- An **HTTP-server build**: Astro (`@astrojs/node` standalone), SvelteKit
+  (`adapter-node`), Nuxt/Nitro with `nitro: { preset: 'node-server' }`, or an
+  OpenNext `docker` origin.
+- Event-handler builds (OpenNext's default `aws-lambda` wrapper, Nitro's
+  `aws-lambda` preset) fail synth with `WebFunctionUnsupportedComputeError`.
+- Synth also fails with `WebFunctionUnsupportedRegionError` outside the
+  supported Regions. If Web Functions have since launched in your Region,
+  bypass the check with `skipRegionValidation: true`.
+
+**What changes.**
+- **Lambda-only knobs are ignored with a synth warning:** `memorySize`,
+  `reservedConcurrency`, `provisionedConcurrency` and `warmup`. Use
+  `webFunction.maxEnvironments` and `webFunction.rateLimit` to cap scale.
+- **Only the SSR server moves.** Image optimization, ISR revalidation,
+  middleware and edge routes stay on Lambda.
+- **Native modules must be Arm64.** Astro's bundled `sharp` is installed for
+  Arm64 automatically.
+- **The default SSR CloudWatch alarms aren't created** for a Web Function yet.
+- **Separate resources.** The SSR server is exposed as
+  `HostingConstruct.computeWebFunctions`, not in `computeFunctions`. Grant it
+  access to AWS resources through its `grantPrincipal`.
+
+**Under the hood.**
+- **Code bucket.** Each deploy uploads the bundle zip to a versioned code
+  bucket (Web Functions only read code from S3). It then creates an immutable
+  revision and points the endpoint at it with weight 100.
+- **Entry shim.** An entry shim, `__aws_blocks_web_entry.mjs`, is written into
+  the bundle. It maps the listen address in `AWS_LAMBDA_HTTP_ENDPOINT` onto
+  the framework's `HOST`/`PORT` variables, then imports the server entry.
+- **Resource policy.** CloudFormation has no resource type for a Web Function's
+  resource-based policy. A small custom resource grants the distribution
+  `lambda:InvokeWebFunctionEndpoint`.
+
 ## Build retention & rollback
 
 Each deploy uploads its assets under an immutable `builds/<buildId>/` prefix and

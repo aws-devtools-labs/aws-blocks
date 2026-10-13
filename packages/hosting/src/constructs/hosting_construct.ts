@@ -64,6 +64,7 @@ import type { QuotaOverrides } from './quota_budget.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { StorageConstruct, DEFAULT_BUILD_RETENTION_DAYS } from './storage_construct.js';
 import { WafConstruct } from './waf_construct.js';
+import { WebFunctionConstruct, type WebFunctionOptions } from './web_function_construct.js';
 
 // Re-export build ID helpers for public API + tests
 export { generateBuildId, generateBuildIdFunctionCode } from '../defaults.js';
@@ -139,6 +140,15 @@ export type HostingConstructProps = {
   waf?: HostingWafConfig;
   /** Compute (Lambda) overrides for all compute resources. */
   compute?: {
+    /**
+     * Where the SSR server runs: `'lambda'` (default — Lambda behind API
+     * Gateway) or `'web-function'` (AWS Lambda Web Functions behind CloudFront
+     * OAC; HTTP-server builds only, supported Regions only).
+     * @see HostingProps.compute.type for the full note.
+     */
+    type?: 'lambda' | 'web-function';
+    /** Lambda Web Functions tuning. Only used when `type` is `'web-function'`. */
+    webFunction?: WebFunctionOptions;
     memorySize?: number;
     /**
      * Lambda timeout. Accepts either a `cdk.Duration` (preferred) or a
@@ -399,6 +409,12 @@ export class HostingConstruct extends Construct {
    * alias instead of `$LATEST`.
    */
   readonly computeAliases: Map<string, Alias> = new Map();
+  /**
+   * SSR compute running on AWS Lambda Web Functions (`compute.type:
+   * 'web-function'`), keyed by compute name. These are NOT in
+   * {@link computeFunctions}, which holds Lambda functions only.
+   */
+  readonly computeWebFunctions: Map<string, WebFunctionConstruct> = new Map();
   readonly certificate?: ICertificate;
   readonly hostedZone?: IHostedZone;
   readonly webAcl?: CfnWebACL;
@@ -549,6 +565,23 @@ export class HostingConstruct extends Construct {
       // Function URL. Image-opt etc. keep OAC + Function URL.
       const isSsrCompute = name === 'default' || name === 'server';
 
+      // Web Functions host the SSR server only; auxiliary compute (image
+      // optimization, revalidation, edge) stays on Lambda.
+      if (isSsrCompute && props.compute?.type === 'web-function') {
+        this.warnInapplicableWebFunctionOptions(props.compute);
+        const webFunction = new WebFunctionConstruct(this, `WebCompute-${name}`, {
+          name,
+          computeResource: resource,
+          timeout: computeTimeout,
+          logRetention: props.compute.logRetention,
+          skipRegionValidation: props.skipRegionValidation,
+          environment: props.compute.environment,
+          ...props.compute.webFunction,
+        });
+        this.computeWebFunctions.set(name, webFunction);
+        continue;
+      }
+
       const computeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
         name,
         computeResource: resource,
@@ -591,7 +624,8 @@ export class HostingConstruct extends Construct {
       });
 
       const cacheComputeName = manifest.cache.computeResource;
-      const cacheFunction = this.computeFunctions.get(cacheComputeName);
+      const cacheFunction =
+        this.computeFunctions.get(cacheComputeName) ?? this.computeWebFunctions.get(cacheComputeName);
       if (!cacheFunction) {
         throw new HostingError('CacheComputeResourceNotFoundError', {
           message: `Cache config references compute resource '${cacheComputeName}' but it was not found in manifest.compute`,
@@ -600,7 +634,7 @@ export class HostingConstruct extends Construct {
       }
       this.cacheBucket.grantReadWrite(cacheFunction);
 
-      if (cacheFunction instanceof LambdaFunction) {
+      if (cacheFunction instanceof LambdaFunction || cacheFunction instanceof WebFunctionConstruct) {
         cacheFunction.addEnvironment('HOSTING_NITRO_CACHE_BUCKET', this.cacheBucket.bucketName);
         cacheFunction.addEnvironment('HOSTING_NITRO_CACHE_REGION', Stack.of(this).region);
       }
@@ -696,7 +730,8 @@ export class HostingConstruct extends Construct {
 
       // Grant cache access to the target compute resource
       const cacheComputeName = manifest.cache.computeResource;
-      const cacheFunction = this.computeFunctions.get(cacheComputeName);
+      const cacheFunction =
+        this.computeFunctions.get(cacheComputeName) ?? this.computeWebFunctions.get(cacheComputeName);
       if (!cacheFunction) {
         throw new HostingError('CacheComputeResourceNotFoundError', {
           message: `Cache config references compute resource '${cacheComputeName}' but it was not found in manifest.compute`,
@@ -713,7 +748,7 @@ export class HostingConstruct extends Construct {
       }
 
       // ISR environment variables
-      if (cacheFunction instanceof LambdaFunction) {
+      if (cacheFunction instanceof LambdaFunction || cacheFunction instanceof WebFunctionConstruct) {
         cacheFunction.addEnvironment('CACHE_BUCKET_NAME', this.cacheBucket.bucketName);
         cacheFunction.addEnvironment('CACHE_BUCKET_REGION', Stack.of(this).region);
         cacheFunction.addEnvironment('OPEN_NEXT_BUILD_ID', buildId);
@@ -969,19 +1004,17 @@ export class HostingConstruct extends Construct {
         }
       }
 
-      for (const [, fn] of this.computeFunctions.entries()) {
-        if (fn instanceof LambdaFunction) {
-          for (const [key, value] of Object.entries(plain)) {
-            fn.addEnvironment(key, value);
-          }
-          // Managed markers (secret|config): inject the store locator + grant read/decrypt.
-          for (const marker of managed) {
-            wireManagedValue(fn, marker, storeConfig);
-          }
-          // BYO handles (ISecret|IParameter): grant via the handle + inject its locator.
-          for (const binding of byo) {
-            wireByo(fn, binding, storeConfig);
-          }
+      for (const [, fn] of this.envTargets()) {
+        for (const [key, value] of Object.entries(plain)) {
+          fn.addEnvironment(key, value);
+        }
+        // Managed markers (secret|config): inject the store locator + grant read/decrypt.
+        for (const marker of managed) {
+          wireManagedValue(fn, marker, storeConfig);
+        }
+        // BYO handles (ISecret|IParameter): grant via the handle + inject its locator.
+        for (const binding of byo) {
+          wireByo(fn, binding, storeConfig);
         }
       }
     }
@@ -1000,8 +1033,7 @@ export class HostingConstruct extends Construct {
     if (props.compute?.tracing) {
       const tracing = props.compute.tracing;
       const serviceName = tracing.serviceName ?? 'hosting';
-      for (const [name, fn] of this.computeFunctions) {
-        if (!(fn instanceof LambdaFunction)) continue;
+      for (const [name, fn] of this.envTargets()) {
         fn.addEnvironment('OTEL_EXPORTER_OTLP_ENDPOINT', tracing.otelEndpoint);
         if (tracing.otelHeaders) {
           fn.addEnvironment('OTEL_EXPORTER_OTLP_HEADERS', tracing.otelHeaders);
@@ -1167,6 +1199,7 @@ export class HostingConstruct extends Construct {
       computeFunctionUrls: this.computeFunctionUrls,
       computeFunctions: this.computeFunctions,
       computeAliases: this.computeAliases,
+      computeWebFunctions: this.computeWebFunctions,
       middlewareEdgeFunction: middlewareEdgeVersion,
       routeEdgeFunctions,
       webAcl: this.webAcl,
@@ -1364,15 +1397,18 @@ export class HostingConstruct extends Construct {
     // Image optimization and other secondary compute functions don't need it.
     if (hasCompute) {
       // Identify the primary server function (the one handling SSR routing)
-      const primaryComputeName = this.computeFunctions.has('default')
-        ? 'default'
-        : this.computeFunctions.has('server')
-          ? 'server'
-          : [...this.computeFunctions.keys()].find((k) => k !== 'image-optimization' && k !== 'middleware');
+      const primaryComputeName =
+        [...this.computeWebFunctions.keys()][0] ??
+        (this.computeFunctions.has('default')
+          ? 'default'
+          : this.computeFunctions.has('server')
+            ? 'server'
+            : [...this.computeFunctions.keys()].find((k) => k !== 'image-optimization' && k !== 'middleware'));
 
       if (primaryComputeName) {
-        const primaryFn = this.computeFunctions.get(primaryComputeName);
-        if (primaryFn && primaryFn instanceof LambdaFunction) {
+        const primaryFn =
+          this.computeWebFunctions.get(primaryComputeName) ?? this.computeFunctions.get(primaryComputeName);
+        if (primaryFn instanceof LambdaFunction || primaryFn instanceof WebFunctionConstruct) {
           // Build origin map with OTHER functions' URLs (not self → avoids cycle)
           const originEntries: string[] = [];
           for (const [urlName, fnUrl] of this.computeFunctionUrls.entries()) {
@@ -1523,10 +1559,8 @@ export class HostingConstruct extends Construct {
       });
 
       // Set env var on all compute functions so they know the bucket name
-      for (const [, fn] of this.computeFunctions.entries()) {
-        if (fn instanceof LambdaFunction) {
-          fn.addEnvironment('HOSTING_BUILD_CACHE_BUCKET', this.buildCacheBucket.bucketName);
-        }
+      for (const [, fn] of this.envTargets()) {
+        fn.addEnvironment('HOSTING_BUILD_CACHE_BUCKET', this.buildCacheBucket.bucketName);
       }
     }
 
@@ -1809,6 +1843,41 @@ export class HostingConstruct extends Construct {
         return [];
       },
     });
+  }
+
+  /**
+   * Every regional compute that takes environment variables and IAM grants:
+   * Lambda functions (Lambda\@Edge has no env vars — skipped) plus Web
+   * Functions.
+   */
+  private envTargets(): Array<[string, LambdaFunction | WebFunctionConstruct]> {
+    const targets: Array<[string, LambdaFunction | WebFunctionConstruct]> = [];
+    for (const [name, fn] of this.computeFunctions) {
+      if (fn instanceof LambdaFunction) targets.push([name, fn]);
+    }
+    for (const entry of this.computeWebFunctions) targets.push(entry);
+    return targets;
+  }
+
+  /**
+   * Lambda-only knobs have no Web Function equivalent — warn instead of
+   * silently ignoring them (an app switching `compute.type` often keeps its
+   * existing `memorySize`).
+   */
+  private warnInapplicableWebFunctionOptions(compute: NonNullable<HostingConstructProps['compute']>): void {
+    const ignored: Array<[keyof typeof compute, string]> = [
+      ['memorySize', 'each Web Function environment has a fixed 2 GB'],
+      ['reservedConcurrency', 'use `webFunction.maxEnvironments` to cap scale'],
+      ['provisionedConcurrency', 'Web Functions keep warm headroom automatically'],
+      ['warmup', 'Web Functions keep warm headroom automatically'],
+    ];
+    for (const [key, hint] of ignored) {
+      if (compute[key] === undefined) continue;
+      Annotations.of(this).addWarningV2(
+        `@aws-blocks/hosting:WebFunctionIgnores-${key}`,
+        `compute.${key} does not apply to compute.type 'web-function' and is ignored (${hint}).`,
+      );
+    }
   }
 
   /**

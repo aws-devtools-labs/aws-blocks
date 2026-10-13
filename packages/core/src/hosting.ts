@@ -5,7 +5,13 @@ import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
-import { detectFramework, type FrameworkAdapterFn, getAdapter, normalizeBasePath } from '@aws-blocks/hosting/adapters';
+import {
+  detectFramework,
+  type FrameworkAdapterFn,
+  getAdapter,
+  normalizeBasePath,
+  withComputeArch,
+} from '@aws-blocks/hosting/adapters';
 import {
   generateBuildId,
   HostingConstruct,
@@ -13,6 +19,8 @@ import {
   type HostingDomainConfig,
   type HostingWafConfig,
   type SkewProtectionConfig,
+  type WebFunctionConstruct,
+  type WebFunctionOptions,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { AllowedMethods, CachePolicy, OriginRequestPolicy, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
@@ -54,6 +62,29 @@ import { getRegisteredRoutes } from './raw-route.js';
  * ```
  */
 export type ComputeConfig = {
+  /**
+   * Where the SSR server runs. Default: `'lambda'`.
+   *
+   * - `'lambda'` — a Lambda function behind API Gateway. Available in every Region.
+   * - `'web-function'` — **AWS Lambda Web Functions**: the framework's own
+   *   Node.js server runs directly on Lambda behind CloudFront (origin access
+   *   control, no API Gateway). One execution environment serves many
+   *   concurrent requests and is billed for active CPU — fewer cold starts and
+   *   lower cost for I/O-bound SSR. Needs an HTTP-server build (Astro,
+   *   SvelteKit, Nuxt/Nitro with `preset: 'node-server'`) and a Region where Web
+   *   Functions are available (us-east-1, us-east-2, us-west-2,
+   *   ap-northeast-1, eu-west-1). Runs on Node.js 24 / Arm64 with 2 GB per
+   *   environment, so `memorySize` and `reservedConcurrency` don't apply —
+   *   tune with {@link ComputeConfig.webFunction}.
+   *
+   * @example
+   * ```ts
+   * compute: { type: 'web-function', webFunction: { maxEnvironments: 20 } }
+   * ```
+   */
+  type?: 'lambda' | 'web-function';
+  /** Lambda Web Functions tuning. Only used when `type` is `'web-function'`. */
+  webFunction?: WebFunctionOptions;
   /** Lambda memory size in MB. Default: 512. */
   memorySize?: number;
   /**
@@ -496,6 +527,13 @@ export class Hosting extends Construct {
   public readonly url: string;
   /** The primary SSR/compute Lambda function (first compute resource, if any). */
   public readonly ssrFunction?: cdk.aws_lambda.Function;
+  /**
+   * The SSR server on AWS Lambda Web Functions — set instead of
+   * {@link ssrFunction} when `compute.type` is `'web-function'`. Use its
+   * `grantPrincipal` / `addToRolePolicy` to give the server access to AWS
+   * resources.
+   */
+  public readonly ssrWebFunction?: WebFunctionConstruct;
   /** S3 bucket for framework build caches (present when `buildCache.enabled` is true). */
   public readonly buildCacheBucket?: cdk.aws_s3.Bucket;
   /**
@@ -606,7 +644,12 @@ export class Hosting extends Construct {
       process.env.BLOCKS_API_URL = props.api.apiUrl;
     }
     const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
-    const manifest: DeployManifest = adapter(root);
+    // Web Functions run on Arm64: adapters that ship native modules into the
+    // server bundle (Astro's sharp) read the target architecture from here.
+    const manifest: DeployManifest = withComputeArch(
+      props.compute?.type === 'web-function' ? 'arm64' : 'x64',
+      () => adapter(root),
+    );
 
     // ── 4b. Ensure buildId is set on the manifest ────────────────
     if (!manifest.buildId) {
@@ -790,8 +833,11 @@ export class Hosting extends Construct {
 
     const primaryFunction = [...hosting.computeFunctions.values()].find(canAddEnv);
 
-    for (const [, fn] of hosting.computeFunctions) {
-      if (!canAddEnv(fn)) continue; // Lambda@Edge: no env var support
+    const envTargets = [
+      ...[...hosting.computeFunctions.values()].filter(canAddEnv), // Lambda@Edge: no env var support
+      ...hosting.computeWebFunctions.values(),
+    ];
+    for (const fn of envTargets) {
       if (props.api) {
         fn.addEnvironment('BLOCKS_API_URL', props.api.apiUrl);
       }
@@ -899,6 +945,7 @@ export class Hosting extends Construct {
     this.distribution = hosting.distribution;
     this.url = hosting.distributionUrl;
     this.ssrFunction = primaryFunction;
+    this.ssrWebFunction = [...hosting.computeWebFunctions.values()][0];
     this.buildCacheBucket = hosting.buildCacheBucket;
     this.monitoring = hosting.monitoring;
 
