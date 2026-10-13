@@ -62,6 +62,17 @@ export function sessionPolicy(bucket: string, prefix: string, permissions: Permi
 	return JSON.stringify({ Version: '2012-10-17', Statement: statements });
 }
 
+/**
+ * Token-exchange spike: ONE session-wide policy for stock `aws-amplify/storage`
+ * calls (`uploadData`, `list`, `getUrl`, `remove`). Amplify asks its
+ * credentialsProvider for a single credential set per app, not per path, so
+ * the policy is the union of every location the user may touch.
+ */
+export function sessionWidePolicy(bucket: string, userSub: string): string {
+	const statements = locationsFor(bucket, userSub).flatMap((l) => JSON.parse(sessionPolicy(bucket, l.prefix, l.permissions)).Statement);
+	return JSON.stringify({ Version: '2012-10-17', Statement: statements });
+}
+
 export class ScopeDeniedError extends Error {
 	override name = 'AccessDeniedException';
 }

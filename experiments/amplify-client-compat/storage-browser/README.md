@@ -75,6 +75,37 @@ PASS A's credentials cannot read B's file (S3 enforces)
 PASS read-only credentials cannot upload to shared (S3 enforces)
 ```
 
+## Token-exchange spike: stock `aws-amplify/storage`
+
+`session` ApiNamespace (`aws-blocks/index.ts`) plus `web/live-token-exchange.ts`.
+The client signs in through Blocks (cookie only), then configures Amplify with
+custom Auth providers instead of an Identity Pool:
+
+```ts
+Amplify.configure({ Storage: { S3: { bucket, region } } }, {
+  Auth: {
+    credentialsProvider, // -> session.getAwsCredentials: 15-min STS, identityId = sub
+    tokenProvider,       // -> session.getTokens (optional; ID/access JWTs, never refresh)
+  },
+});
+await uploadData({ path: ({ identityId }) => `private/${identityId}/a.txt`, data }).result;
+```
+
+Amplify asks for one credential set per app, so `session.getAwsCredentials`
+vends the union of the caller's locations (`sessionWidePolicy` in
+`locations.ts`): read/write/delete on `private/<sub>/`, read on `public/`.
+
+Run (after deploying the stack as above):
+
+```bash
+cd web
+node --import ../../../../node_modules/tsx/dist/loader.mjs live-token-exchange.ts ../.live/outputs.json
+```
+
+Import `Amplify`/`fetchAuthSession`/`decodeJWT` from `@aws-amplify/core`, not
+`aws-amplify`: here `aws-amplify@6.17.0` nests core@6.16.3 while Storage uses the
+top-level core@6.19.2, and configuring the wrong singleton yields `NoBucket`.
+
 ## Known gaps
 
 - The API's refusals come back as JSON-RPC code 500 with

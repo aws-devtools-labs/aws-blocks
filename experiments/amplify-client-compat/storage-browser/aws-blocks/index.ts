@@ -1,6 +1,6 @@
 import { ApiNamespace, Scope, AuthCognito, FileBucket, getSdkIdentifiers } from '@aws-blocks/blocks';
 import { STSClient, AssumeRoleCommand, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
-import { SCOPE_ID, BUCKET_ID, VEND_ROLE_NAME, WEB_ORIGIN, HOSTED_WEB_ORIGIN, locationsFor, sessionPolicy, authorizeScope, type Permission } from './locations.js';
+import { SCOPE_ID, BUCKET_ID, VEND_ROLE_NAME, WEB_ORIGIN, HOSTED_WEB_ORIGIN, locationsFor, sessionPolicy, sessionWidePolicy, authorizeScope, type Permission } from './locations.js';
 
 // StorageBrowser-on-Blocks POC. The stock Amplify UI <StorageBrowser> talks to
 // S3 directly from the browser, but it never sees a Cognito token or an
@@ -73,5 +73,55 @@ export const storage = new ApiNamespace(scope, 'storage', (context) => ({
 				expiration: c.Expiration!.toISOString(),
 			},
 		};
+	},
+}));
+
+// Token-exchange spike (candidate 4). The cookie stays the root of trust; the
+// browser exchanges it for what stock Amplify's pluggable Auth providers need,
+// so `Amplify.configure(config, { Auth: { tokenProvider, credentialsProvider } })`
+// makes stock `aws-amplify/storage` work with no Identity Pool. The refresh
+// token never leaves the server.
+export const session = new ApiNamespace(scope, 'session', (context) => ({
+	/**
+	 * Amplify `CredentialsAndIdentityIdProvider`: 15-minute STS credentials for
+	 * every location the caller may touch, and `identityId` = Cognito `sub` so
+	 * Amplify path callbacks (`({ identityId }) => ...`) land in `private/<sub>/`.
+	 */
+	async getAwsCredentials() {
+		const user = await auth.requireAuth(context);
+		const out = await sts.send(
+			new AssumeRoleCommand({
+				RoleArn: `arn:aws:iam::${await getAccountId()}:role/${VEND_ROLE_NAME}`,
+				RoleSessionName: `sess-${user.userSub}`.slice(0, 64),
+				DurationSeconds: 900,
+				Policy: sessionWidePolicy(getSdkIdentifiers(files).bucketName, user.userSub),
+			}),
+		);
+		const c = out.Credentials!;
+		return {
+			identityId: user.userSub,
+			credentials: {
+				accessKeyId: c.AccessKeyId!,
+				secretAccessKey: c.SecretAccessKey!,
+				sessionToken: c.SessionToken!,
+				expiration: c.Expiration!.toISOString(),
+			},
+		};
+	},
+
+	/**
+	 * Amplify `TokenProvider` (optional variant): the session's current ID and
+	 * access tokens, refreshed server-side when expired. Never the refresh token.
+	 */
+	async getTokens(input?: { forceRefresh?: boolean }) {
+		const s = await auth.fetchAuthSession(context, { forceRefresh: !!input?.forceRefresh });
+		if (!s.tokens) return null;
+		return { idToken: s.tokens.idToken.toString(), accessToken: s.tokens.accessToken.toString() };
+	},
+
+	/** S3 location for `Amplify.configure({ Storage })`. */
+	async getStorageConfig() {
+		await auth.requireAuth(context);
+		return { bucket: getSdkIdentifiers(files).bucketName, region: process.env.AWS_REGION ?? '' };
 	},
 }));
