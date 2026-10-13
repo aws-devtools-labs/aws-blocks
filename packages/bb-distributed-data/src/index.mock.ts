@@ -8,7 +8,7 @@
 
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
-import { DatabaseBase, type SqlQuery, type Transaction, trackEager } from '@aws-blocks/data-common';
+import { DatabaseBase, type SqlQuery, type Transaction, trackEager, logRecovery } from '@aws-blocks/data-common';
 import { DsqlMockEngine } from './engines/dsql-mock-engine.js';
 import { runMigrations, loadMigrationsFromDir } from './migrations.js';
 import { transactionWithRetry } from './transaction.js';
@@ -42,11 +42,21 @@ export class DistributedDatabase extends Scope {
       //  2. don't cache the failure forever — the DsqlMockEngine recovers, so on
       //     an init trap onTrap clears `migrationsRun` and ready() re-runs the
       //     idempotent migrations on the next query.
+      let trapped = false;
       const startMigrations = () => {
+        const retry = trapped;
         const run = loadMigrationsFromDir(path)
           .then(m => this.mockEngine.withDdl(() => runMigrations(this.mockEngine, m)))
-          .then(() => {});
+          .then(() => {
+            if (retry) {
+              trapped = false;
+              try {
+                logRecovery(this.log, 'Migrations re-ran');
+              } catch {}
+            }
+          });
         this.migrationsRun = trackEager(run, this.log, 'Migrations failed', () => {
+          trapped = true;
           this.migrationsRun = null;
         });
         return run;

@@ -14,6 +14,7 @@ import {
 	DEAD_SERVER_STATUS,
 	PGLITE_OOM_REASON,
 	PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL,
+	PGLITE_DATA_LAYER_RECOVERED_SENTINEL,
 	PGLITE_INIT_TRAP_RE,
 	isPgliteInitOom,
 	isDataLayerUnavailable,
@@ -581,22 +582,27 @@ describe('dead_server PGlite-init-OOM carve-out: a WASM memory-ceiling crash is 
 	// out of WASM linear memory under the CI runner — the built app is fine, so it must NOT count
 	// against the agent. Reclassified harness_error (EXCLUDED). The carve-out is signature-gated and
 	// narrow: ONLY this trap reclassifies AND only when the process actually EXITED; every other
-	// dead_server stays counted.
+	// dead_server stays counted. The PGlite init-trap substring fallback was REMOVED (osama-rizk round 2):
+	// with bb-data keeping the server alive through a trap, the engine's per-attempt onRetry warning
+	// leaves `Aborted(` in the tail even after a SUCCESSFUL retry, so "exited + signature in 100 lines"
+	// mostly selected a survived-trap-then-a-different-crash misclassification. The ONLY carve-out now is
+	// the causal `data_layer_unavailable` sentinel (step 3 sets it only when the layer was down at test end).
 	const base = { task: 'oidc-dsql-notes', template: 'default', dev_server_status: 'dead', dev_pid_status: 'exited (pid=1)', tests_passed: 0, tests_failed: 0 };
 
-	it('Aborted(Cannot enlarge memory arrays) in the dev-log → harness_error, EXCLUDED', () => {
+	it('Aborted(...) in a dead_server dev-log alone NO LONGER excludes — stays dead_server (counted)', () => {
+		// Blocking 2: the trap signature appearing in the tail is not proof it CAUSED the death. Without
+		// the causal sentinel this is a genuine product failure and must stay counted.
 		const cell = { ...base, dev_log_tail: 'postgres: Aborted(Cannot enlarge memory arrays to 0x...)' };
-		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: PGLITE_OOM_REASON });
-		assert.equal(isScoredCell(cell), false);
+		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
+		assert.equal(isScoredCell(cell), true);
 	});
 
-	it("RuntimeError: unreachable (the V8/Node trap form) → harness_error, EXCLUDED", () => {
+	it('RuntimeError: unreachable in a dead_server dev-log alone stays dead_server (counted)', () => {
 		const cell = { ...base, dev_log_tail: 'RuntimeError: unreachable\n    at _pg_initdb' };
-		assert.equal(classifyCell(cell).klass, 'harness_error');
-		assert.equal(classifyCell(cell).reason, PGLITE_OOM_REASON);
+		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
 	});
 
-	it('a dead_server with NO matching signature stays dead_server (counted) — the gate is narrow', () => {
+	it('a dead_server with NO matching signature stays dead_server (counted)', () => {
 		const cell = { ...base, dev_log_tail: 'Error: listen EADDRINUSE: address already in use :::3100' };
 		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
 		assert.equal(isScoredCell(cell), true); // a genuine agent-caused crash still counts
@@ -608,15 +614,7 @@ describe('dead_server PGlite-init-OOM carve-out: a WASM memory-ceiling crash is 
 		assert.equal(isScoredCell(cell), true);
 	});
 
-	it('a stray Aborted( in the log does NOT rescue a genuine harness_error / cancellation (precedence holds)', () => {
-		// The PGlite carve-out is ordered inside the dead_server branch, AFTER cancellation/pre-grade —
-		// so a cancelled or pre-grade-failed cell stays EXCLUDED regardless of the log contents.
-		const cancelled = { ...base, status: 'cancelled', failed_at: AGENT_FAIL_AT, dev_log_tail: 'Aborted(OOM)' };
-		assert.equal(classifyCell(cancelled).reason, 'cancelled');
-		assert.equal(classifyCell(cancelled).klass, 'harness_error');
-	});
-
-	it('isPgliteInitOom matches the trap signatures and rejects unrelated / non-string input', () => {
+	it('isPgliteInitOom still matches the trap signatures (pure predicate; no longer wired into classifyCell)', () => {
 		assert.equal(isPgliteInitOom('x Aborted(OOM) y'), true);
 		assert.equal(isPgliteInitOom('wasm trap: unreachable'), true);
 		assert.equal(isPgliteInitOom('RuntimeError: unreachable'), true);
@@ -626,28 +624,28 @@ describe('dead_server PGlite-init-OOM carve-out: a WASM memory-ceiling crash is 
 		assert.equal(isPgliteInitOom(null), false);
 	});
 
-	// --- Tightened fallback gate (review finding: presence ≠ causation) ------------------------------
-	it("a survived trap on an 'alive but not serving' server stays dead_server (counted) — not an exit", () => {
-		// The server did not exit; it logged a trap it SURVIVED and then failed to serve for another
-		// reason (an agent's broken frontend). dev_pid_status does not start with 'exited', so the
-		// trap carve-out must NOT fire — this is a real product failure and stays counted.
+	// --- Blocking 2 (round 2): the removed fallback MUST NOT exclude a survived-trap-then-other-crash --
+	it("Blocking 2: a survived trap followed by a DIFFERENT crash stays dead_server (counted)", () => {
+		// The engine's successful retry logs `Aborted(` and then `[migrations] Applied: 0001_init.sql`,
+		// after which the server died of an agent bug. The old fallback (exited + signature anywhere)
+		// wrongly excluded this; with the fallback gone and no sentinel, it correctly stays counted.
 		const cell = {
 			...base,
-			dev_pid_status: 'alive (pid=123) but not serving',
-			dev_log_tail: '[PGliteEngine] init trap on attempt 1 ... Aborted(Cannot enlarge memory arrays)\n[vite] Internal server error: Failed to resolve import',
+			dev_pid_status: 'exited (pid=1)',
+			dev_log_tail:
+				'[PGliteEngine] PGlite init trap on attempt 1; recreating instance Error: Aborted(Cannot enlarge memory arrays)\n' +
+				"[migrations] Applied: 0001_init.sql\n" +
+				"TypeError: Cannot read properties of undefined (reading 'map')",
 		};
 		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
 		assert.equal(isScoredCell(cell), true);
 	});
 
-	it("an unrelated lowercase 'aborted(' + an agent TypeError stays dead_server (case-sensitive gate)", () => {
-		// Case matters: the real trap is `Aborted(` / `RuntimeError: unreachable`. A lowercase
-		// `request aborted(client closed)` from arbitrary app output must NOT match, so an agent's own
-		// crash is not laundered into an excluded harness_error.
+	it("an 'alive but not serving' server with a survived trap stays dead_server (counted)", () => {
 		const cell = {
 			...base,
-			dev_pid_status: 'exited (pid=1)',
-			dev_log_tail: 'request aborted(client closed)\nTypeError: cannot read properties of undefined',
+			dev_pid_status: 'alive (pid=123) but not serving',
+			dev_log_tail: '[PGliteEngine] init trap on attempt 1 ... Aborted(Cannot enlarge memory arrays)\n[vite] Internal server error: Failed to resolve import',
 		};
 		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
 		assert.equal(isScoredCell(cell), true);
@@ -688,6 +686,19 @@ describe('dead_server PGlite-init-OOM carve-out: a WASM memory-ceiling crash is 
 			assert.equal(isDataLayerUnavailable(cell), false);
 		});
 
+		it('Blocking 1: a RECOVERED trap (step 3 leaves data_layer_unavailable falsy) stays scored (counted)', () => {
+			// When a boot-time trap recovers before test end, step 3 sees the recovery marker AFTER the
+			// last unavailable sentinel and does NOT set data_layer_unavailable — so the cell is graded
+			// normally. A passing recovered cell counts; a failing one exposes the agent bug (not hidden).
+			const recoveredPass = { task: 'x', template: 'y', tests_passed: 11, tests_failed: 0 };
+			assert.equal(classifyCell(recoveredPass).klass, 'scored');
+			const recoveredFail = { task: 'x', template: 'y', tests_passed: 8, tests_failed: 3 };
+			assert.equal(classifyCell(recoveredFail).klass, 'scored');
+			// Explicit false is treated identically to absent (not the sentinel's truthy==true).
+			assert.equal(isDataLayerUnavailable({ ...recoveredFail, data_layer_unavailable: false }), false);
+			assert.equal(classifyCell({ ...recoveredFail, data_layer_unavailable: false }).klass, 'scored');
+		});
+
 		it('isDataLayerUnavailable requires strict true (not truthy)', () => {
 			assert.equal(isDataLayerUnavailable({ data_layer_unavailable: true }), true);
 			assert.equal(isDataLayerUnavailable({ data_layer_unavailable: 'yes' }), false);
@@ -719,6 +730,29 @@ describe('dead_server PGlite-init-OOM carve-out: a WASM memory-ceiling crash is 
 			const m = pgliteInitSrc.match(/PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL = '([^']*)'/);
 			assert.ok(m, 'could not find the sentinel literal in the TS source');
 			assert.equal(PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL, m[1]);
+		});
+
+		it('PGLITE_DATA_LAYER_RECOVERED_SENTINEL equals the TS source literal exactly', () => {
+			const m = pgliteInitSrc.match(/PGLITE_DATA_LAYER_RECOVERED_SENTINEL = '([^']*)'/);
+			assert.ok(m, 'could not find the recovered-sentinel literal in the TS source');
+			assert.equal(PGLITE_DATA_LAYER_RECOVERED_SENTINEL, m[1]);
+		});
+
+		// NB #6 (round 2): the literal that ACTUALLY drives bench detection is the shell variable in
+		// 3-build-and-test.sh, not the scorer constant (which only tests read). Pin BOTH shell literals
+		// to the TS source so a reword of the constant that keeps the scorer test green can't silently
+		// break the grep in CI and let wedged cells get counted again.
+		it('3-build-and-test.sh DATA_LAYER_SENTINEL / DATA_LAYER_RECOVERED match the TS source literals', () => {
+			const sh = readFileSync(
+				join(dirname(fileURLToPath(import.meta.url)), '../3-build-and-test.sh'),
+				'utf-8',
+			);
+			const shDown = sh.match(/DATA_LAYER_SENTINEL='([^']*)'/);
+			const shUp = sh.match(/DATA_LAYER_RECOVERED='([^']*)'/);
+			assert.ok(shDown, 'DATA_LAYER_SENTINEL not found in 3-build-and-test.sh');
+			assert.ok(shUp, 'DATA_LAYER_RECOVERED not found in 3-build-and-test.sh');
+			assert.equal(shDown[1], PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL);
+			assert.equal(shUp[1], PGLITE_DATA_LAYER_RECOVERED_SENTINEL);
 		});
 	});
 });

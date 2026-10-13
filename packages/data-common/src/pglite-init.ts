@@ -256,3 +256,39 @@ export function trackEager<T>(
   });
   return promise;
 }
+
+/**
+ * Marker string a mock Database logs when a migration RE-RUN succeeds after a
+ * prior PGlite WASM init trap — i.e. the up-but-broken data layer HEALED
+ * (transient memory pressure eased, idempotent migrations re-applied, queries
+ * work again). Like {@link PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL} it is a
+ * STABLE, UNIQUE token, and it is the CAUSAL companion to that sentinel: the
+ * agent-bench scorer only treats the data layer as "down when the tests ran"
+ * when an unavailable sentinel is NOT followed by a recovery marker. Without
+ * this, a transient trap that recovered on the first test request would be
+ * wrongly excluded (and an agent bug behind it hidden). The scorer reads this
+ * exact literal (dependency-free `.mjs`, cannot import), so a drift test in
+ * `scoring.test.mjs` pins the two together — change both or neither.
+ */
+export const PGLITE_DATA_LAYER_RECOVERED_SENTINEL = '[bb-data] PGlite init trap: data layer recovered';
+
+/**
+ * Log {@link PGLITE_DATA_LAYER_RECOVERED_SENTINEL} to mark that a migration
+ * re-run (triggered by a caller clearing its cache after a prior trap) has now
+ * succeeded. Call this ONLY on the success of a RETRY run — never on the first
+ * eager run — so the marker's presence always implies a preceding
+ * unavailable sentinel. Logged at `error` level deliberately: it is the single
+ * logger method every bb-logger `ChildLogger` is guaranteed to expose, and the
+ * marker must never throw on the heal path (a throw here would reject the
+ * re-run and leave the data layer wrongly wedged). The LEVEL carries no meaning
+ * for the bench scorer — it greps the fixed literal, not the level.
+ *
+ * @param log - a logger with an `error(msg, meta)` method
+ * @param label - short human label (e.g. `'Migrations re-ran'`)
+ */
+export function logRecovery(
+  log: { error: (message: string, meta?: Record<string, unknown>) => void },
+  label: string,
+): void {
+  log.error(`${label}: ${PGLITE_DATA_LAYER_RECOVERED_SENTINEL} (migrations re-applied; queries will succeed).`);
+}

@@ -58,6 +58,14 @@ export function isPgliteUnreachableTrap(error: unknown): boolean;
 export const loadMigrationsFromDir: (dir: string) => Promise<Record<string, string>>;
 
 // @public
+export function logRecovery(log: {
+    error: (message: string, meta?: Record<string, unknown>) => void;
+}, label: string): void;
+
+// @public
+export const PGLITE_DATA_LAYER_RECOVERED_SENTINEL = "[bb-data] PGlite init trap: data layer recovered";
+
+// @public
 export const PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL = "[bb-data] PGlite init trap: data layer unavailable";
 
 // Warning: (ae-internal-missing-underscore) The name "PgliteInitRetryOptions" should be prefixed with an underscore because the declaration is marked as @internal

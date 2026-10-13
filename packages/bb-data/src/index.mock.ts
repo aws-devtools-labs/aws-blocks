@@ -6,7 +6,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { PGliteEngine } from './engines/pglite-engine.js';
 import { PgClientEngine } from './engines/pg-client-engine.js';
 import { RLSEnabledDatabase } from './database.js';
-import { runMigrations, loadMigrationsFromDir, trackEager } from '@aws-blocks/data-common';
+import { runMigrations, loadMigrationsFromDir, trackEager, logRecovery } from '@aws-blocks/data-common';
 import { createCrudHandlers } from './crud/index.js';
 import type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';
 import type { Transaction, SqlQuery } from '@aws-blocks/data-common';
@@ -104,11 +104,27 @@ export class Database extends Scope {
       //     heal. On an init trap, onTrap clears `migrationsRun` so the next query
       //     re-runs migrations (runMigrations is idempotent — it skips files
       //     already recorded in `_migrations`).
+      // A migration re-run only happens after a prior trap cleared the cache
+      // (onTrap below), so a run that resolves while `trapped` is set is a HEAL:
+      // log the recovery marker, the causal companion to the unavailable
+      // sentinel, so the bench scorer knows the data layer was up by test time.
+      let trapped = false;
       const startMigrations = () => {
+        const retry = trapped;
         const run = loadMigrationsFromDir(path)
           .then(m => runMigrations(this.base.getEngine(), m))
-          .then(() => {});
+          .then(() => {
+            if (retry) {
+              trapped = false;
+              // A logging failure must never reject the heal run (which would
+              // leave the data layer wrongly wedged), so swallow any logger error.
+              try {
+                logRecovery(this.log, 'Migrations re-ran');
+              } catch {}
+            }
+          });
         this.migrationsRun = trackEager(run, this.log, 'Migrations failed', () => {
+          trapped = true;
           this.migrationsRun = null;
         });
         return run;

@@ -18,6 +18,8 @@ export {
   initializePgliteWithRetry,
   isPgliteUnreachableTrap,
   trackEager,
+  logRecovery,
   PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL,
+  PGLITE_DATA_LAYER_RECOVERED_SENTINEL,
 } from './pglite-init.js';
 export type { PgliteLike, PgliteInitRetryOptions } from './pglite-init.js';
