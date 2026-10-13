@@ -17,8 +17,9 @@ fix: the local dev surface is no longer reachable from the network or from other
   the local server now rejects it as well; publish from the server with `Realtime.publish()`.
 - **Local realtime tokens are signed with a per-process random secret** instead of a constant
   published in this repository, so they can't be forged.
-- **The `/realtime` WebSocket upgrade checks `Origin`.** Only loopback origins (or the
-  `BLOCKS_DEV_HOST` you set) can connect. This closes cross-site WebSocket hijacking from any
+- **The `/realtime` WebSocket upgrade checks `Origin`.** Only loopback origins can connect, plus
+  the opted-in host: with `BLOCKS_DEV_HOST=0.0.0.0`, a same-origin page opened by IP address; with
+  a concrete `BLOCKS_DEV_HOST` hostname, that hostname. This closes cross-site WebSocket hijacking from any
   page the developer visits. Non-browser clients that send no `Origin` still connect.
 - **`GET /aws-blocks/settings` opens an editor only under the local dev server.** It no longer
   spawns a process or echoes the working directory when the built-in routes run in a deployed

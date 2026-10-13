@@ -16,7 +16,7 @@ import { createServer, type Server } from 'node:http';
 import { connect as netConnect, type AddressInfo } from 'node:net';
 import { PassThrough } from 'node:stream';
 import { WebSocket } from 'ws';
-import { attach, closeWebSocketServer, localRealtimeBus } from './ws-server.js';
+import { attach, closeWebSocketServer, localRealtimeBus, isAllowedUpgradeOrigin } from './ws-server.js';
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';
 import { mintChannelToken } from './utils.js';
 import { hydrate, __resetConnectionsForTest } from './mock-middleware.js';
@@ -331,5 +331,31 @@ describe('Mock middleware: token replay on reconnect (regression)', () => {
 
 		sub.unsubscribe();
 		__resetConnectionsForTest();
+	});
+});
+
+describe('isAllowedUpgradeOrigin — BLOCKS_DEV_HOST opt-in', () => {
+	it('a WILDCARD opt-in (0.0.0.0 / ::) admits a same-origin page reached by IP address', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://192.168.1.10:3000', '0.0.0.0', '192.168.1.10:3000'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', '::', '[fd00::1]:3000'), true);
+	});
+
+	it('a wildcard opt-in rejects a DNS-name Origin even when it matches Host (DNS rebinding)', () => {
+		// evil.example re-pointed at this machine: the browser sends Origin and Host both = evil.example
+		assert.strictEqual(isAllowedUpgradeOrigin('http://evil.example:3000', '0.0.0.0', 'evil.example:3000'), false);
+	});
+
+	it('a wildcard opt-in rejects a cross-origin IP, and requires a Host to compare against', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://10.0.0.5:3000', '0.0.0.0', '10.0.0.6:3000'), false);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://10.0.0.5:3000', '0.0.0.0', undefined), false);
+	});
+
+	it('a concrete opt-in admits exactly that host (case-insensitive) and nothing else', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('https://MyBox.example.com', 'mybox.example.com', 'mybox.example.com'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('https://other.example.com', 'mybox.example.com', 'other.example.com'), false);
+	});
+
+	it('without an opt-in, a LAN origin is rejected', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://192.168.1.10:3000', undefined, '192.168.1.10:3000'), false);
 	});
 });

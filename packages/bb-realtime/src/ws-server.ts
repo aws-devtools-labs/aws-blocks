@@ -14,6 +14,7 @@ import type { Server } from 'node:http';
 import { EventEmitter } from 'events';
 import { setBroadcastBus, LOCAL_TOKEN_SECRET } from './local-dev.js';
 import { validateChannelToken } from './utils.js';
+import { isLoopbackHost, isWildcardHost, isIpLiteral } from '@aws-blocks/core/bb-utils';
 
 export const localRealtimeBus = new EventEmitter();
 localRealtimeBus.setMaxListeners(1000);
@@ -32,13 +33,24 @@ interface ClientSubscription {
  *   always send one on a WebSocket handshake, so this admits no web page;
  * - a loopback origin — `localhost`, `127.x.x.x`, `[::1]` on any port (the dev
  *   server's front door and the frontend dev server);
- * - the dev host the developer explicitly opted into via `BLOCKS_DEV_HOST`
- *   (container / remote-devbox setups).
+ * - the concrete dev host the developer opted into via `BLOCKS_DEV_HOST`
+ *   (e.g. `mybox.example.com`);
+ * - with a WILDCARD opt-in (`BLOCKS_DEV_HOST=0.0.0.0` / `::`), a same-origin
+ *   page reached by IP address: the Origin's hostname equals the `Host` the
+ *   client connected to AND is an IP literal. A browser reaching a container or
+ *   devbox by its address sends exactly that. DNS names are deliberately not
+ *   accepted here — a same-origin check against a name is defeated by DNS
+ *   rebinding (`evil.example` re-pointed at this machine sends a matching
+ *   Origin and Host); to use a name, set `BLOCKS_DEV_HOST` to it.
  *
- * The hostname is compared exactly, so `http://localhost.evil.example` is
- * rejected.
+ * Loopback/wildcard/IP classification is shared with the dev server's bind
+ * decision (`@aws-blocks/core/bb-utils`), so the two can't drift apart.
  */
-export function isAllowedUpgradeOrigin(origin: string | undefined, devHost = process.env.BLOCKS_DEV_HOST): boolean {
+export function isAllowedUpgradeOrigin(
+	origin: string | undefined,
+	devHost: string | undefined = process.env.BLOCKS_DEV_HOST,
+	requestHost?: string,
+): boolean {
 	if (origin === undefined) return true;
 	let hostname: string;
 	try {
@@ -46,9 +58,18 @@ export function isAllowedUpgradeOrigin(origin: string | undefined, devHost = pro
 	} catch {
 		return false;
 	}
-	if (hostname === 'localhost' || hostname === '[::1]' || /^127(\.\d{1,3}){3}$/.test(hostname)) return true;
+	if (isLoopbackHost(hostname)) return true;
 	const optIn = devHost?.trim();
-	return !!optIn && hostname === optIn;
+	if (!optIn) return false;
+	if (!isWildcardHost(optIn)) return hostname.toLowerCase() === optIn.toLowerCase();
+	if (!requestHost || !isIpLiteral(hostname)) return false;
+	let connectedHost: string;
+	try {
+		connectedHost = new URL(`http://${requestHost}`).hostname;
+	} catch {
+		return false;
+	}
+	return connectedHost === hostname;
 }
 
 let wss: WebSocketServer | null = null;
@@ -70,7 +91,7 @@ export function attach(httpServer: Server) {
 		socket.on('error', () => socket.destroy());
 		const pathname = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`).pathname;
 		if (pathname !== '/realtime') return;
-		if (!isAllowedUpgradeOrigin(req.headers.origin)) {
+		if (!isAllowedUpgradeOrigin(req.headers.origin, process.env.BLOCKS_DEV_HOST, req.headers.host)) {
 			socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
 			return;
 		}

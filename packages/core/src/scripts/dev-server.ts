@@ -23,6 +23,7 @@ import {
   rawRouteErrorFromCatch,
 } from '../rpc.js';
 import { redactToJson } from '../redact.js';
+import { isLoopbackHost, isWildcardHost } from '../common/loopback.js';
 import { isDispatchableExport, resolveApiMethod } from '../rpc-dispatch.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
@@ -50,11 +51,8 @@ export function resolveDevHost(option: string | undefined, env: NodeJS.ProcessEn
   return chosen || '127.0.0.1';
 }
 
-/** Whether `host` is a loopback address/name (reachable only from this machine). */
-export function isLoopbackHost(host: string): boolean {
-  const h = host.replace(/^\[|\]$/g, '');
-  return h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h);
-}
+/** Re-exported for callers/tests; the single definition lives in `common/loopback.ts`. */
+export { isLoopbackHost } from '../common/loopback.js';
 
 /**
  * Resolve the CORS origin for the dev server.
@@ -612,7 +610,11 @@ export async function startDevServer(options: DevServerOptions) {
       `\n⚠️  AWS Blocks dev server is binding ${host}, not loopback. Anyone who can reach this ` +
         'machine on that interface can call every API method against your local mock data ' +
         '(local auth authenticates nothing). Use this only in a container or devbox whose ' +
-        'port you control.\n',
+        'port you control.' +
+        (isWildcardHost(host)
+          ? ' Browsers must reach it by IP address for the realtime WebSocket to accept their Origin; ' +
+            'to use a hostname instead, set BLOCKS_DEV_HOST to that hostname.\n'
+          : '\n'),
     );
   }
   const {
