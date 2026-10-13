@@ -105,7 +105,9 @@ A rewriter turns the files into steps the cluster accepts. On a `distributed` cl
 - turns `CREATE INDEX` into `CREATE INDEX ASYNC` and waits for the index job;
 - adds `NOT VALID` to `ALTER TABLE … ADD CONSTRAINT … CHECK` and `… FOREIGN KEY`, then validates the constraint with `ALTER TABLE ASYNC … VALIDATE CONSTRAINT` and waits for that job (a `REFERENCES` inside `CREATE TABLE` runs as written);
 - turns `SERIAL`, `BIGSERIAL` and `SMALLSERIAL`, and identity columns on smaller integer types, into `BIGINT GENERATED … AS IDENTITY (CACHE 65536)`, and gives `CREATE SEQUENCE` the same type and cache when they are missing (DSQL sequences are `bigint` and need an explicit cache of 1 or at least 65536);
-- rejects statements DSQL cannot run, such as `CREATE TRIGGER`, `CREATE EXTENSION`, `CREATE POLICY`, `TRUNCATE`, `ADD COLUMN … DEFAULT`, `SET NOT NULL` on an existing column, `ADD CONSTRAINT … UNIQUE (…)`, dropping a primary-key column, or an unnamed `ADD CHECK` / `ADD FOREIGN KEY`. The error names the file and the DSQL documentation page for the rule.
+- checks the rewritten statements with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint), the linter the Aurora DSQL team maintains, and rejects what DSQL still cannot run: `CREATE TRIGGER`, `CREATE EXTENSION`, `CREATE POLICY`, `TRUNCATE`, array columns, `ADD COLUMN … DEFAULT`, `SET NOT NULL` or `TYPE` on an existing column, `ADD CONSTRAINT … UNIQUE (…)`, and so on. The error names the file, the rule, dsql-lint's suggestion, and the DSQL documentation page. Two checks are the block's own: dropping a primary-key column (seen from the `CREATE TABLE` earlier in the plan) and an unnamed `ADD CHECK` / `ADD FOREIGN KEY`, which the rewriter could not validate by name.
+
+`dsql-lint` is a native binary that `@aws/dsql-lint` installs per platform as an optional dependency (macOS, Linux, Windows on x64; macOS and Linux on arm64). It runs on your machine and at synth, never on AWS. If your package manager skipped optional dependencies, run `npm install @aws/dsql-lint --include=optional`, or point `DSQL_LINT_PATH` at a build.
 
 To see the steps without running them:
 
@@ -121,11 +123,11 @@ Locally, a block applies its pending migrations before its first query. At deplo
 
 `npm run dev` needs no AWS account. Each cluster is one PGlite (PostgreSQL compiled to WebAssembly) under `.bb-data/`, with one schema per block, as on AWS.
 
-A `distributed` cluster adds DSQL's rules locally. Unsupported SQL fails on your machine instead of in production; DDL outside a migration is refused because the deployed app role can only run DML; and a transaction that changes more than 3,000 rows (cascades included) or 10 MiB fails and rolls back, as it does on DSQL.
+A `distributed` cluster adds DSQL's rules locally. Every statement a handler issues goes through `dsql-lint` first (once per distinct statement), so unsupported SQL fails on your machine instead of in production; DDL outside a migration is refused because the deployed app role can only run DML; and a transaction that changes more than 3,000 rows (cascades included) or 10 MiB fails and rolls back, as it does on DSQL.
 
 | | Owned default | `DatabaseCluster` |
 |---|---|---|
-| Engine | PGlite with DSQL rules | One PGlite per cluster, one schema per block, DSQL rules |
+| Engine | PGlite with `dsql-lint` and the DSQL limits | One PGlite per cluster, one schema per block, same checks |
 | Data | `.bb-data/{fullId}/` | `.bb-data/{clusterFullId}/` |
 | Migrations | Before the block's first query | Same, per block, into its schema |
 
@@ -155,7 +157,7 @@ The guard runs before `cdk deploy` in production. It compares the bindings recor
 
 ## Errors
 
-Query and transaction failures carry a `DatabaseErrors` name. Match them with `isBlocksError(e, DatabaseErrors.X)` on the server or the client. Setup mistakes (a duplicate id, a missing `migrationsPath`), local DSQL rule failures (`DsqlValidationError`) and migration failures (`MigrationFailedException`) have their own names; fix those rather than catch them.
+Query and transaction failures carry a `DatabaseErrors` name. Match them with `isBlocksError(e, DatabaseErrors.X)` on the server or the client. Setup mistakes (a duplicate id, a missing `migrationsPath`), `dsql-lint` findings (`DsqlValidationError`) and migration failures (`MigrationFailedException`) have their own names; fix those rather than catch them.
 
 | Error | When | Retried automatically |
 |---|---|---|

@@ -47,7 +47,7 @@ Locally, each cluster is one PGlite instance on disk, whether a block owns it or
 
 PGlite provides a single session, which imposes two constraints. First, work is serialized by a mutex held for each auto-commit statement or for an entire `BEGIN … COMMIT`, so one block's `SET search_path` cannot occur inside another block's transaction. Second, a query issued from within a block's own `transaction()` callback joins the open transaction instead of waiting on the mutex. The open transaction is tracked with `AsyncLocalStorage`.
 
-Each local engine is wrapped by `MockEngine`, which implements `simulateConflict()` and applies the DSQL rules: the compatibility rule table (`validation.ts`), the DML-only guard that matches the deployed app role, and the per-transaction limits. The limits are enforced for explicit transactions and for auto-commit DML statements alike, before the change is committed, so a statement that would exceed them rolls back as on DSQL. Rows removed by an `ON DELETE CASCADE` foreign key are counted by comparing the child tables' row counts before and after the statement; `SET NULL` and `SET DEFAULT` fan-out is not counted. The 10 MiB limit is approximated from the statement text and its parameters.
+Each local engine is wrapped by `MockEngine`, which implements `simulateConflict()` and applies the DSQL checks: `dsql-lint` on each distinct statement (§5.1), the DML-only guard that matches the deployed app role, and the per-transaction limits. The limits are enforced for explicit transactions and for auto-commit DML statements alike, before the change is committed, so a statement that would exceed them rolls back as on DSQL. Rows removed by an `ON DELETE CASCADE` foreign key are counted by comparing the child tables' row counts before and after the statement; `SET NULL` and `SET DEFAULT` fan-out is not counted. The 10 MiB limit is approximated from the statement text and its parameters.
 
 ### 4.2 Schema scoping on AWS
 
@@ -55,9 +55,11 @@ The DSQL engine is a `pg` pool authenticated with IAM tokens. It sets `search_pa
 
 ## 5. Schema migration
 
-### 5.1 The rule table
+### 5.1 The compatibility checker
 
-`validation.ts` holds the DSQL compatibility rules. Each rule cites the DSQL documentation page it was checked against and carries the examples from that page; `validation.test.ts` runs every example, so re-baselining against a new DSQL release is a diff of the table. The baseline is the DSQL user guide as of 2026-10-11. Foreign keys, views, sequences and identity columns, JSONB, `DROP COLUMN` and `ALTER DEFAULT PRIVILEGES` are supported and have no rule. The rule set is maintained here rather than taken from AWS's `dsql-lint`, which ships as a native binary per platform and is a file linter; this package applies the same rules per statement at request time in the local mock and inside the migration Lambda, where a native binary would not fit.
+Statement compatibility is decided by AWS's [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) (`dsql-lint.ts`), the linter the Aurora DSQL team maintains. It parses the SQL, so a keyword inside a literal is never a false positive, and its rules follow DSQL releases, which a hand-written table did not: the 2025 table in `bb-distributed-data` rejected six features DSQL had since added. `@aws/dsql-lint` installs a native binary per platform as optional dependencies, the pattern esbuild uses. The block runs it on the rewritten SQL of each migration file at synth and in the dev server, and on every distinct statement a handler issues locally, with results cached per text (about 8 ms per uncached statement). It is never run on AWS: the migration Lambda builds its plan with `validate: false`, because the files were validated at synth and the binary is not deployed; the app runtime does no validation.
+
+Two checks stay in the block because they need more than one statement, or exist for the rewriter's sake: dropping a primary-key column, detected from the `CREATE TABLE` seen earlier in the same plan, and an unnamed `ADD CHECK` / `ADD FOREIGN KEY`, which the rewriter could not validate by name. `validation.test.ts` pins the rule ids the integration must report and the SQL it must accept, so a `dsql-lint` upgrade that changes a rule shows up there. The baseline is `@aws/dsql-lint` 0.2.20 and the DSQL user guide as of 2026-10-11.
 
 ### 5.2 Plan construction
 
@@ -67,7 +69,7 @@ Each block has one directory of ordinary PostgreSQL migration files. `buildMigra
 - `CREATE INDEX` becomes `CREATE INDEX ASYNC` followed by a wait on the index job;
 - `ALTER TABLE … ADD CONSTRAINT … CHECK` and `… FOREIGN KEY` gain `NOT VALID`, followed by `ALTER TABLE ASYNC … VALIDATE CONSTRAINT` and a wait on the validation job. A `REFERENCES` inside `CREATE TABLE` is left as written; the table is empty.
 
-Each DDL statement also runs in its own transaction. Statements DSQL cannot execute are rejected; the error names the file and the DSQL documentation page for the rule. Two checks need more than one statement: dropping a primary-key column is detected from the `CREATE TABLE` seen earlier in the same plan, and a `CREATE SEQUENCE` with a cache between 2 and 65535 is rejected. The rewriter never touches string literals, dollar-quoted bodies, or comments. `CACHE 65536` is the author's choice; `CACHE 1` gives strict ordering at the cost of a coordination round per value, and a user who needs it writes it.
+Each DDL statement also runs in its own transaction. The rewritten statements are then checked with `dsql-lint` (§5.1), which rejects exactly the forms the rewriter produces when they are missing (`serial_type`, `index_async`, `check_not_valid`, `foreign_key_not_valid`, `identity_cache_missing`), so the two compose: the rewriter fixes what has a mechanical fix, the linter reports what is left, naming the file and the rule. The rewriter never touches string literals, dollar-quoted bodies, or comments. `CACHE 65536` is the author's choice over the `CACHE 1` that `dsql-lint --fix` writes; `CACHE 1` gives strict ordering at the cost of a coordination round per value, and a user who needs it writes it.
 
 Still to do, and safe to leave as rejections meanwhile: `ADD COLUMN … DEFAULT` as add, set default and backfill; `TRUNCATE` as batched deletes; index `ASC` / `DESC` removed; DML split at 3,000 rows.
 
@@ -104,6 +106,8 @@ A template larger than CloudFormation's 51,200-byte inline limit is staged in th
 
 **Static factory methods** (`Database.dsql()`, `Database.aurora()`). This retains a single class with concise call sites. It exposes service names in the public interface and provides no value that several blocks could share, so R3 would need a second mechanism.
 
+**A hand-written compatibility rule table.** The first cut of this package kept `bb-distributed-data`'s regex rules, re-baselined by hand against the DSQL docs. Comparing that table with `dsql-lint` on the same examples found two errors in the table within minutes (array types and `USING btree` are unsupported) and no case the linter missed. A regex table also cannot parse, so it guesses at literals and comments. #446 had already shown `dsql-lint` working in `bb-distributed-data`'s mock and at synth; this package follows it and adds the rewrite-then-lint order.
+
 **Waiting on DDL jobs inside one Lambda invocation.** Simpler than two handlers, but a Lambda runs for at most 15 minutes, and an index build on a large table can take longer. The provider's `isComplete` polling has a two-hour budget.
 
 **An override for the binding check.** An environment variable would permit deliberate cluster moves. It weakens R4, since an override set once in a CI configuration persists unnoticed. The sandbox exemption and the documented copy procedure cover the legitimate cases.
@@ -121,7 +125,7 @@ A template larger than CloudFormation's 51,200-byte inline limit is staged in th
 | Area | Local | AWS |
 |---|---|---|
 | Concurrency | Serialized per cluster (one PGlite session) | Concurrent; DSQL may raise `40001` at commit |
-| DSQL feature gaps | Rejected by the rule table before PGlite (best effort) | Rejected by DSQL (`42501`, reported as `QueryFailed`) |
+| DSQL feature gaps | Rejected by `dsql-lint` before PGlite | Rejected by DSQL (`42501`, reported as `QueryFailed`) |
 | `ASYNC` DDL | Runs synchronously | Asynchronous job followed by a poll |
 | 3,000-row and 10 MiB transaction limits | Enforced by the mock, cascades counted; size approximated | Enforced by DSQL (`54000`); both reported as `TransactionRowLimitExceeded` |
 | `simulateConflict()` | Available | Throws |
@@ -130,7 +134,7 @@ A template larger than CloudFormation's 51,200-byte inline limit is staged in th
 
 **Known limitations.**
 
-1. The local DSQL rules are pattern-based and can miss constructs that DSQL rejects.
+1. `dsql-lint` checks syntax, not the catalog: a statement that is valid SQL but wrong for the schema (a cascade past 3,000 rows, a duplicate key during an index build) fails on DSQL, not locally.
 2. The mock counts `ON DELETE CASCADE` fan-out toward the row limit but not `SET NULL` or `SET DEFAULT`, and approximates the 10 MiB limit from statement and parameter sizes.
 3. A `CREATE INDEX` or constraint validation that DSQL fails leaves the index `INVALID` or the constraint `NOT VALID`; the deploy fails with the job's details, and the fix is to repair the data and deploy again.
 
@@ -150,7 +154,7 @@ A template larger than CloudFormation's 51,200-byte inline limit is staged in th
 | Resolution of the `cluster` option | `src/cluster-ref.ts` (shared by all entry points) |
 | Queries, transactions and retries | `src/database-core.ts`, `src/transaction.ts` |
 | Local engine and schema switching | `src/engines/pglite-cluster.ts`, `src/engines/mock-engine.ts` |
-| DSQL rule table and the migration rewriter | `src/validation.ts`, `src/migrations/plan.ts` |
+| DSQL compatibility checks and the migration rewriter | `src/dsql-lint.ts`, `src/validation.ts`, `src/migrations/plan.ts` |
 | Resumable runner and job waits | `src/migrations/runner.ts` |
 | Provisioning and the migration Lambdas | `src/infra/cluster-infra.ts`, `src/migration-lambda.ts` |
 | Binding record and deploy-time checks | `src/bindings.ts`, `src/deploy-guard.ts`, `src/cli.ts` |

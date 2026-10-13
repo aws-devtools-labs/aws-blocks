@@ -3,7 +3,7 @@
 
 /**
  * Local-mode behavior of `Database` / `DatabaseCluster`: owned and shared
- * clusters, schema isolation, the DSQL rules and limits, conflict simulation
+ * clusters, schema isolation, dsql-lint and the DSQL limits, conflict simulation
  * and retry, migrations through the rewriter, and the three construction-time
  * rules (unique ids, schema collisions, the binding marker).
  */
@@ -137,12 +137,15 @@ describe('Database (owned distributed cluster)', () => {
 		assert.ok(await db.queryOne(sql`SELECT * FROM t WHERE id = ${'y'}`));
 	});
 
-	test('the DSQL rules reject unsupported SQL at query time with a doc citation', async () => {
+	test('dsql-lint rejects unsupported SQL at query time with its rule, suggestion, and a doc citation', async () => {
 		const db = new Database(app(), 'db');
 		await withMigrations(db, { '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);' });
 		await assert.rejects(
 			db.execute(sql`TRUNCATE t`),
-			(e: Error) => e.name === 'DsqlValidationError' && /aurora-dsql/.test(e.message),
+			(e: Error) =>
+				e.name === 'DsqlValidationError' &&
+				/truncate: TRUNCATE is not supported/.test(e.message) &&
+				/aurora-dsql/.test(e.message),
 		);
 	});
 
@@ -262,7 +265,7 @@ describe('Database (owned distributed cluster)', () => {
 			withMigrations(db, {
 				'001_rls.sql': 'CREATE TABLE a (id TEXT PRIMARY KEY);\nALTER TABLE a ENABLE ROW LEVEL SECURITY;',
 			}),
-			/001_rls\.sql: DSQL does not support Row Level Security/,
+			/001_rls\.sql: at_unsupported_row_level_security/,
 		);
 	});
 
@@ -308,7 +311,7 @@ describe('DatabaseCluster (shared distributed)', () => {
 		assert.ok(!existsSync(join(DATA_DIR, users.fullId, 'pglite')));
 	});
 
-	test('a shared distributed cluster keeps the DSQL rules', async () => {
+	test('a shared distributed cluster keeps the DSQL checks', async () => {
 		const scope = app();
 		const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
 		const db = new Database(scope, 'db', { cluster: shared });

@@ -6,8 +6,9 @@ import { join } from 'node:path';
  * Local development entry point (`npm run dev`, tests).
  *
  * Every cluster is a PGlite (WASM PostgreSQL) on disk under `.bb-data/`, one
- * instance per cluster with one schema per block. A `distributed` cluster adds
- * the Aurora DSQL rules so unsupported SQL fails here, not in production.
+ * instance per cluster with one schema per block. A `distributed` cluster runs
+ * every statement through dsql-lint first, so unsupported SQL fails here, not
+ * in production.
  */
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
@@ -73,8 +74,8 @@ export class DatabaseCluster<T extends ClusterType = ClusterType> extends Scope 
  * SQL database on PostgreSQL. Omit `cluster` and the block owns an Aurora DSQL
  * cluster; pass a {@link DatabaseCluster} to share one.
  *
- * Locally this is PGlite under `.bb-data/`, with the DSQL rules applied when
- * the cluster is `distributed`. Migrations in `./aws-blocks/migrations/{id}`
+ * Locally this is PGlite under `.bb-data/`, with dsql-lint and the DSQL
+ * transaction limits applied when the cluster is `distributed`. Migrations in `./aws-blocks/migrations/{id}`
  * run on first use. `simulateConflict()` makes the next commit fail with
  * `SerializationFailure` so retry logic can be tested on every kind.
  *

@@ -165,9 +165,11 @@ async function migrateBlock(props: MigrationProperties): Promise<boolean> {
 	const engine = buildEngine(kind, schemaName);
 	try {
 		if (props.migrationsBucket && props.migrationsKey) {
+			// Validated at synth; the dsql-lint binary is not deployed with the Lambda.
 			const plan = buildMigrationPlan(
 				await loadMigrationsAsset(props.migrationsBucket, props.migrationsKey),
 				kind,
+				{ validate: false },
 			);
 			const result = await withRetry(() => runMigrationPlan(engine, plan, { schemaName, asyncJobs: 'defer' }));
 			console.log('[bb-database] Applied:', result.applied.length ? result.applied : '(none pending)');

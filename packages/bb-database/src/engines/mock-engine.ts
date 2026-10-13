@@ -6,8 +6,8 @@
  *
  * - `simulateConflict()` makes the next commit raise `SerializationFailure` on
  *   every kind, so retry tests do not depend on which cluster is deployed.
- * - On a `distributed` cluster it adds the DSQL rules: unsupported statements
- *   are rejected before they reach PGlite, DDL on the app connection is refused
+ * - On a `distributed` cluster it runs each statement through dsql-lint, so
+ *   unsupported statements are rejected before they reach PGlite, DDL on the app connection is refused
  *   (parity with the deployed DML-only grant), `ASYNC` DDL is run synchronously,
  *   and the per-transaction limits (one DDL statement, no DDL with DML, 3,000
  *   changed rows with cascades counted, 10 MiB of data) are enforced, for
@@ -34,7 +34,7 @@ interface TrackedHandle {
 }
 
 export interface MockEngineOptions {
-	/** `distributed` enables the DSQL rules. */
+	/** `distributed` enables dsql-lint, the DML-only guard, and the transaction limits. */
 	dialect: 'distributed' | 'postgres';
 }
 

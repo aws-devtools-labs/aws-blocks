@@ -23,8 +23,10 @@ export interface Bindings {
     };
 }
 
-// @public
-export function buildMigrationPlan(migrations: Record<string, string>, target: ClusterKind): MigrationPlan;
+// Warning: (ae-forgotten-export) The symbol "BuildPlanOptions" needs to be exported by the entry point index.mock.d.ts
+//
+// @public (undocumented)
+export function buildMigrationPlan(migrations: Record<string, string>, target: ClusterKind, options?: BuildPlanOptions): MigrationPlan;
 
 // @public
 export interface ClusterBinding {

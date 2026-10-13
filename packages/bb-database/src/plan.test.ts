@@ -55,10 +55,13 @@ describe('migration rewriter (distributed)', () => {
 		const [a] = steps('CREATE SEQUENCE order_no;');
 		assert.strictEqual(a.sql, 'CREATE SEQUENCE order_no CACHE 65536');
 		const [b] = steps('CREATE SEQUENCE IF NOT EXISTS order_no AS integer START WITH 100;');
-		assert.strictEqual(b.sql, 'CREATE SEQUENCE IF NOT EXISTS order_no CACHE 65536 AS BIGINT START WITH 100');
+		assert.strictEqual(b.sql, 'CREATE SEQUENCE IF NOT EXISTS order_no AS BIGINT START WITH 100 CACHE 65536');
 		const [c] = steps('CREATE SEQUENCE order_no CACHE 1;');
 		assert.strictEqual(c.sql, 'CREATE SEQUENCE order_no CACHE 1');
-		assert.throws(() => plan('CREATE SEQUENCE order_no CACHE 50;'), /CACHE 1 or CACHE >= 65536 \(got 50\)/);
+		assert.throws(
+			() => plan('CREATE SEQUENCE order_no CACHE 50;'),
+			/001\.sql: sequence_cache: CACHE value 50 is invalid/,
+		);
 	});
 
 	test('CREATE INDEX becomes ASYNC plus a wait on the job', () => {
@@ -138,16 +141,30 @@ describe('migration rewriter (distributed)', () => {
 		);
 	});
 
-	test('rejects unsupported statements with the file and the doc page', () => {
+	test('rejects what dsql-lint rejects in the rewritten SQL, naming the file, the rule and the doc page', () => {
 		assert.throws(
 			() => buildMigrationPlan({ '002_rls.sql': 'CREATE POLICY p ON t USING (true);' }, 'distributed'),
 			(e: Error) =>
 				e.name === 'DsqlMigrationValidationError' &&
-				/002_rls\.sql: DSQL does not support Row Level Security/.test(e.message) &&
+				/002_rls\.sql: unsupported_create_policy: CREATE POLICY \(Row-Level Security\) is not supported/.test(
+					e.message,
+				) &&
 				/docs\.aws\.amazon\.com\/aurora-dsql/.test(e.message),
 		);
-		assert.throws(() => plan('ALTER TABLE t ALTER COLUMN a SET NOT NULL;'), /SET NOT NULL/);
-		assert.throws(() => plan('ALTER TABLE t ADD CHECK (a > 0);'), /Name the constraint/);
+		assert.throws(
+			() => plan('ALTER TABLE t ALTER COLUMN a SET NOT NULL;'),
+			/at_unsupported_alter_column_set_not_null/,
+		);
+		assert.throws(() => plan('CREATE TABLE t (id TEXT PRIMARY KEY, tags TEXT[]);'), /array_type/);
+		// The block's own check, reported once: the unnamed constraint is still rewritten NOT VALID so dsql-lint does not report it too.
+		assert.throws(
+			() => plan('ALTER TABLE t ADD CHECK (a > 0);'),
+			(e: Error) => /Name the constraint/.test(e.message) && e.message.split('\n').length === 2,
+		);
+		// A file that only passes because of the rewrite is accepted: SERIAL and a sync index are rewritten first.
+		assert.doesNotThrow(() => plan('CREATE TABLE t (id SERIAL PRIMARY KEY, n INT);\nCREATE INDEX t_n ON t (n);'));
+		// validate: false skips the linter (the migration Lambda).
+		assert.doesNotThrow(() => buildMigrationPlan({ '001.sql': 'TRUNCATE t;' }, 'distributed', { validate: false }));
 	});
 
 	test('golden plan: one file with a table, a foreign key, a check, an index, and a seed', () => {
