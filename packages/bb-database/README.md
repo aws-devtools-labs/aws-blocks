@@ -286,4 +286,4 @@ Per block: one S3 asset with its migration files and one CloudFormation custom r
 
 ## Access through the AWS SDK
 
-`getSdkIdentifiers(db)` from `@aws-blocks/blocks` returns `{ clusterId, schemaName }`. In a deployed Lambda it also returns the cluster's `clusterEndpoint` and `region`, which is what a `DsqlSigner` needs to open your own `pg` connection as the same role.
+`getSdkIdentifiers(db)` from `@aws-blocks/core` returns the block's `clusterId` and `schemaName`. In a deployed Lambda it also returns the cluster's `clusterEndpoint` and `region`, which is what a `DsqlSigner` needs to open your own `pg` connection as the same role. The umbrella's typed overloads do not know this block yet, so the result is a `Record<string, string>`.

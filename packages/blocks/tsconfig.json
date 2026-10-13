@@ -16,7 +16,6 @@
     { "path": "../bb-realtime" },
     { "path": "../bb-data" },
     { "path": "../bb-distributed-data" },
-    { "path": "../bb-database" },
     { "path": "../bb-async-job" },
     { "path": "../bb-agent" },
     { "path": "../bb-app-setting" },
