@@ -77,11 +77,17 @@ is absent) never throws.
   `VersionStage: 'AWSPREVIOUS'`; a `SecretVersion` → its `VersionId`. Returns
   `null` when `SecretString` is absent **or** the secret/version does not exist
   (`ResourceNotFoundException`). A `get` never throws for "not found" — normal
-  control flow.
+  control flow. The fetched raw value is cached in-process per instance, keyed by
+  version selector (`current` / `previous` / `v:<versionId>`), so steady-state
+  reads within a warm Lambda skip the API; the schema (if any) is still applied
+  on every call, so a validation error is never cached. The cache has no TTL — it
+  lives for the execution environment and is cleared by `put()`.
 - `put()` → `PutSecretValueCommand`. A `ResourceNotFoundException` maps to
   `SecretErrors.SecretNotFound` (a violated precondition — the secret must exist
   to hold a value). Secrets Manager advances the `AWSCURRENT`/`AWSPREVIOUS`
-  labels automatically on each put, so the prior value becomes `'previous'`.
+  labels automatically on each put, so the prior value becomes `'previous'`. On
+  success it clears the instance read cache (a write invalidates `current`,
+  `previous`, and any specific-version entries), so a later `get()` re-fetches.
 - `listVersions()` → `ListSecretVersionIdsCommand` (paginated, `IncludeDeprecated:
   false`), mapped to `SecretVersionInfo[]` (versionId + staging labels + created
   date — never values) and sorted newest-first.
@@ -131,6 +137,7 @@ consumer's choice (`zod` is a `devDependency` here, used only by tests).
 | Missing value | key absent → `null` | `SecretString` absent / `ResourceNotFound` → `null` |
 | `put` on missing secret | always writes the entry | may throw `SecretNotFound` if the secret resource is gone |
 | Version history | current + previous, in a `.bb-data/secret-versions.json` sidecar (synthetic version ids) | full retained history in Secrets Manager (real version ids + staging labels) |
+| Read caching | none — every `get()` reads fresh from `settings.json` | per-instance in-memory cache keyed by version selector, cleared by `put()` (steady-state reads skip the API) |
 | Security | **plaintext, insecure — dev only** | KMS-encrypted at rest |
 
 Sharing `settings.json` is deliberate: it makes the single `/aws-blocks/settings`

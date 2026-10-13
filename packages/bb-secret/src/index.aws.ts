@@ -52,6 +52,27 @@ function versionSelector(version?: 'current' | 'previous' | SecretVersion): {
 	return { VersionId: version.versionId };
 }
 
+/**
+ * Stable cache key for a version selector. `'current'`/undefined collapse to a
+ * single `current` entry; `'previous'` to `previous`; a {@link SecretVersion} to
+ * `v:<versionId>` (an immutable version id). This is what lets steady-state
+ * reads of the same version hit the per-instance cache instead of the API.
+ */
+function cacheKey(version?: 'current' | 'previous' | SecretVersion): string {
+	if (version === undefined || version === 'current') return 'current';
+	if (version === 'previous') return 'previous';
+	return `v:${version.versionId}`;
+}
+
+/**
+ * A cached GetSecretValue result: the raw `SecretString` fetched from Secrets
+ * Manager, or `null` for a resolved not-found (an absent `SecretString` or a
+ * `ResourceNotFoundException`). The raw value is cached *before* schema parsing
+ * so each `get()` still validates independently (a validation error is never
+ * cached as a value).
+ */
+type CachedRead = { raw: string | null };
+
 // ── Secret (AWS runtime) ────────────────────────────────────────────────────
 
 /**
@@ -86,6 +107,14 @@ function versionSelector(version?: 'current' | 'previous' | SecretVersion): {
  * layer populates (or directly from the `ExternalSecretRef` when wrapping an
  * existing secret via {@link Secret.fromExisting}).
  *
+ * **Caching:** fetched values are cached in-process per `Secret` instance (one
+ * entry per version selector), so steady-state reads within a warm Lambda hit
+ * the cache rather than billing a `GetSecretValue` call. `put()` clears the
+ * cache so a subsequent read in the same process sees the new value; an
+ * out-of-band change (console / CLI / rotation) is picked up on the next cold
+ * start. There is no TTL — the cache lives for the life of the execution
+ * environment.
+ *
  * @typeParam T - The secret value type. Defaults to `string`; inferred from
  *   `schema` when one is provided.
  *
@@ -110,6 +139,12 @@ export class Secret<T = string> extends Scope {
 	private constructId: string;
 	private externalArn?: string;
 	private client: SecretsManagerClient;
+	/**
+	 * Per-instance (per-cold-start) read cache, keyed by version selector. Lives
+	 * for the life of the execution environment; cleared by `put()`. See the
+	 * class-level **Caching** note.
+	 */
+	private readCache = new Map<string, CachedRead>();
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -162,6 +197,12 @@ export class Secret<T = string> extends Scope {
 	 * control flow. In particular `{ version: 'previous' }` returns `null` until
 	 * the secret has been changed at least once.
 	 *
+	 * The fetched value is cached in-process per version selector (see the
+	 * class-level **Caching** note): the first read of a given version calls
+	 * Secrets Manager; subsequent reads of the same version in the same execution
+	 * environment are served from the cache until a `put()` clears it. A schema is
+	 * still applied on every call, so validation is never skipped.
+	 *
 	 * @param options - Optional read options; `version` selects which version.
 	 * @returns The secret value, or `null` if that version has not been set or does not exist.
 	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the stored value is not valid JSON, or fails validation.
@@ -177,19 +218,33 @@ export class Secret<T = string> extends Scope {
 	 */
 	async get(options?: SecretReadOptions): Promise<T | null> {
 		const secretArn = this.resolveSecretArn();
-		// Map the version selector to the SDK's VersionStage / VersionId params.
-		// 'current' (default) → omit (AWSCURRENT); 'previous' → AWSPREVIOUS stage;
-		// a SecretVersion → its versionId.
-		const selector = versionSelector(options?.version);
-		let raw: string;
-		try {
-			const result = await this.client.send(new GetSecretValueCommand({ SecretId: secretArn, ...selector }));
-			if (result.SecretString === undefined || result.SecretString === null) return null;
-			raw = result.SecretString;
-		} catch (err: unknown) {
-			if (err instanceof ResourceNotFoundException) return null;
-			throw err;
+		const key = cacheKey(options?.version);
+
+		// Serve the cached raw value when present (per-cold-start cache); a cache
+		// miss fetches from Secrets Manager and populates the entry. The cache
+		// holds the raw string (or null for not-found), never the validated value,
+		// so schema parsing/validation below still runs on every call.
+		let cached = this.readCache.get(key);
+		if (cached === undefined) {
+			// Map the version selector to the SDK's VersionStage / VersionId params.
+			// 'current' (default) → omit (AWSCURRENT); 'previous' → AWSPREVIOUS stage;
+			// a SecretVersion → its versionId.
+			const selector = versionSelector(options?.version);
+			try {
+				const result = await this.client.send(new GetSecretValueCommand({ SecretId: secretArn, ...selector }));
+				cached = { raw: result.SecretString ?? null };
+			} catch (err: unknown) {
+				if (err instanceof ResourceNotFoundException) {
+					cached = { raw: null };
+				} else {
+					throw err;
+				}
+			}
+			this.readCache.set(key, cached);
 		}
+
+		if (cached.raw === null) return null;
+		const raw = cached.raw;
 
 		if (this.schema) {
 			let parsed: unknown;
@@ -244,6 +299,10 @@ export class Secret<T = string> extends Scope {
 	 * Without a schema, accepts a string. With a schema, accepts `T`, validates
 	 * it, and serializes to JSON before storing.
 	 *
+	 * Clears this instance's read cache on success, so a subsequent `get()` in the
+	 * same execution environment reflects the new value (and the demoted
+	 * `'previous'` version) rather than a stale cached read.
+	 *
 	 * @param value - The new secret value.
 	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the value fails validation.
 	 * @throws {SecretErrors.SecretNotFound} If the underlying Secrets Manager secret does not exist.
@@ -271,6 +330,11 @@ export class Secret<T = string> extends Scope {
 			}
 			throw err;
 		}
+
+		// A write advances the AWSCURRENT/AWSPREVIOUS labels, so every cached read
+		// (current, previous, and any specific version) is now potentially stale —
+		// drop them all; the next get() re-fetches and repopulates.
+		this.readCache.clear();
 	}
 
 	/**

@@ -165,7 +165,7 @@ Without an explicit `name`, the secret name is derived from the scope tree; find
 
 ### Rotating & removing
 
-- **Rotate:** set a new value (console or `put-secret-value`); the next read picks it up — no redeploy needed for runtime reads.
+- **Rotate:** set a new value (console or `put-secret-value`); a warm runtime that already cached the old value picks up the change on its next cold start — no redeploy needed. (A `put()` from within the app clears that instance's cache immediately.)
 - **Remove:** `aws secretsmanager delete-secret --secret-id <name>` (recoverable by default; `--force-delete-without-recovery` to skip the recovery window).
 
 ### Which approach, when
