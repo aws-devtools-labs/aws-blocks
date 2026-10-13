@@ -53,23 +53,25 @@ export function isDisableValue(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
 
-function isTelemetryEnabled(): boolean {
+/**
+ * Keep behaviorally identical to packages/core/src/telemetry/consent.ts.
+ *
+ * `telemetry.enabled: true` only expresses "no objection from this file"; it never
+ * overrides another mechanism's disable. There is deliberately no `=== true` branch.
+ */
+export function isTelemetryEnabled(): boolean {
   if (isDisableValue(process.env.AWS_BLOCKS_DISABLE_TELEMETRY)) return false;
 
-  // Per-project config
   try {
     const projectConfigPath = join(process.cwd(), '.blocks', 'config.json');
     const config = JSON.parse(readFileSync(projectConfigPath, 'utf-8'));
     if (config.telemetry?.enabled === false) return false;
-    if (config.telemetry?.enabled === true) return true;
   } catch { /* no config */ }
 
-  // Global config
   try {
     const globalConfigPath = join(homedir(), '.blocks', 'config.json');
     const config = JSON.parse(readFileSync(globalConfigPath, 'utf-8'));
     if (config.telemetry?.enabled === false) return false;
-    if (config.telemetry?.enabled === true) return true;
   } catch { /* no config */ }
 
   return true;

@@ -884,6 +884,38 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       }
     });
 
+    test('a project config enabling telemetry cannot re-enable a global disable', async () => {
+      tmpHome = createTmpDir('disable-global-project-enabled');
+      const globalCfg = globalConfigPath();
+      const hadGlobal = existsSync(globalCfg);
+      const originalGlobal = hadGlobal ? readFileSync(globalCfg, 'utf-8') : null;
+      const projectConfig = join(APP_ROOT, '.blocks', 'config.json');
+      const originalProject = existsSync(projectConfig) ? readFileSync(projectConfig, 'utf-8') : null;
+
+      mkdirSync(dirname(globalCfg), { recursive: true });
+      writeFileSync(globalCfg, JSON.stringify({ telemetry: { enabled: false } }));
+      mkdirSync(dirname(projectConfig), { recursive: true });
+      writeFileSync(projectConfig, JSON.stringify({ telemetry: { enabled: true } }));
+
+      try {
+        const telemetryFile = uniqueTelemetryFile(tmpHome);
+        const port = getNextPort();
+
+        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+          telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
+        });
+
+        // --telemetry-file still writes even when HTTP is disabled (D-010 contract)
+        assert.ok(await waitForFile(telemetryFile, 2_000), '--telemetry-file should write even when telemetry is disabled');
+        assertNotDelivered(result.stderr);
+      } finally {
+        if (originalGlobal) writeFileSync(globalCfg, originalGlobal);
+        else rmSync(globalCfg, { force: true });
+        if (originalProject) writeFileSync(projectConfig, originalProject);
+        else rmSync(projectConfig, { force: true });
+      }
+    });
+
     test('AWS_BLOCKS_DISABLE_TELEMETRY=0 does NOT disable', async () => {
       tmpHome = createTmpDir('disable-zero');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
