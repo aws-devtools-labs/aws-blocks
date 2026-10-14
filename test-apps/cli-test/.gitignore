@@ -1,0 +1,5 @@
+dist/
+.blocks/
+.blocks-sandbox/
+aws-blocks/client.js
+node_modules/

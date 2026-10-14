@@ -1,0 +1,22 @@
+{
+  "name": "bb-test-cli",
+  "version": "0.1.0",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "A test app that exercises every `blocks` CLI command meaningfully (API namespace for generate-client, secret()/config() for typegen, a route + KV for dev/deploy/sandbox).",
+  "scripts": {
+    "test": "echo 'cli-test is a manual CLI-exploration fixture; run `blocks <command>` here'"
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*",
+    "@aws-blocks/hosting": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0",
+    "zod": "^3.23.0"
+  }
+}
