@@ -177,6 +177,10 @@ and TypeScript checks the shape. The `<Authenticator>` widens to this type at
 one boundary because it builds payloads from runtime `action.fields`; a
 hand-written caller that knows its action name gets full narrowing.
 
+A hand-written call with a literal action name needs no cast:
+`setAuthState({ action: 'signOut' })` type-checks as-is. Don't add `as any`;
+it throws away that check.
+
 ### What you give up
 
 Going fully custom means re-handling things the `Authenticator` does for free.

@@ -4,8 +4,8 @@
 
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
-- **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
-- **AWS Blocks docs** ship inside the `@aws-blocks/blocks` package. Find the docs folder once: `node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"` (fallback: `node_modules/@aws-blocks/blocks/docs`). Read everything relative to it: `README.md` (dev guide + catalog + decision tree — start here), then `<block>/README.md`, plus `<block>/API.md` and `<block>/DESIGN.md` where present.
+- **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`. It targets the starter API: when you change the API and it stops typechecking, update its tests to match your methods — never delete `test/` or the `test:e2e` script.
+- **AWS Blocks docs** ship inside the `@aws-blocks/blocks` package. Find the docs folder once: `node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"` (fallback: `node_modules/@aws-blocks/blocks/docs`). Read everything relative to it: `README.md` (dev guide + catalog + decision tree — read it in full before your first block, not just grep it), then `<block>/README.md`, plus `<block>/API.md` and `<block>/DESIGN.md` where present.
 
 ## Framework model
 
@@ -26,7 +26,7 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 ### Methods are namespaced
 
-A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the string you passed as the **second** argument to `new ApiNamespace(scope, '<name>', …)`. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
+A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = new ApiNamespace(scope, 'todos', …)` → `api`), not the `ApiNamespace` construct ID. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
 
 ### Auth is a Building Block, not hand-rolled
 
@@ -64,12 +64,13 @@ const res = await api.ping('world');   // { message: 'hi world' }
 ## Workflow
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
-2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
+2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running. Run it and get it passing before every `npm run deploy`. It exercises the API through the typed client, not the UI, so if you changed the frontend also check the page in a browser.
 3. For faster iteration, keep one dev server running and rerun tests against it:
    - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev &`.
    - Run `npm run test:e2e` as often as needed; it reuses the running server.
-   - When finished, stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
-4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
+   - When finished (including before `npm run deploy`), stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID).
+   - **Never** stop it with a name-matching kill (`pkill -f …`, `kill $(pgrep -f …)`, `killall node`): the pattern also matches your own shell/agent command and kills it.
+4. Do NOT use curl/fetch against the local API as your functional test — add the check to `test/e2e.test.ts` instead. Raw calls are only for troubleshooting connectivity or checking a deployed app (below).
 
 ### Calling the API directly (troubleshooting only)
 
@@ -99,6 +100,12 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 - `npm run deploy` — full production deploy to AWS
 - `npm run sandbox:destroy` — tear down sandbox resources
 
+The CloudFormation stack is named `<stackId>-prod` (sandbox: `<stackId>-<sandboxId>`), with `stackId` from `.blocks/config.json`. To follow a stack naming convention, change `stackId` there before the first deploy.
+
+A first deploy with hosting typically takes 6–12 minutes (CloudFront), occasionally up to 15. Give the command a tool timeout of at least 20 minutes — in the foreground, or in the background with output redirected to a log, waiting for it to finish rather than sleeping a fixed time — so the deploy isn't killed partway.
+
 If `npm run sandbox` or `npm run deploy` stops with `AWS credentials could not be verified`, the message names the profile and the command that fixes it, such as `aws login --profile <name>` or `aws sso login --profile <name>`. Signing in opens a browser and needs the user: ask the user before you run the command, then re-run the npm script.
 
 On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). Grep that one line for "deploy finished + where it lives"; don't poll CloudFormation or hunt the URL out of the streamed output.
+
+After a redeploy the CDN can briefly serve the previous `index.html`. Before you call the new frontend broken, check that the served `index.html` references the new asset hashes, then retest in a fresh browser context.

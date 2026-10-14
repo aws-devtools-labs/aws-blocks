@@ -185,6 +185,26 @@ The root `@aws-blocks/blocks` entry point does not export it, because the UI exp
 
 The `Authenticator` component does this automatically. You only need `broadcastAuthChange` if you're building custom UI. For a full walkthrough of custom UI, including the `setAuthState` loop and the `AuthActionInput` contract, see [Customizing Auth UI](./CUSTOMIZING-AUTH-UI.md).
 
+A custom form needs no `as any`. Pass a literal `action` and `setAuthState` narrows the payload (wrong fields are a compile error), and the returned `AuthState` is already typed:
+
+```typescript
+import { AuthBasicErrors, hasAuthError } from '@aws-blocks/blocks';
+import { broadcastAuthChange } from '@aws-blocks/blocks/ui';
+import { authApi } from 'aws-blocks';
+
+async function submit(action: 'signIn' | 'signUp', username: string, password: string) {
+  const next = action === 'signIn'
+    ? await authApi.setAuthState({ action: 'signIn', username, password })
+    : await authApi.setAuthState({ action: 'signUp', username, password });
+  if (next.state === 'signedIn') broadcastAuthChange(next.user ?? null);
+  else if (hasAuthError(next, AuthBasicErrors.InvalidCredentials)) { /* show next.error inline */ }
+  return next;
+}
+
+await authApi.setAuthState({ action: 'signOut' });
+broadcastAuthChange(null);
+```
+
 ## Types Reference
 
 ### `AuthState`

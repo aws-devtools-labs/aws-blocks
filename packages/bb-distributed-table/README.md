@@ -133,6 +133,10 @@ All condition failures throw with `error.name === DistributedTableErrors.Conditi
 
 > **No partial update:** There is no `update()` or `patch()` method. To change a field, do a read-modify-write — `get()` the item, mutate it, then `put()` the full item back. For safe concurrent updates, pass `{ ifFieldEquals: { version: <previous> } }` to `put()` so the write fails (via `ConditionalCheckFailed`) if another writer changed the item in the meantime (optimistic locking).
 
+> **Reads are eventually consistent:** `get`/`getBatch`/`query`/`scan` use DynamoDB's default eventually consistent reads (there is no `ConsistentRead` option), so a read right after a write can return stale data. Rely on the conditional `put()` — not a fresh read — for read-modify-write correctness.
+
+> **No atomic increment:** For a counter that is updated concurrently, either loop `get()` → `put(next, { ifFieldEquals: { count: current.count } })` and retry with backoff on `ConditionalCheckFailed`, or write one row per event and aggregate with a `query()` on read (not a `scan()`).
+
 ### Reads and schema evolution
 
 Writes always validate against `schema`. Reads reconcile a stored item with the schema according to the **`readValidation`** option, which matters after a schema change: a row written under an older schema may no longer match the declared type `T` — a newly added field is **absent** from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a **required, no-default** field makes the read-modify-write cycle above **fail on the write** as `put()` rejects the legacy shape.
@@ -174,7 +178,7 @@ Choose **`'strict'`** for tables where a schema mismatch should be treated as co
 
 ### Error Handling
 
-Errors thrown by DistributedTable carry an `error.name` you can match with `isBlocksError`:
+Errors thrown by DistributedTable carry an `error.name`. Match it with `isBlocksError(e, DistributedTableErrors.X)` and type the catch variable as `unknown`. Do not compare `e.name` strings by hand or regex the message on an `any`-typed catch:
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|

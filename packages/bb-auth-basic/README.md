@@ -60,6 +60,8 @@ const auth = new AuthBasic(scope, id, options?)
 
 **Action input shape:** `createApi()` returns the state-machine API. `setAuthState` takes a single FLAT discriminated input — `{ action, ...fields }`, never a nested `{ action, data: {...} }`. Examples: `{ action: 'signIn', username, password }`, `{ action: 'signUp', username, password }`, `{ action: 'confirmSignUp', username, code, password }`, `{ action: 'resetPassword', username }`, `{ action: 'confirmResetPassword', username, code, newPassword }`. See the `AuthActionInput` type in `@aws-blocks/auth-common`.
 
+**Fully typed — no casts.** `authApi.setAuthState(input: AuthActionInput): Promise<AuthState>`, so pass the flat input directly (`await authApi.setAuthState({ action: 'signOut' })` typechecks) and read `state` / `user` / `errorName` off the result without `as any`. If the action comes from a variable, type it as a literal union (`const action: 'signIn' | 'signUp' = ...`), not `string`. There is no `autoSignIn` step in AuthBasic — without `codeDelivery`, `signUp` already returns `signedIn`.
+
 ### `buildApi()` (deprecated)
 
 > **Deprecated — use `createApi()`.** Retained for backward compatibility. Unlike `createApi()` (which exposes the `getAuthState`/`setAuthState` state machine), `buildApi()` returns an `ApiNamespace` with a flat RPC surface. Documented here so existing callers can find the shapes. The request `context` is captured by the namespace factory, so the exposed methods take no `context` argument:
