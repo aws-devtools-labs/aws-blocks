@@ -43,4 +43,24 @@ describe('load-backend — importBackend', () => {
 		writeFileSync(file, `export const x = ;\n`); // syntax error
 		await assert.rejects(() => importBackend(pathToFileURL(file).href, import.meta.url));
 	});
+
+	it('loads a backend only once per process (second import is cached, not re-executed)', async () => {
+		// The dev server imports the backend twice — once to build the API map
+		// (before locking the route registry) and again for client-code
+		// generation (after locking). A re-execution would re-run top-level route
+		// registration against the locked registry and throw. The cache must make
+		// the second import a no-op that returns the same module instance.
+		const file = join(dir, 'once.ts');
+		writeFileSync(
+			file,
+			`(globalThis as any).__LOAD_BACKEND_ONCE_COUNT__ =\n` +
+				`  ((globalThis as any).__LOAD_BACKEND_ONCE_COUNT__ ?? 0) + 1;\n` +
+				`export const marker: string = 'once';\n`,
+		);
+		const url = pathToFileURL(file).href;
+		const first = await importBackend(url, import.meta.url);
+		const second = await importBackend(url, import.meta.url);
+		assert.equal((globalThis as any).__LOAD_BACKEND_ONCE_COUNT__, 1);
+		assert.equal(first, second);
+	});
 });

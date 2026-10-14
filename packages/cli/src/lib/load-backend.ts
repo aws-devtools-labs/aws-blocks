@@ -24,6 +24,24 @@
 const TS_ENTRY = /\.(ts|tsx|mts|cts)$/i;
 
 /**
+ * Resolved-module cache keyed by file URL.
+ *
+ * The dev server imports the backend twice: once to build the runtime API map
+ * (before it locks the route registry), and again via client-code generation
+ * AFTER the lock. Native `import()` dedupes a repeated specifier through Node's
+ * ESM module cache, so the second import is a cache hit that does NOT re-run the
+ * module's top level. `tsImport`, however, loads under a fresh namespace query
+ * each call (`?tsx-namespace=…`), so a second `tsImport` of the same file
+ * RE-EXECUTES it — re-running top-level `new RawRoute(...)` against the now
+ * locked registry and throwing "Cannot register routes after handler creation".
+ *
+ * Caching the resolved module here gives both loaders the same
+ * import-once-per-process guarantee, so a backend is executed exactly once
+ * regardless of which loader served it.
+ */
+const backendModuleCache = new Map<string, Record<string, unknown>>();
+
+/**
  * Dynamically import a backend entry by file URL. For a TypeScript entry this
  * routes through `tsx/esm/api`; for a JS entry it uses the native `import()`.
  *
@@ -35,9 +53,14 @@ export async function importBackend(
 	fileUrl: string,
 	parentURL: string,
 ): Promise<Record<string, unknown>> {
+	const cached = backendModuleCache.get(fileUrl);
+	if (cached) return cached;
+
 	if (!TS_ENTRY.test(fileUrl)) {
 		// JS entry — let Node resolve it; no need to pull tsx in.
-		return (await import(fileUrl)) as Record<string, unknown>;
+		const mod = (await import(fileUrl)) as Record<string, unknown>;
+		backendModuleCache.set(fileUrl, mod);
+		return mod;
 	}
 
 	let tsImport:
@@ -60,5 +83,7 @@ export async function importBackend(
 			`The installed version of tsx does not export \`tsImport\` from \`tsx/esm/api\`. Upgrade to tsx >= 4.7.`,
 		);
 	}
-	return (await tsImport(fileUrl, parentURL)) as Record<string, unknown>;
+	const mod = (await tsImport(fileUrl, parentURL)) as Record<string, unknown>;
+	backendModuleCache.set(fileUrl, mod);
+	return mod;
 }
