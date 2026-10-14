@@ -1,0 +1,36 @@
+name: Actions Pinned
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/**'
+      - 'scripts/check-actions-pinned*'
+  push:
+    branches: [main]
+    paths:
+      - '.github/**'
+
+concurrency:
+  group: actions-pinned-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Require SHA-pinned actions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+      # A mutable tag/branch on any `uses:` lets whoever controls that ref run code
+      # in our jobs, including those that assume an AWS role. Built-ins only.
+      - name: Test the guard
+        run: node --test scripts/check-actions-pinned.test.mjs
+      - name: Check every uses is pinned to a commit SHA
+        run: node scripts/check-actions-pinned.mjs
