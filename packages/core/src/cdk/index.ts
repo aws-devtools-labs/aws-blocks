@@ -83,10 +83,6 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
 	_defaultCompute?: Compute;
 
-	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
-	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
-		return this.requireDefaultCompute().fn;
-	}
 	/** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
 	get gateway(): cdk.aws_apigateway.RestApi {
 		return this.requireDefaultCompute().apiGateway;
@@ -105,7 +101,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	private requireDefaultCompute(): LambdaShapedCompute {
 		if (!this._defaultCompute) {
 			throw new Error(
-				'Blocks stack not fully initialized — access .handler/.gateway/.apiUrl after BlocksStack.create() resolves.',
+				'Blocks stack not fully initialized — access .gateway/.apiUrl after BlocksStack.create() resolves.',
 			);
 		}
 		return this._defaultCompute as LambdaShapedCompute;
@@ -150,7 +146,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 
 		const stack = new BlocksStack(actualScope, id, props);
 		// Create the default compute before importing the backend: it OWNS the
-		// Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
+		// Lambda function + API Gateway (which back .gateway/.apiUrl), and
 		// a block reading `this.compute` in its constructor (during that import)
 		// must resolve to it. The factory is supplied by the umbrella
 		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
@@ -257,10 +253,6 @@ export class Scope extends Construct {
 		return (globalThis as any).CURRENT_BLOCKS_STACK as BlocksStack | BlocksBackend;
 	}
 
-	get handler() {
-		return this.root.handler;
-	}
-
 	/**
 	 * The shared IAM role assumed by all Blocks compute. Building Blocks grant
 	 * their permissions to this role; CDK's `grant*()` / `addToPrincipalPolicy()`
@@ -339,7 +331,7 @@ export class Scope extends Construct {
 
 	/**
 	 * The shared handler Lambda's CloudWatch log group (the default compute's).
-	 * Resolves the same way as {@link handler} — via the owning
+	 * Resolves via the owning
 	 * BlocksStack/BlocksBackend. Its retention comes from the compute's
 	 * `logRetention` (falling back to `defaults.logRetention`); the `bb-logger`
 	 * CDK construct is a no-op and no longer reconfigures it.
@@ -363,7 +355,7 @@ export class Scope extends Construct {
 	 * ```
 	 */
 	get defaults(): BlocksDefaults {
-		// Resolve the same way as handler/executionRole: walk up to the owning
+		// Resolve the same way as executionRole: walk up to the owning
 		// BlocksStack/BlocksBackend and read its defaults, so several backends in
 		// one stack each keep their own posture. Falls back to the ambient stack,
 		// then to the production preset when none was registered.

@@ -429,6 +429,16 @@ export class CdnConstruct extends Construct {
       new RestApi(this, 'SsrRestApi', {
         endpointTypes: [EndpointType.REGIONAL],
         deployOptions: { stageName: 'prod' },
+        // No per-stack CloudWatch role / AWS::ApiGateway::Account. The stage
+        // doesn't enable execution or access logging, so the role is unused,
+        // and CDK RETAINs it by default — every `cdk destroy` would orphan
+        // one IAM role and eventually exhaust the account's role quota.
+        // (Matches bb-lambda-compute's RestApi.) If stage logging is ever added
+        // here, provision the account role through core's
+        // `ensureApiGatewayAccount` (so the stack keeps ONE shared
+        // ApiGateway::Account) and depend the stage on it — don't re-enable
+        // `cloudWatchRole`.
+        cloudWatchRole: false,
         // Treat all bodies as binary. Without this, API Gateway base64-encodes
         // request bodies (Lambda then sees 2× size) and re-encodes responses,
         // breaking binary uploads, downloads, and streaming.

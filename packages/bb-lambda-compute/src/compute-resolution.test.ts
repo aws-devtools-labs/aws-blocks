@@ -66,8 +66,7 @@ describe('Scope.compute resolution', () => {
 		const compute = block.compute;
 
 		assert.ok(compute instanceof LambdaCompute, 'default resolves to a LambdaCompute');
-		// The stack's handler/gateway delegate to the default compute's.
-		assert.strictEqual(stack.handler, (compute as LambdaCompute).fn, 'stack.handler is the compute function');
+		// The stack's gateway delegates to the default compute's.
 		assert.strictEqual(stack.gateway, (compute as LambdaCompute).apiGateway, 'stack.gateway is the compute gateway');
 
 		// Exactly one function + gateway — the default compute's.

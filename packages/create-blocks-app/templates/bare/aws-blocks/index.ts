@@ -34,7 +34,6 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 // // Auth (see node_modules/@aws-blocks/bb-auth-basic/README.md for full API):
 // const auth = new AuthBasic(scope, 'auth', {
 //   passwordPolicy: { minLength: 8 },
-//   crossDomain: process.env.BLOCKS_SANDBOX === 'true',
 // });
 // export const authApi = auth.createApi();
 // // Frontend: Authenticator(authApi) from '@aws-blocks/blocks/ui'

@@ -142,7 +142,7 @@ describe('synth shape (drop into existing stack)', () => {
 		const backend = await makeBackend(parent, 'Blocks', sideEffectBackendPath);
 
 		// Public surface mirrors BlocksStack.
-		assert.ok(backend.handler, 'BlocksBackend should expose .handler');
+		assert.ok(backend.executionRole, 'BlocksBackend should expose .executionRole');
 		assert.ok(backend.gateway, 'BlocksBackend should expose .gateway');
 		assert.ok(backend.apiUrl, 'BlocksBackend should expose .apiUrl');
 

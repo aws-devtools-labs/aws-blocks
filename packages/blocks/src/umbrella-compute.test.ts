@@ -54,11 +54,10 @@ describe('umbrella injects the Lambda default compute', () => {
 		});
 
 		// The umbrella wrapper injected LambdaCompute (not a stub); the stack's
-		// handler/gateway delegate to it. (The `fn`/`apiGateway` members live on
+		// gateway/apiUrl delegate to it. (The `fn`/`apiGateway` members live on
 		// the CDK-typed LambdaCompute; TS resolves the import to the mock type
 		// here, so we assert through the stack's typed getters instead.)
 		assert.ok(stack._defaultCompute instanceof LambdaCompute, 'default compute should be a LambdaCompute');
-		assert.ok(stack.handler, 'stack.handler resolves through the default compute');
 		assert.ok(stack.gateway, 'stack.gateway resolves through the default compute');
 		assert.ok(stack.apiUrl, 'stack.apiUrl resolves through the default compute');
 
@@ -77,7 +76,6 @@ describe('umbrella injects the Lambda default compute', () => {
 		});
 
 		assert.ok(backend._defaultCompute instanceof LambdaCompute, 'default compute should be a LambdaCompute');
-		assert.ok(backend.handler, 'backend.handler resolves through the default compute');
 		assert.ok(backend.apiUrl, 'backend.apiUrl resolves through the default compute');
 
 		const template = Template.fromStack(parent);

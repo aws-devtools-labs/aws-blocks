@@ -16,8 +16,9 @@ import { validateMigrations, classifyStatement } from './validation.js';
 export async function runMigrations(
   engine: DatabaseEngine,
   migrations: Record<string, string>,
+  options: { validate?: boolean } = {},
 ): Promise<string[]> {
-  validateMigrations(migrations);
+  if (options.validate !== false) validateMigrations(migrations);
 
   await engine.execute(`
     CREATE TABLE IF NOT EXISTS _migrations (
