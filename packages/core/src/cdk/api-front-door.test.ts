@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 /**
- * Unit tests for the pieces the `edge` API front door is assembled from.
+ * Unit tests for the pieces the `cloudfront` API front door is assembled from.
  *
  * These build real CloudFront configuration and assert the synthesized template
  * rather than the CDK objects: an origin whose host is wrong, or a behavior that
@@ -92,8 +92,8 @@ describe('API behavior options', () => {
 });
 
 describe('scheduleApiFrontDoor', () => {
-	test('edge: provisions one distribution with a single catch-all behavior to the gateway origin', () => {
-		// Every API path resolves to the shared gateway, so the edge front door is one
+	test('cloudfront: provisions one distribution with a single catch-all behavior to the gateway origin', () => {
+		// Every API path resolves to the shared gateway, so the cloudfront front door is one
 		// origin behind one default behavior — no per-path CacheBehaviors.
 		const stack = new cdk.Stack(new cdk.App(), 'S');
 		scheduleApiFrontDoor(stack, true, GATEWAY_URL);
@@ -106,7 +106,7 @@ describe('scheduleApiFrontDoor', () => {
 		assert.strictEqual(config.Origins[0].OriginPath, '/prod', 'the gateway stage is the OriginPath');
 	});
 
-	test('edge: records the CloudFront origin as resolvedApiFrontDoorUrl (feeds the ApiUrl output)', () => {
+	test('cloudfront: records the CloudFront origin as resolvedApiFrontDoorUrl (feeds the ApiUrl output)', () => {
 		const stack = new cdk.Stack(new cdk.App(), 'S');
 		scheduleApiFrontDoor(stack, true, GATEWAY_URL);
 		// Resolve the tree (synth) so the aspect runs.
@@ -121,7 +121,7 @@ describe('scheduleApiFrontDoor', () => {
 		);
 	});
 
-	test('regional: provisions nothing when the tier opts out', () => {
+	test('apigateway: provisions nothing when the tier opts out', () => {
 		const stack = new cdk.Stack(new cdk.App(), 'S');
 		scheduleApiFrontDoor(stack, false, GATEWAY_URL);
 		Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 0);
@@ -136,7 +136,7 @@ describe('scheduleApiFrontDoor', () => {
 	});
 
 	test('stands down when a Hosting distribution has claimed the front-door role', () => {
-		// A Hosting that fronts the API publishes its own origin; the managed edge
+		// A Hosting that fronts the API publishes its own origin; the managed cloudfront
 		// distribution must not add a second one that doubles hops and splits the domain.
 		// The claim rides on the owner instance (not per-stack state), so the aspect
 		// scheduled on that same owner sees it — the mechanism that works cross-stack.
@@ -160,11 +160,11 @@ describe('scheduleApiFrontDoor', () => {
 
 describe('resolveApiFrontDoor', () => {
 	test('the app’s explicit choice is honored, in both directions', () => {
-		assert.strictEqual(resolveApiFrontDoor('edge'), 'edge');
-		assert.strictEqual(resolveApiFrontDoor('regional'), 'regional');
+		assert.strictEqual(resolveApiFrontDoor('cloudfront'), 'cloudfront');
+		assert.strictEqual(resolveApiFrontDoor('apigateway'), 'apigateway');
 	});
 
-	test('defaults to the constant regional tier when the app expresses no preference', () => {
-		assert.strictEqual(resolveApiFrontDoor(undefined), 'regional');
+	test('defaults to the constant apigateway tier when the app expresses no preference', () => {
+		assert.strictEqual(resolveApiFrontDoor(undefined), 'apigateway');
 	});
 });

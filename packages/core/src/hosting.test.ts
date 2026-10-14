@@ -516,17 +516,17 @@ describe('Hosting', () => {
     });
   });
 
-  // ── edge front door + Hosting coexistence (P2) ─────────────────
+  // ── cloudfront front door + Hosting coexistence (P2) ─────────────────
   //
-  // When the app sets apiFrontDoor: 'edge' AND fronts its frontend with Hosting in
+  // When the app sets apiFrontDoor: 'cloudfront' AND fronts its frontend with Hosting in
   // the same stack, the API belongs on Hosting's distribution — the standalone
-  // managed edge distribution must stand down so there is exactly one.
-  describe('edge front door + Hosting claim', () => {
+  // managed cloudfront distribution must stand down so there is exactly one.
+  describe('cloudfront front door + Hosting claim', () => {
     it('leaves exactly one distribution (Hosting’s) when Hosting fronts the API in edge mode', () => {
       createSpaBuildOutput(tmpDir);
 
       const app = new App();
-      const stack = new Stack(app, 'EdgeHostingClaimStack');
+      const stack = new Stack(app, 'CloudFrontHostingClaimStack');
 
       // Simulate what BlocksStack.create() does in edge mode: schedule the managed
       // front door over the shared gateway, then build Hosting in the same stack.
@@ -546,17 +546,20 @@ describe('Hosting', () => {
       template.resourceCountIs('AWS::CloudFront::Distribution', 1);
     });
 
-    it('a Hosting in a DIFFERENT stack still suppresses the backend stack’s managed edge distribution', () => {
+    it('the claim is recorded on the backend instance, not in its stack’s state', () => {
       createSpaBuildOutput(tmpDir);
 
       const app = new App();
       const backendStack = new Stack(app, 'BackendStack');
       const frontendStack = new Stack(app, 'FrontendStack');
 
-      // The managed edge front door is scheduled on the backend stack; a Hosting
+      // The managed cloudfront front door is scheduled on the backend stack; a Hosting
       // built in a SEPARATE stack claims the role on the backend object (a live
       // reference), so the aspect — scheduled on that same object — reads the claim
-      // and stands the managed distribution down.
+      // and stands the managed distribution down. This pins the claim mechanism only:
+      // a real BlocksStack with Hosting in another stack doesn't synthesize today
+      // (Hosting registers its domain back into the backend's config, a
+      // cross-stack cycle).
       const api: BlocksStackApi = {
         apiUrl: MOCK_API.apiUrl,
         claimApiFrontDoor: (url) => claimApiFrontDoor(backendStack, url),
@@ -564,7 +567,7 @@ describe('Hosting', () => {
       scheduleApiFrontDoor(backendStack, true, api.apiUrl);
       new Hosting(frontendStack, 'Hosting', { root: tmpDir, api });
 
-      // Managed edge distribution stood down in the backend stack (claimed cross-stack)...
+      // Managed cloudfront distribution stood down in the backend stack (the claim reached it through the backend object)...
       Template.fromStack(backendStack).resourceCountIs('AWS::CloudFront::Distribution', 0);
       // ...and only Hosting's distribution exists, in the frontend stack — carrying
       // the API behaviors, so the API is actually served from it.
