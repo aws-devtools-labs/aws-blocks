@@ -10,7 +10,6 @@ import { html, render } from 'lit-html';
 
 injectTheme();
 
-
 // ─── Auth ────────────────────────────────────────────────────────────────────
 // Show Account Menu bar that pops open authenticator when Sign In is clicked.
 const menuBarEl = document.getElementById('menu-bar')!;

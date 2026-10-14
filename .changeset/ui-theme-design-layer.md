@@ -1,6 +1,6 @@
 ---
 "@aws-blocks/auth-common": minor
-"@aws-blocks/blocks": patch
+"@aws-blocks/blocks": minor
 "@aws-blocks/create-blocks-app": patch
 ---
 
@@ -14,18 +14,29 @@ with no new runtime framework dependency.
   properties (`--bb-*` for color, spacing, radius, typography, elevation)
   on `:root`, a light and dark palette driven by `prefers-color-scheme`
   with a `data-bb-theme` override hook, and base `.bb-*` component
-  classes. A new idempotent, SSR-safe `injectTheme()` adds the stylesheet
-  to the document once. The shared `Authenticator`, `AccountMenuBar`, and
+  classes. The palette declares `color-scheme` so UA-drawn widgets
+  (checkboxes, `<select>`, scrollbars, `::placeholder`, autofill) follow
+  the active palette, and `.bb-button` has a `:disabled` state. A new
+  idempotent, SSR-safe `injectTheme()` adds the stylesheet to the document
+  once. The shared `Authenticator`, `AccountMenuBar`, and
   `AuthenticatedContent` now render against these token classes instead
   of inline styles and inject the theme themselves, so the themed look
   travels with the component into any host (lit-html, vanilla, React,
   Next.js) with zero wiring. Every `data-testid` is preserved.
 - `@aws-blocks/blocks` re-exports `injectTheme`, `THEME_CSS`, and
-  `THEME_STYLE_ID` from `@aws-blocks/blocks/ui`.
+  `THEME_STYLE_ID` from `@aws-blocks/blocks/ui`, and adds a lean
+  `@aws-blocks/blocks/theme` subpath that re-exports ONLY the token layer
+  (no `Authenticator`/WebAuthn surface) for non-auth hosts. Both packages
+  are marked `sideEffects: false` so a bundler can drop the unused UI
+  surface.
 - `@aws-blocks/create-blocks-app` templates (`default`, `react`,
   `nextjs`, `demo`, `auth-cognito`) adopt the tokens for their own page
   chrome and todo UI, so the whole page is themed and dark-mode-aware;
-  the `bare` template stays deliberately minimal.
+  the `bare` template stays deliberately minimal. The static templates
+  inline the first-paint palette and the `nextjs` template server-renders
+  the token `<style>` so a dark-mode user never sees a white flash before
+  the bundle runs. A `--bb-color-success` token keeps success messages
+  from reading as accent blue.
 
 Focus states use a real `outline` ring (preserved under forced-colors /
 Windows high-contrast mode) rather than an `outline: none` + `box-shadow`

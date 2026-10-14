@@ -1,6 +1,7 @@
 {
   "name": "@aws-blocks/auth-common",
   "version": "0.1.9",
+  "sideEffects": false,
   "keywords": [
     "aws-blocks",
     "authentication",

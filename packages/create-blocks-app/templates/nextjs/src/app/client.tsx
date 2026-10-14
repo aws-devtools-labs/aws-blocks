@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { api } from 'aws-blocks';
-import { injectTheme } from '@aws-blocks/blocks/ui';
+import { injectTheme } from '@aws-blocks/blocks/theme';
 
 injectTheme();
 

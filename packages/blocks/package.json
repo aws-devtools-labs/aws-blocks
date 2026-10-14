@@ -1,6 +1,7 @@
 {
   "name": "@aws-blocks/blocks",
   "version": "0.7.0",
+  "sideEffects": false,
   "keywords": [
     "aws-blocks",
     "framework",
@@ -57,6 +58,10 @@
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js",
       "default": "./dist/server.js"
+    },
+    "./theme": {
+      "types": "./dist/theme.d.ts",
+      "default": "./dist/theme.js"
     },
     "./ui": {
       "types": "./dist/ui.d.ts",

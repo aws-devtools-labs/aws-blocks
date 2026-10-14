@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { Window } from 'happy-dom';
 import type { AuthState } from './index.js';
 import type { AuthStateApi } from './ui.js';
@@ -143,5 +145,54 @@ describe('UI factories inject the theme', () => {
 			return el;
 		});
 		assert.strictEqual(styleEls().length, 1, 'AuthenticatedContent injects the theme <style>');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Class-name contract — every `bb-*` class a factory assigns must be a
+// selector in THEME_CSS. This is the entire visual contract of the theme:
+// without it a typo (`bb-butotn`) or a one-sided rename renders the component
+// unstyled while every other assertion stays green. The factories assign most
+// classes inside async `onAuthChange` callbacks, so a live-render walk only
+// sees a subset; scanning the ui.ts source for `className = '...'` literals
+// catches the whole set deterministically, both directions (a class the code
+// renders that the CSS lacks, and drift either way).
+// ---------------------------------------------------------------------------
+
+describe('bb-* class contract: every class ui.ts assigns exists in THEME_CSS', () => {
+	// ui.ts source lives next to this test's source; the test runs from dist,
+	// so resolve back to ../src relative to the compiled file.
+	const uiSource = readFileSync(
+		fileURLToPath(new URL('../src/ui.ts', import.meta.url)),
+		'utf-8',
+	);
+
+	/** Every `bb-*` token across all `className = '...'` assignments in ui.ts. */
+	function renderedBbClasses(): Set<string> {
+		const found = new Set<string>();
+		for (const m of uiSource.matchAll(/className\s*=\s*'([^']+)'/g)) {
+			const classAttr = m[1] ?? '';
+			for (const token of classAttr.split(/\s+/)) {
+				if (token.startsWith('bb-')) found.add(token);
+			}
+		}
+		return found;
+	}
+
+	/** Does THEME_CSS declare a rule selecting this class? */
+	function cssDefinesClass(cls: string): boolean {
+		// Match `.bb-foo` as a whole token — the negative lookahead stops
+		// `.bb-button` from spuriously matching `.bb-button-primary`.
+		return new RegExp(`\\.${cls}(?![\\w-])`).test(THEME_CSS);
+	}
+
+	test('ui.ts assigns at least a handful of bb-* classes', () => {
+		assert.ok(renderedBbClasses().size >= 10, 'the scan found the component classes');
+	});
+
+	test('every class ui.ts renders is defined in THEME_CSS', () => {
+		for (const cls of renderedBbClasses()) {
+			assert.ok(cssDefinesClass(cls), `THEME_CSS defines a selector for .${cls} (assigned in ui.ts)`);
+		}
 	});
 });

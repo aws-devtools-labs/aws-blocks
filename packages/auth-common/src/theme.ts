@@ -32,7 +32,14 @@ export const THEME_STYLE_ID = 'bb-ui-theme';
  */
 export const THEME_CSS: string = `
 :root {
-	/* Palette — light (default) */
+	/* Opt into both schemes so UA-drawn widgets (checkboxes, <select>,
+	   scrollbars, ::placeholder, autofill) follow the active palette
+	   instead of staying light on a dark surface. */
+	color-scheme: light dark;
+
+	/* Palette — light (default). The dark palette is a single scoped
+	   media query below; keeping the light values only here means each
+	   token has exactly one home and can't drift. */
 	--bb-color-bg: #ffffff;
 	--bb-color-surface: #ffffff;
 	--bb-color-surface-alt: #f4f6f9;
@@ -42,6 +49,7 @@ export const THEME_CSS: string = `
 	--bb-color-accent: #0972d3;
 	--bb-color-accent-hover: #065299;
 	--bb-color-accent-text: #ffffff;
+	--bb-color-success: #037f0c;
 	--bb-color-danger: #d91515;
 	--bb-color-focus-ring: #0972d3;
 
@@ -66,8 +74,13 @@ export const THEME_CSS: string = `
 	--bb-shadow-md: 0 4px 16px rgba(0, 7, 22, 0.24);
 }
 
+/* Dark palette: applies when the OS prefers dark AND the host hasn't
+   forced light via [data-bb-theme="light"]. Scoping the media query this
+   way lets the single light block above double as the explicit-light
+   override, so the light palette is written exactly once. */
 @media (prefers-color-scheme: dark) {
-	:root {
+	:root:not([data-bb-theme="light"]) {
+		color-scheme: dark;
 		--bb-color-bg: #0f1b2a;
 		--bb-color-surface: #1a2634;
 		--bb-color-surface-alt: #232f3e;
@@ -77,27 +90,20 @@ export const THEME_CSS: string = `
 		--bb-color-accent: #539fe5;
 		--bb-color-accent-hover: #89bdee;
 		--bb-color-accent-text: #0f1b2a;
+		--bb-color-success: #29ad32;
 		--bb-color-danger: #ff7170;
 		--bb-color-focus-ring: #539fe5;
 	}
 }
 
-/* Explicit host override — wins over the media query. */
+/* Explicit host override — wins over the media query. color-scheme
+   carries the UA widgets with the forced palette. */
 [data-bb-theme="light"] {
-	--bb-color-bg: #ffffff;
-	--bb-color-surface: #ffffff;
-	--bb-color-surface-alt: #f4f6f9;
-	--bb-color-text: #16191f;
-	--bb-color-text-muted: #5f6b7a;
-	--bb-color-border: #d5dbdb;
-	--bb-color-accent: #0972d3;
-	--bb-color-accent-hover: #065299;
-	--bb-color-accent-text: #ffffff;
-	--bb-color-danger: #d91515;
-	--bb-color-focus-ring: #0972d3;
+	color-scheme: light;
 }
 
 [data-bb-theme="dark"] {
+	color-scheme: dark;
 	--bb-color-bg: #0f1b2a;
 	--bb-color-surface: #1a2634;
 	--bb-color-surface-alt: #232f3e;
@@ -107,6 +113,7 @@ export const THEME_CSS: string = `
 	--bb-color-accent: #539fe5;
 	--bb-color-accent-hover: #89bdee;
 	--bb-color-accent-text: #0f1b2a;
+	--bb-color-success: #29ad32;
 	--bb-color-danger: #ff7170;
 	--bb-color-focus-ring: #539fe5;
 }
@@ -184,6 +191,11 @@ export const THEME_CSS: string = `
 .bb-button:focus-visible {
 	outline: 2px solid var(--bb-color-focus-ring);
 	outline-offset: 1px;
+}
+
+.bb-button:disabled {
+	opacity: 0.55;
+	cursor: default;
 }
 
 .bb-button-primary {
