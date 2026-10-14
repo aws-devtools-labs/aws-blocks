@@ -268,6 +268,23 @@ describe('agent-bench shell runner — process-identity isolation (issue #184)',
 		}
 	});
 
+	// The uid boundary only contains the agent if benchagent itself holds NO sudo rights. The harness
+	// user (the runner) has passwordless sudo, which is how it enters benchagent via runuser; benchagent
+	// must not. If it could sudo, any agent command could become root and the isolation would be nominal.
+	it('FIX: benchagent holds no sudo rights, so the agent shell cannot escalate to root', { skip: !isolation }, () => {
+		const escalate = spawnSync('sudo', ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'sudo', '-n', 'true'], {
+			encoding: 'utf-8',
+			timeout: 10000,
+		});
+		assert.notEqual(escalate.status, 0, 'benchagent ran `sudo -n true`: the agent shell can escalate to root');
+		const policy = spawnSync('sudo', ['-n', '-l', '-U', BENCH_AGENT_USER], { encoding: 'utf-8', timeout: 10000 });
+		assert.match(
+			`${policy.stdout}${policy.stderr}`,
+			/is not allowed to run sudo/,
+			`benchagent has a sudoers entry: ${policy.stdout}${policy.stderr}`,
+		);
+	});
+
 	// The run-1/5 regression: a workspace ACL alone is NOT enough. The CI workspace's parents
 	// (/home/runner, 0750) aren't world-searchable, so benchagent could rwx the workspace yet every
 	// ABSOLUTE-path open (npm/node/tsc module resolution) failed EACCES. prepareWorkspaceIsolation must

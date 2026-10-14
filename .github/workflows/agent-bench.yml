@@ -145,6 +145,17 @@ jobs:
             echo "benchagent + passwordless sudo+runuser: UNAVAILABLE (agent-shell isolation will be DISABLED)"
           fi
 
+      # The runner user has passwordless sudo (that is how it enters benchagent via runuser);
+      # benchagent must have none, or any agent command could become root and the uid isolation
+      # would be nominal. Not continue-on-error: fail the job rather than run an uncontained agent.
+      - name: Verify isolation user cannot sudo
+        run: |
+          if sudo -n runuser -u benchagent -- sudo -n true 2>/dev/null; then
+            echo "::error::benchagent can run sudo, so the agent shell is not contained"
+            exit 1
+          fi
+          echo "benchagent holds no sudo rights"
+
       - id: npmci
         run: npm ci
         continue-on-error: true
@@ -670,6 +681,16 @@ jobs:
           else
             echo "benchagent + passwordless sudo+runuser: UNAVAILABLE (isolation FIX test will skip)"
           fi
+      # The runner user has passwordless sudo (that is how it enters benchagent via runuser);
+      # benchagent must have none, or any agent command could become root and the uid isolation
+      # would be nominal. Not continue-on-error: fail the job rather than run an uncontained agent.
+      - name: Verify isolation user cannot sudo
+        run: |
+          if sudo -n runuser -u benchagent -- sudo -n true 2>/dev/null; then
+            echo "::error::benchagent can run sudo, so the agent shell is not contained"
+            exit 1
+          fi
+          echo "benchagent holds no sudo rights"
       - run: npm ci
       - name: Type-check + unit-test the bench harness
         run: npm run test:ci -w scripts/agent-bench
