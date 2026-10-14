@@ -142,9 +142,12 @@ const WARNED_ORIGINS_LIMIT = 100;
 function warnDisallowedOriginOnce(origin: string): void {
   if (warnedOrigins.has(origin)) return;
   if (warnedOrigins.size < WARNED_ORIGINS_LIMIT) warnedOrigins.add(origin);
-  const example = "defaults: { ...BlocksPresets.production, allowedOrigins: ['https://myapp\\\\.com'] }";
+  // Preset-agnostic on purpose: this fires mostly on sandbox stacks, so an
+  // example tied to one preset would swap the app's other defaults (or, copied
+  // into production, carry the sandbox localhost pattern there).
+  const example = "defaults: { ...yourPreset, allowedOrigins: [...yourPreset.allowedOrigins, 'https://myapp\\\\.com'] }";
   console.warn(
-    `[CORS] Origin "${origin}" is not allowed. Add it to the stack's defaults.allowedOrigins (regex patterns) to allow it. Example: ${example}`
+    `[CORS] Origin "${origin}" is not allowed. Add it to the stack's defaults.allowedOrigins (regex patterns), keeping the preset's existing entries. Example: ${example}`
   );
 }
 

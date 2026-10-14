@@ -398,7 +398,14 @@ The dev server automatically allows `localhost` / `127.0.0.1` origins. No config
 
 ### Sandbox deployments
 
-`BlocksPresets.sandbox` sets `allowedOrigins` to `^https?://(localhost|127\.0\.0\.1)(:\d+)?$`, so your local frontend can reach the deployed sandbox API. To allow more origins in sandbox, spread the preset and append to its list rather than replacing it.
+`BlocksPresets.sandbox` sets `allowedOrigins` to `['^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$']`, so your local frontend can reach the deployed sandbox API. To allow more origins in sandbox, append to the preset's list rather than replacing it:
+
+```typescript
+defaults: {
+  ...BlocksPresets.sandbox,
+  allowedOrigins: [...BlocksPresets.sandbox.allowedOrigins, 'https://preview\\.myapp\\.com'],
+},
+```
 
 ### Production (frontend hosted separately)
 
