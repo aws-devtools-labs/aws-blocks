@@ -15,6 +15,7 @@ import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/defau
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
+import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
@@ -188,9 +189,61 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	return { executionRole };
 }
 
+/** What {@link buildSharedGateway} reads and writes on a `BlocksStack` / `BlocksBackend`. @internal */
+export interface SharedGatewayOwner {
+	readonly _defaultCompute?: Compute;
+	readonly defaults: BlocksDefaults;
+	_sharedGateway?: SharedGateway;
+}
+
+/**
+ * Build the single shared REST API gateway for a `BlocksStack` / `BlocksBackend`
+ * and record it on the owner (backs `.gateway` / `.apiUrl`). Shared by both
+ * entry points' `create()` so they can't drift.
+ *
+ * Call once, after the backend module has imported and every compute exists.
+ * The gateway fronts the default compute's function (its `apiHandler()`) and is
+ * built in the default compute's construct scope, so its logical IDs match the
+ * per-compute gateway it replaced — existing deployments keep their REST API and
+ * `execute-api` URL. The default compute is always a Lambda compute today, so
+ * `apiHandler()` is defined; a worker-only default fails with a clear error.
+ *
+ * @internal
+ */
+export function buildSharedGateway(owner: SharedGatewayOwner): SharedGateway {
+	const defaultCompute = owner._defaultCompute;
+	if (!defaultCompute) {
+		throw new Error('Default compute not initialized — create() must build it before the shared gateway.');
+	}
+	const defaultApiHandler = defaultCompute.apiHandler();
+	if (!defaultApiHandler) {
+		throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
+	}
+	owner._sharedGateway = createSharedGateway(defaultCompute, {
+		handler: defaultApiHandler,
+		defaults: owner.defaults,
+	});
+	return owner._sharedGateway;
+}
+
+/**
+ * Return the owner's shared gateway, or throw the "not fully initialized" error:
+ * `.gateway` / `.apiUrl` are only available once `create()` resolves (the gateway
+ * is built after the backend module import).
+ *
+ * @internal
+ */
+export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksStack' | 'BlocksBackend'): SharedGateway {
+	if (!owner._sharedGateway) {
+		const noun = kind === 'BlocksStack' ? 'stack' : 'backend';
+		throw new Error(`Blocks ${noun} not fully initialized — access .gateway/.apiUrl after ${kind}.create() resolves.`);
+	}
+	return owner._sharedGateway;
+}
+
 /**
  * Standalone CDK construct that provisions the Blocks backend: a single Lambda
- * function fronted by API Gateway with RPC + catch-all proxy routing.
+ * function fronted by one shared API Gateway REST API with RPC + catch-all proxy routing.
  *
  * Use this to embed a Blocks backend into any existing CDK stack. Building Blocks
  * instantiated during the `backendCDKPath` import will automatically attach to
@@ -202,7 +255,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
  *   backendHandlerPath: join(__dirname, 'handler.ts'),
  *   backendCDKPath: join(__dirname, 'infra.ts'),
  * });
- * // blocks.apiUrl, blocks.handler, blocks.gateway available
+ * // blocks.apiUrl, blocks.gateway, blocks.executionRole available
  * ```
  */
 export class BlocksBackend extends Construct {
@@ -217,20 +270,18 @@ export class BlocksBackend extends Construct {
 	public readonly executionRole: iam.IRole;
 	/** Infrastructure defaults for Building Blocks created under this backend. */
 	public readonly defaults: BlocksDefaults;
-	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
+	/** The default compute (owns the Lambda function); set in `create()`. @internal */
 	_defaultCompute?: Compute;
+	/** The single shared REST API gateway fronting the default compute; built in `create()`. @internal */
+	_sharedGateway?: SharedGateway;
 
-	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
-	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
-		return this.requireDefaultCompute().fn;
-	}
-	/** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
+	/** The backend's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
 	get gateway(): apigateway.RestApi {
-		return this.requireDefaultCompute().apiGateway;
+		return this.requireSharedGateway().restApi;
 	}
-	/** The default compute's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+	/** The shared gateway's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
 	get apiUrl(): string {
-		return this.requireDefaultCompute().apiUrl;
+		return this.requireSharedGateway().apiUrl;
 	}
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
@@ -242,10 +293,14 @@ export class BlocksBackend extends Construct {
 	private requireDefaultCompute(): LambdaShapedCompute {
 		if (!this._defaultCompute) {
 			throw new Error(
-				'Blocks backend not fully initialized — access .handler/.gateway/.apiUrl after BlocksBackend.create() resolves.',
+				'Blocks backend not fully initialized — access .gateway/.apiUrl after BlocksBackend.create() resolves.',
 			);
 		}
 		return this._defaultCompute as LambdaShapedCompute;
+	}
+
+	private requireSharedGateway(): SharedGateway {
+		return requireSharedGateway(this, 'BlocksBackend');
 	}
 
 	/**
@@ -318,10 +373,10 @@ export class BlocksBackend extends Construct {
 	static async create(scope: Construct, id: string, props: CoreBlocksBackendProps) {
 		assertCdkConditionActive();
 		const backend = new BlocksBackend(scope, id, props);
-		// Create the default compute before importing the backend: it OWNS the
-		// Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
-		// a block reading `this.compute` in its constructor (during that import)
-		// must resolve to it. The factory is supplied by the umbrella
+		// Create the default compute before importing the backend: it owns the
+		// Lambda function (the shared gateway's target), and a block reading
+		// `this.compute` in its constructor (during that import) must resolve to
+		// it. The factory is supplied by the umbrella
 		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
 		// imports the concrete compute class.
 		backend._defaultCompute = props.defaultComputeFactory(backend);
@@ -341,6 +396,10 @@ export class BlocksBackend extends Construct {
 			}
 		}
 		addBlocksStackMetadata(cdk.Stack.of(backend));
+
+		// Build the single shared REST API gateway now that the backend module has
+		// imported and every compute exists (see buildSharedGateway).
+		buildSharedGateway(backend);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));

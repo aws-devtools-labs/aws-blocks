@@ -345,6 +345,43 @@ else
   echo "::warning::dev server never came up (dead-server/backend-crash) — skipped Playwright to avoid masking it as invalid-URL test failures; tests stay at pessimistic defaults"
 fi
 
+# Causal data-layer scan — runs AFTER Playwright so dev.log is complete through the end of the tests.
+# When a mock Database's eager migration run dies on a PGlite WASM init trap, bb-data KEEPS THE DEV
+# SERVER ALIVE (the front door still serves, so the dead-server branch above never fires) but logs a
+# fixed UNAVAILABLE sentinel; every DB-backed query then rejects. Without this scan such a cell would
+# be `scored` with failing DB tests and counted against the agent — an INFRA memory crash blamed on
+# the framework. BUT the fix that keeps the server alive also lets the data layer HEAL: ensureMigrations
+# re-runs the idempotent migrations on the next query, and on success logs a RECOVERED marker. So the
+# bare presence of the unavailable sentinel is NOT proof the layer was down when the tests ran — it may
+# have recovered on the first request (boot-time trap), or trapped again mid-tests. We make the flag
+# CAUSAL: set data_layer_unavailable ONLY when the LAST unavailable sentinel in dev.log is not followed
+# by a recovery marker — i.e. the data layer was still wedged when Playwright finished. Both are fixed
+# literals (not a fuzzy trap regex over arbitrary log lines), kept in sync with @aws-blocks/data-common.
+DATA_LAYER_SENTINEL='[bb-data] PGlite init trap: data layer unavailable'
+DATA_LAYER_RECOVERED='[bb-data] PGlite init trap: data layer recovered'
+if [ -f "${CELL_TMP}/dev.log" ] && grep -qF "$DATA_LAYER_SENTINEL" "${CELL_TMP}/dev.log" 2>/dev/null; then
+  DEV_LOG_PATH="${CELL_TMP}/dev.log" DL_SENTINEL="$DATA_LAYER_SENTINEL" DL_RECOVERED="$DATA_LAYER_RECOVERED" \
+  RESULT_PATH="${RESULT_PATH:-/tmp/result.json}" node -e '
+    const fs = require("fs");
+    const log = fs.readFileSync(process.env.DEV_LOG_PATH, "utf-8");
+    // Compare the LAST occurrence of each marker by byte offset. The data layer was down when the
+    // tests finished iff an unavailable sentinel exists and no recovery marker came AFTER it.
+    const lastDown = log.lastIndexOf(process.env.DL_SENTINEL);
+    const lastUp = log.lastIndexOf(process.env.DL_RECOVERED);
+    const wedged = lastDown !== -1 && lastUp < lastDown;
+    if (wedged) {
+      console.log("[data-layer] data layer wedged by a PGlite init trap and NOT recovered by test end (infra) — excluding cell");
+      const p = process.env.RESULT_PATH;
+      let r = {};
+      try { r = JSON.parse(fs.readFileSync(p, "utf-8")); } catch {}
+      r.data_layer_unavailable = true;
+      fs.writeFileSync(p, JSON.stringify(r, null, 2));
+    } else {
+      console.log("[data-layer] PGlite init trap recovered before test end — data layer up, cell counts normally");
+    }
+  ' || echo "::warning::failed to evaluate data_layer_unavailable on result.json"
+fi
+
 # Stage the deep-failure evidence to STABLE /tmp paths for the later "analyze cell" step. CELL_TMP is
 # keyed on this script's PID, so it's gone by the time analyze-cell.mjs runs — mirror how the
 # trace/metrics already land at /tmp. Best-effort: a missing source or copy failure must never break

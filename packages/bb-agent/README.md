@@ -163,6 +163,21 @@ const first = recent[0];           // oldest of the 10
 const last  = recent.at(-1);       // newest message
 ```
 
+#### Conversation records and naming
+
+`listConversations(userId)` returns `Conversation` records (newest-updated first):
+
+```typescript
+interface Conversation {
+  conversationId: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+}
+```
+
+`createConversationId(userId)` sets `name` to the new conversation's UUID, so `name === conversationId` on a fresh record. The agent does **not** derive a human-readable title: the first user message does not become the title, and there is no public API to set or rename `name` — it stays the UUID for the life of the conversation. If you want a readable title in your UI (e.g. the first message, or a user-supplied label), store that mapping yourself in your own data layer and resolve it when rendering a conversation list; treat `conversationId` as the stable key and `name` as an opaque default.
+
 ### AgentConfig
 
 | Option | Type | Description |
