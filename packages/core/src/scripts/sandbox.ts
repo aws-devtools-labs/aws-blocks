@@ -398,9 +398,10 @@ export async function emptyBucket(s3: S3Client, bucket: string): Promise<void> {
  * a partial/aborted deploy), so the versioned bucket blocks the delete and the
  * stack (and its IAM roles) leak. Emptying out-of-band before the retry lets
  * the delete complete. Best-effort: any per-stack/per-bucket error is logged
- * and skipped so teardown still proceeds.
+ * and skipped so teardown still proceeds. Exported so the production destroy
+ * path ({@link ./destroy.ts}) reuses the same bucket-emptying step.
  */
-async function emptySandboxBuckets(stackNames: string[]): Promise<void> {
+export async function emptySandboxBuckets(stackNames: string[]): Promise<void> {
 	try {
 		const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
 		const { S3Client } = await import('@aws-sdk/client-s3');
@@ -470,6 +471,8 @@ export interface DestroyRetryDeps {
 	sleep: (ms: number) => Promise<void>;
 	/** Backoff between retries. Default: 1min, then 2min. */
 	retryDelays?: number[];
+	/** What the resource is, for the success log. Default: 'Sandbox' (production passes 'Production stack'). */
+	successLabel?: string;
 }
 
 /**
@@ -483,11 +486,12 @@ export interface DestroyRetryDeps {
  */
 export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
 	const retryDelays = deps.retryDelays ?? [60_000, 120_000];
+	const label = deps.successLabel ?? 'Sandbox';
 	let stackNames: string[] | undefined;
 	for (let attempt = 0; ; attempt++) {
 		try {
 			deps.runDestroy();
-			console.log(attempt === 0 ? '\n✅ Sandbox destroyed!' : '\n✅ Sandbox destroyed on retry!');
+			console.log(attempt === 0 ? `\n✅ ${label} destroyed!` : `\n✅ ${label} destroyed on retry!`);
 			return;
 		} catch (error) {
 			if (attempt < retryDelays.length) {
