@@ -6,6 +6,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { API_NAMESPACE_MARKER } from '@aws-blocks/core/runtime';
+import { importBackend } from './load-backend.js';
 
 /**
  * Generate browser-safe client code from backend exports.
@@ -22,7 +23,15 @@ export async function generateClientCode(foundationPath: string): Promise<string
 		(globalThis as any).__BLOCKS_CLIENT_MIDDLEWARE__ = [];
 	}
 
-	const backend = await import(pathToFileURL(foundationPath).href);
+	// Load the backend through tsx's API (tsImport) rather than a bare
+	// `import()`: a .ts foundation only resolves via the native loader when the
+	// worker process registered tsx's ESM hooks for THIS dynamic import. On
+	// Node 20 `--import tsx` registers hooks for the entry module but a runtime
+	// `import()` of a different .ts file falls through to the native loader and
+	// throws `Unknown file extension ".ts"`. importBackend sidesteps that (same
+	// fix the dev server already uses); a .js/.mjs foundation still takes the
+	// native import.
+	const backend = await importBackend(pathToFileURL(foundationPath).href, import.meta.url);
 
 	// Read collected middleware and clean up
 	const middleware: string[] = (globalThis as any).__BLOCKS_CLIENT_MIDDLEWARE__;
