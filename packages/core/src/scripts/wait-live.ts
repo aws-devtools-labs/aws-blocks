@@ -13,20 +13,40 @@
 // regression (observed in 2/5 benchmark runs).
 //
 // The observable that proves cutover: the public runtime config at
-// `/.blocks-sandbox/config.json`. During synth a PLACEHOLDER (`{_placeholder:
-// true}`) is written into the static assets; the real config (carrying
-// `apiUrl`) is deployed last, under the new build prefix, and the viewer
-// function only routes to the new build once it is live. So a request to
-// `/.blocks-sandbox/config.json` through CloudFront that returns a NON-
-// placeholder body is proof the new build's function + config are both live at
-// the edge — which is exactly the acceptance criterion ("all requests issued
-// immediately after the signal return the new asset").
+// `/.blocks-sandbox/config.json`. The deploy stamps THIS deploy's build id into
+// that config under `__blocksBuildId` (see `BLOCKS_BUILD_ID_CONFIG_KEY`), and
+// surfaces the same id as the `HostingBuildId` CDK output. The poller fetches
+// the config through CloudFront and declares the build live only when the
+// served config's `__blocksBuildId` equals the id this deploy just published.
+//
+// Why the id matters: the deployed config body is otherwise deploy-INVARIANT
+// (`{...backendConfig, apiUrl}`), so a placeholder-vs-real check only witnesses
+// the cutover on the FIRST-ever deploy — when the prior body was the synth
+// placeholder. On every re-deploy (the common case) a POP still routing to the
+// OLD build serves a byte-identical config, so a non-placeholder check would
+// report "live" against stale content: the exact bug this feature targets. The
+// per-deploy id turns the question from "SOME real build is live" into "THIS
+// build is live", which is correct on re-deploys.
+//
+// Backward-compat: when the caller cannot supply an expected build id (an older
+// app whose stack emits no `HostingBuildId` output), the poller falls back to
+// the placeholder-vs-real check — reliable on a first deploy, best-effort on a
+// re-deploy — rather than failing. Callers that CAN supply the id get the
+// strong guarantee.
 //
 // Everything here is pure and dependency-injected (fetch + clock) so the poll
 // loop is unit-tested without a real network or real wall-clock sleeps.
 
 /** Public path of the runtime config, relative to the frontend origin. */
 export const CONFIG_PROBE_PATH = '/.blocks-sandbox/config.json';
+
+/**
+ * Key under which the deploy stamps this deploy's build id into the public
+ * runtime config. Shared with the CDK hosting construct (which writes it) so
+ * the writer and the poller never drift. Double-underscore-prefixed to mark it
+ * an internal, non-customer-facing config field.
+ */
+export const BLOCKS_BUILD_ID_CONFIG_KEY = '__blocksBuildId';
 
 /** A minimal subset of the `fetch` Response we depend on. */
 export interface ProbeResponse {
@@ -39,17 +59,30 @@ export interface ProbeResponse {
 export type ProbeFetch = (url: string) => Promise<ProbeResponse>;
 
 /**
- * Classify a single fetched config body. Pure and exported so the "is this the
- * new build?" decision is unit-tested against real body shapes.
+ * Classify a single fetched config body against the build id this deploy
+ * published. Pure and exported so the "is THIS build live?" decision is
+ * unit-tested against real body shapes.
  *
- * - `live`    — a non-placeholder JSON object (the real deployed config).
- * - `pending` — the synth placeholder (`{_placeholder:true}`) is still served,
- *   i.e. CloudFront has not cut over to the new build yet.
+ * @param body            the raw config body fetched through CloudFront.
+ * @param expectedBuildId the build id this deploy just published (from the
+ *   `HostingBuildId` CDK output). When omitted, the function falls back to the
+ *   legacy placeholder-vs-real check (see the module header).
+ *
+ * - `live`    — the served config proves the NEW build is live:
+ *     • with an `expectedBuildId`: the config's `__blocksBuildId` equals it;
+ *     • without one (legacy): a non-placeholder config object is served.
+ * - `pending` — the new build is NOT yet live:
+ *     • the synth placeholder (`{_placeholder:true}`) is still served; or
+ *     • a real config is served but its `__blocksBuildId` is missing or does
+ *       not match the expected id (a POP still routing to the OLD build).
  * - `unknown` — the body is not JSON we recognize (an error page, an empty
  *   body, a truncated response); treated like `pending` so the loop keeps
  *   waiting rather than declaring a false "live".
  */
-export function classifyConfigBody(body: string): 'live' | 'pending' | 'unknown' {
+export function classifyConfigBody(
+  body: string,
+  expectedBuildId?: string,
+): 'live' | 'pending' | 'unknown' {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
@@ -57,19 +90,47 @@ export function classifyConfigBody(body: string): 'live' | 'pending' | 'unknown'
     return 'unknown';
   }
   if (parsed === null || typeof parsed !== 'object') return 'unknown';
-  // The placeholder is exactly `{_placeholder:true}`. Any config without that
-  // marker is the real deployed config — we do not require a specific field so
-  // this stays correct for backend-config-only apps whose config carries no
-  // `apiUrl`. `in` narrows without a cast; the value reads as `unknown`, which
-  // `=== true` accepts.
+  // The placeholder is exactly `{_placeholder:true}` — never the new build.
   if ('_placeholder' in parsed && parsed._placeholder === true) return 'pending';
+
+  // Strong path: match the per-deploy build id. A served config whose
+  // `__blocksBuildId` differs from (or lacks) the expected id is a POP still
+  // routing to the OLD build — keep waiting rather than report a false live.
+  if (expectedBuildId !== undefined) {
+    return readStringProp(parsed, BLOCKS_BUILD_ID_CONFIG_KEY) === expectedBuildId
+      ? 'live'
+      : 'pending';
+  }
+
+  // Legacy fallback (no expected id available): any non-placeholder config
+  // object counts as live. Reliable on a first deploy; best-effort on a
+  // re-deploy (a byte-identical old config can read as live).
   return 'live';
+}
+
+/**
+ * Read a string-valued property from an object without a type cast. Returns
+ * `undefined` when the key is absent or the value is not a string, so a
+ * non-string `__blocksBuildId` never accidentally matches an expected id.
+ */
+function readStringProp(obj: object, key: string): string | undefined {
+  if (!(key in obj)) return undefined;
+  const record: Record<string, unknown> = { ...obj };
+  const value = record[key];
+  return typeof value === 'string' ? value : undefined;
 }
 
 /** Options for {@link waitForLiveBuild}. */
 export interface WaitForLiveOptions {
   /** Public frontend origin, e.g. `https://d123.cloudfront.net` (no trailing slash required). */
   hostingUrl: string;
+  /**
+   * The build id this deploy published (from the `HostingBuildId` CDK output).
+   * When set, the poll declares live only once the served config's
+   * `__blocksBuildId` matches it — correct across re-deploys. When omitted, the
+   * poll falls back to the legacy placeholder-vs-real check.
+   */
+  expectedBuildId?: string;
   /** Overall budget in milliseconds before giving up. */
   timeoutMs: number;
   /** Delay between polls in milliseconds. */
@@ -96,8 +157,15 @@ export interface WaitForLiveResult {
 /** Build the cache-busting probe URL for the config under a frontend origin. */
 export function buildProbeUrl(hostingUrl: string, now: number): string {
   const base = hostingUrl.replace(/\/+$/, '');
-  // A unique query string defeats any intermediary/edge cache so each poll
-  // reflects the current origin state, not a cached earlier body.
+  // The primary edge-freshness guarantee is the config's OWN cache-control: it
+  // is deployed `max-age=60, must-revalidate` and registered as a no-cache path
+  // (hosting.ts), so CloudFront revalidates it against the origin rather than
+  // serving a long-lived cached body. The viewer function rewrites this path to
+  // `/builds/<id>/.blocks-sandbox/config.json`, and a query string does NOT
+  // change that rewritten S3 cache key — so this `_blocks_live` param does not
+  // force a fresh ORIGIN fetch at the edge; it only defeats any intermediary /
+  // browser cache on the polling client so each poll reflects the latest body
+  // the edge returns.
   return `${base}${CONFIG_PROBE_PATH}?_blocks_live=${now}`;
 }
 
@@ -109,7 +177,7 @@ export function buildProbeUrl(hostingUrl: string, now: number): string {
  * `live: false` result (warn + non-zero exit), never emitting a false signal.
  */
 export async function waitForLiveBuild(options: WaitForLiveOptions): Promise<WaitForLiveResult> {
-  const { hostingUrl, timeoutMs, intervalMs, fetch, now, sleep, onAttempt } = options;
+  const { hostingUrl, expectedBuildId, timeoutMs, intervalMs, fetch, now, sleep, onAttempt } = options;
   const start = now();
   let attempt = 0;
 
@@ -120,7 +188,7 @@ export async function waitForLiveBuild(options: WaitForLiveOptions): Promise<Wai
     try {
       const res = await fetch(buildProbeUrl(hostingUrl, now()));
       if (res.ok) {
-        result = classifyConfigBody(await res.text());
+        result = classifyConfigBody(await res.text(), expectedBuildId);
       } else {
         result = 'error';
         detail = `HTTP ${res.status}`;

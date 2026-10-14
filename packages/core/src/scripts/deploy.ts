@@ -170,6 +170,16 @@ export async function deploy(options: DeployOptions) {
     const hostingUrl = Object.entries(stackOutputs).find(([key]) => 
       key.includes('Hosting') && key.includes('Url')
     )?.[1] ?? earlyHostingUrl;
+
+    // Build id this deploy published, surfaced as the `HostingBuildId` output.
+    // Lets the liveness poll confirm the config CloudFront serves is THIS
+    // deploy's, not a byte-identical config from the previous build still being
+    // served at an edge POP during cutover. Absent for a backend-only app or an
+    // older stack that predates the output — the poll then falls back to the
+    // placeholder-vs-real check.
+    const expectedBuildId = Object.entries(stackOutputs).find(([key]) =>
+      key.includes('Hosting') && key.includes('BuildId')
+    )?.[1];
     
     if (!apiUrl) {
       throw new Error('Could not find API URL in CDK outputs');
@@ -198,6 +208,7 @@ export async function deploy(options: DeployOptions) {
       console.log(`\n⏳ Waiting for the new build to go live at ${hostingUrl} (up to ${timeoutMs / 1000}s)…`);
       const result = await waitForLiveBuild({
         hostingUrl,
+        expectedBuildId,
         timeoutMs,
         intervalMs: WAIT_LIVE_INTERVAL_MS,
         fetch: (url) => fetch(url, { cache: 'no-store' }),

@@ -54,28 +54,68 @@ function fakeClock(startMs = 0) {
   };
 }
 
+const BUILD_ID = 'mg7k2p-ab12cd34';
 const REAL = JSON.stringify({ apiUrl: '/aws-blocks/api', environment: 'production' });
+const REAL_WITH_ID = JSON.stringify({
+  apiUrl: '/aws-blocks/api',
+  environment: 'production',
+  __blocksBuildId: BUILD_ID,
+});
+const REAL_WITH_OLD_ID = JSON.stringify({
+  apiUrl: '/aws-blocks/api',
+  environment: 'production',
+  __blocksBuildId: 'OLD-9z9z9z-00000000',
+});
 const PLACEHOLDER = JSON.stringify({ _placeholder: true });
 
 describe('classifyConfigBody', () => {
-  it('treats a non-placeholder config object as live', () => {
-    assert.equal(classifyConfigBody(REAL), 'live');
-    // Backend-config-only app whose config carries no apiUrl is still live.
-    assert.equal(classifyConfigBody(JSON.stringify({ environment: 'production' })), 'live');
-    assert.equal(classifyConfigBody(JSON.stringify({})), 'live');
+  describe('with an expected build id (the strong, re-deploy-correct path)', () => {
+    it('is live only when the served config carries the matching build id', () => {
+      assert.equal(classifyConfigBody(REAL_WITH_ID, BUILD_ID), 'live');
+    });
+
+    it('is pending when the served config carries a DIFFERENT build id (stale POP)', () => {
+      // The exact re-deploy scenario this feature targets: a byte-plausible
+      // real config from the OLD build is served during cutover — must NOT read
+      // as live.
+      assert.equal(classifyConfigBody(REAL_WITH_OLD_ID, BUILD_ID), 'pending');
+    });
+
+    it('is pending when the served config has no build id at all', () => {
+      assert.equal(classifyConfigBody(REAL, BUILD_ID), 'pending');
+      // {} no longer short-circuits to live once a discriminator is expected.
+      assert.equal(classifyConfigBody(JSON.stringify({}), BUILD_ID), 'pending');
+    });
+
+    it('is pending when the build id is present but not a string', () => {
+      assert.equal(classifyConfigBody(JSON.stringify({ __blocksBuildId: 123 }), BUILD_ID), 'pending');
+    });
+
+    it('is still pending for the synth placeholder', () => {
+      assert.equal(classifyConfigBody(PLACEHOLDER, BUILD_ID), 'pending');
+    });
   });
 
-  it('treats the synth placeholder as pending', () => {
-    assert.equal(classifyConfigBody(PLACEHOLDER), 'pending');
-    assert.equal(classifyConfigBody(JSON.stringify({ _placeholder: true, extra: 1 })), 'pending');
+  describe('without an expected build id (legacy fallback)', () => {
+    it('treats a non-placeholder config object as live', () => {
+      assert.equal(classifyConfigBody(REAL), 'live');
+      // Backend-config-only app whose config carries no apiUrl is still live.
+      assert.equal(classifyConfigBody(JSON.stringify({ environment: 'production' })), 'live');
+      assert.equal(classifyConfigBody(JSON.stringify({})), 'live');
+    });
+
+    it('treats the synth placeholder as pending', () => {
+      assert.equal(classifyConfigBody(PLACEHOLDER), 'pending');
+      assert.equal(classifyConfigBody(JSON.stringify({ _placeholder: true, extra: 1 })), 'pending');
+    });
   });
 
   it('treats unparseable / non-object bodies as unknown (keep waiting, never false-live)', () => {
-    assert.equal(classifyConfigBody('<html>403</html>'), 'unknown');
-    assert.equal(classifyConfigBody(''), 'unknown');
-    assert.equal(classifyConfigBody('null'), 'unknown');
-    assert.equal(classifyConfigBody('"a string"'), 'unknown');
-    assert.equal(classifyConfigBody('42'), 'unknown');
+    assert.equal(classifyConfigBody('<html>403</html>', BUILD_ID), 'unknown');
+    assert.equal(classifyConfigBody('', BUILD_ID), 'unknown');
+    assert.equal(classifyConfigBody('null', BUILD_ID), 'unknown');
+    assert.equal(classifyConfigBody('"a string"', BUILD_ID), 'unknown');
+    assert.equal(classifyConfigBody('42', BUILD_ID), 'unknown');
   });
 });
 
@@ -124,6 +164,40 @@ describe('waitForLiveBuild', () => {
     });
     assert.equal(r.live, true);
     assert.equal(r.attempts, 3);
+  });
+
+  it('with an expected build id, waits through a stale OLD-build config and goes live only on the matching id', async () => {
+    const clk = fakeClock();
+    // A POP serves the previous build's (byte-plausible) real config first,
+    // then the new build's config carrying the expected id.
+    const fetch = seqFetch([res(200, REAL_WITH_OLD_ID), res(200, REAL_WITH_OLD_ID), res(200, REAL_WITH_ID)]);
+    const r = await waitForLiveBuild({
+      hostingUrl: 'https://d.cloudfront.net',
+      expectedBuildId: BUILD_ID,
+      timeoutMs: 60_000,
+      intervalMs: 5_000,
+      fetch,
+      now: clk.now,
+      sleep: clk.sleep,
+    });
+    assert.equal(r.live, true);
+    assert.equal(r.attempts, 3);
+  });
+
+  it('with an expected build id, times out if only the OLD-build config is ever served', async () => {
+    const clk = fakeClock();
+    const fetch = seqFetch([res(200, REAL_WITH_OLD_ID)]);
+    const r = await waitForLiveBuild({
+      hostingUrl: 'https://d.cloudfront.net',
+      expectedBuildId: BUILD_ID,
+      timeoutMs: 20_000,
+      intervalMs: 5_000,
+      fetch,
+      now: clk.now,
+      sleep: clk.sleep,
+    });
+    assert.equal(r.live, false);
+    assert.equal(r.reason, 'timeout');
   });
 
   it('retries through transient network/edge errors (never a false live)', async () => {

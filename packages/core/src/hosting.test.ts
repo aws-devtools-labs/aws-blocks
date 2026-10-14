@@ -671,6 +671,29 @@ describe('Hosting', () => {
       assert.ok(Object.keys(customResources).length >= 1, 'Should have BucketDeployment even without api');
     });
 
+    it('emits a HostingBuildId output so a post-deploy liveness poll can match the served build', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'HostingBuildIdOutputStack');
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const template = Template.fromStack(stack);
+      // CDK suffixes a nested construct's CfnOutput logical id with a hash
+      // (e.g. `HostingHostingBuildId8EDD8441`), and deploy.ts matches it by the
+      // same `Hosting`+`BuildId` substring it uses on outputs.json — so match
+      // by substring here too rather than an exact logical id.
+      const outputs = template.toJSON().Outputs ?? {};
+      const buildIdKeys = Object.keys(outputs).filter(
+        (k) => k.includes('Hosting') && k.includes('BuildId'),
+      );
+      assert.equal(buildIdKeys.length, 1, 'exactly one HostingBuildId output should be emitted');
+      // The value is the generated build id — a non-empty literal string.
+      const value: unknown = outputs[buildIdKeys[0]].Value;
+      assert.ok(typeof value === 'string' && value.length > 0, 'HostingBuildId output value should be a non-empty build id');
+    });
+
     it('does not inject BLOCKS_API_URL into SSR Lambda when api is omitted', () => {
       createNextjsBuildOutput(tmpDir);
 
