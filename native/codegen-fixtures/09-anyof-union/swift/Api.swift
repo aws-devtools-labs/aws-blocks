@@ -54,19 +54,17 @@ public final class Api: Sendable {
             public func encode(to encoder: Encoder) throws {
                 switch self {
                 case .query_Variant0:
-                    var c = encoder.container(keyedBy: EmptyKey.self)
-                    _ = c
+                    _ = encoder.container(keyedBy: EmptyKey.self)
                 case .query_Variant1(let payload):
                     try payload.encode(to: encoder)
                 }
             }
 
             public init(from decoder: Decoder) throws {
-                var lastError: Error?
-                do {
-                    self = .query_Variant1(try Query_Variant1(from: decoder))
+                if let value = try? Query_Variant1(from: decoder) {
+                    self = .query_Variant1(value)
                     return
-                } catch { lastError = error }
+                }
                 self = .query_Variant0
             }
 

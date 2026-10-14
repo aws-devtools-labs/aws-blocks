@@ -412,30 +412,29 @@ public struct SwiftCodeGenerator {
                 lines.append("\(indent)            try payload.encode(to: encoder)")
             } else {
                 lines.append("\(indent)        case .\(caseName):")
-                lines.append("\(indent)            var c = encoder.container(keyedBy: EmptyKey.self)")
-                lines.append("\(indent)            _ = c")
+                lines.append("\(indent)            _ = encoder.container(keyedBy: EmptyKey.self)")
             }
         }
         lines.append("\(indent)        }")
         lines.append("\(indent)    }")
         lines.append("")
-        lines.append("\(indent)    public init(from decoder: Decoder) throws {")
-        lines.append("\(indent)        var lastError: Error?")
-        for variant in variants {
-            let caseName = camelCase(variant.name)
-            let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
-            if let payload = variant.payloadTypeName ?? (hasSynthBody ? variant.name : nil) {
-                lines.append("\(indent)        do {")
-                lines.append("\(indent)            self = .\(caseName)(try \(payload)(from: decoder))")
-                lines.append("\(indent)            return")
-                lines.append("\(indent)        } catch { lastError = error }")
-            }
-        }
         let nestedFieldless = variants.first(where: {
             $0.fields.isEmpty && $0.payloadTypeName == nil
                 && $0.additionalPropertiesType == nil
                 && $0.embeddedUnion == nil
         })
+        lines.append("\(indent)    public init(from decoder: Decoder) throws {")
+        // With a fieldless fallback no error is rethrown, so none is kept.
+        if nestedFieldless == nil {
+            lines.append("\(indent)        var lastError: Error?")
+        }
+        for variant in variants {
+            let caseName = camelCase(variant.name)
+            let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
+            if let payload = variant.payloadTypeName ?? (hasSynthBody ? variant.name : nil) {
+                appendVariantAttempt(caseName, payload: payload, keepsError: nestedFieldless == nil, indent: indent + "        ", lines: &lines)
+            }
+        }
         if let nestedFieldless {
             lines.append("\(indent)        self = .\(camelCase(nestedFieldless.name))")
         } else {
@@ -1063,32 +1062,31 @@ public struct SwiftCodeGenerator {
                 lines.append("            try payload.encode(to: encoder)")
             } else {
                 lines.append("        case .\(caseName):")
-                lines.append("            var c = encoder.container(keyedBy: EmptyKey.self)")
-                lines.append("            _ = c")
+                lines.append("            _ = encoder.container(keyedBy: EmptyKey.self)")
             }
         }
         lines.append("        }")
         lines.append("    }")
         lines.append("")
+        let fieldlessFirst = variants.first(where: {
+            $0.fields.isEmpty && $0.payloadTypeName == nil
+                && $0.additionalPropertiesType == nil
+                && $0.embeddedUnion == nil
+        })
         lines.append("    public init(from decoder: Decoder) throws {")
-        lines.append("        var lastError: Error?")
+        // With a fieldless fallback no error is rethrown, so none is kept.
+        if fieldlessFirst == nil {
+            lines.append("        var lastError: Error?")
+        }
         for variant in variants {
             let caseName = camelCase(variant.name)
             let hasSynthBody = !variant.fields.isEmpty
                 || variant.additionalPropertiesType != nil
                 || variant.embeddedUnion != nil
             if let payload = variant.payloadTypeName ?? (hasSynthBody ? variant.name : nil) {
-                lines.append("        do {")
-                lines.append("            self = .\(caseName)(try \(payload)(from: decoder))")
-                lines.append("            return")
-                lines.append("        } catch { lastError = error }")
+                appendVariantAttempt(caseName, payload: payload, keepsError: fieldlessFirst == nil, indent: "        ", lines: &lines)
             }
         }
-        let fieldlessFirst = variants.first(where: {
-            $0.fields.isEmpty && $0.payloadTypeName == nil
-                && $0.additionalPropertiesType == nil
-                && $0.embeddedUnion == nil
-        })
         if let fieldlessFirst {
             lines.append("        self = .\(camelCase(fieldlessFirst.name))")
         } else {
@@ -1447,6 +1445,23 @@ public struct SwiftCodeGenerator {
             return name
         case .transferable(let blocksType, let typeArgs):
             return transferableTypeName(blocksType, typeArgs) { swiftTypeName($0, emitted: &emitted, modelLines: &modelLines) }
+        }
+    }
+}
+
+extension SwiftCodeGenerator {
+    /// One variant attempt in a union's `init(from:)`; with a fieldless fallback no error is kept to rethrow.
+    func appendVariantAttempt(_ caseName: String, payload: String, keepsError: Bool, indent: String, lines: inout [String]) {
+        if keepsError {
+            lines.append("\(indent)do {")
+            lines.append("\(indent)    self = .\(caseName)(try \(payload)(from: decoder))")
+            lines.append("\(indent)    return")
+            lines.append("\(indent)} catch { lastError = error }")
+        } else {
+            lines.append("\(indent)if let value = try? \(payload)(from: decoder) {")
+            lines.append("\(indent)    self = .\(caseName)(value)")
+            lines.append("\(indent)    return")
+            lines.append("\(indent)}")
         }
     }
 }
