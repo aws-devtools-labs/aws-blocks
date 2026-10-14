@@ -1303,7 +1303,8 @@ class KotlinCodeGenerator(
         } else if (returnType == ClassNames.unknownTransferable) {
             // An unbound tag here would otherwise fail generation; degrade to a checked carrier.
             // Reached only on exact equality with the non-nullable name, so no null guard: a
-            // nullable unbound result still fails generation (codegen-design.md:181).
+            // nullable unbound result still fails generation (see docs/native-clients/
+            // codegen-design.md § Unbound transferables).
             val tag = unwrapNullableTransferable(operation.result.type)!!.transferableName
             funBuilder.addStatement("val result = client.execute(request)")
             funBuilder.addCode(

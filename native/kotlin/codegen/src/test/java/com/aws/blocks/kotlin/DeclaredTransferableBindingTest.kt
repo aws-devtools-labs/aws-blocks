@@ -252,8 +252,8 @@ class DeclaredTransferableBindingTest : FunSpec({
             )
         }
 
-        // codegen-design.md:181 - a nullable result on an unbound path still fails generation,
-        // including the two paths this change adds.
+        // docs/native-clients/codegen-design.md § Unbound transferables: a nullable result on an
+        // unbound path still fails generation, including the two paths this change adds.
         test("a nullable result on an excluded package still fails generation") {
             shouldThrow<UnsupportedOperationException> {
                 generate(
