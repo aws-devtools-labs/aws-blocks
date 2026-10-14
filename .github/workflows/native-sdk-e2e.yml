@@ -15,8 +15,11 @@ concurrency:
   group: native-e2e-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Least privilege: no OIDC token at workflow scope. Only the jobs that assume
+# an AWS role (configure-aws-credentials) get `id-token: write`, per job, so
+# jobs that build PR-head code (npm ci, gradlew, swift build) cannot mint AWS
+# credentials.
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -347,6 +350,9 @@ jobs:
   # dispatch. Deploy uses `npm run deploy` (aws-blocks/scripts/deploy.ts ->
   # aws-blocks/index.cdk.ts); the API serves JSON-RPC under `/aws-blocks/api`.
   dart-e2e-sandbox:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: Dart E2E (sandbox)
     needs: [detect-changes, dart-e2e]
     if: >-
@@ -489,6 +495,9 @@ jobs:
         run: npm run destroy || true
 
   swift-e2e-sandbox:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: Swift E2E (sandbox)
     needs: [detect-changes, swift-e2e]
     if: >-
@@ -587,6 +596,9 @@ jobs:
         run: npm run destroy || true
 
   kotlin-e2e-sandbox:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: Kotlin E2E (${{ matrix.label }}, sandbox)
     needs: [detect-changes, kotlin-e2e]
     if: >-

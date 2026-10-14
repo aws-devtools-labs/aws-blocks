@@ -25,8 +25,11 @@ concurrency:
   group: pr-checks-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Least privilege: no OIDC token at workflow scope. Only the jobs that assume
+# an AWS role (configure-aws-credentials) get `id-token: write`, per job, so
+# jobs that build PR-head code (npm ci, gradlew, swift build) cannot mint AWS
+# credentials.
 permissions:
-  id-token: write
   contents: read
 
 env:
@@ -302,6 +305,9 @@ jobs:
         run: node scripts/ci/templates-e2e.mjs --skip-publish
 
   e2e-sandbox:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: E2E Sandbox
     needs: [build-and-test-local, detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
@@ -340,6 +346,9 @@ jobs:
         run: npm run test:e2e:sandbox
 
   e2e-sandbox-vpc:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: E2E VPC Smoke
     needs: [build-and-test-local, detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
@@ -394,6 +403,9 @@ jobs:
         run: npm run test:e2e:sandbox:vpc
 
   e2e-production:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: E2E Production
     needs: [build-and-test-local, detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
@@ -432,6 +444,9 @@ jobs:
         run: npm run test:e2e:production
 
   e2e-supabase:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: E2E Supabase
     needs: [build-and-test-local, detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
@@ -506,6 +521,9 @@ jobs:
         run: npm run test:e2e:supabase
 
   e2e-hosting:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: E2E Hosting (${{ matrix.framework }})
     timeout-minutes: 60
     needs: [build-and-test-local, detect-changes]
