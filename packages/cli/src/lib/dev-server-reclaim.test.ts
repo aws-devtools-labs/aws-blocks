@@ -13,6 +13,7 @@ import {
   parsePidRecord,
   isPidAlive,
   isPortOpen,
+  startupErrorHint,
   type DevServerPidRecord,
   type ReclaimResult,
 } from './dev-server.js';
@@ -426,5 +427,24 @@ describe('createBindRetryController — bounded EADDRINUSE reclaim-and-rebind', 
     // A failed reclaim still schedules the next attempt (the budget, not reclaim
     // success, bounds the loop).
     assert.strictEqual(c.scheduled.length, 1);
+  });
+});
+
+// ── startupErrorHint — actionable guidance for non-EADDRINUSE startup failures ──
+describe('startupErrorHint', () => {
+  it('guides to a higher port on EACCES (privileged port)', () => {
+    const hint = startupErrorHint(Object.assign(new Error('listen EACCES'), { code: 'EACCES' }), 80);
+    assert.match(hint, /--port/);
+    assert.match(hint, /privileged/i);
+  });
+
+  it('explains an unavailable address on EADDRNOTAVAIL', () => {
+    const hint = startupErrorHint(Object.assign(new Error('x'), { code: 'EADDRNOTAVAIL' }), 3000);
+    assert.match(hint, /not available/i);
+  });
+
+  it('falls back to a --debug pointer for an unknown code', () => {
+    const hint = startupErrorHint(Object.assign(new Error('x'), { code: 'EOTHER' }), 3000);
+    assert.match(hint, /--debug/);
   });
 });

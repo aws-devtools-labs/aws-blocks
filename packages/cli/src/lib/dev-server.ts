@@ -409,6 +409,27 @@ export function reclaimMessage(port: number, result: ReclaimResult, subject: str
   return `⚠️  Port ${port} is in use and could not be reclaimed automatically (no owner PID found).`;
 }
 
+/**
+ * Map a non-EADDRINUSE startup/bind failure to one actionable line.
+ *
+ * EADDRINUSE has its own reclaim-and-retry path; this covers the other errno
+ * codes a `server.listen` can fail with, so the user gets a next step instead
+ * of only the raw message. Falls back to a generic `--debug` pointer.
+ */
+export function startupErrorHint(err: NodeJS.ErrnoException, port: number): string {
+  switch (err.code) {
+    case 'EACCES':
+      return (
+        `Port ${port} needs elevated privileges (ports below 1024 are privileged). ` +
+        'Use a higher port with `--port <n>` (for example `blocks dev --port 3000`).'
+      );
+    case 'EADDRNOTAVAIL':
+      return `The address for port ${port} is not available on this host. Check the port and any bind configuration.`;
+    default:
+      return 'Run again with --debug for the full stack trace.';
+  }
+}
+
 /** Bounded retry policy for binding the `:3000` front door under EADDRINUSE. */
 export interface PortBindRetryPolicy {
   /** Total bind attempts tolerated before giving up (exit non-zero). */
@@ -479,8 +500,8 @@ export function createBindRetryController(
     if (!decision.retry) {
       deps.warn(
         `\n❌ Port ${port} is still in use after ${policy.maxAttempts} ` +
-        `attempts to reclaim it — another process is holding :${port}. Stop it (or run the ` +
-        `cleanup script) and retry \`npm run dev\`.\n`,
+        `attempts to reclaim it — another process is holding :${port}. Stop that process (or run the ` +
+        `cleanup script), or start on a different port with \`blocks dev --port <n>\`, then retry.\n`,
       );
       deps.onExhausted();
       return;
@@ -680,7 +701,21 @@ export async function startDevServer(options: DevServerOptions) {
   // import(): the sandbox dev server is a child `npx tsx watch` process started
   // with NODE_OPTIONS='', so a runtime import() of the .ts backend is otherwise
   // handled by Node's native loader and throws `Unknown file extension ".ts"`.
-  const backend = await importBackend(backendUrl, import.meta.url);
+  let backend: Record<string, any>;
+  try {
+    backend = await importBackend(backendUrl, import.meta.url);
+  } catch (err) {
+    // The backend module failed to load or threw while its top-level code ran
+    // (a bad route definition, a throwing constructor, a syntax error). Name the
+    // file so the user knows where to look, then re-throw the original so the
+    // top-level handler prints its message (and the stack under --debug).
+    logError(
+      `Failed to load the backend at ${resolvedPath}.\n` +
+        '  The error below comes from your backend code (or an import it pulls in).\n' +
+        '  Fix it there, then restart `blocks dev` (run with --debug for the full stack trace).',
+    );
+    throw err;
+  }
 
   // 3. Read collected dev attachments and clean up
   const devAttachments: string[] = (globalThis as any).__BLOCKS_DEV_ATTACHMENTS__;
@@ -1079,7 +1114,10 @@ export async function startDevServer(options: DevServerOptions) {
       duration: Date.now() - devStartTime,
       error: { code: 'UNKNOWN', phase: 'startup' },
     });
-    logError(`Dev server failed to start: ${err.message}`);
+    logError(
+      `Dev server failed to start: ${err.message}\n` +
+        `  ${startupErrorHint(err, port)}`,
+    );
     process.exit(1);
   });
 
