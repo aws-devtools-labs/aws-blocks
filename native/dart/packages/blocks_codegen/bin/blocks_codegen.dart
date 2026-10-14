@@ -21,6 +21,12 @@ void main(List<String> args) {
           'hard error. By default they are auto-disambiguated with a '
           'deterministic suffix and reported as a warning.',
     )
+    ..addMultiOption(
+      'native-package-opt-out',
+      help:
+          'Logical native package identity whose transferable bindings are '
+          'not applied, so its results stay UnknownTransferable. Repeatable.',
+    )
     ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
 
   final ArgResults results;
@@ -65,16 +71,22 @@ void main(List<String> args) {
 
   final contents = specFile.readAsStringSync();
   final failOnCollision = results['fail-on-collision'] as bool;
-  final rpcModel = const OpenRpcParser().parse(contents);
+  final optedOutPackages = (results['native-package-opt-out'] as List<String>)
+      .toSet();
   final String output;
   try {
+    final rpcModel = const OpenRpcParser().parse(contents);
     final codegenModel = CodegenModelBuilder(
       failOnCollision: failOnCollision,
+      optedOutPackages: optedOutPackages,
     ).build(rpcModel);
     for (final w in codegenModel.warnings) {
       stderr.writeln('Warning: $w');
     }
     output = const DartCodeGenerator().generate(codegenModel);
+  } on FormatException catch (e) {
+    stderr.writeln('Error: ${e.message}');
+    exit(1);
   } on NamingConflictException catch (e) {
     stderr.writeln('Error: ${e.message}');
     exit(1);

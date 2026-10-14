@@ -1,5 +1,7 @@
-/// Fallback for a transferable whose tag has no runtime binding: holds the
-/// [tag] and raw [descriptor] without hydrating them.
+import 'package:blocks_runtime/src/transferable_descriptor.dart';
+
+/// Fallback for a direct-result transferable whose tag has no runtime binding
+/// on this platform.
 class UnknownTransferable {
   final String tag;
 
@@ -15,30 +17,11 @@ class UnknownTransferable {
     Object? json, {
     required String expectedTag,
   }) {
-    if (json is! Map<String, dynamic>) {
-      throw FormatException(
-        "UnknownTransferable for '$expectedTag' expected a JSON object "
-        'descriptor',
-      );
-    }
-    final tag = json['__blocks'];
-    if (tag is! String) {
-      throw FormatException(
-        "UnknownTransferable for '$expectedTag' expected a string "
-        "'__blocks' tag",
-      );
-    }
-    if (tag.isEmpty) {
-      throw FormatException(
-        "UnknownTransferable for '$expectedTag' expected a non-empty "
-        "'__blocks' tag",
-      );
-    }
-    if (tag != expectedTag) {
-      throw FormatException(
-        "UnknownTransferable expected tag '$expectedTag', got '$tag'",
-      );
-    }
-    return UnknownTransferable._(tag: tag, descriptor: json);
+    final descriptor = validateTransferableDescriptor(
+      json,
+      expectedTag: expectedTag,
+      subject: 'UnknownTransferable',
+    );
+    return UnknownTransferable._(tag: expectedTag, descriptor: descriptor);
   }
 }

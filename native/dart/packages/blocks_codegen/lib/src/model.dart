@@ -184,6 +184,43 @@ class TransferableRef extends TypeRef {
   const TransferableRef({required this.blocksType, this.typeArgs = const []});
 }
 
+/// The `platforms.dart` entry of an `x-blocks-native-packages` package.
+class DartNativePackage {
+  const DartNativePackage({required this.name, required this.library});
+
+  /// pub package name: the key under `dependencies` in `pubspec.yaml`.
+  final String name;
+
+  /// Entry library in `lib/`, imported as `package:<name>/<library>`.
+  final String library;
+}
+
+/// An `x-blocks-native-bindings` entry, before validation.
+class NativeBinding {
+  const NativeBinding({
+    required this.kind,
+    required this.tag,
+    required this.package,
+    required this.export,
+    required this.abi,
+    required this.genericArity,
+  });
+
+  /// Open enumeration; only `transferable` is defined in schema 1.
+  final String kind;
+
+  final String tag;
+
+  /// A key of [RpcModel.nativePackages].
+  final String package;
+
+  final String export;
+
+  final String abi;
+
+  final int genericArity;
+}
+
 /// A parameter in an RPC method.
 class RpcParam {
   final String name;
@@ -234,11 +271,18 @@ class RpcModel {
   final Map<String, TypeRef> schemas;
 
   final List<Server> servers;
+
+  final Map<String, DartNativePackage?> nativePackages;
+
+  final List<NativeBinding> nativeBindings;
+
   const RpcModel({
     required this.title,
     required this.version,
     required this.methods,
     required this.schemas,
     this.servers = const [],
+    this.nativePackages = const {},
+    this.nativeBindings = const [],
   });
 }
