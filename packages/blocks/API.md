@@ -25,6 +25,7 @@ import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { AppSettingErrors } from '@aws-blocks/bb-app-setting';
 import { AppSettingOptions } from '@aws-blocks/bb-app-setting';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
+import { AsyncJobBaseOptions } from '@aws-blocks/bb-async-job';
 import { AsyncJobContext } from '@aws-blocks/bb-async-job';
 import { AsyncJobErrors } from '@aws-blocks/bb-async-job';
 import { AsyncJobOptions } from '@aws-blocks/bb-async-job';
@@ -234,6 +235,8 @@ export { AppSettingErrors }
 export { AppSettingOptions }
 
 export { AsyncJob }
+
+export { AsyncJobBaseOptions }
 
 export { AsyncJobContext }
 

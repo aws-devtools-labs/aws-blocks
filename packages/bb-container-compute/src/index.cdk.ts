@@ -30,10 +30,11 @@ import type { ContainerScaling, ScalingSignal, ScopeParent } from '@aws-blocks/c
 import { getConfigDeployment, getConfigLocation } from '@aws-blocks/core/cdk';
 import {
 	ComputeBase,
+	getBlocksRoot,
+	getOrCreateOnRoot,
 	getOrCreateVpc,
 	getVpcContext,
 	initializeVpc,
-	isVpcInitialized,
 	registerVpcRequirements,
 } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
@@ -103,25 +104,27 @@ export class ContainerCompute extends ComputeBase {
 		this.scalingConfig = options?.scaling;
 
 		// A Fargate service needs a VPC. Declare the requirement centrally (so a
-		// census of the app still shows a VPC is needed) and then materialize the
-		// shared VPC now — the service is constructed here, during the backend
-		// import, well before create()'s finalizeVpc runs. initializeVpc is guarded
-		// so whichever of {this constructor, finalizeVpc} runs first wins and the
-		// security group + context are created exactly once (isVpcInitialized).
+		// census of the app still shows a VPC is needed), then resolve one now —
+		// the service is constructed here, during the backend import, well before
+		// create()'s finalizeVpc runs.
 		registerVpcRequirements(this as unknown as { readonly fullId: string } & typeof this, {
 			requiresVpc: true,
 			requiresEgress: true,
 		});
-		const stack = cdk.Stack.of(this);
-		// Honor an app-provided VPC. If the app passed `defaults.vpc.network`, the
-		// backend initialized the context before this import ran, so it's already
-		// discoverable here — reuse it (bring-your-own VPC must cover compute too,
-		// mirroring how bb-data co-locates on a shared VPC when one exists). Only
-		// derive the shared lazy VPC when nothing was provided.
+		const root = getBlocksRoot(this);
+		// Honor a customer-provided VPC: if `defaults.vpc.network` was set, the
+		// backend published a `source: 'provided'` context before this import, so
+		// it's already discoverable here — reuse it. Otherwise derive the one shared
+		// Blocks VPC on the backend root (fixed id, so N containers share ONE VPC and
+		// placement is order-independent) and publish it as a `source: 'derived'`
+		// context. The `derived` tag is what keeps a stateful block (Database) from
+		// auto-joining this VPC: joining a Blocks-derived VPC would move an existing
+		// cluster on a routine change (e.g. adding this container) and replace it.
+		// Stateless compute (this container, Lambda) shares it freely.
 		const existingContext = getVpcContext(this);
-		const vpc = existingContext?.vpc ?? getOrCreateVpc(stack);
-		if (!isVpcInitialized(stack)) {
-			initializeVpc(stack, { network: vpc });
+		if (!existingContext) {
+			const derived = getOrCreateVpc(root);
+			initializeVpc(root, { network: derived }, 'derived');
 		}
 		const vpcContext = getVpcContext(this);
 
@@ -180,7 +183,7 @@ export class ContainerCompute extends ComputeBase {
 		});
 
 		this.service = new ecs.FargateService(this, 'Service', {
-			cluster: this.getOrCreateCluster(vpc),
+			cluster: this.getOrCreateCluster(vpcContext.vpc),
 			taskDefinition: this.taskDefinition,
 			desiredCount: this.scalingConfig?.minInstances ?? 1,
 			vpcSubnets: vpcContext.computeSubnets,
@@ -336,15 +339,17 @@ export class ContainerCompute extends ComputeBase {
 
 	/**
 	 * Append the `ecs-tasks` service principal to the shared role's assume-role
-	 * policy, once per stack. `assumeRolePolicy` exists only on a concrete
-	 * `iam.Role`; core always creates BlocksRole concretely, so narrow and fail
-	 * loud if that ever changes.
+	 * policy, once per role. Keyed on the **role object** (not the stack) so two
+	 * backends sharing one `cdk.Stack` each stamp their own `executionRole` — a
+	 * stack-keyed guard would add the trust to the first backend's role only, and
+	 * the second backend's tasks could not assume their role. `assumeRolePolicy`
+	 * exists only on a concrete `iam.Role`; core always creates BlocksRole
+	 * concretely, so narrow and fail loud if that ever changes.
 	 */
 	private appendEcsTrustOnce(role: cdk.aws_iam.IRole): void {
-		const stack = cdk.Stack.of(this);
 		const KEY = Symbol.for('BLOCKS_CONTAINER_ECS_TRUST');
-		const stackAny = stack as unknown as Record<symbol, boolean | undefined>;
-		if (stackAny[KEY]) return;
+		const roleAny = role as unknown as Record<symbol, boolean | undefined>;
+		if (roleAny[KEY]) return;
 		if (!(role instanceof Role)) {
 			throw new Error(
 				'ContainerCompute requires the shared Blocks execution role to be a concrete iam.Role to add its ecs-tasks trust',
@@ -357,26 +362,24 @@ export class ContainerCompute extends ComputeBase {
 				actions: ['sts:AssumeRole'],
 			}),
 		);
-		stackAny[KEY] = true;
+		roleAny[KEY] = true;
 	}
 
 	/**
-	 * One shared ECS cluster per stack (keyed on the stack) so multiple container
-	 * computes share it rather than each standing up their own.
+	 * One shared ECS cluster per backend root (BlocksStack/BlocksBackend) so
+	 * multiple container computes share it rather than each standing up their own,
+	 * and so two backends in one stack get independent clusters. Created on the
+	 * root at a fixed id, mirroring the shared VPC.
 	 */
 	private getOrCreateCluster(vpc: ec2.IVpc): ecs.Cluster {
-		const stack = cdk.Stack.of(this);
-		const KEY = Symbol.for('BLOCKS_CONTAINER_CLUSTER');
-		const stackAny = stack as unknown as Record<symbol, ecs.Cluster | undefined>;
-		if (stackAny[KEY]) return stackAny[KEY]!;
-		const cluster = new ecs.Cluster(stack, 'BlocksContainerCluster', { vpc });
-		stackAny[KEY] = cluster;
-		return cluster;
+		return getOrCreateOnRoot(this, Symbol.for('BLOCKS_CONTAINER_CLUSTER'), (root) =>
+			new ecs.Cluster(root, 'BlocksContainerCluster', { vpc }),
+		);
 	}
 
 	private getClusterName(): string {
-		const stackAny = cdk.Stack.of(this) as unknown as Record<symbol, ecs.Cluster | undefined>;
-		return stackAny[Symbol.for('BLOCKS_CONTAINER_CLUSTER')]?.clusterName ?? '';
+		const rootAny = getBlocksRoot(this) as unknown as Record<symbol, ecs.Cluster | undefined>;
+		return rootAny[Symbol.for('BLOCKS_CONTAINER_CLUSTER')]?.clusterName ?? '';
 	}
 
 	/**

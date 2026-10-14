@@ -250,7 +250,7 @@ new AsyncJob(scope, 'emails', {
 });
 ```
 
-Concurrency is per-job (each job sets its own), and `AsyncJobOptions` is generic over the injected compute's type so the knob only appears when the compute enforces it. The default compute cannot be given a setting it ignores — it is a compile error, not a silently-dropped property. Keeps the one-object ergonomics; costs a conditional/generic type on `AsyncJobOptions`.
+Concurrency is per-job (each job sets its own), and `AsyncJobOptions` is a discriminated union on the assigned `compute` so the knob only appears when the compute enforces it. The default compute cannot be given a setting it ignores — it is a compile error, not a silently-dropped property. Keeps the one-object ergonomics; costs a union on `AsyncJobOptions`.
 
 ### Option 3 — a mapper object that joins jobs to compute
 
@@ -302,6 +302,8 @@ perInstanceConcurrency = max(1, ceil(maxConcurrencyPerCPU × size.vcpu))
 ### Recommendation
 
 **Option 4 (selected.)** It keeps concurrency where it belongs — per-job and compute-conditional, so the default (serverless) compute can't be handed a knob it ignores (compile error, not a silent no-op) — while expressing the amount as a multiplier of the compute's vCPUs rather than an absolute count. Effective per-instance concurrency is `max(1, ceil(maxConcurrencyPerCPU × size.vcpu))`, so resizing the compute scales a job's parallelism with it instead of stranding a hand-tuned absolute. Option 2 was the runner-up (same placement, absolute count); Option 1 reintroduces carte blanche across co-located jobs; Option 3's mapper is only worth its extra construct if reusable named profiles become a real requirement.
+
+**Implementation note (compile-conditional *without* a type parameter).** `AsyncJobOptions<T>` is a discriminated union on the `compute` property — a `ComputeProvider<'container'>` arm that carries `maxConcurrencyPerCPU`, and a serverless/absent arm that types it `never`. It deliberately has **no** `C` compute-kind type parameter: the kind is inferred from the `compute` argument, never spelled by hand (a compute type is meaningless without the object). This keeps `T` the single first-class generic, so `new AsyncJob<Payload>(…)` with a container compute still compiles — an earlier `AsyncJobOptions<T, C>` form broke that, because supplying `T` stopped `C` from being inferred and it fell back to the serverless default. The compile-time gate is backed by a synth-time guard (`AsyncJob` throws if `maxConcurrencyPerCPU` is set on a non-container compute), so a caller who bypasses the types (plain JS, `as any`, cross-package version skew) still fails before deploy rather than silently dropping the knob.
 
 ---
 

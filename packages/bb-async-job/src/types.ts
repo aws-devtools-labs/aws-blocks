@@ -18,14 +18,14 @@ export interface AsyncJobContext {
 }
 
 /**
- * Configuration options for creating an AsyncJob.
+ * Configuration options for creating an AsyncJob — see {@link AsyncJobOptions}.
  *
- * Generic over `C`, the {@link ComputeProvider} passed as `compute` (defaulting
- * to a serverless provider when none is given). Container-only options such as
- * `maxConcurrencyPerCPU` are merged in only when `C` is a container compute —
- * see {@link ContainerOnlyJobOptions}.
+ * This base carries every option that does not depend on the compute kind. The
+ * `compute` option and the container-only `maxConcurrencyPerCPU` knob live on
+ * {@link AsyncJobOptions}, which intersects this with a discriminated union on
+ * `compute` so the knob is a compile error unless `compute` is a container.
  */
-export type AsyncJobOptions<T, C extends ComputeProvider = ComputeProvider<'serverless'>> = {
+export interface AsyncJobBaseOptions<T> {
 	/** Async function that processes each job payload. */
 	handler: (payload: T, context: AsyncJobContext) => Promise<void>;
 	/** Optional schema for runtime payload validation on submit. Accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType, etc.). */
@@ -56,19 +56,6 @@ export type AsyncJobOptions<T, C extends ComputeProvider = ComputeProvider<'serv
 	trackStatus?: boolean;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
-	/**
-	 * The compute this job's handler runs on. Pass a `Compute` block (or any
-	 * {@link ComputeProvider}) to place the handler on a different runtime than the
-	 * app default — e.g. a long-running or high-memory job that a container
-	 * (Fargate) can serve but a serverless compute cannot.
-	 *
-	 * When omitted, the job runs on the app's default (serverless) compute, exactly
-	 * as today. Assigning a container-backed compute moves delivery from a native
-	 * SQS event source to an owner-matched poller the container self-starts; the
-	 * per-handler wall-clock limit comes from the compute's `timeoutSeconds`. In
-	 * local dev, compute assignment is transparent — the handler runs in-process.
-	 */
-	compute?: C;
 
 	/**
 	 * Wall-clock limit for one delivery, in seconds. A property of the work, not
@@ -77,29 +64,65 @@ export type AsyncJobOptions<T, C extends ComputeProvider = ComputeProvider<'serv
 	 * function timeout. Must fit under the compute's ceiling where one exists.
 	 */
 	timeoutSeconds?: number;
-} & ContainerOnlyJobOptions<C>;
+}
 
 /**
- * Options that apply only when the job runs on a **container** compute. Merged
- * into {@link AsyncJobOptions} conditionally on the injected compute's kind, so
- * these fields are present only for a container compute and are a **compile
- * error** on a serverless one (not a silently-ignored property). Resolves to
- * `{}` for a serverless compute or when no compute is assigned (the app default
- * is serverless).
+ * Options for creating an AsyncJob.
+ *
+ * This is {@link AsyncJobBaseOptions} intersected with a discriminated union on
+ * `compute`: a **container** compute carries the container-only
+ * `maxConcurrencyPerCPU` knob, while a serverless compute (or none — the app
+ * default is serverless) forbids it (`maxConcurrencyPerCPU?: never`), so setting
+ * the knob without a container compute is a **compile error** (and is also
+ * rejected at synth, as a defense for callers who bypass the types).
+ *
+ * There is intentionally no `C` type parameter: the compute's kind is inferred
+ * from the `compute` argument itself, never spelled by hand (its type is
+ * meaningless without the object). This keeps `T` the single, first-class
+ * generic, so `new AsyncJob<Payload>(…)` with a container compute still compiles
+ * — supplying `T` no longer forces a `ComputeProvider<'serverless'>` default.
  */
-export type ContainerOnlyJobOptions<C extends ComputeProvider> = C extends ComputeProvider<'container'>
-	? {
-			/**
-			 * How many deliveries of this job run at once per instance, expressed
-			 * **per vCPU**. Blocks multiplies by the compute's vCPU count for the
-			 * per-instance concurrency: `max(1, ceil(maxConcurrencyPerCPU × vcpu))`.
-			 * Higher for IO-bound work that mostly awaits; 1 (or omit) for CPU-bound
-			 * work. Container-only — exposed only when the injected `compute` is a
-			 * container; setting it with a serverless compute is a compile error.
-			 */
-			maxConcurrencyPerCPU?: number;
-		}
-	: Record<never, never>;
+export type AsyncJobOptions<T> = AsyncJobBaseOptions<T> &
+	(
+		| {
+				/**
+				 * The compute this job's handler runs on. Pass a `Compute` block (or any
+				 * {@link ComputeProvider}) to place the handler on a different runtime than
+				 * the app default — e.g. a long-running or high-memory job that a container
+				 * (Fargate) can serve but a serverless compute cannot.
+				 *
+				 * Assigning a container-backed compute moves delivery from a native SQS
+				 * event source to an owner-matched poller the container self-starts; the
+				 * per-handler wall-clock limit comes from the compute's `timeoutSeconds`. In
+				 * local dev, compute assignment is transparent — the handler runs in-process.
+				 */
+				compute: ComputeProvider<'container'>;
+				/**
+				 * How many deliveries of this job run at once per instance, expressed
+				 * **per vCPU**. Blocks multiplies by the compute's vCPU count for the
+				 * per-instance concurrency: `max(1, ceil(maxConcurrencyPerCPU × vcpu))`.
+				 * Higher for IO-bound work that mostly awaits; 1 (or omit) for CPU-bound
+				 * work. Container-only — exposed only when the assigned `compute` is a
+				 * container; setting it with a serverless compute (or none) is a compile
+				 * error and is also rejected at synth.
+				 */
+				maxConcurrencyPerCPU?: number;
+		  }
+		| {
+				/**
+				 * The compute this job's handler runs on. Omit to run on the app's default
+				 * (serverless) compute, exactly as today. Pass a serverless `Compute` block
+				 * (or any {@link ComputeProvider}) to assign one explicitly.
+				 */
+				compute?: ComputeProvider<'serverless'>;
+				/**
+				 * Container-only — not available on a serverless compute. See the container
+				 * arm of {@link AsyncJobOptions}. Typed `never` so setting it here is a
+				 * compile error.
+				 */
+				maxConcurrencyPerCPU?: never;
+		  }
+	);
 
 /**
  * Lifecycle state of a single job.

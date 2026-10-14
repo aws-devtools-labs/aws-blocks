@@ -13,7 +13,6 @@ import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
 import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import type {
 	AsyncJobContext,
 	AsyncJobOptions,
@@ -26,6 +25,7 @@ import { STATUS_TABLE_ID, statusTableOptions } from './status.js';
 
 export { AsyncJobErrors } from './errors.js';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	SubmitOptions,
@@ -76,11 +76,11 @@ function validateEventSourceOptions(
 	}
 }
 
-export class AsyncJob<T = unknown, C extends ComputeProvider = ComputeProvider<'serverless'>> extends BuildingBlockScope {
+export class AsyncJob<T = unknown> extends BuildingBlockScope {
 	public readonly queue: Queue;
 	public readonly dlq: Queue;
 
-	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T, C>) {
+	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
 		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
 
 		// Assign the requested compute (if any) before anything reads `this.compute`

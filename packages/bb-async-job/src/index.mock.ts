@@ -3,7 +3,6 @@
 
 import { Scope, registerSdkIdentifiers, brandBlocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { randomUUID } from 'node:crypto';
 import type {
@@ -23,6 +22,7 @@ import { BB_NAME, BB_VERSION } from './version.js';
 
 export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	SubmitOptions,
@@ -90,7 +90,7 @@ const MAX_BATCH_PAYLOADS = 10_000;
  * status.transitions.map(t => t.state); // ['queued', 'processing', 'complete']
  * ```
  */
-export class AsyncJob<T = unknown, C extends ComputeProvider = ComputeProvider<'serverless'>> extends Scope {
+export class AsyncJob<T = unknown> extends Scope {
 	private handler: (payload: T, context: AsyncJobContext) => Promise<void>;
 	private schema?: StandardSchemaV1<T>;
 	private maxRetries: number;
@@ -110,7 +110,7 @@ export class AsyncJob<T = unknown, C extends ComputeProvider = ComputeProvider<'
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
 
-	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T, C>) {
+	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this._id = id;

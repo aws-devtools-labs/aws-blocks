@@ -10,7 +10,6 @@ import { dispatchJobToWorker, isJobWorker } from '@aws-blocks/core';
 import { EventSourceMapping, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import { registerAsyncJob } from './job-registry.js';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type {
 	AsyncJobContext,
@@ -29,6 +28,7 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 
 export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	SubmitOptions,
@@ -73,7 +73,7 @@ const VISIBILITY_HEARTBEAT_INTERVAL_MS = 30_000;
  */
 const DEFAULT_CONTAINER_CONCURRENCY = 5;
 
-export class AsyncJob<T = unknown, C extends ComputeProvider = ComputeProvider<'serverless'>> extends Scope {
+export class AsyncJob<T = unknown> extends Scope {
 	private _handler: (payload: T, context: AsyncJobContext) => Promise<void>;
 	private _schema?: StandardSchemaV1<T>;
 	private _envKey: string;
@@ -85,7 +85,7 @@ export class AsyncJob<T = unknown, C extends ComputeProvider = ComputeProvider<'
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
 
-	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T, C>) {
+	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this._handler = options.handler;

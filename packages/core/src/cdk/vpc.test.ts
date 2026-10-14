@@ -326,6 +326,23 @@ describe('lazy VPC derivation', () => {
 		assert.equal(a, b, 'lazy VPC is a per-stack singleton');
 	});
 
+	it('initializeVpc stamps source: a customer VPC is "provided", a derived one is "derived"', () => {
+		// Customer path (default): the context is tagged provided, so a stateful BB
+		// (Database) will join it.
+		const provided = stackWith(() => {});
+		const providedCtx = initializeVpc(provided.scope, {
+			network: new ec2.Vpc(provided.scope, 'CustomerVpc', { maxAzs: 2 }),
+		});
+		assert.equal(providedCtx.source, 'provided', 'customer-provided VPC defaults to source=provided');
+
+		// Derived path (what a container does): explicitly tagged derived, so a
+		// stateful BB must NOT auto-join it (data-loss guard).
+		const derived = stackWith(() => {});
+		const derivedVpc = getOrCreateVpc(derived.scope);
+		const derivedCtx = initializeVpc(derived.scope, { network: derivedVpc }, 'derived');
+		assert.equal(derivedCtx.source, 'derived', 'container-derived VPC is tagged source=derived');
+	});
+
 	it('a derived VPC + finalizeVpc provisions endpoints for a requiresVpc app', () => {
 		const app = new cdk.App();
 		const stack = new cdk.Stack(app, 'DerivedStack', { env: { account: '123456789012', region: 'us-east-1' } });
