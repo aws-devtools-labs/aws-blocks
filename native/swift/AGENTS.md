@@ -120,7 +120,7 @@ Generated code is Swift Concurrency-ready: `func setAuthState(input: Input) asyn
 
 Generated model `struct`s and `enum`s are public, so they are not implicitly `Sendable`; returning them across actors fails in Swift 6 language mode. Don't add reference types to the IR or to runtime-shipped data classes.
 
-`WebSocketSession` guards the process-wide connection pool with an `NSLock`. `SessionGate` guards each client's `URLSession` with an `OSAllocatedUnfairLock`, and every request goes through `SessionGate.send(_:)`: a task created on an invalidated `URLSession` terminates the process. Generated code never forms a realtime message decoder: it decodes `RealtimeChannel<M>` through `Decodable`, because a closure formed in an app target with `MainActor` default isolation traps when the socket task calls it in Swift 6 mode.
+`WebSocketSession` guards the process-wide connection pool with an `NSLock`. `SessionGate` guards each client's `URLSession` with an `OSAllocatedUnfairLock`, and every request goes through `SessionGate.send(_:)`: a task created on an invalidated `URLSession` terminates the process. `BlocksClient.baseHost` is computed over an `OSAllocatedUnfairLock`, not a stored `static var`: apps set it, and a Swift 6 app target rejects references to mutable stored statics. Generated code never forms a realtime message decoder: it decodes `RealtimeChannel<M>` through `Decodable`, because a closure formed in an app target with `MainActor` default isolation traps when the socket task calls it in Swift 6 mode.
 
 ## Common Workflows
 

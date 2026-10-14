@@ -23,9 +23,15 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "Blocks
 public final class BlocksClient: Sendable {
 
     /// Base host for localhost rewriting in transferable descriptors (e.g., WebSocket URLs).
-    /// Set to your Mac's LAN IP for physical device testing.
+    /// Only needed for a dev server started with `BLOCKS_DEV_HOST`: set it to the host the app reaches that server at.
     /// Default: "localhost" (no rewriting — works in Simulator).
-    public static var baseHost: String = "localhost"
+    public static var baseHost: String {
+        get { baseHostLock.withLock { $0 } }
+        set { baseHostLock.withLock { $0 = newValue } }
+    }
+
+    // Not a stored static var: Swift 6 app code cannot reference one.
+    private static let baseHostLock = OSAllocatedUnfairLock(initialState: "localhost")
 
     /// Base URL the client was constructed with — exposed for transferable
     /// hydration (e.g. `OIDCClient.fromJSON(descriptor, baseUrl: client.baseUrl, ...)`).

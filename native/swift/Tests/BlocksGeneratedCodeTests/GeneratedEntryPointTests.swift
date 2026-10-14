@@ -170,6 +170,12 @@ final class GeneratedEntryPointTests: XCTestCase {
         requireSendable(BlocksServer.self)
     }
 
+    // Compiles only while BlocksClient.baseHost, which apps set, is not a stored static var.
+    func testBaseHostIsReadableFromAnyConcurrencyDomain() async {
+        let host = await Task.detached { BlocksClient.baseHost }.value
+        XCTAssertEqual(host, BlocksClient.baseHost)
+    }
+
     @available(*, deprecated)
     func testDeprecatedServerInitBuildsItsOwnLiveClient() async {
         // Port 9 refuses the connection, so a URLError shows the bridge's own client sent the request.
