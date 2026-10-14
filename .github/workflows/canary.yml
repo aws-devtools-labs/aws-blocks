@@ -14,6 +14,10 @@ on:
     paths:
       - '.github/workflows/canary.yml'
       - 'scripts/canary/**'
+      # A template's package.json defines whether it ships a `test:e2e`, which
+      # is what the discover job keys on — so adding or changing one re-runs
+      # the canary on the PR that introduces it.
+      - 'packages/create-blocks-app/templates/*/package.json'
 
 concurrency:
   group: canary-${{ github.ref }}
@@ -26,10 +30,52 @@ env:
   NODE_OPTIONS: '--test-reporter=spec'
 
 jobs:
+  # Discover the matrix from the source of truth rather than hard-coding it.
+  # `packages/create-blocks-app/templates/` is the only source of truth for the
+  # template list (packages/create-blocks-app/src/index.ts), so the canary runs
+  # exactly the templates that ship a runnable `test:e2e` and never drifts when
+  # a template is added or removed. A template without a `test:e2e` script (for
+  # example `amplify`, whose coverage lives in the `test-apps/amplify-gen2`
+  # interop suite) is excluded automatically.
+  discover:
+    name: Discover templates
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      templates: ${{ steps.list.outputs.templates }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: list
+        name: List templates with a test:e2e script
+        run: |
+          templates="$(
+            for pkg in packages/create-blocks-app/templates/*/package.json; do
+              if jq -e '.scripts["test:e2e"]' "$pkg" > /dev/null 2>&1; then
+                basename "$(dirname "$pkg")"
+              fi
+            done | sort | jq -R . | jq -cs .
+          )"
+          echo "Discovered templates: $templates"
+          if [ "$templates" = "[]" ]; then
+            echo "ERROR: no templates with a test:e2e script found" >&2
+            exit 1
+          fi
+          echo "templates=$templates" >> "$GITHUB_OUTPUT"
+
   canary:
-    name: Canary (local mocks)
+    name: Canary (${{ matrix.template }}, local mocks)
+    needs: discover
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      # One cell per discovered template; a single template failing must not
+      # cancel the others, so each day reports every template's result.
+      fail-fast: false
+      matrix:
+        template: ${{ fromJSON(needs.discover.outputs.templates) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,4 +117,4 @@ jobs:
       - name: Run canary
         env:
           BLOCKS_REGISTRY_URL: http://localhost:4873/registry/
-        run: npm run canary -- --template default
+        run: npm run canary -- --template ${{ matrix.template }}
