@@ -17,28 +17,24 @@ export interface DeployOptions {
   cdkAppPath: string;
   projectRoot: string;
   /**
-   * When true, after `cdk deploy` completes, block until the new frontend
-   * build is actually being served through CloudFront before emitting
-   * `BLOCKS_DEPLOYED`. Prevents a caller's immediate self-test
-   * from hitting a stale bundle during edge propagation. No-op for a
-   * backend-only app (no frontend to serve).
+   * When true, block until the new frontend build is actually served through
+   * CloudFront before emitting `BLOCKS_DEPLOYED`, so a caller's immediate
+   * self-test can't hit a stale bundle during edge propagation. No-op for a
+   * backend-only app.
    */
   waitLive?: boolean;
   /** Overall budget for the liveness wait, in seconds. Defaults to 180. */
   waitLiveTimeoutSec?: number;
 }
 
-/** Default liveness-wait budget (seconds) when `--wait-live` is given without a value. */
+/** Default liveness-wait budget (seconds). */
 export const DEFAULT_WAIT_LIVE_TIMEOUT_SEC = 180;
 /** Poll interval for the liveness wait, in milliseconds. */
 export const WAIT_LIVE_INTERVAL_MS = 5_000;
 
 /**
- * Parse the `--wait-live` family of flags from a process argv tail. Pure and
- * exported so flag handling is unit-tested without spawning a deploy.
- *
- * Accepts `--wait-live` (opt in, default timeout) and
- * `--wait-live-timeout=<seconds>` (override the budget). An out-of-range or
+ * Parse the `--wait-live` flags from an argv tail. Pure and exported so flag
+ * handling is unit-tested without spawning a deploy. An out-of-range or
  * non-numeric timeout falls back to the default rather than failing the deploy.
  */
 export function parseWaitLiveArgs(argv: readonly string[]): {
@@ -67,9 +63,8 @@ export async function deploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
     console.log('🏗️  Preparing deployment...');
 
-    // Resolve the liveness-wait config: an explicit option wins; otherwise read
-    // the `--wait-live` / `--wait-live-timeout=` flags from argv, so the thin
-    // template wrapper (which just calls `deploy({...})`) needs no arg plumbing.
+    // Resolve the liveness-wait config: an explicit option wins, else read the
+    // flags from argv so the thin template wrapper needs no arg plumbing.
     const argvWaitLive = parseWaitLiveArgs(process.argv.slice(2));
     const waitLive = options.waitLive ?? argvWaitLive.waitLive;
     const waitLiveTimeoutSec = options.waitLiveTimeoutSec ?? argvWaitLive.waitLiveTimeoutSec;
@@ -167,29 +162,23 @@ export async function deploy(options: DeployOptions) {
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
     const apiUrl = stackOutputs.ApiUrl;
     
-    // Resolve the frontend URL and the build id FROM THE SAME Hosting output
-    // group. Each `Hosting` construct emits `<prefix>HostingUrl…` and
-    // `<prefix>HostingBuildId…` sharing the construct's logical-id prefix, so
-    // keying off that shared prefix pairs the two for the one frontend we poll —
-    // rather than two independent first-matches that could disagree if a stack
-    // ever carried two Hosting constructs. `--wait-live` targets a
-    // single-frontend stack; the first Hosting group is that frontend.
+    // Resolve the frontend URL and build id from the SAME Hosting output group.
+    // Each Hosting construct emits `<prefix>HostingUrl…` and
+    // `<prefix>HostingBuildId…` sharing a logical-id prefix; keying off it pairs
+    // the two for the one frontend we poll rather than two independent
+    // first-matches that could disagree on a two-Hosting stack. `--wait-live`
+    // targets a single-frontend stack; the first Hosting group is that frontend.
     const hostingUrlEntry = Object.entries(stackOutputs).find(([key]) =>
       key.includes('Hosting') && key.includes('Url')
     );
     const hostingUrl = hostingUrlEntry?.[1] ?? earlyHostingUrl;
-
-    // The logical-id prefix shared by this frontend's Hosting outputs (the text
-    // before `HostingUrl`), used to pick its matching build-id output.
     const hostingPrefix = hostingUrlEntry?.[0].split('HostingUrl')[0];
 
-    // Build id this deploy published, surfaced as the `HostingBuildId` output.
-    // Lets the liveness poll confirm the config CloudFront serves is THIS
-    // deploy's, not a byte-identical config from the previous build still being
-    // served at an edge POP during cutover. Scoped to the same Hosting group as
-    // `hostingUrl` via the shared prefix. Absent for a backend-only app or an
-    // older stack that predates the output — the poll then falls back to the
-    // placeholder-vs-real check.
+    // Build id this deploy published (the `HostingBuildId` output), scoped to
+    // the same Hosting group. Lets the liveness poll confirm CloudFront serves
+    // THIS build, not a byte-identical config from the previous build still at
+    // an edge POP. Absent for a backend-only app or an older stack — the poll
+    // then falls back to the placeholder-vs-real check.
     const expectedBuildId = Object.entries(stackOutputs).find(([key]) =>
       key.includes('BuildId') &&
       (hostingPrefix ? key.startsWith(hostingPrefix) : key.includes('Hosting'))
@@ -211,20 +200,15 @@ export async function deploy(options: DeployOptions) {
       console.log(`🌐 Frontend URL: ${hostingUrl}`);
     }
 
-    // Liveness gate: `cdk deploy` returning does NOT mean the new
-    // build is being served — CloudFront takes a short window to propagate the
-    // new viewer-request function and config. When `--wait-live` is set, block
-    // until the deployed frontend actually serves the new build before emitting
-    // the completion signal, so a caller's immediate self-test can't hit a
-    // stale bundle. Skipped for a backend-only app (no frontend to verify).
+    // Liveness gate: block until the deployed frontend serves the new build
+    // before emitting the completion signal, so a caller's immediate self-test
+    // can't hit a stale bundle. Skipped for a backend-only app.
     if (waitLive && hostingUrl) {
       const timeoutMs = waitLiveTimeoutSec * 1000;
       console.log(`\n⏳ Waiting for the new build to go live at ${hostingUrl} (up to ${timeoutMs / 1000}s)…`);
       if (!expectedBuildId) {
-        // No HostingBuildId output → legacy placeholder-vs-real check. Surface
-        // the weaker guarantee at run time, not only in the docs, so an
-        // operator knows a re-synth that emits HostingBuildId upgrades this to
-        // an exact per-build match.
+        // No HostingBuildId output → best-effort check. Surface the weaker
+        // guarantee at run time so an operator knows a re-synth upgrades it.
         console.log(
           '   ℹ️  No build-id output found — using best-effort liveness (reliable on a first deploy, ' +
             'approximate on a re-deploy). Re-synthesize to emit HostingBuildId for an exact per-build check.',
@@ -245,8 +229,8 @@ export async function deploy(options: DeployOptions) {
         },
       });
       if (!result.live) {
-        // Never emit a false "live" signal. Report the timeout honestly and
-        // exit non-zero so a caller treats it as "could not confirm", not done.
+        // Report the timeout honestly and exit non-zero rather than emit a
+        // false "live" — the deploy succeeded but the new build isn't confirmed.
         console.log(
           `\n⚠️  Could not confirm the new build is live after ${Math.round(result.elapsedMs / 1000)}s ` +
             `(${result.attempts} attempts). The deploy itself SUCCEEDED, but CloudFront may still be ` +
@@ -263,9 +247,8 @@ export async function deploy(options: DeployOptions) {
     // Machine-readable completion signal — a single stable line a caller (a
     // coding agent, a CI step, a script) can grep for "deploy done + where it
     // lives" without parsing CloudFormation output or polling the stack. Always
-    // the LAST line on the success path. With `--wait-live` it is emitted only
-    // after the new build is confirmed live, so a request issued immediately
-    // after it returns the new asset.
+    // the LAST line on the success path; with `--wait-live` it is emitted only
+    // after the new build is confirmed live.
     console.log(`\n${formatDeploySignal(apiUrl, hostingUrl)}`);
   });
 }

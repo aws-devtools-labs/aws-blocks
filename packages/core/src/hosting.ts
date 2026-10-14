@@ -910,9 +910,9 @@ export class Hosting extends Construct {
     });
 
     // Surface this deploy's build id so a post-deploy liveness poll can confirm
-    // the NEW build is being served (it matches this id against the config
-    // served at `/.blocks-sandbox/config.json`). Emitted only when a build id
-    // exists — the same condition that gates the config deployment above.
+    // the new build is served (matched against the config at
+    // `/.blocks-sandbox/config.json`). Gated on a build id existing, like the
+    // config deployment above.
     if (manifest.buildId) {
       new cdk.CfnOutput(this, 'HostingBuildId', {
         value: manifest.buildId,
@@ -934,11 +934,10 @@ export class Hosting extends Construct {
    * When `api` is provided, the config uses a relative `/aws-blocks/api` URL
    * so the frontend fetches through the same CloudFront domain (no CORS).
    *
-   * `buildId` is stamped under `__blocksBuildId` so a post-deploy liveness
-   * poll can tell THIS deploy's config apart from a previously-served one
-   * during the CloudFront cutover window (see `scripts/wait-live.ts`). The
-   * rest of the body is deploy-invariant, so without this id a re-deploy's
-   * old and new configs are byte-identical and indistinguishable at the edge.
+   * `buildId` is stamped under `__blocksBuildId` so a post-deploy liveness poll
+   * can tell this deploy's config from a previously-served one during the
+   * CloudFront cutover (see `scripts/wait-live.ts`); the rest of the body is
+   * deploy-invariant.
    */
   private buildConfigJson(props: HostingProps, buildId: string): Record<string, unknown> {
     return {
