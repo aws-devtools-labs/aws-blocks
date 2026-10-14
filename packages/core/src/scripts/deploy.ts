@@ -167,18 +167,32 @@ export async function deploy(options: DeployOptions) {
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
     const apiUrl = stackOutputs.ApiUrl;
     
-    const hostingUrl = Object.entries(stackOutputs).find(([key]) => 
+    // Resolve the frontend URL and the build id FROM THE SAME Hosting output
+    // group. Each `Hosting` construct emits `<prefix>HostingUrl…` and
+    // `<prefix>HostingBuildId…` sharing the construct's logical-id prefix, so
+    // keying off that shared prefix pairs the two for the one frontend we poll —
+    // rather than two independent first-matches that could disagree if a stack
+    // ever carried two Hosting constructs. `--wait-live` targets a
+    // single-frontend stack; the first Hosting group is that frontend.
+    const hostingUrlEntry = Object.entries(stackOutputs).find(([key]) =>
       key.includes('Hosting') && key.includes('Url')
-    )?.[1] ?? earlyHostingUrl;
+    );
+    const hostingUrl = hostingUrlEntry?.[1] ?? earlyHostingUrl;
+
+    // The logical-id prefix shared by this frontend's Hosting outputs (the text
+    // before `HostingUrl`), used to pick its matching build-id output.
+    const hostingPrefix = hostingUrlEntry?.[0].split('HostingUrl')[0];
 
     // Build id this deploy published, surfaced as the `HostingBuildId` output.
     // Lets the liveness poll confirm the config CloudFront serves is THIS
     // deploy's, not a byte-identical config from the previous build still being
-    // served at an edge POP during cutover. Absent for a backend-only app or an
+    // served at an edge POP during cutover. Scoped to the same Hosting group as
+    // `hostingUrl` via the shared prefix. Absent for a backend-only app or an
     // older stack that predates the output — the poll then falls back to the
     // placeholder-vs-real check.
     const expectedBuildId = Object.entries(stackOutputs).find(([key]) =>
-      key.includes('Hosting') && key.includes('BuildId')
+      key.includes('BuildId') &&
+      (hostingPrefix ? key.startsWith(hostingPrefix) : key.includes('Hosting'))
     )?.[1];
     
     if (!apiUrl) {
@@ -206,6 +220,16 @@ export async function deploy(options: DeployOptions) {
     if (waitLive && hostingUrl) {
       const timeoutMs = waitLiveTimeoutSec * 1000;
       console.log(`\n⏳ Waiting for the new build to go live at ${hostingUrl} (up to ${timeoutMs / 1000}s)…`);
+      if (!expectedBuildId) {
+        // No HostingBuildId output → legacy placeholder-vs-real check. Surface
+        // the weaker guarantee at run time, not only in the docs, so an
+        // operator knows a re-synth that emits HostingBuildId upgrades this to
+        // an exact per-build match.
+        console.log(
+          '   ℹ️  No build-id output found — using best-effort liveness (reliable on a first deploy, ' +
+            'approximate on a re-deploy). Re-synthesize to emit HostingBuildId for an exact per-build check.',
+        );
+      }
       const result = await waitForLiveBuild({
         hostingUrl,
         expectedBuildId,
