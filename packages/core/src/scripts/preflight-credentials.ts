@@ -12,6 +12,7 @@ import {
 	profileArg,
 	profileName,
 } from './credential-guidance.js';
+import { classifyDenialError, denialGuidance } from './denial-guidance.js';
 import { type DeploymentTargetOptions, environmentAccessKeys, resolveDeploymentTarget } from './deployment-target.js';
 
 /**
@@ -32,6 +33,10 @@ import { type DeploymentTargetOptions, environmentAccessKeys, resolveDeploymentT
  * On a credential failure, the message names the credential source (for example
  * an SSO or `aws login` profile, or access keys in the environment) and the
  * command that fixes it. The check never prompts, signs in, or changes credentials.
+ *
+ * When AWS denies the check (for example a role that the profile assumes), it warns
+ * and continues. The warning says whether an AWS Organizations policy explicitly
+ * denied the request, without the error details.
  *
  * Before the deploy continues, the check prints the deployment target: the
  * credentials that CDK deploys with (a profile, environment access keys or
@@ -254,8 +259,18 @@ export async function assertAwsCredentials({
 		const label = credentialErrorLabel(error);
 		const failure = classifyCredentialError(label);
 
-		// Not a credential problem: don't block a deploy that might still work.
-		if (failure === 'network') {
+		// Denied, which does not prove that the deployment credentials are invalid.
+		const denial = classifyDenialError(error);
+		if (denial) {
+			console.warn(
+				[
+					`⚠️  AWS denied access while checking credentials for \`npm run ${command}\` (${label}); ` +
+						'continuing — the deploy will report the error if it is denied too.',
+					...denialGuidance(denial).map((line) => `  ${line}`),
+				].join('\n'),
+			);
+		} else if (failure === 'network') {
+			// Not a credential problem: don't block a deploy that might still work.
 			console.warn(
 				`⚠️  Could not reach AWS to verify credentials for \`npm run ${command}\` (${label}); ` +
 					'continuing — if the deploy also fails to connect, check your network or proxy settings.',
@@ -285,6 +300,7 @@ export async function assertAwsCredentials({
 						: env,
 					profile,
 					readAwsCliVersion,
+					region,
 				}),
 			);
 		}
