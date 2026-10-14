@@ -45,10 +45,8 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
-      # Build and test FIRST, before any AWS credentials or secrets exist on the
-      # runner: compilation runs every Gradle plugin, dependency build script and
-      # code generator, none of which may see the Maven password or the PGP
-      # signing key.
+      # Build before loading credentials because Gradle plugins, build scripts, and
+      # code generators execute during compilation.
       - name: Build and test (pre-publish gate)
         run: ./gradlew build
 
@@ -73,8 +71,8 @@ jobs:
             --query SecretString --output text)
 
           mask() {
-            printf '::add-mask::%s\n' "$1"
-            # A mask matches one line; also mask each line of a multi-line value.
+            # GitHub masks match only one line. Never echo the whole value: a
+            # multi-line value would print every line after the first.
             while IFS= read -r line; do
               if [ -n "$line" ]; then printf '::add-mask::%s\n' "$line"; fi
             done <<< "$1"
@@ -111,8 +109,6 @@ jobs:
         if: inputs.dry_run == true
         run: ./gradlew publishToMavenLocal
 
-      # Never leave the Maven password or signing key on the runner, even when a
-      # publish step fails.
       - name: Remove publishing credentials
         if: always()
         run: rm -f "$HOME/.gradle/gradle.properties"

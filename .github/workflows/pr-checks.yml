@@ -25,10 +25,8 @@ concurrency:
   group: pr-checks-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-# Least privilege: no OIDC token at workflow scope. Only the jobs that assume
-# an AWS role (configure-aws-credentials) get `id-token: write`, per job, so
-# jobs that build PR-head code (npm ci, gradlew, swift build) cannot mint AWS
-# credentials.
+# Grant OIDC tokens only to role-assuming jobs so PR-head build jobs cannot
+# mint AWS credentials.
 permissions:
   contents: read
 
