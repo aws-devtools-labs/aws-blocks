@@ -150,7 +150,9 @@ jobs:
       # would be nominal. Not continue-on-error: fail the job rather than run an uncontained agent.
       - name: Verify isolation user cannot sudo
         run: |
-          if sudo -n runuser -u benchagent -- sudo -n true 2>/dev/null; then
+          # `sudo -n -l` also catches a passwordless rule narrowed to specific commands.
+          if sudo -n runuser -u benchagent -- sudo -n true 2>/dev/null ||
+             sudo -n runuser -u benchagent -- sudo -n -l >/dev/null 2>&1; then
             echo "::error::benchagent can run sudo, so the agent shell is not contained"
             exit 1
           fi
@@ -686,7 +688,9 @@ jobs:
       # would be nominal. Not continue-on-error: fail the job rather than run an uncontained agent.
       - name: Verify isolation user cannot sudo
         run: |
-          if sudo -n runuser -u benchagent -- sudo -n true 2>/dev/null; then
+          # `sudo -n -l` also catches a passwordless rule narrowed to specific commands.
+          if sudo -n runuser -u benchagent -- sudo -n true 2>/dev/null ||
+             sudo -n runuser -u benchagent -- sudo -n -l >/dev/null 2>&1; then
             echo "::error::benchagent can run sudo, so the agent shell is not contained"
             exit 1
           fi

@@ -277,12 +277,14 @@ describe('agent-bench shell runner — process-identity isolation (issue #184)',
 			timeout: 10000,
 		});
 		assert.notEqual(escalate.status, 0, 'benchagent ran `sudo -n true`: the agent shell can escalate to root');
-		const policy = spawnSync('sudo', ['-n', '-l', '-U', BENCH_AGENT_USER], { encoding: 'utf-8', timeout: 10000 });
-		assert.match(
-			`${policy.stdout}${policy.stderr}`,
-			/is not allowed to run sudo/,
-			`benchagent has a sudoers entry: ${policy.stdout}${policy.stderr}`,
-		);
+		// `sudo -n -l` as benchagent exits 0 if ANY passwordless rule exists, even one narrowed to a
+		// single command that `sudo -n true` above can't reach. Exit status only, so it doesn't depend
+		// on sudo's (locale- and version-dependent) message wording.
+		const list = spawnSync('sudo', ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'sudo', '-n', '-l'], {
+			encoding: 'utf-8',
+			timeout: 10000,
+		});
+		assert.notEqual(list.status, 0, `benchagent holds a passwordless sudo rule: ${list.stdout}${list.stderr}`);
 	});
 
 	// The run-1/5 regression: a workspace ACL alone is NOT enough. The CI workspace's parents
