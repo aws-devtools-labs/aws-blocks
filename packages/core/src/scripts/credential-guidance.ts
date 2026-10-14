@@ -114,6 +114,8 @@ export type CredentialSource =
 			profile: string;
 			/** The profile that holds the credentials when `profile` assumes a role with `source_profile`. */
 			sourceProfile?: string;
+			/** The `region` setting of the profile that holds the credentials (`sourceProfile`, or else `profile`). */
+			region?: string;
 	  };
 
 type Profiles = Record<string, Record<string, string | undefined> | undefined>;
@@ -180,13 +182,15 @@ export async function describeCredentialSource(
 	const { parseKnownFiles } = await import('@smithy/shared-ini-file-loader');
 	const profiles: Profiles = await parseKnownFiles({ ...sharedConfigFiles(env), ignoreCache: true });
 	const source = profileSource(profiles, name, new Set());
-	if (source.type !== 'none') return { ...source, profile: name };
+	if (source.type !== 'none') {
+		return { ...source, profile: name, region: profiles[source.sourceProfile ?? name]?.region };
+	}
 	if (selected && !profiles[name]) return { type: 'missing-profile', profile: name };
 	if (env.AWS_WEB_IDENTITY_TOKEN_FILE && env.AWS_ROLE_ARN) return { type: 'web-identity' };
 	if (env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI || env.AWS_CONTAINER_CREDENTIALS_FULL_URI) {
 		return { type: 'workload' };
 	}
-	return { ...source, profile: name };
+	return { ...source, profile: name, region: profiles[name]?.region };
 }
 
 /** Whether the installed AWS CLI has `aws login`, which needs version 2.32.0 or later. */
@@ -238,8 +242,9 @@ function profileArg(profile: string): string {
 	return SHELL_SAFE_PROFILE.test(profile) ? profile : '<profile>';
 }
 
-function loginCommand(profile: string, support: AwsCliLoginSupport): string {
-	const command = `aws login --profile ${profileArg(profile)}`;
+/** `aws login` for `profile`; `regionArg` adds `--region`, which overrides the Region in the environment and the profile. */
+function loginCommand(profile: string, support: AwsCliLoginSupport, regionArg?: string): string {
+	const command = `aws login --profile ${profileArg(profile)}${regionArg ? ` --region ${regionArg}` : ''}`;
 	switch (support) {
 		case 'supported':
 			return command;
@@ -252,8 +257,59 @@ function loginCommand(profile: string, support: AwsCliLoginSupport): string {
 	}
 }
 
-/** The explanation and the fix, one line each. `login` is set when the fix is `aws login`. */
-function guidanceLines(source: CredentialSource, failure: CredentialFailure, login: AwsCliLoginSupport): string[] {
+/** A deployment Region for the message: as given, as prose, and as a command argument. */
+interface PrintedRegion {
+	value: string;
+	name: string;
+	arg: string;
+	/**
+	 * Whether `AWS_REGION` or `AWS_DEFAULT_REGION` names another Region. The AWS CLI
+	 * uses them before the profile's Region, so `aws login` then needs `--region`.
+	 */
+	pin: boolean;
+}
+
+/** Region names, as in `us-east-1` or `us-gov-west-1`. Any other value prints as a placeholder in commands. */
+const SHELL_SAFE_REGION = /^[a-z]{2}(?:-[a-z0-9]+)+$/;
+
+/**
+ * The lines that recommend `aws login --profile <profile>`, after `prefix`.
+ *
+ * `aws login` signs in to the Region of the profile, and asks for one when the
+ * profile has none. When that is not the deployment Region, the lines first set
+ * the profile's Region, and say to sign in again after any later change, so that
+ * the sign-in and the deployment use the same Region. When the environment names
+ * another Region, which the AWS CLI would use instead, the command adds `--region`.
+ */
+function signInLines(
+	prefix: string,
+	profile: string,
+	login: AwsCliLoginSupport,
+	region: PrintedRegion | undefined,
+	profileRegion: string | undefined,
+): string[] {
+	const regionArg = region?.pin ? region.arg : undefined;
+	const signIn = `${prefix}${loginCommand(profile, login, regionArg)}`;
+	if (!region || profileRegion === region.value) return [signIn];
+	const named = profileName(profile);
+	const arg = profileArg(profile);
+	return [
+		`Before you sign in, set the Region of profile ${named} to ${region.name}: aws configure set region ${region.arg} --profile ${arg}`,
+		signIn,
+		`If you change the Region of profile ${named} later, sign in again: ${loginCommand(profile, 'supported', regionArg)}`,
+	];
+}
+
+/**
+ * The explanation and the fix, one line each. `login` is set when the fix is `aws login`,
+ * and `region` is the deployment Region.
+ */
+function guidanceLines(
+	source: CredentialSource,
+	failure: CredentialFailure,
+	login: AwsCliLoginSupport,
+	region: PrintedRegion | undefined,
+): string[] {
 	if (source.type === 'environment') {
 		const variables = 'AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY';
 		const fix = `Export new credentials, or unset ${variables} to use an AWS profile.`;
@@ -264,7 +320,7 @@ function guidanceLines(source: CredentialSource, failure: CredentialFailure, log
 		const profile = profileName(source.profile);
 		return [
 			`Profile ${profile} is not in your AWS config or credentials file.`,
-			`Sign in to create it: ${loginCommand(source.profile, login)}`,
+			...signInLines('Sign in to create it: ', source.profile, login, region, undefined),
 			'Or select another profile with AWS_PROFILE, or with "profile" in cdk.json.',
 			`New to AWS? Create an account: ${SIGN_UP_URL}`,
 		];
@@ -294,7 +350,7 @@ function guidanceLines(source: CredentialSource, failure: CredentialFailure, log
 				lines.push(
 					`No AWS credentials are configured for profile ${named}.`,
 					`New to AWS? Create an account: ${SIGN_UP_URL}`,
-					`Already have an account? Sign in: ${loginCommand(profile, login)}`,
+					...signInLines('Already have an account? Sign in: ', profile, login, region, source.region),
 					`Other ways to sign in: ${SIGN_IN_OPTIONS_URL}`,
 				);
 				break;
@@ -305,14 +361,14 @@ function guidanceLines(source: CredentialSource, failure: CredentialFailure, log
 					? `The credentials for profile ${named} have expired.`
 					: `AWS did not accept the credentials for profile ${named}.`,
 				'They are not in your AWS config files, so they come from another source, such as an instance role.',
-				`Check that source, or sign in: ${loginCommand(profile, login)}`,
+				...signInLines('Check that source, or sign in: ', profile, login, region, source.region),
 				`Other ways to sign in: ${SIGN_IN_OPTIONS_URL}`,
 			);
 			break;
 		case 'login':
 			lines.push(
 				`The AWS sign-in session for profile ${named} has expired or could not be refreshed.`,
-				`Sign in again: ${loginCommand(profile, login)}`,
+				...signInLines('Sign in again: ', profile, login, region, source.region),
 			);
 			break;
 		case 'sso':
@@ -389,6 +445,8 @@ export interface CredentialFailureMessageOptions {
 	profile?: string;
 	/** Reads `aws --version`; called only when the guidance recommends `aws login`. */
 	readAwsCliVersion?: AwsCliVersionReader;
+	/** The deployment Region. The message names it, and `aws login` guidance sets the profile to it first. */
+	region?: string;
 }
 
 /**
@@ -397,6 +455,12 @@ export interface CredentialFailureMessageOptions {
  * because a module fails to load, the message lists the general ways to
  * configure credentials instead. Unreadable or malformed AWS config files do not
  * reach this fallback: the SDK's loader reads them as empty.
+ *
+ * The message also names the profile and the deployment Region. When the fix is
+ * `aws login` and the profile is set to another Region, or to none, it first
+ * prints the `aws configure set region` command that sets the deployment Region.
+ * When `AWS_REGION` or `AWS_DEFAULT_REGION` names another Region (for example
+ * because `cdk.json` sets the Region), the `aws login` command adds `--region`.
  */
 export async function credentialFailureMessage({
 	command,
@@ -405,7 +469,17 @@ export async function credentialFailureMessage({
 	env = process.env,
 	profile,
 	readAwsCliVersion: read = readAwsCliVersion,
+	region,
 }: CredentialFailureMessageOptions): Promise<string> {
+	const cliRegion = env.AWS_REGION || env.AWS_DEFAULT_REGION;
+	const pin = Boolean(cliRegion) && cliRegion !== region;
+	const printed: PrintedRegion | undefined =
+		region === undefined
+			? undefined
+			: SHELL_SAFE_REGION.test(region)
+				? { value: region, name: region, arg: region, pin }
+				: { value: region, name: JSON.stringify(region), arg: '<region>', pin };
+	const inRegion = printed ? ` in Region ${printed.name}` : '';
 	let lines: string[];
 	try {
 		const source = await describeCredentialSource(env, profile);
@@ -413,9 +487,14 @@ export async function credentialFailureMessage({
 			source.type === 'none' || source.type === 'login' || source.type === 'missing-profile'
 				? await awsCliLoginSupport(read)
 				: 'unknown';
-		lines = guidanceLines(source, failure, login);
+		const target =
+			'profile' in source && source.profile !== undefined
+				? `Using profile ${profileName(source.profile)}${inRegion}.`
+				: printed && `Using Region ${printed.name}.`;
+		lines = [...(target ? [target] : []), ...guidanceLines(source, failure, login, printed)];
 	} catch {
 		lines = [
+			...(printed ? [`Using Region ${printed.name}.`] : []),
 			'Configure AWS credentials, for example:',
 			'  • run `aws login`, `aws sso login` or `aws configure`, or',
 			'  • set AWS_PROFILE to a configured profile, or',
