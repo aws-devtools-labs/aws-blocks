@@ -86,9 +86,33 @@ function toIssue(d: LintDiagnostic): ValidationIssue {
 	return { rule: d.rule, message: formatDiagnostic(d), doc: COMPAT_DOC };
 }
 
+/** `GRANT ... ON SCHEMA ... TO`, for the `public` check below; `[^;]` keeps a match inside one statement. */
+const GRANT_ON_SCHEMA = /\bGRANT\b[^;]*\bON\s+SCHEMA\s+([^;]*?)\bTO\b/gi;
+
+/** Whether a schema list from `GRANT ... ON SCHEMA` names `public` (unquoted, any case, or quoted exactly). */
+function grantsOnPublic(schemas: string): boolean {
+	return schemas.split(',').some((s) => {
+		const name = s.trim();
+		return name.startsWith('"') ? name === '"public"' : name.toLowerCase() === 'public';
+	});
+}
+
 /** The dsql-lint findings for SQL a `distributed` cluster would be asked to run. */
 export function findStatementIssues(sql: string): ValidationIssue[] {
-	return lintSql(sql).map(toIssue);
+	const issues = lintSql(sql).map(toIssue);
+	// dsql-lint and PGlite both accept this, but DSQL rejects it at runtime:
+	// `public` is a system entity, and custom roles can use it without a grant.
+	for (const m of stripLiteralsAndComments(sql).matchAll(GRANT_ON_SCHEMA)) {
+		if (grantsOnPublic(m[1])) {
+			issues.push({
+				rule: 'grant_on_public_schema',
+				message:
+					'grant_on_public_schema: DSQL rejects GRANT ON SCHEMA public (public is a system entity; roles can use it without a grant). Remove the statement.',
+				doc: COMPAT_DOC,
+			});
+		}
+	}
+	return issues;
 }
 
 /** Validate a SQL statement for `distributed` compatibility. Throws a branded `DsqlValidationError`. */

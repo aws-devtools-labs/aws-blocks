@@ -85,7 +85,9 @@ export async function provisionAppRole(
 		}
 	}
 	await engine.execute(`AWS IAM GRANT ${quoteIdent(dbRoleName)} TO '${escapeString(appRoleArn)}'`);
-	await engine.execute(`GRANT USAGE ON SCHEMA ${quoteIdent(schemaName)} TO ${quoteIdent(dbRoleName)}`);
+	// `public` is a DSQL system entity: a schema-level grant on it is rejected, and custom roles can use it without one.
+	if (schemaName !== 'public')
+		await engine.execute(`GRANT USAGE ON SCHEMA ${quoteIdent(schemaName)} TO ${quoteIdent(dbRoleName)}`);
 	const tables = await engine.query<{ tablename: string }>(
 		`SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename NOT IN ('_migrations', '_migration_progress')`,
 		[schemaName],

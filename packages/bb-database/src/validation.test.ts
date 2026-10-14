@@ -47,6 +47,9 @@ const REJECTED: [sql: string, rule: string][] = [
 	['CREATE SEQUENCE order_no', 'sequence_cache_missing'],
 	['CREATE SEQUENCE order_no CACHE 50', 'sequence_cache'],
 	['SELEC 1', 'parse_error'],
+	// The block's own rule: dsql-lint and PGlite accept these, DSQL rejects them at runtime.
+	['GRANT USAGE ON SCHEMA public TO blocks_app_x', 'grant_on_public_schema'],
+	['GRANT USAGE ON SCHEMA app, "public" TO blocks_app_x', 'grant_on_public_schema'],
 ];
 
 /** SQL DSQL runs today, including features its 2025 rule set used to reject. */
@@ -73,6 +76,9 @@ const ACCEPTED = [
 	'WITH x AS (SELECT 1) SELECT * FROM x',
 	'INSERT INTO _migration_progress (name, step, job_id) VALUES ($1, $2, $3) ON CONFLICT (name) DO UPDATE SET step = EXCLUDED.step',
 	"SELECT sys.wait_for_job('abc') AS ok",
+	'GRANT USAGE ON SCHEMA app TO blocks_app_x',
+	'GRANT USAGE ON SCHEMA "Public" TO blocks_app_x', // quoted is case-sensitive: not the system schema
+	"INSERT INTO notes (text) VALUES ('GRANT USAGE ON SCHEMA public TO x')",
 ];
 
 describe('dsql-lint integration', () => {
