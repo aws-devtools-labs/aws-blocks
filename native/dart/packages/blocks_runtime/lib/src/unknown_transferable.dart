@@ -1,7 +1,8 @@
 import 'package:blocks_runtime/src/transferable_descriptor.dart';
 
 /// Fallback for a direct-result transferable whose tag has no runtime binding
-/// on this platform.
+/// on this platform: holds the [tag] and raw [descriptor] without hydrating
+/// them.
 class UnknownTransferable {
   final String tag;
 

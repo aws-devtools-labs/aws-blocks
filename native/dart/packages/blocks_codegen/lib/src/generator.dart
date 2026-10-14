@@ -482,8 +482,6 @@ class DartCodeGenerator {
     return buf.toString();
   }
 
-  /// Declared names are read back out of the emitted source, not the model, so
-  /// a class this generator starts emitting later cannot bypass the check.
   void _checkBoundTypesNotShadowed(CodegenModel model, String output) {
     final declared = declaredTypeNames(output);
     for (final ns in model.namespaces) {
@@ -499,8 +497,6 @@ class DartCodeGenerator {
     }
   }
 
-  /// The `show` keeps any other name the library exports from colliding with
-  /// the runtime's wholesale import. Sorted, as `directives_ordering` requires.
   List<String> _imports(CodegenModel model) {
     final shown = <String, Set<String>>{};
     for (final ns in model.namespaces) {
@@ -1235,6 +1231,8 @@ class DartCodeGenerator {
     return '$name.fromJson($accessor as Map<String, dynamic>)';
   }
 
+  /// A null return and the builder's `AWSBLOCKS-NATIVE-002` diagnostic both
+  /// derive from [channelMessageHydratable], so the two cannot disagree.
   String? _messageDecoder(
     List<ResolvedType> typeArgs,
     Map<String, ResolvedType> allTypes,
@@ -1246,10 +1244,14 @@ class DartCodeGenerator {
     }
     final arg = typeArgs.isEmpty ? null : typeArgs[0];
     final unwrapped = arg is NullableType ? arg.inner : arg;
+    // A `Map` message is decodable by the `Map`-only runtime: rebuild it
+    // per-value through the shared map decoder.
     if (unwrapped is MapType) {
       return '(json) => json.map((k, v) => MapEntry(k, '
           "${_mapValueFromJson('v', unwrapped.valueType, allTypes)}))";
     }
+    // A `dynamic` message (incl. `dynamic?` and the absent arg), so an
+    // identity decoder type-checks.
     return '(json) => json';
   }
 
@@ -1277,8 +1279,6 @@ class DartCodeGenerator {
     };
   }
 
-  /// Direct results only: a nested, list, or nullable transferable stays
-  /// `dynamic`, as it does for a tag with no binding at all.
   TransferableType? _boundTransferable(ResolvedType type) =>
       type is TransferableType && type.binding != null ? type : null;
 
@@ -1292,8 +1292,9 @@ class DartCodeGenerator {
   }
 
   /// `Type.fromBlocksDescriptor(validated[, decoder])`, the call fixed by the
-  /// `blocks-transferable-v1` ABI. The builder has already dropped an
-  /// arity-one binding whose payload has no decoder, so the `!` holds.
+  /// `blocks-transferable-v1` ABI. `_withDecodableBinding` already dropped any
+  /// arity-one binding whose payload has no decoder, over the same type map
+  /// this receives as `allTypes`, so the `!` holds.
   String _bindingFactoryCall(
     TransferableType type,
     Map<String, ResolvedType> allTypes,
@@ -1310,6 +1311,9 @@ class DartCodeGenerator {
         '.fromBlocksDescriptor($descriptor, $decoder)';
   }
 
+  /// A bare transferable whose tag has no runtime binding (the fallback case).
+  /// A nullable or list-wrapped one is out of scope: `dynamic?` and
+  /// `List<dynamic>`.
   bool _isUnboundTransferable(ResolvedType type) =>
       type is TransferableType && transferableIsUnbound(type);
 

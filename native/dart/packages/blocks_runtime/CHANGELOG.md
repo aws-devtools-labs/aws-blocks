@@ -1,10 +1,7 @@
 ## Unreleased
 
-- Add `validateTransferableDescriptor`, which returns a transferable descriptor
-  after checking its `__blocks` tag against the tag the spec declared, for the
-  `blocks-transferable-v1` factories that generated clients call. For a generic
-  arity of one that factory must be a constructor, since the generated call
-  carries the type argument on the receiver.
+- Add `validateTransferableDescriptor`, which checks a descriptor's `__blocks`
+  tag against the tag the spec declared and returns it.
 - Add `UnknownTransferable`, returned for a direct method result whose
   transferable tag has no known runtime binding, instead of untyped `dynamic`.
 

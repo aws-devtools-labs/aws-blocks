@@ -3,8 +3,6 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
-/// Spawns the real entrypoint, so argument parsing and exit codes are covered
-/// rather than the builder they delegate to.
 ProcessResult _run(List<String> args) => Process.runSync(
   Platform.resolvedExecutable,
   ['run', 'bin/blocks_codegen.dart', ...args],
@@ -57,7 +55,7 @@ String _spec({String? pattern}) => jsonEncode({
         'kind': 'transferable',
         'tag': _tag,
         'package': 'example-iot-native',
-        'export': 'DeviceLink',
+        'export': 'deviceLink',
         'abi': 'blocks-transferable-v1',
         'genericArity': 0,
       },
@@ -102,21 +100,27 @@ void main() {
     });
 
     test('a repeated --native-package-opt-out collects every value', () {
-      final result = _run([
-        '--spec',
-        writeSpec(_spec()),
-        '--native-package-opt-out',
-        'other-native',
-        '--native-package-opt-out',
-        'example-iot-native',
-      ]);
+      // Both orders, so neither first-value-only nor last-value-only passes.
+      for (final order in [
+        ['other-native', 'example-iot-native'],
+        ['example-iot-native', 'other-native'],
+      ]) {
+        final result = _run([
+          '--spec',
+          writeSpec(_spec()),
+          '--native-package-opt-out',
+          order[0],
+          '--native-package-opt-out',
+          order[1],
+        ]);
 
-      expect(result.exitCode, 0, reason: result.stderr.toString());
-      expect(result.stdout, contains('Future<UnknownTransferable>'));
+        expect(result.exitCode, 0, reason: result.stderr.toString());
+        expect(result.stdout, contains('Future<UnknownTransferable>'));
+        expect(result.stdout, isNot(contains('DeviceLink')));
+      }
     });
 
     test('a spec the parser rejects exits 1 with the message', () {
-      // Reachable only because parsing moved inside the entrypoint's `try`.
       final result = _run(['--spec', writeSpec(_spec(pattern: r'abc\'))]);
 
       expect(result.exitCode, 1);
@@ -131,10 +135,35 @@ void main() {
       expect(result.exitCode, 1);
       expect(result.stderr, contains('Could not find an option named'));
       expect(result.stderr, contains('--native-package-opt-out'));
+      expect(result.stdout, isEmpty);
     });
 
-    test('a missing --spec exits 1', () {
-      expect(_run([]).exitCode, 1);
+    test('an empty --native-package-opt-out value exits 1', () {
+      final result = _run([
+        '--spec',
+        writeSpec(_spec()),
+        '--native-package-opt-out',
+        '',
+      ]);
+
+      expect(result.exitCode, 1);
+      expect(result.stderr, contains('requires a package identity'));
+      expect(result.stdout, isEmpty);
+    });
+
+    test('a missing --spec exits 1 with the message', () {
+      final result = _run([]);
+
+      expect(result.exitCode, 1);
+      expect(result.stderr, contains('Error: --spec is required'));
+      expect(result.stdout, isEmpty);
+    });
+
+    test('--help exits 0 with usage on stdout', () {
+      final result = _run(['--help']);
+
+      expect(result.exitCode, 0, reason: result.stderr.toString());
+      expect(result.stdout, contains('--native-package-opt-out'));
     });
   });
 }

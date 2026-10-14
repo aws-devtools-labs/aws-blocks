@@ -905,6 +905,17 @@ describe('rule 6 — malformed metadata', () => {
 });
 
 describe('rule 7 — values a generator interpolates into generated source', () => {
+	function pkgWith(dart: Record<string, string>): NativeDeclarationSource {
+		return source({
+			packages: [
+				{
+					identity: 'example-iot-native',
+					platforms: { dart: { package: { name: 'example_iot_native', library: 'x.dart', ...dart } } },
+				},
+			],
+		});
+	}
+
 	it('rejects a dart package name that is not a pub package name', () => {
 		for (const name of ['My-Package', ' example_iot ', 'example-iot', '0example', 'Example']) {
 			const errors = errorsFrom([
@@ -946,6 +957,8 @@ describe('rule 7 — values a generator interpolates into generated source', () 
 	});
 
 	it('accepts the dart library forms a package may legitimately publish', () => {
+		// Control: a validator that never runs would also report no errors below.
+		assert.notDeepStrictEqual(paths(errorsFrom([pkgWith({ library: 'lib/x.dart' })])), []);
 		for (const library of ['example_iot_native.dart', 'src/public_api.dart', 'api.g.dart']) {
 			const errors = errorsFrom([
 				source({
@@ -979,13 +992,35 @@ describe('rule 7 — values a generator interpolates into generated source', () 
 	});
 
 	it('accepts the export forms a generator can upper-camel-case', () => {
+		// Control: a validator that never runs would also report no errors below.
+		assert.notDeepStrictEqual(paths(errorsFrom([source({ bindings: [binding({ export: 'device link' })] })])), []);
 		for (const exported of ['deviceLink', 'DeviceLink', 'device_link', 'device-link', 'device.link', 'Link2']) {
 			const errors = errorsFrom([source({ bindings: [binding({ export: exported })] })]);
 			assert.deepStrictEqual(paths(errors), []);
 		}
 	});
 
+	it('rejects a dart package name the generated client already imports', () => {
+		const errors = errorsFrom([
+			source({
+				packages: [
+					{
+						identity: 'example-iot-native',
+						platforms: { dart: { package: { name: 'blocks_runtime', library: 'x.dart' } } },
+					},
+				],
+			}),
+		]);
+
+		assert.deepStrictEqual(paths(errors), [
+			'x-blocks-native-packages.packages["example-iot-native"].platforms.dart.package.name',
+		]);
+		assert.match(errors[0].message, /name a package other than "blocks_runtime"/);
+	});
+
 	it('constrains only the platforms that declare a grammar', () => {
+		// Control: a validator that never runs would also report no errors below.
+		assert.notDeepStrictEqual(paths(errorsFrom([pkgWith({ name: 'My-Package' })])), []);
 		const errors = errorsFrom([
 			source({
 				packages: [

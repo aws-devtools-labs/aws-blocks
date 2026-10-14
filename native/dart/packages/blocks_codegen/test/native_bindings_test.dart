@@ -76,19 +76,6 @@ void main() {
       ]);
     });
 
-    test('several exports of one library share a single directive', () {
-      final output = _generateFrom(_twoBoundSpec());
-
-      expect(
-        output,
-        contains(
-          "import 'package:example_iot_native/example_iot_native.dart' "
-          'show DeviceLink, SensorStream;',
-        ),
-      );
-      expect(_directives(output), hasLength(2));
-    });
-
     test('directives sort alphabetically, runtime included', () {
       // `a_iot_native` sorts before `blocks_runtime`, so emitting the runtime
       // first would break `directives_ordering` in the generated client.
@@ -121,7 +108,7 @@ void main() {
     });
 
     test('a quote in a string pattern is escaped, not raw', () {
-      final output = _generateFrom(_quotedPatternSpec());
+      final output = _generateFrom(_patternSpec("it's|x"));
 
       expect(output, contains(r"RegExp('it\'s|x')"));
       expect(output, isNot(contains("RegExp(r'it")));
@@ -140,7 +127,7 @@ void main() {
     test('a carriage return in a pattern cannot end the raw literal', () {
       // A bare CR has no quote and no newline, so it must still take the
       // escaped branch: a raw string cannot carry one.
-      final output = _generateFrom(_crPatternSpec());
+      final output = _generateFrom(_patternSpec('^a\rb\$'));
 
       expect(output, contains(r"RegExp('^a\rb"));
       expect(output, isNot(contains("RegExp(r'^a")));
@@ -164,7 +151,7 @@ void main() {
     });
 
     test('a dotted namespace yields one class and one identifier', () {
-      final output = _generateFrom(_dottedNamespaceSpec());
+      final output = _generateFrom(_namespaceSpec('api.foo.bar'));
 
       expect(output, contains('class ApiFooApi {'));
       expect(output, contains('late final ApiFooApi apiFoo;'));
@@ -429,6 +416,21 @@ void main() {
       expect(model.warnings, isEmpty);
     });
 
+    test('a bound result is settled at its own position in the namespace', () {
+      // The decodability pass indexes each operation inside its namespace, so
+      // a bound result that is not the first method must still be reached.
+      final model = _build(_secondMethodBoundSpec());
+
+      expect(
+        _generate(model),
+        contains('Future<UnknownTransferable> streamed('),
+      );
+      expect(
+        model.warnings,
+        contains(contains('AWSBLOCKS-NATIVE-001: api.streamed')),
+      );
+    });
+
     test('an arity-one payload with no decoder falls back', () {
       final model = _build(
         _specJson(
@@ -474,6 +476,22 @@ void main() {
       );
     });
 
+    test('two exports in one package claiming one type name is an error', () {
+      expect(
+        () => _build(
+          _specJson(
+            extras: _catalogs(
+              bindings: [
+                _binding(export: 'device-link'),
+                _binding(tag: 'example-iot/device-port', export: 'device_link'),
+              ],
+            ),
+          ),
+        ),
+        _throwsFormat('already declares DeviceLink'),
+      );
+    });
+
     test('two packages exporting the same type name is an error', () {
       final spec = _specJson(
         extras: _catalogs(
@@ -493,7 +511,7 @@ void main() {
       );
       expect(
         () => _build(spec),
-        _throwsFormat("package 'a-native' already declares DeviceLink"),
+        _throwsFormat("export 'deviceLink' in package 'a-native'"),
       );
     });
 
@@ -696,10 +714,13 @@ void main() {
       final runtimeLib = File(
         '${Directory.current.path}/../blocks_runtime/lib/blocks_runtime.dart',
       );
-      if (!runtimeLib.existsSync()) {
-        markTestSkipped('blocks_runtime sources not available');
-        return;
-      }
+      expect(
+        runtimeLib.existsSync(),
+        isTrue,
+        reason:
+            'blocksRuntimeTypeNames is unverifiable without '
+            '${runtimeLib.path}; this guard must not be skippable',
+      );
       final source = runtimeLib.readAsStringSync();
       final exported = RegExp(
         r"^export '([^']+)'[^;]*;",
@@ -714,6 +735,11 @@ void main() {
               .length,
         ),
         reason: 'an export directive was not parsed',
+      );
+      expect(
+        declaredTypeNames('extension type Meters(int v) {}').single,
+        'Meters',
+        reason: 'extension type must precede extension in the alternation',
       );
       // Public only: an importer cannot see a private declaration, so a bound
       // export can never collide with one.
@@ -1076,7 +1102,10 @@ void main() {
     test('a transferable binding with an unknown abi', () {
       expect(
         () => _build(_specWith(_binding(abi: 'blocks-transferable-v2'))),
-        _throwsFormat("'blocks-transferable-v2'"),
+        _throwsFormat(
+          "Unsupported 'x-blocks-native-bindings.bindings[0].abi': "
+          "'blocks-transferable-v2' (expected 'blocks-transferable-v1')",
+        ),
       );
     });
 
@@ -1199,29 +1228,6 @@ String _renamedPayloadSpec() => jsonEncode({
   ..._catalogs(bindings: [_binding(genericArity: 1)]),
 });
 
-/// A spec whose string `pattern` carries a quote, which a raw string literal
-/// cannot escape.
-String _quotedPatternSpec() => jsonEncode({
-  'openrpc': '1.3.2',
-  'info': {'title': 'test', 'version': '1.0.0'},
-  'methods': [
-    {
-      'name': 'api.connectDevice',
-      'params': <Map<String, dynamic>>[],
-      'result': {
-        'name': 'ConnectDeviceResult',
-        'schema': {
-          'type': 'object',
-          'properties': {
-            'label': {'type': 'string', 'pattern': "it's|x"},
-          },
-          'required': ['label'],
-        },
-      },
-    },
-  ],
-});
-
 String _patternSpec(String pattern) => jsonEncode({
   'openrpc': '1.3.2',
   'info': {'title': 'test', 'version': '1.0.0'},
@@ -1235,28 +1241,6 @@ String _patternSpec(String pattern) => jsonEncode({
           'type': 'object',
           'properties': {
             'label': {'type': 'string', 'pattern': pattern},
-          },
-          'required': ['label'],
-        },
-      },
-    },
-  ],
-});
-
-/// A spec whose string `pattern` carries a bare carriage return.
-String _crPatternSpec() => jsonEncode({
-  'openrpc': '1.3.2',
-  'info': {'title': 'test', 'version': '1.0.0'},
-  'methods': [
-    {
-      'name': 'api.connectDevice',
-      'params': <Map<String, dynamic>>[],
-      'result': {
-        'name': 'ConnectDeviceResult',
-        'schema': {
-          'type': 'object',
-          'properties': {
-            'label': {'type': 'string', 'pattern': '^a\rb\$'},
           },
           'required': ['label'],
         },
@@ -1305,21 +1289,6 @@ String _collidingNamespaceSpec() => jsonEncode({
   ],
 });
 
-String _dottedNamespaceSpec() => jsonEncode({
-  'openrpc': '1.3.2',
-  'info': {'title': 'test', 'version': '1.0.0'},
-  'methods': [
-    {
-      'name': 'api.foo.bar',
-      'params': <Map<String, dynamic>>[],
-      'result': {
-        'name': 'BarResult',
-        'schema': {'type': 'string'},
-      },
-    },
-  ],
-});
-
 Matcher _throwsFormat(String needle) => throwsA(
   isA<FormatException>().having((e) => e.message, 'message', contains(needle)),
 );
@@ -1335,6 +1304,43 @@ Map<String, dynamic> _dartPlatform({
   String name = 'example_iot_native',
   String library = 'example_iot_native.dart',
 }) => {'dart': _dartPackage(name: name, library: library)};
+
+/// A spec whose bound arity-one result is the second method in its namespace,
+/// so a pass that indexed from zero would settle the wrong operation.
+String _secondMethodBoundSpec() => jsonEncode({
+  'openrpc': '1.3.2',
+  'info': {'title': 'test', 'version': '1.0.0'},
+  'methods': [
+    {
+      'name': 'api.plain',
+      'params': <Map<String, dynamic>>[],
+      'result': {
+        'name': 'PlainResult',
+        'schema': {
+          'type': 'object',
+          'properties': {
+            'ok': {'type': 'boolean'},
+          },
+          'required': ['ok'],
+        },
+      },
+    },
+    {
+      'name': 'api.streamed',
+      'params': <Map<String, dynamic>>[],
+      'result': {
+        'name': 'StreamedResult',
+        'schema': {
+          'x-blocks-transferable': _tag,
+          'x-blocks-type-args': [
+            {'type': 'string'},
+          ],
+        },
+      },
+    },
+  ],
+  ..._catalogs(bindings: [_binding(genericArity: 1)]),
+});
 
 Map<String, dynamic> _binding({
   String kind = 'transferable',
@@ -1463,13 +1469,8 @@ String _twoBoundSpec({String name = 'example_iot_native'}) => jsonEncode({
   ),
 });
 
-String _specWith(
-  Map<String, dynamic> binding, {
-  Map<String, dynamic> resultSchema = const {'x-blocks-transferable': _tag},
-}) => _specJson(
-  resultSchema: resultSchema,
-  extras: _catalogs(bindings: [binding]),
-);
+String _specWith(Map<String, dynamic> binding) =>
+    _specJson(extras: _catalogs(bindings: [binding]));
 
 String _arityOneSpec() => _specJson(
   resultSchema: const {

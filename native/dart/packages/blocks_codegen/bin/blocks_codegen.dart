@@ -25,7 +25,8 @@ void main(List<String> args) {
       'native-package-opt-out',
       help:
           'Logical native package identity whose transferable bindings are '
-          'not applied, so its results stay UnknownTransferable. Repeatable.',
+          'not applied, so its direct results stay UnknownTransferable. '
+          'Repeatable.',
     )
     ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
 
@@ -72,7 +73,14 @@ void main(List<String> args) {
   final contents = specFile.readAsStringSync();
   final failOnCollision = results['fail-on-collision'] as bool;
   final optedOutPackages = (results['native-package-opt-out'] as List<String>)
+      .map((s) => s.trim())
       .toSet();
+  if (optedOutPackages.remove('')) {
+    stderr.writeln(
+      'Error: --native-package-opt-out requires a package identity',
+    );
+    exit(1);
+  }
   final String output;
   try {
     final rpcModel = const OpenRpcParser().parse(contents);

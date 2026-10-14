@@ -79,6 +79,12 @@ const PLATFORM_FIELD_GRAMMARS: Partial<
 /** An export must name a public type once a generator upper-camel-cases it. */
 const EXPORT_GRAMMAR = /^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$/;
 
+/**
+ * Every generated Dart client imports this library, so a declared package of
+ * the same name would emit a second directive for it.
+ */
+const DART_RESERVED_PACKAGE_NAMES: readonly string[] = ['blocks_runtime'];
+
 export function validateNativeCatalogs(
 	sources: readonly NativeDeclarationInput[],
 	methods: readonly ValidatableMethod[] = [],
@@ -313,6 +319,15 @@ function validatePlatformEntry(
 			errors.push({
 				path: `${pkgPath}.${field}`,
 				message: `${platform} "package" requires "${field}" to be ${grammar.shape}, got "${value}" (${declaredBy})`,
+			});
+			continue;
+		}
+		if (platform === 'dart' && field === 'name' && DART_RESERVED_PACKAGE_NAMES.includes(value)) {
+			errors.push({
+				path: `${pkgPath}.${field}`,
+				message:
+					`${platform} "package" requires "${field}" to name a package other than ` +
+					`"${value}", which every generated client already imports (${declaredBy})`,
 			});
 		}
 	}

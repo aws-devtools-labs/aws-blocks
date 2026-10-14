@@ -2,11 +2,11 @@
 
 - Resolve a direct result's transferable tag through the spec's
   `x-blocks-native-packages` and `x-blocks-native-bindings` catalogs, emitting
-  the declared package import, its export in upper camel case, and
+  the declared import, its export in upper camel case, and
   `fromBlocksDescriptor` instead of `UnknownTransferable`. Generic arity one
-  specializes the type with the generated payload model and passes its decoder;
-  a concrete primitive, list, enum, or tuple payload has no decoder and falls
-  back.
+  specializes the type with the generated model and passes its decoder.
+- Fall back to `UnknownTransferable` for an arity-one declared binding whose
+  payload has no generated decoder, since the ABI has no decoder-less call.
 - Add the `native_package_opt_out` builder option and `--native-package-opt-out`
   flag, which exclude a logical package identity from binding resolution.
 - Warn with `AWSBLOCKS-NATIVE-003` for a declared native package that no binding
@@ -32,16 +32,19 @@
   colliding with it, so the generated client would not compile.
 - Report a spec or binding error as `Error: <message>` and exit 1, matching the
   existing naming-collision path, instead of an unhandled exception and exit
-  255. This also covers malformed JSON and a missing `info` or `methods`
-  section, which crashed before.
+  255. This also covers malformed JSON and a missing or malformed `info` or
+  `methods` section, which crashed before.
 - Import a declared package with a `show` of just the bound type, and reject a
   binding whose export resolves to a type name that `blocks_runtime`, another
   declared package, or the generated client itself already declares.
 - Reject a declared Dart package whose `name` is not a pub package name or whose
   `library` is not a `.dart` path inside `lib/`, since both are interpolated
   into the generated import directive.
-- Escape newlines in `info.title` and `info.version` so a spec cannot place a
-  declaration in the generated file's header comment.
+- Reject a binding whose `export` is not a delimited run of alphanumeric
+  segments starting with a letter, since the generator upper-camel-cases it into
+  a type name in the generated client.
+- Escape line terminators in `info.title` and `info.version` so a spec cannot
+  place a declaration in the generated file's header comment.
 - Generate `UnknownTransferable` (with an `AWSBLOCKS-NATIVE-001` diagnostic) for
   a direct result whose transferable tag has no known binding, instead of `dynamic`.
 - Hydrate a nullable bound transferable result (e.g. `RealtimeChannel<T>?`)

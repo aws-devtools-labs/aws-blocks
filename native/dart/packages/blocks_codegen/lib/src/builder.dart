@@ -5,8 +5,7 @@ const _packagesExtension = 'x-blocks-native-packages';
 const _transferableKind = 'transferable';
 final _exportGrammar = RegExp(r'^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$');
 
-/// A declared binding cannot replace one of these; any other tag resolves
-/// through the binding catalog.
+/// A declared binding cannot replace one of these.
 const knownTransferableTags = {
   'realtime/channel',
   'file-bucket/download',
@@ -49,9 +48,8 @@ const dartCoreTypeNames = {
   'num',
 };
 
-/// Public top-level types of `package:blocks_runtime/blocks_runtime.dart`,
-/// which every generated client imports wholesale. A bound export resolving to
-/// one of these would make the emitted file's reference ambiguous.
+/// The generated client imports the runtime wholesale, so a bound export
+/// resolving to one of these would be ambiguous.
 const blocksRuntimeTypeNames = {
   'AuthProvider',
   'AuthorizeParamsResponse',
@@ -201,7 +199,6 @@ class TransferableType extends ResolvedType {
   });
 }
 
-/// A direct result of an unbound [type] becomes `UnknownTransferable`.
 bool transferableIsUnbound(TransferableType type) =>
     type.binding == null && !knownTransferableTags.contains(type.blocksType);
 
@@ -345,8 +342,7 @@ class CodegenModelBuilder {
   // so a rename of the target can be propagated to all references.
   final Map<ResolvedType, List<SchemaReference>> _dedupRefs = {};
 
-  // Every `$ref`-derived reference, keyed by the spec schema name it names, so
-  // a Pass 3 rename of that schema reaches them.
+  // Keyed by the spec schema name the `$ref` names, not the Dart name.
   final Map<String, List<SchemaReference>> _schemaRefs = {};
   // Non-fatal diagnostics produced during the build.
   final List<String> _warnings = [];
@@ -422,6 +418,8 @@ class CodegenModelBuilder {
         '${method.name}#result',
       );
 
+      // Bare transferable only: a nullable/list/record-wrapped one is a
+      // different ResolvedType and skipped, matching the generator's fallback.
       // Decodability is settled after Pass 3, which can rename the payload a
       // type-arg `$ref` resolves to, so deciding here would bind the result to
       // a model the generator no longer sees.
@@ -1046,8 +1044,6 @@ class CodegenModelBuilder {
     }
   }
 
-  /// A `$ref` names a spec schema, so only a renamed *named schema* origin
-  /// has any reference to move.
   void _followSchemaRefs(_TypeOrigin origin, String newName) {
     const prefix = 'schema:';
     if (!origin.canonicalKey.startsWith(prefix)) return;
@@ -1098,12 +1094,9 @@ class CodegenModelBuilder {
         '(or pass --fail-on-collision to make this an error).';
   }
 
-  /// Throws a [FormatException] when a binding names a package the catalog does
-  /// not declare, an export that cannot name a public Dart type, or an export
-  /// whose type name another imported library already declares.
   void _resolveBindings(RpcModel rpc) {
     final referenced = <String>{};
-    final claimed = <String, String>{};
+    final claimed = <String, ({String package, String export})>{};
     for (final binding in rpc.nativeBindings) {
       if (!rpc.nativePackages.containsKey(binding.package)) {
         throw FormatException(
@@ -1120,7 +1113,7 @@ class CodegenModelBuilder {
       if (package == null) continue;
       final typeName = _exportTypeName(binding.export);
       _checkTypeNameUnclaimed(binding, typeName, claimed);
-      claimed[typeName] = binding.package;
+      claimed[typeName] = (package: binding.package, export: binding.export);
       _bindings[binding.tag] = TransferableBinding(
         typeName: typeName,
         packageName: package.name,
@@ -1138,23 +1131,22 @@ class CodegenModelBuilder {
     }
   }
 
-  /// Throws a [FormatException] when [typeName] is already declared by
-  /// `dart:core`/`dart:async`, by `blocks_runtime`, or by another package's
-  /// export. The first shadows silently and the other two are ambiguous, since
-  /// the client imports the runtime wholesale and one library per bound package.
+  /// Two tags may share one export, but two exports cannot share a type name.
   void _checkTypeNameUnclaimed(
     NativeBinding binding,
     String typeName,
-    Map<String, String> claimed,
+    Map<String, ({String package, String export})> claimed,
   ) {
     final String? occupant;
     if (dartCoreTypeNames.contains(typeName)) {
       occupant = 'dart:core or dart:async';
     } else if (blocksRuntimeTypeNames.contains(typeName)) {
       occupant = 'package:blocks_runtime/blocks_runtime.dart';
-    } else if (claimed.containsKey(typeName) &&
-        claimed[typeName] != binding.package) {
-      occupant = "package '${escapeForDiagnostic(claimed[typeName]!)}'";
+    } else if (claimed[typeName] case final prior?
+        when prior != (package: binding.package, export: binding.export)) {
+      occupant =
+          "export '${escapeForDiagnostic(prior.export)}' in package "
+          "'${escapeForDiagnostic(prior.package)}'";
     } else {
       occupant = null;
     }
@@ -1178,9 +1170,6 @@ class CodegenModelBuilder {
     return export.split(RegExp(r'[-_.]+')).map(_capitalize).join();
   }
 
-  /// Throws a [FormatException] when a bound result's `x-blocks-type-args`
-  /// count differs from its binding's declared generic arity, which would
-  /// specialize the package type with the wrong number of models.
   void _checkBindingArity(String operation, TransferableType type) {
     final binding = type.binding;
     if (binding == null) return;
@@ -1193,9 +1182,9 @@ class CodegenModelBuilder {
     }
   }
 
-  /// Drops a binding whose arity-one payload has no generated decoder, so the
-  /// result takes the `UnknownTransferable` fallback and `AWSBLOCKS-NATIVE-001`
-  /// rather than declaring a package type the generated body cannot produce.
+  /// Dropping the binding routes the result to the `UnknownTransferable`
+  /// fallback and `AWSBLOCKS-NATIVE-001`, since the v1 ABI has no decoder-less
+  /// arity-one call.
   TransferableType _withDecodableBinding(TransferableType type) {
     final binding = type.binding;
     if (binding == null || binding.genericArity == 0) return type;
@@ -1213,8 +1202,7 @@ class CodegenModelBuilder {
 /// Whether a generic transferable's message type-arg can be hydrated by the
 /// `Map`-only runtime. An object (record or sealed class, including via `$ref`
 /// and the nullable `T?` form) hydrates via `fromJson`, a `Map` per-value, and
-/// `dynamic`/`dynamic?`/absent gets an identity decoder. A concrete primitive,
-/// list, enum, or tuple has none.
+/// `dynamic`/`dynamic?`/absent gets an identity decoder.
 bool channelMessageHydratable(
   List<ResolvedType> typeArgs,
   Map<String, ResolvedType> allTypes,

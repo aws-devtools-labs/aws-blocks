@@ -180,7 +180,7 @@ When a bare direct result's `x-blocks-transferable` tag has no known runtime bin
 
 The unbound fallback is direct-only; a transferable in any other position is unchanged from before the fallback, except that on Kotlin a nullable result still fails code generation.
 
-A nullable result carrying a *built-in* transferable tag does hydrate to its optional concrete type. A declared binding is direct-only in iteration 1: a nullable, nested, or list-wrapped result keeps the pre-fallback type.
+A nullable result carrying a *built-in* transferable tag does hydrate to its optional concrete type. A declared binding is direct-only in iteration 1: a nullable, nested, or list-wrapped result keeps the pre-fallback type, and does so silently — only a bare direct result reports `AWSBLOCKS-NATIVE-001`.
 
 ---
 

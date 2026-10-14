@@ -272,6 +272,9 @@ class RpcModel {
 
   final List<Server> servers;
 
+  /// Null for a package the spec declares with no `platforms.dart` entry, an
+  /// intentional absence: a binding on a tag with no built-in falls back to
+  /// `UnknownTransferable`; a built-in tag is unaffected.
   final Map<String, DartNativePackage?> nativePackages;
 
   final List<NativeBinding> nativeBindings;

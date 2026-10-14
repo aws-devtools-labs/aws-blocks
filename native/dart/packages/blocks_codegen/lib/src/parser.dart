@@ -12,8 +12,6 @@ const _maxGenericArity = 1;
 
 final _pubPackageName = RegExp(r'^[a-z_][a-z0-9_]*$');
 
-/// The runtime every generated client imports wholesale. A declared package of
-/// the same name would emit two directives for one library.
 const _runtimePackage = 'blocks_runtime';
 
 /// Every segment must start with `[a-z_]`, so no segment can be `..` and the
@@ -40,8 +38,8 @@ class OpenRpcParser {
       throw FormatException('Invalid JSON in spec: ${e.message}');
     }
     final spec = decoded as Map<String, dynamic>;
-    final info = spec['info'] as Map<String, dynamic>?;
-    if (info == null) {
+    final info = spec['info'];
+    if (info is! Map<String, dynamic>) {
       throw const FormatException("Expected 'info' object in spec root");
     }
     final methodsList = spec['methods'];
@@ -196,8 +194,6 @@ class OpenRpcParser {
     }).toList();
   }
 
-  /// Throws when the catalog is present with a `schemaVersion` this parser does
-  /// not implement.
   Map<String, dynamic>? _catalog(Map<String, dynamic> spec, String key) {
     final catalog = spec[key];
     if (catalog == null) return null;
@@ -215,7 +211,6 @@ class OpenRpcParser {
     return catalog;
   }
 
-  /// [shape] names the expected form in the error message.
   String _requiredMatch(
     Map<String, dynamic> owner,
     String field,
@@ -521,9 +516,9 @@ class OpenRpcParser {
     return null;
   }
 
-  /// [pattern] unchanged, or a [FormatException] when Dart cannot compile it.
-  /// The generator emits it into a `RegExp`, so an invalid one analyzes without
-  /// error and throws on the customer's first call, where the spec is gone.
+  /// The generator emits [pattern] into a `RegExp`, so an invalid one analyzes
+  /// without error and throws on the customer's first call, where the spec is
+  /// gone.
   String? _validRegExp(String? pattern) {
     if (pattern == null) return null;
     try {
