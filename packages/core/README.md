@@ -468,3 +468,39 @@ Multiple patterns are comma-separated. If a pattern is invalid regex, it falls b
 > **Escape the dots.** Because each entry is a regex, an unescaped `.` matches *any* character — so `https://app.example.com` also matches unrelated hosts like `https://appXexample.com`. Always escape literal dots: write `https://app\\.example\\.com`, not `https://app.example.com`. Each entry is compiled as `^(?:<entry>)$`, so it must match the whole origin: `^https://app\\.example\\.com` (or just `https://app\\.example\\.com`) matches that exact origin, not `https://app.example.com.extra`. Because the anchors wrap the whole expression, every branch of a top-level `|` alternation is anchored too. Prefer separate comma-separated entries over one `|`-joined entry for readability. The CloudFront origin the `Hosting` construct injects for you is always escaped and anchored automatically.
 
 If an origin doesn't match any pattern, the handler omits the `Access-Control-Allow-Origin` header (browser blocks the response) and logs a `[CORS]` warning to CloudWatch.
+
+## IAM: permissions boundary and the composed-policy report
+
+Every Blocks compute (the API handler, raw routes, queue/cron/WebSocket handlers, the agent runtime) runs as **one shared execution role**, and every Building Block grants its permissions onto that role. The role is therefore the union of what all your blocks need.
+
+### See what the role holds: `<stack>.blocks-iam.json`
+
+Every synth writes a report of the shared role's composed policy next to the template in `cdk.out/`: `<stackName>.blocks-iam.json` for a `BlocksStack`, or `<stackName>.<backendId>.blocks-iam.json` for each embedded `BlocksBackend`. It lists every statement (actions, resources, conditions), the managed policies, the boundary in force, and the other roles Blocks created. Each statement carries a `blocks` field: the `fullId`s of the Building Blocks that own the resources it references. The file is sorted and deterministic, so a CI step can diff it against the previous build and fail when an app's permissions grow unexpectedly:
+
+```bash
+NODE_OPTIONS="--conditions=cdk" npx cdk synth --quiet
+jq '.executionRole.statements[] | {actions, blocks}' cdk.out/my-app.blocks-iam.json
+```
+
+The report is CDK-only and doesn't change the CloudFormation template.
+
+### Cap every role: `defaults.permissionsBoundary`
+
+A [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) is a ceiling: a role's effective permissions are the intersection of its policies and the boundary. Set `defaults.permissionsBoundary` to attach one to **every** IAM role AWS Blocks creates: the shared execution role, block-owned helper roles, the CDK custom-resource roles blocks cause, and `Hosting`'s roles (including the Lambda@Edge and CloudFront-monitoring roles in the separate `us-east-1` stacks).
+
+```typescript
+// aws-blocks/index.cdk.ts
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: { ...BlocksPresets.production, permissionsBoundary: 'my-app-boundary' },
+});
+```
+
+Pass the policy's name (resolved in the deploying account), its full ARN (required when the policy has a path), or an `iam.IManagedPolicy`. The option is unset in both presets, and unset leaves templates unchanged.
+
+This is the hook a platform needs when many apps deploy through one pipeline: the platform restricts its CloudFormation execution role so that `iam:CreateRole` / `iam:PutRolePolicy` are allowed only with an `iam:PermissionsBoundary` condition naming its boundary, and each app sets `permissionsBoundary` to that policy. A role created without it fails the deploy.
+
+- **Scope.** On a `BlocksStack` the boundary covers every role in the stack. On an embedded `BlocksBackend` it covers the backend's subtree plus the stack-level CDK singleton roles its blocks add; roles your stack already had are left alone. Bound those, and any other stack, yourself with `iam.PermissionsBoundary.of(stack).apply(policy)`.
+- **With CDK's `@aws-cdk/core:permissionsBoundary` context.** The context bounds every role in the app. When both are set, `defaults.permissionsBoundary` wins for the roles Blocks creates and synth warns. Set the context in `cdk.json` (the `-c '@aws-cdk/core:permissionsBoundary={"name":"…"}'` CLI form passes a string, which CDK ignores). The context doesn't reach the cross-region-reference provider roles CDK adds while preparing the app, such as the ones off-region `Hosting` causes; `defaults.permissionsBoundary` does.
+- **What it doesn't do.** A boundary caps the shared role; it doesn't split it. Every handler still runs as the same role, so a bug in one block can still use another block's grants, up to the boundary. Separately deployed apps that need isolation from each other belong in separate AWS accounts.
