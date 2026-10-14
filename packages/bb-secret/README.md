@@ -33,7 +33,7 @@ const secret = new Secret(scope, id, options?)
 | `schema` | `StandardSchemaV1<T>` | No | Runtime validation schema (Zod, Valibot, ArkType). Infers `T`, treats the stored value as JSON, and validates on `get()`/`put()`. Omit for an opaque `string`. |
 | `secret` | `ExternalSecretRef` | No | Wrap an existing Secrets Manager secret from `Secret.fromExisting(arn)` instead of creating one. |
 | `generate` | `boolean` | No | When `true`, seed a random value on first create (for a signing/HMAC key that only needs to exist). Otherwise the secret starts empty and `get()` returns `null` until set. Don't combine with `schema`. |
-| `cacheTtlSeconds` | `number` | No | Bound how long the runtime reuses a cached value before re-fetching. Omit for no expiry (cache for the process lifetime) — fine for request-scoped compute. Set a value on long-running compute so a rotated secret is picked up without a redeploy. Ignored by the mock. |
+| `cacheTtlSeconds` | `number` | No | How long the runtime reuses a cached value before re-fetching. **Defaults to 300s (5 min)**, matching the AWS Secrets Manager agent — a bounded default so a long-running process can't serve a rotated value indefinitely. Raise it to cut fetches, lower it for fresher reads, or set `0` to disable caching. `put()` always clears the cache. Ignored by the mock. |
 | `removalPolicy` | `'destroy' \| 'retain'` | No | Override the stack-wide removal default for the created secret. Ignored by the mock and when wrapping an existing secret. |
 | `logger` | `ChildLogger` | No | Optional logger for internal operations. Defaults to an error-level logger. |
 
@@ -208,7 +208,7 @@ For anything deeper than the current/previous pair (full history, custom staging
 ## Scaling & cost (AWS)
 
 - **Billing:** $0.40 per secret per month (prorated hourly) + $0.05 per 10,000 API calls. No free tier.
-- **Latency:** low-tens-of-ms per API call; the runtime caches the fetched value in-process, so steady-state reads hit the cache, not the API. By default a cached value lives for the life of the process (picked up fresh when request-scoped compute recycles); set `cacheTtlSeconds` on long-running compute to bound how long a rotated value can go unnoticed.
+- **Latency:** low-tens-of-ms per API call; the runtime caches the fetched value in-process, so steady-state reads hit the cache, not the API. A cached value is held for `cacheTtlSeconds` — **default 5 minutes** (matching the AWS Secrets Manager agent) — so a rotated value is picked up within the TTL even on a long-running process; raise it to cut fetches, or set `0` to disable caching.
 - **Throughput:** GetSecretValue scales to thousands of requests/sec per account (default quotas, raisable). Reads are the hot path; `put()` is rare.
 - **Value size limit:** 64 KB per secret value.
 - **Version history:** `listVersions()` returns the **labeled** versions — current + previous. Secrets Manager retains additional unlabeled versions internally (until >100, never removing any created in the last 24h), but the BB surfaces only current/previous; reach for the AWS SDK for deeper history.

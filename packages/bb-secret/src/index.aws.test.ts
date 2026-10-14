@@ -139,18 +139,38 @@ describe('AWS runtime read cache — cacheTtlSeconds', () => {
 		}
 	});
 
-	test('without cacheTtlSeconds the cache never expires (process-lifetime)', async () => {
+	test('default TTL is 5 minutes — reused within, re-fetched after', async () => {
 		mock.timers.enable({ apis: ['Date'] });
 		const { commands, restore } = stubSend(() => ({ SecretString: 'sk-1' }));
 		try {
-			const secret = new Secret(new Scope('app'), 'ttl-none', { secret: Secret.fromExisting(TEST_ARN) });
-			assert.strictEqual(await secret.get(), 'sk-1');
-			mock.timers.tick(24 * 60 * 60 * 1000); // a full day later
-			assert.strictEqual(await secret.get(), 'sk-1');
-			assert.strictEqual(getCalls(commands).length, 1, 'default (no TTL) caches for the life of the process');
+			// No cacheTtlSeconds → the AWS-agent default of 300s applies.
+			const secret = new Secret(new Scope('app'), 'ttl-default', { secret: Secret.fromExisting(TEST_ARN) });
+			assert.strictEqual(await secret.get(), 'sk-1'); // call 1
+			mock.timers.tick(299_000); // just inside 5 min
+			assert.strictEqual(await secret.get(), 'sk-1'); // cache hit
+			assert.strictEqual(getCalls(commands).length, 1, 'reads within the 5-min default must not re-fetch');
+			mock.timers.tick(2_000); // cross 300s
+			assert.strictEqual(await secret.get(), 'sk-1'); // re-fetched
+			assert.strictEqual(getCalls(commands).length, 2, 'reads past the 5-min default must re-fetch');
 		} finally {
 			restore();
 			mock.timers.reset();
+		}
+	});
+
+	test('cacheTtlSeconds: 0 disables caching — every read re-fetches', async () => {
+		const { commands, restore } = stubSend(() => ({ SecretString: 'sk-1' }));
+		try {
+			const secret = new Secret(new Scope('app'), 'ttl-zero', {
+				secret: Secret.fromExisting(TEST_ARN),
+				cacheTtlSeconds: 0,
+			});
+			assert.strictEqual(await secret.get(), 'sk-1');
+			assert.strictEqual(await secret.get(), 'sk-1');
+			assert.strictEqual(await secret.get(), 'sk-1');
+			assert.strictEqual(getCalls(commands).length, 3, 'ttl 0 must re-fetch on every read');
+		} finally {
+			restore();
 		}
 	});
 });

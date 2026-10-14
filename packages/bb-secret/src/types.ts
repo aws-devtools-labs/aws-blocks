@@ -81,20 +81,18 @@ export interface SecretOptions<T = string> {
 	 * its in-process read cache before re-fetching on the next `get()`.
 	 *
 	 * The runtime caches each fetched value in memory so steady-state reads don't
-	 * bill a fetch on every call (see {@link Secret.get}). The cache lives for the
-	 * life of the process, and a `put()` from within the app clears it.
+	 * bill a fetch on every call (see {@link Secret.get}). A `put()` from within
+	 * the app clears the cache immediately, so this TTL only bounds how long an
+	 * *out-of-band* change (a rotation via the console/CLI, or another process's
+	 * `put()`) can go unnoticed.
 	 *
-	 * - **Omitted (default)** — no expiry: a fetched value is cached for the whole
-	 *   process lifetime. On request-scoped compute (where a process handles one
-	 *   request and is frequently recycled) an out-of-band change — a rotation via
-	 *   the console/CLI, or another process's `put()` — is picked up quickly as
-	 *   processes turn over.
-	 * - **A positive number** — the cache entry is treated as stale once this many
-	 *   seconds have elapsed since it was fetched, so the next `get()` re-fetches.
-	 *   Set this on **long-running compute** (a process that stays alive for hours
-	 *   or days and handles many requests) to bound how long a rotated value can
-	 *   go unnoticed, without a redeploy. A small value trades extra fetches for
-	 *   fresher reads.
+	 * - **Omitted (default)** — **300 seconds (5 minutes)**, matching the AWS
+	 *   Secrets Manager agent and the Lambda Parameters and Secrets extension. A
+	 *   bounded default keeps a long-running process (one alive for hours or days,
+	 *   handling many requests) from serving a rotated value indefinitely.
+	 * - **A positive number** — use a larger value to cut `GetSecretValue` calls,
+	 *   or a smaller one for fresher reads.
+	 * - **`0`** — disable caching: every `get()` re-fetches from the service.
 	 *
 	 * Ignored by the local mock, which always reads the current value from disk.
 	 */

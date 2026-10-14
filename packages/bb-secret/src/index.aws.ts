@@ -53,6 +53,15 @@ function versionSelector(version?: 'current' | 'previous' | SecretVersion): {
 }
 
 /**
+ * Default read-cache TTL (ms) when `cacheTtlSeconds` is omitted: 5 minutes.
+ * Mirrors the default of the AWS Secrets Manager Agent / Lambda Parameters and
+ * Secrets extension (300s), so a never-set secret cache can only serve a stale
+ * value for up to this long — bounded even on a long-running process. `0` (via
+ * `cacheTtlSeconds: 0`) disables caching entirely.
+ */
+const DEFAULT_CACHE_TTL_MS = 300_000;
+
+/**
  * Stable cache key for a version selector. `'current'`/undefined collapse to a
  * single `current` entry; `'previous'` to `previous`; a {@link SecretVersion} to
  * `v:<versionId>` (an immutable version id). This is what lets steady-state
@@ -112,12 +121,12 @@ type CachedRead = { raw: string | null; fetchedAt: number };
  * **Caching:** fetched values are cached in-process per `Secret` instance (one
  * entry per version selector), so steady-state reads hit the cache rather than
  * billing a `GetSecretValue` call. `put()` clears the cache so a subsequent read
- * in the same process sees the new value. By default a cached value lives for
- * the life of the process, so an out-of-band change (console / CLI / rotation)
- * is picked up when the process recycles — fine for request-scoped compute that
- * turns over often. On long-running compute (a process alive for hours or days)
- * set `cacheTtlSeconds` to bound how long a rotated value can go unnoticed; past
- * the TTL the next read re-fetches.
+ * in the same process sees the new value. A cached value is held for
+ * `cacheTtlSeconds` — **default 5 minutes**, matching the AWS Secrets Manager
+ * agent / Lambda extension — so an out-of-band change (console / CLI / rotation)
+ * is picked up within the TTL even on a long-running process. Raise it to cut
+ * fetches, lower it for fresher reads, or set `0` to disable caching (every read
+ * re-fetches).
  *
  * @typeParam T - The secret value type. Defaults to `string`; inferred from
  *   `schema` when one is provided.
@@ -150,11 +159,12 @@ export class Secret<T = string> extends Scope {
 	 */
 	private readCache = new Map<string, CachedRead>();
 	/**
-	 * Cache entry lifetime in ms, from `cacheTtlSeconds`. `undefined` means no
-	 * expiry (cache for the life of the process). Set it to bound how long a
-	 * long-running process may serve a stale value after an out-of-band change.
+	 * Cache entry lifetime in ms, derived from `cacheTtlSeconds`. Defaults to
+	 * {@link DEFAULT_CACHE_TTL_MS}. `0` disables caching (every `get()` re-fetches).
+	 * Bounds how long a long-running process may serve a stale value after an
+	 * out-of-band change.
 	 */
-	private cacheTtlMs?: number;
+	private cacheTtlMs: number;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -165,7 +175,7 @@ export class Secret<T = string> extends Scope {
 		this.constructId = id;
 		this.externalArn = options?.secret?.secretArn;
 		this.cacheTtlMs =
-			options?.cacheTtlSeconds !== undefined ? Math.max(0, options.cacheTtlSeconds) * 1000 : undefined;
+			options?.cacheTtlSeconds !== undefined ? Math.max(0, options.cacheTtlSeconds) * 1000 : DEFAULT_CACHE_TTL_MS;
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 
 		this.client = new SecretsManagerClient({
@@ -237,9 +247,10 @@ export class Secret<T = string> extends Scope {
 		// from Secrets Manager and (re)populate the entry. The cache holds the raw
 		// string (or null for not-found), never the validated value, so schema
 		// parsing/validation below still runs on every call. `cacheTtlMs` bounds
-		// how long an entry is reused — unset means it lives for the process.
+		// how long an entry is reused (default 5 min; `0` disables caching so every
+		// read re-fetches).
 		let cached = this.readCache.get(key);
-		if (cached !== undefined && this.cacheTtlMs !== undefined && Date.now() - cached.fetchedAt >= this.cacheTtlMs) {
+		if (cached !== undefined && Date.now() - cached.fetchedAt >= this.cacheTtlMs) {
 			cached = undefined;
 		}
 		if (cached === undefined) {
