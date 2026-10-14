@@ -11,6 +11,7 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
@@ -47,6 +48,10 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
     @get:Input
     abstract val visibility: Property<GeneratedVisibility>
 
+    /** Declared native package identities to leave unbound. */
+    @get:Input
+    abstract val excludeNativePackages: SetProperty<String>
+
     /** URI the backend relays back to once OIDC sign-in completes. */
     @get:Input
     @get:org.gradle.api.tasks.Optional
@@ -67,16 +72,7 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
             throw GradleException("Blocks Spec file not found: ${file.absolutePath}")
         }
 
-        val outputDir = outputDirectory.get().asFile
-
-        // Clear previous output
-        if (outputDir.exists()) {
-            outputDir.deleteRecursively()
-        }
-        outputDir.mkdirs()
-
-        val json = file.readText()
-        val model = OpenRpcParser.parse(json)
+        val model = OpenRpcParser.parse(file.readText())
 
         // Merge server overrides from the extension DSL into the parsed model.
         // Overrides replace servers with the same name; new names are appended.
@@ -100,9 +96,18 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
             internalVisibility = visibility.get() == GeneratedVisibility.Internal,
             relayTo = relayTo.orNull,
             relayToRequirement = relayToRequirement.get(),
+            excludedPackages = excludeNativePackages.get(),
         )
         val codegenModel = CodegenModelBuilder().build(mergedModel)
         val result = generator.generate(codegenModel)
+
+        // Generate before clearing, so a rejected spec leaves the previous sources in place.
+        val outputDir = outputDirectory.get().asFile
+        if (outputDir.exists()) {
+            outputDir.deleteRecursively()
+        }
+        outputDir.mkdirs()
+
         result.warnings.forEach { logger.warn("w: $it") }
         result.files.forEach { it.writeTo(outputDir) }
 

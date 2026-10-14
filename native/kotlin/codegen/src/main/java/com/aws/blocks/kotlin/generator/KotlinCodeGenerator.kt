@@ -7,6 +7,7 @@ import com.aws.blocks.kotlin.model.Constraints
 import com.aws.blocks.kotlin.model.DiscriminatorInfo
 import com.aws.blocks.kotlin.model.DiscriminatorType
 import com.aws.blocks.kotlin.model.FormatKind
+import com.aws.blocks.kotlin.model.NativeCatalogs
 import com.aws.blocks.kotlin.model.NestedTypeNode
 import com.aws.blocks.kotlin.model.Operation
 import com.aws.blocks.kotlin.model.OperationParameter
@@ -16,6 +17,7 @@ import com.aws.blocks.kotlin.model.ResolvedType
 import com.aws.blocks.kotlin.model.ServerDefinition
 import com.aws.blocks.kotlin.model.TypeDefinition
 import com.aws.blocks.kotlin.model.UnionVariant
+import com.aws.blocks.kotlin.parser.OpenRpcParseException
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
@@ -61,11 +63,28 @@ private val knownTransferableBindings = mapOf(
 
 private val knownTransferableTags: Set<String> = knownTransferableBindings.keys
 
+private data class BoundTransferable(val type: ClassName, val genericArity: Int)
+
+private fun resolveBoundTransferables(
+    catalogs: NativeCatalogs,
+    excludedPackages: Set<String>,
+): Map<String, BoundTransferable> = catalogs.bindings
+    .filter { it.tag !in knownTransferableTags && it.packageIdentity !in excludedPackages }
+    .mapNotNull { binding ->
+        binding.kotlinPackage?.let { kotlinPackage ->
+            binding.tag to BoundTransferable(
+                ClassName(kotlinPackage, NamingUtils.exportTypeName(binding.export)),
+                binding.genericArity,
+            )
+        }
+    }.toMap()
+
 class KotlinCodeGenerator(
     private val packageName: String,
     private val internalVisibility: Boolean = false,
     private val relayTo: String? = null,
     private val relayToRequirement: RelayToRequirement = RelayToRequirement.Required,
+    private val excludedPackages: Set<String> = emptySet(),
 ) {
 
     /** Visibility modifier applied to all top-level generated types. */
@@ -93,6 +112,7 @@ class KotlinCodeGenerator(
         val files = mutableListOf<FileSpec>()
         val warnings = mutableListOf<String>()
         val serializerRegistry = TransferableSerializerRegistry()
+        val bound = resolveBoundTransferables(model.nativeCatalogs, excludedPackages)
 
         if (relayTo == null &&
             relayToRequirement != RelayToRequirement.NotNeeded &&
@@ -115,7 +135,7 @@ class KotlinCodeGenerator(
 
         // Generate API files before serializers so annotations register every serializer they use.
         val apiFiles = model.apiNamespaces.map { group ->
-            generateApiGroupFile(group, index, model.servers, model.endpoint, serializerRegistry)
+            generateApiGroupFile(group, index, model.servers, model.endpoint, serializerRegistry, bound)
         }
 
         // Emit Serializers.kt for the transferables referenced by generated annotations.
@@ -139,7 +159,7 @@ class KotlinCodeGenerator(
         for (namespace in model.apiNamespaces) {
             for (operation in namespace.operations) {
                 val result = operation.result.type
-                if (isUnboundDirectResult(result)) {
+                if (isUnboundDirectResult(result, bound)) {
                     warnings.add(
                         formatUnboundTransferable(
                             "${namespace.name}.${operation.name}",
@@ -148,6 +168,13 @@ class KotlinCodeGenerator(
                     )
                 }
             }
+        }
+
+        for (identity in model.nativeCatalogs.unreferencedPackages) {
+            warnings.add(
+                "AWSBLOCKS-NATIVE-003: native package '$identity' is declared but no binding " +
+                    "references it; nothing is imported for it on kotlin.",
+            )
         }
 
         return GeneratorResult(files, warnings)
@@ -833,6 +860,7 @@ class KotlinCodeGenerator(
         servers: List<ServerDefinition>,
         endpoint: String?,
         serializerRegistry: TransferableSerializerRegistry,
+        bound: Map<String, BoundTransferable>,
     ): FileSpec {
         val className = toPascalCase(group.name)
         val builder = FileSpec.builder(packageName, className)
@@ -850,7 +878,8 @@ class KotlinCodeGenerator(
         }
 
         builder.addType(
-            generateApiClass(group, className, index, servers, endpoint, serializerRegistry).withApiVisibility(),
+            generateApiClass(group, className, index, servers, endpoint, serializerRegistry, bound)
+                .withApiVisibility(),
         )
 
         return builder.build()
@@ -909,6 +938,7 @@ class KotlinCodeGenerator(
         servers: List<ServerDefinition>,
         endpoint: String?,
         serializerRegistry: TransferableSerializerRegistry,
+        bound: Map<String, BoundTransferable>,
     ): TypeSpec {
         val clientInitializer = if (endpoint != null) {
             com.squareup.kotlinpoet.CodeBlock.of("%T(%T(server.name, server.url.toString() + %S))", ClassNames.blocksClient, blocksServerClass, endpoint)
@@ -954,7 +984,9 @@ class KotlinCodeGenerator(
                 classBuilder.addFunction(generateOidcStubMethod(operation))
             } else {
                 val opContext = operationContexts[operation]
-                classBuilder.addFunction(generateImplMethod(operation, namespace.name, index, opContext))
+                classBuilder.addFunction(
+                    generateImplMethod(operation, namespace.name, index, opContext, bound),
+                )
             }
         }
 
@@ -1170,6 +1202,7 @@ class KotlinCodeGenerator(
         namespace: String,
         index: TypeIndex,
         opContext: OperationTypeContext?,
+        bound: Map<String, BoundTransferable>,
     ): FunSpec {
         val funBuilder = FunSpec
             .builder(operation.name)
@@ -1189,16 +1222,19 @@ class KotlinCodeGenerator(
             funBuilder.addParameter(paramBuilder.build())
         }
 
-        val returnType = if (isUnboundDirectResult(operation.result.type)) {
-            ClassNames.unknownTransferable
-        } else {
-            resolveResolvedType(operation.result.type, index, opContext)
+        val boundResult = boundDirectResult(operation, namespace, bound, index, opContext)
+        val returnType = when {
+            boundResult != null -> boundResult.declaredType()
+            isUnboundDirectResult(operation.result.type, bound) -> ClassNames.unknownTransferable
+            else -> resolveResolvedType(operation.result.type, index, opContext)
         }
         if (returnType != Unit::class.asTypeName()) {
             funBuilder.returns(returnType)
         }
 
-        generateImplMethodBody(funBuilder, operation, namespace, index, opContext, returnType)
+        generateImplMethodBody(
+            funBuilder, operation, namespace, index, opContext, returnType, boundResult,
+        )
 
         return funBuilder.build()
     }
@@ -1226,6 +1262,7 @@ class KotlinCodeGenerator(
         index: TypeIndex,
         opContext: OperationTypeContext?,
         returnType: TypeName,
+        boundResult: BoundResult?,
     ) {
         val hasOptionalParams = operation.parameters.any { !it.required }
         val dottedMethod = "${namespace}.${operation.name}"
@@ -1258,14 +1295,19 @@ class KotlinCodeGenerator(
             )
         }
 
-        if (returnType == Unit::class.asTypeName()) {
+        if (boundResult != null) {
+            funBuilder.addStatement("val result = client.execute(request)")
+            funBuilder.addCode("return %L\n", boundResult.fromDescriptor())
+        } else if (returnType == Unit::class.asTypeName()) {
             funBuilder.addStatement("client.execute(request)")
         } else if (returnType == ClassNames.unknownTransferable) {
             // An unbound tag here would otherwise fail generation; degrade to a checked carrier.
-            val tag = (operation.result.type as ResolvedType.Transferable).transferableName
+            // Reached only on exact equality with the non-nullable name, so no null guard: a
+            // nullable unbound result still fails generation (codegen-design.md:181).
+            val tag = unwrapNullableTransferable(operation.result.type)!!.transferableName
             funBuilder.addStatement("val result = client.execute(request)")
-            funBuilder.addStatement(
-                "return %T.fromJson(result, expectedTag = %L)",
+            funBuilder.addCode(
+                "return %T.fromJson(result, expectedTag = %L)\n",
                 ClassNames.unknownTransferable,
                 kotlinStringLiteral(tag),
             )
@@ -1273,7 +1315,10 @@ class KotlinCodeGenerator(
             val transferableType = unwrapNullableTransferable(operation.result.type)!!
             funBuilder.addStatement("val result = client.execute(request)")
             val fromJsonExpr = generateTransferableFromJson(transferableType, "result", index, opContext)
-            funBuilder.addCode("return %L\n", fromJsonExpr)
+            funBuilder.addCode(
+                "return %L\n",
+                nullGuarded(operation.result.type is ResolvedType.Nullable, fromJsonExpr),
+            )
         } else {
             val blocksJson = ClassNames.blocksJson
             val decodeFromJsonElement = MemberNames.decode
@@ -1441,8 +1486,70 @@ class KotlinCodeGenerator(
         else -> null
     }
 
-    private fun isUnboundDirectResult(type: ResolvedType): Boolean =
-        type is ResolvedType.Transferable && type.transferableName !in knownTransferableTags
+    private fun isUnboundDirectResult(
+        type: ResolvedType,
+        bound: Map<String, BoundTransferable>,
+    ): Boolean = type is ResolvedType.Transferable &&
+        type.transferableName !in knownTransferableTags &&
+        type.transferableName !in bound
+
+    /** Built-in tags are absent from [bound], so a binding on one stays inert. */
+    private fun boundDirectResult(
+        operation: Operation,
+        namespace: String,
+        bound: Map<String, BoundTransferable>,
+        index: TypeIndex,
+        opContext: OperationTypeContext?,
+    ): BoundResult? {
+        val transferable = unwrapNullableTransferable(operation.result.type) ?: return null
+        val binding = bound[transferable.transferableName] ?: return null
+        if (transferable.typeArgs.size != binding.genericArity) {
+            throw OpenRpcParseException(
+                "$namespace.${operation.name} returns \"${transferable.transferableName}\", bound at " +
+                    "genericArity ${binding.genericArity}, but its result carries " +
+                    "${transferable.typeArgs.size} x-blocks-type-args entries",
+            )
+        }
+        return BoundResult(
+            type = binding.type,
+            tag = transferable.transferableName,
+            typeArg = transferable.typeArgs.firstOrNull()
+                ?.let { resolveResolvedType(it, index, opContext) },
+            optional = operation.result.type is ResolvedType.Nullable,
+        )
+    }
+
+    private fun nullGuarded(optional: Boolean, hydrate: CodeBlock): CodeBlock =
+        if (!optional) hydrate
+        else CodeBlock.of("if (result is %T) null else %L", ClassNames.jsonNull, hydrate)
+
+    /** A direct result's declared type and factory call, both derived from one resolution. */
+    private inner class BoundResult(
+        private val type: ClassName,
+        private val tag: String,
+        private val typeArg: TypeName?,
+        private val optional: Boolean,
+    ) {
+        fun declaredType(): TypeName =
+            (if (typeArg == null) type else type.parameterizedBy(typeArg)).copy(nullable = optional)
+
+        fun fromDescriptor(): CodeBlock {
+            val descriptor = CodeBlock.of(
+                "%M(result, expectedTag = %L)",
+                MemberNames.validateTransferableDescriptor,
+                kotlinStringLiteral(tag),
+            )
+            val hydrate = if (typeArg == null) {
+                CodeBlock.of("%T.fromBlocksDescriptor(%L)", type, descriptor)
+            } else {
+                CodeBlock.of(
+                    "%T.fromBlocksDescriptor<%T>(%L) { %T.%M<%T>(it) }",
+                    type, typeArg, descriptor, ClassNames.blocksJson, MemberNames.decode, typeArg,
+                )
+            }
+            return nullGuarded(optional, hydrate)
+        }
+    }
 
     private fun transferableTypeArgModelName(type: ResolvedType): String? = when (type) {
         is ResolvedType.Record -> type.name
@@ -1748,14 +1855,7 @@ class KotlinCodeGenerator(
 
     // ── Naming utilities ──────────────────────────────────────────────
 
-    private fun isKotlinKeyword(name: String): Boolean {
-        return name in setOf(
-            "as", "break", "class", "continue", "do", "else", "false", "for",
-            "fun", "if", "in", "interface", "is", "null", "object", "package",
-            "return", "super", "this", "throw", "true", "try", "typealias",
-            "typeof", "val", "var", "when", "while",
-        )
-    }
+    private fun isKotlinKeyword(name: String): Boolean = NamingUtils.isKotlinKeyword(name)
 
     companion object {
         fun toPascalCase(name: String): String = NamingUtils.toPascalCase(name)

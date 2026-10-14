@@ -53,9 +53,17 @@ object OpenRpcParser {
         val info = parseInfo(root)
         val servers = parseServers(root)
         val endpoint = root["x-blocks-endpoint"]?.jsonPrimitive?.contentOrNull
+        val nativeCatalogs = NativeCatalogParser.parse(root)
 
         val methodsArray = root["methods"]?.jsonArray
-            ?: return RpcModel(info = info, methods = emptyList(), servers = servers, components = componentsObj, endpoint = endpoint)
+            ?: return RpcModel(
+                info = info,
+                methods = emptyList(),
+                servers = servers,
+                components = componentsObj,
+                endpoint = endpoint,
+                nativeCatalogs = nativeCatalogs,
+            )
 
         val methods = mutableListOf<Method>()
 
@@ -120,7 +128,14 @@ object OpenRpcParser {
             )
         }
 
-        return RpcModel(info = info, methods = methods, servers = servers, components = componentsObj, endpoint = endpoint)
+        return RpcModel(
+            info = info,
+            methods = methods,
+            servers = servers,
+            components = componentsObj,
+            endpoint = endpoint,
+            nativeCatalogs = nativeCatalogs,
+        )
     }
 
     private fun parseInfo(root: JsonObject): Info {

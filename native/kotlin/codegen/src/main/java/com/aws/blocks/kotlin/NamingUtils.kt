@@ -1,6 +1,24 @@
 package com.aws.blocks.kotlin
 
 object NamingUtils {
+    private val HARD_KEYWORDS = setOf(
+        "as", "break", "class", "continue", "do", "else", "false", "for",
+        "fun", "if", "in", "interface", "is", "null", "object", "package",
+        "return", "super", "this", "throw", "true", "try", "typealias",
+        "typeof", "val", "var", "when", "while",
+    )
+
+    fun isKotlinKeyword(name: String): Boolean = name in HARD_KEYWORDS
+
+    /**
+     * The type a binding's `export` resolves to. Only each segment's first character is
+     * raised, so an acronym the declaring package exports as `URL` is imported as `URL`;
+     * [toPascalCase] would lower its tail and name a type the package does not export.
+     */
+    fun exportTypeName(export: String): String =
+        export.split('_', '-')
+            .joinToString("") { if (it.isEmpty()) "" else it[0].uppercaseChar() + it.substring(1) }
+
     fun toPascalCase(name: String): String {
         if (name.isEmpty()) return name
         return name

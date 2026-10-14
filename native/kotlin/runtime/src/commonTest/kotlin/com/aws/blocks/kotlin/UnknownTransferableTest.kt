@@ -5,11 +5,12 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeSameInstanceAs
-import kotlinx.serialization.json.JsonNull
+import kotlin.test.Test
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import kotlin.test.Test
 
 class UnknownTransferableTest {
 
@@ -27,17 +28,6 @@ class UnknownTransferableTest {
     }
 
     @Test
-    fun `rejects an object whose __blocks tag differs from expectedTag`() {
-        val exception = shouldThrow<TransferableException> {
-            UnknownTransferable.fromJson(
-                buildJsonObject { put("__blocks", "other/tag") },
-                expectedTag = "example-iot/device-link",
-            )
-        }
-        exception.message shouldContain "expected tag 'example-iot/device-link', got 'other/tag'"
-    }
-
-    @Test
     fun `rejects an object missing the __blocks field`() {
         val exception = shouldThrow<TransferableException> {
             UnknownTransferable.fromJson(
@@ -49,57 +39,22 @@ class UnknownTransferableTest {
     }
 
     @Test
-    fun `rejects an object whose __blocks is an empty string`() {
-        val exception = shouldThrow<TransferableException> {
-            UnknownTransferable.fromJson(
-                buildJsonObject { put("__blocks", "") },
-                expectedTag = "example-iot/device-link",
-            )
+    fun `keeps the four messages the Dart and Swift runtimes emit`() {
+        val tag = "example-iot/device-link"
+        val cases = listOf<Pair<JsonElement, String>>(
+            JsonPrimitive("not-an-object") to
+                "UnknownTransferable for '$tag' expected a JSON object descriptor",
+            JsonObject(mapOf("__blocks" to JsonPrimitive(1))) to
+                "UnknownTransferable for '$tag' expected a string '__blocks' tag",
+            JsonObject(mapOf("__blocks" to JsonPrimitive(""))) to
+                "UnknownTransferable for '$tag' expected a non-empty '__blocks' tag",
+            JsonObject(mapOf("__blocks" to JsonPrimitive("other/tag"))) to
+                "UnknownTransferable expected tag '$tag', got 'other/tag'",
+        )
+        for ((element, expected) in cases) {
+            shouldThrow<TransferableException> {
+                UnknownTransferable.fromJson(element, expectedTag = tag)
+            }.message shouldBe expected
         }
-        exception.message shouldContain "expected a non-empty '__blocks' tag"
-    }
-
-    @Test
-    fun `rejects an object whose __blocks is not a string`() {
-        val exception = shouldThrow<TransferableException> {
-            UnknownTransferable.fromJson(
-                buildJsonObject { put("__blocks", 42) },
-                expectedTag = "example-iot/device-link",
-            )
-        }
-        exception.message shouldContain "expected a string '__blocks' tag"
-    }
-
-    @Test
-    fun `rejects an object whose __blocks is JSON null`() {
-        val exception = shouldThrow<TransferableException> {
-            UnknownTransferable.fromJson(
-                buildJsonObject { put("__blocks", JsonNull) },
-                expectedTag = "example-iot/device-link",
-            )
-        }
-        exception.message shouldContain "expected a string '__blocks' tag"
-    }
-
-    @Test
-    fun `rejects a non-object descriptor`() {
-        val exception = shouldThrow<TransferableException> {
-            UnknownTransferable.fromJson(
-                JsonPrimitive("not-an-object"),
-                expectedTag = "example-iot/device-link",
-            )
-        }
-        exception.message shouldContain "expected a JSON object descriptor"
-    }
-
-    @Test
-    fun `names the expected tag in a rejection message`() {
-        val exception = shouldThrow<TransferableException> {
-            UnknownTransferable.fromJson(
-                JsonPrimitive("not-an-object"),
-                expectedTag = "example-iot/device-link",
-            )
-        }
-        exception.message shouldContain "'example-iot/device-link'"
     }
 }
