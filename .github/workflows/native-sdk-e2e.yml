@@ -544,7 +544,8 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.json'))['apiUrl'])")
-          echo "blocks_url=${URL}/aws-blocks/api" >> $GITHUB_OUTPUT
+          # apiUrl is already the full RPC endpoint and the spec's first server, so Blocks() reaches it too.
+          echo "blocks_url=${URL}" >> $GITHUB_OUTPUT
 
       - name: Generate OpenRPC spec
         working-directory: test-apps/native-bindings
