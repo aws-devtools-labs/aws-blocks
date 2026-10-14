@@ -23,6 +23,8 @@ describe('assertAwsCredentials', () => {
 	let env: NodeJS.ProcessEnv;
 
 	beforeEach(async () => {
+		// The check prints the deployment target on success; keep the runner's stdout protocol clean.
+		mock.method(console, 'log', () => {});
 		directory = await mkdtemp(join(tmpdir(), 'blocks-preflight-'));
 		env = {
 			HOME: directory,
@@ -34,6 +36,7 @@ describe('assertAwsCredentials', () => {
 	});
 
 	afterEach(async () => {
+		mock.restoreAll();
 		await rm(directory, { recursive: true, force: true });
 	});
 

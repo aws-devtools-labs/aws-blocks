@@ -1,11 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { AwsCredentialIdentity } from '@smithy/types';
+import { type AccountMetadata, type AccountMetadataClientFactory, readAccountMetadata } from './account-metadata.js';
 import {
 	type AwsCliVersionReader,
 	classifyCredentialError,
 	credentialErrorLabel,
 	credentialFailureMessage,
+	profileArg,
+	profileName,
 } from './credential-guidance.js';
 import { type DeploymentTargetOptions, resolveDeploymentTarget } from './deployment-target.js';
 
@@ -27,14 +31,27 @@ import { type DeploymentTargetOptions, resolveDeploymentTarget } from './deploym
  * On a credential failure, the message names the credential source (for example
  * an SSO or `aws login` profile, or access keys in the environment) and the
  * command that fixes it. The check never prompts, signs in, or changes credentials.
+ *
+ * Before the deploy continues, the check prints the deployment target: the
+ * profile (or environment access keys) and the configured Region. With verified
+ * credentials it also reads the account name and the AWS account plan, which are
+ * optional: any failure only makes them unavailable. It then links to the AWS
+ * Settings billing page, and asks the user to check that the workspace there is
+ * the deployment target. The Region is the configured one, not discovered.
  */
 
 /**
  * Probe that resolves when valid AWS credentials are available for `region` and
  * rejects otherwise. Injectable so the guard can be unit-tested without network
  * or real credentials; production callers use the default {@link stsProbe}.
+ *
+ * The probe may resolve to the credentials it verified. Only then are the account
+ * name and plan read, with those same credentials.
  */
-export type CredentialProbe = (region: string, profile?: string) => Promise<void>;
+export type CredentialProbe = (
+	region: string,
+	profile?: string,
+) => Promise<AwsCredentialIdentity | undefined> | Promise<void>;
 
 /**
  * Default probe: STS GetCallerIdentity via the SDK's standard credential chain
@@ -44,17 +61,34 @@ export type CredentialProbe = (region: string, profile?: string) => Promise<void
  * runs — never during dev-server startup or a mock unit test. Bounded with a
  * short request timeout and a single attempt (matching `common/config.ts`) so a
  * bad network can't make this hang *longer* than the synth it's replacing.
+ *
+ * Resolves to the credentials that the request was signed with, so that the
+ * metadata reads use the same identity. The default credential chain runs once,
+ * as a client for this profile and Region would run it, and the request is signed
+ * with that snapshot. Reading a client's credential provider a second time is not
+ * a cache hit: the SDK refreshes credentials that expire within five minutes,
+ * which can run `credential_process` or an MFA prompt again and return another
+ * identity.
  */
 const stsProbe: CredentialProbe = async (region, profile) => {
 	const { STSClient, GetCallerIdentityCommand } = await import('@aws-sdk/client-sts');
-	const client = new STSClient({
+	const config = {
 		region,
 		profile,
 		maxAttempts: 1,
 		requestHandler: { connectionTimeout: 2000, requestTimeout: 3000 },
-	});
+	};
+	const chain = new STSClient(config);
+	let credentials: AwsCredentialIdentity;
+	try {
+		credentials = await chain.config.credentials();
+	} finally {
+		chain.destroy();
+	}
+	const client = new STSClient({ ...config, credentials });
 	try {
 		await client.send(new GetCallerIdentityCommand({}));
+		return credentials;
 	} finally {
 		client.destroy();
 	}
@@ -68,6 +102,42 @@ export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
 	probe?: CredentialProbe;
 	/** Reads `aws --version` when the guidance recommends `aws login`. Override in tests. */
 	readAwsCliVersion?: AwsCliVersionReader;
+	/** Creates the clients for the optional account name and plan reads. Override in tests. */
+	metadataClients?: AccountMetadataClientFactory;
+	/** How long the optional metadata reads may take, in milliseconds. Override in tests. */
+	metadataTimeoutMs?: number;
+}
+
+const BILLING_URL = 'https://settings.aws.com/billing';
+const PROJECTS_URL = 'https://settings.aws.com/projects';
+
+/** A Region code; any other value prints quoted, so that it cannot write terminal control sequences. */
+const REGION_CODE = /^[a-z0-9-]+$/;
+
+const NO_METADATA: AccountMetadata = { accountName: null, plan: null };
+
+/** The profile that the SDK uses, selected as `describeCredentialSource` selects it; `undefined` for environment keys. */
+function selectedProfile(env: NodeJS.ProcessEnv, profile: string | undefined): string | undefined {
+	const selected = profile || env.AWS_PROFILE;
+	if (selected) return selected;
+	return env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY ? undefined : 'default';
+}
+
+/**
+ * The deployment target, the optional metadata and the spending guidance. The
+ * Region is the configured one; nothing here claims that it is the Region of
+ * the user's project or workspace.
+ */
+function targetSummary(selected: string | undefined, region: string | null, metadata: AccountMetadata): string {
+	const credentials =
+		selected === undefined ? 'access keys in AWS_ACCESS_KEY_ID' : `AWS profile ${profileName(selected)}`;
+	const regionLabel = region ? (REGION_CODE.test(region) ? region : JSON.stringify(region)) : 'not set';
+	return [
+		`🎯 Deployment target: ${credentials}, Region ${regionLabel}`,
+		`   Account name: ${metadata.accountName ?? 'not available'}`,
+		`   Account plan: ${metadata.plan ?? 'not available'}`,
+		`💳 Spending limit: ${BILLING_URL} (check that the selected workspace matches this target)`,
+	].join('\n');
 }
 
 /**
@@ -80,6 +150,11 @@ export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
  * version is checked only after a credential failure, so it never blocks valid
  * credentials.
  *
+ * When the deploy continues, the check prints the deployment target and the AWS
+ * Settings billing link. When the probe returns the credentials it verified, the
+ * check first reads the optional account name and plan with them, within a
+ * short timeout. Those reads never throw or block the deploy.
+ *
  * @throws {Error} With actionable guidance when the probe reports a credential error,
  * or when the CDK configuration cannot be read.
  */
@@ -87,19 +162,30 @@ export async function assertAwsCredentials({
 	command,
 	probe = stsProbe,
 	readAwsCliVersion,
+	metadataClients,
+	metadataTimeoutMs,
 	...options
 }: AssertAwsCredentialsOptions): Promise<void> {
 	const { region, profile } = await resolveDeploymentTarget(options);
+	const selected = selectedProfile(options.env ?? process.env, profile);
 	if (!region) {
 		console.warn(
-			`⚠️  Skipping the AWS credential pre-check for \`npm run ${command}\`: no Region is set. ` +
-				'Set AWS_REGION, or set region in your AWS profile. The deploy will surface any credential error itself.',
+			[
+				`⚠️  Skipping the AWS credential pre-check for \`npm run ${command}\`: no Region is set. ` +
+					'Set AWS_REGION, or set region in your AWS profile. The deploy will surface any credential error itself.',
+				"   For `aws login`: before you run `aws login`, set the profile Region to your project's Region " +
+					`(listed at ${PROJECTS_URL}):`,
+				`     aws configure set region <region> --profile ${profileArg(selected ?? 'default')}`,
+				'   If you change the profile Region after you sign in, run `aws login` again.',
+			].join('\n'),
 		);
+		console.log(targetSummary(selected, null, NO_METADATA));
 		return;
 	}
 
+	let credentials: AwsCredentialIdentity | undefined;
 	try {
-		await probe(region, profile);
+		credentials = (await probe(region, profile)) || undefined;
 	} catch (error) {
 		// The label is the error name, a Node.js error code, or a known network error
 		// name found in a credential provider's message; never message text, which for
@@ -114,24 +200,30 @@ export async function assertAwsCredentials({
 				`⚠️  Could not reach AWS to verify credentials for \`npm run ${command}\` (${label}); ` +
 					'continuing — if the deploy also fails to connect, check your network or proxy settings.',
 			);
-			return;
-		}
-		if (failure === 'inconclusive') {
+		} else if (failure === 'inconclusive') {
 			console.warn(
 				`⚠️  Could not verify AWS credentials for \`npm run ${command}\` (${label}); ` +
 					'continuing — the deploy will report any real error.',
 			);
-			return;
+		} else {
+			throw new Error(
+				await credentialFailureMessage({
+					command,
+					errorName: label,
+					failure,
+					env: options.env,
+					profile,
+					readAwsCliVersion,
+				}),
+			);
 		}
-		throw new Error(
-			await credentialFailureMessage({
-				command,
-				errorName: label,
-				failure,
-				env: options.env,
-				profile,
-				readAwsCliVersion,
-			}),
-		);
 	}
+
+	const metadata = credentials
+		? await readAccountMetadata(
+				{ region, profile, credentials },
+				{ clients: metadataClients, timeoutMs: metadataTimeoutMs },
+			)
+		: NO_METADATA;
+	console.log(targetSummary(selected, region, metadata));
 }

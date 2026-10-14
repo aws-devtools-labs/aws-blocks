@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 
@@ -35,14 +35,19 @@ describe('resolveDeploymentTarget', () => {
 			region: 'eu-west-1',
 			profile: 'deployment',
 		});
-		await assertAwsCredentials({
-			command: 'deploy',
-			env,
-			projectRoot,
-			probe: async (region) => {
-				assert.equal(region, 'eu-west-1');
-			},
-		});
+		const log = mock.method(console, 'log', () => {});
+		try {
+			await assertAwsCredentials({
+				command: 'deploy',
+				env,
+				projectRoot,
+				probe: async (region) => {
+					assert.equal(region, 'eu-west-1');
+				},
+			});
+		} finally {
+			log.mock.restore();
+		}
 		assert.deepEqual(env, { HOME: home });
 	});
 
