@@ -334,6 +334,7 @@ it is absent — the operational paths read the CA from the environment only.
 **Date:** 2026-06-10
 **Authors:** sarayev
 **Status**: Amended by [D-017](#d-017---telemetry-file-appends-every-event-from-the-run-that-created-the-file) (2026-10-05, varshpam) — clause 4 ("One event per file") and Alternative 4 ("Append to existing files") are superseded; a run now appends every event to the file it created. Clause 3 is narrowed: a path this run did not create is still skipped. The decision below is preserved as originally written.
+**Status**: Amended by [D-018](#d-018---telemetry-file-is-gated-by-consent) (2026-10-08, varshpam) — point 1 ("Writes regardless of opt-out status"), Alternative 2 ("File gated by consent (same as HTTP)"), the capture-without-sending note and Rationale bullets 1-3 are superseded; the file sink is now gated by consent. Point 2, and point 3 as narrowed by D-017, still hold. The decision below is preserved as originally written.
 
 ### Context
 
@@ -738,3 +739,38 @@ Two asymmetries are left standing on purpose. As of this decision `create-blocks
 ### References
 - D-010 (clauses 1–2 unchanged; clause 3 narrowed to paths this run did not create)
 - `aws/aws-cdk-cli`, `packages/aws-cdk/lib/cli/telemetry/sink/file-sink.ts` — create-then-append file sink
+
+## D-018: `--telemetry-file` is gated by consent
+
+**Date**: 2026-10-08
+**Authors:** varshpam
+
+### Context
+D-010 let the `--telemetry-file` sink fire regardless of consent. Building the event is itself a side effect: `getInstallationId()` creates `~/.blocks/telemetry/installation-id` and prints the first-run notice to stderr, and `getProjectId()` persists a project ID into `.blocks/config.json` under the working directory. An opted-out user who passed the flag therefore still got identifier files on disk and the notice printed, which is what the flag was never meant to buy.
+
+### Decision
+Consent is checked before any event is built, and in `create-blocks-app` again before the event is emitted, because `trackCommand` wraps a command that can run for minutes and an opt-out landing inside that window must still be honored (`core` gets the second check for free, because its `finally` re-enters `buildAndSendEvent`). When telemetry is disabled there is no event, no identifiers persisted, no first-run notice, no file and no HTTP request — `--telemetry-file` does not override opt-out. D-010's remaining points stand as D-017 leaves them: with telemetry enabled the flag is additive to the HTTP send, and a path this run did not create is still skipped.
+
+This adopts D-010's rejected Alternative 2, "File gated by consent (same as HTTP)". That rejection was argued from the flag's usefulness for inspecting a disabled run; that capability is deliberately removed — opting out means no event exists. To capture events without sending them, run `BLOCKS_TELEMETRY_ENDPOINT=http://127.0.0.1:1 <cmd> --telemetry-file=<path>`, which is a consented run.
+
+### Rationale
+- For `core` this is less a new contract than two of its entry points being made to agree. `trackCommand` already returned on `!isTelemetryEnabled()` with no `--telemetry-file` escape, while `dev` and `sandbox`, which call `buildAndSendEvent` directly, did not. The inconsistency was live on `main`, not hypothetical. `create-blocks-app` has a single entry point, so there the escape is simply removed.
+- Opting out must mean nothing is written. A debugging flag must not re-enable disk writes and a consent notice for a user who has opted out.
+- The identifier writes, not the capture file, are the privacy-relevant part, and they happen while the event is built — so the gate has to sit before `buildEvent`, not around the file sink.
+- The capture-without-sending workflow D-010 protected survives via the endpoint redirect, which needs no listener. It is not free: a redirected run is a consented run, so it still writes both identifiers and prints the first-run notice.
+
+### Alternatives Considered
+1. **Keep D-010 unchanged:** rejected; it persisted identifiers and printed the notice for a user who had opted out. D-010 clause 4 is addressed separately by [D-017](#d-017---telemetry-file-appends-every-event-from-the-run-that-created-the-file), which this decision does not touch: consent decides whether a file is written at all, ownership decides what goes into it.
+2. **Gate only the writes, still build the event from ephemeral IDs:** rejected on cost, not capability. It is the only option that captures *without* persisting the identifiers or printing the notice, but it splits one consent check into two contracts and `getInstallationId`/`getProjectId` would each need a non-persisting read whose only caller is the opted-out branch. Revisit if a caller needs capture with no identifier writes.
+3. **Follow the CDK CLI exactly:** rejected. Its `FileTelemetrySink` constructor and its `getOrCreateInstallationId` helper each run no consent check of their own — consent is the separate `canCollectTelemetry` predicate — and its telemetry module has no first-run notice and no project-scoped ID at all. Ours has both, so an ungated sink here keeps the two side effects this decision removes.
+
+### Supersedes
+- D-010 point 1 ("Writes regardless of opt-out status — even when telemetry is disabled ... the file still captures events") — the file sink is now gated by consent, like the HTTP sink.
+- D-010's capture-without-sending note ("combine `--telemetry-file` with `AWS_BLOCKS_DISABLE_TELEMETRY`") — that combination now writes nothing. Redirect `BLOCKS_TELEMETRY_ENDPOINT` instead.
+- D-010 Rationale bullets 1-3 (integration testing, local debugging, the privacy trade-off) — all three now need a consented run, which writes the identifiers anyway. Bullet 4 is D-017's subject; bullet 5 still holds.
+- D-010 Alternative 2 ("File gated by consent (same as HTTP)") — that rejection no longer stands; an opted-out run builds no event.
+
+### References
+- Task 7 in Task-Phase-1; PR #607 (closed unmerged, the first attempt at this change)
+- `packages/core/src/telemetry/client.ts` (`buildAndSendEvent`), `packages/core/src/telemetry/identifiers.ts`
+- `packages/create-blocks-app/src/telemetry.ts` (`trackCommand`)
