@@ -56,16 +56,17 @@ async function loadConfigFromS3(): Promise<Record<string, string>> {
 		const body = await fetcher(bucket, key);
 		configCache = JSON.parse(body);
 	} catch (error: any) {
-		const isNotFound = error?.name === 'NoSuchKey'
-			|| error?.Code === 'NoSuchKey'
-			|| error?.$metadata?.httpStatusCode === 404;
+		const isNotFound =
+			error?.name === 'NoSuchKey' || error?.Code === 'NoSuchKey' || error?.$metadata?.httpStatusCode === 404;
 		if (isNotFound) {
 			// Do NOT cache the empty result: a 404 right after deploy is usually the config file
 			// not being readable yet (the transient window before the BucketDeployment settles), not
 			// a genuinely config-less app. Caching {} here would poison the container for its whole
 			// lifetime. Returning without caching lets the next invocation re-fetch and pick up the
 			// real config once it's present. (Apps that truly have no config just re-check cheaply.)
-			console.warn(`[Blocks] Config file not found in S3 (${bucket}/${key}), proceeding with empty config (will retry on next request)`);
+			console.warn(
+				`[Blocks] Config file not found in S3 (${bucket}/${key}), proceeding with empty config (will retry on next request)`,
+			);
 			return {};
 		}
 		const msg = error instanceof Error ? error.message : String(error);
@@ -146,13 +147,27 @@ export async function preloadConfig(): Promise<void> {
  * read their config via `process.env[key]` as before — no BB code changes needed.
  *
  * Only sets env vars that aren't already set (won't override explicit env vars).
+ * When an existing env var shadows a config entry with a **different** value,
+ * logs one warning listing the shadowed key names (never their values), so a
+ * `registerConfig` entry that can't take effect isn't silently ignored. A key
+ * whose env value already equals the config value (e.g. set by an earlier load
+ * in the same container) is not reported.
  */
 export async function loadConfigToProcessEnv(): Promise<void> {
 	const config = await ensureConfigLoaded();
+	const shadowed: string[] = [];
 	for (const [key, value] of Object.entries(config)) {
-		if (process.env[key] === undefined) {
+		const existing = process.env[key];
+		if (existing === undefined) {
 			process.env[key] = value;
+		} else if (existing !== String(value)) {
+			shadowed.push(key);
 		}
+	}
+	if (shadowed.length > 0) {
+		console.warn(
+			`[Blocks config] Ignored ${shadowed.length} config entr${shadowed.length === 1 ? 'y' : 'ies'} because an environment variable of the same name is already set (environment variables take precedence over registerConfig): ${shadowed.join(', ')}`,
+		);
 	}
 }
 

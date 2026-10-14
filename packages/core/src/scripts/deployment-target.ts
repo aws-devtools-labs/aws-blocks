@@ -33,6 +33,20 @@ async function readCdkSettings(path: string): Promise<Record<string, unknown>> {
 	throw new Error('Could not read CDK configuration. Check cdk.json and ~/.cdk.json before deploying.');
 }
 
+/** The home directory, as the SDK and CDK find it. */
+function homeDirectory(env: NodeJS.ProcessEnv): string {
+	return (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || homedir();
+}
+
+/** The paths of the shared AWS config and credentials files, as the SDK finds them. */
+export function sharedConfigFiles(env: NodeJS.ProcessEnv = process.env): { configFilepath: string; filepath: string } {
+	const home = homeDirectory(env);
+	return {
+		configFilepath: env.AWS_CONFIG_FILE ?? join(home, '.aws', 'config'),
+		filepath: env.AWS_SHARED_CREDENTIALS_FILE ?? join(home, '.aws', 'credentials'),
+	};
+}
+
 /**
  * Find the Region and the profile that CDK uses for a deployment.
  *
@@ -55,7 +69,7 @@ export async function resolveDeploymentTarget({
 	env = process.env,
 	projectRoot = process.cwd(),
 }: DeploymentTargetOptions = {}): Promise<DeploymentTarget> {
-	const home = (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || homedir();
+	const home = homeDirectory(env);
 	const [userSettings, projectSettings] = await Promise.all([
 		readCdkSettings(join(home, '.cdk.json')),
 		readCdkSettings(join(projectRoot, 'cdk.json')),
@@ -75,8 +89,7 @@ export async function resolveDeploymentTarget({
 
 	const { loadSharedConfigFiles } = await import('@smithy/shared-ini-file-loader');
 	const { configFile, credentialsFile } = await loadSharedConfigFiles({
-		configFilepath: env.AWS_CONFIG_FILE ?? join(home, '.aws', 'config'),
-		filepath: env.AWS_SHARED_CREDENTIALS_FILE ?? join(home, '.aws', 'credentials'),
+		...sharedConfigFiles(env),
 		ignoreCache: true,
 	});
 	const selectedProfile = settingsProfile || envProfile || 'default';

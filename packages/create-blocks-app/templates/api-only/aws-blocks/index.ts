@@ -25,7 +25,6 @@ const scope = new Scope('my-app');
 // ─── Auth ────────────────────────────────────────────────────────────────────
 const auth = new AuthBasic(scope, 'auth', {
   passwordPolicy: { minLength: 8 },
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
 });
 export const authApi = auth.createApi();
 
