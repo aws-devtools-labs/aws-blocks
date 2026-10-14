@@ -191,11 +191,9 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         XCTAssertTrue(output.api.contains("RealtimeChannel<"))
     }
 
-    /// Ensures the realtime closure passes raw bytes to the decoder:
-    /// the realtime closure should hand the raw payload bytes straight to
-    /// the typed decoder. Eliminates the redundant String round-trip we
-    /// previously emitted (`{ text in try JSONDecoder().decode(_, from: Data(text.utf8)) }`).
-    func testRealtimeClosurePassesPayloadDataDirectlyToDecoder() throws {
+    /// A realtime result decodes through `RealtimeChannel`'s `Decodable`, so BlocksRuntime forms the message
+    /// decoder: one formed here inherits MainActor default isolation and traps when the socket task calls it.
+    func testRealtimeResultDecodesThroughTheRuntime() throws {
         let output = try generate(from: """
         {
             "openrpc": "1.3.2",
@@ -214,21 +212,11 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         """)
 
         XCTAssertTrue(
-            output.api.contains("{ data in"),
-            "expected emitted closure to bind `data in`, got:\n\(output.api)"
+            output.api.contains("return try JSONDecoder().decode(RealtimeChannel<GetChannel.ResultMessage>.self, from: result)"),
+            "expected the channel to decode through Decodable, got:\n\(output.api)"
         )
-        XCTAssertTrue(
-            output.api.contains("from: data)"),
-            "expected emitted closure to decode straight from data, got:\n\(output.api)"
-        )
-        XCTAssertFalse(
-            output.api.contains("Data(text.utf8)"),
-            "expected the String→Data round-trip to be removed, got:\n\(output.api)"
-        )
-        XCTAssertFalse(
-            output.api.contains("{ text in"),
-            "expected the closure to no longer bind `text in`, got:\n\(output.api)"
-        )
+        XCTAssertFalse(output.api.contains("{ data in"), "expected no message decoder in generated code, got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("Invalid channel descriptor"), "expected Decodable to own descriptor errors, got:\n\(output.api)")
     }
 
     func testGeneratesFileDownloadHandle() throws {
@@ -603,10 +591,11 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         )
         XCTAssertTrue(output.api.contains("guard let result else { return nil }"), "a nullable result returns nil for a null body, got:\n\(output.api)")
         XCTAssertTrue(
-            output.api.contains("RealtimeChannel<MaybeChannel.ResultMessage>.fromJSON(descriptor"),
-            "a nullable bound transferable hydrates via fromJSON, got:\n\(output.api)"
+            output.api.contains("return try JSONDecoder().decode(RealtimeChannel<MaybeChannel.ResultMessage>.self, from: result)"),
+            "a nullable bound channel hydrates through RealtimeChannel's Decodable, got:\n\(output.api)"
         )
-        XCTAssertFalse(output.api.contains("JSONDecoder().decode(RealtimeChannel"), "must not decode a live RealtimeChannel directly, got:\n\(output.api)")
+        // A message decoder formed in generated code inherits MainActor default isolation and traps when the socket task calls it.
+        XCTAssertFalse(output.api.contains("{ data in"), "generated code must not form the message decoder, got:\n\(output.api)")
     }
 
     func testEveryKnownTagResolvesToConcreteType() throws {

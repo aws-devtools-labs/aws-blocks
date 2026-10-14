@@ -1201,17 +1201,14 @@ public struct SwiftCodeGenerator {
                 lines.append(transferable.optional
                     ? "        guard let result else { return nil }"
                     : "        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
-                let descriptorNoun: String
+                let descriptorNoun: String?
                 let returnLines: [String]
                 switch blocksType {
                 case "realtime/channel":
                     let messageType = typeArgs.first.map { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) } ?? "JSONValue"
-                    descriptorNoun = "channel"
-                    returnLines = [
-                        "        return RealtimeChannel<\(messageType)>.fromJSON(descriptor, baseHost: BlocksClient.baseHost) { data in",
-                        "            try JSONDecoder().decode(\(messageType).self, from: data)",
-                        "        }"
-                    ]
+                    // Decoded in BlocksRuntime: a message decoder formed here inherits MainActor default isolation and traps off it.
+                    descriptorNoun = nil
+                    returnLines = ["        return try JSONDecoder().decode(RealtimeChannel<\(messageType)>.self, from: result)"]
                 case "file-bucket/download":
                     descriptorNoun = "file"
                     returnLines = ["        return try FileDownloadHandle.fromJSON(descriptor)"]
@@ -1226,9 +1223,11 @@ public struct SwiftCodeGenerator {
                     descriptorNoun = "transferable"
                     returnLines = ["        return try BlocksRuntime.UnknownTransferable.fromJSON(descriptor, expectedTag: \(swiftStringLiteral(blocksType)))"]
                 }
-                lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
-                lines.append("            throw RPCError(message: \"Invalid \(descriptorNoun) descriptor for \(fullMethodName)\")")
-                lines.append("        }")
+                if let descriptorNoun {
+                    lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
+                    lines.append("            throw RPCError(message: \"Invalid \(descriptorNoun) descriptor for \(fullMethodName)\")")
+                    lines.append("        }")
+                }
                 lines.append(contentsOf: returnLines)
             }
         } else if returnType == "Void" {

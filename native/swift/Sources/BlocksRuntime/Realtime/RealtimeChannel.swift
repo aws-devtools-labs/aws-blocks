@@ -56,7 +56,7 @@ enum RealtimeFrame {
 ///     print("Cursor: \(position)")
 /// }
 /// ```
-public class RealtimeChannel<T> {
+public final class RealtimeChannel<T> {
 
     private var webSocketSession: WebSocketSession { RealtimeChannelWebSocketSession.shared }
 
@@ -72,7 +72,8 @@ public class RealtimeChannel<T> {
     /// Converts the raw JSON payload bytes from a WebSocket message into
     /// an instance of T. Receiving `Data` lets callers pass straight to
     /// `JSONDecoder` without a redundant `Data → String → Data` round trip.
-    private let deserializer: (Data) throws -> T
+    /// Internal so tests can decode a payload without a socket.
+    let deserializer: (Data) throws -> T
 
     private var closed = false
     private let lock = NSLock()
@@ -205,6 +206,34 @@ public class RealtimeChannel<T> {
         for listener in listeners {
             webSocketSession.release(wsUrl: wsUrl, token: token, listener: listener)
         }
+    }
+}
+
+// MARK: - Codable
+
+extension RealtimeChannel: Decodable where T: Decodable {
+    /// Hydrates a channel from its descriptor in a generated result, at any depth; a bad descriptor throws.
+    public convenience init(from decoder: Decoder) throws {
+        let descriptor = try TransferableCoding.descriptor(from: decoder)
+        // `fromJSON` traps without these.
+        guard descriptor["channel"] is String, descriptor["wsUrl"] is String, descriptor["token"] is String else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid RealtimeChannel descriptor: missing channel, wsUrl, or token"
+            ))
+        }
+        // Formed here, not in generated code: a closure formed under MainActor default isolation traps off it.
+        let channel = Self.fromJSON(descriptor, baseHost: BlocksClient.baseHost) { data in
+            try JSONDecoder().decode(T.self, from: data)
+        }
+        self.init(channel: channel.channel, wsUrl: channel.wsUrl, token: channel.token, deserializer: channel.deserializer)
+    }
+}
+
+extension RealtimeChannel: Encodable {
+    /// Always throws: transferables are read-only.
+    public func encode(to encoder: Encoder) throws {
+        throw TransferableCoding.readOnlyError(self, encoder)
     }
 }
 

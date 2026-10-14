@@ -39,6 +39,7 @@ A Swift Package that generates type-safe Swift client code from an OpenRPC speci
 | Realtime connection pool | `Sources/BlocksRuntime/Realtime/WebSocketSession.swift` |
 | File download handle | `Sources/BlocksRuntime/FileBucket/FileDownloadHandle.swift` |
 | File upload handle | `Sources/BlocksRuntime/FileBucket/FileUploadHandle.swift` |
+| Transferables nested in a result: descriptor decoding, read-only encoding | `Sources/BlocksRuntime/TransferableCoding.swift` |
 | Error types | `Sources/BlocksRuntime/BlocksError.swift`, `Realtime/RealtimeError.swift`, `FileBucket/FileBucketError.swift` |
 
 ### Plugins
@@ -119,7 +120,7 @@ Generated code is Swift Concurrency-ready: `func setAuthState(input: Input) asyn
 
 Generated model `struct`s and `enum`s are public, so they are not implicitly `Sendable`; returning them across actors fails in Swift 6 language mode. Don't add reference types to the IR or to runtime-shipped data classes.
 
-`WebSocketSession` guards the process-wide connection pool with an `NSLock`. `SessionGate` guards each client's `URLSession` with an `OSAllocatedUnfairLock`, and every request goes through `SessionGate.send(_:)`: a task created on an invalidated `URLSession` terminates the process.
+`WebSocketSession` guards the process-wide connection pool with an `NSLock`. `SessionGate` guards each client's `URLSession` with an `OSAllocatedUnfairLock`, and every request goes through `SessionGate.send(_:)`: a task created on an invalidated `URLSession` terminates the process. Generated code never forms a realtime message decoder: it decodes `RealtimeChannel<M>` through `Decodable`, because a closure formed in an app target with `MainActor` default isolation traps when the socket task calls it in Swift 6 mode.
 
 ## Common Workflows
 

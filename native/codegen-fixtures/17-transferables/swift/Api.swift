@@ -18,12 +18,7 @@ public final class Api: Sendable {
         let request = BlocksRequest(method: "api.getChannel", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
         guard let result else { throw RPCError(message: "Unexpected null result for api.getChannel") }
-        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw RPCError(message: "Invalid channel descriptor for api.getChannel")
-        }
-        return RealtimeChannel<GetChannel.ResultMessage>.fromJSON(descriptor, baseHost: BlocksClient.baseHost) { data in
-            try JSONDecoder().decode(GetChannel.ResultMessage.self, from: data)
-        }
+        return try JSONDecoder().decode(RealtimeChannel<GetChannel.ResultMessage>.self, from: result)
     }
 
     /// Calls `api.getFile`.

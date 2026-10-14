@@ -38,5 +38,4 @@ namespace as `blocks.default`; the generator prints a `swift:` line for each ren
 `oidc/client` namespaces in one spec now share one token store.
 
 `BlocksServer` (now also `Equatable`) and `BlocksClient` are `Sendable`, so generated code compiles
-in Swift 6 language mode, except for specs with realtime results, which still read the mutable
-`BlocksClient.baseHost`.
+in Swift 6 language mode.

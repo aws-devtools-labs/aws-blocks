@@ -20,7 +20,7 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "FileUp
 /// // or stream from disk:
 /// try await handle.uploadFrom(fileURL: localPath)
 /// ```
-public class FileUploadHandle {
+public final class FileUploadHandle: Sendable {
     private let url: String
     private let contentType: String?
     private let session: URLSession
@@ -114,5 +114,20 @@ public class FileUploadHandle {
         } catch {
             throw FileBucketError.uploadFailed(error.localizedDescription, error)
         }
+    }
+}
+
+// MARK: - Codable
+
+extension FileUploadHandle: Codable {
+    /// Hydrates a handle nested in a result through `fromJSON`, as the generated code hydrates a top-level one.
+    public convenience init(from decoder: Decoder) throws {
+        let handle = try Self.fromJSON(TransferableCoding.descriptor(from: decoder))
+        self.init(url: handle.url, contentType: handle.contentType, session: handle.session)
+    }
+
+    /// Always throws: transferables are read-only.
+    public func encode(to encoder: Encoder) throws {
+        throw TransferableCoding.readOnlyError(self, encoder)
     }
 }
