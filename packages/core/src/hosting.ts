@@ -20,7 +20,8 @@ import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { registerConfig } from './cdk/config-registry.js';
-import { getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
+import { applyBoundaryToHosting, snapshotForHosting } from './cdk/permissions-boundary.js';
+import { findBackendRoot, getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
 import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
@@ -549,6 +550,10 @@ export class Hosting extends Construct {
    */
   constructor(scope: Construct, id: string, props: HostingProps, resolvedSecrets: Map<string, string> = new Map()) {
     super(scope, id);
+    // Stack/stage children before Hosting builds anything, so the fronted
+    // backend's permissions boundary also reaches the singletons and helper
+    // stacks it adds (step 12).
+    const childrenBefore = snapshotForHosting(this);
 
     const root = resolve(props.root);
 
@@ -914,6 +919,18 @@ export class Hosting extends Construct {
         description: 'S3 bucket for framework build caches',
       });
     }
+
+    // ── 12. Permissions boundary ─────────────────────────────────
+    // Cap every role Hosting created with the fronted backend's
+    // `defaults.permissionsBoundary` — including the roles in the separate
+    // us-east-1 stacks (Lambda@Edge, CloudFront monitoring) and the cross-region
+    // reference providers, which no aspect on this stack reaches. No-op when the
+    // backend sets no boundary.
+    const boundaryOwner = isBlocksBackendRoot(props.api) ? props.api : findBackendRoot(this);
+    // Duck-typed (`edgeArn`) rather than `instanceof`, which fails across
+    // duplicate aws-cdk-lib copies (hosting's vs core's).
+    const edgeFunctions = [...hosting.computeFunctions.values()].filter((fn) => 'edgeArn' in fn);
+    applyBoundaryToHosting(this, boundaryOwner, childrenBefore, edgeFunctions);
   }
 
   /**
