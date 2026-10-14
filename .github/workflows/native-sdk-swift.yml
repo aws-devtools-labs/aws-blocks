@@ -57,7 +57,7 @@ jobs:
         run: swift build
 
       - name: Run unit tests
-        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests"
+        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests|BlocksGeneratedCodeTests"
 
   build-and-test-ios:
     name: Build & Test (iOS)

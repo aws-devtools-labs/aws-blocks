@@ -58,5 +58,13 @@ let package = Package(
             dependencies: ["BlocksRuntime"],
             path: "Tests/BlocksRuntimeTests"
         ),
+        // Compiles the build plugin's output for blocks.spec.json; concurrency warnings fail the build.
+        .testTarget(
+            name: "BlocksGeneratedCodeTests",
+            dependencies: ["BlocksRuntime"],
+            path: "Tests/BlocksGeneratedCodeTests",
+            swiftSettings: [.enableExperimentalFeature("StrictConcurrency"), .unsafeFlags(["-warnings-as-errors"])],
+            plugins: ["BlocksCodegenBuildPlugin"]
+        ),
     ]
 )
