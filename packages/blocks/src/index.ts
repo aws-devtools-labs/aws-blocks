@@ -69,10 +69,12 @@ export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
 /**
  * **Single application configuration value backed by SSM Parameter Store.**
  *
- * Use for feature flags, API URLs, thresholds, or structured config objects.
- * Set `secret: true` for sensitive values (API keys, tokens) — stored as SSM
- * SecureString encrypted with the `aws/ssm` KMS key. Each instance maps to
- * exactly one SSM parameter. Supports schema validation for typed objects.
+ * Use for non-sensitive config — feature flags, API URLs, thresholds, or
+ * structured config objects. `secret: true` stores the value encrypted at rest,
+ * a free fallback for a low-value secret; for a production secret (API keys,
+ * OAuth secrets, connection strings) prefer `Secret`, the recommended home for
+ * credentials. Each instance maps to exactly one SSM parameter. Supports schema
+ * validation for typed objects.
  *
  * Package: `@aws-blocks/bb-app-setting`
  * Full docs: `README.md` in the package directory above.
@@ -429,7 +431,10 @@ export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo
  * runtime. Supports an optional schema for typed JSON secrets, and
  * `Secret.fromExisting(arn)` to wrap a secret owned outside the stack.
  *
- * For non-sensitive configuration, use `AppSetting` instead.
+ * This is the recommended home for production secrets — any credential that
+ * protects a production app. For non-sensitive configuration, use `AppSetting`
+ * instead; `AppSetting` with `secret: true` is only a free, encrypted fallback
+ * for a low-value secret (e.g. a prototype).
  *
  * Package: `@aws-blocks/bb-secret`
  * Full docs: `README.md` in the package directory above.

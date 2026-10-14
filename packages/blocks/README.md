@@ -239,7 +239,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 ## Security Considerations
 
 - Use `await auth.requireAuth(context)` in every method that shouldn't be public — ApiNamespace methods are **unauthenticated by default**
-- Use `new Secret(scope, id)` (AWS Secrets Manager) or `new AppSetting(scope, id, { secret: true })` (SSM SecureString) for API keys and credentials — never hardcode or use `.env` files
+- Use `new Secret(scope, id)` for API keys and credentials — `Secret` is the recommended home for production secrets. `new AppSetting(scope, id, { secret: true })` is a free, encrypted fallback only for a low-value secret. Don't hardcode secret values in source, and don't ship real secrets to a deployed app through plaintext environment variables — set them through `Secret`/`AppSetting`
 - Always attach a schema to KVStore/AppSetting that accepts user data — the RPC layer validates structure but not business logic
 - Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
 - Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead

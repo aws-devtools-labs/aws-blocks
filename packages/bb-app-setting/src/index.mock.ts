@@ -64,7 +64,9 @@ async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value:
  *
  * **When to use:** You need to store and retrieve a non-secret configuration
  * value at runtime — a feature flag, API URL, threshold, or structured config
- * object. For sensitive values, set `secret: true` to use SSM SecureString.
+ * object. `secret: true` encrypts the stored value, a free fallback for a
+ * low-value secret; for a production secret (API keys, tokens, passwords) use
+ * `Secret`, the recommended home for credentials.
  *
  * **When NOT to use:** If you need structured key-value data with conditional
  * writes and queries, use `KVStore` or `DistributedTable`.
@@ -72,7 +74,7 @@ async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value:
  * **Best practices:**
  * - One AppSetting per logical configuration value
  * - Use a schema for structured objects to get type safety and runtime validation
- * - Use `secret: true` for API keys, tokens, and passwords
+ * - `secret: true` encrypts a low-value secret for free; reach for `Secret` for production credentials
  *
  * **Scaling:** Standard-tier SSM parameters. 40 TPS default for GetParameter
  * (can be increased). No cost for standard parameters.

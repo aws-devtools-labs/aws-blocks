@@ -20,6 +20,28 @@ The public API (`get`, `put`, `fromExisting`, `SecretOptions`, `ExternalSecretRe
 `SecretErrors`) is identical across layers. `types.ts` is the single, types-only
 source; `errors.ts` holds the wire-stable error names.
 
+## When to use `Secret` vs `AppSetting(secret: true)`
+
+Two blocks can hold an encrypted value, backed by different AWS services:
+
+- **`Secret`** → **AWS Secrets Manager**. A dedicated per-secret resource with
+  resource-level access controls, cross-account resource policies, cross-region
+  replication, built-in version staging (`AWSCURRENT`/`AWSPREVIOUS`), and
+  (future) managed rotation. Costs ~$0.40/secret/month + API calls.
+- **`AppSetting(secret: true)`** → **SSM Parameter Store SecureString**. KMS-
+  encrypted at rest, free for standard parameters, but no per-secret resource
+  policy, no cross-region replication, and no rotation.
+
+AWS's own guidance is that credentials belong in Secrets Manager: the Parameter
+Store docs state that for secrets such as database credentials, API keys, or
+tokens, AWS recommends Secrets Manager
+([*Where should I store my application data?*](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html)).
+So the customer-facing recommendation is: **`Secret` for production secrets;
+`AppSetting(secret: true)` only as a free, encrypted fallback for a low-value
+secret** (e.g. a prototype). The user-facing docs phrase this in Blocks terms
+(`Secret` / `AppSetting`) and link out to that AWS page rather than naming the
+services inline.
+
 ## Infrastructure (CDK)
 
 `index.cdk.ts` extends `BuildingBlockScope` and requests the Secrets Manager

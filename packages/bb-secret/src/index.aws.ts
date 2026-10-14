@@ -79,10 +79,11 @@ type CachedRead = { raw: string | null };
  * A single application secret backed by AWS Secrets Manager.
  *
  * Each instance represents exactly one secret value. Declare multiple `Secret`
- * instances for multiple secrets. Unlike `AppSetting` (SSM Parameter Store),
- * `Secret` is always backed by AWS Secrets Manager — use it for high-value
- * credentials that benefit from Secrets Manager's dedicated access controls and
- * version history.
+ * instances for multiple secrets. `Secret` is the recommended home for
+ * production secrets — a dedicated per-secret resource with its own access
+ * controls and version history. For non-sensitive configuration use
+ * `AppSetting`; `AppSetting` with `secret: true` is only a free, encrypted
+ * fallback for a low-value secret.
  *
  * **When to use:** Third-party API keys, OAuth client secrets, database
  * connection strings, webhook signing keys, encryption keys.
