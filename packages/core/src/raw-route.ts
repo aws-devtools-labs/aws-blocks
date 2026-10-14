@@ -135,6 +135,18 @@ interface RawRouteRegistryState {
   locked: boolean;
   /** Number of core copies that have joined this registry (1 = healthy). */
   copies: number;
+  /**
+   * Distinct physical module paths of the copies that have joined, with any
+   * loader query/hash stripped (added additively; a peer copy that predates
+   * this field simply does not populate it). This separates a genuine duplicate
+   * INSTALL (two different files on disk) from a mere loader SPLIT: a TypeScript
+   * loader such as tsx loads the same file under a per-import namespace query
+   * (`raw-route.js?tsx-namespace=…`), which Node keys as a distinct module, so
+   * `copies` counts more than one even though there is a single file and nothing
+   * to deduplicate. The duplicate warning keys on the count of DISTINCT paths
+   * here, not on `copies`, so it fires only for a real dependency-tree problem.
+   */
+  paths?: string[];
 }
 
 /**
@@ -168,6 +180,28 @@ type GlobalWithRegistry = typeof globalThis & { [REGISTRY_KEY]?: RawRouteRegistr
 let thisCopyCounted = false;
 
 /**
+ * This copy's own physical module path, with any loader query/hash stripped.
+ *
+ * A TypeScript loader (tsx) appends a per-import namespace query such as
+ * `?tsx-namespace=1700000000` to the module URL, which Node keys as a distinct
+ * module. Stripping the query/hash collapses those back to the single file they
+ * came from, so two copies that are really the SAME file under different loader
+ * namespaces compare equal here and do not trip the duplicate warning. Two
+ * copies from genuinely different files (a real duplicate install) keep
+ * different paths and do trip it.
+ */
+const thisCopyPath = (() => {
+  try {
+    const u = new URL(import.meta.url);
+    u.search = '';
+    u.hash = '';
+    return u.href;
+  } catch {
+    return import.meta.url;
+  }
+})();
+
+/**
  * Resolve the shared registry state, creating it on first access.
  *
  * The copy count is incremented here rather than at module load so that it
@@ -197,13 +231,21 @@ function getState(): RawRouteRegistryState {
   // a registry still accepting registrations means.
   if (!Array.isArray(state.routes)) state.routes = [];
   if (typeof state.copies !== 'number') state.copies = 0;
+  if (!Array.isArray(state.paths)) state.paths = [];
 
   if (!thisCopyCounted) {
     thisCopyCounted = true;
     state.copies += 1;
-    if (state.copies > 1) {
+    if (!state.paths.includes(thisCopyPath)) state.paths.push(thisCopyPath);
+    // Warn only on a genuine duplicate INSTALL — two or more distinct physical
+    // files. A higher `copies` with a single distinct path is a loader split
+    // (the same file re-loaded under a tsx namespace query); routes still share
+    // one registry and there is nothing to deduplicate, so staying silent there
+    // avoids a false "dependency-tree problem" alarm.
+    if (state.paths.length > 1) {
       console.warn(
-        `AWS Blocks: ${state.copies} copies of @aws-blocks/core loaded in this process. ` +
+        `AWS Blocks: ${state.paths.length} copies of @aws-blocks/core loaded in this process ` +
+          `from different locations:\n  ${state.paths.join('\n  ')}\n` +
           'They now share one RawRoute registry, but duplicate copies indicate a ' +
           'dependency-tree problem — deduplicate @aws-blocks/core.',
       );

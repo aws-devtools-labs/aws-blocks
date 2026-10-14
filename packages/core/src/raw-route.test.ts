@@ -959,13 +959,20 @@ describe('duplicate core copies are announced', () => {
    * The copy must be *used*, not merely imported: the counter increments on
    * first registry access, so a copy that never touches the registry is never
    * counted — deliberately, since only routing copies matter here.
+   *
+   * When `preSeededCopies` is given, the seed also records a DISTINCT physical
+   * path, standing in for an earlier copy loaded from a different file on disk
+   * (a real duplicate install). The warning keys on the count of distinct
+   * paths, so the real copy that joins next brings the total to two and trips
+   * it — whereas the same file re-loaded under a loader namespace query would
+   * share this process's path and stay silent.
    */
   function useInFreshProcess(preSeededCopies: number | null): string {
     const moduleUrl = new URL('./raw-route.js', import.meta.url).href;
     const seed =
       preSeededCopies === null
         ? ''
-        : `globalThis[${JSON.stringify(REGISTRY_KEY)}] = { routes: [], locked: false, copies: ${preSeededCopies} };`;
+        : `globalThis[${JSON.stringify(REGISTRY_KEY)}] = { routes: [], locked: false, copies: ${preSeededCopies}, paths: ['file:///other/@aws-blocks/core/dist/raw-route.js'] };`;
     const script = `${seed}const m = await import(${JSON.stringify(moduleUrl)}); m.registerRoute({ method: 'GET', path: '/probe', handler: async () => {} });`;
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
     assert.strictEqual(result.status, 0, `using raw-route.js failed: ${result.stderr}`);
@@ -982,9 +989,25 @@ describe('duplicate core copies are announced', () => {
     assert.doesNotMatch(stderr, /copies of @aws-blocks\/core/);
   });
 
+  it('stays silent for the same file re-loaded under a loader namespace query', () => {
+    // tsx loads a .ts module under a per-import `?tsx-namespace=…` URL, which
+    // Node keys as a distinct module. That is NOT a duplicate install: the
+    // physical file is the same, so stripping the query collapses the two to
+    // one path and the warning must not fire. Simulate it by pre-seeding the
+    // SAME path this process's raw-route.js resolves to (query stripped).
+    const selfPath = new URL('./raw-route.js', import.meta.url).href;
+    const moduleUrl = new URL('./raw-route.js', import.meta.url).href;
+    const script =
+      `globalThis[${JSON.stringify(REGISTRY_KEY)}] = { routes: [], locked: false, copies: 1, paths: [${JSON.stringify(selfPath)}] };` +
+      `const m = await import(${JSON.stringify(moduleUrl)}); m.registerRoute({ method: 'GET', path: '/probe', handler: async () => {} });`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /copies of @aws-blocks\/core/);
+  });
+
   it('warns once per copy, not once per registry access', () => {
     const moduleUrl = new URL('./raw-route.js', import.meta.url).href;
-    const script = `globalThis[${JSON.stringify(REGISTRY_KEY)}] = { routes: [], locked: false, copies: 1 };
+    const script = `globalThis[${JSON.stringify(REGISTRY_KEY)}] = { routes: [], locked: false, copies: 1, paths: ['file:///other/@aws-blocks/core/dist/raw-route.js'] };
       const m = await import(${JSON.stringify(moduleUrl)});
       m.registerRoute({ method: 'GET', path: '/a', handler: async () => {} });
       m.registerRoute({ method: 'GET', path: '/b', handler: async () => {} });
