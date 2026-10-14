@@ -16,7 +16,14 @@ function run(args: string[], cwd?: string, env?: Record<string, string>): { stdo
       encoding: 'utf-8',
       timeout: 30000,
       cwd,
-      env: env ? { ...process.env, ...env } : undefined,
+      // Every run spawns the real CLI, which calls trackCommand. Opt out, and point the
+      // endpoint at a dead port so a regression cannot reach the production collector.
+      env: {
+        ...process.env,
+        AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+        BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
+        ...env,
+      },
     });
     return { stdout, stderr: '', exitCode: 0 };
   } catch (err: any) {
@@ -223,6 +230,8 @@ describe('create-blocks-app auto-detection', () => {
       const generateClientPath = join(tmpDir, 'aws-blocks', 'scripts', 'generate-client.ts');
       const cognitoVerifierPath = join(tmpDir, 'aws-blocks', 'cognito-verifier.ts');
       assert.strictEqual(packageJson.scripts['blocks:dev'], 'tsx watch aws-blocks/scripts/server.ts');
+      assert.strictEqual(packageJson.scripts['blocks:stop'], 'tsx aws-blocks/scripts/stop.ts');
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'stop.ts')));
       assert.ok(existsSync(serverPath));
       assert.match(readFileSync(serverPath, 'utf-8'), /startDevServer/);
       assert.match(readFileSync(generateClientPath, 'utf-8'), /from '@aws-blocks\/blocks\/scripts'/);
@@ -478,6 +487,10 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(result.exitCode, 0);
       const serverContent = readFileSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
       assert.match(serverContent, /vite/, 'default template should start the Vite dev server');
+      // The existing-project path must also wire the sanctioned stop command.
+      const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+      assert.strictEqual(pkg.scripts['dev:stop'], 'tsx aws-blocks/scripts/stop.ts');
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'stop.ts')));
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -594,6 +607,12 @@ describe('create-blocks-app bin-symlink invocation', () => {
         execFileSync('node', [linkPath, targetDir, '-y', '--skip-install'], {
           encoding: 'utf-8',
           timeout: 30000,
+          // This spawn bypasses run(), so it needs the same telemetry guard.
+          env: {
+            ...process.env,
+            AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+            BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
+          },
         });
       } catch (err: any) {
         exitCode = err.status ?? 1;

@@ -142,7 +142,7 @@ Default to `DistributedTable` for your data models unless your domain specifical
 
 Reach for one of the SQL blocks when you need to filter or join results across more than one related record, filter models on many dimensions with no preset hierarchy, store large objects, require transactions, or otherwise need the flexibility or familiarity of SQL that NoSQL does not offer.
 
-If you need SQL, prefer `DistributedDatabase` for basic Postgres-compatible querying. Use `Database` specifically when you need a full (more expensive) Postgres implementation where the engine itself provides and enforces foreign keys, row level security, triggers, views, large transactions (more than 3,000 rows), or integration with an existing Postgres database. Note it carries an idle cost at minimum 0.5 ACU, or a cold start when scaling from zero, unlike the other two blocks.
+If you need SQL, prefer `DistributedDatabase` for Aurora DSQL, which is PostgreSQL wire-protocol compatible; see the [Aurora DSQL SQL compatibility documentation](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html) for supported SQL features. Use `Database` specifically when you need a full (more expensive) Postgres implementation with row level security, triggers, procedures, or PL/pgSQL functions; large transactions (more than 3,000 rows); or integration with an existing Postgres database. Note it carries an idle cost at minimum 0.5 ACU, or a cold start when scaling from zero, unlike the other two blocks.
 
 ## Building Block documentation
 
@@ -191,9 +191,11 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | Data | persists to `.bb-data/` (delete to reset) | lives in AWS |
 | Use for | rapid iteration, tests | pre-production validation against real services |
 
-> **Deploying needs AWS credentials.** `npm run dev` is fully local (no creds). `npm run sandbox` and `npm run deploy` provision real AWS resources, so configure credentials first — e.g. `aws configure sso` + `aws sso login`, or `aws configure` (verify with `aws sts get-caller-identity`). Use **least-privilege** credentials scoped to the services your blocks deploy — not broad `Administrator` access.
+> **Deploying needs AWS credentials.** `npm run dev` is fully local (no creds). `npm run sandbox` and `npm run deploy` provision real AWS resources, so configure credentials first — e.g. `aws login` (AWS CLI 2.32.0 or later), `aws configure sso` + `aws sso login`, or `aws configure` (verify with `aws sts get-caller-identity`). If the credentials are missing or expired, both commands stop before synthesizing and print the sign-in or refresh command for the profile they use. Use **least-privilege** credentials scoped to the services your blocks deploy — not broad `Administrator` access.
 
 `npm run deploy` does a full production deploy; `npm run sandbox:destroy` tears the sandbox down. The same backend code runs in all three — blocks switch implementations automatically.
+
+Importing `@aws-blocks/blocks` through its default (Node) entry declares the default compute (`LambdaCompute`) so the CLI reports it in telemetry. It is folded in only when telemetry reads the registry, after the blocks the app constructed, and an app-constructed `LambdaCompute` takes precedence. The `cdk` and `browser` entries do not declare it.
 
 `npm run deploy` streams CloudFormation events to **stdout** as they happen, so `npm run deploy | tee deploy.log` shows live progress instead of going silent for minutes, and a deploy failure keeps its reason on **stderr** (that stays the place to grep for why a deploy failed). On POSIX the deploy also survives a stray reap: a single `SIGTERM`, or any `SIGHUP` — a closed terminal, a backgrounded `npm run deploy &` — logs a line and keeps streaming rather than abandoning a stack update CloudFormation is still applying. Press Ctrl-C, or send `SIGTERM` twice, to stop it. That signal resilience is POSIX-only: Windows has no process groups and no OS-delivered `SIGTERM`/`SIGHUP`, so there a kill on the process tree still ends the deploy.
 
@@ -239,7 +241,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - Always attach a schema to KVStore/AppSetting that accepts user data — the RPC layer validates structure but not business logic
 - Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
 - Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
-- Configure `CORS_ALLOWED_ORIGINS` explicitly for production — avoid wildcards
+- Configure `defaults.allowedOrigins` explicitly for production — avoid wildcards
 - For cross-domain deployments, pass `crossDomain: true` to auth constructors (enables `SameSite=None; Secure; Partitioned`)
 - Enable `monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only)
 - Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default

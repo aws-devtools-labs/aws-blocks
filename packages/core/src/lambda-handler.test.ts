@@ -415,6 +415,35 @@ describe('createLambdaHandler — RawRoute body handling', () => {
   });
 });
 
+// ── RPC errors never carry ARNs / AWS SDK detail ────────────────────────────
+
+describe('createLambdaHandler — AWS SDK AccessDenied detail never reaches the RPC client', () => {
+  it('collapses an AccessDenied (role + resource ARNs in the message, $metadata attached) to a generic error', async () => {
+    const roleArn = 'arn:aws:sts::123456789012:assumed-role/app-backend-HandlerRole-ABC123/app-backend-handler';
+    const resourceArn = 'arn:aws:dynamodb:us-west-2:123456789012:table/app-backend-orders-prod';
+    const sdkError = Object.assign(
+      new Error(`User: ${roleArn} is not authorized to perform: dynamodb:PutItem on resource: ${resourceArn}`),
+      { name: 'AccessDeniedException', $fault: 'client', $metadata: { httpStatusCode: 400, requestId: 'REQ-123' } },
+    );
+    const backend = { api: (_ctx: BlocksContext) => ({ async write() { throw sdkError; } }) };
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke(backend, makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.write', params: [], id: 1 }) }));
+    } finally {
+      console.error = originalError;
+    }
+
+    const body: string = result.body;
+    for (const leak of ['arn:aws', '123456789012', 'HandlerRole', 'app-backend-orders-prod', 'AccessDeniedException', 'REQ-123', 'dynamodb:PutItem']) {
+      assert.ok(!body.includes(leak), `client-visible error body leaked "${leak}": ${body}`);
+    }
+    assert.ok(JSON.parse(body).error, 'the call must still fail');
+  });
+});
+
 // ── RawRoute uncaught-exception sanitization ────────────────────────────────
 
 describe('createLambdaHandler — RawRoute uncaught exceptions', () => {
@@ -1526,4 +1555,58 @@ describe('createLambdaHandler — native client user-agent forwarding', () => {
     assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
   });
 
+});
+
+// ── RPC dispatch: only API surfaces are callable ────────────────────────────
+//
+// The dispatcher resolves `backend[apiNamespace][method]`. It must not expose a
+// Building Block instance that happens to be exported from the backend module
+// (its whole data plane would bypass every `requireAuth` in the ApiNamespace
+// layer), `_`-private exports, or members inherited from `Object.prototype`.
+
+function rpcEvent(method: string, params: unknown[] = []) {
+  return makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }) });
+}
+
+function rpcError(result: any): { code: number; message: string } | undefined {
+  return JSON.parse(result.body).error;
+}
+
+describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () => {
+  it('rejects a method on an exported Building Block (Scope) instance', async () => {
+    let wrote = false;
+    // Structurally a Scope (id + fullId), like `export const todos = new DistributedTable(scope, 'todos')`.
+    const todos = { id: 'todos', fullId: 'app-todos', async put() { wrote = true; return 'WROTE'; } };
+    const result = await invoke({ todos }, rpcEvent('todos.put', ['k', 'v']));
+    assert.strictEqual(rpcError(result)?.code, -32601, 'block instance must be method-not-found');
+    assert.strictEqual(wrote, false, 'the block method must never run');
+  });
+
+  it('rejects an underscore-private export', async () => {
+    let ran = false;
+    const backend = { _internal: () => ({ async run() { ran = true; return 1; } }) };
+    const result = await invoke(backend, rpcEvent('_internal.run'));
+    assert.strictEqual(rpcError(result)?.code, -32601);
+    assert.strictEqual(ran, false);
+  });
+
+  for (const inherited of ['toString', 'hasOwnProperty', 'constructor', 'valueOf', '__proto__']) {
+    it(`rejects the inherited Object.prototype member "${inherited}"`, async () => {
+      const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return m; } }) };
+      const result = await invoke(backend, rpcEvent(`api.${inherited}`));
+      assert.strictEqual(rpcError(result)?.code, -32601, `${inherited} must be method-not-found`);
+    });
+  }
+
+  it('rejects a non-function own property on the method map', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ secretConfig: { key: 'x' }, async echo(m: string) { return m; } }) };
+    const result = await invoke(backend, rpcEvent('api.secretConfig'));
+    assert.strictEqual(rpcError(result)?.code, -32601);
+  });
+
+  it('still dispatches a real method (regression guard)', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return { m }; } }) };
+    const result = await invoke(backend, rpcEvent('api.echo', ['hi']));
+    assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
+  });
 });

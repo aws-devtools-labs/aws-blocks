@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { brandBlocksError } from '@aws-blocks/core';
+import { blocksError } from '@aws-blocks/core';
 
 /**
  * S3 bucket-name validation, shared by the CDK (synth) and mock (local dev)
@@ -26,12 +26,6 @@ import { brandBlocksError } from '@aws-blocks/core';
 
 const MIN_LEN = 3;
 const MAX_LEN = 63;
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return brandBlocksError(err);
-}
 
 /**
  * Validate an auto-derived S3 bucket name. Throws a `ValidationFailed` error

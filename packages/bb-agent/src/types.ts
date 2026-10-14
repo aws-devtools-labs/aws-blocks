@@ -366,8 +366,8 @@ export interface AgentStreamChunk {
 
 export interface MessageMetadata {
 	toolName?: string;
-	toolInput?: string;
-	toolOutput?: string;
+	toolInput?: JSONValue;
+	toolOutput?: JSONValue;
 	usage?: TokenUsage;
 	latencyMs?: number;
 	error?: string;
