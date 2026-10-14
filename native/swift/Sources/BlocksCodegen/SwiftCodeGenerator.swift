@@ -56,18 +56,14 @@ public struct SwiftCodeGenerator {
         // the same `operationQualifiedNames` authority that drives emission.
         var warnings: [String] = []
 
-        // Default server name for init parameter default
-        let defaultServerName = model.servers.first.map { "Servers.\(camelCase($0.name))" } ?? "Servers.local"
+        // The spec's first server, the default for `Blocks()` and the deprecated `init(server:)`
+        let defaultServerName = model.servers.first.map { "Servers.\(serverPropertyName($0.name))" } ?? "Servers.local"
+        let entryPoint = entryPointNames(for: model.apiNamespaces)
+        warnings += entryPoint.warnings
 
         // Generate one class per namespace
-        for namespace in model.apiNamespaces {
-            let nsName = pascalCase(namespace.name)
-            apiLines.append("public class \(nsName) {")
-            apiLines.append("    private let client: BlocksClient")
-            apiLines.append("")
-            apiLines.append("    public init(server: BlocksServer = \(defaultServerName)) {")
-            apiLines.append("        self.client = BlocksClient(server: server)")
-            apiLines.append("    }")
+        for (namespace, names) in zip(model.apiNamespaces, entryPoint.names) {
+            emitNamespaceHeader(names, defaultServer: defaultServerName, lines: &apiLines)
 
             for operation in namespace.operations {
                 apiLines.append("")
@@ -78,7 +74,7 @@ public struct SwiftCodeGenerator {
                     let fullOp = namespace.name == "_default" ? operation.name : "\(namespace.name).\(operation.name)"
                     warnings.append(formatUnboundTransferable(
                         operation: fullOp, blocksType: blocksType, typeArgs: typeArgs,
-                        namespace: namespace.name, qualifiedNames: opQualified
+                        className: names.className, qualifiedNames: opQualified
                     ))
                 }
                 emitOperation(
@@ -99,16 +95,8 @@ public struct SwiftCodeGenerator {
             apiLines.append("")
         }
 
-        // Generate Servers enum
-        apiLines.append("")
-        apiLines.append("// MARK: - Servers")
-        apiLines.append("")
-        apiLines.append("public enum Servers {")
-        for server in model.servers {
-            let propertyName = camelCase(server.name)
-            apiLines.append("    public static let \(propertyName) = BlocksServer(name: \"\(server.name)\", url: \"\(server.url)\")")
-        }
-        apiLines.append("}")
+        emitBlocksEntryPoint(entryPoint.names, defaultServer: defaultServerName, lines: &apiLines)
+        emitServers(model.servers, lines: &apiLines)
 
         // Only include models file content if there are actual type definitions
         let hasTypes = !model.typeDefinitions.isEmpty
@@ -1295,26 +1283,26 @@ public struct SwiftCodeGenerator {
     }
 
     /// From the emission `qualifiedNames`, so it matches the emitted nesting; a `$ref` stays bare.
-    private func diagnosticModelName(_ type: ResolvedType, namespace: String, qualifiedNames: [String: String]) -> String {
+    private func diagnosticModelName(_ type: ResolvedType, className: String, qualifiedNames: [String: String]) -> String {
         switch type {
         case .record(let name, _, _, _), .enum(let name, _), .union(let name, _, _):
-            return "\(pascalCase(namespace)).\(qualifiedNames[name] ?? name)"
+            return "\(className).\(qualifiedNames[name] ?? name)"
         case .typeReference(let name):
             return name
         case .list(let elementType, _):
-            return diagnosticModelName(elementType, namespace: namespace, qualifiedNames: qualifiedNames)
+            return diagnosticModelName(elementType, className: className, qualifiedNames: qualifiedNames)
         case .map(let valueType):
-            return diagnosticModelName(valueType, namespace: namespace, qualifiedNames: qualifiedNames)
+            return diagnosticModelName(valueType, className: className, qualifiedNames: qualifiedNames)
         case .nullable(let inner):
-            return diagnosticModelName(inner, namespace: namespace, qualifiedNames: qualifiedNames)
+            return diagnosticModelName(inner, className: className, qualifiedNames: qualifiedNames)
         default:
             return ""
         }
     }
 
     /// Names the operation, tag, platform, and generated type-argument models, never descriptor values.
-    private func formatUnboundTransferable(operation: String, blocksType: String, typeArgs: [ResolvedType], namespace: String, qualifiedNames: [String: String]) -> String {
-        let models = typeArgs.map { diagnosticModelName($0, namespace: namespace, qualifiedNames: qualifiedNames) }.filter { !$0.isEmpty }
+    private func formatUnboundTransferable(operation: String, blocksType: String, typeArgs: [ResolvedType], className: String, qualifiedNames: [String: String]) -> String {
+        let models = typeArgs.map { diagnosticModelName($0, className: className, qualifiedNames: qualifiedNames) }.filter { !$0.isEmpty }
         let typeArgClause = switch models.count {
         case 0: "no generated type-argument models"
         case 1: "type argument \(models[0])"
@@ -1329,7 +1317,7 @@ public struct SwiftCodeGenerator {
     }
 
     /// Escapes an untrusted tag so it cannot break the emitted Swift literal.
-    private func swiftStringLiteral(_ value: String) -> String {
+    func swiftStringLiteral(_ value: String) -> String {
         let escaped = value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
