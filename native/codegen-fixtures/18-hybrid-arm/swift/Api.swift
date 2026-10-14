@@ -1,7 +1,7 @@
 import Foundation
 import BlocksRuntime
 
-public final class AuthApi: Sendable {
+public final nonisolated class AuthApi: Sendable {
     private let client: BlocksClient
 
     public init(client: BlocksClient) {
@@ -256,7 +256,7 @@ public final class AuthApi: Sendable {
 
 /// One BlocksClient, so one URLSession (RPC and OIDC calls) and one token store, for every namespace in this spec;
 /// file transfers and realtime use the shared runtime session. Hold one while the backend is in use: `let blocks = Blocks()`.
-public final class Blocks: Sendable {
+public final nonisolated class Blocks: Sendable {
     /// The server every API calls.
     public let server: BlocksRuntime.BlocksServer
     /// The client every API runs on.
@@ -283,6 +283,6 @@ public final class Blocks: Sendable {
 
 // MARK: - Servers
 
-public enum Servers {
+public nonisolated enum Servers {
     public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
 }

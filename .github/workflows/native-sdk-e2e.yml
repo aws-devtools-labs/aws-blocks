@@ -261,7 +261,7 @@ jobs:
     name: Swift E2E
     needs: [detect-changes, setup]
     if: needs.detect-changes.outputs.swift-changed == 'true'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -341,7 +341,7 @@ jobs:
           xcodebuild clean test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \
             -scheme BlocksE2ETests \
-            -destination 'platform=iOS Simulator,name=iPhone 16'
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
   # Sandbox E2E — deploys a per-run stack to the shared repo AWS account.
   # Runs on same-repo PRs (fork PRs can't access secrets/OIDC) and on manual
@@ -502,7 +502,7 @@ jobs:
       needs.detect-changes.outputs.swift-changed == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: macos-15
+    runs-on: macos-26
     # Same ~27-min deploy+build overhead as dart-e2e-sandbox; the slower
     # xcodebuild blew past 30 (and skipped Destroy → leaked stack). Raise to 45.
     # Stop-gap until deploy-once-per-run lands.
@@ -587,7 +587,7 @@ jobs:
           xcodebuild test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \
             -scheme BlocksE2ETests \
-            -destination 'platform=iOS Simulator,name=iPhone 16'
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
       - name: Destroy sandbox
         if: always()

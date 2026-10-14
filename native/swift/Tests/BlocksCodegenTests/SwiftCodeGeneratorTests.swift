@@ -147,7 +147,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """)
 
-        XCTAssertTrue(output.api.contains("public final class Api: Sendable {"))
+        XCTAssertTrue(output.api.contains("public final nonisolated class Api: Sendable {"))
         XCTAssertTrue(output.api.contains("func greet(name: String)"))
         XCTAssertTrue(output.api.contains("async throws"))
     }
@@ -286,8 +286,8 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """)
 
-        XCTAssertTrue(output.api.contains("public final class Posts: Sendable {"), "Should emit Posts class")
-        XCTAssertTrue(output.api.contains("public final class Users: Sendable {"), "Should emit Users class")
+        XCTAssertTrue(output.api.contains("public final nonisolated class Posts: Sendable {"), "Should emit Posts class")
+        XCTAssertTrue(output.api.contains("public final nonisolated class Users: Sendable {"), "Should emit Users class")
         XCTAssertTrue(output.api.contains("func list()"), "Each class has its own list() — no prefix needed")
     }
 
@@ -438,7 +438,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         )
         // The emitted code must declare the type the diagnostic names (Api.ConnectDevice.ResultMessage),
         // or that name would not resolve in the generated client.
-        XCTAssertTrue(output.api.contains("public final class Api: Sendable {"), "namespace class Api not emitted, got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("public final nonisolated class Api: Sendable {"), "namespace class Api not emitted, got:\n\(output.api)")
         guard let opEnum = output.api.range(of: "public enum ConnectDevice {") else {
             return XCTFail("operation enum ConnectDevice not emitted, got:\n\(output.api)")
         }
@@ -779,7 +779,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         """
         let model = try build(from: spec)
         let output = generator.generate(from: model)
-        XCTAssertTrue(output.api.contains("public final class _Default: Sendable {"), "expected _Default class, got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("public final nonisolated class _Default: Sendable {"), "expected _Default class, got:\n\(output.api)")
         let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
         XCTAssertEqual(
             diagnostic,
@@ -810,7 +810,10 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             }
         }
         """)
-        XCTAssertTrue(output.models.contains("public struct Telemetry"), "the $ref type-arg must be a resolvable top-level type, got:\n\(output.models)")
+        XCTAssertTrue(
+            output.models.contains("public nonisolated struct Telemetry"),
+            "the $ref type-arg must be a resolvable top-level type, got:\n\(output.models)"
+        )
         let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
         XCTAssertEqual(
             diagnostic,

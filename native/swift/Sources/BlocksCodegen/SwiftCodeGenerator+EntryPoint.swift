@@ -42,9 +42,10 @@ extension SwiftCodeGenerator {
         return (names, warnings)
     }
 
-    /// Opens a namespace class that runs on the client its `Blocks` owns.
+    /// Opens a namespace class that runs on the client its `Blocks` owns. Every top-level generated type is
+    /// `nonisolated`: it compiles in the app's target and must not inherit a `MainActor` default isolation.
     func emitNamespaceHeader(_ name: EntryPointName, defaultServer: String, lines: inout [String]) {
-        lines.append("public final class \(name.className): Sendable {")
+        lines.append("public final nonisolated class \(name.className): Sendable {")
         lines.append("    private let client: BlocksClient")
         lines.append("")
         lines.append("    public init(client: BlocksClient) {")
@@ -64,7 +65,7 @@ extension SwiftCodeGenerator {
         lines.append("")
         lines.append("/// One BlocksClient, so one URLSession (RPC and OIDC calls) and one token store, for every namespace in this spec;")
         lines.append("/// file transfers and realtime use the shared runtime session. Hold one while the backend is in use: `let blocks = Blocks()`.")
-        lines.append("public final class Blocks: Sendable {")
+        lines.append("public final nonisolated class Blocks: Sendable {")
         lines.append("    /// The server every API calls.")
         lines.append("    public let server: BlocksRuntime.BlocksServer")
         lines.append("    /// The client every API runs on.")
@@ -101,7 +102,7 @@ extension SwiftCodeGenerator {
         lines.append("")
         lines.append("// MARK: - Servers")
         lines.append("")
-        lines.append("public enum Servers {")
+        lines.append("public nonisolated enum Servers {")
         for server in servers {
             let name = swiftStringLiteral(server.name)
             let url = swiftStringLiteral(server.url)

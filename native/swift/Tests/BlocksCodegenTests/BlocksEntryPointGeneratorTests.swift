@@ -35,7 +35,7 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
     func testNamespaceClassTakesTheSharedClient() throws {
         let api = try generate().api
         XCTAssertTrue(api.contains("""
-        public final class Todos: Sendable {
+        public final nonisolated class Todos: Sendable {
             private let client: BlocksClient
 
             public init(client: BlocksClient) {
@@ -57,7 +57,7 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
 
     func testBlocksStoresOnePropertyPerNamespace() throws {
         let api = try generate().api
-        XCTAssertEqual(api.components(separatedBy: "public final class Blocks: Sendable {").count, 2)
+        XCTAssertEqual(api.components(separatedBy: "public final nonisolated class Blocks: Sendable {").count, 2)
         XCTAssertTrue(api.contains("    public let authCognito: AuthCognito\n    public let todos: Todos\n"))
         XCTAssertTrue(api.contains("        self.authCognito = .init(client: client)\n        self.todos = .init(client: client)\n"))
         XCTAssertTrue(api.contains("    public func close() {\n        client.close()\n    }"))
@@ -74,6 +74,28 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
                 self.server = server
                 self.client = BlocksRuntime.BlocksClient(server: server, session: session, tokenStore: tokenStore)
         """))
+    }
+
+    // Generated code compiles in the app's target, so its top-level types opt out of a MainActor default isolation.
+    func testEveryTopLevelTypeIsNonisolated() throws {
+        let output = try generate("""
+        { "openrpc": "1.3.2", "info": { "title": "test", "version": "1.0.0" },
+          "methods": [{ "name": "todos.get", "params": [], "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Todo" } } }],
+          "components": { "schemas": {
+            "Todo": { "type": "object", "properties": { "status": { "$ref": "#/components/schemas/Status" } }, "required": ["status"] },
+            "Status": { "type": "string", "enum": ["open", "done"] }
+          } } }
+        """)
+        let topLevel = (output.api + "\n" + output.models).split(separator: "\n").filter { $0.hasPrefix("public ") }
+        XCTAssertEqual(Set(topLevel), [
+            "public final nonisolated class Todos: Sendable {",
+            "public final nonisolated class Blocks: Sendable {",
+            "public nonisolated enum Servers {",
+            "public nonisolated struct Todo: Codable {",
+            "public nonisolated enum Status: String, Codable {"
+        ])
+        let members = (output.api + output.models).split(separator: "\n").filter { $0.hasPrefix(" ") && $0.contains("nonisolated") }
+        XCTAssertEqual(members, [], "members inherit nonisolated from their type")
     }
 
     func testDefaultsFollowTheFirstOfSeveralServers() throws {
@@ -124,11 +146,11 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
     func testNamespacesNamedLikeGeneratedTypesGetAnApiSuffix() throws {
         let output = try generate(namespaces: ["blocks", "servers", "blocksRuntime"])
         for className in ["BlocksApi", "ServersApi", "BlocksRuntimeApi"] {
-            XCTAssertTrue(output.api.contains("public final class \(className): Sendable {"), className)
+            XCTAssertTrue(output.api.contains("public final nonisolated class \(className): Sendable {"), className)
         }
         let properties = "    public let blocks: BlocksApi\n    public let blocksRuntime: BlocksRuntimeApi\n    public let servers: ServersApi\n"
         XCTAssertTrue(output.api.contains(properties))
-        XCTAssertEqual(output.api.components(separatedBy: "public final class Blocks: Sendable {").count, 2)
+        XCTAssertEqual(output.api.components(separatedBy: "public final nonisolated class Blocks: Sendable {").count, 2)
         XCTAssertTrue(output.warnings.contains("swift: namespace 'blocks' generates class BlocksApi; Blocks is reserved."))
     }
 
@@ -138,13 +160,13 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
             ["blocks": "BlocksApiApi", "blocksApi": "BlocksApi", "sendable": "SendableApi", "URLSession": "URLSessionApi"]
         )
         let output = try generate(namespaces: ["blocks", "blocksApi"])
-        XCTAssertEqual(output.api.components(separatedBy: "public final class BlocksApi: Sendable {").count, 2)
+        XCTAssertEqual(output.api.components(separatedBy: "public final nonisolated class BlocksApi: Sendable {").count, 2)
         XCTAssertTrue(output.warnings.contains("swift: namespace 'blocks' generates class BlocksApiApi; Blocks is reserved."))
     }
 
     func testDefaultNamespaceIsReachedAsDefault() throws {
         let output = try generate(namespaces: [""])
-        XCTAssertTrue(output.api.contains("public final class _Default: Sendable {"))
+        XCTAssertTrue(output.api.contains("public final nonisolated class _Default: Sendable {"))
         XCTAssertTrue(output.api.contains("    public let `default`: _Default\n"))
         XCTAssertEqual(output.warnings, [])
     }
@@ -165,8 +187,8 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
 
     func testBlocksMemberNamesCoverEveryMemberBlocksDeclares() throws {
         let api = try generate(namespaces: ["todos"]).api
-        let body = try XCTUnwrap(api.components(separatedBy: "public final class Blocks: Sendable {").last?.components(separatedBy: "\n}\n").first)
-        let members = Set(matches(#"(?m)^    public (?:let|var|func) `?(\w+)"#, in: body)).subtracting(["todos"])
+        let body = try XCTUnwrap(api.components(separatedBy: "public final nonisolated class Blocks: Sendable {").last?.components(separatedBy: "\n}\n").first)
+        let members = Set(matches(#"(?m)^    public (?:nonisolated )?(?:let|var|func) `?(\w+)"#, in: body)).subtracting(["todos"])
         XCTAssertEqual(members, ["server", "client", "close"])
         XCTAssertTrue(members.isSubset(of: blocksMemberNames))
     }

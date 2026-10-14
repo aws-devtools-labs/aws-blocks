@@ -63,7 +63,8 @@ A Swift Package that generates type-safe Swift client code from an OpenRPC speci
 | Golden files for the 27 shared fixtures | `Tests/BlocksCodegenTests/GoldenFileTests.swift` |
 | Hybrid-arm fixture spec | `../codegen-fixtures/18-hybrid-arm/spec.json` |
 | Runtime tests | `Tests/BlocksRuntimeTests/*` |
-| Build-plugin output compiled with strict concurrency, warnings as errors; any new compiler warning in generated code, such as one a runner Xcode update brings, fails CI | `Tests/BlocksGeneratedCodeTests/` (its `blocks.spec.json` is un-ignored in `.gitignore`) |
+| Build-plugin output compiled in Swift 6 language mode with `.treatAllWarnings(as: .error)`; any new compiler warning in generated code, such as one a runner Xcode update brings, fails CI | `Tests/BlocksGeneratedCodeTests/` (its `blocks.spec.json` is un-ignored in `.gitignore`) |
+| The same spec's output under Xcode 26 app defaults: `.defaultIsolation(MainActor.self)` plus approachable concurrency | `Tests/BlocksGeneratedMainActorTests/` (its `blocks.spec.json` copy is un-ignored too) |
 
 ## Build and Test Commands
 
@@ -116,7 +117,7 @@ These rules are load-bearing — the generated wire format depends on them. Brea
 
 ## Swift Concurrency
 
-Generated code is Swift Concurrency-ready: `func setAuthState(input: Input) async throws -> AuthState` is the standard signature. `BlocksClient`, `BlocksServer`, the generated `Blocks` and the generated namespace classes are checked `Sendable`, and none is `@MainActor`. Generated code compiles in the app's target, so it inherits that target's default isolation: under Xcode's default `MainActor` isolation, call `Blocks()` and `close()` on the main actor, then pass the `Sendable` instance anywhere.
+Generated code is Swift Concurrency-ready: `func setAuthState(input: Input) async throws -> AuthState` is the standard signature. `BlocksClient`, `BlocksServer`, the generated `Blocks` and the generated namespace classes are checked `Sendable`, and none is `@MainActor`. Generated code compiles in the app's target, so it would inherit that target's default isolation; every top-level generated type is emitted `nonisolated` (Swift 6.1+), so generated code behaves the same with or without Xcode's `MainActor` default isolation. The package is `swift-tools-version: 6.2` (Xcode 26); its own targets build in Swift 5 language mode (`swiftLanguageModes: [.v5]`) until the runtime is migrated, and the two generated-code test targets build in Swift 6 mode.
 
 Generated model `struct`s and `enum`s are public, so they are not implicitly `Sendable`; returning them across actors fails in Swift 6 language mode. Don't add reference types to the IR or to runtime-shipped data classes.
 

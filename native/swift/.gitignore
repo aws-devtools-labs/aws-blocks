@@ -13,6 +13,7 @@
 
 *blocks.spec.json
 !Tests/BlocksGeneratedCodeTests/blocks.spec.json
+!Tests/BlocksGeneratedMainActorTests/blocks.spec.json
 
 # Node (changeset tooling)
 node_modules/

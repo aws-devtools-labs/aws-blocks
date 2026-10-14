@@ -59,7 +59,7 @@ _ = try await blocks.authApi.setAuthState(input: .signUp(AuthApi.SetAuthState.Si
 
 `Blocks()` uses the first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends is a regeneration, not an edit. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/aws-blocks/api"))`. Pass `tokenStore:` your own `TokenStore` to keep OIDC tokens across launches, or `session:` a `URLSession` you own.
 
-Create one `Blocks` in app-scoped state, such as the Demo's `AppState`, not in a `View` initializer or a `@State` default. Each `blocks.<namespace>` is a stored, `Sendable` wrapper over the same client. `close()` makes later calls throw `ClientClosedError`, lets calls in flight finish, then releases the instance's `URLSession`; an instance that is never closed releases it once nothing references it. That session carries RPC and OIDC calls; realtime channels and file transfers use a shared one and keep working. Under Xcode's default `MainActor` isolation, create `Blocks` on the main actor and pass it anywhere. A file that imports two generated modules names the one it means: `FeatureA.Blocks()`.
+Create one `Blocks` in app-scoped state, such as the Demo's `AppState`, not in a `View` initializer or a `@State` default. Each `blocks.<namespace>` is a stored, `Sendable` wrapper over the same client. `close()` makes later calls throw `ClientClosedError`, lets calls in flight finish, then releases the instance's `URLSession`; an instance that is never closed releases it once nothing references it. That session carries RPC and OIDC calls; realtime channels and file transfers use a shared one and keep working. Generated types are `nonisolated`, so they behave the same under Xcode's default `MainActor` isolation: create, call and close `Blocks` from any actor or task. A file that imports two generated modules names the one it means: `FeatureA.Blocks()`.
 
 ## Features
 
@@ -104,8 +104,10 @@ Linux / watchOS / tvOS are not currently targeted — the runtime relies on Foun
 
 ## Requirements
 
-- Swift 5.9+
-- Xcode 15+ (for iOS / macOS app builds)
+- Swift 6.2+ (the package declares `swift-tools-version: 6.2`)
+- Xcode 26+ (for iOS / macOS app builds)
+
+Your app can build in Swift 5 or Swift 6 language mode.
 
 ## License
 

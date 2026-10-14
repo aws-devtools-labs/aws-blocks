@@ -476,7 +476,7 @@ public struct SwiftCodeGenerator {
         case .enum(_, let values):
             emitted.insert(name)
             lines.append("")
-            lines.append("public enum \(name): String, Codable {")
+            lines.append("public nonisolated enum \(name): String, Codable {")
             for val in values {
                 let caseName = camelCase(val)
                 if caseName != val {
@@ -522,7 +522,7 @@ public struct SwiftCodeGenerator {
             }
             var body: [String] = []
             body.append("")
-            body.append("public enum \(name): Codable {")
+            body.append("public nonisolated enum \(name): Codable {")
             for variant in variants {
                 let caseName = camelCase(variant.name)
                 let hasSynthBody = !variant.fields.isEmpty
@@ -564,7 +564,7 @@ public struct SwiftCodeGenerator {
         let fields = fields.filter { !isVoidType($0.type) }
         var body: [String] = []
         body.append("")
-        body.append("public struct \(name): Codable {")
+        body.append("public nonisolated struct \(name): Codable {")
         for field in fields {
             let swType = swiftTypeNameNoEmit(field.type)
             let alreadyOptional = swType.hasSuffix("?")
