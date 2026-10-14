@@ -227,10 +227,10 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  *
  * Also schedules the API front door now that its origin exists. That decision is
  * deferred to synth via an aspect: a `Hosting` built after `create()` resolves
- * may claim the front-door role, in which case no managed `edge` distribution is
- * provisioned. `edge` ⇒ a CloudFront distribution in front of the gateway;
- * `apigateway` (the default) ⇒ clients call the gateway directly. Under
- * `cloudfront` the gateway is built as a `REGIONAL` endpoint.
+ * may claim the front-door role, in which case no managed distribution is
+ * provisioned. `cloudfront` ⇒ a CloudFront distribution in front of the gateway,
+ * which is then built as a `REGIONAL` endpoint; `apigateway` (the default) ⇒
+ * clients call the gateway directly.
  *
  * @internal
  */
