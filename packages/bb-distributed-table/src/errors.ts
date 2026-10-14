@@ -3,7 +3,7 @@
 
 import { createDefu } from 'defu';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { ApiError, brandBlocksError } from '@aws-blocks/core';
+import { ApiError, blocksError as coreBlocksError, brandBlocksError } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { ReadValidationMode } from './types.js';
 
@@ -93,12 +93,11 @@ export const DistributedTableErrors = {
 /**
  * @internal Build an Error whose `name` carries the typed error code (so callers
  * can match it with `isBlocksError`). Shared by the mock and AWS runtime so both
- * produce identically shaped errors.
+ * produce identically shaped errors. Delegates to core's `blocksError` so the
+ * minting (prefixing, naming, wire-safe branding) lives in one place.
  */
 export function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return brandBlocksError(err);
+	return coreBlocksError(name, message);
 }
 
 /**
