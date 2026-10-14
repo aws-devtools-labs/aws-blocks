@@ -45,7 +45,7 @@ after(() => {
 });
 
 describe('umbrella injects the Lambda default compute', () => {
-	test('BlocksStack.create() resolves the default to a LambdaCompute with one function + gateway', async () => {
+	test('BlocksStack.create() resolves the default to a LambdaCompute fronted by one shared REST API', async () => {
 		const app = new cdk.App();
 		const stack = await BlocksStack.create(app, 'UmbrellaStack', {
 			backendHandlerPath: handlerPath,
@@ -54,13 +54,13 @@ describe('umbrella injects the Lambda default compute', () => {
 		});
 
 		// The umbrella wrapper injected LambdaCompute (not a stub); the stack's
-		// handler/gateway delegate to it. (The `fn`/`apiGateway` members live on
-		// the CDK-typed LambdaCompute; TS resolves the import to the mock type
-		// here, so we assert through the stack's typed getters instead.)
+		// gateway/apiUrl resolve to the stack's single
+		// shared REST API. (The `fn` member lives on the CDK-typed LambdaCompute;
+		// TS resolves the import to the mock type here, so we assert through the
+		// stack's typed getters instead.)
 		assert.ok(stack._defaultCompute instanceof LambdaCompute, 'default compute should be a LambdaCompute');
-		assert.ok(stack.handler, 'stack.handler resolves through the default compute');
-		assert.ok(stack.gateway, 'stack.gateway resolves through the default compute');
-		assert.ok(stack.apiUrl, 'stack.apiUrl resolves through the default compute');
+		assert.ok(stack.gateway, 'stack.gateway resolves to the shared REST API');
+		assert.ok(stack.apiUrl, 'stack.apiUrl resolves to the shared REST API');
 
 		const template = Template.fromStack(stack);
 		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
@@ -77,10 +77,60 @@ describe('umbrella injects the Lambda default compute', () => {
 		});
 
 		assert.ok(backend._defaultCompute instanceof LambdaCompute, 'default compute should be a LambdaCompute');
-		assert.ok(backend.handler, 'backend.handler resolves through the default compute');
-		assert.ok(backend.apiUrl, 'backend.apiUrl resolves through the default compute');
+		assert.ok(backend.apiUrl, 'backend.apiUrl resolves to the shared REST API');
 
 		const template = Template.fromStack(parent);
 		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+	});
+});
+
+// The shared gateway replaced a gateway each LambdaCompute owned. It is built in
+// the default compute's scope with the same construct ids, so CloudFormation sees
+// the same logical IDs and an upgrade keeps the deployed REST API, its stage, and
+// its execute-api URL (and, in production, the RETAINed access-log group's audit
+// trail). These are the IDs `main` synthesized before the move — a change here
+// replaces the REST API for every deployed app, so it must be deliberate.
+describe('shared gateway keeps the pre-move logical IDs', () => {
+	const defaults = { ...BlocksPresets.production, accessLogging: true };
+	const gatewayIds = (stack: cdk.Stack) => {
+		const resources = Template.fromStack(stack).toJSON().Resources as Record<string, { Type: string }>;
+		const ids = (type: string, filter: (id: string) => boolean = () => true) =>
+			Object.keys(resources)
+				.filter((id) => resources[id].Type === type && filter(id))
+				.sort();
+		return {
+			restApi: ids('AWS::ApiGateway::RestApi'),
+			stage: ids('AWS::ApiGateway::Stage'),
+			accessLogs: ids('AWS::Logs::LogGroup', (id) => id.includes('ApiAccessLogs')),
+		};
+	};
+
+	test('BlocksStack', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'PinStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults,
+		});
+		assert.deepStrictEqual(gatewayIds(stack), {
+			restApi: ['DefaultComputeAPI5E5CE44A'],
+			stage: ['DefaultComputeAPIDeploymentStageprodBEAFD421'],
+			accessLogs: ['DefaultComputeApiAccessLogs6AADB91E'],
+		});
+	});
+
+	test('BlocksBackend', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'PinParent');
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults,
+		});
+		assert.deepStrictEqual(gatewayIds(parent), {
+			restApi: ['BlocksDefaultComputeAPI11DA76BF'],
+			stage: ['BlocksDefaultComputeAPIDeploymentStageprod70A875D5'],
+			accessLogs: ['BlocksDefaultComputeApiAccessLogsBEFB0011'],
+		});
 	});
 });

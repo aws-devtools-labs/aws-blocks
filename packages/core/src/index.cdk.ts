@@ -49,7 +49,13 @@ export {
 	synthGuard,
 } from './cdk/index.js';
 export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
-export { BlocksStackProps } from './common/index.js';
+export {
+	type BlocksStackProps,
+	type BuildingBlockMeta,
+	buildingBlockParent,
+	computeScopeFullId,
+	type ScopeParent,
+} from './common/index.js';
 export {
 	_resetSdkRegistry,
 	getAllSdkIdentifiers,

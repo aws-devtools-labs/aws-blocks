@@ -3,7 +3,14 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig, _resetConfigCache, _setS3Fetcher } from './config.js';
+import {
+	getConfig,
+	getConfigSync,
+	loadConfigToProcessEnv,
+	preloadConfig,
+	_resetConfigCache,
+	_setS3Fetcher,
+} from './config.js';
 
 beforeEach(() => {
 	_resetConfigCache();
@@ -94,6 +101,40 @@ describe('config — S3 load success', () => {
 		delete process.env.EXISTING_KEY;
 	});
 
+	it('loadConfigToProcessEnv warns once, by key name only, when an env var shadows a different config value', async (t) => {
+		process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
+		process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
+		process.env.SHADOWED_A = 'env-a';
+		process.env.SHADOWED_B = 'env-b';
+		process.env.SAME_VALUE = 'same';
+		const warn = t.mock.method(console, 'warn', () => {});
+
+		_setS3Fetcher(async () =>
+			JSON.stringify({ SHADOWED_A: 'secret-a', SHADOWED_B: 'secret-b', SAME_VALUE: 'same', NEW_KEY: 'n' }),
+		);
+
+		await loadConfigToProcessEnv();
+		assert.strictEqual(warn.mock.callCount(), 1, 'one consolidated warning');
+		const message = String(warn.mock.calls[0].arguments[0]);
+		assert.match(message, /SHADOWED_A, SHADOWED_B/);
+		assert.ok(!message.includes('SAME_VALUE'), 'an equal value is not a conflict');
+		assert.ok(!message.includes('NEW_KEY'), 'an unset key is applied, not reported');
+		assert.ok(!message.includes('secret-') && !message.includes('env-'), 'values are never logged');
+		for (const k of ['SHADOWED_A', 'SHADOWED_B', 'SAME_VALUE', 'NEW_KEY']) delete process.env[k];
+	});
+
+	it('loadConfigToProcessEnv does not warn when re-run in the same container', async (t) => {
+		process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
+		process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
+		_setS3Fetcher(async () => JSON.stringify({ RELOADED_KEY: 'v' }));
+		const warn = t.mock.method(console, 'warn', () => {});
+
+		await loadConfigToProcessEnv();
+		await loadConfigToProcessEnv(); // the second load sees the values the first one set
+		assert.strictEqual(warn.mock.callCount(), 0);
+		delete process.env.RELOADED_KEY;
+	});
+
 	it('getConfigSync returns cached value after load', async () => {
 		process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
 		process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
@@ -113,7 +154,9 @@ describe('config — S3 errors', () => {
 
 		const noSuchKeyError = new Error('The specified key does not exist.');
 		(noSuchKeyError as any).name = 'NoSuchKey';
-		_setS3Fetcher(async () => { throw noSuchKeyError; });
+		_setS3Fetcher(async () => {
+			throw noSuchKeyError;
+		});
 
 		const result = await getConfig('ANY_KEY');
 		assert.strictEqual(result, '', 'Should return empty string (empty config) on NoSuchKey');
@@ -125,7 +168,9 @@ describe('config — S3 errors', () => {
 
 		const notFoundError = new Error('Not Found');
 		(notFoundError as any).$metadata = { httpStatusCode: 404 };
-		_setS3Fetcher(async () => { throw notFoundError; });
+		_setS3Fetcher(async () => {
+			throw notFoundError;
+		});
 
 		const result = await getConfig('ANY_KEY');
 		assert.strictEqual(result, '', 'Should return empty string (empty config) on 404');
@@ -156,7 +201,9 @@ describe('config — S3 errors', () => {
 		process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
 		process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
 
-		_setS3Fetcher(async () => { throw new Error('Network timeout'); });
+		_setS3Fetcher(async () => {
+			throw new Error('Network timeout');
+		});
 
 		await assert.rejects(
 			() => getConfig('ANY_KEY'),
@@ -173,7 +220,9 @@ describe('config — S3 errors', () => {
 		process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
 		process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
 
-		_setS3Fetcher(async () => { throw new Error('Empty config file'); });
+		_setS3Fetcher(async () => {
+			throw new Error('Empty config file');
+		});
 
 		await assert.rejects(
 			() => getConfig('ANY_KEY'),
@@ -239,15 +288,11 @@ describe('config — concurrent access', () => {
 		let callCount = 0;
 		_setS3Fetcher(async () => {
 			callCount++;
-			await new Promise(r => setTimeout(r, 50));
+			await new Promise((r) => setTimeout(r, 50));
 			return JSON.stringify({ KEY_A: 'value-a' });
 		});
 
-		const [r1, r2, r3] = await Promise.all([
-			getConfig('KEY_A'),
-			getConfig('KEY_A'),
-			getConfig('KEY_A'),
-		]);
+		const [r1, r2, r3] = await Promise.all([getConfig('KEY_A'), getConfig('KEY_A'), getConfig('KEY_A')]);
 
 		assert.strictEqual(r1, 'value-a');
 		assert.strictEqual(r2, 'value-a');
