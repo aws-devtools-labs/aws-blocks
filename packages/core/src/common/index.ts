@@ -422,6 +422,13 @@ export function buildingBlockParent(
   return { ...meta, fullId: computeScopeFullId(meta) };
 }
 
+/**
+ * How a Blocks backend's API is exposed to clients: `'apigateway'` (the API
+ * Gateway endpoint itself, the default) or `'cloudfront'` (a Blocks-managed
+ * CloudFront distribution in front of it). See {@link BlocksStackProps.apiFrontDoor}.
+ */
+export type ApiFrontDoorTier = 'apigateway' | 'cloudfront';
+
 export interface BlocksStackProps extends StackProps {
   backendHandlerPath: string;
   backendCDKPath: string;
@@ -434,25 +441,32 @@ export interface BlocksStackProps extends StackProps {
    */
   defaults: BlocksDefaults;
   /**
-   * How the app's API is exposed to the internet. Default: `'regional'`.
+   * How the app's API is exposed to clients. Default: `'apigateway'`.
    *
-   * - `'regional'` — the shared regional gateway, reached directly on its own
-   *   endpoint. Cheap, and a stable address for a given deployment (no CDN hop).
-   * - `'edge'` — a global, CDN-backed front door in front of that gateway, with
-   *   edge termination. Choose it for a geographically distributed audience.
+   * - `'apigateway'` — clients call the stack's API Gateway endpoint directly, on
+   *   its own `execute-api` domain. Nothing extra to deploy.
+   * - `'cloudfront'` — Blocks puts a CloudFront distribution in front of the
+   *   gateway (built as a regional endpoint, so traffic passes through one
+   *   CloudFront layer), and clients call the distribution's domain instead.
    *
-   * The default is a constant `'regional'` — it is NEVER derived from the app's
+   * Whichever tier you pick, `publicApiUrl` (and the `ApiUrl` stack output) is the
+   * URL clients should call. When a `Hosting` construct fronts the API, the API is
+   * served from Hosting's distribution; under `'cloudfront'` Blocks then creates no
+   * second distribution.
+   *
+   * The default is a constant `'apigateway'` — it is NEVER derived from the app's
    * shape, so adding or removing Building Blocks never silently changes how the
    * API is exposed.
    *
-   * ⚠️ **Switching `'regional'` ⇄ `'edge'` changes the API's endpoint domain.**
-   * Browser auth cookies and sessions are bound to the origin they were set on,
-   * so a switch invalidates every existing cookie/session — users are signed out
-   * and must sign in again. (A stable custom domain — a future feature — would
-   * let you move between tiers without this.) Pick a tier before you have real
-   * users, and treat a later change as a breaking migration.
+   * ⚠️ **Switching tiers — or adding or removing `Hosting` under `'cloudfront'` —
+   * changes the API's endpoint domain.** Browser auth cookies and sessions are
+   * bound to the origin they were set on, so the change invalidates every existing
+   * cookie/session — users are signed out and must sign in again. (A stable custom
+   * domain — a future feature — would avoid this.) Pick a tier, and decide on
+   * Hosting, before you have real users, and treat a later change as a breaking
+   * migration.
    */
-  apiFrontDoor?: 'regional' | 'edge';
+  apiFrontDoor?: ApiFrontDoorTier;
 }
 
 export class BlocksStack {

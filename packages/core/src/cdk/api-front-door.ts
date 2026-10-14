@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The `edge` tier: a managed CloudFront front door for API traffic.
+ * The `cloudfront` tier: a Blocks-managed CloudFront distribution in front of the
+ * API.
  *
- * The stack's single shared REST API gateway is reachable directly on its own
- * regional `execute-api` domain — that is the implicit `regional` tier, and the
- * default. The `edge` tier puts one CloudFront distribution in front of that
- * gateway so the API is served from a global, CDN-backed domain instead
+ * By default (`apigateway`) clients call the stack's shared API Gateway REST API
+ * on its own `execute-api` endpoint. The `cloudfront` tier puts one CloudFront
+ * distribution in front of that gateway, which is then built as a `REGIONAL`
+ * endpoint so traffic doesn't pass through two CloudFront layers
  * (CloudFront → API Gateway → Lambda).
  *
  * It is a single catch-all default behavior forwarding to the shared gateway
@@ -34,7 +35,9 @@ import {
 } from 'aws-cdk-lib/aws-cloudfront';
 import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import type { Construct, IConstruct } from 'constructs';
+import type { ApiFrontDoorTier } from '../common/index.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
+import { registerConfig } from './config-registry.js';
 
 /** Construct id of the managed distribution. */
 const FRONT_DOOR_ID = 'ApiFrontDoor';
@@ -67,18 +70,17 @@ export const API_BEHAVIOR_OPTIONS = {
  *
  * A later `Hosting` holds a direct reference to its backend (`props.api`), so it
  * records its claim on that object — and the synth-time aspect, scheduled on the
- * same object, reads it back. Because the signal travels through a live object
- * reference, it works even when `Hosting` and its backend live in **different
- * stacks** (the previous `Symbol.for` per-stack state did not: the two stacks
- * never shared it, so a cross-stack `Hosting` could not suppress the managed
- * `edge` distribution and the app got two). The fields are `@internal` and set
- * only through {@link claimApiFrontDoor} and the aspect.
+ * same object, reads it back. Keying the signal on the backend instance (not on
+ * its stack) keeps two backends in one stack independent. The fields are
+ * `@internal` and set only through {@link claimApiFrontDoor} and the aspect.
  */
 export interface ApiFrontDoorOwner {
 	/** Set when a `Hosting` distribution has claimed the API front-door role. */
 	_apiFrontDoorClaimedByHosting?: boolean;
 	/** Public origin of whichever front door ended up fronting the API. */
 	_apiFrontDoorResolvedUrl?: string;
+	/** The `apiFrontDoor` tier the owner was created with (`undefined` ⇒ default). */
+	_apiFrontDoorTier?: ApiFrontDoorTier;
 }
 
 /**
@@ -104,13 +106,11 @@ export function httpOriginFromEndpoint(gatewayUrl: string): IOrigin {
  *
  * When the app already fronts its frontend with CloudFront, the API belongs on
  * that same distribution — same domain means no CORS and no second hop. Claiming
- * suppresses the managed `edge` distribution and makes `distributionUrl` the
- * origin clients are pointed at.
+ * suppresses the managed `cloudfront` distribution and makes `distributionUrl`
+ * the origin clients are pointed at.
  *
  * @param owner the backend the `Hosting` was given as `props.api` (a `BlocksStack`
- *   or `BlocksBackend`) — the same object the aspect is scheduled on. Recording
- *   the claim on this instance, not its stack, is what lets a `Hosting` in a
- *   different stack than its backend still suppress that backend's front door.
+ *   or `BlocksBackend`) — the same object the aspect is scheduled on.
  * @param distributionUrl the distribution's public origin — custom domain when one
  *   is configured, else the CloudFront default. A URL rather than the
  *   `Distribution` because that public origin is the only thing anyone reads, and
@@ -124,13 +124,39 @@ export function claimApiFrontDoor(owner: Construct & ApiFrontDoorOwner, distribu
 
 /**
  * The URL of whichever distribution ended up fronting this backend's API, or
- * `undefined` when nothing did (the `regional` tier, and no `Hosting` claim), in
+ * `undefined` when nothing did (the `apigateway` tier, and no `Hosting` claim), in
  * which case callers fall back to the raw gateway URL.
  *
  * @internal
  */
 export function resolvedApiFrontDoorUrl(owner: Construct & ApiFrontDoorOwner): string | undefined {
 	return owner._apiFrontDoorResolvedUrl;
+}
+
+/**
+ * The URL clients should send RPC calls to: under `cloudfront`, the URL of the
+ * distribution fronting the API (the managed one, or a `Hosting` distribution that
+ * claimed the role) + the RPC prefix; otherwise `apiUrl` itself.
+ *
+ * A `Lazy` because the answer is only settled at synth: the front-door aspect runs
+ * after `create()` (and after any `Hosting`) and before tokens resolve. Under
+ * `apigateway` a `Hosting` claim does not move it, so adding Hosting never changes
+ * the domain a client is bound to.
+ *
+ * @internal Backs `BlocksStack.publicApiUrl` / `BlocksBackend.publicApiUrl`.
+ */
+export function publicApiUrl(
+	owner: Construct & ApiFrontDoorOwner,
+	tier: ApiFrontDoorTier | undefined,
+	apiUrl: () => string,
+): string {
+	const cloudfront = resolveApiFrontDoor(tier) === 'cloudfront';
+	return cdk.Lazy.string({
+		produce: () => {
+			const frontDoorUrl = cloudfront ? resolvedApiFrontDoorUrl(owner) : undefined;
+			return frontDoorUrl ? `${frontDoorUrl}${BLOCKS_RPC_PREFIX}` : apiUrl();
+		},
+	});
 }
 
 /**
@@ -170,12 +196,11 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		const stack = cdk.Stack.of(this.owner);
 
 		// `Hosting` fronts the API itself, and has already published its origin
-		// (recorded on this same owner instance, so a cross-stack `Hosting` claim
-		// is seen here too). Provisioning a second distribution would double the
-		// hops and split the domain.
+		// (recorded on this same owner instance). Provisioning a second distribution
+		// would double the hops and split the domain.
 		if (this.owner._apiFrontDoorClaimedByHosting) return;
 
-		// The `regional` tier: the shared gateway is reached directly, so there is no
+		// The `apigateway` tier: clients call the gateway directly, so there is no
 		// CloudFront distribution to build.
 		if (!this.provision) return;
 
@@ -196,17 +221,24 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 			defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS },
 		});
 
-		// Record the resolved origin on the owner so the `ApiUrl` output (and
-		// Hosting) resolve to the CloudFront URL. No separate CloudFront-domain
-		// output is emitted — `ApiUrl` is the single client endpoint, and the bare
-		// domain was never read by any tooling (it's `ApiUrl` minus the RPC prefix).
-		this.owner._apiFrontDoorResolvedUrl = `https://${distribution.distributionDomainName}`;
+		// Record the resolved origin on the owner so `publicApiUrl` (and the `ApiUrl`
+		// output) resolve to the CloudFront URL. No separate CloudFront-domain
+		// output is emitted — `ApiUrl` is the single client endpoint.
+		const frontDoorUrl = `https://${distribution.distributionDomainName}`;
+		this.owner._apiFrontDoorResolvedUrl = frontDoorUrl;
+
+		// CloudFront forwards with `ALL_VIEWER_EXCEPT_HOST_HEADER`, so the Lambda
+		// sees the execute-api host, never the public one. Publish the public origin
+		// the same way `Hosting` does, so absolute URLs the runtime builds (e.g.
+		// AuthOIDC's callback `redirect_uri`) point at this distribution and its
+		// cookies. Registered at synth, before the config JSON (a Lazy) resolves.
+		registerConfig(this.owner, 'BLOCKS_PUBLIC_ORIGIN', frontDoorUrl);
 	}
 }
 
 /**
  * Resolve the API front-door tier: the app's explicit choice if it made one,
- * otherwise the constant `regional` default.
+ * otherwise the constant `apigateway` default.
  *
  * The default is a constant — never derived from app shape or preset — so adding
  * or removing Building Blocks never silently moves the API onto (or off) a
@@ -215,8 +247,8 @@ class ApiFrontDoorAspect implements cdk.IAspect {
  *
  * @internal
  */
-export function resolveApiFrontDoor(apiFrontDoor: 'regional' | 'edge' | undefined): 'regional' | 'edge' {
-	return apiFrontDoor ?? 'regional';
+export function resolveApiFrontDoor(apiFrontDoor: ApiFrontDoorTier | undefined): ApiFrontDoorTier {
+	return apiFrontDoor ?? 'apigateway';
 }
 
 /**
@@ -230,7 +262,7 @@ export function resolveApiFrontDoor(apiFrontDoor: 'regional' | 'edge' | undefine
  *   Everything hangs off this rather than off its stack, because it is also the
  *   identity that routes are registered under — and a `BlocksBackend` is a
  *   construct inside a stack it does not own, possibly alongside siblings.
- * @param provision whether to build the `edge` CloudFront distribution
+ * @param provision whether to build the `cloudfront` tier's distribution
  * @param gatewayUrl the shared REST API gateway URL (`https://{host}/{stage}/aws-blocks/api`),
  *   the origin the distribution forwards to
  */

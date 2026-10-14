@@ -122,7 +122,7 @@ export interface BlocksStackApi {
   readonly apiUrl: string;
   /**
    * Claim the API front-door role for this `Hosting` distribution, suppressing
-   * the backend's managed `edge` distribution. Optional so any `{ apiUrl }`
+   * the backend's managed `cloudfront` distribution. Optional so any `{ apiUrl }`
    * object stays assignable; `BlocksStack`/`BlocksBackend` implement it.
    * @internal Framework-only.
    */
@@ -940,14 +940,13 @@ export class Hosting extends Construct {
    * and claim the API front-door role for this distribution.
    *
    * Claiming is part of the same step: with the API served from this distribution,
-   * the backend's managed `edge` distribution — decided later by an aspect at
-   * synth — must stand down, so the SPA/SSR frontend and the API are same-origin
-   * on one distribution (no CORS, no second hop). The claim is recorded on the
-   * backend object (`api.claimApiFrontDoor`), a live reference Hosting holds, so
-   * the aspect scheduled on that same object reads it back — even when `Hosting`
-   * and its backend live in *different* stacks.
+   * the backend's managed `cloudfront` distribution — decided later by an aspect
+   * at synth — must stand down, so the SPA/SSR frontend and the API are
+   * same-origin on one distribution (no CORS, no second hop). The claim is
+   * recorded on the backend object (`api.claimApiFrontDoor`), a live reference
+   * Hosting holds, so the aspect scheduled on that same object reads it back.
    *
-   * The shared `edge` front door and these behaviors forward to the same origin
+   * The managed `cloudfront` front door and these behaviors forward to the same origin
    * via the same `httpOriginFromEndpoint` + `API_BEHAVIOR_OPTIONS`, so the two
    * paths cannot drift.
    */
@@ -957,8 +956,8 @@ export class Hosting extends Construct {
     // else the CloudFront default), so clients are pointed at the domain the app
     // is actually served from. The claim is recorded on the backend object
     // (`props.api`) itself — a live reference Hosting holds — so it suppresses
-    // that backend's managed `edge` distribution even when Hosting lives in a
-    // different stack. Optional: a bare `{ apiUrl }` origin simply isn't claimed.
+    // that backend's managed `cloudfront` distribution. Optional: a bare
+    // `{ apiUrl }` origin simply isn't claimed.
     api.claimApiFrontDoor?.(hosting.distributionUrl);
 
     // The REST API URL embeds its `/{stage}` prefix, which the origin carries as

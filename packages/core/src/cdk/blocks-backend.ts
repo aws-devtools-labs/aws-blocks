@@ -12,9 +12,11 @@ import type { BlocksDefaults } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
+import type { ApiFrontDoorTier } from '../common/index.js';
 import {
 	type ApiFrontDoorOwner,
 	claimApiFrontDoor,
+	publicApiUrl,
 	resolveApiFrontDoor,
 	scheduleApiFrontDoor,
 } from './api-front-door.js';
@@ -74,25 +76,14 @@ export interface BlocksBackendProps {
 	 */
 	defaults: BlocksDefaults;
 	/**
-	 * How the backend's API is exposed to the internet. Default: `'regional'`.
+	 * How the backend's API is exposed to clients: `'apigateway'` (default) or
+	 * `'cloudfront'`. Read {@link BlocksBackend.publicApiUrl} for the URL clients
+	 * should call. ⚠️ Switching tiers — or adding or removing `Hosting` under
+	 * `'cloudfront'` — changes the API's endpoint domain and signs users out.
 	 *
-	 * - `'regional'` — the shared regional gateway, reached directly on its own
-	 *   endpoint. Cheap, and a stable address for a given deployment (no CDN hop).
-	 * - `'edge'` — a global, CDN-backed front door in front of that gateway, with
-	 *   edge termination. Choose it for a geographically distributed audience.
-	 *
-	 * The default is a constant `'regional'` — it is NEVER derived from the app's
-	 * shape, so adding or removing Building Blocks never silently changes how the
-	 * API is exposed.
-	 *
-	 * ⚠️ **Switching `'regional'` ⇄ `'edge'` changes the API's endpoint domain.**
-	 * Browser auth cookies and sessions are bound to the origin they were set on,
-	 * so a switch invalidates every existing cookie/session — users are signed out
-	 * and must sign in again. (A stable custom domain — a future feature — would
-	 * let you move between tiers without this.) Pick a tier before you have real
-	 * users, and treat a later change as a breaking migration.
+	 * @see BlocksStackProps.apiFrontDoor for the full description of each tier.
 	 */
-	apiFrontDoor?: 'regional' | 'edge';
+	apiFrontDoor?: ApiFrontDoorTier;
 }
 
 /**
@@ -237,28 +228,32 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  *
  * Also schedules the API front door now that its origin exists. That decision is
  * deferred to synth via an aspect: a `Hosting` built after `create()` resolves
- * may claim the front-door role, in which case no managed `edge` distribution is
- * provisioned. `edge` ⇒ a CloudFront distribution in front of the gateway;
- * `regional` (the default) ⇒ the gateway is reached directly.
+ * may claim the front-door role, in which case no managed distribution is
+ * provisioned. `cloudfront` ⇒ a CloudFront distribution in front of the gateway,
+ * which is then built as a `REGIONAL` endpoint; `apigateway` (the default) ⇒
+ * clients call the gateway directly.
  *
  * @internal
  */
 export function buildSharedGateway(
 	owner: SharedGatewayOwner,
-	apiFrontDoor: 'regional' | 'edge' | undefined,
+	apiFrontDoor: ApiFrontDoorTier | undefined,
 ): SharedGateway {
 	const defaultCompute = owner._defaultCompute;
 	if (!defaultCompute) {
 		throw new Error('Default compute not initialized — create() must build it before the shared gateway.');
 	}
 	// createSharedGateway guards that the default compute exposes an apiHandler().
+	const cloudfront = resolveApiFrontDoor(apiFrontDoor) === 'cloudfront';
 	const sharedGateway = createSharedGateway(defaultCompute, {
 		computes: getComputes(owner),
 		defaultCompute,
 		defaults: owner.defaults,
+		regionalEndpoint: cloudfront,
 	});
 	owner._sharedGateway = sharedGateway;
-	scheduleApiFrontDoor(owner, resolveApiFrontDoor(apiFrontDoor) === 'edge', sharedGateway.apiUrl);
+	owner._apiFrontDoorTier = apiFrontDoor;
+	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl);
 	return sharedGateway;
 }
 
@@ -316,12 +311,14 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	_apiFrontDoorClaimedByHosting?: boolean;
 	/** Public origin of whichever front door ended up fronting the API. @internal */
 	_apiFrontDoorResolvedUrl?: string;
+	/** The `apiFrontDoor` tier this was created with (`undefined` ⇒ default). @internal */
+	_apiFrontDoorTier?: ApiFrontDoorTier;
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this
-	 * backend's API. Recorded on this instance (not ambient per-stack state) so a
-	 * `Hosting` in a different stack can still suppress the managed `edge`
-	 * distribution — see {@link ApiFrontDoorOwner}. @internal Framework-only.
+	 * backend's API, so the managed `cloudfront` distribution stands down. Recorded
+	 * on this instance (not ambient per-stack state) — see {@link ApiFrontDoorOwner}.
+	 * @internal Framework-only.
 	 */
 	claimApiFrontDoor(distributionUrl: string): void {
 		claimApiFrontDoor(this, distributionUrl);
@@ -332,15 +329,24 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		return this.requireSharedGateway().restApi;
 	}
 	/**
-	 * The shared gateway's direct RPC endpoint URL (the `regional` tier). Always
-	 * the gateway's own `execute-api` URL — even under `apiFrontDoor: 'edge'`, where
-	 * the public, front-door-aware address is whatever `ApiUrl` output the embedding
-	 * stack emits (the CloudFront URL) and this value stays the origin that
-	 * Hosting/SSR forward to. To be removed once consumers move to the multi-compute
-	 * model.
+	 * The shared gateway's own RPC endpoint URL (its `execute-api` address),
+	 * whatever the `apiFrontDoor` tier. `Hosting` forwards API traffic to it, so it
+	 * stays the gateway's URL even under `'cloudfront'`. For the URL clients should
+	 * call, use {@link publicApiUrl}. To be removed once consumers move to the
+	 * multi-compute model.
 	 */
 	get apiUrl(): string {
 		return this.requireSharedGateway().apiUrl;
+	}
+	/**
+	 * The URL clients should send RPC calls to: the CloudFront distribution's URL +
+	 * `/aws-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
+	 * distribution, or `Hosting`'s when Hosting fronts the API), otherwise
+	 * {@link apiUrl}. A CloudFormation token, resolved at synth — use it wherever a
+	 * deploy-time value works (a `CfnOutput`, Amplify outputs, …).
+	 */
+	get publicApiUrl(): string {
+		return publicApiUrl(this, this._apiFrontDoorTier, () => this.apiUrl);
 	}
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the

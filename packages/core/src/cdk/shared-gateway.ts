@@ -37,6 +37,14 @@ export interface SharedGatewayProps {
 	 * (`logRetention`) and removal policy (`removalPolicy`).
 	 */
 	readonly defaults: BlocksDefaults;
+	/**
+	 * Build the REST API as a `REGIONAL` endpoint instead of API Gateway's default
+	 * (edge-optimized). Set under `apiFrontDoor: 'cloudfront'`, where a Blocks
+	 * CloudFront distribution already fronts the API — an edge-optimized endpoint
+	 * would add a second, AWS-managed CloudFront layer behind it. Changing the
+	 * endpoint type is an in-place update that keeps the `execute-api` hostname.
+	 */
+	readonly regionalEndpoint?: boolean;
 }
 
 /** What {@link createSharedGateway} returns. @internal */
@@ -94,7 +102,7 @@ export interface SharedGateway {
  * @internal Framework-only; apps reach the gateway via `BlocksStack.gateway`.
  */
 export function createSharedGateway(scope: Construct, props: SharedGatewayProps): SharedGateway {
-	const { computes, defaultCompute, defaults } = props;
+	const { computes, defaultCompute, defaults, regionalEndpoint } = props;
 
 	// The default compute's function backs the catch-all resources. It is always a
 	// Lambda compute today, so apiHandler() is defined; guard with a clear error if
@@ -133,6 +141,9 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 
 	const restApi = new apigateway.RestApi(scope, 'API', {
 		restApiName: 'Blocks API',
+		// Left unset (API Gateway's edge-optimized default) unless a Blocks
+		// CloudFront distribution fronts the API.
+		...(regionalEndpoint ? { endpointTypes: [apigateway.EndpointType.REGIONAL] } : {}),
 		// Don't let RestApi auto-create its own account-level CloudWatch role: it
 		// would collide with the one shared account we provision — a stack may
 		// have only one effective account setting. When access logging is on we
