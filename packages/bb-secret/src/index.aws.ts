@@ -69,9 +69,10 @@ function cacheKey(version?: 'current' | 'previous' | SecretVersion): string {
  * Manager, or `null` for a resolved not-found (an absent `SecretString` or a
  * `ResourceNotFoundException`). The raw value is cached *before* schema parsing
  * so each `get()` still validates independently (a validation error is never
- * cached as a value).
+ * cached as a value). `fetchedAt` (epoch ms) is when the entry was stored, used
+ * to apply the optional `cacheTtlSeconds` expiry.
  */
-type CachedRead = { raw: string | null };
+type CachedRead = { raw: string | null; fetchedAt: number };
 
 // ── Secret (AWS runtime) ────────────────────────────────────────────────────
 
@@ -109,12 +110,14 @@ type CachedRead = { raw: string | null };
  * existing secret via {@link Secret.fromExisting}).
  *
  * **Caching:** fetched values are cached in-process per `Secret` instance (one
- * entry per version selector), so steady-state reads within a warm Lambda hit
- * the cache rather than billing a `GetSecretValue` call. `put()` clears the
- * cache so a subsequent read in the same process sees the new value; an
- * out-of-band change (console / CLI / rotation) is picked up on the next cold
- * start. There is no TTL — the cache lives for the life of the execution
- * environment.
+ * entry per version selector), so steady-state reads hit the cache rather than
+ * billing a `GetSecretValue` call. `put()` clears the cache so a subsequent read
+ * in the same process sees the new value. By default a cached value lives for
+ * the life of the process, so an out-of-band change (console / CLI / rotation)
+ * is picked up when the process recycles — fine for request-scoped compute that
+ * turns over often. On long-running compute (a process alive for hours or days)
+ * set `cacheTtlSeconds` to bound how long a rotated value can go unnoticed; past
+ * the TTL the next read re-fetches.
  *
  * @typeParam T - The secret value type. Defaults to `string`; inferred from
  *   `schema` when one is provided.
@@ -141,11 +144,17 @@ export class Secret<T = string> extends Scope {
 	private externalArn?: string;
 	private client: SecretsManagerClient;
 	/**
-	 * Per-instance (per-cold-start) read cache, keyed by version selector. Lives
-	 * for the life of the execution environment; cleared by `put()`. See the
+	 * Per-instance read cache, keyed by version selector. Lives for the life of
+	 * the process; cleared by `put()` and bounded by {@link cacheTtlMs}. See the
 	 * class-level **Caching** note.
 	 */
 	private readCache = new Map<string, CachedRead>();
+	/**
+	 * Cache entry lifetime in ms, from `cacheTtlSeconds`. `undefined` means no
+	 * expiry (cache for the life of the process). Set it to bound how long a
+	 * long-running process may serve a stale value after an out-of-band change.
+	 */
+	private cacheTtlMs?: number;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -155,6 +164,8 @@ export class Secret<T = string> extends Scope {
 		this.schema = options?.schema;
 		this.constructId = id;
 		this.externalArn = options?.secret?.secretArn;
+		this.cacheTtlMs =
+			options?.cacheTtlSeconds !== undefined ? Math.max(0, options.cacheTtlSeconds) * 1000 : undefined;
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 
 		this.client = new SecretsManagerClient({
@@ -222,11 +233,15 @@ export class Secret<T = string> extends Scope {
 		const secretArn = this.resolveSecretArn();
 		const key = cacheKey(options?.version);
 
-		// Serve the cached raw value when present (per-cold-start cache); a cache
-		// miss fetches from Secrets Manager and populates the entry. The cache
-		// holds the raw string (or null for not-found), never the validated value,
-		// so schema parsing/validation below still runs on every call.
+		// Serve the cached raw value when present and not expired; otherwise fetch
+		// from Secrets Manager and (re)populate the entry. The cache holds the raw
+		// string (or null for not-found), never the validated value, so schema
+		// parsing/validation below still runs on every call. `cacheTtlMs` bounds
+		// how long an entry is reused — unset means it lives for the process.
 		let cached = this.readCache.get(key);
+		if (cached !== undefined && this.cacheTtlMs !== undefined && Date.now() - cached.fetchedAt >= this.cacheTtlMs) {
+			cached = undefined;
+		}
 		if (cached === undefined) {
 			// Map the version selector to the SDK's VersionStage / VersionId params.
 			// 'current' (default) → omit (AWSCURRENT); 'previous' → AWSPREVIOUS stage;
@@ -234,10 +249,10 @@ export class Secret<T = string> extends Scope {
 			const selector = versionSelector(options?.version);
 			try {
 				const result = await this.client.send(new GetSecretValueCommand({ SecretId: secretArn, ...selector }));
-				cached = { raw: result.SecretString ?? null };
+				cached = { raw: result.SecretString ?? null, fetchedAt: Date.now() };
 			} catch (err: unknown) {
 				if (err instanceof ResourceNotFoundException) {
-					cached = { raw: null };
+					cached = { raw: null, fetchedAt: Date.now() };
 				} else {
 					throw err;
 				}

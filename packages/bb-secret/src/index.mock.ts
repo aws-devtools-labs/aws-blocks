@@ -144,7 +144,9 @@ let plaintextWarningLogged = false;
  * — for custom schedules, drive `put()` from a `CronJob`.
  *
  * **Local dev:** The mock stores values as plaintext on disk under `.bb-data/`.
- * It is NOT secure — do not use real credentials locally.
+ * It is NOT secure — do not use real credentials locally. The mock reads the
+ * current value from disk on every `get()`, so it does not cache and
+ * `cacheTtlSeconds` has no effect locally.
  *
  * @typeParam T - The secret value type. Defaults to `string`; inferred from
  *   `schema` when one is provided.

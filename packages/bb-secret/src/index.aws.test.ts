@@ -96,3 +96,61 @@ describe('AWS runtime read cache', () => {
 		}
 	});
 });
+
+describe('AWS runtime read cache — cacheTtlSeconds', () => {
+	test('within the TTL the cache is reused (no second call)', async () => {
+		mock.timers.enable({ apis: ['Date'] });
+		const { commands, restore } = stubSend(() => ({ SecretString: 'sk-1' }));
+		try {
+			const secret = new Secret(new Scope('app'), 'ttl-fresh', {
+				secret: Secret.fromExisting(TEST_ARN),
+				cacheTtlSeconds: 60,
+			});
+			assert.strictEqual(await secret.get(), 'sk-1'); // call 1
+			mock.timers.tick(59_000); // still inside the 60s window
+			assert.strictEqual(await secret.get(), 'sk-1'); // cache hit
+			assert.strictEqual(getCalls(commands).length, 1, 'a read within the TTL must not re-fetch');
+		} finally {
+			restore();
+			mock.timers.reset();
+		}
+	});
+
+	test('past the TTL the next read re-fetches and sees the rotated value', async () => {
+		mock.timers.enable({ apis: ['Date'] });
+		let current = 'sk-old';
+		const { commands, restore } = stubSend(() => ({ SecretString: current }));
+		try {
+			const secret = new Secret(new Scope('app'), 'ttl-expire', {
+				secret: Secret.fromExisting(TEST_ARN),
+				cacheTtlSeconds: 30,
+			});
+			assert.strictEqual(await secret.get(), 'sk-old'); // call 1, cached
+			current = 'sk-new'; // rotated out-of-band (no put())
+			mock.timers.tick(29_000);
+			assert.strictEqual(await secret.get(), 'sk-old'); // still within TTL → stale cache
+			assert.strictEqual(getCalls(commands).length, 1, 'no re-fetch before the TTL elapses');
+			mock.timers.tick(1_001); // cross the 30s boundary
+			assert.strictEqual(await secret.get(), 'sk-new'); // re-fetched
+			assert.strictEqual(getCalls(commands).length, 2, 'a read past the TTL must re-fetch');
+		} finally {
+			restore();
+			mock.timers.reset();
+		}
+	});
+
+	test('without cacheTtlSeconds the cache never expires (process-lifetime)', async () => {
+		mock.timers.enable({ apis: ['Date'] });
+		const { commands, restore } = stubSend(() => ({ SecretString: 'sk-1' }));
+		try {
+			const secret = new Secret(new Scope('app'), 'ttl-none', { secret: Secret.fromExisting(TEST_ARN) });
+			assert.strictEqual(await secret.get(), 'sk-1');
+			mock.timers.tick(24 * 60 * 60 * 1000); // a full day later
+			assert.strictEqual(await secret.get(), 'sk-1');
+			assert.strictEqual(getCalls(commands).length, 1, 'default (no TTL) caches for the life of the process');
+		} finally {
+			restore();
+			mock.timers.reset();
+		}
+	});
+});

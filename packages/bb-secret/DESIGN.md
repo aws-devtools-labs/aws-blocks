@@ -114,9 +114,21 @@ is absent) never throws.
   (`ResourceNotFoundException`). A `get` never throws for "not found" — normal
   control flow. The fetched raw value is cached in-process per instance, keyed by
   version selector (`current` / `previous` / `v:<versionId>`), so steady-state
-  reads within a warm Lambda skip the API; the schema (if any) is still applied
-  on every call, so a validation error is never cached. The cache has no TTL — it
-  lives for the execution environment and is cleared by `put()`.
+  reads skip the API; the schema (if any) is still applied on every call, so a
+  validation error is never cached. By default the cache lives for the life of
+  the process and is cleared by `put()`. `cacheTtlSeconds` (from `SecretOptions`)
+  bounds entry lifetime: an entry older than the TTL is treated as a miss and
+  the next `get()` re-fetches. **This matters for long-running compute.** Under
+  request-scoped execution (one process per request, frequently recycled) the
+  no-TTL default self-heals — a rotation is seen on the next cold process. Under
+  long-running compute (a container-backed process alive for hours/days handling
+  many requests, as introduced by the multi-compute / long-running async-job
+  work) the same `Secret` instance — and its cache — persists for the process's
+  entire lifetime, so without a TTL a rotated value would never be picked up
+  until redeploy. `cacheTtlSeconds` is the knob to bound that staleness; it
+  mirrors the hosting value API's `getSecret` cache. The default stays no-TTL so
+  behavior is unchanged for existing (Lambda) callers; long-running compute
+  should set it.
 - `put()` → `PutSecretValueCommand`. A `ResourceNotFoundException` maps to
   `SecretErrors.SecretNotFound` (a violated precondition — the secret must exist
   to hold a value). Secrets Manager advances the `AWSCURRENT`/`AWSPREVIOUS`
@@ -176,7 +188,7 @@ consumer's choice (`zod` is a `devDependency` here, used only by tests).
 | Missing value | key absent → `null` | `SecretString` absent / `ResourceNotFound` → `null` |
 | `put` on missing secret | always writes the entry | may throw `SecretNotFound` if the secret resource is gone |
 | Version history | current + previous, in a `.bb-data/secret-versions.json` sidecar (synthetic version ids) | current + previous via `ListSecretVersionIds` with `IncludeDeprecated: false` (labeled only — real version ids + staging labels) |
-| Read caching | none — every `get()` reads fresh from `settings.json` | per-instance in-memory cache keyed by version selector, cleared by `put()` (steady-state reads skip the API) |
+| Read caching | none — every `get()` reads fresh from `settings.json` (so `cacheTtlSeconds` is a no-op) | per-instance in-memory cache keyed by version selector, cleared by `put()`; lives for the process unless `cacheTtlSeconds` bounds it (steady-state reads skip the API) |
 | Security | **plaintext, insecure — dev only** | KMS-encrypted at rest |
 
 Sharing `settings.json` is deliberate: it makes the single `/aws-blocks/settings`

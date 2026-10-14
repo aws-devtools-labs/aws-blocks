@@ -584,8 +584,11 @@ const secretSetting = new AppSetting(scope, 'secret-setting', {
 });
 
 // Secret - Single high-value credential backed by AWS Secrets Manager
-// Opaque string secret (e.g. a third-party API key).
-const apiKeySecret = new Secret(scope, 'secret-api-key', { removalPolicy: 'destroy' });
+// Opaque string secret (e.g. a third-party API key). `cacheTtlSeconds` bounds
+// how long the runtime reuses a cached value — set here so the option is
+// exercised end to end (the round-trip tests below still see fresh writes
+// because `put()` clears the cache).
+const apiKeySecret = new Secret(scope, 'secret-api-key', { removalPolicy: 'destroy', cacheTtlSeconds: 300 });
 
 // Typed JSON secret with schema validation (e.g. a set of related credentials).
 const dbSecretSchema = z.object({ host: z.string(), port: z.number() });
