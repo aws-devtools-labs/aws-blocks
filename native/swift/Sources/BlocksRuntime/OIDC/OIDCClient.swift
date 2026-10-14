@@ -276,6 +276,9 @@ public actor OIDCClient: AuthProvider {
         let json: [String: Any]
         do {
             json = try await client.postRawRoute(path: refreshPath, body: ["refreshToken": refreshToken])
+        } catch let error as ClientClosedError {
+            // A closed client says nothing about the session, so the tokens stay.
+            throw error
         } catch {
             await clearTokens()
             emit(.signedOut)
@@ -320,6 +323,10 @@ public actor OIDCClient: AuthProvider {
         if await isExpired() {
             do {
                 try await refresh()
+            } catch is ClientClosedError {
+                // The tokens stay for a new Blocks to restore.
+                emit(.signedOut)
+                return
             } catch {
                 await clearTokens()
                 emit(.signedOut)
@@ -353,7 +360,12 @@ public actor OIDCClient: AuthProvider {
     public func getAccessToken() async -> String? {
         guard let token = await tokenStore.get("access_token") else { return nil }
         if await isExpired() {
-            try? await refresh()
+            do {
+                try await refresh()
+            } catch {
+                // Only a closed client throws here, and its expired token is no use.
+                return nil
+            }
             return await tokenStore.get("access_token")
         }
         return token
@@ -362,6 +374,8 @@ public actor OIDCClient: AuthProvider {
     public func onAuthFailure() async {
         do {
             try await refresh()
+        } catch is ClientClosedError {
+            return
         } catch {
             await clearTokens()
             emit(.signedOut)
