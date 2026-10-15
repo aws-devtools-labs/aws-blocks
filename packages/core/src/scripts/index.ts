@@ -12,6 +12,17 @@ export {
 export { listConfig, removeConfig, runConfigCli, setConfig } from './config.js';
 export { type ConsoleOptions, openConsole } from './console.js';
 export { type DeployOptions, deploy } from './deploy.js';
+export {
+	type DeployState,
+	type DeployStatus,
+	type DeployStatusCliOptions,
+	type DeployWaitCliOptions,
+	formatDeployStatus,
+	parseDeployStatus,
+	readDeployStatus,
+	runDeployStatusCli,
+	runDeployWaitCli,
+} from './deploy-status.js';
 export { type DestroyOptions, destroy } from './destroy.js';
 export {
 	type DevServerOptions,

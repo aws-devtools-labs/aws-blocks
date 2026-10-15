@@ -662,6 +662,8 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'sandbox:destroy': 'tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts',
       'sandbox:console': 'tsx aws-blocks/scripts/console.ts',
       'deploy': 'tsx aws-blocks/scripts/deploy.ts',
+      'deploy:status': 'tsx aws-blocks/scripts/deploy-status.ts status',
+      'deploy:wait': 'tsx aws-blocks/scripts/deploy-status.ts wait',
       'destroy': 'tsx aws-blocks/scripts/destroy.ts',
       'dev:server': 'tsx watch aws-blocks/scripts/server.ts',
       'dev:stop': 'tsx aws-blocks/scripts/stop.ts',

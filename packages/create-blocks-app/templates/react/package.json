@@ -24,6 +24,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
+    "deploy:status": "tsx aws-blocks/scripts/deploy-status.ts status",
+    "deploy:wait": "tsx aws-blocks/scripts/deploy-status.ts wait",
     "secret": "tsx aws-blocks/scripts/secret.ts",
     "typegen": "tsx aws-blocks/scripts/typegen.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",

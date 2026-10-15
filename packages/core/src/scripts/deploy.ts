@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { BLOCKS_DEPLOY_FAILED_LINE } from '../common/constants.js';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
@@ -305,7 +306,7 @@ export async function deploy(options: DeployOptions) {
       // *reason* is still there. The CDK CLI keeps error-level output on stderr
       // even under `--ci`, and the entrypoint prints the error itself with
       // `console.error(error)`.
-      console.log('\n❌ Deployment failed.');
+      console.log(`\n${BLOCKS_DEPLOY_FAILED_LINE}`);
       throw error;
     }
     
@@ -409,6 +410,14 @@ export async function deploy(options: DeployOptions) {
         }
         console.log(`\n📡 API URL: ${apiUrl}`);
         if (hostingUrl) console.log(`🌐 Frontend URL: ${hostingUrl}`);
+        // The deploy itself SUCCEEDED (only build liveness is unconfirmed), so
+        // still emit the machine-readable completion signal a log reader keys
+        // off — otherwise `deploy:status`/`deploy:wait` see no terminal line and
+        // poll to their cap on a deploy that is actually done. The non-zero
+        // exitCode below still tells the FOREGROUND `--wait-live` caller that
+        // liveness could not be confirmed; the two signals answer two questions
+        // (did the deploy finish vs is the new build live).
+        console.log(`\n${formatDeploySignal(apiUrl, hostingUrl)}`);
         process.exitCode = 1;
         return;
       }

@@ -491,6 +491,13 @@ describe('create-blocks-app auto-detection', () => {
       const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
       assert.strictEqual(pkg.scripts['dev:stop'], 'tsx aws-blocks/scripts/stop.ts');
       assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'stop.ts')));
+      // The deploy-status wrapper is copied in, so the existing-project path must
+      // also wire the scripts that invoke it — otherwise `npm run deploy:wait`
+      // (which the generated AGENTS.md tells agents to run) fails with
+      // 'missing script'.
+      assert.strictEqual(pkg.scripts['deploy:status'], 'tsx aws-blocks/scripts/deploy-status.ts status');
+      assert.strictEqual(pkg.scripts['deploy:wait'], 'tsx aws-blocks/scripts/deploy-status.ts wait');
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'deploy-status.ts')));
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

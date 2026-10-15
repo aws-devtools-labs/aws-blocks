@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ChildProcess } from 'node:child_process';
+import { BLOCKS_DEPLOYED_PREFIX } from '../common/constants.js';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 
@@ -330,8 +331,8 @@ export function extractHostingUrlFromLine(line: string): string | null {
  */
 export function formatDeploySignal(apiUrl: string, hostingUrl?: string): string {
   return hostingUrl
-    ? `BLOCKS_DEPLOYED url=${hostingUrl} api=${apiUrl}`
-    : `BLOCKS_DEPLOYED api=${apiUrl}`;
+    ? `${BLOCKS_DEPLOYED_PREFIX} url=${hostingUrl} api=${apiUrl}`
+    : `${BLOCKS_DEPLOYED_PREFIX} api=${apiUrl}`;
 }
 
 export interface CdkDeployArgsOptions {

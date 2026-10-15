@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { BLOCKS_DEPLOY_FAILED_LINE } from '../common/constants.js';
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
@@ -191,7 +192,7 @@ export async function startSandbox(options: SandboxOptions) {
       duration: Date.now() - sandboxStartTime,
       error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
     });
-    console.error("\n❌ Deployment failed.");
+    console.error(`\n${BLOCKS_DEPLOY_FAILED_LINE}`);
     console.error(sandboxFailureRecoveryHint());
     throw error;
   }

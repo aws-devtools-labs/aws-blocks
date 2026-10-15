@@ -99,11 +99,21 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 - `npm run deploy` — full production deploy to AWS
 - `npm run sandbox:destroy` — tear down sandbox resources
 
-`npm run deploy` does the whole deploy in one command. A first production deploy can take 10+ minutes — longer than many shell command timeouts — so run it in the background (your harness's background-process feature, or `npm run deploy > deploy.log 2>&1 &`) and let it finish.
+`npm run deploy` does the whole deploy in one command. A first production deploy can take 10+ minutes — longer than many shell command timeouts — so **don't block a foreground shell on it**. Fire it once in the background and poll a Blocks primitive for completion; never poll CloudFormation:
+
+```bash
+npm run deploy > deploy.log 2>&1 &   # fire once, returns immediately
+npm run deploy:wait                  # blocks until done, prints the result, exits 0 (deployed) / 1 (failed)
+```
+
+- `npm run deploy:wait` reads `deploy.log` on a short interval until the deploy writes its terminal line, then prints `✅ deployed url=… api=…` (exit 0) or `❌ failed` (exit 1); it gives up with exit 2 only if the deploy is still running after ~20 min. It never calls `describe-stacks`.
+- `npm run deploy:status` is the one-shot version: it reads the log once and exits `0` deployed / `1` failed / `2` still running — use it inside your own loop if you'd rather poll yourself, or to check on a deploy you backgrounded earlier.
+- **Exit 2 means different things for the two commands:** for `deploy:status` it is the normal "still running" state you loop on until it flips to 0/1; for `deploy:wait` it is the rare "gave up after ~20 min" give-up. So a caller branching on exit codes should treat `deploy:status`→2 as keep-waiting and `deploy:wait`→2 as a failure to surface — don't wrap a single generic `|| handle_failure` around both.
+- Both read the log the backgrounded deploy writes, so they stay correct even if the original `npm run deploy` process was reaped. One deploy invocation, zero CloudFormation polls.
 
 If `npm run sandbox` or `npm run deploy` stops with `AWS credentials could not be verified`, the message names the profile and the command that fixes it, such as `aws login --profile <name>` or `aws sso login --profile <name>`. Signing in opens a browser and needs the user: ask the user before you run the command, then re-run the npm script.
 
-On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). Wait for that line — it confirms the deploy finished and gives the URLs, so there's no need to poll CloudFormation or hunt the URL out of the streamed output.
+The deploy's own terminal line (which `deploy:status`/`deploy:wait` read for you) is a single machine-readable line printed last on success — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). If you ever read the log yourself, grep for that line: it confirms the deploy finished and gives the URLs, so there's no need to poll CloudFormation or hunt the URL out of the streamed output.
 
 If you will immediately self-test the frontend, add `npm run deploy -- --wait-live`: it holds the `BLOCKS_DEPLOYED` line until the new build is actually being served through CloudFront, so a request issued right after the signal returns the new asset rather than a stale cached bundle. Without it, the signal fires as soon as the deploy process exits, which can be a few seconds before the edge finishes serving the new build. Tune the budget with `--wait-live-timeout=<seconds>` (default 180); if it can't confirm within the budget it says so and exits non-zero instead of printing the signal.
 
