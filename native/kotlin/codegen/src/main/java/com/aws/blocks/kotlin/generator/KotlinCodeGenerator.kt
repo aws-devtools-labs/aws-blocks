@@ -176,9 +176,12 @@ class KotlinCodeGenerator(
             val shortName: String
 
             if (typeDef.parentSchema != null) {
-                // Schema child: nest under parent schema class
-                className = ClassName(packageName, typeDef.parentSchema, typeDef.name)
-                shortName = typeDef.name
+                // Schema child: nest under parent schema class. The emitted class uses the bare
+                // shortName (e.g. `Value`); typeDef.name is the parent-qualified identity (e.g.
+                // `FieldValue`) used only as the index key so same-named nested types under
+                // different components do not collide.
+                className = ClassName(packageName, typeDef.parentSchema, typeDef.shortName)
+                shortName = typeDef.shortName
             } else {
                 // Top-level
                 className = ClassName(packageName, typeDef.name)
@@ -234,18 +237,23 @@ class KotlinCodeGenerator(
             )
         }
 
-        // Collect schema-child types to nest inside their parent data class
+        // Collect schema-child types to nest inside their parent data class.
+        // All schema children (enums, sealed, AND data classes) are routed into this map FIRST, so
+        // a parent assembled later always sees the complete set of its nested types regardless of
+        // the order entries happen to appear in the index.
         val schemaNestedTypes = LinkedHashMap<String, MutableList<TypeSpec>>()
+        // Specs for top-level (non-nested) types, assembled after all children are collected.
+        val topLevelSpecs = LinkedHashMap<String, TypeSpec>()
 
         fun routeType(typeDef: TypeDefinition, typeSpec: TypeSpec) {
             if (typeDef.parentSchema != null) {
                 schemaNestedTypes.getOrPut(typeDef.parentSchema) { mutableListOf() }.add(typeSpec)
             } else {
-                typesBuilder.addType(typeSpec.withApiVisibility())
+                topLevelSpecs[typeDef.name] = typeSpec
             }
         }
 
-        // Route enum and sealed classes first (they may be schema children)
+        // Route enum and sealed classes (they may be schema children)
         for ((_, entry) in index.enumClasses) {
             val enumType = entry.typeDef.type as ResolvedType.Enum
             val spec = generateEnumClass(entry.shortName, enumType.values)
@@ -256,26 +264,27 @@ class KotlinCodeGenerator(
             val spec = generateSealedClass(entry.shortName, unionType, index, serializerRegistry = serializerRegistry)
             routeType(entry.typeDef, spec)
         }
-
-        // Emit data classes, injecting schema-child types as nested types
+        // Route data classes (also possibly schema children). Collect them before injection so that
+        // a parent data class can nest a child data class irrespective of index iteration order.
         for ((_, entry) in index.dataClasses) {
             val recordType = entry.typeDef.type as ResolvedType.Record
-            var spec = generateDataClass(entry.shortName, recordType, index, serializerRegistry = serializerRegistry)
+            val spec = generateDataClass(entry.shortName, recordType, index, serializerRegistry = serializerRegistry)
+            routeType(entry.typeDef, spec)
+        }
 
-            val nestedTypes = schemaNestedTypes[entry.typeDef.name]
-            if (nestedTypes != null) {
-                spec = spec.toBuilder().apply {
+        // Assemble top-level types, injecting their collected schema-child types as nested members.
+        for ((name, spec) in topLevelSpecs) {
+            val nestedTypes = schemaNestedTypes[name]
+            val finalSpec = if (nestedTypes != null) {
+                spec.toBuilder().apply {
                     for (nested in nestedTypes) {
                         addType(nested)
                     }
                 }.build()
-            }
-
-            if (entry.typeDef.parentSchema != null) {
-                schemaNestedTypes.getOrPut(entry.typeDef.parentSchema) { mutableListOf() }.add(spec)
             } else {
-                typesBuilder.addType(spec.withApiVisibility())
+                spec
             }
+            typesBuilder.addType(finalSpec.withApiVisibility())
         }
 
         return typesBuilder.build()
