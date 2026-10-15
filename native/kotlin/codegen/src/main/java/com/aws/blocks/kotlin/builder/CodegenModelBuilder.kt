@@ -554,7 +554,16 @@ class CodegenModelBuilder {
                     // Recurse into fields AFTER registering this type
                     val thisNodeId = if (parentSchemaName == null) id else null
                     // For schema-nested types, children qualify under THIS type's name so that
-                    // same-named grandchildren under different parents stay distinct.
+                    // same-named grandchildren under different parents stay distinct in the index.
+                    //
+                    // Emission limitation: parentSchemaName is passed through unchanged, and
+                    // buildTypeIndex nests every schema child directly under the TOP component
+                    // (single-level flattening). So two same-named grandchildren under different
+                    // intermediate parents of the SAME component (e.g. Field.a.Meta and Field.b.Meta)
+                    // would both emit as Field.Meta -- a duplicate nested declaration. The qualified
+                    // index key keeps them distinct in the model but the generator does not yet nest
+                    // a grandchild under its intermediate parent's class. Out of scope here (this PR
+                    // targets the two-sibling-component collision); tracked for a later change.
                     val childPrefix = if (parentSchemaName != null) qualifyName(qualifiedPrefix, suffix) else null
                     for (field in typeRef.fields) {
                         collect(field.type, methodName, toPascalCase(field.name), parentSchemaName, parentNodeId = thisNodeId, qualifiedPrefix = childPrefix)
@@ -763,6 +772,9 @@ class CodegenModelBuilder {
          * of the same field name; the EMITTED class still uses the bare suffix nested under its
          * parent. A null/blank prefix (should not happen for schema-nested types) falls back to the
          * bare suffix.
+         *
+         * [suffix] is expected to already be PascalCase (all call sites pass `toPascalCase(field.name)`,
+         * `suffix + "Value"`, or a schema name); only the [prefix] is normalized here.
          */
         fun qualifyName(prefix: String?, suffix: String): String =
             if (prefix.isNullOrBlank()) suffix else toPascalCase(prefix) + suffix
