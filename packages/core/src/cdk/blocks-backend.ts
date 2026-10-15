@@ -12,6 +12,14 @@ import type { BlocksDefaults } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
+import type { ApiFrontDoorTier } from '../common/index.js';
+import {
+	type ApiFrontDoorOwner,
+	claimApiFrontDoor,
+	publicApiUrl,
+	resolveApiFrontDoor,
+	scheduleApiFrontDoor,
+} from './api-front-door.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
@@ -67,6 +75,15 @@ export interface BlocksBackendProps {
 	 * corresponding stack default.
 	 */
 	defaults: BlocksDefaults;
+	/**
+	 * How the backend's API is exposed to clients: `'apigateway'` (default) or
+	 * `'cloudfront'`. Read {@link BlocksBackend.publicApiUrl} for the URL clients
+	 * should call. ⚠️ Switching tiers — or adding or removing `Hosting` under
+	 * `'cloudfront'` — changes the API's endpoint domain and signs users out.
+	 *
+	 * @see BlocksStackProps.apiFrontDoor for the full description of each tier.
+	 */
+	apiFrontDoor?: ApiFrontDoorTier;
 }
 
 /**
@@ -190,7 +207,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 }
 
 /** What {@link buildSharedGateway} reads and writes on a `BlocksStack` / `BlocksBackend`. @internal */
-export interface SharedGatewayOwner {
+export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
 	readonly _defaultCompute?: Compute;
 	readonly defaults: BlocksDefaults;
 	_sharedGateway?: SharedGateway;
@@ -208,6 +225,13 @@ export interface SharedGatewayOwner {
  * `execute-api` URL. The default compute is always a Lambda compute today, so
  * `apiHandler()` is defined; a worker-only default fails with a clear error.
  *
+ * Also schedules the API front door now that its origin exists. That decision is
+ * deferred to synth via an aspect: a `Hosting` built after `create()` resolves
+ * may claim the front-door role, in which case no managed distribution is
+ * provisioned. `cloudfront` ⇒ a CloudFront distribution in front of the gateway,
+ * which is then built as a `REGIONAL` endpoint; `apigateway` (the default) ⇒
+ * clients call the gateway directly.
+ *
  * @internal
  */
 export function buildSharedGateway(owner: SharedGatewayOwner): SharedGateway {
@@ -219,11 +243,15 @@ export function buildSharedGateway(owner: SharedGatewayOwner): SharedGateway {
 	if (!defaultApiHandler) {
 		throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
 	}
-	owner._sharedGateway = createSharedGateway(defaultCompute, {
+	const cloudfront = resolveApiFrontDoor(owner._apiFrontDoorTier) === 'cloudfront';
+	const sharedGateway = createSharedGateway(defaultCompute, {
 		handler: defaultApiHandler,
 		defaults: owner.defaults,
+		regionalEndpoint: cloudfront,
 	});
-	return owner._sharedGateway;
+	owner._sharedGateway = sharedGateway;
+	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl);
+	return sharedGateway;
 }
 
 /**
@@ -236,7 +264,9 @@ export function buildSharedGateway(owner: SharedGatewayOwner): SharedGateway {
 export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksStack' | 'BlocksBackend'): SharedGateway {
 	if (!owner._sharedGateway) {
 		const noun = kind === 'BlocksStack' ? 'stack' : 'backend';
-		throw new Error(`Blocks ${noun} not fully initialized — access .gateway/.apiUrl after ${kind}.create() resolves.`);
+		throw new Error(
+			`Blocks ${noun} not fully initialized — access .gateway/.apiUrl after ${kind}.create() resolves.`,
+		);
 	}
 	return owner._sharedGateway;
 }
@@ -258,7 +288,7 @@ export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksSta
  * // blocks.apiUrl, blocks.gateway, blocks.executionRole available
  * ```
  */
-export class BlocksBackend extends Construct {
+export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	public readonly backendHandlerPath: string;
 	/**
 	 * Path to the app's backend module (`props.backendCDKPath`). Exposed so Building Blocks that
@@ -274,14 +304,46 @@ export class BlocksBackend extends Construct {
 	_defaultCompute?: Compute;
 	/** The single shared REST API gateway fronting the default compute; built in `create()`. @internal */
 	_sharedGateway?: SharedGateway;
+	/** Set when a `Hosting` distribution has claimed the API front-door role (see {@link claimApiFrontDoor}). @internal */
+	_apiFrontDoorClaimedByHosting?: boolean;
+	/** Public origin of whichever front door ended up fronting the API. @internal */
+	_apiFrontDoorResolvedUrl?: string;
+	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
+	_apiFrontDoorTier?: ApiFrontDoorTier;
+
+	/**
+	 * Claim the API front-door role for a `Hosting` distribution fronting this
+	 * backend's API, so the managed `cloudfront` distribution stands down. Recorded
+	 * on this instance (not ambient per-stack state) — see {@link ApiFrontDoorOwner}.
+	 * @internal Framework-only.
+	 */
+	claimApiFrontDoor(distributionUrl: string): void {
+		claimApiFrontDoor(this, distributionUrl);
+	}
 
 	/** The backend's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
 	get gateway(): apigateway.RestApi {
 		return this.requireSharedGateway().restApi;
 	}
-	/** The shared gateway's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+	/**
+	 * The shared gateway's own RPC endpoint URL (its `execute-api` address),
+	 * whatever the `apiFrontDoor` tier. `Hosting` forwards API traffic to it, so it
+	 * stays the gateway's URL even under `'cloudfront'`. For the URL clients should
+	 * call, use {@link publicApiUrl}. To be removed once consumers move to the
+	 * multi-compute model.
+	 */
 	get apiUrl(): string {
 		return this.requireSharedGateway().apiUrl;
+	}
+	/**
+	 * The URL clients should send RPC calls to: the CloudFront distribution's URL +
+	 * `/aws-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
+	 * distribution, or `Hosting`'s when Hosting fronts the API), otherwise
+	 * {@link apiUrl}. A CloudFormation token, resolved at synth — use it wherever a
+	 * deploy-time value works (a `CfnOutput`, Amplify outputs, …).
+	 */
+	get publicApiUrl(): string {
+		return publicApiUrl(this, () => this.apiUrl);
 	}
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
@@ -342,6 +404,9 @@ export class BlocksBackend extends Construct {
 		this.backendHandlerPath = props.backendHandlerPath;
 		this.backendModulePath = props.backendCDKPath;
 		this._vpcOptions = props.defaults.vpc;
+		// Validate and record the tier before the backend module is imported, so an
+		// invalid value fails before any app code runs.
+		this._apiFrontDoorTier = resolveApiFrontDoor(props.apiFrontDoor);
 
 		// Brand as a backend root so getBlocksRoot() finds this by walking the
 		// construct tree — the key that keeps two BlocksBackends in one cdk.Stack
@@ -398,7 +463,8 @@ export class BlocksBackend extends Construct {
 		addBlocksStackMetadata(cdk.Stack.of(backend));
 
 		// Build the single shared REST API gateway now that the backend module has
-		// imported and every compute exists (see buildSharedGateway).
+		// imported and every compute exists, and schedule the API front door
+		// (see buildSharedGateway).
 		buildSharedGateway(backend);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
