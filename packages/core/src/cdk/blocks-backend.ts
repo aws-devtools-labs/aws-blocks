@@ -14,6 +14,12 @@ import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
+import { attachIamReport } from './iam-report.js';
+import {
+	applyBlocksPermissionsBoundary,
+	applyBoundaryToStackLevelAdditions,
+	snapshotChildren,
+} from './permissions-boundary.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
 import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
 import { finalizeTracing } from './tracer-registry.js';
@@ -125,6 +131,19 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 				: []),
 		],
 	});
+
+	// ── Permissions boundary + IAM report ─────────────────────────────────
+	// Opt-in ceiling on every role under this root (`defaults.permissionsBoundary`):
+	// an aspect, so it also caps roles blocks add after this point. Unset → no-op,
+	// templates unchanged. The report lists what the shared role accumulated; it is
+	// written at synth (after every block has granted) beside the template.
+	applyBlocksPermissionsBoundary(scope, props.defaults);
+	const owningStack = cdk.Stack.of(scope);
+	attachIamReport(
+		scope,
+		executionRole,
+		cdk.Stack.isStack(scope) ? owningStack.artifactId : `${owningStack.artifactId}.${scope.node.id}`,
+	);
 
 	// ── Resource Groups ───────────────────────────────────────────────────
 	let rootStack = cdk.Stack.of(scope);
@@ -372,6 +391,9 @@ export class BlocksBackend extends Construct {
 
 	static async create(scope: Construct, id: string, props: CoreBlocksBackendProps) {
 		assertCdkConditionActive();
+		// Stack-level children before this backend exists, so the boundary can also
+		// cap the per-stack CDK singletons its blocks add (see the end of create()).
+		const stackChildrenBefore = snapshotChildren(cdk.Stack.of(scope));
 		const backend = new BlocksBackend(scope, id, props);
 		// Create the default compute before importing the backend: it owns the
 		// Lambda function (the shared gateway's target), and a block reading
@@ -428,6 +450,9 @@ export class BlocksBackend extends Construct {
 					'bring your own. See packages/blocks/VPC.md.',
 			);
 		}
+
+		// Last, so every role a block or finalizer hoisted to stack scope exists.
+		applyBoundaryToStackLevelAdditions(backend, stackChildrenBefore);
 
 		return backend;
 	}
