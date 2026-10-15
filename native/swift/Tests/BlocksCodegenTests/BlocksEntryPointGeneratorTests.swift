@@ -193,14 +193,8 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
         XCTAssertTrue(members.isSubset(of: blocksMemberNames))
     }
 
-    func testReservedClassNamesCoverEveryRuntimeTypeGeneratedCodeNames() throws {
-        let runtimeDir = swiftPackageURL.appendingPathComponent("Sources/BlocksRuntime")
-        let files = (FileManager.default.enumerator(at: runtimeDir, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
-            .filter { $0.pathExtension == "swift" }
-        let declaration = #"(?m)^public (?:final )?(?:class|struct|enum|protocol|actor) (\w+)"#
-        let runtimeTypes = try Set(files.flatMap { try matches(declaration, in: String(contentsOf: $0)) })
-        XCTAssertTrue(runtimeTypes.contains("BlocksClient"))
-
+    // A namespace class named like any type the generated files name unqualified would shadow it.
+    func testReservedClassNamesCoverEveryTypeGeneratedCodeNamesUnqualified() throws {
         let fixtures = swiftPackageURL.deletingLastPathComponent().appendingPathComponent("codegen-fixtures")
         let specs = try FileManager.default.contentsOfDirectory(at: fixtures, includingPropertiesForKeys: nil)
             .map { $0.appendingPathComponent("spec.json") }
@@ -215,10 +209,16 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
 
         var named: Set<String> = []
         for spec in specs + [transferables] {
-            let code = try generate(spec).api.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-            let unqualified = code.joined(separator: "\n").replacingOccurrences(of: #"BlocksRuntime\.\w+"#, with: "", options: .regularExpression)
-            named.formUnion(Set(matches(#"\b([A-Z]\w*)\b"#, in: unqualified)).intersection(runtimeTypes))
+            let output = try generate(spec)
+            let code = (output.api + "\n" + output.models).split(separator: "\n")
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                .joined(separator: "\n")
+                .replacingOccurrences(of: #""(?:\\.|[^"\\])*""#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"BlocksRuntime\.\w+"#, with: "", options: .regularExpression)
+            let declared = Set(matches(#"\b(?:class|struct|enum|actor|protocol|typealias) `?(\w+)"#, in: code))
+            named.formUnion(Set(matches(#"(?<![.\w])([A-Z]\w*)\b"#, in: code)).subtracting(declared))
         }
+        XCTAssertTrue(named.isSuperset(of: ["BlocksClient", "String", "Date", "JSONDecoder"]))
         XCTAssertEqual(named.subtracting(reservedNamespaceClassNames), [], "add these to reservedNamespaceClassNames")
     }
 

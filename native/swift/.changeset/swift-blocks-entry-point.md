@@ -31,10 +31,10 @@ its stored tokens: `signIn` and a refresh that needs the network throw `ClientCl
 `init(client:)`, so subclass mocks no longer compile; inject a `URLSession` through
 `Blocks(server:session:)` instead. A type named `Blocks` in a target that generates code, whether
 your own or a spec model, now collides with the generated class. A namespace whose class name the
-generated file already uses (`blocks`, `servers`, `blocksRuntime`, `sendable`, `realtimeChannel`,
-…), or that another namespace already takes, gets an `Api` suffix. A namespace named `client`,
-`server`, `close`, `self` or `init` is reached as `blocks.<name>Api`, and methods without a
-namespace as `blocks.default`; the generator prints a `swift:` line for each rename.
+generated files already use (`blocks`, `servers`, `blocksRuntime`, `sendable`, `realtimeChannel`,
+`string`, `date`, …), or that another namespace already takes, gets an `Api` suffix. A namespace
+named `client`, `server`, `close`, `self` or `init` is reached as `blocks.<name>Api`, and methods
+without a namespace as `blocks.default`; the generator prints a `swift:` line for each rename.
 
 Every `OIDCClient` from one `Blocks` shares its token store, so each now keys its tokens by its
 exchange path, e.g. `/auth/exchange#refresh_token`, and two `oidc/client` namespaces keep separate

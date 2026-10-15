@@ -169,13 +169,15 @@ func escapedSwiftName(_ name: String) -> String {
 /// Members of the generated `Blocks`, plus names `blocks.<name>` cannot reach without backticks.
 let blocksMemberNames: Set<String> = ["client", "server", "close", "self", "init"]
 
-/// Names no namespace class may take: types the generated API file declares or names unqualified,
-/// the module it qualifies with, and keywords no class can be named.
+/// Names no namespace class may take: types the generated files declare or name unqualified,
+/// the modules they qualify with, and keywords no class can be named.
 let reservedNamespaceClassNames: Set<String> = [
-    "Blocks", "Servers", "BlocksRuntime",
+    "Blocks", "Servers", "BlocksRuntime", "Foundation",
     "BlocksClient", "BlocksServer", "BlocksRequest", "RPCError", "CodegenError", "JSONValue",
     "RealtimeChannel", "FileDownloadHandle", "FileUploadHandle", "OIDCClient",
     "Sendable", "URLSession",
+    "String", "Int", "Double", "Bool", "Date", "UUID", "URL", "Void", "Set", "Error",
+    "Codable", "Encodable", "Decoder", "Encoder", "CodingKey", "DecodingError", "JSONDecoder", "JSONSerialization",
     "Self", "Any"
 ]
 
