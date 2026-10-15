@@ -21,8 +21,10 @@ export interface ModelConfig {
 	apiKey?: string | (() => Promise<string>);
 	/**
 	 * Canned provider phrase-to-response dictionary, or a path to a JSON dictionary. Custom entries replace built-in keyword responses.
+	 * Inline dictionaries are validated and copied when the provider is created; Agent creates a provider for each turn.
 	 * A path resolves from the current working directory when the model is created and is read once per text selection; tool calls and summaries do not read it.
 	 * Correct a failed file request and retry the next request. Replace files atomically to avoid exposing partial JSON to a selection.
+	 * Each file-backed text selection reads, parses, and validates the full dictionary; large fixtures increase per-request latency and memory use.
 	 */
 	cannedResponses?: Record<string, string> | string;
 	inferenceConfig?: InferenceConfig;

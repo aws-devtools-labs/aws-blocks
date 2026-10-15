@@ -14,7 +14,7 @@
  * @see https://strandsagents.com/docs/user-guide/concepts/model-providers/custom_model_provider/
  */
 
-import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { Message, ModelStreamEvent, StreamOptions } from '@strands-agents/sdk';
 import { Model } from '@strands-agents/sdk';
@@ -79,10 +79,10 @@ function validateResponses(value: unknown, source: string): Record<string, strin
 }
 
 /** Read and parse one snapshot of a configured response file for a text selection. */
-function readResponsesFile(filePath: string): Record<string, string> {
+async function readResponsesFile(filePath: string): Promise<Record<string, string>> {
 	let contents: string;
 	try {
-		contents = readFileSync(filePath, 'utf8');
+		contents = await readFile(filePath, 'utf8');
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : String(error);
 		throw new Error(`Unable to read canned responses file '${filePath}': ${detail}`);
@@ -265,7 +265,7 @@ let toolCallCounter = 0;
 export class CannedProvider extends Model<CannedConfig> {
 	private config: CannedConfig;
 	private hints: Map<string, CannedToolHints>;
-	private responses?: unknown;
+	private responses?: Record<string, string>;
 	private responsesFile?: string;
 
 	constructor(options?: CannedProviderOptions) {
@@ -274,8 +274,8 @@ export class CannedProvider extends Model<CannedConfig> {
 		this.hints = options?.hints ?? new Map();
 		if (typeof options?.responses === 'string') {
 			this.responsesFile = resolve(options.responses);
-		} else if (options && 'responses' in options) {
-			this.responses = options.responses;
+		} else if (options?.responses !== undefined) {
+			this.responses = { ...validateResponses(options.responses, 'Canned responses') };
 		}
 	}
 
@@ -314,9 +314,7 @@ export class CannedProvider extends Model<CannedConfig> {
 
 		// Default: keyword-based text response. Read a configured file exactly once for
 		// this selection so each request sees one coherent, current dictionary snapshot.
-		const responses = this.responsesFile
-			? readResponsesFile(this.responsesFile)
-			: this.responses === undefined ? undefined : validateResponses(this.responses, 'Canned responses');
+		const responses = this.responsesFile ? await readResponsesFile(this.responsesFile) : this.responses;
 		const selected = matchResponse(prompt, responses);
 		yield* this.emitText(selected.response, selected.verbatim);
 	}
