@@ -459,6 +459,39 @@ function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): 
 	}
 }
 
+/**
+ * Return true if at least one of `stackNames` currently exists as a deployed
+ * CloudFormation stack. Used by `sandbox:destroy` to tell "a stack was actually
+ * removed" from "there was never anything to destroy" — otherwise `cdk destroy`
+ * on a non-existent stack is a silent no-op that still prints a success tick.
+ *
+ * A `DescribeStacks` on a missing stack throws a `ValidationError` whose message
+ * contains "does not exist"; that specific case means the stack is absent and is
+ * treated as "not present" (false). Any other error (creds, throttling, network)
+ * is rethrown so the caller does not mistake an unverifiable check for "absent"
+ * and wrongly report "nothing to destroy" while a real stack keeps costing money.
+ * A `DELETE_COMPLETE` stack still lingering in the describe response counts as
+ * absent — it is already torn down.
+ */
+export async function anySandboxStackExists(
+	cfn: CloudFormationClient,
+	stackNames: string[],
+): Promise<boolean> {
+	const { DescribeStacksCommand } = await import('@aws-sdk/client-cloudformation');
+	for (const stackName of stackNames) {
+		try {
+			const res = await cfn.send(new DescribeStacksCommand({ StackName: stackName }));
+			const status = res.Stacks?.[0]?.StackStatus;
+			if (status && status !== 'DELETE_COMPLETE') return true;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (/does not exist/i.test(message)) continue; // this stack is absent — check the rest
+			throw error; // unverifiable (creds/network/throttling): do NOT treat as "absent"
+		}
+	}
+	return false;
+}
+
 /** Injectable dependencies for {@link runDestroyWithRetries} — real ones in
  * `destroySandbox`, fakes in tests so the retry/empty-before-retry wiring (the
  * sev2 fix) is exercised without spawning cdk. */
@@ -528,6 +561,32 @@ export async function destroySandbox(backendPath: string) {
       "--app", `npm exec tsx -- -C cdk '${backendPath}'`,
     ];
     const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
+
+    // Honesty gate: `cdk destroy --force` on a stack that was never deployed is
+    // a silent no-op that still prints a success tick. Resolve the app's stack
+    // names (synth-time, no creds) and ask CloudFormation whether any actually
+    // exist; if none do, say so plainly instead of claiming a destroy happened.
+    // Best-effort — if the existence check itself can't run (no stacks resolved,
+    // or the describe is unverifiable), fall through to the real destroy rather
+    // than risk skipping a teardown that was needed.
+    try {
+      const stackNames = listSandboxStackNames(backendPath, cdkEnv);
+      if (stackNames.length > 0) {
+        const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
+        const cfn = new CloudFormationClient({});
+        try {
+          if (!(await anySandboxStackExists(cfn, stackNames))) {
+            info('\nNo sandbox to destroy — nothing is currently deployed.');
+            return;
+          }
+        } finally {
+          cfn.destroy();
+        }
+      }
+    } catch (e) {
+      verbose(`sandbox existence pre-check skipped: ${(e as Error).message}`);
+    }
+
     await runDestroyWithRetries({
       runDestroy: async () => {
         const { stdout, stderr, finish } = createDeployStreams(

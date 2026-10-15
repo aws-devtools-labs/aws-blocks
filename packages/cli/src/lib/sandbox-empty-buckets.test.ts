@@ -6,7 +6,64 @@ import assert from 'node:assert';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
-import { emptyBucket, listStackBucketNames, runDestroyWithRetries, toDeleteObjects } from './sandbox.js';
+import { anySandboxStackExists, emptyBucket, listStackBucketNames, runDestroyWithRetries, toDeleteObjects } from './sandbox.js';
+
+/** Build a fake CloudFormationClient whose `send` returns/throws per the queued
+ * handlers, one per stack name in call order. */
+function fakeCfn(handlers: Array<() => unknown>): CloudFormationClient {
+	let i = 0;
+	return {
+		send: async () => {
+			const h = handlers[i++];
+			return h();
+		},
+	} as unknown as CloudFormationClient;
+}
+
+// `sandbox:destroy` must tell "a stack was actually removed" from "there was
+// never anything to destroy" — a `cdk destroy` on a missing stack is a silent
+// no-op that would otherwise still print a success tick.
+describe('anySandboxStackExists', () => {
+	it('returns true when a stack exists in a live state', async () => {
+		const cfn = fakeCfn([() => ({ Stacks: [{ StackStatus: 'CREATE_COMPLETE' }] })]);
+		assert.strictEqual(await anySandboxStackExists(cfn, ['bb-app-abc']), true);
+	});
+
+	it('returns false when the stack does not exist (ValidationError)', async () => {
+		const cfn = fakeCfn([
+			() => {
+				throw new Error('Stack with id bb-app-abc does not exist');
+			},
+		]);
+		assert.strictEqual(await anySandboxStackExists(cfn, ['bb-app-abc']), false);
+	});
+
+	it('treats a DELETE_COMPLETE stack as absent', async () => {
+		const cfn = fakeCfn([() => ({ Stacks: [{ StackStatus: 'DELETE_COMPLETE' }] })]);
+		assert.strictEqual(await anySandboxStackExists(cfn, ['bb-app-abc']), false);
+	});
+
+	it('returns true if ANY of several stacks exists', async () => {
+		const cfn = fakeCfn([
+			() => {
+				throw new Error('Stack with id bb-a does not exist');
+			},
+			() => ({ Stacks: [{ StackStatus: 'UPDATE_COMPLETE' }] }),
+		]);
+		assert.strictEqual(await anySandboxStackExists(cfn, ['bb-a', 'bb-b']), true);
+	});
+
+	it('rethrows an unverifiable error (creds/network) instead of reporting absent', async () => {
+		const cfn = fakeCfn([
+			() => {
+				const e = new Error('The security token included in the request is invalid');
+				e.name = 'InvalidClientTokenId';
+				throw e;
+			},
+		]);
+		await assert.rejects(() => anySandboxStackExists(cfn, ['bb-app-abc']), /security token/);
+	});
+});
 
 // The teardown bucket-emptying must delete BOTH live versions and delete
 // markers — a versioned bucket left with either still blocks `cdk destroy`.
