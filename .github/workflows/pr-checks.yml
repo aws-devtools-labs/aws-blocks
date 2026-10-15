@@ -402,6 +402,9 @@ jobs:
 
   e2e-compute-smoke:
     name: E2E Compute Smoke
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     needs: [build-and-test-local, detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
