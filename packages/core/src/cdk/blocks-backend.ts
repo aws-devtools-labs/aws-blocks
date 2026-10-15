@@ -219,10 +219,11 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  * entry points' `create()` so they can't drift.
  *
  * Call once, after the backend module has imported and every compute exists.
- * The gateway fronts the default compute's function (its `apiHandler()`) and is
- * built in the default compute's construct scope, so its logical IDs match the
- * per-compute gateway it replaced — existing deployments keep their REST API and
- * `execute-api` URL. The default compute is always a Lambda compute today, so
+ * The gateway's catch-all resources front the default compute's function (its
+ * `apiHandler()`), and every other compute's namespaces are routed to that
+ * compute's function. It is built in the default compute's construct scope, so
+ * its logical IDs match the per-compute gateway it replaced — existing
+ * deployments keep their REST API and `execute-api` URL. The default compute is always a Lambda compute today, so
  * `apiHandler()` is defined; a worker-only default fails with a clear error.
  *
  * Also schedules the API front door now that its origin exists. That decision is
@@ -239,13 +240,11 @@ export function buildSharedGateway(owner: SharedGatewayOwner): SharedGateway {
 	if (!defaultCompute) {
 		throw new Error('Default compute not initialized — create() must build it before the shared gateway.');
 	}
-	const defaultApiHandler = defaultCompute.apiHandler();
-	if (!defaultApiHandler) {
-		throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
-	}
+	// createSharedGateway guards that the default compute exposes an apiHandler().
 	const cloudfront = resolveApiFrontDoor(owner._apiFrontDoorTier) === 'cloudfront';
 	const sharedGateway = createSharedGateway(defaultCompute, {
-		handler: defaultApiHandler,
+		computes: getComputes(owner),
+		defaultCompute,
 		defaults: owner.defaults,
 		regionalEndpoint: cloudfront,
 	});

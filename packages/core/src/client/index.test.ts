@@ -116,3 +116,51 @@ try {
     assert.ok(result.includes('PASS'), `Expected PASS, got: ${result}`);
   });
 });
+
+describe('ApiNamespaceClient — per-namespace request path', () => {
+  // The typed client POSTs to `/aws-blocks/api/{namespace}` so a gateway can
+  // route each namespace to the compute that hosts it. These spy on `fetch`
+  // (test plumbing — not customer code) to assert the request URL.
+  it('appends /{namespace} to the API base URL', async () => {
+    const { ApiNamespaceClient } = await import('./index.js');
+    const calls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify({ jsonrpc: '2.0', result: 'ok', id: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const api = ApiNamespaceClient<{ hello(): Promise<string> }>('reports', {
+        url: 'https://d123.cloudfront.net/aws-blocks/api',
+      });
+      const result = await api.hello();
+      assert.strictEqual(result, 'ok');
+      assert.deepStrictEqual(calls, ['https://d123.cloudfront.net/aws-blocks/api/reports']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('tolerates a trailing slash on the API base URL', async () => {
+    const { ApiNamespaceClient } = await import('./index.js');
+    const calls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify({ jsonrpc: '2.0', result: 1, id: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const api = ApiNamespaceClient<{ ping(): Promise<number> }>('auth', { url: '/aws-blocks/api/' });
+      await api.ping();
+      assert.deepStrictEqual(calls, ['/aws-blocks/api/auth']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

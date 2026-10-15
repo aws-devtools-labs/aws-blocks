@@ -32,9 +32,14 @@ import { registerCompute } from './compute-registry.js';
  */
 export abstract class Compute extends Scope {
 	/**
-	 * API namespaces assigned to run on this compute — recorded so request
-	 * routing can map a namespace to the compute that hosts it. Currently
-	 * unpopulated (no compute assignment surface yet).
+	 * API namespaces assigned to run on this compute — recorded (as each
+	 * `ApiNamespace` is constructed) so request routing can map a namespace to the
+	 * compute that hosts it. The shared gateway reads this to add per-namespace
+	 * resources routed to this compute's function for every non-default compute;
+	 * namespaces on the default compute are served by the gateway's catch-all
+	 * resources and need no explicit entry. Populated via the internal `_compute`
+	 * assignment seam — there is no public, customer-facing compute-assignment
+	 * surface yet.
 	 */
 	readonly namespaces: string[] = [];
 
