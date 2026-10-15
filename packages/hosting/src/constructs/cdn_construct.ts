@@ -947,13 +947,7 @@ export class CdnConstruct extends Construct {
     // function publish. The function itself is build-independent.
     const routerResponseFn = new CloudFrontFunction(this, 'KvsRouterResponse', {
       code: FunctionCode.fromInline(
-        generateKvsRouterResponseCode(
-          skewEnabled ? skewMaxAge : 0,
-          // A Web Function names its internal log stream + revision in every
-          // response; keep that off the viewer (request id stays, like API
-          // Gateway's x-amzn-requestid, for support correlation).
-          ssrWebFunction ? ['lambda-web-logstream'] : [],
-        ),
+        generateKvsRouterResponseCode(skewEnabled ? skewMaxAge : 0),
       ),
       runtime: CLOUDFRONT_FUNCTION_RUNTIME,
       keyValueStore: routeStore,

@@ -551,6 +551,8 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}
+      # Web Function jobs keep the sandbox after the suite for the redeploy check.
+      BLOCKS_SANDBOX_KEEP: ${{ matrix.compute-type == 'web-function' && '1' || '' }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
       - uses: actions/checkout@v7
@@ -582,6 +584,13 @@ jobs:
 
       - name: E2E Test Hosting (${{ matrix.framework }})
         run: npm run ${{ matrix.script }}
+
+      # Sandbox deploys use Express Mode (rollback disabled), which rejects
+      # replacement updates; a fresh create can't catch a revision that updates
+      # in place. Redeploy the kept sandbox with a new revision and check it serves.
+      - name: Redeploy with a new Web Function revision
+        if: matrix.compute-type == 'web-function'
+        run: npx tsx scripts/ci/web-function-redeploy.ts ${{ matrix.app-dir }}
 
       - name: Cleanup sandbox
         if: always()

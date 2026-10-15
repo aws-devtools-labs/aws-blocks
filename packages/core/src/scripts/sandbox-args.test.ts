@@ -4,7 +4,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 
-import { buildSandboxDeployArgs, sandboxFailureRecoveryHint } from './sandbox.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
+import {
+  buildSandboxDeployArgs,
+  findExpressUnsafeStacks,
+  previousSandboxStackNames,
+  sandboxFailureRecoveryHint,
+} from './sandbox.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
 
 /**
@@ -88,5 +97,50 @@ describe('sandboxFailureRecoveryHint — no silent dead-end after a failed expre
 
   it('explains why (rollback is off under express mode)', () => {
     assert.match(hint, /rollback is off|automatic rollback/i);
+  });
+});
+
+describe('sandbox Express Mode fallback (Lambda Web Function endpoints)', () => {
+  it('drops --express (keeping --method direct, rollback on) when express is false', () => {
+    const args = buildSandboxDeployArgs({ outDir: 'o', projectRoot: '/a', backendPath: 'b.ts', express: false });
+    assert.ok(!args.includes('--express'), `unexpected --express in: ${args.join(' ')}`);
+    assert.strictEqual(valueAfter(args, '--method'), 'direct');
+    assert.ok(!args.includes('--no-rollback'), 'rollback stays at its default (on)');
+  });
+
+  it('reads the stacks the previous sandbox deploy recorded', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sandbox-outputs-'));
+    try {
+      assert.deepStrictEqual(previousSandboxStackNames(dir), [], 'no outputs before the first deploy');
+      writeFileSync(join(dir, 'outputs.json'), JSON.stringify({ 'app-stack': { HostingHostingUrl: 'x' }, 'edge-stack': {} }));
+      assert.deepStrictEqual(previousSandboxStackNames(dir), ['app-stack', 'edge-stack']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  const fakeCfn = (resources: Record<string, string[] | Error>): CloudFormationClient =>
+    ({
+      send: async (cmd: { input: { StackName: string } }) => {
+        const r = resources[cmd.input.StackName];
+        if (r instanceof Error) throw r;
+        return { StackResourceSummaries: (r ?? []).map((ResourceType) => ({ ResourceType })) };
+      },
+    }) as unknown as CloudFormationClient;
+
+  it('flags only stacks that contain a Web Function endpoint, skipping gone stacks', async () => {
+    const unsafe = await findExpressUnsafeStacks(
+      ['wf-stack', 'lambda-stack', 'gone-stack'],
+      fakeCfn({
+        'wf-stack': ['AWS::Lambda::WebFunction', 'AWS::Lambda::WebFunctionEndpoint'],
+        'lambda-stack': ['AWS::Lambda::Function', 'AWS::ApiGateway::RestApi'],
+        'gone-stack': new Error('Stack does not exist'),
+      }),
+    );
+    assert.deepStrictEqual(unsafe, ['wf-stack']);
+  });
+
+  it('keeps Express Mode before the first deploy (no recorded stacks)', async () => {
+    assert.deepStrictEqual(await findExpressUnsafeStacks([], fakeCfn({})), []);
   });
 });

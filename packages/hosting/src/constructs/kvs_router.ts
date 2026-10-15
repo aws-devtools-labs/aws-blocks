@@ -850,22 +850,12 @@ export const generateEdgeBasePathStripCode = (basePath: string): string => {
  *      single-behavior replacement for per-pattern ResponseHeadersPolicies).
  *
  * @param skewMaxAge cookie Max-Age in seconds; 0 disables the cookie set.
- * @param stripHeaders lower-case origin response headers to remove before the
- *   response reaches the viewer (e.g. a Web Function's `lambda-web-logstream`,
- *   which names the internal log stream + revision). Default: none — the
- *   generated code is then identical to the no-strip version.
  */
-export const generateKvsRouterResponseCode = (
-  skewMaxAge: number,
-  stripHeaders: readonly string[] = [],
-): string => `import cf from 'cloudfront';
+export const generateKvsRouterResponseCode = (skewMaxAge: number): string => `import cf from 'cloudfront';
 ${SHARED_CF_HELPERS}
 async function handler(event) {
   var request = event.request;
-  var response = event.response;${stripHeaders
-    .map((h) => `
-  delete response.headers[${JSON.stringify(h.toLowerCase())}];`)
-    .join('')}
+  var response = event.response;
   var uri = request.uri;
   var meta = await getJson('meta', null);
   if (!meta) { return response; }

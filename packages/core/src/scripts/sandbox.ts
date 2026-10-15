@@ -50,6 +50,12 @@ export interface SandboxDeployArgsOptions {
   projectRoot: string;
   /** Backend entry passed to `--app` so CDK synthesizes from the app definition. */
   backendPath: string;
+  /**
+   * Use CloudFormation Express Mode (`--express`). Default `true`. Turned off
+   * when the deployed sandbox contains a resource Express Mode can't update —
+   * see {@link findExpressUnsafeStacks}.
+   */
+  express?: boolean;
 }
 
 /**
@@ -79,13 +85,21 @@ export interface SandboxDeployArgsOptions {
  *   change set and full stabilization with rollback, which are exactly the
  *   safety signals a production deploy should keep. Requires an aws-cdk CLI
  *   new enough to expose `--express`; our pinned `^2.1138.0` has it.
+ *   `express: false` drops it (still `--method direct`, with rollback) for a
+ *   sandbox whose deployed stack Express Mode can't update — currently a Lambda
+ *   Web Function endpoint (`compute.type: 'web-function'`).
  */
-export function buildSandboxDeployArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxDeployArgs({
+  outDir,
+  projectRoot,
+  backendPath,
+  express = true,
+}: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
     "--all",
     "--method", "direct",
-    "--express",
+    ...(express ? ["--express"] : []),
     "--require-approval", "never",
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
@@ -173,12 +187,23 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("🚀 Deploying to AWS...");
   console.log("   (This may take a few minutes on first deploy)");
 
+  // Express Mode can't update some resources (see findExpressUnsafeStacks). A
+  // FIRST deploy (creates) is fine in Express Mode; check the stacks the previous
+  // sandbox deploy recorded and fall back to a full deploy when needed.
+  const expressUnsafe = await findExpressUnsafeStacks(previousSandboxStackNames(outDir));
+  if (expressUnsafe.length > 0) {
+    console.log(
+      `ℹ️  Express Mode off for this deploy: ${expressUnsafe.join(', ')} contains a Lambda Web Function ` +
+        "endpoint, which Express Mode can't update. Deploying with full stabilization + rollback instead.",
+    );
+  }
+
   try {
     runSync(
       "npm",
       // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
       // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
-      buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath }),
+      buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath, express: expressUnsafe.length === 0 }),
       {
         stdio: "inherit",
         env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
@@ -363,6 +388,55 @@ export async function listStackBucketNames(cfn: CloudFormationClient, stackName:
 		token = res.NextToken;
 	} while (token);
 	return buckets;
+}
+
+/**
+ * Resource types CloudFormation Express Mode can't UPDATE. Re-pointing a
+ * Lambda Web Function endpoint's `RevisionWeights` at a new revision fails
+ * there with "RevisionWeights: expected minimum item count: 1, found: 0" (a
+ * plain update with rollback succeeds), and Express Mode's disabled rollback
+ * then leaves the stack stuck in UPDATE_FAILED. Creates are unaffected.
+ */
+export const EXPRESS_UNSAFE_RESOURCE_TYPES: ReadonlySet<string> = new Set(['AWS::Lambda::WebFunctionEndpoint']);
+
+/** Stack names recorded by the previous sandbox deploy (`<outDir>/outputs.json` keys); [] before the first deploy. */
+export function previousSandboxStackNames(outDir: string): string[] {
+	try {
+		return Object.keys(JSON.parse(readFileSync(`${outDir}/outputs.json`, 'utf-8')) as Record<string, unknown>);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * The deployed stacks (of `stackNames`) that contain a resource in
+ * {@link EXPRESS_UNSAFE_RESOURCE_TYPES}. Best-effort: a stack that is gone or
+ * unreadable is skipped, so the deploy keeps Express Mode (a create is safe).
+ */
+export async function findExpressUnsafeStacks(
+	stackNames: string[],
+	cfnClient?: CloudFormationClient,
+): Promise<string[]> {
+	if (stackNames.length === 0) return [];
+	const { CloudFormationClient: Client, ListStackResourcesCommand } = await import('@aws-sdk/client-cloudformation');
+	const cfn = cfnClient ?? new Client({});
+	const unsafe: string[] = [];
+	for (const stackName of stackNames) {
+		try {
+			let token: string | undefined;
+			do {
+				const res = await cfn.send(new ListStackResourcesCommand({ StackName: stackName, NextToken: token }));
+				if ((res.StackResourceSummaries ?? []).some((r) => EXPRESS_UNSAFE_RESOURCE_TYPES.has(r.ResourceType ?? ''))) {
+					unsafe.push(stackName);
+					break;
+				}
+				token = res.NextToken;
+			} while (token);
+		} catch {
+			// stack deleted / not accessible: nothing to update
+		}
+	}
+	return unsafe;
 }
 
 /** Empty a versioned bucket: delete every object version + delete marker in

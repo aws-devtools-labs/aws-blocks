@@ -374,9 +374,30 @@ CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framewor
   access to AWS resources through its `grantPrincipal`.
 
 **Under the hood.**
-- **Code bucket.** Each deploy uploads the bundle zip to a versioned code
-  bucket (Web Functions only read code from S3). It then creates an immutable
-  revision and points the endpoint at it with weight 100.
+- **Code bucket.** Web Functions only read code from a versioned S3 object.
+  Each deploy copies the bundle zip onto one fixed key
+  (`web-function/<fn>/code.zip`) in a versioned code bucket, and pins the new
+  revision to the object version that copy returned. Superseded zips become
+  non-current versions, which a lifecycle rule expires after 30 days.
+- **Revisions.** Every revision property is create-only, so the revision's
+  logical ID is derived from its content, as with `lambda.Version`. A changed
+  bundle or environment variable adds a new revision and re-points the endpoint
+  (weight 100), then CloudFormation deletes the old revision during cleanup.
+  The deploy never needs a replacement update, which matters because sandbox
+  deploys run in Express Mode with rollback disabled, and CloudFormation
+  rejects replacements there.
+- **Header hygiene.** Responses from a Web Function carry `lambda-web-logstream`,
+  which names the internal log stream and revision. Hosting removes it with a
+  response headers policy, which applies to every status code including
+  4xx/5xx. The policy has the same settings as AWS's managed
+  `SecurityHeadersPolicy`, plus `removeHeaders`.
+  - It counts against the account's response headers policy quota.
+  - A BYO `cdn.responseHeadersPolicy` gets a synth warning, because Hosting
+    can't add the removal to it.
+- **Native modules.** Synth warns when the bundle contains x86-64 `.node`
+  binaries. Web Functions run on Arm64, and Lambda doesn't check that the
+  server starts when it activates a revision, so a server that crashes on
+  start would otherwise deploy green.
 - **Entry shim.** An entry shim, `__aws_blocks_web_entry.mjs`, is written into
   the bundle. It maps the listen address in `AWS_LAMBDA_HTTP_ENDPOINT` onto
   the framework's `HOST`/`PORT` variables, then imports the server entry.

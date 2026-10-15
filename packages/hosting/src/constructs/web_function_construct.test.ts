@@ -264,27 +264,142 @@ void describe('HostingConstruct — compute.type web-function', () => {
   });
 });
 
-void describe('web-function viewer response', () => {
+void describe('web-function deploy safety', () => {
   afterEach(() => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  void it('strips lambda-web-logstream at the edge (and only for web-function compute)', () => {
-    const routerResponseCode = (stack: Stack): string => {
-      const fns = Template.fromStack(stack).findResources('AWS::CloudFront::Function');
-      const entry = Object.entries(fns).find(([id]) => id.includes('KvsRouterResponse'));
-      assert.ok(entry, 'router response function present');
-      return JSON.stringify(entry[1].Properties.FunctionCode);
-    };
-    const wfStack = createEnvStack();
-    webFunctionHosting(wfStack);
-    assert.match(routerResponseCode(wfStack), /lambda-web-logstream/);
+  const revisionLogicalId = (stack: Stack): string => {
+    const ids = Object.keys(Template.fromStack(stack).findResources('AWS::Lambda::WebFunctionRevision'));
+    assert.strictEqual(ids.length, 1);
+    return ids[0];
+  };
 
+  void it('content-hashes the revision logical id so a change adds a revision instead of replacing it', () => {
+    // Express Mode sandbox deploys run with rollback disabled, and CloudFormation
+    // rejects REPLACEMENT updates there. Every revision property is create-only,
+    // so the id must change with the content (add + remove) and stay stable
+    // otherwise.
+    const first = createEnvStack();
+    webFunctionHosting(first, { environment: { FLAG: 'a' } });
+    const idA = revisionLogicalId(first);
     fs.rmSync(tmpDir, { recursive: true, force: true });
-    const lambdaStack = createEnvStack();
+
+    const same = createEnvStack();
+    webFunctionHosting(same, { environment: { FLAG: 'a' } });
+    assert.strictEqual(revisionLogicalId(same), idA, 'unchanged content keeps the same revision');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    const changedEnv = createEnvStack();
+    webFunctionHosting(changedEnv, { environment: { FLAG: 'b' } });
+    assert.notStrictEqual(revisionLogicalId(changedEnv), idA, 'an env change yields a new revision resource');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    const changedCode = createEnvStack();
+    webFunctionHosting(changedCode, { environment: { FLAG: 'a' } }, (bundle) => {
+      fs.writeFileSync(path.join(bundle, 'server', 'entry.mjs'), 'export const changed = true;');
+      return httpServer(bundle);
+    });
+    assert.notStrictEqual(revisionLogicalId(changedCode), idA, 'a code change yields a new revision resource');
+
+    // The endpoint (in-place update) points at whichever revision is current.
+    const endpoint = Object.values(Template.fromStack(changedCode).findResources('AWS::Lambda::WebFunctionEndpoint'))[0];
+    assert.deepStrictEqual(endpoint.Properties.RevisionWeights[0].RevisionId, {
+      'Fn::GetAtt': [revisionLogicalId(changedCode), 'RevisionId'],
+    });
+  });
+
+  void it('copies the bundle onto one stable key and pins the revision to the copied version', () => {
+    const stack = createEnvStack();
+    webFunctionHosting(stack);
+    const template = Template.fromStack(stack);
+    // No per-deploy key: old zips become non-current versions of code.zip and
+    // the lifecycle rule expires them.
+    const zipDeployments = template.findResources('Custom::CDKBucketDeployment', { Properties: { Extract: false } });
+    assert.strictEqual(Object.keys(zipDeployments).length, 0, 'no per-deploy <assetHash>.zip upload');
+    // The copy call (Fn::Join-rendered JSON): S3 copyObject onto a fixed key, with
+    // a stable physical id so a new bundle is an update, never a replacement.
+    const uploads = Object.entries(template.findResources('Custom::AWS')).filter(([id]) => id.includes('CodeUpload'));
+    assert.strictEqual(uploads.length, 1);
+    const create = JSON.stringify(uploads[0][1].Properties.Create);
+    for (const fragment of ['copyObject', 'code.zip', 'web-function-code', 'VersionId']) {
+      assert.ok(create.includes(fragment), `copy call includes ${fragment}`);
+    }
+    const revision = Object.values(template.findResources('AWS::Lambda::WebFunctionRevision'))[0];
+    const s3Object = revision.Properties.BuildConfig.CodeConfig.S3Object;
+    assert.match(s3Object.Key, /^web-function\/.+\/code\.zip$/);
+    assert.ok(s3Object.VersionId['Fn::GetAtt'], 'revision pins the copied object version');
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      VersioningConfiguration: { Status: 'Enabled' },
+      LifecycleConfiguration: { Rules: [Match.objectLike({ NoncurrentVersionExpiration: { NoncurrentDays: 30 } })] },
+    });
+  });
+
+  void it('removes lambda-web-logstream with a response headers policy (covers 4xx/5xx)', () => {
+    const stack = createEnvStack();
+    webFunctionHosting(stack);
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+      ResponseHeadersPolicyConfig: Match.objectLike({
+        RemoveHeadersConfig: { Items: [{ Header: 'lambda-web-logstream' }] },
+        // Same settings as the managed SecurityHeadersPolicy — notably no CSP.
+        SecurityHeadersConfig: Match.objectLike({
+          StrictTransportSecurity: { AccessControlMaxAgeSec: 31536000, Override: false },
+          ContentTypeOptions: { Override: true },
+          FrameOptions: { FrameOption: 'SAMEORIGIN', Override: false },
+          ReferrerPolicy: { ReferrerPolicy: 'strict-origin-when-cross-origin', Override: false },
+          XSSProtection: { Protection: true, ModeBlock: true, Override: false },
+          ContentSecurityPolicy: Match.absent(),
+        }),
+      }),
+    });
+    // Attached to the behavior that serves SSR (the router's default behavior).
+    const [policyId] = Object.keys(template.findResources('AWS::CloudFront::ResponseHeadersPolicy', {
+      Properties: { ResponseHeadersPolicyConfig: Match.objectLike({ RemoveHeadersConfig: Match.anyValue() }) },
+    }));
+    const distribution = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0];
+    assert.deepStrictEqual(distribution.Properties.DistributionConfig.DefaultCacheBehavior.ResponseHeadersPolicyId, {
+      Ref: policyId,
+    });
+  });
+
+  void it('keeps the managed security headers policy (no extra policy) for lambda compute', () => {
+    const stack = createEnvStack();
     const { staticDir, bundleDir } = createDirs();
-    new HostingConstruct(lambdaStack, 'Hosting', { manifest: ssrManifest(staticDir, httpServer(bundleDir)) });
-    assert.doesNotMatch(routerResponseCode(lambdaStack), /lambda-web-logstream/);
+    new HostingConstruct(stack, 'Hosting', { manifest: ssrManifest(staticDir, httpServer(bundleDir)) });
+    const policies = Template.fromStack(stack).findResources('AWS::CloudFront::ResponseHeadersPolicy', {
+      Properties: { ResponseHeadersPolicyConfig: Match.objectLike({ RemoveHeadersConfig: Match.anyValue() }) },
+    });
+    assert.strictEqual(Object.keys(policies).length, 0);
+  });
+
+  void it('warns when the bundle ships x86-64 native modules', () => {
+    const stack = createEnvStack();
+    webFunctionHosting(stack, {}, (bundle) => {
+      const dir = path.join(bundle, 'node_modules', '@img', 'sharp-linux-x64', 'lib');
+      fs.mkdirSync(dir, { recursive: true });
+      // Minimal ELF header: magic, then e_machine (bytes 18-19, LE) = 0x3e (x86-64).
+      const elf = Buffer.alloc(64);
+      elf.writeUInt32BE(0x7f454c46, 0);
+      elf.writeUInt16LE(0x3e, 18);
+      fs.writeFileSync(path.join(dir, 'sharp-linux-x64.node'), elf);
+      return httpServer(bundle);
+    });
+    Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('ships x86-64 native modules'));
+  });
+
+  void it('does not warn for Arm64 native modules', () => {
+    const stack = createEnvStack();
+    webFunctionHosting(stack, {}, (bundle) => {
+      const dir = path.join(bundle, 'node_modules', '@img', 'sharp-linux-arm64', 'lib');
+      fs.mkdirSync(dir, { recursive: true });
+      const elf = Buffer.alloc(64);
+      elf.writeUInt32BE(0x7f454c46, 0);
+      elf.writeUInt16LE(0xb7, 18); // aarch64
+      fs.writeFileSync(path.join(dir, 'sharp-linux-arm64.node'), elf);
+      return httpServer(bundle);
+    });
+    Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('x86-64 native modules'));
   });
 });
 

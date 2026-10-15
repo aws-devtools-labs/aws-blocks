@@ -1,4 +1,5 @@
-import { writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { closeSync, openSync, readdirSync, readSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Construct } from 'constructs';
@@ -7,11 +8,9 @@ import {
   CfnResource,
   CustomResource,
   Duration,
-  Fn,
   Lazy,
   Names,
   RemovalPolicy,
-  Size,
   Stack,
   Token,
 } from 'aws-cdk-lib';
@@ -21,8 +20,8 @@ import { HttpOrigin, type HttpOriginProps } from 'aws-cdk-lib/aws-cloudfront-ori
 import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BlockPublicAccess, Bucket, BucketEncryption } from 'aws-cdk-lib/aws-s3';
-import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
-import { Provider } from 'aws-cdk-lib/custom-resources';
+import { Asset } from 'aws-cdk-lib/aws-s3-assets';
+import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId, Provider } from 'aws-cdk-lib/custom-resources';
 import { HostingError } from '../hosting_error.js';
 import type { ComputeResource } from '../manifest/types.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
@@ -58,6 +57,16 @@ const DEFAULT_TIMEOUT_SECONDS = 30;
 
 /** Bounds for `maxConcurrencyPerEnvironment` (revision setting). */
 const MAX_CONCURRENCY_PER_ENVIRONMENT = 128;
+
+/**
+ * Response headers a Web Function adds that name internal resources
+ * (`lambda-web-logstream`: log stream + revision id). Hosting removes them
+ * at the edge via its response headers policy.
+ */
+export const WEB_FUNCTION_INTERNAL_HEADERS: readonly string[] = ['lambda-web-logstream'];
+
+/** Logical-id prefix of the content-hashed revision resource. */
+const REVISION_LOGICAL_ID_PREFIX = 'WebFunctionRevision';
 
 /** Endpoint name. Create-only, so it must never change for a deployed app. */
 const ENDPOINT_NAME = 'default';
@@ -198,8 +207,10 @@ export class WebFunctionConstruct extends Construct implements iam.IGrantable {
         resolution:
           'Web Functions run the framework server directly. Use a framework/preset that emits a ' +
           'Node.js HTTP server: Astro (@astrojs/node standalone), SvelteKit (adapter-node), ' +
-          "Nuxt/Nitro with `nitro: { preset: 'node-server' }`, or Next.js with an OpenNext " +
-          "`docker` origin. Otherwise remove `compute.type` (defaults to 'lambda').",
+          "Nuxt/Nitro with `nitro: { preset: 'node-server' }`, or Next.js with OpenNext's `node` " +
+          "wrapper. The built-in adapters build these automatically when run inside " +
+          "withComputeTarget('web-function', …) (core Hosting does this). Otherwise remove " +
+          "`compute.type` (defaults to 'lambda').",
       });
     }
     if (computeResource.runtime && computeResource.runtime !== WEB_FUNCTION_RUNTIME) {
@@ -207,6 +218,20 @@ export class WebFunctionConstruct extends Construct implements iam.IGrantable {
         '@aws-blocks/hosting:WebFunctionRuntime',
         `Compute resource '${props.name}' declares runtime '${computeResource.runtime}', but Lambda Web ` +
           `Functions only support '${WEB_FUNCTION_RUNTIME}'. Deploying on ${WEB_FUNCTION_RUNTIME}.`,
+      );
+    }
+
+    // Lambda doesn't check that the server starts when it activates a revision,
+    // so a bundle that crashes on boot deploys green. The likeliest cause is a
+    // native module built for x64 (Web Functions run on Arm64) — e.g. a
+    // HostingConstruct user whose adapter run didn't target Web Functions.
+    const x64Modules = findX64NativeModules(computeResource.bundle);
+    if (x64Modules.length > 0) {
+      Annotations.of(this).addWarningV2(
+        '@aws-blocks/hosting:WebFunctionX64NativeModule',
+        `Compute resource '${props.name}' ships x86-64 native modules, but Lambda Web Functions run on Arm64 — ` +
+          `the server may fail to start: ${x64Modules.join(', ')}. Rebuild them for linux-arm64 ` +
+          "(wrap the adapter run in withComputeTarget('web-function', …) from @aws-blocks/hosting/adapters).",
       );
     }
 
@@ -241,6 +266,12 @@ export class WebFunctionConstruct extends Construct implements iam.IGrantable {
     });
 
     // ---- Code ----
+    // Every deploy copies the bundle zip onto ONE stable key and the revision
+    // pins the object version that copy returns. Overwriting a key leaves
+    // existing revisions untouched (they pin a version), and the superseded
+    // zip becomes a non-current version that the lifecycle rule below expires.
+    // A key per deploy, by contrast, keeps every old zip current forever, and
+    // deleting/pruning it risks failing the revision still serving traffic.
     const codeBucket = new Bucket(this, 'CodeBucket', {
       versioned: true,
       encryption: BucketEncryption.S3_MANAGED,
@@ -248,14 +279,11 @@ export class WebFunctionConstruct extends Construct implements iam.IGrantable {
       enforceSSL: true,
       removalPolicy: RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
-      // Each revision pins an object version of `<assetHash>.zip`. Every deploy
-      // writes a NEW key and the deployment doesn't prune (see below), so a
-      // superseded zip stays the current version of its own key and this rule
-      // never expires it: the bucket keeps one bundle per deploy. The rule only
-      // covers overwrites of the same key. Retention of old zips is still open.
+      // Only superseded zips are non-current. CloudFormation deletes their
+      // revisions in the same deploy, so 30 days only bounds the bucket size.
       lifecycleRules: [{ noncurrentVersionExpiration: Duration.days(30) }],
     });
-    const codePrefix = `web-function/${this.functionName}/`;
+    const codeKey = `web-function/${this.functionName}/code.zip`;
     const revisionArnPattern = stack.formatArn({
       service: 'lambda',
       resource: 'web-function',
@@ -266,23 +294,38 @@ export class WebFunctionConstruct extends Construct implements iam.IGrantable {
         sid: 'AllowLambdaWebFunctionCodeAccess',
         principals: [new iam.ServicePrincipal('lambda.amazonaws.com')],
         actions: ['s3:GetObject', 's3:GetObjectVersion'],
-        resources: [codeBucket.arnForObjects(`${codePrefix}*`)],
+        resources: [codeBucket.arnForObjects(codeKey)],
         conditions: { ArnLike: { 'aws:SourceArn': revisionArnPattern } },
       }),
     );
-    const codeDeployment = new BucketDeployment(this, 'CodeDeployment', {
-      sources: [Source.asset(computeResource.bundle)],
-      destinationBucket: codeBucket,
-      destinationKeyPrefix: codePrefix,
-      // Keep the zip as-is: the revision references the archive, not its files.
-      extract: false,
-      prune: false,
-      memoryLimit: 1024,
-      // The handler stages the zip in /tmp before the copy; SSR bundles can
-      // exceed the 512 MiB default.
-      ephemeralStorageSize: Size.gibibytes(2),
+    const codeAsset = new Asset(this, 'CodeAsset', { path: computeResource.bundle });
+    const codeUpload = new AwsCustomResource(this, 'CodeUpload', {
+      // onCreate defaults to onUpdate. The call re-runs whenever its parameters
+      // change, i.e. whenever the bundle (asset key) changes.
+      onUpdate: {
+        service: 'S3',
+        action: 'copyObject',
+        parameters: {
+          Bucket: codeBucket.bucketName,
+          Key: codeKey,
+          CopySource: `${codeAsset.s3BucketName}/${codeAsset.s3ObjectKey}`,
+        },
+        // Stable id: an update must never look like a replacement (Express
+        // Mode sandbox deploys run with rollback disabled, which rejects it).
+        physicalResourceId: PhysicalResourceId.of('web-function-code'),
+        outputPaths: ['VersionId'],
+      },
+      policy: AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['s3:GetObject', 's3:GetObjectVersion'],
+          resources: [codeAsset.bucket.arnForObjects(codeAsset.s3ObjectKey)],
+        }),
+        new iam.PolicyStatement({ actions: ['s3:PutObject'], resources: [codeBucket.arnForObjects(codeKey)] }),
+      ]),
+      installLatestAwsSdk: false,
+      timeout: Duration.minutes(5),
     });
-    const codeKey = Fn.join('', [codePrefix, Fn.select(0, codeDeployment.objectKeys)]);
+    const codeVersionId = codeUpload.getResponseField('VersionId');
 
     // ---- Web Function, revision, endpoint ----
     this.cfnWebFunction = new CfnResource(this, 'WebFunction', {
@@ -294,32 +337,51 @@ export class WebFunctionConstruct extends Construct implements iam.IGrantable {
     this.environment = { ...computeResource.environment, ...props.environment };
     this.environment.AWS_LAMBDA_NODEJS_ENTRYPOINT = WEB_FUNCTION_ENTRY_SHIM;
 
+    const revisionProperties = {
+      FunctionName: this.functionName,
+      BuildConfig: {
+        CodeConfig: { S3Object: { Bucket: codeBucket.bucketName, Key: codeKey, VersionId: codeVersionId } },
+        RuntimeConfig: { Runtime: WEB_FUNCTION_RUNTIME },
+      },
+      ServiceConfig: {
+        ExecutionRoleArn: this.role.roleArn,
+        TimeoutSeconds: timeoutSeconds,
+        MaxConcurrencyPerEnvironment: props.maxConcurrencyPerEnvironment,
+        // Lazy: env vars are added after construction (secrets, Blocks
+        // config, ISR wiring). Every revision property is create-only, so a
+        // changed env var produces a new revision — the same as a new deploy.
+        EnvironmentVariables: Lazy.any({ produce: () => ({ ...this.environment }) }),
+        TelemetryConfig: { LoggingConfig: { LogGroup: logGroup.logGroupName } },
+      },
+    };
     this.cfnRevision = new CfnResource(this, 'Revision', {
       type: 'AWS::Lambda::WebFunctionRevision',
-      properties: {
-        FunctionName: this.functionName,
-        BuildConfig: {
-          CodeConfig: { S3Object: { Bucket: codeBucket.bucketName, Key: codeKey } },
-          RuntimeConfig: { Runtime: WEB_FUNCTION_RUNTIME },
-        },
-        ServiceConfig: {
-          ExecutionRoleArn: this.role.roleArn,
-          TimeoutSeconds: timeoutSeconds,
-          MaxConcurrencyPerEnvironment: props.maxConcurrencyPerEnvironment,
-          // Lazy: env vars are added after construction (secrets, Blocks
-          // config, ISR wiring). Every revision property is create-only, so a
-          // changed env var produces a new revision — the same as a new deploy.
-          EnvironmentVariables: Lazy.any({ produce: () => ({ ...this.environment }) }),
-          TelemetryConfig: { LoggingConfig: { LogGroup: logGroup.logGroupName } },
-        },
-      },
+      properties: revisionProperties,
     });
     this.cfnRevision.addDependency(this.cfnWebFunction);
     // Lambda reads the object when the revision is created: the zip, the
     // bucket policy, and the role (incl. its default policy) must exist first.
     // Depending on the log groups also orders a stack delete: the revision
     // (and its environments) go before the groups they write to.
-    this.cfnRevision.node.addDependency(codeDeployment, this.role, logGroup, localLogGroup);
+    this.cfnRevision.node.addDependency(codeUpload, this.role, logGroup, localLogGroup);
+    // Every revision property is create-only, so an in-place change would be a
+    // REPLACEMENT update, which CloudFormation rejects on stacks deployed with
+    // rollback disabled (Express Mode sandbox deploys). Like `lambda.Version`,
+    // derive the logical id from the revision's content instead: a change adds
+    // a new revision, the endpoint is re-pointed (an in-place update), and the
+    // old revision is deleted during cleanup.
+    this.cfnRevision.overrideLogicalId(
+      Lazy.uncachedString({
+        produce: () => {
+          const hash = createHash('sha256')
+            .update(JSON.stringify(stack.resolve(revisionProperties)))
+            .update(codeAsset.assetHash)
+            .digest('hex')
+            .slice(0, 16);
+          return `${REVISION_LOGICAL_ID_PREFIX}${hash}`;
+        },
+      }),
+    );
     if (bucketPolicy.policyDependable) this.cfnRevision.node.addDependency(bucketPolicy.policyDependable);
 
     this.cfnEndpoint = new CfnResource(this, 'Endpoint', {
@@ -444,6 +506,41 @@ export class WebFunctionConstruct extends Construct implements iam.IGrantable {
 }
 
 // ---- Validation helpers ----
+
+/** ELF `e_machine` value for x86-64. */
+const ELF_MACHINE_X86_64 = 0x3e;
+
+/**
+ * @internal Bundle-relative paths (at most `limit`) of `.node` native modules
+ * compiled for x86-64 — read from each file's ELF header (`e_machine` at byte
+ * 18). Non-ELF files (e.g. darwin builds) are ignored.
+ */
+export const findX64NativeModules = (bundle: string, limit = 5): string[] => {
+  const found: string[] = [];
+  let entries: string[];
+  try {
+    entries = readdirSync(bundle, { recursive: true, encoding: 'utf-8' });
+  } catch {
+    return found;
+  }
+  const header = Buffer.alloc(20);
+  for (const rel of entries) {
+    if (!rel.endsWith('.node')) continue;
+    let fd: number | undefined;
+    try {
+      fd = openSync(join(bundle, rel), 'r');
+      const read = readSync(fd, header, 0, header.length, 0);
+      const isElf = read === header.length && header.readUInt32BE(0) === 0x7f454c46;
+      if (isElf && header.readUInt16LE(18) === ELF_MACHINE_X86_64) found.push(rel);
+    } catch {
+      // unreadable entry (directory named *.node, broken symlink) — skip
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+    if (found.length >= limit) break;
+  }
+  return found;
+};
 
 const validateRegion = (region: string, skip: boolean | undefined): void => {
   if (skip || Token.isUnresolved(region) || WEB_FUNCTION_SUPPORTED_REGIONS.has(region)) return;

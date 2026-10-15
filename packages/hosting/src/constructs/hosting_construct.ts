@@ -61,10 +61,10 @@ import { MonitoringConstruct } from './monitoring_construct.js';
 import { UsEast1MonitoringStack } from './us_east_1_monitoring_stack.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import type { QuotaOverrides } from './quota_budget.js';
-import { createSecurityHeadersPolicy } from './security_headers.js';
+import { createManagedEquivalentSecurityHeadersPolicy, createSecurityHeadersPolicy } from './security_headers.js';
 import { StorageConstruct, DEFAULT_BUILD_RETENTION_DAYS } from './storage_construct.js';
 import { WafConstruct } from './waf_construct.js';
-import { WebFunctionConstruct, type WebFunctionOptions } from './web_function_construct.js';
+import { WEB_FUNCTION_INTERNAL_HEADERS, WebFunctionConstruct, type WebFunctionOptions } from './web_function_construct.js';
 
 // Re-export build ID helpers for public API + tests
 export { generateBuildId, generateBuildIdFunctionCode } from '../defaults.js';
@@ -1163,13 +1163,31 @@ export class HostingConstruct extends Construct {
     // X-XSS-Protection, and Referrer-Policy. CSP is intentionally omitted
     // from the default — frameworks (Next.js, Nuxt) emit their own CSP via
     // response headers, and a blanket L3 CSP would conflict.
+    //
+    // A Web Function names its internal log stream + revision in every
+    // response (`lambda-web-logstream`). Strip it with the policy rather than a
+    // viewer-response function: CloudFront skips viewer-response functions on
+    // 4xx/5xx origin responses, but applies response headers policies to all.
+    // The request id (`lambda-web-request-id`) stays, like API Gateway's
+    // `x-amzn-requestid`, for support correlation.
+    const removeOriginHeaders = this.computeWebFunctions.size > 0 ? [...WEB_FUNCTION_INTERNAL_HEADERS] : [];
     let securityHeadersPolicy: IResponseHeadersPolicy;
     if (props.cdn?.responseHeadersPolicy) {
       securityHeadersPolicy = props.cdn.responseHeadersPolicy;
+      if (removeOriginHeaders.length > 0) {
+        Annotations.of(this).addWarningV2(
+          '@aws-blocks/hosting:WebFunctionHeaderNotStripped',
+          `cdn.responseHeadersPolicy is your own policy, so Hosting can't remove ${removeOriginHeaders.join(', ')} ` +
+            '(internal Web Function log stream name) from responses. Add it to the policy\'s removeHeaders.',
+        );
+      }
     } else if (props.cdn?.contentSecurityPolicy) {
       securityHeadersPolicy = createSecurityHeadersPolicy(this, 'SecurityHeaders', {
         contentSecurityPolicy: props.cdn.contentSecurityPolicy,
+        removeHeaders: removeOriginHeaders,
       });
+    } else if (removeOriginHeaders.length > 0) {
+      securityHeadersPolicy = createManagedEquivalentSecurityHeadersPolicy(this, 'SecurityHeaders', removeOriginHeaders);
     } else {
       securityHeadersPolicy = ResponseHeadersPolicy.SECURITY_HEADERS;
     }
