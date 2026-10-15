@@ -35,11 +35,16 @@ public final class FileUploadHandle: Sendable {
     ///
     /// Expected shape: `{ "url": "https://s3.../presigned-url", "contentType": "image/jpeg" }`
     public static func fromJSON(_ json: [String: Any]) throws -> FileUploadHandle {
+        let (url, contentType) = try parts(of: json)
+        return FileUploadHandle(url: url, contentType: contentType)
+    }
+
+    /// The presigned URL and content type a descriptor carries.
+    static func parts(of json: [String: Any]) throws -> (url: String, contentType: String?) {
         guard let url = json["url"] as? String else {
             throw FileBucketError.invalidURL("missing 'url' in descriptor")
         }
-        let contentType = json["contentType"] as? String
-        return FileUploadHandle(url: url, contentType: contentType)
+        return (url, json["contentType"] as? String)
     }
 
     /// Returns the presigned upload URL.
@@ -120,10 +125,10 @@ public final class FileUploadHandle: Sendable {
 // MARK: - Codable
 
 extension FileUploadHandle: Codable {
-    /// Hydrates a handle nested in a result through `fromJSON`, as the generated code hydrates a top-level one.
+    /// Hydrates a handle from its descriptor in a generated result, at any depth, as `fromJSON` does.
     public convenience init(from decoder: Decoder) throws {
-        let handle = try Self.fromJSON(TransferableCoding.descriptor(from: decoder))
-        self.init(url: handle.url, contentType: handle.contentType, session: handle.session)
+        let (url, contentType) = try Self.parts(of: TransferableCoding.descriptor(from: decoder))
+        self.init(url: url, contentType: contentType)
     }
 
     /// Always throws: transferables are read-only.

@@ -15,6 +15,13 @@ private enum RealtimeChannelWebSocketSession {
     static let shared = WebSocketSession()
 }
 
+/// A realtime descriptor's channel, socket URL and subscribe token.
+private struct RealtimeChannelParts {
+    let channel: String
+    let wsUrl: String
+    let token: String
+}
+
 /// Parsing of server WebSocket frames. Non-generic and internal so tests can
 /// exercise it without a socket.
 enum RealtimeFrame {
@@ -121,10 +128,18 @@ public final class RealtimeChannel<T> {
         baseHost: String? = nil,
         deserializer: @escaping (Data) throws -> T
     ) -> RealtimeChannel<T> {
+        guard let parts = parts(of: json, baseHost: baseHost) else {
+            fatalError("Invalid RealtimeChannel descriptor: missing channel, wsUrl, or token")
+        }
+        return RealtimeChannel(channel: parts.channel, wsUrl: parts.wsUrl, token: parts.token, deserializer: deserializer)
+    }
+
+    /// A descriptor's channel, socket URL and subscribe token, with `baseHost` and the connect token applied; nil if one is missing.
+    private static func parts(of json: [String: Any], baseHost: String?) -> RealtimeChannelParts? {
         guard let channelName = json["channel"] as? String,
               var wsUrlStr = json["wsUrl"] as? String,
               let tokenValue = json["token"] as? String else {
-            fatalError("Invalid RealtimeChannel descriptor: missing channel, wsUrl, or token")
+            return nil
         }
 
         if let host = baseHost {
@@ -135,7 +150,7 @@ public final class RealtimeChannel<T> {
             wsUrlStr = Self.appendingConnectToken(to: wsUrlStr, connectToken)
         }
 
-        return RealtimeChannel(channel: channelName, wsUrl: wsUrlStr, token: tokenValue, deserializer: deserializer)
+        return RealtimeChannelParts(channel: channelName, wsUrl: wsUrlStr, token: tokenValue)
     }
 
     /// Appends `connectToken` to `wsUrl` as a `token` query parameter. Keeps any
@@ -214,19 +229,16 @@ public final class RealtimeChannel<T> {
 extension RealtimeChannel: Decodable where T: Decodable {
     /// Hydrates a channel from its descriptor in a generated result, at any depth; a bad descriptor throws.
     public convenience init(from decoder: Decoder) throws {
-        let descriptor = try TransferableCoding.descriptor(from: decoder)
-        // `fromJSON` traps without these.
-        guard descriptor["channel"] is String, descriptor["wsUrl"] is String, descriptor["token"] is String else {
+        guard let parts = try Self.parts(of: TransferableCoding.descriptor(from: decoder), baseHost: BlocksClient.baseHost) else {
             throw DecodingError.dataCorrupted(.init(
                 codingPath: decoder.codingPath,
                 debugDescription: "Invalid RealtimeChannel descriptor: missing channel, wsUrl, or token"
             ))
         }
         // Formed here, not in generated code: a closure formed under MainActor default isolation traps off it.
-        let channel = Self.fromJSON(descriptor, baseHost: BlocksClient.baseHost) { data in
+        self.init(channel: parts.channel, wsUrl: parts.wsUrl, token: parts.token) { data in
             try JSONDecoder().decode(T.self, from: data)
         }
-        self.init(channel: channel.channel, wsUrl: channel.wsUrl, token: channel.token, deserializer: channel.deserializer)
     }
 }
 

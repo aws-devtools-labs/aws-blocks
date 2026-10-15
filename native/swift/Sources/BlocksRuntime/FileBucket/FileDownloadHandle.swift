@@ -33,10 +33,15 @@ public final class FileDownloadHandle: Sendable {
     ///
     /// Expected shape: `{ "url": "https://s3.../presigned-url" }`
     public static func fromJSON(_ json: [String: Any]) throws -> FileDownloadHandle {
+        try FileDownloadHandle(url: url(in: json))
+    }
+
+    /// The presigned URL a descriptor carries.
+    static func url(in json: [String: Any]) throws -> String {
         guard let url = json["url"] as? String else {
             throw FileBucketError.invalidURL("missing 'url' in descriptor")
         }
-        return FileDownloadHandle(url: url)
+        return url
     }
 
     /// Returns the presigned download URL.
@@ -110,10 +115,9 @@ public final class FileDownloadHandle: Sendable {
 // MARK: - Codable
 
 extension FileDownloadHandle: Codable {
-    /// Hydrates a handle nested in a result through `fromJSON`, as the generated code hydrates a top-level one.
+    /// Hydrates a handle from its descriptor in a generated result, at any depth, as `fromJSON` does.
     public convenience init(from decoder: Decoder) throws {
-        let handle = try Self.fromJSON(TransferableCoding.descriptor(from: decoder))
-        self.init(url: handle.url, session: handle.session)
+        try self.init(url: Self.url(in: TransferableCoding.descriptor(from: decoder)))
     }
 
     /// Always throws: transferables are read-only.
