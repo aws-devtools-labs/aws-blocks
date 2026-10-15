@@ -3,25 +3,28 @@
 
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
-import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
+import { API_NAMESPACE_SCOPE } from '../api.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
+import { isDispatchableExport } from '../rpc-dispatch.js';
 import { ensureApiGatewayAccount } from './apigateway-account.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 
+/** Characters API Gateway allows in a literal resource path part. */
+const API_GATEWAY_PATH_PART = /^[A-Za-z0-9:._$-]+$/;
+
 /** Inputs the shared REST API gateway is built from. @internal */
 export interface SharedGatewayProps {
 	/**
-	 * Every compute registered on the stack (`getComputes(stack)`), in
-	 * construction order. The gateway builds one Lambda integration per compute
-	 * that serves HTTP (`apiHandler()` defined) and routes each compute's
-	 * namespaces (`Compute.namespaces`) to it; worker-only computes are skipped.
-	 * The {@link defaultCompute} is handled specially (see below), so its entry
-	 * here needs no explicit per-namespace route.
+	 * Each non-default compute that hosts API namespaces, mapped to the export
+	 * names routed to it (see {@link resolveNamespaceRoutes}). The gateway builds
+	 * one Lambda integration per compute and a literal `/aws-blocks/api/{name}`
+	 * resource per name. Namespaces on the {@link defaultCompute} need no entry —
+	 * the catch-all resources already reach it. Omitted ⇒ no fan-out.
 	 */
-	readonly computes: readonly Compute[];
+	readonly namespaceRoutes?: ReadonlyMap<Compute, readonly string[]>;
 	/**
 	 * The stack's default compute. Its `apiHandler()` backs the catch-all
 	 * resources, so the RPC root (`/aws-blocks/api`), auth, `RawRoute`s, and any
@@ -78,15 +81,18 @@ export interface SharedGateway {
  *
  * **Multi-compute fan-out.** When a namespace is assigned to a non-default
  * compute, the gateway adds a literal `/aws-blocks/api/{namespace}` resource
- * (ANY) and its `{proxy+}` subtree, integrated with the function of the compute
- * hosting it. A literal resource wins over the sibling `{proxy+}`, so each
- * per-namespace path reaches ITS function while everything else — the RPC root,
- * auth, raw routes, and every namespace left on the default compute — still
- * reaches the default compute. `{namespace}` is a literal path segment (names
- * are assumed URL-path-safe — they are JS export identifiers — but are not
- * validated here; a validator belongs with the future compute-assignment
- * surface), not an API Gateway `{param}`; ANY covers POST plus the OPTIONS
- * preflight.
+ * (ANY), integrated with the function of the compute hosting it. `{namespace}`
+ * is the namespace's **export** name — what the client calls and dispatch
+ * resolves — from {@link resolveNamespaceRoutes}. A literal resource wins over
+ * the sibling `{proxy+}`, so each per-namespace path reaches ITS function while
+ * everything else — the RPC root, auth, raw routes, and every namespace left on
+ * the default compute — still reaches the default compute. The client POSTs to
+ * exactly that path, so the literal resource has no `{proxy+}` subtree.
+ * `{namespace}` is a literal path segment, validated against API Gateway's
+ * path-part characters, not an API Gateway `{param}`; ANY covers POST plus the
+ * OPTIONS preflight. Each such function gets a single API-scoped invoke
+ * permission however many namespaces it hosts, so its 20 KB resource policy
+ * doesn't grow with the namespace count.
  *
  * CORS is not configured on the gateway: OPTIONS reaches the Lambda, which
  * reflects allowed origins from `CORS_ALLOWED_ORIGINS`.
@@ -102,7 +108,7 @@ export interface SharedGateway {
  * @internal Framework-only; apps reach the gateway via `BlocksStack.gateway`.
  */
 export function createSharedGateway(scope: Construct, props: SharedGatewayProps): SharedGateway {
-	const { computes, defaultCompute, defaults, regionalEndpoint } = props;
+	const { namespaceRoutes = new Map(), defaultCompute, defaults, regionalEndpoint } = props;
 
 	// The default compute's function backs the catch-all resources. It is always a
 	// Lambda compute today, so apiHandler() is defined; guard with a clear error if
@@ -110,17 +116,6 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 	const defaultHandler = defaultCompute.apiHandler();
 	if (!defaultHandler) {
 		throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
-	}
-
-	// The non-default computes that serve HTTP and host at least one namespace —
-	// each gets its own integration and per-namespace resources. Worker-only
-	// computes (no HTTP ingress) and HTTP computes hosting no namespace contribute
-	// nothing.
-	const routedComputes: Array<{ compute: Compute; handler: IFunction }> = [];
-	for (const compute of computes) {
-		if (compute === defaultCompute || compute.namespaces.length === 0) continue;
-		const handler = compute.apiHandler();
-		if (handler) routedComputes.push({ compute, handler });
 	}
 
 	// Structured JSON access logging on the stage, when the stack-wide default
@@ -188,13 +183,27 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 	restApi.root.addProxy({ defaultIntegration, anyMethod: true });
 
 	// Fan out: route each non-default compute's namespaces to its own function.
-	for (const { compute, handler } of routedComputes) {
+	for (const [compute, exportNames] of namespaceRoutes) {
+		const handler = compute.apiHandler();
+		if (!handler) {
+			throw new Error(
+				`Compute '${compute.node.id}' hosts API namespaces (${exportNames.join(', ')}) but accepts no API traffic.`,
+			);
+		}
 		// One integration per compute, reused across all of its namespace resources.
-		const integration = new apigateway.LambdaIntegration(handler);
-		for (const name of compute.namespaces) {
-			const namespaceResource = apiResource.addResource(name);
-			namespaceResource.addMethod('ANY', integration);
-			namespaceResource.addProxy({ defaultIntegration: integration, anyMethod: true });
+		// API-scoped invoke permission: one Lambda::Permission per function for this
+		// API, instead of CDK's default two per method (stage + test-invoke), so the
+		// function's resource policy stays flat however many namespaces it hosts.
+		// Safe because the only routes integrating this function are the ones below.
+		const integration = new apigateway.LambdaIntegration(handler, { scopePermissionToMethod: false });
+		for (const name of exportNames) {
+			if (!API_GATEWAY_PATH_PART.test(name)) {
+				throw new Error(
+					`API namespace export '${name}' can't be routed to compute '${compute.node.id}': ` +
+						'API Gateway path segments allow only letters, digits and : . _ - $. Rename the export.',
+				);
+			}
+			apiResource.addResource(name).addMethod('ANY', integration);
 		}
 	}
 
@@ -202,4 +211,42 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 	const apiUrl = `${restApi.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
 
 	return { restApi, apiUrl };
+}
+
+/**
+ * Map each non-default compute to the export names of the API namespaces it
+ * hosts — the routing table {@link createSharedGateway} fans out with.
+ *
+ * Walks the backend module's exports with the filter the Lambda handler and dev
+ * server dispatch with (`isDispatchableExport`), so the gateway routes exactly
+ * the names a client can call. Keys on the **export** name, not the
+ * `ApiNamespace` constructor name: the export name is what the typed client
+ * sends and dispatch resolves, and the two can differ
+ * (`export const authApi = auth.createApi()` is constructed as `'auth'`). A
+ * namespace exported under several names is routed under each.
+ *
+ * Each namespace's compute is resolved here — after the backend module has been
+ * imported — from the scope it was constructed in (`scope.compute`: the nearest
+ * compute assigned up the scope chain, else the default), so the result doesn't
+ * depend on the order computes, assignments and namespaces were created in.
+ *
+ * Contributes no route — leaving the request to the default compute's catch-all
+ * resources — for a namespace on the default compute, a plain exported
+ * function/object (no `ApiNamespace` scope), and a namespace that isn't exported
+ * (no client can call it, and dispatch couldn't resolve it).
+ *
+ * @param backendModule the imported backend module (`backendCDKPath`)
+ * @param defaultCompute the owner's default compute
+ * @internal
+ */
+export function resolveNamespaceRoutes(backendModule: object, defaultCompute: Compute): Map<Compute, string[]> {
+	const routes = new Map<Compute, string[]>();
+	for (const [exportName, value] of Object.entries(backendModule)) {
+		if (!isDispatchableExport(exportName, value)) continue;
+		const scope = (value as Record<symbol, { compute?: Compute } | undefined>)[API_NAMESPACE_SCOPE];
+		const compute = scope?.compute;
+		if (!compute || compute === defaultCompute) continue;
+		routes.set(compute, [...(routes.get(compute) ?? []), exportName]);
+	}
+	return routes;
 }

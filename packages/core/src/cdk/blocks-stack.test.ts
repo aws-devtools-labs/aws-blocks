@@ -78,6 +78,7 @@ const handlerPath = join(__dirname, '__fixtures__', 'handler.js');
 const sideEffectBackendPath = join(__dirname, '__fixtures__', 'side-effect-backend.js');
 const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js');
 const gatewayReadingBackendPath = join(__dirname, '__fixtures__', 'gateway-reading-backend.js');
+const namespaceRoutingBackendPath = join(__dirname, '__fixtures__', 'namespace-routing-backend.js');
 
 // Wrap create(), injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
@@ -302,5 +303,49 @@ describe('gateway is not available during the backend import (BlocksStack)', () 
 			makeStack(app, 'GatewayDuringImportStack', gatewayReadingBackendPath),
 			/not fully initialized/,
 		);
+	});
+});
+
+describe('shared gateway routes namespaces by export name (create())', () => {
+	// The fixture exports `api` (default compute) and `shop` — constructed as
+	// 'orders' — on a second compute. The routing table is built from the module
+	// create() imported, so this covers the real wiring for both entry points.
+	before(() => {
+		(globalThis as Record<string, unknown>).__BLOCKS_TEST_MAKE_COMPUTE__ = (parent: ScopeParent, id: string) =>
+			new StubLambdaCompute(parent, id);
+	});
+
+	const assertRoutedByExportName = (stackOfGateway: cdk.Stack, owner: Construct) => {
+		const resources = Template.fromStack(stackOfGateway).toJSON().Resources as Record<
+			string,
+			{ Type: string; Properties: Record<string, unknown> }
+		>;
+		const pathParts = Object.entries(resources)
+			.filter(([, r]) => r.Type === 'AWS::ApiGateway::Resource')
+			.map(([id, r]) => [id, r.Properties.PathPart as string] as const);
+		const parts = pathParts.map(([, part]) => part);
+		assert.ok(parts.includes('shop'), `routed by export name: ${parts.join(', ')}`);
+		assert.ok(!parts.includes('orders'), 'not by the ApiNamespace constructor name');
+		// `/aws-blocks/api` is the only 'api' part: the default-compute `api` namespace adds none.
+		assert.strictEqual(parts.filter((part) => part === 'api').length, 1, 'a default-compute namespace adds no resource');
+
+		const orders = getComputes(owner).find((c) => c.node.id === 'OrdersCompute') as StubLambdaCompute;
+		const ordersFnId = stackOfGateway.getLogicalId(orders.fn.node.defaultChild as cdk.CfnElement);
+		const shopId = pathParts.find(([, part]) => part === 'shop')?.[0];
+		const shopMethod = Object.values(resources).find(
+			(r) => r.Type === 'AWS::ApiGateway::Method' && (r.Properties.ResourceId as { Ref?: string }).Ref === shopId,
+		);
+		assert.ok(JSON.stringify(shopMethod?.Properties.Integration).includes(ordersFnId), 'shop → the orders function');
+	};
+
+	test('BlocksStack', async () => {
+		const stack = await makeStack(new cdk.App(), 'NamespaceRoutingStack', namespaceRoutingBackendPath);
+		assertRoutedByExportName(stack, stack);
+	});
+
+	test('BlocksBackend', async () => {
+		const parent = new cdk.Stack(new cdk.App(), 'NamespaceRoutingParent');
+		const backend = await makeBackend(parent, 'Blocks', namespaceRoutingBackendPath);
+		assertRoutedByExportName(parent, backend);
 	});
 });

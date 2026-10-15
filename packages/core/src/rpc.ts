@@ -10,6 +10,7 @@
  * @see https://www.jsonrpc.org/specification
  */
 
+import { rpcNamespaceFromPath } from './constants.js';
 import { ApiError, DEFAULT_API_ERROR_NAME, isApiErrorLike, isWireSafeError } from './errors.js';
 
 /**
@@ -35,6 +36,16 @@ export interface RpcParsedRequest {
 export type RpcParseResult =
   | { ok: true; request: RpcParsedRequest }
   | { ok: false; response: string };
+
+/** Options for `parseRpcRequest`. */
+export interface RpcParseOptions {
+  /**
+   * The request path, without query string. When it is a per-namespace RPC path
+   * (`/aws-blocks/api/{namespace}`), the namespace it names must match the body's
+   * `namespace.method` prefix, or the request is rejected as invalid.
+   */
+  pathname?: string;
+}
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -117,8 +128,15 @@ export function decodeRpcResponse(body: unknown): unknown {
  * Returns `{ ok: false, response }` with a ready-to-send JSON string when
  * the request is malformed, so callers can short-circuit without knowing
  * anything about the JSON-RPC spec.
+ *
+ * The body's `namespace.method` prefix is always the namespace dispatched. A
+ * per-namespace path (`options.pathname`) only addresses the request — a gateway
+ * routes on it, since it can't read the body — so a path that names a different
+ * namespace than the body is rejected rather than silently preferring either.
+ * The typed client never sends a mismatch; this only surfaces hand-written
+ * requests that would otherwise run on a different namespace than intended.
  */
-export function parseRpcRequest(bodyText: string): RpcParseResult {
+export function parseRpcRequest(bodyText: string, options: RpcParseOptions = {}): RpcParseResult {
   // Reject oversized bodies before parsing or dispatch. See MAX_RPC_BODY_BYTES
   // for the limit and its rationale.
   if (Buffer.byteLength(bodyText, 'utf8') > MAX_RPC_BODY_BYTES) {
@@ -167,6 +185,20 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     };
   }
 
+  const apiNamespace = parsed.method.substring(0, dotIndex);
+  const pathNamespace = options.pathname === undefined ? undefined : rpcNamespaceFromPath(options.pathname);
+  if (pathNamespace !== undefined && pathNamespace !== apiNamespace) {
+    return {
+      ok: false,
+      response: errorResponse(
+        RpcErrorCode.InvalidRequest,
+        `Invalid Request: the path addresses namespace "${pathNamespace}" but method "${parsed.method}" is in namespace "${apiNamespace}"`,
+        id,
+        { name: 'InvalidRequest' },
+      ),
+    };
+  }
+
   const hasParams = Object.hasOwn(parsed, 'params');
   if (hasParams && (parsed.params === null || typeof parsed.params !== 'object')) {
     return {
@@ -188,7 +220,7 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
   return {
     ok: true,
     request: {
-      apiNamespace: parsed.method.substring(0, dotIndex),
+      apiNamespace,
       method: parsed.method.substring(dotIndex + 1),
       // JSON-RPC 2.0 §4.2: params may be an array (positional) or object (named).
       args,

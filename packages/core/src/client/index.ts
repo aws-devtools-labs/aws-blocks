@@ -250,8 +250,9 @@ export interface ApiNamespaceClientOptions {
  * The namespace segment is what lets a gateway route each namespace to the
  * compute that hosts it — a single-compute backend serves every namespace path
  * from the same origin, so this is safe there too. The namespace also stays in
- * the JSON-RPC body; the server prefers the path but falls back to the body, so
- * raw HTTP callers posting to the bare `/aws-blocks/api` endpoint keep working.
+ * the JSON-RPC body, which is what the server dispatches on — the path must name
+ * the same namespace — so raw HTTP callers posting to the bare `/aws-blocks/api`
+ * endpoint keep working.
  *
  * `baseUrl` may be relative (Hosting publishes `/aws-blocks/api` for same-origin
  * browser calls), so this does deliberate string concatenation rather than going

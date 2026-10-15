@@ -3,7 +3,7 @@
 
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { CLIENT_USER_AGENT_HEADER, isRpcPath, rpcNamespaceFromPath } from './constants.js';
+import { CLIENT_USER_AGENT_HEADER, isRpcPath } from './constants.js';
 import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
@@ -571,18 +571,15 @@ function createHandler(backend: any) {
     };
 
     const { bodyText, bodyStream } = decodeEventBody(event);
-    const parsed = parseRpcRequest(bodyText);
+    // The path is validated against the body's namespace (see parseRpcRequest);
+    // dispatch always uses the body's `namespace.method`.
+    const parsed = parseRpcRequest(bodyText, { pathname: requestPath });
 
     if (!parsed.ok) {
       return { statusCode: 200, headers: rpcHeaders, body: parsed.response };
     }
 
-    const { apiNamespace: bodyNamespace, method, args, id: rpcId } = parsed.request;
-    // Prefer the namespace addressed in the path (`/aws-blocks/api/{ns}`), which
-    // a gateway can route per-compute; fall back to the body's `namespace.method`
-    // prefix for back-compat (raw HTTP callers and clients that still POST to the
-    // bare `/aws-blocks/api` endpoint).
-    const apiNamespace = rpcNamespaceFromPath(requestPath) ?? bodyNamespace;
+    const { apiNamespace, method, args, id: rpcId } = parsed.request;
 
     try {
       const headers = new Headers(event.headers || {});

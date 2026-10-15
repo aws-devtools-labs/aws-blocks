@@ -32,18 +32,6 @@ import { registerCompute } from './compute-registry.js';
  */
 export abstract class Compute extends Scope {
 	/**
-	 * API namespaces assigned to run on this compute — recorded (as each
-	 * `ApiNamespace` is constructed) so request routing can map a namespace to the
-	 * compute that hosts it. The shared gateway reads this to add per-namespace
-	 * resources routed to this compute's function for every non-default compute;
-	 * namespaces on the default compute are served by the gateway's catch-all
-	 * resources and need no explicit entry. Populated via the internal `_compute`
-	 * assignment seam — there is no public, customer-facing compute-assignment
-	 * surface yet.
-	 */
-	readonly namespaces: string[] = [];
-
-	/**
 	 * Whether tracing has been enabled on this compute — flipped by
 	 * {@link enableTracing}. Private so it can't be set independently of the
 	 * infra; read internally by {@link dashboardSection} to decide whether to

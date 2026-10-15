@@ -73,6 +73,35 @@ describe('-32600 Invalid Request error shape', () => {
   });
 });
 
+describe('parseRpcRequest — per-namespace path', () => {
+  const body = JSON.stringify({ jsonrpc: '2.0', method: 'orders.list', params: [], id: 3 });
+
+  it('accepts a path whose namespace matches the body prefix', () => {
+    const result = parseRpcRequest(body, { pathname: '/aws-blocks/api/orders' });
+    assert.ok(result.ok);
+    if (result.ok) assert.strictEqual(result.request.apiNamespace, 'orders');
+  });
+
+  it('accepts the bare endpoint and no pathname — the body prefix decides', () => {
+    for (const options of [{ pathname: '/aws-blocks/api' }, { pathname: '/aws-blocks/api/' }, {}]) {
+      const result = parseRpcRequest(body, options);
+      assert.ok(result.ok, JSON.stringify(options));
+      if (result.ok) assert.strictEqual(result.request.apiNamespace, 'orders');
+    }
+  });
+
+  it('rejects a path whose namespace differs from the body prefix', () => {
+    const result = parseRpcRequest(body, { pathname: '/aws-blocks/api/reports' });
+    assert.strictEqual(result.ok, false);
+    if (!result.ok) {
+      const parsed = JSON.parse(result.response);
+      assert.strictEqual(parsed.error.code, RpcErrorCode.InvalidRequest);
+      assert.strictEqual(parsed.error.data.name, 'InvalidRequest');
+      assert.strictEqual(parsed.id, 3);
+    }
+  });
+});
+
 describe('errorResponseFromCatch does not leak backend internals', () => {
   it('collapses a non-ApiError (driver exception) to a generic 500', () => {
     // Simulate a Postgres/DynamoDB driver throw: custom class name + raw message.

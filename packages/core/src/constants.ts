@@ -23,10 +23,11 @@ export const BLOCKS_RPC_PREFIX = '/aws-blocks/api';
  *
  * True for {@link BLOCKS_RPC_PREFIX} itself (the back-compat body-addressed
  * endpoint) and for every per-namespace path beneath it
- * (`/aws-blocks/api/{namespace}`). The whole subtree is RPC: dispatch resolves
- * the namespace from the path (preferred) or the JSON-RPC body (fallback), so a
- * caller matching against it must treat the prefix and its descendants
- * identically — e.g. the handler skips RawRoute matching for the entire subtree.
+ * (`/aws-blocks/api/{namespace}`). The whole subtree is RPC: dispatch takes the
+ * namespace from the JSON-RPC body, and a per-namespace path must name the same
+ * one (see `parseRpcRequest`), so a caller matching against it must treat the
+ * prefix and its descendants identically — e.g. the handler skips RawRoute
+ * matching for the entire subtree.
  *
  * @param pathname - The request path, without query string.
  */
@@ -40,10 +41,11 @@ export function isRpcPath(pathname: string): boolean {
  *
  * The typed client POSTs to `/aws-blocks/api/{namespace}` so a gateway can route
  * each namespace to the compute that hosts it; this reads that `{namespace}`
- * segment back out on the server. Only the first segment after the prefix is the
+ * segment back out on the server, where it is checked against the body's
+ * `namespace.method` prefix. Only the first segment after the prefix is the
  * namespace — anything deeper is ignored. Returns `undefined` for the bare
- * `/aws-blocks/api` path (and a trailing-slash-only variant), where the caller
- * must fall back to the body's `namespace.method` prefix for back-compat.
+ * `/aws-blocks/api` path (and a trailing-slash-only variant), where the body's
+ * prefix alone names the namespace.
  *
  * The segment is percent-decoded defensively (matching RawRoute param handling),
  * falling back to the raw value on malformed encoding.

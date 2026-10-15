@@ -3,11 +3,12 @@
 
 /**
  * Unit tests for the stack-level shared REST API gateway. Exercises
- * `createSharedGateway` directly with stub computes + presets, pinning the
- * single-API shape, the catch-all resource tree → default-compute integration,
- * the multi-compute per-namespace fan-out, stage throttling (stack-wide and
- * per-namespace), optional access logging (with the account-level CloudWatch
- * role), and the `apiUrl` shape.
+ * `createSharedGateway` and `resolveNamespaceRoutes` directly with stub computes
+ * + presets, pinning the single-API shape, the catch-all resource tree →
+ * default-compute integration, the multi-compute per-namespace fan-out (keyed by
+ * export name, one API-scoped invoke permission per function), stage throttling,
+ * optional access logging (with the account-level CloudWatch role), and the
+ * `apiUrl` shape.
  */
 
 import assert from 'node:assert';
@@ -20,9 +21,8 @@ import type { Construct } from 'constructs';
 import { ApiNamespace } from '../api.js';
 import { BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
-import { getComputes } from './compute/compute-registry.js';
 import { Scope } from './index.js';
-import { createSharedGateway } from './shared-gateway.js';
+import { createSharedGateway, resolveNamespaceRoutes } from './shared-gateway.js';
 
 before(() => {
 	process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --conditions=cdk`;
@@ -30,20 +30,23 @@ before(() => {
 
 // Minimal stand-in for a real HTTP compute (e.g. LambdaCompute, which core's own
 // tests can't depend on): a Compute that owns a function and exposes it via
-// apiHandler(), so the gateway has something to integrate. The `scope as never`
-// cast is test plumbing — a plain cdk.Stack isn't a ScopeParent, but Compute only
-// needs it as a construct-tree parent here (it never reads root-derived state).
+// apiHandler(), so the gateway has something to integrate — or, with
+// `servesApi: false`, a worker-only compute that takes no API traffic. The
+// `scope as never` cast is test plumbing — a plain cdk.Stack isn't a ScopeParent,
+// but Compute only needs it as a construct-tree parent here (it never reads
+// root-derived state).
 class StubCompute extends Compute {
 	constructor(
 		scope: Construct,
 		id: string,
 		readonly fn: IFunction,
+		private readonly servesApi = true,
 	) {
 		super(id, { parent: scope as never });
 	}
 
-	override apiHandler(): IFunction {
-		return this.fn;
+	override apiHandler(): IFunction | undefined {
+		return this.servesApi ? this.fn : undefined;
 	}
 
 	setEnv(): void {}
@@ -75,11 +78,17 @@ function setup(id: string) {
 	return { stack, fn, compute };
 }
 
-/** Assign `name` to `compute` through the internal `_compute` seam and record it via a real ApiNamespace. */
-function assignNamespace(stack: cdk.Stack, compute: Compute, name: string): void {
-	const apiScope = new Scope(`${name}-scope`, { parent: stack as never });
+let scopeCount = 0;
+/**
+ * A real `ApiNamespace` constructed as `name` in a fresh scope, assigned to
+ * `compute` through the internal `_compute` seam (exactly what the future
+ * compute-assignment surface will do). Returns the namespace object a backend
+ * module would export.
+ */
+function namespaceOn(stack: cdk.Stack, compute: Compute, name: string): object {
+	const apiScope = new Scope(`scope-${scopeCount++}`, { parent: stack as never });
 	apiScope._compute = compute;
-	new ApiNamespace(apiScope, name, () => ({
+	return new ApiNamespace(apiScope, name, () => ({
 		async ping() {
 			return 'pong';
 		},
@@ -127,7 +136,6 @@ describe('createSharedGateway — single shared REST API', () => {
 	test('provisions exactly one REST API with proxy integrations to the function', () => {
 		const { stack, compute } = setup('SharedGwShape');
 		const gw = createSharedGateway(stack, {
-			computes: [compute],
 			defaultCompute: compute,
 			defaults: BlocksPresets.production,
 		});
@@ -145,7 +153,6 @@ describe('createSharedGateway — single shared REST API', () => {
 	test('routes the RPC endpoint, per-namespace RPC paths, RawRoute sub-paths, and every other path', () => {
 		const { stack, compute } = setup('SharedGwTree');
 		createSharedGateway(stack, {
-			computes: [compute],
 			defaultCompute: compute,
 			defaults: BlocksPresets.production,
 		});
@@ -175,7 +182,6 @@ describe('createSharedGateway — single shared REST API', () => {
 		// logical IDs a deployed app's REST API was created with.
 		const { compute } = setup('SharedGwIds');
 		const gw = createSharedGateway(compute, {
-			computes: [compute],
 			defaultCompute: compute,
 			defaults: BlocksPresets.production,
 		});
@@ -185,7 +191,6 @@ describe('createSharedGateway — single shared REST API', () => {
 	test('apiUrl is the stage URL plus the RPC prefix', () => {
 		const { stack, compute } = setup('SharedGwUrl');
 		const gw = createSharedGateway(stack, {
-			computes: [compute],
 			defaultCompute: compute,
 			defaults: BlocksPresets.production,
 		});
@@ -196,46 +201,78 @@ describe('createSharedGateway — single shared REST API', () => {
 });
 
 describe('createSharedGateway — multi-compute fan-out', () => {
-	test('routes a non-default compute namespace to its own function; the rest stays on the default', () => {
+	function fanOut(id: string) {
 		const app = new cdk.App();
-		const stack = new cdk.Stack(app, 'FanOut');
+		const stack = new cdk.Stack(app, id);
 		const defaultCompute = new StubCompute(stack, 'DefaultCompute', makeFn(stack, 'DefaultFn'));
 		const ordersCompute = new StubCompute(stack, 'OrdersCompute', makeFn(stack, 'OrdersFn'));
+		const defaultFnId = stack.getLogicalId(defaultCompute.fn.node.defaultChild as cdk.CfnElement);
+		const ordersFnId = stack.getLogicalId(ordersCompute.fn.node.defaultChild as cdk.CfnElement);
+		return { stack, defaultCompute, ordersCompute, defaultFnId, ordersFnId };
+	}
 
-		// Assign a namespace to the second compute via the internal `_compute` seam
-		// (exactly what the future compute-assignment surface will do); the real
-		// recordNamespaceOnCompute path populates its list.
-		assignNamespace(stack, ordersCompute, 'orders');
-		assert.deepStrictEqual(ordersCompute.namespaces, ['orders'], 'namespace recorded on the second compute');
+	test('routes a non-default namespace by its export name to its own function; the rest stays on the default', () => {
+		const { stack, defaultCompute, ordersCompute, defaultFnId, ordersFnId } = fanOut('FanOut');
+		// Constructed as 'orders', exported as 'shop' — the client calls /aws-blocks/api/shop.
+		const backendModule = { shop: namespaceOn(stack, ordersCompute, 'orders') };
 
 		createSharedGateway(stack, {
-			computes: getComputes(stack),
+			namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute),
 			defaultCompute,
 			defaults: BlocksPresets.production,
 		});
 
 		// Correlate method → integration → function so we PROVE the fan-out.
-		const defaultFnId = stack.getLogicalId(defaultCompute.fn.node.defaultChild as cdk.CfnElement);
-		const ordersFnId = stack.getLogicalId(ordersCompute.fn.node.defaultChild as cdk.CfnElement);
 		const fnIds = [defaultFnId, ordersFnId];
-
-		assert.strictEqual(methodTargetFnId(stack, '/aws-blocks/api/orders', 'ANY', fnIds), ordersFnId);
-		assert.strictEqual(methodTargetFnId(stack, '/aws-blocks/api/orders/{proxy+}', 'ANY', fnIds), ordersFnId);
+		assert.strictEqual(methodTargetFnId(stack, '/aws-blocks/api/shop', 'ANY', fnIds), ordersFnId);
 		// Everything else stays on the default compute.
 		assert.strictEqual(methodTargetFnId(stack, '/aws-blocks/api', 'POST', fnIds), defaultFnId);
 		assert.strictEqual(methodTargetFnId(stack, '/aws-blocks/api/{proxy+}', 'ANY', fnIds), defaultFnId);
 		assert.strictEqual(methodTargetFnId(stack, '/aws-blocks/{proxy+}', 'ANY', fnIds), defaultFnId);
 		assert.strictEqual(methodTargetFnId(stack, '/{proxy+}', 'ANY', fnIds), defaultFnId);
+
+		// Exactly the catch-all tree plus one literal resource: no constructor-name
+		// resource, and no `{proxy+}` subtree (the client POSTs to exactly
+		// /aws-blocks/api/{name}).
+		const paths = Object.values(resourcePaths(Template.fromStack(stack).toJSON().Resources as CfnResources));
+		assert.deepStrictEqual(paths.sort(), [
+			'/aws-blocks',
+			'/aws-blocks/api',
+			'/aws-blocks/api/shop',
+			'/aws-blocks/api/{proxy+}',
+			'/aws-blocks/{proxy+}',
+			'/{proxy+}',
+		]);
+	});
+
+	test('gives each routed function one API-scoped invoke permission, however many namespaces it hosts', () => {
+		const { stack, defaultCompute, ordersCompute, ordersFnId } = fanOut('FanOutPermission');
+		const backendModule = {
+			orders: namespaceOn(stack, ordersCompute, 'orders'),
+			invoices: namespaceOn(stack, ordersCompute, 'invoices'),
+			refunds: namespaceOn(stack, ordersCompute, 'refunds'),
+		};
+
+		createSharedGateway(stack, {
+			namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute),
+			defaultCompute,
+			defaults: BlocksPresets.production,
+		});
+
+		// CDK's default is two statements (stage + test-invoke) per method, which would
+		// grow the function's 20 KB resource policy with every namespace.
+		const ordersPermissions = Object.values(Template.fromStack(stack).findResources('AWS::Lambda::Permission')).filter(
+			(p) => JSON.stringify(p.Properties.FunctionName).includes(ordersFnId),
+		);
+		assert.strictEqual(ordersPermissions.length, 1, 'one API-scoped permission, not one per method');
+		assert.match(JSON.stringify(ordersPermissions[0].Properties.SourceArn), /\/\*\/\*\/\*/);
 	});
 
 	test('a compute hosting no namespace contributes no resources', () => {
-		const app = new cdk.App();
-		const stack = new cdk.Stack(app, 'FanOutIdle');
-		const defaultCompute = new StubCompute(stack, 'DefaultCompute', makeFn(stack, 'DefaultFn'));
-		new StubCompute(stack, 'IdleCompute', makeFn(stack, 'IdleFn'));
+		const { stack, defaultCompute } = fanOut('FanOutIdle');
 
 		createSharedGateway(stack, {
-			computes: getComputes(stack),
+			namespaceRoutes: resolveNamespaceRoutes({}, defaultCompute),
 			defaultCompute,
 			defaults: BlocksPresets.production,
 		});
@@ -243,13 +280,106 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 		const resources = Template.fromStack(stack).toJSON().Resources as CfnResources;
 		assert.strictEqual(Object.keys(resourcePaths(resources)).length, 5, 'only the catch-all tree');
 	});
+
+	test('rejects a namespace on a compute that accepts no API traffic', () => {
+		const { stack, defaultCompute } = fanOut('FanOutWorker');
+		const workerCompute = new StubCompute(stack, 'WorkerCompute', makeFn(stack, 'WorkerFn'), false);
+		const backendModule = { jobs: namespaceOn(stack, workerCompute, 'jobs') };
+
+		assert.throws(
+			() =>
+				createSharedGateway(stack, {
+					namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute),
+					defaultCompute,
+					defaults: BlocksPresets.production,
+				}),
+			/Compute 'WorkerCompute' hosts API namespaces \(jobs\) but accepts no API traffic/,
+		);
+	});
+
+	test('rejects an export name API Gateway cannot use as a path segment', () => {
+		const { stack, defaultCompute, ordersCompute } = fanOut('FanOutBadName');
+		const backendModule = { café: namespaceOn(stack, ordersCompute, 'cafe') };
+
+		assert.throws(
+			() =>
+				createSharedGateway(stack, {
+					namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute),
+					defaultCompute,
+					defaults: BlocksPresets.production,
+				}),
+			/API namespace export 'café' can't be routed to compute 'OrdersCompute'/,
+		);
+	});
+});
+
+describe('resolveNamespaceRoutes', () => {
+	function computes(id: string) {
+		const stack = new cdk.Stack(new cdk.App(), id);
+		const defaultCompute = new StubCompute(stack, 'DefaultCompute', makeFn(stack, 'DefaultFn'));
+		const ordersCompute = new StubCompute(stack, 'OrdersCompute', makeFn(stack, 'OrdersFn'));
+		return { stack, defaultCompute, ordersCompute };
+	}
+
+	test('keys on the export name, not the ApiNamespace constructor name', () => {
+		const { stack, defaultCompute, ordersCompute } = computes('RoutesExportName');
+		// Like `export const authApi = auth.createApi()`, constructed as 'auth'.
+		const routes = resolveNamespaceRoutes({ authApi: namespaceOn(stack, ordersCompute, 'auth') }, defaultCompute);
+		assert.deepStrictEqual([...routes], [[ordersCompute, ['authApi']]]);
+	});
+
+	test('routes a namespace exported under several names under each', () => {
+		const { stack, defaultCompute, ordersCompute } = computes('RoutesReExport');
+		const orders = namespaceOn(stack, ordersCompute, 'orders');
+		const routes = resolveNamespaceRoutes({ orders, shop: orders }, defaultCompute);
+		assert.deepStrictEqual(routes.get(ordersCompute), ['orders', 'shop']);
+	});
+
+	// An unassigned namespace (no `_compute` up its scope chain) resolves to the
+	// default compute too; that needs a real Blocks root, so it is covered by the
+	// create()-level test in blocks-stack.test.ts.
+	test('skips namespaces on the default compute', () => {
+		const { stack, defaultCompute } = computes('RoutesDefault');
+		const routes = resolveNamespaceRoutes({ api: namespaceOn(stack, defaultCompute, 'api') }, defaultCompute);
+		assert.strictEqual(routes.size, 0);
+	});
+
+	test('skips plain exports, private exports, and unexported namespaces', () => {
+		const { stack, defaultCompute, ordersCompute } = computes('RoutesSkip');
+		namespaceOn(stack, ordersCompute, 'unexported');
+		const routes = resolveNamespaceRoutes(
+			{
+				plainFn: () => ({ async ping() {} }),
+				plainObject: { async ping() {} },
+				_private: namespaceOn(stack, ordersCompute, 'private'),
+			},
+			defaultCompute,
+		);
+		assert.strictEqual(routes.size, 0);
+	});
+
+	test('inherits the compute from an ancestor scope', () => {
+		const { stack, defaultCompute, ordersCompute } = computes('RoutesInherit');
+		const parent = new Scope('parent', { parent: stack as never });
+		parent._compute = ordersCompute;
+		const child = new Scope('child', { parent });
+		const orders = new ApiNamespace(child, 'orders', () => ({ async ping() {} }));
+		assert.deepStrictEqual(resolveNamespaceRoutes({ orders }, defaultCompute).get(ordersCompute), ['orders']);
+	});
+
+	test('resolves the compute when called, not when the namespace was constructed', () => {
+		const { stack, defaultCompute, ordersCompute } = computes('RoutesLate');
+		const scope = new Scope('late', { parent: stack as never });
+		const orders = new ApiNamespace(scope, 'orders', () => ({ async ping() {} }));
+		scope._compute = ordersCompute; // assigned after the namespace exists
+		assert.deepStrictEqual(resolveNamespaceRoutes({ orders }, defaultCompute).get(ordersCompute), ['orders']);
+	});
 });
 
 describe('createSharedGateway — stage throttling (defaults.throttling)', () => {
 	test('production carries the 1000/2000 rate + burst default', () => {
 		const { stack, compute } = setup('SharedGwThrottleProd');
 		createSharedGateway(stack, {
-			computes: [compute],
 			defaultCompute: compute,
 			defaults: BlocksPresets.production,
 		});
@@ -267,7 +397,7 @@ describe('createSharedGateway — stage throttling (defaults.throttling)', () =>
 
 	test('sandbox caps the stage tighter (200/400)', () => {
 		const { stack, compute } = setup('SharedGwThrottleSandbox');
-		createSharedGateway(stack, { computes: [compute], defaultCompute: compute, defaults: BlocksPresets.sandbox });
+		createSharedGateway(stack, { defaultCompute: compute, defaults: BlocksPresets.sandbox });
 		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
 			MethodSettings: Match.arrayWith([
 				Match.objectLike({ ThrottlingRateLimit: 200, ThrottlingBurstLimit: 400 }),
@@ -278,7 +408,6 @@ describe('createSharedGateway — stage throttling (defaults.throttling)', () =>
 	test('a per-stack throttling override wins over the preset', () => {
 		const { stack, compute } = setup('SharedGwThrottleOverride');
 		createSharedGateway(stack, {
-			computes: [compute],
 			defaultCompute: compute,
 			defaults: { ...BlocksPresets.production, throttling: { rateLimit: 50, burstLimit: 75 } },
 		});
@@ -294,7 +423,7 @@ describe('createSharedGateway — stage access logging (defaults.accessLogging)'
 
 	test('opt-in enables JSON access logging + the account CloudWatch role', () => {
 		const { stack, compute } = setup('SharedGwAccessLogProd');
-		createSharedGateway(stack, { computes: [compute], defaultCompute: compute, defaults: withAccessLogging });
+		createSharedGateway(stack, { defaultCompute: compute, defaults: withAccessLogging });
 		const template = Template.fromStack(stack);
 		// The account-level CloudWatch role is provisioned exactly once.
 		template.resourceCountIs('AWS::ApiGateway::Account', 1);
@@ -305,7 +434,7 @@ describe('createSharedGateway — stage access logging (defaults.accessLogging)'
 
 	test('the stage depends on the account so a clean-account first deploy succeeds', () => {
 		const { stack, compute } = setup('SharedGwAccessLogDependsOn');
-		createSharedGateway(stack, { computes: [compute], defaultCompute: compute, defaults: withAccessLogging });
+		createSharedGateway(stack, { defaultCompute: compute, defaults: withAccessLogging });
 		const template = Template.fromStack(stack);
 		const [accountId] = Object.keys(template.findResources('AWS::ApiGateway::Account'));
 		const [stage] = Object.values(template.findResources('AWS::ApiGateway::Stage'));
@@ -317,14 +446,13 @@ describe('createSharedGateway — stage access logging (defaults.accessLogging)'
 
 	test('the production access-log group is RETAINed (audit trail survives teardown)', () => {
 		const { stack, compute } = setup('SharedGwAccessLogRetain');
-		createSharedGateway(stack, { computes: [compute], defaultCompute: compute, defaults: withAccessLogging });
+		createSharedGateway(stack, { defaultCompute: compute, defaults: withAccessLogging });
 		Template.fromStack(stack).hasResource('AWS::Logs::LogGroup', { DeletionPolicy: 'Retain' });
 	});
 
 	test('off by default (production preset) — no stage AccessLogSetting, no account role', () => {
 		const { stack, compute } = setup('SharedGwAccessLogDefaultOff');
 		createSharedGateway(stack, {
-			computes: [compute],
 			defaultCompute: compute,
 			defaults: BlocksPresets.production,
 		});
@@ -335,7 +463,7 @@ describe('createSharedGateway — stage access logging (defaults.accessLogging)'
 
 	test('sandbox disables access logging (no stage AccessLogSetting, no account role)', () => {
 		const { stack, compute } = setup('SharedGwAccessLogSandbox');
-		createSharedGateway(stack, { computes: [compute], defaultCompute: compute, defaults: BlocksPresets.sandbox });
+		createSharedGateway(stack, { defaultCompute: compute, defaults: BlocksPresets.sandbox });
 		const template = Template.fromStack(stack);
 		template.resourceCountIs('AWS::ApiGateway::Account', 0);
 		template.hasResourceProperties('AWS::ApiGateway::Stage', { AccessLogSetting: Match.absent() });

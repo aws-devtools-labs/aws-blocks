@@ -31,7 +31,7 @@ curl -o /dev/null -w '%{http_code}\n' http://localhost:3000/config.json
 
 The typed client (`import { api } from 'aws-blocks'`) handles all RPC automatically. This section is for low-level troubleshooting only.
 
-**Format:** JSON-RPC 2.0 — all namespaces share a single `POST` endpoint.
+**Format:** JSON-RPC 2.0 — every namespace is served at `POST /aws-blocks/api`. (The typed client posts to `/aws-blocks/api/<namespace>`, which works too; the namespace in the path must match the one in `method`.)
 
 ```bash
 # "Is it alive?" check:
@@ -75,7 +75,8 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| 404 on `/api/...` or `/authApi/...` | Wrong URL — all calls go to one endpoint | Use `POST /aws-blocks/api` with method in the body |
+| 404 on `/api/...` or `/authApi/...` | Wrong URL — every call goes under `/aws-blocks/api` | Use `POST /aws-blocks/api` with method in the body |
+| `-32600` `Invalid Request: the path addresses namespace "…" but method "…"` | The namespace after `/aws-blocks/api/` differs from the one in `method` | Use the same export name in both, or post to the bare `/aws-blocks/api` |
 | HTTP 200 but `{"error":...}` in body | Normal JSON-RPC error response | Read `error.message` — not a routing problem |
 | `API 'foo' not found` | Namespace doesn't match any export name | Check your `export const` names in `aws-blocks/index.ts` |
 | `config.json` not found | Server not started or not deployed yet | Run `npm run dev` or `npm run sandbox` first |

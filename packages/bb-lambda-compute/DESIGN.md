@@ -50,9 +50,10 @@ returns `fn`, and the stack-level **shared REST API** (built by core in
   - the root gets a catch-all proxy so all other paths reach the function.
   - **Multi-compute** — those resources all integrate the **default** compute's
     function. A **non-default** `LambdaCompute` that hosts namespaces gets its
-    own integration plus literal `/aws-blocks/api/{namespace}` (ANY) and
-    `{proxy+}` subtree resources for each namespace it hosts
-    (`Compute.namespaces`); a compute hosting no namespace gets no resource.
+    own integration plus a literal `/aws-blocks/api/{namespace}` (ANY) resource
+    for each namespace it hosts, keyed by the namespace's **export** name (what
+    the client calls), and a single API-scoped invoke permission however many
+    namespaces that is; a compute hosting no namespace gets no resource.
   - **Throttling** — the stage's method throttle comes from `defaults.throttling`
     (sandbox 200/400, production 1000/2000).
   - **Access logging** — when `defaults.accessLogging` is true (opt-in; off in
@@ -242,9 +243,9 @@ supplies a concrete factory through a normal `import`.
    `this.compute` in its constructor (during that import) resolves to it. That
    call runs `new LambdaCompute(root, 'DefaultCompute')`, provisioning the
    function. After the backend import, `create()` builds the single shared REST
-   API in the default compute's scope from every registered compute's
-   `apiHandler()` — catch-all resources to the default compute, per-namespace
-   resources to the others.
+   API in the default compute's scope — catch-all resources to the default
+   compute's `apiHandler()`, and per-namespace resources (by export name, read
+   from the imported backend module) to the other computes'.
 4. `Scope.compute` and the delegating `handler` accessor read from
    `_defaultCompute`; `gateway` / `apiUrl` read from the shared gateway.
 

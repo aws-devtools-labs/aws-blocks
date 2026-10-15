@@ -249,6 +249,19 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     assert.strictEqual(payload.result, 'pong');
     assert.strictEqual(payload.id, 7);
 
+    // A path that names a different namespace than the body is rejected — the
+    // same check the Lambda handler applies, so local dev can't drift from it.
+    const mismatch = await fetch(nsUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'otherApi.ping', params: [], id: 8 }),
+    });
+    assert.strictEqual(mismatch.status, 200);
+    const mismatchBody = await mismatch.json() as { error?: { code?: number; data?: { name?: string } }; id?: unknown };
+    assert.strictEqual(mismatchBody.error?.code, -32600);
+    assert.strictEqual(mismatchBody.error?.data?.name, 'InvalidRequest');
+    assert.strictEqual(mismatchBody.id, 8);
+
     // A GET on that path gets the usage hint pointing at the path itself.
     const hint = await fetch(nsUrl, { method: 'GET' });
     assert.strictEqual(hint.status, 404);

@@ -10,7 +10,7 @@ import { createConnection, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
-import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, CLIENT_USER_AGENT_HEADER, isRpcPath, rpcNamespaceFromPath } from '../constants.js';
+import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, CLIENT_USER_AGENT_HEADER, isRpcPath } from '../constants.js';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
 import { CORS_MAX_AGE } from '../cors.js';
@@ -1466,7 +1466,8 @@ function handleApiRequest(
         }
         console.log('[rpc-in]', inLog.length > 800 ? inLog.slice(0, 800) + '…' : inLog);
       }
-      const parsed = parseRpcRequest(body);
+      // Same path/body namespace check as the Lambda handler (see parseRpcRequest).
+      const parsed = parseRpcRequest(body, { pathname: url.pathname });
 
       if (!parsed.ok) {
         if (!process.env.BLOCKS_DEV_QUIET) console.log('[rpc-out parse-error]', parsed.response);
@@ -1475,11 +1476,7 @@ function handleApiRequest(
         return;
       }
 
-      const { apiNamespace: bodyNamespace, method: rpcMethod, args, id: rpcId } = parsed.request;
-      // Prefer the namespace addressed in the path (`/aws-blocks/api/{ns}`) — the
-      // same resolution the Lambda handler uses — and fall back to the body's
-      // `namespace.method` prefix for back-compat.
-      const apiNamespace = rpcNamespaceFromPath(url.pathname) ?? bodyNamespace;
+      const { apiNamespace, method: rpcMethod, args, id: rpcId } = parsed.request;
       if (!process.env.BLOCKS_DEV_QUIET) {
         // redactToJson handles circulars and serialization failures itself.
         console.log('[rpc-call]', `${apiNamespace}.${rpcMethod}`, redactToJson(args));

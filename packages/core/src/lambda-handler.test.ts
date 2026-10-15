@@ -290,7 +290,7 @@ describe('createLambdaHandler — named params (JSON-RPC 2.0 §4.2)', () => {
 // ── per-namespace RPC path dispatch ──────────────────────────────────────────
 
 describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
-  it('dispatches a call sent to /aws-blocks/api/{namespace} using the path namespace', async () => {
+  it('dispatches a call sent to /aws-blocks/api/{namespace}', async () => {
     const backend = {
       reports: (_ctx: BlocksContext) => ({
         async generate(id: string) { return { id, done: true }; },
@@ -324,13 +324,14 @@ describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
     assert.deepStrictEqual(body.result, { msg: 'hi' });
   });
 
-  it('path namespace takes precedence over the body prefix', async () => {
-    // The path addresses `reports`; the body still carries a `<ns>.<method>`
-    // prefix (here a stale `api.`), but the handler dispatches on the path.
+  it('rejects a path namespace that does not match the body prefix', async () => {
+    // The path addresses `reports` but the body calls `api.generate`. Neither is
+    // silently preferred: dispatching either one would run code the caller didn't
+    // address on one side, so the request is an Invalid Request.
+    let called = false;
     const backend = {
-      reports: (_ctx: BlocksContext) => ({
-        async generate() { return 'from-reports'; },
-      }),
+      reports: (_ctx: BlocksContext) => ({ async generate() { called = true; return 'from-reports'; } }),
+      api: (_ctx: BlocksContext) => ({ async generate() { called = true; return 'from-api'; } }),
     };
 
     const result = await invoke(backend, makeEvent({
@@ -340,7 +341,11 @@ describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
 
     assert.strictEqual(result.statusCode, 200);
     const body = JSON.parse(result.body);
-    assert.strictEqual(body.result, 'from-reports');
+    assert.strictEqual(body.error?.code, -32600);
+    assert.strictEqual(body.error?.data?.name, 'InvalidRequest');
+    assert.match(body.error?.message, /path addresses namespace "reports" but method "api\.generate"/);
+    assert.strictEqual(body.id, 2);
+    assert.strictEqual(called, false, 'neither namespace is dispatched');
   });
 });
 

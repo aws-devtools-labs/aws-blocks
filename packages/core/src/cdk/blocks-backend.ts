@@ -23,7 +23,7 @@ import {
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
-import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
+import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
@@ -221,10 +221,14 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  * Call once, after the backend module has imported and every compute exists.
  * The gateway's catch-all resources front the default compute's function (its
  * `apiHandler()`), and every other compute's namespaces are routed to that
- * compute's function. It is built in the default compute's construct scope, so
+ * compute's function — by export name, read from `backendModule` (see
+ * `resolveNamespaceRoutes`). It is built in the default compute's construct scope, so
  * its logical IDs match the per-compute gateway it replaced — existing
  * deployments keep their REST API and `execute-api` URL. The default compute is always a Lambda compute today, so
  * `apiHandler()` is defined; a worker-only default fails with a clear error.
+ *
+ * @param backendModule the imported backend module (`backendCDKPath`) — the
+ *   exports the typed client calls and the runtime dispatches against
  *
  * Also schedules the API front door now that its origin exists. That decision is
  * deferred to synth via an aspect: a `Hosting` built after `create()` resolves
@@ -235,7 +239,7 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  *
  * @internal
  */
-export function buildSharedGateway(owner: SharedGatewayOwner): SharedGateway {
+export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: object): SharedGateway {
 	const defaultCompute = owner._defaultCompute;
 	if (!defaultCompute) {
 		throw new Error('Default compute not initialized — create() must build it before the shared gateway.');
@@ -243,7 +247,8 @@ export function buildSharedGateway(owner: SharedGatewayOwner): SharedGateway {
 	// createSharedGateway guards that the default compute exposes an apiHandler().
 	const cloudfront = resolveApiFrontDoor(owner._apiFrontDoorTier) === 'cloudfront';
 	const sharedGateway = createSharedGateway(defaultCompute, {
-		computes: getComputes(owner),
+		// Keyed by export name, resolved from the imported backend module.
+		namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute),
 		defaultCompute,
 		defaults: owner.defaults,
 		regionalEndpoint: cloudfront,
@@ -464,7 +469,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// Build the single shared REST API gateway now that the backend module has
 		// imported and every compute exists, and schedule the API front door
 		// (see buildSharedGateway).
-		buildSharedGateway(backend);
+		buildSharedGateway(backend, mod);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));
