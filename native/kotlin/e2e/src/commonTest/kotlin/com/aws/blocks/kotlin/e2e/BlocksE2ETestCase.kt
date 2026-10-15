@@ -10,8 +10,9 @@ private val blocksUrl: String =
         ?: "http://localhost:3001/aws-blocks/api"
 
 /**
- * One instance for the whole suite, so the tests run on a single HTTP client rather than one per
- * API. It is never closed: the engine goes away with the test process.
+ * One instance for the whole suite, so every RPC call runs on a single HTTP client rather than one
+ * per API. File handles and realtime channels still open their own. It is never closed: the engine
+ * goes away with the test process.
  */
 private val blocks = Blocks(BlocksServer(name = "e2e", url = blocksUrl))
 

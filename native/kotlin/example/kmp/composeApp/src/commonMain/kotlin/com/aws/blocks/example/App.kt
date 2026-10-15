@@ -28,16 +28,17 @@ import blocks.testapp.invoke
 
 @Composable
 fun App() {
-    // One entry point for the whole app: both APIs below run on the HTTP client it owns. The
-    // zero-argument form reaches the server the spec declares, so switching backends is a
-    // regeneration rather than an edit here. All three are remembered so that each recomposition
-    // hands the screens the same instances.
+    // Every RPC call below runs on the HTTP client this owns. The zero-argument form reaches the
+    // server the spec declares, so switching backends is a regeneration rather than an edit here.
+    // It is remembered because the DisposableEffect closes the engine it owns, and `api` because
+    // the screens take it as a parameter and a new instance on each recomposition would defeat
+    // skipping.
     val blocks = remember { Blocks() }
-    val auth = remember { blocks.authApi }
     val api = remember { blocks.api }
     DisposableEffect(blocks) {
         onDispose { blocks.close() }
     }
+    val auth = blocks.authApi
     var selectedTab by remember { mutableStateOf(Tab.Auth) }
 
     // The client keeps sign-in state in memory, so it is owned here rather than by the Auth

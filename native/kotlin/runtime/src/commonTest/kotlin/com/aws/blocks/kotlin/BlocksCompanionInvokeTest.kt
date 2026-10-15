@@ -15,7 +15,7 @@ class BlocksCompanionInvokeTest {
     @Test
     fun `a companion accessor can supply the server so callers need no argument`() {
         Blocks().use { blocks ->
-            blocks.server.name shouldBe "generated"
+            blocks.client().server.name shouldBe "generated"
         }
     }
 }

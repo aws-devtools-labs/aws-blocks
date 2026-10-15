@@ -66,4 +66,4 @@ public class Posts(
 }
 
 public val Blocks.posts: Posts
-  get() = Posts(client)
+  get() = Posts(client())

@@ -42,4 +42,4 @@ public class Users(
 }
 
 public val Blocks.users: Users
-  get() = Users(client)
+  get() = Users(client())

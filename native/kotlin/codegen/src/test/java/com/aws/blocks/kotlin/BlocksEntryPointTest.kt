@@ -1,9 +1,11 @@
 package com.aws.blocks.kotlin
 
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
+import com.aws.blocks.kotlin.generator.GeneratorResult
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
 import com.aws.blocks.kotlin.parser.OpenRpcParser
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
@@ -15,39 +17,50 @@ import io.kotest.matchers.string.shouldNotContain
 private fun spec(
     endpoint: String? = null,
     servers: String? = null,
+    namespaces: List<String> = listOf("todos", "authCognito"),
+    withSharedType: Boolean = false,
 ): String {
     val endpointLine = endpoint?.let { """"x-blocks-endpoint": "$it",""" } ?: ""
     val serversLine = servers?.let { """"servers": $it,""" } ?: ""
+    val componentsLine = if (withSharedType) {
+        """"components": { "schemas": { "Shared": { "type": "object",""" +
+            """ "properties": { "id": { "type": "string" } }, "required": ["id"] } } },"""
+    } else {
+        ""
+    }
+    val resultSchema = if (withSharedType) {
+        """{ "${'$'}ref": "#/components/schemas/Shared" }"""
+    } else {
+        """{ "type": "string" }"""
+    }
+    val methods = namespaces.joinToString(",") { ns ->
+        """{ "name": "$ns.list", "params": [],""" +
+            """ "result": { "name": "ListResult", "schema": $resultSchema } }"""
+    }
     return """
         {
           "openrpc": "1.3.2",
           "info": { "title": "test", "version": "1.0.0" },
           $endpointLine
           $serversLine
-          "methods": [
-            {
-              "name": "todos.list",
-              "params": [],
-              "result": { "name": "ListResult", "schema": { "type": "string" } }
-            },
-            {
-              "name": "authCognito.currentUser",
-              "params": [],
-              "result": { "name": "CurrentUserResult", "schema": { "type": "string" } }
-            }
-          ]
+          $componentsLine
+          "methods": [ $methods ]
         }
     """.trimIndent()
+}
+
+private fun result(
+    specJson: String,
+    internalVisibility: Boolean = false,
+): GeneratorResult {
+    val generator = KotlinCodeGenerator(packageName = "test.generated", internalVisibility = internalVisibility)
+    return generator.generate(CodegenModelBuilder().build(OpenRpcParser.parse(specJson)))
 }
 
 private fun generate(
     specJson: String,
     internalVisibility: Boolean = false,
-): String {
-    val generator = KotlinCodeGenerator(packageName = "test.generated", internalVisibility = internalVisibility)
-    val model = CodegenModelBuilder().build(OpenRpcParser.parse(specJson))
-    return generator.generate(model).files.joinToString("\n") { it.toString() }
-}
+): String = result(specJson, internalVisibility).files.joinToString("\n") { it.toString() }
 
 class BlocksEntryPointTest : FunSpec({
 
@@ -62,8 +75,8 @@ class BlocksEntryPointTest : FunSpec({
     test("each namespace gets one extension property on the entry point") {
         val source = generate(spec())
 
-        source shouldContain "public val Blocks.todos: Todos\n  get() = Todos(client)"
-        source shouldContain "public val Blocks.authCognito: AuthCognito\n  get() = AuthCognito(client)"
+        source shouldContain "public val Blocks.todos: Todos\n  get() = Todos(client())"
+        source shouldContain "public val Blocks.authCognito: AuthCognito\n  get() = AuthCognito(client())"
     }
 
     test("an endpoint suffix is baked into the generated server constants") {
@@ -87,12 +100,18 @@ class BlocksEntryPointTest : FunSpec({
         source shouldContain """BlocksServer(name = "local", url = "http://localhost:3001/aws-blocks/api")"""
     }
 
-    test("without an endpoint the server url is the one the spec declares") {
+    test("the default server carries the rpc path when the spec declares no endpoint") {
+        val source = generate(spec())
+
+        source shouldContain """BlocksServer(name = "local", url = "http://localhost:3001/aws-blocks/api")"""
+    }
+
+    test("a declared server url is used as given") {
         val source = generate(
-            spec(servers = """[{ "name": "local", "url": "http://localhost:3001" }]"""),
+            spec(servers = """[{ "name": "staging", "url": "https://staging.example.com/rpc" }]"""),
         )
 
-        source shouldContain """BlocksServer(name = "local", url = "http://localhost:3001")"""
+        source shouldContain """BlocksServer(name = "staging", url = "https://staging.example.com/rpc")"""
     }
 
     test("a zero-argument accessor is generated for the spec's default server") {
@@ -102,13 +121,35 @@ class BlocksEntryPointTest : FunSpec({
             "public operator fun Blocks.Companion.invoke(): Blocks = Blocks(Servers.local)"
     }
 
-    test("the default server is the spec's first one rather than one named local") {
-        val source = generate(
-            spec(servers = """[{ "name": "sandbox", "url": "https://api.example.com/prod" }]"""),
-        )
+    test("the default server is the first the spec declares, whatever it is named") {
+        val twoServers = """
+            [
+              { "name": "sandbox", "url": "https://api.example.com/prod" },
+              { "name": "local", "url": "http://localhost:3001" }
+            ]
+        """.trimIndent()
+
+        val source = generate(spec(endpoint = "/aws-blocks/api", servers = twoServers))
 
         source shouldContain
             "public operator fun Blocks.Companion.invoke(): Blocks = Blocks(Servers.sandbox)"
+        // Every declared server keeps its own suffixed URL, not just the default.
+        source shouldContain """url = "https://api.example.com/prod/aws-blocks/api""""
+        source shouldContain """url = "http://localhost:3001/aws-blocks/api""""
+    }
+
+    test("reversing the declared order moves the default with it") {
+        val twoServers = """
+            [
+              { "name": "local", "url": "http://localhost:3001" },
+              { "name": "sandbox", "url": "https://api.example.com/prod" }
+            ]
+        """.trimIndent()
+
+        val source = generate(spec(servers = twoServers))
+
+        source shouldContain
+            "public operator fun Blocks.Companion.invoke(): Blocks = Blocks(Servers.local)"
     }
 
     test("internal visibility covers the generated accessors too") {
@@ -118,5 +159,34 @@ class BlocksEntryPointTest : FunSpec({
         source shouldContain "internal operator fun Blocks.Companion.invoke(): Blocks"
         source.contains("public val Blocks.") shouldBe false
         source.contains("public operator fun") shouldBe false
+    }
+
+    listOf("types" to "TypesApi", "serializers" to "SerializersApi", "servers" to "ServersApi")
+        .forEach { (namespace, expected) ->
+            test("a namespace named $namespace is renamed so it cannot overwrite a generated file") {
+                val generated = result(
+                    spec(namespaces = listOf(namespace, "todos"), withSharedType = true),
+                )
+                val names = generated.files.map { it.name }
+
+                names shouldContain expected
+                names shouldBe names.distinct()
+                generated.warnings.single() shouldContain namespace
+            }
+        }
+
+    test("a renamed namespace keeps a property name that matches its class") {
+        val source = generate(spec(namespaces = listOf("types"), withSharedType = true))
+
+        source shouldContain "public class TypesApi("
+        source shouldContain "public val Blocks.typesApi: TypesApi\n  get() = TypesApi(client())"
+    }
+
+    test("a namespace that would collide with a renamed one fails rather than overwriting it") {
+        val failure = runCatching {
+            result(spec(namespaces = listOf("types", "typesApi"), withSharedType = true))
+        }.exceptionOrNull()
+
+        failure!!.message!! shouldContain "TypesApi"
     }
 })

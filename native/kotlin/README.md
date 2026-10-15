@@ -70,6 +70,8 @@ On iOS, declare the same `relayTo` scheme in the app's `Info.plist` under `CFBun
 
 ```kotlin
 import com.aws.blocks.kotlin.Blocks
+import com.example.myapp.generated.Api.ListTodos
+import com.example.myapp.generated.Api.UpdateTodo
 import com.example.myapp.generated.Todo
 import com.example.myapp.generated.api
 import com.example.myapp.generated.authApi
@@ -77,22 +79,28 @@ import com.example.myapp.generated.invoke
 
 val blocks = Blocks()
 
-// Create a todo
-val todo: Todo = blocks.api.createTodo(title = "Buy groceries", priority = 1.0)
+suspend fun todos() {
+    // Create a todo
+    val todo: Todo = blocks.api.createTodo(title = "Buy groceries", priority = 1.0)
 
-// List todos with optional sorting
-val todos: List<Todo> = blocks.api.listTodos(sortBy = ListTodos.SortBy.Priority)
+    // List todos with optional sorting
+    val todos: List<Todo> = blocks.api.listTodos(sortBy = ListTodos.SortBy.Priority)
 
-// Update a todo
-blocks.api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = true))
+    // Update a todo
+    blocks.api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = true))
 
-// A second namespace in the same spec
-val user = blocks.authApi.getCurrentUser()
+    // A second namespace in the same spec
+    val authState = blocks.authApi.getAuthState()
+}
 ```
 
 `Blocks()` follows the spec's first server, so regenerating against a different backend leaves the
-call site alone — the `invoke` import is what brings it into scope. Name a server to pin one:
-`Blocks(Servers.sandbox)`. `close()` shuts down the HTTP client the instance owns.
+call site alone — the `invoke` import is what brings it into scope, and without it the compiler
+reports a missing `server` argument. Name a server to pin one: `Blocks(Servers.sandbox)`.
+
+Every RPC call and every OIDC client share the one HTTP engine the instance owns; file handles and
+realtime channels still open their own. `close()` shuts that engine down, after which calls through
+the instance report it rather than failing inside the HTTP client.
 
 When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable result still fails code generation.
 

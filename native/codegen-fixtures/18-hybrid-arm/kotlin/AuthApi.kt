@@ -140,4 +140,4 @@ public class AuthApi(
 }
 
 public val Blocks.authApi: AuthApi
-  get() = AuthApi(client)
+  get() = AuthApi(client())

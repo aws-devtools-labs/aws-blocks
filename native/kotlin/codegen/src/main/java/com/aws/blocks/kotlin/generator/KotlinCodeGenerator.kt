@@ -61,6 +61,15 @@ private val knownTransferableBindings = mapOf(
 
 private val knownTransferableTags: Set<String> = knownTransferableBindings.keys
 
+/**
+ * Class names this generator puts in the target package itself, one file each. A namespace that
+ * would produce one of these is renamed, since same-named files in one package overwrite each
+ * other. Keep in step with the `FileSpec.builder(packageName, ...)` calls below.
+ */
+private val RESERVED_FILE_NAMES = setOf("Types", "Serializers", "Servers")
+
+private const val API_SUFFIX = "Api"
+
 class KotlinCodeGenerator(
     private val packageName: String,
     private val internalVisibility: Boolean = false,
@@ -93,6 +102,30 @@ class KotlinCodeGenerator(
         val files = mutableListOf<FileSpec>()
         val warnings = mutableListOf<String>()
         val serializerRegistry = TransferableSerializerRegistry()
+
+        for (namespace in model.apiNamespaces) {
+            val original = toPascalCase(namespace.name)
+            if (original in RESERVED_FILE_NAMES) {
+                warnings.add(
+                    "The \"${namespace.name}\" namespace would be generated as $original.kt, which " +
+                        "this generator emits itself. Its API is generated as " +
+                        "${apiClassName(namespace)} instead, reached through " +
+                        "blocks.${apiPropertyName(namespace)}."
+                )
+            }
+        }
+
+        // Suffixing can itself collide, e.g. namespaces "types" and "typesApi". One file would
+        // silently replace the other, so refuse instead.
+        model.apiNamespaces
+            .groupBy { apiClassName(it) }
+            .filterValues { it.size > 1 }
+            .forEach { (className, namespaces) ->
+                error(
+                    "Namespaces ${namespaces.joinToString { "\"${it.name}\"" }} would all be " +
+                        "generated as $className. Rename one in the spec."
+                )
+            }
 
         if (relayTo == null &&
             relayToRequirement != RelayToRequirement.NotNeeded &&
@@ -851,6 +884,24 @@ class KotlinCodeGenerator(
             )
             .build()
 
+    // ── API naming ────────────────────────────────────────────────────
+
+    /**
+     * The class and file name for a namespace. A namespace whose name matches one of the files
+     * this generator emits itself takes an `Api` suffix, because two files of the same name in one
+     * package overwrite each other and the loser disappears without an error.
+     */
+    private fun apiClassName(namespace: ApiNamespace): String {
+        val name = toPascalCase(namespace.name)
+        return if (name in RESERVED_FILE_NAMES) name + API_SUFFIX else name
+    }
+
+    /** The accessor name for a namespace, suffixed alongside [apiClassName] so the two match. */
+    private fun apiPropertyName(namespace: ApiNamespace): String {
+        val name = toCamelCase(namespace.name)
+        return if (toPascalCase(namespace.name) in RESERVED_FILE_NAMES) name + API_SUFFIX else name
+    }
+
     // ── Per-API-group file generation ─────────────────────────────────
 
     private fun generateApiGroupFile(
@@ -858,7 +909,7 @@ class KotlinCodeGenerator(
         index: TypeIndex,
         serializerRegistry: TransferableSerializerRegistry,
     ): FileSpec {
-        val className = toPascalCase(group.name)
+        val className = apiClassName(group)
         val builder = FileSpec.builder(packageName, className)
 
         // Add @OptIn(ExperimentalSerializationApi::class) if any operation has discriminated unions
@@ -890,12 +941,12 @@ class KotlinCodeGenerator(
     private fun generateApiAccessor(group: ApiNamespace, className: String): PropertySpec {
         val apiClass = ClassName(packageName, className)
         return PropertySpec
-            .builder(toCamelCase(group.name), apiClass)
+            .builder(apiPropertyName(group), apiClass)
             .addModifiers(apiModifiers)
             .receiver(ClassNames.blocks)
             .getter(
                 FunSpec.getterBuilder()
-                    .addStatement("return %T(client)", apiClass)
+                    .addStatement("return %T(client())", apiClass)
                     .build(),
             )
             .build()

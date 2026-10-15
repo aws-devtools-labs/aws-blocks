@@ -3,37 +3,48 @@ package com.aws.blocks.kotlin
 /**
  * The entry point to a Blocks backend.
  *
- * One instance holds one [BlocksClient], and therefore one HTTP engine and connection pool, for
- * every API generated from the spec. Generated code adds one extension property per API namespace,
- * so a single instance reaches all of them:
+ * One instance holds one [BlocksClient], and therefore one HTTP engine, for every RPC call the
+ * generated APIs make and for the [com.aws.blocks.kotlin.oidc.OidcClient] they hand out. File
+ * handles and realtime channels still open their own. Generated code adds one extension property
+ * per API namespace, so a single instance reaches all of them:
  *
  * ```
- * val blocks = Blocks(Servers.local)
+ * val blocks = Blocks()
  * val todos = blocks.api.listTodos()
- * val user = blocks.authCognito.currentUser()
+ * val state = blocks.authApi.getAuthState()
  * ```
  *
- * Those properties build a thin wrapper over [client] on each access, so holding on to one of them
- * buys nothing. Hold the instance instead, for as long as the backend is in use, and [close] it
- * once it is not.
+ * `Blocks()` comes from generated code and follows the server the spec declares; pass one to
+ * reach a different server from a multi-server spec, as in `Blocks(Servers.sandbox)`.
+ *
+ * Each access to a generated property builds a new wrapper over [client], so keep one where a
+ * stable reference matters — a Compose parameter, say. The instance is what owns the engine, and
+ * what to [close] once the backend is no longer in use.
  */
 class Blocks(
-    val server: BlocksServer,
+    server: BlocksServer,
 ) : AutoCloseable {
 
+    private val client: BlocksClient = BlocksClient(server)
+
     /**
-     * The client every API generated for [server] runs its requests through. Generated extension
-     * properties read it; callers who need to issue a request the spec does not describe can use
-     * it directly.
+     * The client every API generated for this instance runs its requests through, the same one on
+     * every call. Generated extension properties read it; callers who need to issue a request the
+     * spec does not describe can use it directly.
+     *
+     * This is a function rather than a property so that a spec may declare a namespace named
+     * `client` without the generated accessor for it being shadowed.
      */
-    val client: BlocksClient = BlocksClient(server)
+    fun client(): BlocksClient = client
 
     /**
      * Shuts down the HTTP engine this instance owns. Requests issued through any API obtained from
-     * it fail afterwards, so close it only once the backend is no longer in use.
+     * it, and through any OIDC client it handed out, then fail with a
+     * [com.aws.blocks.kotlin.exceptions.BlocksException] naming the closed instance. Closing more
+     * than once does nothing.
      */
     override fun close() {
-        client.httpClient.close()
+        client.close()
     }
 
     /**

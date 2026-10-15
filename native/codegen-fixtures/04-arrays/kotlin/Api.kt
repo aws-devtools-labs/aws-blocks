@@ -34,4 +34,4 @@ public class Api(
 }
 
 public val Blocks.api: Api
-  get() = Api(client)
+  get() = Api(client())
