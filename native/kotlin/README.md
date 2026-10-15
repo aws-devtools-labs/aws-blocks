@@ -53,8 +53,8 @@ awsBlocks {
         custom("staging", "https://staging.example.com")
     }
 
-    // Logical identities from x-blocks-native-packages whose transferable results stay
-    // UnknownTransferable instead of importing the declared type (optional)
+    // Logical identities from x-blocks-native-packages that keep the
+    // UnknownTransferable fallback instead of a declared type (optional)
     excludeNativePackages = setOf("example-iot-native")
 
     // Only needed to use the OIDC client on Android or iOS, where the relay scheme is
@@ -90,7 +90,7 @@ api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = tr
 
 When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable unbound result still fails code generation.
 
-When `x-blocks-native-bindings` binds the tag and its package declares an `android` field, the generated client returns the declared type and hydrates it through `<Type>.fromBlocksDescriptor`, checked against the declared tag first. A nullable bound result returns null for a JSON-null body.
+When a binding declares the tag and its package has an `android` field, the client returns the declared type, hydrated through `<Type>.fromBlocksDescriptor` after the descriptor is checked against the tag. A nullable bound result returns null for a JSON-null body.
 
 ## Gradle Tasks
 
