@@ -28,6 +28,7 @@ import {
 	type ApiFrontDoorOwner,
 	claimApiFrontDoor,
 	publicApiUrl,
+	resolveApiFrontDoor,
 } from './api-front-door.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
@@ -101,7 +102,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	_apiFrontDoorClaimedByHosting?: boolean;
 	/** Public origin of whichever front door ended up fronting the API. @internal */
 	_apiFrontDoorResolvedUrl?: string;
-	/** The `apiFrontDoor` tier this was created with (`undefined` ⇒ default). @internal */
+	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
 
 	/**
@@ -136,7 +137,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	 * deploy-time value works. The stack's `ApiUrl` output is this value.
 	 */
 	get publicApiUrl(): string {
-		return publicApiUrl(this, this._apiFrontDoorTier, () => this.apiUrl);
+		return publicApiUrl(this, () => this.apiUrl);
 	}
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
@@ -167,6 +168,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		this.backendModulePath = props.backendCDKPath;
 		this.defaults = props.defaults;
 		this._vpcOptions = props.defaults.vpc;
+		// Validate and record the tier before the backend module is imported, so an
+		// invalid value fails before any app code runs.
+		this._apiFrontDoorTier = resolveApiFrontDoor(props.apiFrontDoor);
 
 		// Brand as a backend root so getBlocksRoot() can find this by walking the
 		// construct tree (see root-registry.ts). Set before any child Scope/BB is
@@ -221,7 +225,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// Build the single shared REST API gateway now that the backend module has
 		// imported and every compute exists, and schedule the API front door
 		// (see buildSharedGateway).
-		buildSharedGateway(stack, props.apiFrontDoor);
+		buildSharedGateway(stack);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));

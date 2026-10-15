@@ -36,7 +36,7 @@ Amplify template now publishes `publicApiUrl` as `blocks_api_url`.
 
 The default is a constant `'apigateway'` — it is **never** derived from the app's
 shape, so adding or removing Building Blocks never silently changes how the API is
-exposed.
+exposed. Any value other than `'apigateway'` or `'cloudfront'` fails synth.
 
 When an app fronts its frontend with `Hosting`, the API is served from Hosting's
 distribution; under `'cloudfront'` the managed distribution then stands down — one

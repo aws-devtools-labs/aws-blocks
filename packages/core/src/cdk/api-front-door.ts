@@ -42,6 +42,9 @@ import { registerConfig } from './config-registry.js';
 /** Construct id of the managed distribution. */
 const FRONT_DOOR_ID = 'ApiFrontDoor';
 
+/** Every valid `apiFrontDoor` value. */
+const API_FRONT_DOOR_TIERS: readonly ApiFrontDoorTier[] = ['apigateway', 'cloudfront'];
+
 /**
  * CloudFront behavior settings for API traffic.
  *
@@ -79,7 +82,10 @@ export interface ApiFrontDoorOwner {
 	_apiFrontDoorClaimedByHosting?: boolean;
 	/** Public origin of whichever front door ended up fronting the API. */
 	_apiFrontDoorResolvedUrl?: string;
-	/** The `apiFrontDoor` tier the owner was created with (`undefined` ⇒ default). */
+	/**
+	 * The resolved `apiFrontDoor` tier, recorded at construction — before the
+	 * backend module is imported — so a read from inside that module sees it.
+	 */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
 }
 
@@ -139,20 +145,18 @@ export function resolvedApiFrontDoorUrl(owner: Construct & ApiFrontDoorOwner): s
  * claimed the role) + the RPC prefix; otherwise `apiUrl` itself.
  *
  * A `Lazy` because the answer is only settled at synth: the front-door aspect runs
- * after `create()` (and after any `Hosting`) and before tokens resolve. Under
- * `apigateway` a `Hosting` claim does not move it, so adding Hosting never changes
- * the domain a client is bound to.
+ * after `create()` (and after any `Hosting`) and before tokens resolve. The tier is
+ * read when the token resolves too, not when the getter is called, so the value is
+ * the same wherever it is read — including inside the backend module, before
+ * `create()` has built the gateway. Under `apigateway` a `Hosting` claim does not
+ * move it, so adding Hosting never changes the domain a client is bound to.
  *
  * @internal Backs `BlocksStack.publicApiUrl` / `BlocksBackend.publicApiUrl`.
  */
-export function publicApiUrl(
-	owner: Construct & ApiFrontDoorOwner,
-	tier: ApiFrontDoorTier | undefined,
-	apiUrl: () => string,
-): string {
-	const cloudfront = resolveApiFrontDoor(tier) === 'cloudfront';
+export function publicApiUrl(owner: Construct & ApiFrontDoorOwner, apiUrl: () => string): string {
 	return cdk.Lazy.string({
 		produce: () => {
+			const cloudfront = resolveApiFrontDoor(owner._apiFrontDoorTier) === 'cloudfront';
 			const frontDoorUrl = cloudfront ? resolvedApiFrontDoorUrl(owner) : undefined;
 			return frontDoorUrl ? `${frontDoorUrl}${BLOCKS_RPC_PREFIX}` : apiUrl();
 		},
@@ -245,10 +249,18 @@ class ApiFrontDoorAspect implements cdk.IAspect {
  * CloudFront distribution, which would change the endpoint domain and invalidate
  * existing cookies/sessions.
  *
+ * Any other value throws rather than falling back to the default: TypeScript
+ * rejects it, but plain-JS apps and loosely typed callers (e.g. the Amplify
+ * template's `backend: any`) would otherwise silently lose the CloudFront tier.
+ *
  * @internal
  */
 export function resolveApiFrontDoor(apiFrontDoor: ApiFrontDoorTier | undefined): ApiFrontDoorTier {
-	return apiFrontDoor ?? 'apigateway';
+	if (apiFrontDoor === undefined) return 'apigateway';
+	if (!API_FRONT_DOOR_TIERS.includes(apiFrontDoor)) {
+		throw new Error(`apiFrontDoor must be 'apigateway' or 'cloudfront' (got ${JSON.stringify(apiFrontDoor)}).`);
+	}
+	return apiFrontDoor;
 }
 
 /**

@@ -234,10 +234,7 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  *
  * @internal
  */
-export function buildSharedGateway(
-	owner: SharedGatewayOwner,
-	apiFrontDoor: ApiFrontDoorTier | undefined,
-): SharedGateway {
+export function buildSharedGateway(owner: SharedGatewayOwner): SharedGateway {
 	const defaultCompute = owner._defaultCompute;
 	if (!defaultCompute) {
 		throw new Error('Default compute not initialized — create() must build it before the shared gateway.');
@@ -246,14 +243,13 @@ export function buildSharedGateway(
 	if (!defaultApiHandler) {
 		throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
 	}
-	const cloudfront = resolveApiFrontDoor(apiFrontDoor) === 'cloudfront';
+	const cloudfront = resolveApiFrontDoor(owner._apiFrontDoorTier) === 'cloudfront';
 	const sharedGateway = createSharedGateway(defaultCompute, {
 		handler: defaultApiHandler,
 		defaults: owner.defaults,
 		regionalEndpoint: cloudfront,
 	});
 	owner._sharedGateway = sharedGateway;
-	owner._apiFrontDoorTier = apiFrontDoor;
 	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl);
 	return sharedGateway;
 }
@@ -312,7 +308,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	_apiFrontDoorClaimedByHosting?: boolean;
 	/** Public origin of whichever front door ended up fronting the API. @internal */
 	_apiFrontDoorResolvedUrl?: string;
-	/** The `apiFrontDoor` tier this was created with (`undefined` ⇒ default). @internal */
+	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
 
 	/**
@@ -347,7 +343,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	 * deploy-time value works (a `CfnOutput`, Amplify outputs, …).
 	 */
 	get publicApiUrl(): string {
-		return publicApiUrl(this, this._apiFrontDoorTier, () => this.apiUrl);
+		return publicApiUrl(this, () => this.apiUrl);
 	}
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
@@ -408,6 +404,9 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		this.backendHandlerPath = props.backendHandlerPath;
 		this.backendModulePath = props.backendCDKPath;
 		this._vpcOptions = props.defaults.vpc;
+		// Validate and record the tier before the backend module is imported, so an
+		// invalid value fails before any app code runs.
+		this._apiFrontDoorTier = resolveApiFrontDoor(props.apiFrontDoor);
 
 		// Brand as a backend root so getBlocksRoot() finds this by walking the
 		// construct tree — the key that keeps two BlocksBackends in one cdk.Stack
@@ -466,7 +465,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// Build the single shared REST API gateway now that the backend module has
 		// imported and every compute exists, and schedule the API front door
 		// (see buildSharedGateway).
-		buildSharedGateway(backend, props.apiFrontDoor);
+		buildSharedGateway(backend);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));

@@ -25,6 +25,8 @@ import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let handlerPath: string;
 let backendPath: string;
+let earlyReadBackendPath: string;
+let throwingBackendPath: string;
 let tmpDir: string;
 
 before(() => {
@@ -38,6 +40,16 @@ before(() => {
 	writeFileSync(handlerPath, "export const handler = async () => ({ statusCode: 200, body: '{}' });\n");
 	backendPath = join(tmpDir, 'backend.mjs');
 	writeFileSync(backendPath, 'export default () => {};\n');
+	// Reads `publicApiUrl` from inside the backend module — before create() has
+	// built the gateway — and emits it as an `Early` output.
+	earlyReadBackendPath = join(tmpDir, 'backend-early-read.mjs');
+	writeFileSync(
+		earlyReadBackendPath,
+		"import { CfnOutput, Stack } from 'aws-cdk-lib';\n" +
+			"export default (root) => { new CfnOutput(Stack.of(root), 'Early', { value: root.publicApiUrl }); };\n",
+	);
+	throwingBackendPath = join(tmpDir, 'backend-throwing.mjs');
+	writeFileSync(throwingBackendPath, "throw new Error('backend module was imported');\n");
 });
 
 after(() => {
@@ -251,6 +263,17 @@ describe('apiFrontDoor: cloudfront', () => {
 	const restApi = (template: Template) =>
 		Object.values(template.findResources('AWS::ApiGateway::RestApi'))[0] as { Properties: Record<string, unknown> };
 	const configBlob = (template: Template) => JSON.stringify(template.findResources('Custom::CDKBucketDeployment'));
+	// The config JSON is one Lazy, so it lands as a single `Fn::Join` in the config
+	// deployment's `SourceMarkers`. Returns the join part right after `"KEY":"https://`
+	// — for a token value, the token itself.
+	const configValueAfterHttps = (template: Template, key: string): unknown => {
+		const [deployment] = Object.values(template.findResources('Custom::CDKBucketDeployment'));
+		const markers: Record<string, { 'Fn::Join': [string, unknown[]] }> = deployment.Properties.SourceMarkers[0];
+		const [, parts] = Object.values(markers)[0]['Fn::Join'];
+		const i = parts.findIndex((part) => typeof part === 'string' && part.endsWith(`"${key}":"https://`));
+		return i === -1 ? undefined : parts[i + 1];
+	};
+	const domainOf = (distributionId: string) => ({ 'Fn::GetAtt': [distributionId, 'DomainName'] });
 
 	// Renaming the distribution's construct id or moving its scope replaces it: a new
 	// *.cloudfront.net domain, so the public URL moves and users are signed out.
@@ -286,11 +309,67 @@ describe('apiFrontDoor: cloudfront', () => {
 
 	// CloudFront forwards with ALL_VIEWER_EXCEPT_HOST_HEADER, so the runtime only
 	// learns the public origin (e.g. for AuthOIDC's callback URL) from config.
-	test('publishes BLOCKS_PUBLIC_ORIGIN under cloudfront only', async () => {
+	test('publishes BLOCKS_PUBLIC_ORIGIN as the distribution URL, under cloudfront only', async () => {
 		const cloudfront = await create('cloudfront');
-		assert.ok(configBlob(cloudfront.stack).includes('BLOCKS_PUBLIC_ORIGIN'), 'stack');
-		assert.ok(configBlob(cloudfront.parent).includes('BLOCKS_PUBLIC_ORIGIN'), 'backend');
+		assert.deepStrictEqual(
+			configValueAfterHttps(cloudfront.stack, 'BLOCKS_PUBLIC_ORIGIN'),
+			domainOf('ApiFrontDoorA48CED56'),
+			'stack',
+		);
+		assert.deepStrictEqual(
+			configValueAfterHttps(cloudfront.parent, 'BLOCKS_PUBLIC_ORIGIN'),
+			domainOf('BlocksApiFrontDoor9F3D9B2C'),
+			'backend',
+		);
 		const apigateway = await create('apigateway');
 		assert.ok(!configBlob(apigateway.stack).includes('BLOCKS_PUBLIC_ORIGIN'));
+	});
+
+	// The backend module runs before create() builds the gateway, so a read there
+	// must still resolve to the front door, not to the execute-api URL.
+	test('publicApiUrl read inside the backend module resolves to the distribution', async () => {
+		const stack = await BlocksStack.create(new cdk.App(), 'EarlyReadStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: earlyReadBackendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'cloudfront',
+		});
+		const stackOutputs = Template.fromStack(stack).findOutputs('*');
+		assert.deepStrictEqual(stackOutputs.Early.Value, stackOutputs.ApiUrl.Value, 'matches the ApiUrl output');
+		assert.ok(JSON.stringify(stackOutputs.Early.Value).includes('ApiFrontDoorA48CED56'), 'stack');
+
+		const parent = new cdk.Stack(new cdk.App(), 'EarlyReadParent');
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: earlyReadBackendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'cloudfront',
+		});
+		const early = JSON.stringify(Template.fromStack(parent).findOutputs('Early').Early.Value);
+		assert.ok(early.includes('BlocksApiFrontDoor9F3D9B2C') && !early.includes('execute-api'), early);
+	});
+
+	// TypeScript rejects other values, but plain-JS apps and `any`-typed callers
+	// (the Amplify template's `backend`) don't; they must fail, not lose the tier.
+	test('rejects an unknown tier before the backend module is imported', async () => {
+		const invalid = /apiFrontDoor must be 'apigateway' or 'cloudfront' \(got "edge"\)/;
+		await assert.rejects(
+			BlocksStack.create(new cdk.App(), 'BadTierStack', {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: throwingBackendPath,
+				defaults: BlocksPresets.production,
+				apiFrontDoor: 'edge' as never,
+			}),
+			invalid,
+		);
+		await assert.rejects(
+			BlocksBackend.create(new cdk.Stack(new cdk.App(), 'BadTierParent'), 'Blocks', {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: throwingBackendPath,
+				defaults: BlocksPresets.production,
+				apiFrontDoor: 'edge' as never,
+			}),
+			invalid,
+		);
 	});
 });
