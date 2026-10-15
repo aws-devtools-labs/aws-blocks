@@ -8,6 +8,8 @@
 import PackagePlugin
 import Foundation
 
+let blocksCodegenConfigName = "blocks.codegen.json"
+
 /// A command plugin that generates typed Swift models and API methods
 /// from an OpenRPC spec file (`blocks.spec.json`).
 ///
@@ -58,9 +60,13 @@ struct BlocksCodegenCommandPlugin: CommandPlugin {
             print("   Spec: \(specFile.path.string)")
             print("   Output: \(outputDir.string)")
 
+            let configDir = specFile.path.removingLastComponent()
+            let configPath = configDir.appending(subpath: blocksCodegenConfigName)
+            let hasConfig = FileManager.default.fileExists(atPath: configPath.string)
+
             let process = Process()
             process.executableURL = URL(fileURLWithPath: generatorTool.path.string)
-            process.arguments = [specFile.path.string, outputDir.string]
+            process.arguments = [specFile.path.string, outputDir.string] + (hasConfig ? [configPath.string] : [])
 
             let pipe = Pipe()
             process.standardOutput = pipe
@@ -109,9 +115,12 @@ extension BlocksCodegenCommandPlugin: XcodeCommandPlugin {
         print("   Spec: \(specPath.string)")
         print("   Output: \(outputDir.string)")
 
+        let configPath = specPath.removingLastComponent().appending(subpath: blocksCodegenConfigName)
+        let hasConfig = FileManager.default.fileExists(atPath: configPath.string)
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: generatorTool.path.string)
-        process.arguments = [specPath.string, outputDir.string]
+        process.arguments = [specPath.string, outputDir.string] + (hasConfig ? [configPath.string] : [])
 
         let pipe = Pipe()
         process.standardOutput = pipe

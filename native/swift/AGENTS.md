@@ -56,6 +56,8 @@ A Swift Package that generates type-safe Swift client code from an OpenRPC speci
 | Constraints / formats / defaults / const / tuple | `Tests/BlocksCodegenTests/ConstraintsAndDefaultsTests.swift` |
 | Helpers / naming | `Tests/BlocksCodegenTests/HelpersTests.swift` |
 | Generator output | `Tests/BlocksCodegenTests/SwiftCodeGeneratorTests.swift` |
+| Declared native binding resolution | `Tests/BlocksCodegenTests/DeclaredBindingParserTests.swift` |
+| Declared transferable emission | `Tests/BlocksCodegenTests/DeclaredTransferableBindingTests.swift` |
 | Hybrid-arm fixture spec | `../codegen-fixtures/18-hybrid-arm/spec.json` |
 | Runtime tests | `Tests/BlocksRuntimeTests/*` |
 
