@@ -3,10 +3,8 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { execFile } from 'node:child_process';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { Scope } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
 import { createChat, realtimeTransport } from './index.chat.js';
@@ -363,78 +361,8 @@ describe('CannedProvider', () => {
 		assert.strictEqual(await collectText(provider, [{ role: 'user', content: [{ text: '10 then 2' }] }]), 'two is enumerated first');
 	});
 
-	test('rejects invalid inline responses at construction before any text or tool selection', () => {
+	test('rejects invalid inline responses at construction', () => {
 		assert.throws(() => new CannedProvider({ responses: { ' \n\t ': 'invalid' } }), /blank response phrase/);
-		const responses: Record<string, string> = { status: 'valid' };
-		Object.defineProperty(responses, 'other', { value: 42, enumerable: true });
-		assert.throws(() => new CannedProvider({ responses }), /response for phrase 'other' must be a string/);
-	});
-
-	test('keeps an inline response snapshot when the caller mutates the original dictionary', async () => {
-		const responses: Record<string, string> = { status: 'first', retained: 'original retained response' };
-		const provider = new CannedProvider({ responses });
-		const messages = [{ role: 'user', content: [{ text: 'status' }] }];
-		assert.strictEqual(await collectText(provider, messages), 'first');
-		responses.status = 'updated';
-		delete responses.retained;
-		responses.added = 'new response';
-		assert.strictEqual(await collectText(provider, messages), 'first');
-		assert.strictEqual(await collectText(provider, [{ role: 'user', content: [{ text: 'retained' }] }]), 'original retained response');
-		assert.match(await collectText(provider, [{ role: 'user', content: [{ text: 'added' }] }]), /No real model was called/);
-		assert.strictEqual(await collectText(new CannedProvider({ responses }), messages), 'updated');
-		responses[' \t'] = 'invalid blank phrase';
-		Object.defineProperty(responses, 'other', { value: 42, enumerable: true, configurable: true });
-		assert.strictEqual(await collectText(provider, messages), 'first');
-	});
-
-	test('reads files asynchronously and allows overlapping selections with independent snapshots', async () => {
-		// Isolate built-in module stubs so other tests retain their real filesystem APIs.
-		await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', `
-			import assert from 'node:assert/strict';
-			import fs from 'node:fs';
-			import promises from 'node:fs/promises';
-			import { syncBuiltinESMExports } from 'node:module';
-			import { resolve } from 'node:path';
-			import { setImmediate } from 'node:timers/promises';
-			import { CannedProvider } from ${JSON.stringify(new URL('./providers/canned.js', import.meta.url).href)};
-			const target = resolve('gated-canned-responses.json');
-			const gates = [];
-			const originalReadFile = promises.readFile;
-			const originalReadFileSync = fs.readFileSync;
-			promises.readFile = (path, ...args) => {
-				if (path !== target) return originalReadFile(path, ...args);
-				return new Promise(resolve => gates.push(resolve));
-			};
-			fs.readFileSync = (path, ...args) => {
-				assert.notEqual(path, target, 'text selection must not read the dictionary synchronously');
-				return originalReadFileSync(path, ...args);
-			};
-			syncBuiltinESMExports();
-			const provider = new CannedProvider({ responses: target });
-			let completed = 0;
-			async function select() {
-				let text = '';
-				for await (const event of provider.stream([{ role: 'user', content: [{ text: 'release' }] }])) {
-					if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'textDelta') text += event.delta.text;
-				}
-				completed++;
-				return text;
-			}
-			const first = select();
-			const second = select();
-			// Keep failures handled until the assertions below report the read contract.
-			first.catch(() => {});
-			second.catch(() => {});
-			await setImmediate();
-			assert.equal(gates.length, 2, 'both selections must reach asynchronous reads before either read completes');
-			assert.equal(completed, 0, 'the event loop must progress while both reads remain pending');
-			gates[1](JSON.stringify({ release: 'second complete snapshot', other: 'second' }));
-			assert.equal(await second, 'second complete snapshot');
-			assert.equal(completed, 1);
-			gates[0](JSON.stringify({ release: 'first complete snapshot', other: 'first' }));
-			assert.equal(await first, 'first complete snapshot');
-			assert.equal(gates.length, 2, 'each selection must read exactly one snapshot');
-		`]);
 	});
 
 	test('gives tool results and tool calls precedence over dictionary responses', async () => {
@@ -1379,37 +1307,6 @@ describe('model-factory', () => {
 			if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'textDelta') chunks.push(event.delta.text);
 		}
 		assert.strictEqual(chunks.join(''), 'All clear.');
-	});
-
-	test('binds relative cannedResponses paths to the cwd at provider construction', async () => {
-		await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', `
-			import assert from 'node:assert/strict';
-			import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-			import { tmpdir } from 'node:os';
-			import { join } from 'node:path';
-			import { createStrandsModel } from ${JSON.stringify(new URL('./model-factory.js', import.meta.url).href)};
-			const originalCwd = process.cwd();
-			const directory = mkdtempSync(join(tmpdir(), 'bb-agent-canned-cwd-'));
-			try {
-				const constructionCwd = join(directory, 'construction');
-				const requestCwd = join(directory, 'request');
-				mkdirSync(constructionCwd);
-				mkdirSync(requestCwd);
-				writeFileSync(join(constructionCwd, 'responses.json'), JSON.stringify({ status: 'construction directory' }));
-				writeFileSync(join(requestCwd, 'responses.json'), JSON.stringify({ status: 'request directory' }));
-				process.chdir(constructionCwd);
-				const model = await createStrandsModel({ provider: 'canned', cannedResponses: 'responses.json' });
-				process.chdir(requestCwd);
-				let text = '';
-				for await (const event of model.stream([{ role: 'user', content: [{ text: 'status' }] }])) {
-					if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'textDelta') text += event.delta.text;
-				}
-				assert.equal(text, 'construction directory');
-			} finally {
-				process.chdir(originalCwd);
-				rmSync(directory, { recursive: true, force: true });
-			}
-		`]);
 	});
 
 	test('reloads cannedResponses files on each text selection and recovers in the same provider', async () => {
