@@ -54,16 +54,21 @@ export const BlocksBackend = {
 };
 export type BlocksBackend = CoreBlocksBackend;
 
-export type { AuthAction, AuthField, AuthState, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
+export type { AuthAction, AuthActionInput, AuthField, AuthState, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
 export type {
 	AgentConfig,
 	AgentResult,
 	AgentStreamChunk,
+	AgentTool,
+	DefaultToolContext,
 	ModelConfig,
 	StreamOptions,
 	TokenUsage,
 	ToolCallRecord,
 	ToolDefinition,
+	ToolFactory,
+	ToolHandlerArgs,
+	ToolsConfig,
 } from '@aws-blocks/bb-agent';
 export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
 export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
@@ -88,15 +93,29 @@ export {
 	type PasswordPolicy,
 } from '@aws-blocks/bb-auth-basic';
 export type {
+	AdminAction,
+	AdminActionGate,
+	AdminCreateInit,
+	AdminDisabled,
+	AdminGetterOf,
+	AdminGrants,
+	AdminOptions,
+	AdminSurface,
+	AdminUser,
+	AdminUserFilter,
 	AuthCognitoOptions,
 	AuthFlowType,
 	CodeDeliveryDetails,
+	CodeDeliveryFn,
 	CognitoUser,
 	ConfirmSignInOptions,
 	DeviceRecord,
 	ExternalUserPoolRef,
+	GroupAdmin,
+	LifecycleAdmin,
 	MFAPreference,
 	ResetPasswordResult,
+	SetPasswordOptions,
 	SignInNextStep,
 	SignInOptions,
 	SignInResult,
@@ -190,6 +209,12 @@ export type {
 	MetricUnit,
 } from '@aws-blocks/bb-metrics';
 export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
+export type {
+	DisconnectReason,
+	RealtimeChannel,
+	RealtimeSubscription,
+	SubscribeOptions,
+} from '@aws-blocks/bb-realtime';
 export { Realtime } from '@aws-blocks/bb-realtime';
 export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-blocks/bb-secret';
 export { Secret, SecretErrors } from '@aws-blocks/bb-secret';

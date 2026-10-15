@@ -67,6 +67,7 @@ export { relayOrigin, type RelayOrigin } from './relay.js';
 export type {
 	OIDCUser,
 	MappedClaims,
+	OIDCClient,
 	OnStubAuthorize,
 	StubAuthorizeRequest,
 	StubUser,
