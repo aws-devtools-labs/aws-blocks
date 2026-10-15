@@ -145,7 +145,11 @@ async function resolveApiUrl(): Promise<string> {
  * request is dispatched to the server.
  */
 export interface BlocksRequest {
-  /** The namespace name this call targets (e.g., 'api', 'auth'). Corresponds to the second argument of `new ApiNamespace(scope, name, handler)` in the backend. */
+  /**
+   * The namespace this call targets: the name the namespace is exported under from the backend module
+   * (e.g., 'api', 'authApi'). For `export const api = new ApiNamespace(scope, 'todos', handler)`,
+   * `api.list()` sends the method `api.list`.
+   */
   apiNamespace: string;
   /** The method being called on the namespace (e.g., 'getUser', 'kvSet'). */
   method: string;
