@@ -218,6 +218,15 @@ export class CdnConstruct extends Construct {
   readonly defaultNotFoundPageHtml?: string;
 
   /**
+   * Physical id of the `/*` invalidation issued on a compute deploy, as a CDK
+   * token (`getResponseField('Invalidation.Id')`). A post-deploy liveness poll
+   * waits on `GetInvalidation` reaching `Completed` so it does not report the
+   * build live while the fire-and-forget invalidation is still propagating.
+   * `undefined` for a pure-static deploy, which issues no invalidation.
+   */
+  readonly invalidationId?: string;
+
+  /**
    * Resources whose update is the atomic-deploy cutover and therefore MUST
    * happen only after the new build's assets are uploaded to S3. Under KVS
    * routing this is the {@link KvKeys} custom resource — its UpdateKeys call
@@ -1499,6 +1508,10 @@ export class CdnConstruct extends Construct {
       // Gate AFTER the atomic KVS cutover so we only flush the previous build's
       // pages (see ordering note above).
       invalidation.node.addDependency(kvKeys.resource);
+      // Surface the invalidation id (a CDK token) so the L3 can output it and a
+      // post-deploy poll can wait for it to reach `Completed` — the config
+      // probe alone proves the KVS cutover, not this invalidation's propagation.
+      this.invalidationId = invalidation.getResponseField('Invalidation.Id');
     }
 
     // ---- Self-enforcing atomic-deploy guard ----

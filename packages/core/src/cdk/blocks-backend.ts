@@ -24,8 +24,8 @@ import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
 import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
-import { finalizeTracing } from './tracer-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
+import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
 
@@ -173,7 +173,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 		resourceQuery: {
 			type: 'TAG_FILTERS_1_0',
 			query: {
-				resourceTypeFilters: ['AWS::SSM::Parameter'],
+				resourceTypeFilters: ['AWS::SSM::Parameter', 'AWS::SecretsManager::Secret'],
 				tagFilters: [{ key: 'aws-blocks-stack', values: [rootStack.stackName] }],
 			},
 		},
