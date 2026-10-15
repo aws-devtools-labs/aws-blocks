@@ -49,7 +49,6 @@ let lastCode: { username: string; code: string; purpose: string } | null = null;
 // Authenticator drives a "Continue" step that exchanges the bridging
 // session for tokens — no second OTP, no separate sign-in.
 const auth = new AuthCognito(scope, 'auth', {
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
   passwordPolicy: { minLength: 8, requireDigits: true },
   signInWith: 'email' as const,
   authFlowType: 'USER_AUTH' as const,

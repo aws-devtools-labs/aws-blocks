@@ -4,7 +4,7 @@
 import { SQSClient, SendMessageCommand, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import { ReceiveMessageCommand, DeleteMessageCommand, ChangeMessageVisibilityCommand } from '@aws-sdk/client-sqs';
 import type { SendMessageBatchCommandOutput } from '@aws-sdk/client-sqs';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, brandBlocksError } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, blocksError } from '@aws-blocks/core';
 import { getConfigSync, getContainerComputeId, isContainerRuntime, registerContainerPoller } from '@aws-blocks/core';
 import { dispatchJobToWorker, isJobWorker } from '@aws-blocks/core';
 import { EventSourceMapping, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
@@ -426,9 +426,7 @@ export class AsyncJob<T = unknown> extends Scope {
 			const result = rawResult instanceof Promise ? await rawResult : rawResult;
 			if (result && typeof result === 'object' && 'issues' in result && result.issues) {
 				const msg = result.issues[0]?.message ?? 'Validation failed';
-				const err = new Error(`${AsyncJobErrors.ValidationFailed}: ${msg}`);
-				err.name = AsyncJobErrors.ValidationFailed;
-				throw brandBlocksError(err);
+				throw blocksError(AsyncJobErrors.ValidationFailed, msg);
 			}
 		}
 
@@ -436,11 +434,7 @@ export class AsyncJob<T = unknown> extends Scope {
 		const bytes = Buffer.byteLength(serialized, 'utf8');
 		if (bytes > MAX_PAYLOAD_BYTES) {
 			const kb = Math.ceil(bytes / 1024);
-			const err = new Error(
-				`${AsyncJobErrors.PayloadTooLarge}: Serialized payload is ${kb} KB, exceeds 256 KB limit`
-			);
-			err.name = AsyncJobErrors.PayloadTooLarge;
-			throw brandBlocksError(err);
+			throw blocksError(AsyncJobErrors.PayloadTooLarge, `Serialized payload is ${kb} KB, exceeds 256 KB limit`);
 		}
 
 		return serialized;
@@ -569,19 +563,11 @@ export class AsyncJob<T = unknown> extends Scope {
 		this.ensureQueueUrl();
 
 		if (payloads.length === 0) {
-			const err = new Error(
-				`${AsyncJobErrors.BatchEmpty}: Batch is empty, must contain at least 1 payload`
-			);
-			err.name = AsyncJobErrors.BatchEmpty;
-			throw brandBlocksError(err);
+			throw blocksError(AsyncJobErrors.BatchEmpty, 'Batch is empty, must contain at least 1 payload');
 		}
 
 		if (payloads.length > MAX_BATCH_PAYLOADS) {
-			const err = new Error(
-				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`
-			);
-			err.name = AsyncJobErrors.BatchTooLarge;
-			throw brandBlocksError(err);
+			throw blocksError(AsyncJobErrors.BatchTooLarge, `Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`);
 		}
 
 		// Validate and serialize every payload before enqueuing anything, so one bad

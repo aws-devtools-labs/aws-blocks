@@ -63,7 +63,7 @@ packages/bb-{name}/
     errors.ts           # {Class}Errors as-const, wire-name strings ("...Exception")
     index.mock.ts       # default + types entry; persists to getMockDataDir()
     index.aws.ts        # aws-runtime; SDK client w/ buildUserAgentChain()
-    index.cdk.ts        # cdk; provisions infra, grants on this.handler, synthGuard stubs
+    index.cdk.ts        # cdk; provisions infra, grants on this.executionRole, synthGuard stubs
     index.browser.ts    # stub class (no-op ctor) + re-export errors
     index.test.ts       # node:test; resets .bb-data in beforeEach
     parity.test.ts      # mock↔aws↔browser behavioral parity

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import type { ComputeType } from '../../common/compute-capabilities.js';
 import type { ScopeOptions } from '../../common/index.js';
 import { Scope } from '../index.js';
@@ -124,6 +125,22 @@ export abstract class ComputeBase extends Scope implements ComputeProvider {
 	 * directly so config targets the right compute.
 	 */
 	abstract setEnv(key: string, value: string): void;
+
+	/**
+	 * The Lambda function the stack's single shared API gateway integrates
+	 * so this compute is reachable over HTTP — or `undefined` for a worker-only
+	 * compute that owns no HTTP ingress (e.g. a background/queue consumer).
+	 *
+	 * The shared gateway (built by `BlocksStack` / `BlocksBackend` at finalize)
+	 * reads this off the default compute and forwards every request to it; the
+	 * Lambda handler then does the actual path routing. Returning `undefined`
+	 * here means "no HTTP front door", so a concrete compute that serves HTTP
+	 * overrides this to return its function. Defaults to `undefined` so a new
+	 * worker-only compute need not implement it.
+	 */
+	apiHandler(): IFunction | undefined {
+		return undefined;
+	}
 
 	/**
 	 * Enable distributed tracing on this compute: mark it traced (so the Dashboard

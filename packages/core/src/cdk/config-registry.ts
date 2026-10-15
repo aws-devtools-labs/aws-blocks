@@ -44,11 +44,27 @@ function getRegistry(root: Construct): ConfigRegistryState {
 }
 
 /**
- * Register a config entry for a Building Block. This replaces
- * `handler.addEnvironment(key, value)` for BB resource mappings.
+ * Register a config entry for a Building Block or an app. This replaces
+ * `handler.addEnvironment(key, value)` for BB resource mappings and app
+ * settings alike.
  *
  * The entry will be serialized into a JSON config file in S3, loaded
  * by the Lambda at cold start. This avoids the 4KB env var limit.
+ *
+ * Every compute loads the same config, so at runtime the entry is available as
+ * `process.env[key]` on all of them — before the backend module is imported, so
+ * module-level reads see it. An existing environment variable of the same name
+ * wins; if its value differs, the compute logs a warning at cold start naming
+ * the ignored key. It can be called from a Building Block constructor or from app code
+ * after `BlocksStack.create()` / `BlocksBackend.create()` resolves:
+ *
+ * ```ts
+ * const blocksStack = await BlocksStack.create(app, 'App', { ... });
+ * registerConfig(blocksStack, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
+ * ```
+ *
+ * Config is stored as plain JSON in a private S3 bucket; use `AppSetting` with
+ * `secret: true` for secrets.
  *
  * @param scope - The CDK construct (used to find the owning backend root)
  * @param key - The config key (same string the runtime will use to look it up)
@@ -152,11 +168,9 @@ export function finalizeConfigRegistry(
 	if (registry.finalized) return;
 	registry.finalized = true;
 
-	// Nothing to do only if no config was registered AND no bucket was created (via
-	// getConfigLocation). If a co-located BB created the bucket, still upload (even an empty {}) and
-	// wire the handler so that compute's loadConfigToProcessEnv() resolves instead of 404-ing forever.
-	if (registry.entries.size === 0 && !registry.bucket) return;
-
+	// Always deploy, even with zero entries so far: the JSON is a Lazy read at synth, so config
+	// registered after this point (e.g. by app code after `create()` resolves) is still included —
+	// as long as the deployment exists. An empty registry uploads `{}`.
 	// Ensure the bucket exists (a co-located BB may already have created it via getConfigLocation).
 	const configBucket = ensureConfigBucket(root);
 	const configKey = CONFIG_KEY;

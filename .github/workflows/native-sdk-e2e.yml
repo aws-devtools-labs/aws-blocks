@@ -15,8 +15,9 @@ concurrency:
   group: native-e2e-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Grant OIDC tokens only to role-assuming jobs so PR-head build jobs cannot
+# mint AWS credentials.
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -31,7 +32,7 @@ jobs:
       kotlin-changed: ${{ steps.check.outputs.kotlin-changed }}
       any-changed: ${{ steps.check.outputs.any-changed }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -76,12 +77,12 @@ jobs:
     outputs:
       spec-path: ${{ steps.spec.outputs.path }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -97,7 +98,7 @@ jobs:
           echo "path=test-apps/native-bindings/aws-blocks/blocks.spec.json" >> $GITHUB_OUTPUT
 
       - name: Upload spec artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/blocks.spec.json
@@ -113,17 +114,17 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: dart-lang/setup-dart@v1
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
         with:
           sdk: '3.13.0'
 
@@ -136,7 +137,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/
@@ -211,17 +212,17 @@ jobs:
             gradle-task: iosSimulatorArm64Test
             timeout: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: 17
@@ -230,7 +231,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: blocks-spec
           path: native/kotlin/e2e/
@@ -263,12 +264,12 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -282,7 +283,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/
@@ -347,6 +348,9 @@ jobs:
   # dispatch. Deploy uses `npm run deploy` (aws-blocks/scripts/deploy.ts ->
   # aws-blocks/index.cdk.ts); the API serves JSON-RPC under `/aws-blocks/api`.
   dart-e2e-sandbox:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: Dart E2E (sandbox)
     needs: [detect-changes, dart-e2e]
     if: >-
@@ -364,17 +368,17 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: dart-lang/setup-dart@v1
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
         with:
           sdk: '3.13.0'
 
@@ -391,7 +395,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
@@ -489,6 +493,9 @@ jobs:
         run: npm run destroy || true
 
   swift-e2e-sandbox:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: Swift E2E (sandbox)
     needs: [detect-changes, swift-e2e]
     if: >-
@@ -504,12 +511,12 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -523,7 +530,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
@@ -587,6 +594,9 @@ jobs:
         run: npm run destroy || true
 
   kotlin-e2e-sandbox:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: Kotlin E2E (${{ matrix.label }}, sandbox)
     needs: [detect-changes, kotlin-e2e]
     if: >-
@@ -615,17 +625,17 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: 17
@@ -634,7 +644,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
@@ -680,7 +690,7 @@ jobs:
         run: npm run spec
 
       - name: Download spec
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: blocks-spec
           path: native/kotlin/e2e/

@@ -156,6 +156,7 @@ export class PgClientEngine implements DatabaseEngine {
 
 // @public
 export interface PgClientEngineConfig {
+    applicationName?: string;
     connectionString: string;
     connectionTimeoutMillis?: number;
     poolSize?: number;

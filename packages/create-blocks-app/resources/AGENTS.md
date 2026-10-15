@@ -65,7 +65,10 @@ const res = await api.ping('world');   // { message: 'hi world' }
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
 2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
-3. For faster iteration: run `npm run dev &` in the background, then run `npm run test:e2e` repeatedly (reuses the running server)
+3. For faster iteration, keep one dev server running and rerun tests against it:
+   - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev &`.
+   - Run `npm run test:e2e` as often as needed; it reuses the running server.
+   - When finished, stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
 4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
 
 ### Calling the API directly (troubleshooting only)
@@ -96,4 +99,10 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 - `npm run deploy` — full production deploy to AWS
 - `npm run sandbox:destroy` — tear down sandbox resources
 
-On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). Grep that one line for "deploy finished + where it lives"; don't poll CloudFormation or hunt the URL out of the streamed output.
+`npm run deploy` does the whole deploy in one command. A first production deploy can take 10+ minutes — longer than many shell command timeouts — so run it in the background (your harness's background-process feature, or `npm run deploy > deploy.log 2>&1 &`) and let it finish.
+
+If `npm run sandbox` or `npm run deploy` stops with `AWS credentials could not be verified`, the message names the profile and the command that fixes it, such as `aws login --profile <name>` or `aws sso login --profile <name>`. Signing in opens a browser and needs the user: ask the user before you run the command, then re-run the npm script.
+
+On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). Wait for that line — it confirms the deploy finished and gives the URLs, so there's no need to poll CloudFormation or hunt the URL out of the streamed output.
+
+**Stack naming.** The deploy scripts name stacks from `stackId` in `.blocks/config.json` (generated at scaffold time, e.g. `my-app-a3x9kf`): production is `<stackId>-prod`, sandbox is `<stackId>-<username>-<random>`. Use these names when inspecting stacks (e.g. `aws cloudformation describe-stacks --stack-name <stackId>-prod`). To rename, edit `stackId`; for computed names, edit `aws-blocks/index.cdk.ts`.

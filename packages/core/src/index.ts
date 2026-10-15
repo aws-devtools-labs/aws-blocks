@@ -28,7 +28,14 @@ export {
 	type ServerlessComputeOptions,
 } from './common/compute-capabilities.js';
 export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
-export { type BuildingBlockMeta, Scope, type ScopeOptions, type ScopeParent } from './common/index.js';
+export {
+	type BuildingBlockMeta,
+	buildingBlockParent,
+	computeScopeFullId,
+	Scope,
+	type ScopeOptions,
+	type ScopeParent,
+} from './common/index.js';
 export {
 	_resetSdkRegistry,
 	getAllSdkIdentifiers,

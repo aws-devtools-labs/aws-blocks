@@ -71,6 +71,16 @@ export interface BuildingBlockMeta {
 }
 
 // @public
+export function buildingBlockParent(meta: BuildingBlockMeta & {
+    id: string;
+    parent: ScopeParent;
+}): BuildingBlockMeta & {
+    id: string;
+    parent: ScopeParent;
+    fullId: string;
+};
+
+// @public
 export function clearRouteRegistry(): void;
 
 // @public
@@ -79,6 +89,12 @@ export type ComputeOptions = ({
 } & ServerlessComputeOptions) | ({
     type: 'container';
 } & ContainerComputeOptions);
+
+// @public
+export function computeScopeFullId(scope: {
+    id: string;
+    parent?: ScopeParent;
+}): string;
 
 // @public
 export type ComputeType = 'serverless' | 'container';
@@ -332,6 +348,7 @@ export class Scope {
     readonly bbName?: string;
     readonly bbVersion?: string;
     protected buildUserAgentChain(): [string, string][];
+    protected formatUserAgentString(maxBytes?: number): string;
     // (undocumented)
     get fullId(): string;
     // @internal
