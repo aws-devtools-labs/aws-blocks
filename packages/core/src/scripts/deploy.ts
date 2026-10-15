@@ -128,6 +128,29 @@ export function resolveHostingOutputs(
   };
 }
 
+/** The two halves of a `HostingInvalidationId` output, present only when both
+ * are non-empty. */
+export interface ParsedInvalidationId {
+  distributionId: string;
+  invId: string;
+}
+
+/**
+ * Split a `HostingInvalidationId` output (`<distributionId>/<invalidationId>`)
+ * into its two halves, returning `undefined` for a malformed/empty pair so the
+ * caller degrades to the config-only wait rather than probing with an undefined
+ * id. The producer always emits both halves (a CloudFront invalidation id never
+ * contains a slash — see hosting.ts), so this guards a shape that can't occur
+ * today but would otherwise surface as an opaque `GetInvalidation` error.
+ * Pure and exported so the guard is unit-tested.
+ */
+export function parseInvalidationId(invalidationId: string | undefined): ParsedInvalidationId | undefined {
+  if (!invalidationId) return undefined;
+  const [distributionId, invId] = invalidationId.split('/');
+  if (!distributionId || !invId) return undefined;
+  return { distributionId, invId };
+}
+
 /** The slice of a CloudFront client the invalidation probe needs — lets a test
  * inject a fake without the real SDK. */
 export interface InvalidationStatusClient {
@@ -187,10 +210,15 @@ export async function deploy(options: DeployOptions) {
     console.log('🏗️  Preparing deployment...');
 
     // Resolve the liveness-wait config: an explicit option wins, else read the
-    // flags from argv so the thin template wrapper needs no arg plumbing.
-    const argvWaitLive = parseWaitLiveArgs(process.argv.slice(2));
-    const waitLive = options.waitLive ?? argvWaitLive.waitLive;
-    const waitLiveTimeoutSec = options.waitLiveTimeoutSec ?? argvWaitLive.waitLiveTimeoutSec;
+    // flags from argv so the thin template wrapper needs no arg plumbing. Only
+    // parse argv when an explicit option is absent — otherwise a stray/invalid
+    // `--wait-live-timeout=` on argv would emit a warning on a path that then
+    // ignores the parsed value.
+    const needsArgv = options.waitLive === undefined || options.waitLiveTimeoutSec === undefined;
+    const argvWaitLive = needsArgv ? parseWaitLiveArgs(process.argv.slice(2)) : undefined;
+    const waitLive = options.waitLive ?? argvWaitLive?.waitLive ?? false;
+    const waitLiveTimeoutSec =
+      options.waitLiveTimeoutSec ?? argvWaitLive?.waitLiveTimeoutSec ?? DEFAULT_WAIT_LIVE_TIMEOUT_SEC;
 
     // Load production environment (from .env.production or CI env vars)
     loadProductionEnv();
@@ -318,15 +346,17 @@ export async function deploy(options: DeployOptions) {
       console.log(`\n⏳ Waiting for the new build to go live at ${hostingUrl} (up to ${timeoutMs / 1000}s)…`);
 
       // For a compute deploy, also wait on the fire-and-forget `/*`
-      // invalidation. The output carries `<distributionId>/<invalidationId>`.
-      // Resolve the Region/profile the deploy itself used (SDK v3 clients don't
-      // read cdk.json or AWS_DEFAULT_PROFILE — see resolveDeploymentTarget), and
-      // load the CloudFront SDK lazily so a deploy without `--wait-live`, or a
-      // pure-static one, never pays for it.
+      // invalidation. The output carries `<distributionId>/<invalidationId>`;
+      // parseInvalidationId degrades a malformed/empty pair to the config-only
+      // wait. Resolve the Region/profile the deploy itself used (SDK v3 clients
+      // don't read cdk.json or AWS_DEFAULT_PROFILE — see resolveDeploymentTarget),
+      // and load the CloudFront SDK lazily so a deploy without `--wait-live`, or
+      // a pure-static one, never pays for it.
       let invalidationComplete: InvalidationProbe | undefined;
       let destroyClient: (() => void) | undefined;
-      if (invalidationId) {
-        const [distributionId, invId] = invalidationId.split('/');
+      const parsedInvalidation = parseInvalidationId(invalidationId);
+      if (parsedInvalidation) {
+        const { distributionId, invId } = parsedInvalidation;
         const target = await resolveDeploymentTarget({ projectRoot: options.projectRoot });
         const { CloudFrontClient, GetInvalidationCommand } = await import('@aws-sdk/client-cloudfront');
         const cloudfront = new CloudFrontClient({ region: target.region ?? undefined, profile: target.profile });

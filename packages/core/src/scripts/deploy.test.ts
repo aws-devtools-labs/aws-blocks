@@ -13,6 +13,7 @@ import {
   parseWaitLiveArgs,
   DEFAULT_WAIT_LIVE_TIMEOUT_SEC,
   resolveHostingOutputs,
+  parseInvalidationId,
   classifyInvalidationError,
   makeInvalidationProbe,
   type InvalidationStatusClient,
@@ -124,6 +125,27 @@ describe('resolveHostingOutputs — pairing the Hosting output group', () => {
     assert.strictEqual(r.hostingUrl, 'https://web.cloudfront.net');
     assert.strictEqual(r.expectedBuildId, 'web-build');
     assert.strictEqual(r.invalidationId, 'WDIST/WINV');
+  });
+});
+
+describe('parseInvalidationId — guarding the <distributionId>/<invalidationId> pair', () => {
+  it('splits a well-formed pair', () => {
+    assert.deepStrictEqual(parseInvalidationId('DIST123/INV456'), {
+      distributionId: 'DIST123',
+      invId: 'INV456',
+    });
+  });
+
+  it('returns undefined for an absent id (pure-static deploy)', () => {
+    assert.strictEqual(parseInvalidationId(undefined), undefined);
+  });
+
+  it('returns undefined for a malformed/empty pair so the wait degrades to config-only', () => {
+    // Each would otherwise yield an undefined half and an opaque GetInvalidation error.
+    assert.strictEqual(parseInvalidationId(''), undefined);
+    assert.strictEqual(parseInvalidationId('DIST-only'), undefined);
+    assert.strictEqual(parseInvalidationId('DIST/'), undefined);
+    assert.strictEqual(parseInvalidationId('/INV'), undefined);
   });
 });
 
