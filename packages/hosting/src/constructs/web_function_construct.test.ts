@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { execFileSync } from 'child_process';
 import { App, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { HostingConstruct } from './hosting_construct.js';
@@ -132,6 +133,18 @@ void describe('HostingConstruct — compute.type web-function', () => {
     assert.match(rendered, /cloudfront\.amazonaws\.com/);
     assert.match(rendered, /aws:SourceArn/);
     assert.match(rendered, /HostingDistribution/);
+  });
+
+  void it('grants the policy handler only the resource-policy calls it makes', () => {
+    const stack = createEnvStack();
+    webFunctionHosting(stack);
+    const template = Template.fromStack(stack);
+
+    const actions = Object.values(template.findResources('AWS::IAM::Policy'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement)
+      .flatMap((s: { Action: string | string[] }) => (Array.isArray(s.Action) ? s.Action : [s.Action]))
+      .filter((a: string) => a.endsWith('ResourcePolicy'));
+    assert.deepStrictEqual(actions.sort(), ['lambda:DeleteResourcePolicy', 'lambda:PutResourcePolicy']);
   });
 
   void it('stores code in a versioned bucket readable only by this function’s revisions', () => {
@@ -276,11 +289,52 @@ void describe('web-function viewer response', () => {
 });
 
 void describe('renderEntryShim', () => {
-  void it('splits host:port on the last colon and sets every framework listen var', () => {
-    const shim = renderEntryShim('./index.js');
-    for (const key of ['HOST', 'HOSTNAME', 'NITRO_HOST', 'PORT', 'NITRO_PORT']) {
-      assert.ok(shim.includes(`'${key}'`), `sets ${key}`);
+  // Runs the generated shim in a child process against a stub server entry, so the
+  // assertions cover what the shim does at runtime, not the text it renders.
+  const runShim = (endpoint: string | undefined): Record<string, string | null> => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-function-shim-'));
+    try {
+      fs.mkdirSync(path.join(root, 'server'));
+      fs.writeFileSync(
+        path.join(root, 'server', 'entry.mjs'),
+        `const keys = ['HOST', 'HOSTNAME', 'NITRO_HOST', 'PORT', 'NITRO_PORT'];
+console.log(JSON.stringify({ ...Object.fromEntries(keys.map((k) => [k, process.env[k] ?? null])), cwd: process.cwd() }));`,
+      );
+      fs.writeFileSync(path.join(root, WEB_FUNCTION_ENTRY_SHIM), renderEntryShim('./server/entry.mjs'));
+      const env: NodeJS.ProcessEnv = { PATH: process.env.PATH };
+      if (endpoint !== undefined) env.AWS_LAMBDA_HTTP_ENDPOINT = endpoint;
+      const out = execFileSync(process.execPath, [path.join(root, WEB_FUNCTION_ENTRY_SHIM)], { env, encoding: 'utf-8' });
+      const result = JSON.parse(out.trim()) as Record<string, string | null>;
+      // Report the working directory relative to the bundle (tmpdir may be a symlink, e.g. on macOS).
+      const serverDir = fs.realpathSync(path.join(root, 'server'));
+      if (result.cwd && fs.realpathSync(result.cwd) === serverDir) result.cwd = 'server';
+      return result;
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
     }
-    assert.match(shim, /lastIndexOf\(':'\)/);
+  };
+
+  void it('maps AWS_LAMBDA_HTTP_ENDPOINT onto every framework listen var and runs from the entry directory', () => {
+    assert.deepStrictEqual(runShim('127.0.0.1:8080'), {
+      HOST: '127.0.0.1',
+      HOSTNAME: '127.0.0.1',
+      NITRO_HOST: '127.0.0.1',
+      PORT: '8080',
+      NITRO_PORT: '8080',
+      cwd: 'server',
+    });
+  });
+
+  void it('splits an IPv6 endpoint on the last colon', () => {
+    const result = runShim('[::1]:9000');
+    assert.strictEqual(result.HOST, '[::1]');
+    assert.strictEqual(result.PORT, '9000');
+  });
+
+  void it('leaves listen vars untouched when no endpoint is provided', () => {
+    const result = runShim(undefined);
+    assert.strictEqual(result.HOST, null);
+    assert.strictEqual(result.PORT, null);
+    assert.strictEqual(result.cwd, 'server');
   });
 });

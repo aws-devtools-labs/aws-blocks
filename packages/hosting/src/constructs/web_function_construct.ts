@@ -248,8 +248,11 @@ export class WebFunctionConstruct extends Construct implements iam.IGrantable {
       enforceSSL: true,
       removalPolicy: RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
-      // Each revision pins an object version; superseded revisions are deleted
-      // by CloudFormation on the next deploy, so old versions are dead weight.
+      // Each revision pins an object version of `<assetHash>.zip`. Every deploy
+      // writes a NEW key and the deployment doesn't prune (see below), so a
+      // superseded zip stays the current version of its own key and this rule
+      // never expires it: the bucket keeps one bundle per deploy. The rule only
+      // covers overwrites of the same key. Retention of old zips is still open.
       lifecycleRules: [{ noncurrentVersionExpiration: Duration.days(30) }],
     });
     const codePrefix = `web-function/${this.functionName}/`;
@@ -426,7 +429,7 @@ export class WebFunctionConstruct extends Construct implements iam.IGrantable {
     });
     handler.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['lambda:PutResourcePolicy', 'lambda:DeleteResourcePolicy', 'lambda:GetResourcePolicy'],
+        actions: ['lambda:PutResourcePolicy', 'lambda:DeleteResourcePolicy'],
         resources: [this.functionArn],
       }),
     );
