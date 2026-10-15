@@ -6,7 +6,9 @@ chore(swift): require Swift 6.2 (Xcode 26) and generate `nonisolated` types
 
 The package now declares `swift-tools-version: 6.2`, so building it needs Xcode 26 or a Swift 6.2
 toolchain; Xcode 15 and 16 can no longer resolve it. Apps can still build in Swift 5 or Swift 6
-language mode.
+language mode. A dependency declared with `from: "0.1.0"` picks this release up on the next
+`swift package update`; declare it with `.upToNextMinor(from:)` to take breaking 0.x releases
+deliberately.
 
 Every top-level generated type (`Blocks`, the namespace classes, `Servers` and the models) is now
 `nonisolated`. Generated code compiles in the app's target, so under Xcode 26's default `MainActor`
