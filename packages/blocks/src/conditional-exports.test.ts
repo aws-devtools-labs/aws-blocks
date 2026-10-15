@@ -8,6 +8,10 @@
  * it always resolves the "types" key. This test actually loads entry points
  * under each condition and compares their named exports to catch drift.
  *
+ * Every BB is checked under both "aws-runtime" (the Lambda bundle) and "cdk"
+ * (`cdk synth` loads the backend module under it, so a missing export crashes
+ * synth at import time).
+ *
  * BB packages are discovered automatically — any package under packages/ whose
  * exports["."] has an "aws-runtime" condition is treated as a Building Block.
  *
@@ -83,5 +87,15 @@ test('discovery sanity check', () => {
 for (const pkg of bbPackages) {
 	test(`${pkg}: aws-runtime exports match default`, () => {
 		assertSuperset(pkg, 'aws-runtime');
+	});
+}
+
+// ── BB packages: cdk (auto-discovered) ──────────────────────────────────────
+// `cdk synth` loads the whole backend module under --conditions=cdk, so an export
+// the default entry has but the cdk entry lacks crashes synth at import time.
+
+for (const pkg of bbPackages) {
+	test(`${pkg}: cdk exports match default`, () => {
+		assertSuperset(pkg, 'cdk');
 	});
 }

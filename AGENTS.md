@@ -159,7 +159,7 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 **Checklist for a new BB:**
 - conditional exports across all entry points + `prebuild` version script
 - `types.ts` types-only
-- every named export in `index.mock.ts` exists in cdk/aws/browser (enforced by `conditional-exports.test.ts` in `packages/blocks`)
+- every named runtime export in `index.mock.ts` exists in the `cdk` and `aws-runtime` entries (enforced by `conditional-exports.test.ts` in `packages/blocks`); `browser` entries are intentionally narrower and are outside this full-export parity check
 - ship `README.md` + `DESIGN.md` via `package.json` `"files"`
 - register in the umbrella `packages/blocks` exactly like an existing BB (add dependency + a catalog/README row + re-export from its `index.ts` **and** `index.cdk.ts`)
 - add to the root `workspaces`

@@ -11,7 +11,7 @@ import { AgentCoreRuntime } from './agentcore-runtime.cdk.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig } from './types.js';
 
-export { AgentErrors } from './errors.js';
+export { AgentErrors, InterruptError } from './errors.js';
 export { BedrockModels, OllamaModels } from './models.js';
 
 export class Agent extends BuildingBlockScope {
