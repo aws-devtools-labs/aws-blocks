@@ -139,7 +139,7 @@ describe('scheduleApiFrontDoor', () => {
 		// A Hosting that fronts the API publishes its own origin; the managed cloudfront
 		// distribution must not add a second one that doubles hops and splits the domain.
 		// The claim rides on the owner instance (not per-stack state), so the aspect
-		// scheduled on that same owner sees it — the mechanism that works cross-stack.
+		// scheduled on that same owner sees it.
 		const stack = new cdk.Stack(new cdk.App(), 'S');
 		claimApiFrontDoor(stack, 'https://d111.cloudfront.net');
 		scheduleApiFrontDoor(stack, true, GATEWAY_URL);
@@ -166,5 +166,16 @@ describe('resolveApiFrontDoor', () => {
 
 	test('defaults to the constant apigateway tier when the app expresses no preference', () => {
 		assert.strictEqual(resolveApiFrontDoor(undefined), 'apigateway');
+	});
+
+	test('rejects any other value instead of falling back to the default', () => {
+		// TypeScript catches these, but plain-JS apps and `any`-typed callers don't —
+		// a silent fallback would quietly drop the CloudFront tier.
+		for (const value of ['edge', 'regional', 'CloudFront', '']) {
+			assert.throws(
+				() => resolveApiFrontDoor(value as never),
+				new RegExp(`apiFrontDoor must be 'apigateway' or 'cloudfront' \\(got "${value}"\\)`),
+			);
+		}
 	});
 });

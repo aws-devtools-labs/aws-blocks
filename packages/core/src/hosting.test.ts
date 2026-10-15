@@ -522,13 +522,13 @@ describe('Hosting', () => {
   // the same stack, the API belongs on Hosting's distribution — the standalone
   // managed cloudfront distribution must stand down so there is exactly one.
   describe('cloudfront front door + Hosting claim', () => {
-    it('leaves exactly one distribution (Hosting’s) when Hosting fronts the API in edge mode', () => {
+    it('leaves exactly one distribution (Hosting’s) when Hosting fronts the API under cloudfront', () => {
       createSpaBuildOutput(tmpDir);
 
       const app = new App();
       const stack = new Stack(app, 'CloudFrontHostingClaimStack');
 
-      // Simulate what BlocksStack.create() does in edge mode: schedule the managed
+      // Simulate what BlocksStack.create() does under cloudfront: schedule the managed
       // front door over the shared gateway, then build Hosting in the same stack.
       // In production `props.api` IS the owner the aspect is scheduled on (the
       // BlocksStack), so its `claimApiFrontDoor` records the claim on that same
