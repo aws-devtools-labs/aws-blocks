@@ -31,6 +31,9 @@ import ts from 'typescript';
  * Type-only exports are erased at runtime, so they are compared from the same
  * `.d.ts` files, for every BB and the umbrella package.
  *
+ * Each BB's "browser" entry must load under that condition and export the BB's
+ * error constants, which frontends use with `isBlocksError`.
+ *
  * BB packages are discovered automatically — any package under packages/ whose
  * exports["."] has an "aws-runtime" condition is treated as a Building Block.
  *
@@ -62,6 +65,8 @@ const buildingBlocks = readdirSync(packagesDir, { withFileTypes: true })
 	.map((dir) => readPackage(join(packagesDir, dir.name)))
 	.sort((a, b) => a.name.localeCompare(b.name));
 const bbPackages = buildingBlocks.filter((pkg) => pkg.exports['aws-runtime']);
+const browserPackages = buildingBlocks.filter((pkg) => pkg.exports.browser);
+const umbrellaPackage = readPackage(join(packagesDir, 'blocks'));
 const serverConditions: ServerCondition[] = ['aws-runtime', 'cdk'];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -124,6 +129,28 @@ for (const { name } of bbPackages) {
 	}
 }
 
+// ── BB packages: browser (auto-discovered) ──────────────────────────────────
+// Frontend code imports a BB package directly only for its error constants, to
+// match errors with `isBlocksError(e, FileBucketErrors.FileNotFound)`. The
+// bundler resolves the browser entry, so it must load under that condition and
+// export every `*Errors` constant the default entry has. The rest of a BB is
+// server-side, so other exports are not compared.
+
+// Includes packages without an aws-runtime entry, like bb-auth-basic.
+for (const { name } of browserPackages) {
+	test(`${name}: browser entry exports error constants`, () => {
+		const browserNames = getExports(name, 'browser');
+		const missing = [...getExports(name)].filter((n) => n.endsWith('Errors') && !browserNames.has(n));
+
+		assert.deepStrictEqual(
+			missing,
+			[],
+			`${name} "browser" entry is missing error constants:\n  ${missing.join(', ')}\n\n` +
+				'Re-export them from the browser entry file so frontends can match errors with `isBlocksError`.',
+		);
+	});
+}
+
 // ── BB packages: class methods (auto-discovered) ────────────────────────────
 // A class can exist in every entry yet lose methods: under cdk it is a different
 // class (the construct), so every runtime-only method needs a `synthGuard` stub
@@ -163,7 +190,7 @@ const bbEntries = bbPackages.map(declarationEntry);
 // The umbrella re-exports core (`Scope`, `RawRoute`, `ApiNamespace`, ...) from a
 // different module per condition, so its classes get the same method-parity check.
 // Not the guard check below: core's cdk classes are constructs, not `synthGuard` stubs.
-const umbrellaEntry = declarationEntry(readPackage(join(packagesDir, 'blocks')));
+const umbrellaEntry = declarationEntry(umbrellaPackage);
 
 let program: ts.Program | undefined;
 
