@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { registerTracer, Scope } from '@aws-blocks/core/cdk';
+import { registerTracer, Scope, synthGuard } from '@aws-blocks/core/cdk';
 import type { TracerOptions } from './types.js';
 
 export type { AnnotationValue, Segment, TracerOptions } from './types.js';
@@ -28,4 +28,14 @@ export class Tracer extends Scope {
 			registerTracer(this);
 		}
 	}
+
+	// ── Runtime methods are not available during CDK synth ────────────────
+	// Under `--conditions=cdk` a Tracer resolves to this construct, which only
+	// provisions infrastructure; these methods live in the runtime build. Calling
+	// one at module top-level (which runs during synth) would otherwise fail with a
+	// cryptic `X is not a function`; these stubs turn that into an actionable message.
+	startSegment(..._args: unknown[]): never { return synthGuard('Tracer', 'startSegment'); }
+	addAnnotation(..._args: unknown[]): never { return synthGuard('Tracer', 'addAnnotation'); }
+	addMetadata(..._args: unknown[]): never { return synthGuard('Tracer', 'addMetadata'); }
+	getTraceId(..._args: unknown[]): never { return synthGuard('Tracer', 'getTraceId'); }
 }

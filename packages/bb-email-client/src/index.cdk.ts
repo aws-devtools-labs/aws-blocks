@@ -5,7 +5,7 @@ import { CfnConfigurationSet } from 'aws-cdk-lib/aws-ses';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Stack } from 'aws-cdk-lib';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 
 // Re-export public types and errors (no runtime dependencies)
@@ -47,4 +47,12 @@ export class EmailClient extends BuildingBlockScope {
 			],
 		}));
 	}
+
+	// ── Runtime methods are not available during CDK synth ────────────────
+	// Under `--conditions=cdk` an EmailClient resolves to this construct, which only
+	// provisions infrastructure; these methods live in the runtime build. Calling
+	// one at module top-level (which runs during synth) would otherwise fail with a
+	// cryptic `X is not a function`; these stubs turn that into an actionable message.
+	send(..._args: unknown[]): never { return synthGuard('EmailClient', 'send'); }
+	sendBatch(..._args: unknown[]): never { return synthGuard('EmailClient', 'sendBatch'); }
 }

@@ -8,7 +8,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 import { validateAppSettingOptions } from './validation.js';
@@ -139,6 +139,14 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 		const envKey = `BLOCKS_SSM_PARAM_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 		registerConfig(this, envKey, parameterName);
 	}
+
+	// ── Runtime methods are not available during CDK synth ────────────────
+	// Under `--conditions=cdk` an AppSetting resolves to this construct, which only
+	// provisions infrastructure; these methods live in the runtime build. Calling
+	// one at module top-level (which runs during synth) would otherwise fail with a
+	// cryptic `X is not a function`; these stubs turn that into an actionable message.
+	get(..._args: unknown[]): never { return synthGuard('AppSetting', 'get'); }
+	put(..._args: unknown[]): never { return synthGuard('AppSetting', 'put'); }
 }
 
 // ── Bulk Secret Initialization (one CustomResource per stack) ───────────────

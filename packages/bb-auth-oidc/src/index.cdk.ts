@@ -29,7 +29,7 @@
  */
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { AppSetting, SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
@@ -352,4 +352,21 @@ export class AuthOIDC<
 	createApi() {
 		return Object.assign(() => ({}), { [Symbol.for('blocks:ApiNamespace')]: 'auth' });
 	}
+
+	// ── Runtime methods are not available during CDK synth ────────────────
+	// Under `--conditions=cdk` an AuthOIDC resolves to this construct, which only
+	// provisions infrastructure; these methods live in the runtime build. Calling
+	// one at module top-level (which runs during synth) would otherwise fail with a
+	// cryptic `X is not a function`; these stubs turn that into an actionable message.
+	requireAuth(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'requireAuth'); }
+	checkAuth(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'checkAuth'); }
+	getCurrentUser(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'getCurrentUser'); }
+	getSignInUrl(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'getSignInUrl'); }
+	handleCallback(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'handleCallback'); }
+	handleCallbackDispatch(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'handleCallbackDispatch'); }
+	handleExchange(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'handleExchange'); }
+	getAuthorizeParams(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'getAuthorizeParams'); }
+	refreshBearerTokens(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'refreshBearerTokens'); }
+	signOut(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'signOut'); }
+	signInRoutePath(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'signInRoutePath'); }
 }

@@ -5,7 +5,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { FileBucketOptions, CorsRule, ExternalBucketRef } from './types.js';
 import { validateBucketName } from './bucket-name.js';
@@ -159,4 +159,21 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 		this.bucket.grantReadWrite(this.executionRole);
 	}
+
+	// ── Runtime methods are not available during CDK synth ────────────────
+	// Under `--conditions=cdk` a FileBucket resolves to this construct, which only
+	// provisions infrastructure; these methods live in the runtime build. Calling
+	// one at module top-level (which runs during synth) would otherwise fail with a
+	// cryptic `X is not a function`; these stubs turn that into an actionable message.
+	put(..._args: unknown[]): never { return synthGuard('FileBucket', 'put'); }
+	get(..._args: unknown[]): never { return synthGuard('FileBucket', 'get'); }
+	delete(..._args: unknown[]): never { return synthGuard('FileBucket', 'delete'); }
+	deleteBatch(..._args: unknown[]): never { return synthGuard('FileBucket', 'deleteBatch'); }
+	getUrl(..._args: unknown[]): never { return synthGuard('FileBucket', 'getUrl'); }
+	putUrl(..._args: unknown[]): never { return synthGuard('FileBucket', 'putUrl'); }
+	getFileHandle(..._args: unknown[]): never { return synthGuard('FileBucket', 'getFileHandle'); }
+	createUploadHandle(..._args: unknown[]): never { return synthGuard('FileBucket', 'createUploadHandle'); }
+	scan(..._args: unknown[]): never { return synthGuard('FileBucket', 'scan'); }
+	listVersions(..._args: unknown[]): never { return synthGuard('FileBucket', 'listVersions'); }
+	restoreVersion(..._args: unknown[]): never { return synthGuard('FileBucket', 'restoreVersion'); }
 }

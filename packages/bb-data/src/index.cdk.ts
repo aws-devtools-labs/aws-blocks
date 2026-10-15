@@ -261,6 +261,18 @@ export class Database extends BuildingBlockScope {
   static fromExisting(config: ExternalDatabaseRef): ExternalDatabaseRef {
     return config;
   }
+
+  // ── Runtime methods are not available during CDK synth ────────────────
+  // Under `--conditions=cdk` a Database resolves to this construct, which only
+  // provisions infrastructure; these methods live in the runtime build. Calling
+  // one at module top-level (which runs during synth) would otherwise fail with a
+  // cryptic `X is not a function`; these stubs turn that into an actionable message.
+  query(..._args: unknown[]): never { return synthGuard('Database', 'query'); }
+  queryOne(..._args: unknown[]): never { return synthGuard('Database', 'queryOne'); }
+  execute(..._args: unknown[]): never { return synthGuard('Database', 'execute'); }
+  transaction(..._args: unknown[]): never { return synthGuard('Database', 'transaction'); }
+  withRLS(..._args: unknown[]): never { return synthGuard('Database', 'withRLS'); }
+  crud(..._args: unknown[]): never { return synthGuard('Database', 'crud'); }
 }
 
 export { fromExisting } from './from-existing.js';
