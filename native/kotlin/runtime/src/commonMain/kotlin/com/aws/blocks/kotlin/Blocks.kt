@@ -25,6 +25,10 @@ class Blocks(
     server: BlocksServer,
 ) : AutoCloseable {
 
+    // Nothing public on this class may be a property, which is why the server is not one. A spec
+    // may name a namespace anything, a member always wins over an extension of the same name, and
+    // that leaves the generated accessor unreachable behind nothing louder than a compiler
+    // warning. Functions are safe: a member function and an extension property can share a name.
     private val client: BlocksClient = BlocksClient(server)
 
     /**
@@ -33,7 +37,7 @@ class Blocks(
      * spec does not describe can use it directly.
      *
      * This is a function rather than a property so that a spec may declare a namespace named
-     * `client` without the generated accessor for it being shadowed.
+     * `client` without the generated accessor for it being shadowed. See the note above.
      */
     fun client(): BlocksClient = client
 
