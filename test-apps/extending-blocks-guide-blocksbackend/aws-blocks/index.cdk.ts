@@ -60,7 +60,7 @@ class MyExistingStack extends cdk.Stack {
     stack.externalQueue.grantSendMessages(stack.blocks.executionRole);
     registerConfig(stack.blocks, 'EXTERNAL_QUEUE_URL', stack.externalQueue.queueUrl);
 
-    new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.blocks.apiUrl });
+    new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.blocks.publicApiUrl });
     new cdk.CfnOutput(stack, 'ExternalQueueUrl', { value: stack.externalQueue.queueUrl });
     new cdk.CfnOutput(stack, 'StackNameOut', { value: id });
 

@@ -178,7 +178,7 @@ export class MyApiStack extends cdk.Stack {
     externalQueue.grantSendMessages(blocks.executionRole);
     registerConfig(blocks, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 
-    new cdk.CfnOutput(this, 'BlocksApiUrl', { value: blocks.apiUrl });
+    new cdk.CfnOutput(this, 'BlocksApiUrl', { value: blocks.publicApiUrl });
   }
 }
 ```

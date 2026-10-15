@@ -24,7 +24,7 @@ export async function initBlocks(backend: any) {
   // Surface Blocks API URL in amplify_outputs.json
   backend.addOutput({
     custom: {
-      blocks_api_url: blocks.apiUrl,
+      blocks_api_url: blocks.publicApiUrl,
     },
   });
 

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers, brandBlocksError } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, blocksError } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -39,14 +39,10 @@ function writeSettings(scope: Scope, data: Record<string, unknown>): void {
 	writeFileSync(fp, JSON.stringify(data, null, 2));
 }
 
-// Prefixes the message with the error `name`. The `blocksError` in validation.ts
-// is deliberately UNPREFIXED to preserve the CDK synth error text — keep these
-// separate; do not merge them into one prefixing helper. @see validation.ts
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return brandBlocksError(err);
-}
+// Uses core's prefixing `blocksError` (message prefixed with the error `name`).
+// The `blocksError` in validation.ts is deliberately UNPREFIXED to preserve the
+// CDK synth error text — keep that one local; do not route it through core.
+// @see validation.ts
 
 async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value: unknown): Promise<void> {
 	if (!schema) return;

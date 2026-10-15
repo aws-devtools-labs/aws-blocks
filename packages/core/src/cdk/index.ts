@@ -6,6 +6,7 @@ import { __PIPELINE_STAGE_SCOPE__ } from '@aws-blocks/pipeline';
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
+	type ApiFrontDoorTier,
 	type BlocksStack as BaseBlocksStack,
 	type BlocksStackProps,
 	computeScopeFullId,
@@ -23,6 +24,12 @@ import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
+import {
+	type ApiFrontDoorOwner,
+	claimApiFrontDoor,
+	publicApiUrl,
+	resolveApiFrontDoor,
+} from './api-front-door.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
@@ -74,7 +81,7 @@ export interface CoreBlocksStackProps extends BlocksStackProps {
 	defaultComputeFactory: DefaultComputeFactory;
 }
 
-export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
+export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontDoorOwner {
 	public readonly id: string;
 	public readonly backendHandlerPath: string;
 	/**
@@ -91,14 +98,46 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	_defaultCompute?: Compute;
 	/** The single shared REST API gateway fronting the default compute; built in `create()`. @internal */
 	_sharedGateway?: SharedGateway;
+	/** Set when a `Hosting` distribution has claimed the API front-door role (see {@link claimApiFrontDoor}). @internal */
+	_apiFrontDoorClaimedByHosting?: boolean;
+	/** Public origin of whichever front door ended up fronting the API. @internal */
+	_apiFrontDoorResolvedUrl?: string;
+	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
+	_apiFrontDoorTier?: ApiFrontDoorTier;
+
+	/**
+	 * Claim the API front-door role for a `Hosting` distribution fronting this
+	 * stack's API, so the managed `cloudfront` distribution stands down. Recorded
+	 * on this instance (not ambient per-stack state) — see {@link ApiFrontDoorOwner}.
+	 * @internal Framework-only.
+	 */
+	claimApiFrontDoor(distributionUrl: string): void {
+		claimApiFrontDoor(this, distributionUrl);
+	}
 
 	/** The stack's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
 	get gateway(): cdk.aws_apigateway.RestApi {
 		return this.requireSharedGateway().restApi;
 	}
-	/** The shared gateway's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+	/**
+	 * The shared gateway's own RPC endpoint URL (its `execute-api` address),
+	 * whatever the `apiFrontDoor` tier. `Hosting` forwards API traffic to it, so it
+	 * stays the gateway's URL even under `'cloudfront'`. For the URL clients should
+	 * call, use {@link publicApiUrl}. To be removed once consumers move to the
+	 * multi-compute model.
+	 */
 	get apiUrl(): string {
 		return this.requireSharedGateway().apiUrl;
+	}
+	/**
+	 * The URL clients should send RPC calls to: the CloudFront distribution's URL +
+	 * `/aws-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
+	 * distribution, or `Hosting`'s when Hosting fronts the API), otherwise
+	 * {@link apiUrl}. A CloudFormation token, resolved at synth — use it wherever a
+	 * deploy-time value works. The stack's `ApiUrl` output is this value.
+	 */
+	get publicApiUrl(): string {
+		return publicApiUrl(this, () => this.apiUrl);
 	}
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
@@ -129,6 +168,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		this.backendModulePath = props.backendCDKPath;
 		this.defaults = props.defaults;
 		this._vpcOptions = props.defaults.vpc;
+		// Validate and record the tier before the backend module is imported, so an
+		// invalid value fails before any app code runs.
+		this._apiFrontDoorTier = resolveApiFrontDoor(props.apiFrontDoor);
 
 		// Brand as a backend root so getBlocksRoot() can find this by walking the
 		// construct tree (see root-registry.ts). Set before any child Scope/BB is
@@ -181,7 +223,8 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 			}
 		}
 		// Build the single shared REST API gateway now that the backend module has
-		// imported and every compute exists (see buildSharedGateway).
+		// imported and every compute exists, and schedule the API front door
+		// (see buildSharedGateway).
 		buildSharedGateway(stack);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
@@ -215,7 +258,10 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 			);
 		}
 
-		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
+		// Where a client should send RPC calls (see publicApiUrl): the CloudFront URL
+		// under `cloudfront`, else the gateway's own URL. `deploy.ts` / `sandbox.ts`
+		// read this output and hand it to a client as `BLOCKS_API_URL`.
+		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.publicApiUrl });
 
 		addBlocksStackMetadata(stack);
 
