@@ -14,6 +14,9 @@ object NamingUtils {
      * The type a binding's `export` resolves to. Only each segment's first character is
      * raised, so an acronym the declaring package exports as `URL` is imported as `URL`;
      * [toPascalCase] would lower its tail and name a type the package does not export.
+     *
+     * The empty-segment arm is defensive: the parser's `EXPORT` regex admits no dangling or
+     * doubled separator, so no value reaching here splits into one.
      */
     fun exportTypeName(export: String): String =
         export.split('_', '-')

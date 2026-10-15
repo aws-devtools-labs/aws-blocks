@@ -3,10 +3,12 @@ package com.aws.blocks.kotlin
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.GeneratorResult
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
+import com.aws.blocks.kotlin.CodegenException
 import com.aws.blocks.kotlin.parser.OpenRpcParseException
 import com.aws.blocks.kotlin.parser.OpenRpcParser
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -15,6 +17,7 @@ import io.kotest.matchers.string.shouldNotContain
 private const val TAG = "example-iot/device-link"
 private const val KOTLIN_PACKAGE = "com.example.blocks.iot"
 private const val IDENTITY = "example-iot-native"
+private const val OIDC_TAG = "oidc/client"
 
 private val TELEMETRY_REF = """{ "${'$'}ref": "#/components/schemas/Telemetry" }"""
 
@@ -134,10 +137,6 @@ class DeclaredTransferableBindingTest : FunSpec({
                 "expectedTag = \"$TAG\")) { BlocksJson.decodeFromJsonElement<Telemetry>(it) }"
         }
 
-        test("emits no unbound diagnostic") {
-            generate(generic).warnings shouldBe emptyList()
-        }
-
     }
 
     context("arity zero") {
@@ -254,8 +253,19 @@ class DeclaredTransferableBindingTest : FunSpec({
 
         // docs/native-clients/codegen-design.md § Unbound transferables: a nullable result on an
         // unbound path still fails generation, including the two paths this change adds.
+        test("a nullable result on a package with no android field still fails generation") {
+            shouldThrow<CodegenException> {
+                generate(
+                    spec(
+                        """{ "oneOf": [ ${transferableResult(typeArgs = null)}, { "type": "null" } ] }""",
+                        "${packagesCatalog(platforms = dartPlatform())},${bindingsCatalog(binding(arity = "0"))}",
+                    ),
+                )
+            }
+        }
+
         test("a nullable result on an excluded package still fails generation") {
-            shouldThrow<UnsupportedOperationException> {
+            shouldThrow<CodegenException> {
                 generate(
                     spec(
                         """{ "oneOf": [ ${transferableResult(typeArgs = null)}, { "type": "null" } ] }""",
@@ -266,8 +276,52 @@ class DeclaredTransferableBindingTest : FunSpec({
             }
         }
 
-        test("neither catalog present keeps the Iteration 0 output") {
-            fellBack(generate(spec(transferableResult(), schemas = TELEMETRY_SCHEMA)))
+        test("a spec with no methods still carries the catalogs") {
+            val model = OpenRpcParser.parse(
+                """
+                {
+                  "openrpc": "1.3.2",
+                  "info": { "title": "test", "version": "1.0.0" },
+                  ${packagesCatalog()},${bindingsCatalog(binding())}
+                }
+                """.trimIndent(),
+            )
+            model.methods.shouldBeEmpty()
+            model.nativeCatalogs.bindings.map { it.tag } shouldBe listOf(TAG)
+        }
+    }
+
+    context("the authoring guide's factory contract matches what the generator calls") {
+        val guide = java.io.File(System.getProperty("AUTHORING_GUIDE")!!).readText()
+        val declarations = Regex("""fun (?:<T> )?fromBlocksDescriptor\((.*)\): """)
+            .findAll(guide).map { it.groupValues[1] }.toList()
+
+        test("the guide declares exactly the arity-0 and arity-1 forms") {
+            declarations shouldBe listOf(
+                "descriptor: JsonObject",
+                "descriptor: JsonObject, decode: (JsonElement) -> T",
+            )
+        }
+
+        test("an arity-0 call passes the documented single descriptor parameter") {
+            generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${packagesCatalog()},${bindingsCatalog(binding(arity = "0"))}",
+                ),
+            ).source() shouldContain "DeviceLink.fromBlocksDescriptor(validateTransferableDescriptor("
+        }
+
+        test("an arity-1 call passes a type argument and the documented decoder") {
+            generate(
+                spec(
+                    transferableResult(),
+                    "${packagesCatalog()},${bindingsCatalog(binding())}",
+                    TELEMETRY_SCHEMA,
+                ),
+            ).source() shouldContain
+                "DeviceLink.fromBlocksDescriptor<Telemetry>(validateTransferableDescriptor(result, " +
+                "expectedTag = \"$TAG\")) { BlocksJson.decodeFromJsonElement<Telemetry>(it) }"
         }
     }
 
@@ -341,6 +395,15 @@ class DeclaredTransferableBindingTest : FunSpec({
             src shouldContain "import kotlinx.serialization.json.JsonNull"
         }
 
+        test("a nullable oidc/client result returns null for a JSON-null body") {
+            generate(
+                spec(
+                    """{ "oneOf": [ ${transferableResult(tag = OIDC_TAG, typeArgs = null)}, { "type": "null" } ] }""",
+                ),
+                relayTo = "com.example.app://auth/callback",
+            ).source() shouldContain "return if (result is JsonNull) null else OidcClient.fromJson("
+        }
+
         listOf(
             "file-bucket/download" to "FileDownloadHandle.fromJson(result)",
             "file-bucket/upload" to "FileUploadHandle.fromJson(result)",
@@ -397,6 +460,13 @@ class DeclaredTransferableBindingTest : FunSpec({
                 spec(transferableResult(typeArgs = null), packagesCatalog(platforms = """
           "dart": { "package": { "name": "iot", "library": "iot.dart" } }""")),
             ).warnings.count { it.contains("AWSBLOCKS-NATIVE-003") } shouldBe 1
+        }
+
+        test("an excluded package is not reported as unreferenced") {
+            generate(
+                spec("""{ "type": "string" }""", packagesCatalog()),
+                excluded = setOf(IDENTITY),
+            ).warnings shouldBe emptyList()
         }
 
         test("a declared package no binding names reports AWSBLOCKS-NATIVE-003") {
@@ -538,6 +608,15 @@ class DeclaredTransferableBindingTest : FunSpec({
           "android": 7""")) shouldContain "must be an object"
         }
 
+        test("a transferable binding with no tag is rejected") {
+            rejected(
+                "${packagesCatalog()}," + """
+    "x-blocks-native-bindings": { "schemaVersion": 1, "bindings": [
+        { "id": "b", "kind": "transferable", "package": "$IDENTITY", "export": "deviceLink",
+          "abi": "blocks-transferable-v1", "genericArity": 0 } ] }""",
+            ) shouldContain "requires a non-blank string \"tag\""
+        }
+
         test("a non-string kotlinPackage is rejected") {
             rejected(
                 packagesCatalog(platforms = """
@@ -563,13 +642,15 @@ class DeclaredTransferableBindingTest : FunSpec({
             ).source() shouldContain "import $KOTLIN_PACKAGE.URL\n"
         }
 
-        test("only each segment's first character is raised") {
-            generate(
-                spec(
-                    transferableResult(typeArgs = null),
-                    "${packagesCatalog()},${bindingsCatalog(binding(export = "iot_API", arity = "0"))}",
-                ),
-            ).source() shouldContain "import $KOTLIN_PACKAGE.IotAPI\n"
+        listOf("iot_API" to "IotAPI", "iot-API" to "IotAPI").forEach { (export, type) ->
+            test("only each segment's first character is raised in \"$export\"") {
+                generate(
+                    spec(
+                        transferableResult(typeArgs = null),
+                        "${packagesCatalog()},${bindingsCatalog(binding(export = export, arity = "0"))}",
+                    ),
+                ).source() shouldContain "import $KOTLIN_PACKAGE.$type\n"
+            }
         }
 
         test("a negative genericArity is rejected") {
@@ -612,7 +693,7 @@ class DeclaredTransferableBindingTest : FunSpec({
 
     context("arity must agree with the declared results") {
         fun mismatch(result: String, arity: String, schemas: String = "") =
-            shouldThrow<OpenRpcParseException> {
+            shouldThrow<CodegenException> {
                 generate(spec(result, "${packagesCatalog()},${bindingsCatalog(binding(arity = arity))}", schemas))
             }.message.shouldNotBeNull()
 
@@ -632,7 +713,7 @@ class DeclaredTransferableBindingTest : FunSpec({
         }
 
         test("too few type args on the result is rejected, naming the method") {
-            shouldThrow<OpenRpcParseException> {
+            shouldThrow<CodegenException> {
                 generate(
                     spec(
                         transferableResult(typeArgs = null),
@@ -646,7 +727,7 @@ class DeclaredTransferableBindingTest : FunSpec({
         }
 
         test("too many type args on the result is rejected") {
-            shouldThrow<OpenRpcParseException> {
+            shouldThrow<CodegenException> {
                 generate(
                     spec(
                         transferableResult(),

@@ -18,8 +18,8 @@ private fun kmpProject(): Project = project("org.jetbrains.kotlin.multiplatform"
 
 class AwsBlocksExtensionWiringTest : FunSpec({
 
-    // Android needs AGP and is unreachable under ProjectBuilder; KMP's relayToRequirement is a
-    // placeholder afterEvaluate replaces, so neither is asserted here.
+    // Android needs AGP, unreachable under ProjectBuilder; KMP's relayToRequirement is
+    // a placeholder afterEvaluate replaces. Neither is asserted.
     test("every extension input reaches the JVM codegen task") {
         val project = jvmProject()
         project.extensions.getByType(AwsBlocksExtension::class.java).apply {

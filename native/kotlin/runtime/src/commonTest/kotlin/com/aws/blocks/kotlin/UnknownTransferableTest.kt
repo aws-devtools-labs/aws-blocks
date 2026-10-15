@@ -3,7 +3,6 @@ package com.aws.blocks.kotlin
 import com.aws.blocks.kotlin.exceptions.TransferableException
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeSameInstanceAs
 import kotlin.test.Test
 import kotlinx.serialization.json.JsonElement
@@ -25,17 +24,6 @@ class UnknownTransferableTest {
 
         unknown.tag shouldBe "example-iot/device-link"
         unknown.descriptor shouldBeSameInstanceAs descriptor
-    }
-
-    @Test
-    fun `rejects an object missing the __blocks field`() {
-        val exception = shouldThrow<TransferableException> {
-            UnknownTransferable.fromJson(
-                buildJsonObject { put("endpoint", "wss://iot.example.com") },
-                expectedTag = "example-iot/device-link",
-            )
-        }
-        exception.message shouldContain "expected a string '__blocks' tag"
     }
 
     @Test

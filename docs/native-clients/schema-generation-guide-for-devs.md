@@ -468,6 +468,24 @@ Each binding carries a stable `id`, a `kind` (only `transferable` in schema 1), 
 
 **Codegen contract.** A method joins its binding only by tag: `result.schema.x-blocks-transferable` equals `bindings[].tag`. The `abi` fixes the call: under `blocks-transferable-v1`, export `x` resolves to `X.fromBlocksDescriptor`. A built-in tag cannot be bound by a block.
 
+**Factory contract.** `fromBlocksDescriptor` is the declared package's own surface — nothing here type-checks it, so a shape mismatch surfaces only when the consumer compiles. Under `blocks-transferable-v1` the descriptor arrives already checked against the binding's `tag`. On Android the `export` must carry the form its `genericArity` selects:
+
+```kotlin
+// genericArity 0
+class DeviceHandle {
+	companion object {
+		fun fromBlocksDescriptor(descriptor: JsonObject): DeviceHandle
+	}
+}
+
+// genericArity 1 — T is the method's result type
+class DeviceLink<T> {
+	companion object {
+		fun <T> fromBlocksDescriptor(descriptor: JsonObject, decode: (JsonElement) -> T): DeviceLink<T>
+	}
+}
+```
+
 **Stability.** Both catalogs are emitted only when a block declares content.
 
 ### Where the catalogs come from: `aws-blocks.native`

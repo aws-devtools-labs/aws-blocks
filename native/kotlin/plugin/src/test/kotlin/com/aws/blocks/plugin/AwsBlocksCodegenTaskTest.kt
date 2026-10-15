@@ -1,6 +1,7 @@
 package com.aws.blocks.plugin
 
 import com.aws.blocks.kotlin.generator.RelayToRequirement
+import com.aws.blocks.kotlin.CodegenException
 import com.aws.blocks.kotlin.parser.OpenRpcParseException
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -87,7 +88,7 @@ class AwsBlocksCodegenTaskTest : FunSpec({
     test("a spec rejected during code generation leaves previously generated sources in place") {
         val run = StaleOutput(ARITY_MISMATCH)
 
-        shouldThrow<OpenRpcParseException> { run.task.generate() }
+        shouldThrow<CodegenException> { run.task.generate() }
 
         run.previous.readText() shouldBe "// from the previous run"
     }

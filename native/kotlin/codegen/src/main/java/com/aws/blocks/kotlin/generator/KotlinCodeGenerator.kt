@@ -3,6 +3,7 @@ package com.aws.blocks.kotlin.generator
 import com.aws.blocks.kotlin.NamingUtils
 import com.aws.blocks.kotlin.model.ApiNamespace
 import com.aws.blocks.kotlin.model.CodegenModel
+import com.aws.blocks.kotlin.CodegenException
 import com.aws.blocks.kotlin.model.Constraints
 import com.aws.blocks.kotlin.model.DiscriminatorInfo
 import com.aws.blocks.kotlin.model.DiscriminatorType
@@ -17,7 +18,6 @@ import com.aws.blocks.kotlin.model.ResolvedType
 import com.aws.blocks.kotlin.model.ServerDefinition
 import com.aws.blocks.kotlin.model.TypeDefinition
 import com.aws.blocks.kotlin.model.UnionVariant
-import com.aws.blocks.kotlin.parser.OpenRpcParseException
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
@@ -35,14 +35,7 @@ import com.squareup.kotlinpoet.asTypeName
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 
-/**
- * Generates Kotlin source files from a [CodegenModel] using KotlinPoet.
- *
- * This is a thin translation layer: all business logic (type deduplication,
- * API grouping, discriminator detection) lives in the CodegenModelBuilder.
- * This generator owns Kotlin-specific concerns: naming conventions, nesting
- * decisions, KotlinPoet annotations, and file structure.
- */
+/** One generation run: the files to write, plus the diagnostics the caller surfaces. */
 data class GeneratorResult(
     val files: List<FileSpec>,
     val warnings: List<String>,
@@ -79,6 +72,14 @@ private fun resolveBoundTransferables(
         }
     }.toMap()
 
+/**
+ * Generates Kotlin source files from a [CodegenModel] using KotlinPoet.
+ *
+ * This is a thin translation layer: all business logic (type deduplication,
+ * API grouping, discriminator detection) lives in the CodegenModelBuilder.
+ * This generator owns Kotlin-specific concerns: naming conventions, nesting
+ * decisions, KotlinPoet annotations, and file structure.
+ */
 class KotlinCodeGenerator(
     private val packageName: String,
     private val internalVisibility: Boolean = false,
@@ -170,7 +171,7 @@ class KotlinCodeGenerator(
             }
         }
 
-        for (identity in model.nativeCatalogs.unreferencedPackages) {
+        for (identity in model.nativeCatalogs.unreferencedPackages - excludedPackages) {
             warnings.add(
                 "AWSBLOCKS-NATIVE-003: native package '$identity' is declared but no binding " +
                     "references it; nothing is imported for it on kotlin.",
@@ -1302,9 +1303,8 @@ class KotlinCodeGenerator(
             funBuilder.addStatement("client.execute(request)")
         } else if (returnType == ClassNames.unknownTransferable) {
             // An unbound tag here would otherwise fail generation; degrade to a checked carrier.
-            // Reached only on exact equality with the non-nullable name, so no null guard: a
-            // nullable unbound result still fails generation (see docs/native-clients/
-            // codegen-design.md § Unbound transferables).
+            // A nullable unbound result fails generation, so this arm is always non-nullable.
+            // See docs/native-clients/codegen-design.md § Unbound transferables.
             val tag = unwrapNullableTransferable(operation.result.type)!!.transferableName
             funBuilder.addStatement("val result = client.execute(request)")
             funBuilder.addCode(
@@ -1494,7 +1494,13 @@ class KotlinCodeGenerator(
         type.transferableName !in knownTransferableTags &&
         type.transferableName !in bound
 
-    /** Built-in tags are absent from [bound], so a binding on one stays inert. */
+    /**
+     * Built-in tags are absent from [bound], so a binding on one stays inert.
+     *
+     * An arity disagreement is the generator's own rejection, not the parser's: it needs the
+     * operation's result and must run after [excludedPackages]. It shares [CodegenException]
+     * with the parser's rejections, so one catch covers every spec a run refuses.
+     */
     private fun boundDirectResult(
         operation: Operation,
         namespace: String,
@@ -1505,7 +1511,7 @@ class KotlinCodeGenerator(
         val transferable = unwrapNullableTransferable(operation.result.type) ?: return null
         val binding = bound[transferable.transferableName] ?: return null
         if (transferable.typeArgs.size != binding.genericArity) {
-            throw OpenRpcParseException(
+            throw CodegenException(
                 "$namespace.${operation.name} returns \"${transferable.transferableName}\", bound at " +
                     "genericArity ${binding.genericArity}, but its result carries " +
                     "${transferable.typeArgs.size} x-blocks-type-args entries",
@@ -1742,7 +1748,7 @@ class KotlinCodeGenerator(
             is ResolvedType.TupleType -> TODO("TupleType toJson not yet implemented")
 
             is ResolvedType.Transferable -> {
-                throw UnsupportedOperationException(
+                throw CodegenException(
                     "Transferable types (${type.transferableName}) cannot be serialized — they are read-only"
                 )
             }
@@ -1832,7 +1838,7 @@ class KotlinCodeGenerator(
             }
 
             else -> {
-                throw UnsupportedOperationException("Unknown transferable: ${type.transferableName}")
+                throw CodegenException("Unknown transferable: ${type.transferableName}")
             }
         }
     }

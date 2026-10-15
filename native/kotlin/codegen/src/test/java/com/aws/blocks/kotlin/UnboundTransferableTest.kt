@@ -1,5 +1,6 @@
 package com.aws.blocks.kotlin
 
+import com.aws.blocks.kotlin.CodegenException
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.GeneratorResult
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
@@ -183,7 +184,7 @@ class UnboundTransferableTest : FunSpec({
         test("nullable direct result is out of scope and left unchanged") {
             // Nullable is out of scope and kept at today's behavior; Kotlin's "today" for
             // an unbound tag is a generation failure, so this path is deliberately left to throw.
-            shouldThrow<UnsupportedOperationException> {
+            shouldThrow<CodegenException> {
                 generate(
                     resultSpec("""{ "oneOf": [ { "x-blocks-transferable": "$UNBOUND_TAG" }, { "type": "null" } ] }"""),
                 )

@@ -6,6 +6,7 @@ import com.aws.blocks.kotlin.model.ContentDescriptor
 import com.aws.blocks.kotlin.model.Error
 import com.aws.blocks.kotlin.model.ExamplePairing
 import com.aws.blocks.kotlin.model.ExternalDocumentation
+import com.aws.blocks.kotlin.CodegenException
 import com.aws.blocks.kotlin.model.Field
 import com.aws.blocks.kotlin.model.Info
 import com.aws.blocks.kotlin.model.License
@@ -21,7 +22,7 @@ import kotlinx.serialization.json.*
 /**
  * Exception thrown when the OpenRPC parser encounters invalid or unsupported input.
  */
-class OpenRpcParseException(message: String) : RuntimeException(message)
+class OpenRpcParseException(message: String) : CodegenException(message)
 
 /**
  * Parses an OpenRPC JSON specification into a [com.aws.blocks.kotlin.model.RpcModel].

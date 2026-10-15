@@ -16,7 +16,7 @@ private const val TRANSFERABLE_KIND = "transferable"
 private const val TRANSFERABLE_ABI = "blocks-transferable-v1"
 private const val MAX_GENERIC_ARITY = 1
 
-/** The only shape `import <kotlinPackage>.<Type>` accepts: dotted Kotlin identifiers. */
+/** The only shape `import <kotlinPackage>.<Type>` accepts: dot-separated segments. */
 private val KOTLIN_PACKAGE = Regex("""[\p{L}_][\p{L}\p{N}_]*(\.[\p{L}_][\p{L}\p{N}_]*)*""")
 
 /** One identifier; a separator always joins two segments, never dangles. */
@@ -86,15 +86,15 @@ internal object NativeCatalogParser {
                     "$path (\"$id\") names package \"$identity\", which $PACKAGES does not declare",
                 )
             }
-            // `kind` is an open enumeration, so uniqueness has to span every kind.
-            binding["tag"]?.let {
-                val tag = binding.requireString("tag", path)
-                if (!seenTags.add(tag)) {
-                    throw OpenRpcParseException("$BINDINGS binds tag \"$tag\" more than once")
-                }
+            // `kind` is an open enumeration, so uniqueness has to span every kind, and a
+            // kind that carries no tag is skipped rather than rejected.
+            val declaredTag = if (binding.containsKey("tag")) binding.requireString("tag", path) else null
+            if (declaredTag != null && !seenTags.add(declaredTag)) {
+                throw OpenRpcParseException("$BINDINGS binds tag \"$declaredTag\" more than once")
             }
             if (kind != TRANSFERABLE_KIND) continue
-            val tag = binding.requireString("tag", path)
+            val tag = declaredTag
+                ?: throw OpenRpcParseException("$path (\"$id\") requires a non-blank string \"tag\"")
 
             val abi = binding.requireString("abi", path)
             if (abi != TRANSFERABLE_ABI) {

@@ -91,8 +91,9 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
             project.plugins.hasPlugin("com.android.library")
 
     /**
-     * Every registration path sets the same eight inputs; only the relay requirement differs, and
-     * the KMP path passes a placeholder that `afterEvaluate` replaces once targets are known.
+     * Every registration path sets every input the task declares; only the relay requirement
+     * differs, and the KMP path passes a placeholder that `afterEvaluate` replaces once targets
+     * are known.
      */
     private fun configureCodegenTask(
         task: AwsBlocksCodegenTask,

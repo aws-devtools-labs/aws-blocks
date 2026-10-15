@@ -1,5 +1,6 @@
 package com.aws.blocks.kotlin
 
+import com.aws.blocks.kotlin.exceptions.TransferableException
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
@@ -13,6 +14,10 @@ class UnknownTransferable private constructor(
     val descriptor: JsonObject,
 ) {
     companion object {
+        /**
+         * Throws [TransferableException] unless [element] is a JSON object whose
+         * `__blocks` is a non-empty string equal to [expectedTag].
+         */
         fun fromJson(element: JsonElement, expectedTag: String): UnknownTransferable =
             UnknownTransferable(
                 expectedTag,

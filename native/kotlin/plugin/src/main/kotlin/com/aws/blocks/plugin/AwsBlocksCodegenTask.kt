@@ -102,6 +102,8 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
         val result = generator.generate(codegenModel)
 
         // Generate before clearing, so a rejected spec leaves the previous sources in place.
+        // The clear and the write are not atomic: that guarantee covers a spec rejected
+        // before writing starts, not a crash part-way through it.
         val outputDir = outputDirectory.get().asFile
         if (outputDir.exists()) {
             outputDir.deleteRecursively()
