@@ -28,6 +28,9 @@ import ts from 'typescript';
  * This checks exported names, method presence and the cdk guards, not signature
  * compatibility. CDK stubs intentionally have different signatures.
  *
+ * Type-only exports are erased at runtime, so they are compared from the same
+ * `.d.ts` files, for every BB and the umbrella package.
+ *
  * BB packages are discovered automatically — any package under packages/ whose
  * exports["."] has an "aws-runtime" condition is treated as a Building Block.
  *
@@ -351,4 +354,31 @@ for (const entry of bbEntries) {
 				'implement it for real and add it to SYNTH_SAFE_METHODS.',
 		);
 	});
+}
+
+// ── Type exports (auto-discovered) ──────────────────────────────────────────
+// Type-only exports are erased at runtime, so the export checks above cannot see
+// them. A type the default entry exports but a server entry lacks breaks any
+// backend that imports it once it is type-checked under that condition.
+// Compares every declared name, types included.
+
+for (const { name, files } of [umbrellaEntry, ...bbEntries]) {
+	for (const condition of serverConditions) {
+		test(`${name}: ${condition} type exports match default`, { skip: !files[condition] }, () => {
+			assert.ok(files.default, `${name} has no "types" entry`);
+			const conditionFile = files[condition];
+			assert.ok(conditionFile, `${name} has no "${condition}" entry`);
+			const actual = new Set(declaredExports(conditionFile).map((s) => s.name));
+			const missing = declaredExports(files.default)
+				.map((s) => s.name)
+				.filter((n) => n !== 'default' && !actual.has(n));
+
+			assert.deepStrictEqual(
+				missing,
+				[],
+				`${name} "${condition}" entry is missing type exports:\n  ${missing.join(', ')}\n\n` +
+					`Re-export them from the ${condition} entry file with \`export type\`.`,
+			);
+		});
+	}
 }
