@@ -51,7 +51,7 @@ import {
 	DEFAULT_CALLBACK_PATH,
 	DEFAULT_SIGNOUT_PATH,
 } from './auth-oidc.js';
-import { cookieSecretEnvVar } from './utils.js';
+import { cognitoEnvPrefix, cookieSecretEnvVar } from './utils.js';
 
 export { AuthOIDCErrors, type AuthOIDCErrorName } from './errors.js';
 export {
@@ -250,7 +250,7 @@ export class AuthOIDC<
 			client.node.addDependency(dep);
 		}
 
-		const envPrefix = `BLOCKS_AUTH_OIDC_COGNITO_${this.fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+		const envPrefix = cognitoEnvPrefix(this.fullId);
 		registerConfig(this, `${envPrefix}_POOL_ID`, pool.userPoolId);
 		registerConfig(this, `${envPrefix}_CLIENT_ID`, client.userPoolClientId);
 		registerConfig(this, `${envPrefix}_CLIENT_SECRET`, client.userPoolClientSecret.unsafeUnwrap());

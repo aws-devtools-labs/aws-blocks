@@ -284,7 +284,9 @@ export class Scope {
 
     const parents = collectBBParents(this.parent);
     for (const parent of parents) {
-      chain.push(['bb', `${parent.bbName}/${parent.bbVersion}`]);
+      if (parent.bbName && parent.bbVersion) {
+        chain.push(['bb', `${parent.bbName}/${parent.bbVersion}`]);
+      }
     }
 
     if (this.bbName && this.bbVersion && OFFICIAL_BB_NAMES.has(this.bbName)) {
@@ -369,7 +371,22 @@ function isOfficialBuildingBlock(obj: unknown): obj is BuildingBlockMeta {
   return isBuildingBlock(obj) && OFFICIAL_BB_NAMES.has(obj.bbName);
 }
 
-export function computeScopeFullId(scope: { id: string; parent?: any }) {
+/**
+ * The fully-qualified ID of a scope: its parent's `fullId` (or `id`) joined to its own.
+ *
+ * This is what `Scope.fullId` returns. Call it directly only when a block must know its
+ * own `fullId` before `super()` has run — a block that builds a child in its constructor
+ * cannot reach `this.fullId` yet, and must not restate the rule.
+ *
+ * @param scope - The scope's own `id` and its optional parent
+ * @returns The fully-qualified ID, e.g. `"myApp-auth"`
+ *
+ * @example
+ * ```typescript
+ * const fullId = computeScopeFullId({ id, parent: scope });
+ * ```
+ */
+export function computeScopeFullId(scope: { id: string; parent?: ScopeParent }): string {
   if (scope.parent) {
     if ('fullId' in scope.parent && scope.parent.fullId) {
       return `${scope.parent.fullId}-${scope.id}`;
@@ -380,6 +397,37 @@ export function computeScopeFullId(scope: { id: string; parent?: any }) {
   }
   return scope.id;
 }
+
+/**
+ * A Building Block standing in as its own child's parent, for a block that must
+ * construct a child before `super()` has run and so cannot pass `this`.
+ *
+ * `bbName`/`bbVersion` are required because the chain walk skips a parent without
+ * them. It also skips a name outside `OFFICIAL_BB_NAMES`, so a custom block is not
+ * attributed by supplying them alone. `fullId` is derived here so the child's own
+ * `fullId`, and any resource name taken from it, is the same as under a real parent.
+ *
+ * @param meta - The block's own `id`, its parent scope, and its name and version
+ * @returns A parent carrying the identity and the user-agent metadata
+ *
+ * @example
+ * ```typescript
+ * const self = buildingBlockParent({ id, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+ * const child = new KVStore(self, 'sessions');
+ * ```
+ */
+export function buildingBlockParent(
+  meta: BuildingBlockMeta & { id: string; parent: ScopeParent },
+): BuildingBlockMeta & { id: string; parent: ScopeParent; fullId: string } {
+  return { ...meta, fullId: computeScopeFullId(meta) };
+}
+
+/**
+ * How a Blocks backend's API is exposed to clients: `'apigateway'` (the API
+ * Gateway endpoint itself, the default) or `'cloudfront'` (a Blocks-managed
+ * CloudFront distribution in front of it). See {@link BlocksStackProps.apiFrontDoor}.
+ */
+export type ApiFrontDoorTier = 'apigateway' | 'cloudfront';
 
 export interface BlocksStackProps extends StackProps {
   backendHandlerPath: string;
@@ -392,6 +440,33 @@ export interface BlocksStackProps extends StackProps {
    * option. See `BlocksDefaults` in `@aws-blocks/core/cdk`.
    */
   defaults: BlocksDefaults;
+  /**
+   * How the app's API is exposed to clients. Default: `'apigateway'`.
+   *
+   * - `'apigateway'` — clients call the stack's API Gateway endpoint directly, on
+   *   its own `execute-api` domain. Nothing extra to deploy.
+   * - `'cloudfront'` — Blocks puts a CloudFront distribution in front of the
+   *   gateway (built as a regional endpoint, so traffic passes through one
+   *   CloudFront layer), and clients call the distribution's domain instead.
+   *
+   * Whichever tier you pick, `publicApiUrl` (and the `ApiUrl` stack output) is the
+   * URL clients should call. When a `Hosting` construct fronts the API, the API is
+   * served from Hosting's distribution; under `'cloudfront'` Blocks then creates no
+   * second distribution.
+   *
+   * The default is a constant `'apigateway'` — it is NEVER derived from the app's
+   * shape, so adding or removing Building Blocks never silently changes how the
+   * API is exposed.
+   *
+   * ⚠️ **Switching tiers — or adding or removing `Hosting` under `'cloudfront'` —
+   * changes the API's endpoint domain.** Browser auth cookies and sessions are
+   * bound to the origin they were set on, so the change invalidates every existing
+   * cookie/session — users are signed out and must sign in again. (A stable custom
+   * domain — a future feature — would avoid this.) Pick a tier, and decide on
+   * Hosting, before you have real users, and treat a later change as a breaking
+   * migration.
+   */
+  apiFrontDoor?: ApiFrontDoorTier;
 }
 
 export class BlocksStack {

@@ -12,6 +12,12 @@ import {
 	DEAD_SERVER_KLASS,
 	DEAD_SERVER_REASON,
 	DEAD_SERVER_STATUS,
+	PGLITE_OOM_REASON,
+	PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL,
+	PGLITE_DATA_LAYER_RECOVERED_SENTINEL,
+	PGLITE_INIT_TRAP_RE,
+	isPgliteInitOom,
+	isDataLayerUnavailable,
 	PRICING,
 	buildCapDecision,
 	cellCost,
@@ -22,14 +28,25 @@ import {
 	HARNESS_FAIL_REASONS,
 	hardCapPlan,
 	isCountedFailKlass,
+	isProviderServerFault,
 	isScoredCell,
 	isUngracefulStepTwoDeath,
+	PROVIDER_UNAVAILABLE_REASON,
 	scorePerDollar,
 	testRate,
 	testStats,
 	verdict,
 	verdictOf,
 } from './scoring.mjs';
+// The real producer of the `builder_error` string the carve-out matches. Imported so a drift-guard
+// test can feed describeModelError's ACTUAL output into isProviderServerFault — pinning the format
+// contract between the two sibling .mjs modules (see the "drift guard" test below).
+import { describeModelError } from './bedrock-retry.mjs';
+// For the regex/sentinel drift-guard tests: read the TS source of truth and assert this .mjs's local
+// copies still match it (this .mjs cannot import the TS package, so the copies are coupled by VALUE).
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 describe('composite(tr, j) == round(60*tr + 4*j*min(1, 4*tr), 1)', () => {
 	it('tr=0 floors the judge term to 0 regardless of judge score', () => {
@@ -285,6 +302,116 @@ describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness
 	});
 });
 
+describe('provider-5xx carve-out: a 2-agent failure caused by a Bedrock SERVER fault → harness_error', () => {
+	// The real builder_error string describeModelError produced for the kb-chat-agent cell that
+	// prompted this gate (PR follow-up): Bedrock returned a 503 through the whole invoke-retry window.
+	const BEDROCK_503 =
+		'ModelError: Bedrock is unable to process your request. ← caused by ServiceUnavailableException: ' +
+		'Bedrock is unable to process your request. $fault=server $metadata={httpStatusCode:503,requestId:d72cb143}';
+
+	it('isProviderServerFault matches a 5xx server fault, not a 4xx / throttle / budget error', () => {
+		assert.equal(isProviderServerFault(BEDROCK_503), true);
+		assert.equal(isProviderServerFault('InternalServerException: transient $metadata={httpStatusCode:500}'), true);
+		assert.equal(isProviderServerFault('ModelError $fault=server'), true);
+		// Must NOT fire on the cases that are genuinely the agent's own fault:
+		assert.equal(isProviderServerFault('MaxTokensError: Model reached maximum token limit.'), false);
+		assert.equal(isProviderServerFault('ContextWindowOverflowError: too long'), false);
+		assert.equal(
+			isProviderServerFault('ValidationException: bad request $metadata={httpStatusCode:400}'),
+			false,
+		);
+		assert.equal(
+			isProviderServerFault('ThrottlingException: slow down $metadata={httpStatusCode:429}'),
+			false,
+		);
+		assert.equal(isProviderServerFault(undefined), false);
+		assert.equal(isProviderServerFault(null), false);
+	});
+
+	it('a 2-agent failure with a Bedrock 503 builder_error → harness_error (EXCLUDED), reason provider_unavailable', () => {
+		const cell = {
+			failed_at: AGENT_FAIL_AT,
+			status: 'error',
+			stop_reason: 'error',
+			builder_error: BEDROCK_503,
+			tokens_in: 42_000,
+		};
+		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: PROVIDER_UNAVAILABLE_REASON });
+		assert.equal(isScoredCell(cell), false); // EXCLUDED — the provider was down, not the agent
+		assert.equal(verdictOf(cell), 'harness_error');
+	});
+
+	it('a MaxTokensError budget exhaustion stays agent_fail (INCLUDED) — the agent spent its own budget', () => {
+		// The cognito-profile cell: same failed_at/stop_reason, but the error is the agent's budget, not infra.
+		const cell = {
+			failed_at: AGENT_FAIL_AT,
+			status: 'error',
+			stop_reason: 'error',
+			builder_error: 'MaxTokensError: Model reached maximum token limit. This is an unrecoverable state.',
+			tokens_in: 1_000_000,
+		};
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_FAIL_REASON });
+		assert.equal(isScoredCell(cell), true); // INCLUDED — poor budget management is the agent failing
+	});
+
+	it('a plain invoke-exhausted sentinel with no 5xx builder_error stays agent_fail (no over-broadening)', () => {
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'error', builder_error: 'ModelError: unknown' };
+		assert.equal(classifyCell(cell).klass, 'agent_fail');
+	});
+
+	it('the carve-out is gated to 2-agent — a 5xx builder_error on a non-agent step is NOT reclassified by this gate', () => {
+		// A 5xx-looking string on a build-step failure must not become provider_unavailable: the gate
+		// only inspects builder_error inside the 2-agent branch. (3-build-test isn't a HARNESS_FAIL_REASONS
+		// key and isn't dead_server, so it falls through to 'scored' — the point is it's NOT excluded here.)
+		const cell = { failed_at: '3-build-test', status: 'error', builder_error: '$fault=server httpStatusCode:503' };
+		assert.notEqual(classifyCell(cell).reason, PROVIDER_UNAVAILABLE_REASON);
+		assert.notEqual(classifyCell(cell).klass, 'harness_error');
+	});
+
+	// Drift guard: the carve-out matches a FLATTENED string, but the only thing that produces that
+	// string in production is describeModelError (bedrock-retry.mjs), written onto result.json by
+	// 2-agent-run.ts. BEDROCK_503 above is hand-written to look like that output; if describeModelError's
+	// format ever changes (drops `$fault=` / `httpStatusCode:`), the hand-written literal would keep
+	// passing while the REAL gate silently goes dark. So feed describeModelError's actual output through
+	// the predicate here: a describer format change breaks THIS test instead of disabling the gate unseen.
+	it('drift guard: describeModelError on a real 503 cause-chain is matched by isProviderServerFault', () => {
+		// A synthetic cause chain shaped exactly like the AWS SDK v3 error the invoke layer sees: an outer
+		// ModelError wrapper ← the Bedrock ServiceUnavailableException carrying $fault/$metadata.
+		const bedrock503 = {
+			name: 'ServiceUnavailableException',
+			message: 'Bedrock is unable to process your request.',
+			$fault: 'server',
+			$metadata: { httpStatusCode: 503, requestId: 'd72cb143' },
+		};
+		const wrapped = { name: 'ModelError', message: 'Bedrock is unable to process your request.', cause: bedrock503 };
+		const produced = describeModelError(wrapped);
+
+		assert.equal(
+			isProviderServerFault(produced),
+			true,
+			`describeModelError output must still carry a 5xx server-fault signature; got: ${produced}`,
+		);
+
+		// And the full classifyCell path on a cell carrying that produced string → excluded.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'error', builder_error: produced };
+		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: PROVIDER_UNAVAILABLE_REASON });
+		assert.equal(isScoredCell(cell), false);
+	});
+
+	it('drift guard: describeModelError on a client 4xx is NOT matched (stays counted agent_fail)', () => {
+		// The negative half of the contract: a real ValidationException (400) must still read as the
+		// agent's own fault through the describer, so the gate can't start swallowing client errors.
+		const validation = {
+			name: 'ValidationException',
+			message: 'malformed request',
+			$fault: 'client',
+			$metadata: { httpStatusCode: 400, requestId: 'abc123' },
+		};
+		const produced = describeModelError(validation);
+		assert.equal(isProviderServerFault(produced), false, `a 4xx client fault must not match; got: ${produced}`);
+	});
+});
+
 describe('isScoredCell(result) — the single inclusion rule for the headline mean', () => {
 	it('an agent_fail IS included (the agent is exactly what is under test)', () => {
 		assert.equal(isScoredCell({ failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' }), true);
@@ -447,6 +574,186 @@ describe('dead_server: a crashed/never-served dev-server is a REAL fail (composi
 		const cell = { ...deadCell, failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', isolation_active: true };
 		assert.equal(classifyCell(cell).klass, 'harness_error');
 		assert.equal(isScoredCell(cell), false);
+	});
+});
+
+describe('dead_server PGlite-init-OOM carve-out: a WASM memory-ceiling crash is infra, EXCLUDED (not the agent)', () => {
+	// A dead_server whose dev-log shows the PGlite `_pg_initdb` WASM abort is the mock engine running
+	// out of WASM linear memory under the CI runner — the built app is fine, so it must NOT count
+	// against the agent. Reclassified harness_error (EXCLUDED). The carve-out is signature-gated and
+	// narrow: ONLY this trap reclassifies AND only when the process actually EXITED; every other
+	// dead_server stays counted. The PGlite init-trap substring fallback was REMOVED (osama-rizk round 2):
+	// with bb-data keeping the server alive through a trap, the engine's per-attempt onRetry warning
+	// leaves `Aborted(` in the tail even after a SUCCESSFUL retry, so "exited + signature in 100 lines"
+	// mostly selected a survived-trap-then-a-different-crash misclassification. The ONLY carve-out now is
+	// the causal `data_layer_unavailable` sentinel (step 3 sets it only when the layer was down at test end).
+	const base = { task: 'oidc-dsql-notes', template: 'default', dev_server_status: 'dead', dev_pid_status: 'exited (pid=1)', tests_passed: 0, tests_failed: 0 };
+
+	it('Aborted(...) in a dead_server dev-log alone NO LONGER excludes — stays dead_server (counted)', () => {
+		// Blocking 2: the trap signature appearing in the tail is not proof it CAUSED the death. Without
+		// the causal sentinel this is a genuine product failure and must stay counted.
+		const cell = { ...base, dev_log_tail: 'postgres: Aborted(Cannot enlarge memory arrays to 0x...)' };
+		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
+		assert.equal(isScoredCell(cell), true);
+	});
+
+	it('RuntimeError: unreachable in a dead_server dev-log alone stays dead_server (counted)', () => {
+		const cell = { ...base, dev_log_tail: 'RuntimeError: unreachable\n    at _pg_initdb' };
+		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
+	});
+
+	it('a dead_server with NO matching signature stays dead_server (counted)', () => {
+		const cell = { ...base, dev_log_tail: 'Error: listen EADDRINUSE: address already in use :::3100' };
+		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
+		assert.equal(isScoredCell(cell), true); // a genuine agent-caused crash still counts
+	});
+
+	it('a dead_server with no dev_log_tail at all stays dead_server (counted)', () => {
+		const cell = { ...base };
+		assert.equal(classifyCell(cell).klass, DEAD_SERVER_KLASS);
+		assert.equal(isScoredCell(cell), true);
+	});
+
+	it('isPgliteInitOom still matches the trap signatures (pure predicate; no longer wired into classifyCell)', () => {
+		assert.equal(isPgliteInitOom('x Aborted(OOM) y'), true);
+		assert.equal(isPgliteInitOom('wasm trap: unreachable'), true);
+		assert.equal(isPgliteInitOom('RuntimeError: unreachable'), true);
+		assert.equal(isPgliteInitOom('EADDRINUSE'), false);
+		assert.equal(isPgliteInitOom(''), false);
+		assert.equal(isPgliteInitOom(undefined), false);
+		assert.equal(isPgliteInitOom(null), false);
+	});
+
+	// --- Blocking 2 (round 2): the removed fallback MUST NOT exclude a survived-trap-then-other-crash --
+	it("Blocking 2: a survived trap followed by a DIFFERENT crash stays dead_server (counted)", () => {
+		// The engine's successful retry logs `Aborted(` and then `[migrations] Applied: 0001_init.sql`,
+		// after which the server died of an agent bug. The old fallback (exited + signature anywhere)
+		// wrongly excluded this; with the fallback gone and no sentinel, it correctly stays counted.
+		const cell = {
+			...base,
+			dev_pid_status: 'exited (pid=1)',
+			dev_log_tail:
+				'[PGliteEngine] PGlite init trap on attempt 1; recreating instance Error: Aborted(Cannot enlarge memory arrays)\n' +
+				"[migrations] Applied: 0001_init.sql\n" +
+				"TypeError: Cannot read properties of undefined (reading 'map')",
+		};
+		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
+		assert.equal(isScoredCell(cell), true);
+	});
+
+	it("an 'alive but not serving' server with a survived trap stays dead_server (counted)", () => {
+		const cell = {
+			...base,
+			dev_pid_status: 'alive (pid=123) but not serving',
+			dev_log_tail: '[PGliteEngine] init trap on attempt 1 ... Aborted(Cannot enlarge memory arrays)\n[vite] Internal server error: Failed to resolve import',
+		};
+		assert.deepEqual(classifyCell(cell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
+		assert.equal(isScoredCell(cell), true);
+	});
+
+	// --- Primary causal sentinel: fires for ANY class, including a scored cell with failing DB tests --
+	describe('data_layer_unavailable sentinel — the PRIMARY causal carve-out (server stays alive)', () => {
+		it('a SCORED cell with failing DB tests but the sentinel → harness_error, EXCLUDED', () => {
+			// This is the leak L1 creates: bb-data keeps the server alive through a trap, Playwright runs,
+			// DB tests fail, dev_server_status is NOT 'dead' — so the dead_server gate never sees it. The
+			// sentinel proves the trap caused it, so it is excluded rather than counted against the agent.
+			const cell = {
+				task: 'auth-notes', template: 'demo', dev_server_status: undefined,
+				tests_passed: 0, tests_failed: 11, data_layer_unavailable: true,
+			};
+			assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: PGLITE_OOM_REASON });
+			assert.equal(isScoredCell(cell), false);
+			assert.equal(isDataLayerUnavailable(cell), true);
+		});
+
+		it('the sentinel also rescues a dead_server cell (no exited/signature needed)', () => {
+			const cell = { task: 'x', template: 'y', dev_server_status: 'dead', data_layer_unavailable: true };
+			assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: PGLITE_OOM_REASON });
+		});
+
+		it('the sentinel does NOT override a cancellation or a pre-grade harness failure (precedence)', () => {
+			const cancelled = { status: 'cancelled', data_layer_unavailable: true };
+			assert.equal(classifyCell(cancelled).reason, 'cancelled');
+			const preGrade = { failed_at: '1-init', data_layer_unavailable: true };
+			// a pre-grade harness failure keeps its own reason, not the sentinel's
+			assert.equal(classifyCell(preGrade).klass, 'harness_error');
+			assert.notEqual(classifyCell(preGrade).reason, PGLITE_OOM_REASON);
+		});
+
+		it('without the sentinel a scored cell with failing tests stays scored (counted)', () => {
+			const cell = { task: 'x', template: 'y', tests_passed: 0, tests_failed: 11 };
+			assert.equal(classifyCell(cell).klass, 'scored');
+			assert.equal(isDataLayerUnavailable(cell), false);
+		});
+
+		it('Blocking 1: a RECOVERED trap (step 3 leaves data_layer_unavailable falsy) stays scored (counted)', () => {
+			// When a boot-time trap recovers before test end, step 3 sees the recovery marker AFTER the
+			// last unavailable sentinel and does NOT set data_layer_unavailable — so the cell is graded
+			// normally. A passing recovered cell counts; a failing one exposes the agent bug (not hidden).
+			const recoveredPass = { task: 'x', template: 'y', tests_passed: 11, tests_failed: 0 };
+			assert.equal(classifyCell(recoveredPass).klass, 'scored');
+			const recoveredFail = { task: 'x', template: 'y', tests_passed: 8, tests_failed: 3 };
+			assert.equal(classifyCell(recoveredFail).klass, 'scored');
+			// Explicit false is treated identically to absent (not the sentinel's truthy==true).
+			assert.equal(isDataLayerUnavailable({ ...recoveredFail, data_layer_unavailable: false }), false);
+			assert.equal(classifyCell({ ...recoveredFail, data_layer_unavailable: false }).klass, 'scored');
+		});
+
+		it('isDataLayerUnavailable requires strict true (not truthy)', () => {
+			assert.equal(isDataLayerUnavailable({ data_layer_unavailable: true }), true);
+			assert.equal(isDataLayerUnavailable({ data_layer_unavailable: 'yes' }), false);
+			assert.equal(isDataLayerUnavailable({ data_layer_unavailable: 1 }), false);
+			assert.equal(isDataLayerUnavailable({}), false);
+			assert.equal(isDataLayerUnavailable(null), false);
+		});
+	});
+
+	// --- Drift guards: the local copies must track the TS source of truth (review finding) -----------
+	describe('drift guards vs packages/data-common/src/pglite-init.ts (local copies, no TS import)', () => {
+		const pgliteInitSrc = readFileSync(
+			join(dirname(fileURLToPath(import.meta.url)), '../../../../packages/data-common/src/pglite-init.ts'),
+			'utf-8',
+		);
+
+		it('PGLITE_INIT_TRAP_RE matches the TS source regex SOURCE (case flag intentionally differs)', () => {
+			const m = pgliteInitSrc.match(/const PGLITE_INIT_TRAP_RE = (\/.*\/[a-z]*);/);
+			assert.ok(m, 'could not find PGLITE_INIT_TRAP_RE literal in the TS source');
+			const tsSource = m[1].slice(1, m[1].lastIndexOf('/'));
+			// The match-set (source) must stay identical; the TS copy is /i (it runs against the fixed
+			// SELECT 1 probe), while this scorer copy drops /i on purpose (it scans arbitrary dev-log
+			// text). So assert SOURCE equality but NOT flags — the divergence is deliberate.
+			assert.equal(PGLITE_INIT_TRAP_RE.source, tsSource);
+			assert.equal(PGLITE_INIT_TRAP_RE.flags, '', 'scorer copy is intentionally case-sensitive (no /i)');
+		});
+
+		it('PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL equals the TS source literal exactly', () => {
+			const m = pgliteInitSrc.match(/PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL = '([^']*)'/);
+			assert.ok(m, 'could not find the sentinel literal in the TS source');
+			assert.equal(PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL, m[1]);
+		});
+
+		it('PGLITE_DATA_LAYER_RECOVERED_SENTINEL equals the TS source literal exactly', () => {
+			const m = pgliteInitSrc.match(/PGLITE_DATA_LAYER_RECOVERED_SENTINEL = '([^']*)'/);
+			assert.ok(m, 'could not find the recovered-sentinel literal in the TS source');
+			assert.equal(PGLITE_DATA_LAYER_RECOVERED_SENTINEL, m[1]);
+		});
+
+		// NB #6 (round 2): the literal that ACTUALLY drives bench detection is the shell variable in
+		// 3-build-and-test.sh, not the scorer constant (which only tests read). Pin BOTH shell literals
+		// to the TS source so a reword of the constant that keeps the scorer test green can't silently
+		// break the grep in CI and let wedged cells get counted again.
+		it('3-build-and-test.sh DATA_LAYER_SENTINEL / DATA_LAYER_RECOVERED match the TS source literals', () => {
+			const sh = readFileSync(
+				join(dirname(fileURLToPath(import.meta.url)), '../3-build-and-test.sh'),
+				'utf-8',
+			);
+			const shDown = sh.match(/DATA_LAYER_SENTINEL='([^']*)'/);
+			const shUp = sh.match(/DATA_LAYER_RECOVERED='([^']*)'/);
+			assert.ok(shDown, 'DATA_LAYER_SENTINEL not found in 3-build-and-test.sh');
+			assert.ok(shUp, 'DATA_LAYER_RECOVERED not found in 3-build-and-test.sh');
+			assert.equal(shDown[1], PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL);
+			assert.equal(shUp[1], PGLITE_DATA_LAYER_RECOVERED_SENTINEL);
+		});
 	});
 });
 

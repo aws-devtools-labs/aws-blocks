@@ -78,7 +78,15 @@ async function main() {
   const work = mkdtempSync(join(baseTmp, 'bb-win-e2e-'));
   const userNpmrc = join(work, '.npmrc');
   writeFileSync(userNpmrc, `@aws-blocks:registry=${REGISTRY}\n`);
-  const env = { ...process.env, NPM_CONFIG_USERCONFIG: userNpmrc, npm_config_cache: join(work, '.npm-cache') };
+  // This harness is test traffic, not real usage; suppress CLI telemetry so a
+  // local run (no CI env var set) is not counted as a real user. See the
+  // cross-platform driver templates-e2e.mjs for the full rationale.
+  const env = {
+    ...process.env,
+    NPM_CONFIG_USERCONFIG: userNpmrc,
+    npm_config_cache: join(work, '.npm-cache'),
+    AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+  };
 
   run('npm', ['install', '@aws-blocks/create-blocks-app@latest'], { cwd: work, env });
   const createBin = join(work, 'node_modules', '.bin', isWin ? 'create-blocks-app.cmd' : 'create-blocks-app');

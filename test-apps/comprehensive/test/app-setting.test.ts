@@ -3,6 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
 
 export function appSettingTests(getApi: () => typeof apiType) {
@@ -42,7 +43,10 @@ export function appSettingTests(getApi: () => typeof apiType) {
       const api = getApi();
       await assert.rejects(
         () => api.settingPutTypedInvalid({ wrong: 'field' }),
-        /ValidationFailedException/,
+        // Assert the rejection round-trips as a *branded* BB error over the
+        // wire (so isBlocksError matches), not merely a message substring —
+        // the wire sanitizer drops the raw message but preserves the name.
+        (e: unknown) => isBlocksError(e, 'ValidationFailedException'),
       );
     });
 
