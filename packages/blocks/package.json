@@ -1,7 +1,6 @@
 {
   "name": "@aws-blocks/blocks",
   "version": "0.7.0",
-  "sideEffects": false,
   "keywords": [
     "aws-blocks",
     "framework",
