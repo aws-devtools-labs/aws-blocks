@@ -4,6 +4,7 @@
 import { execFileSync } from 'node:child_process';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { assertAwsCredentials } from './preflight-credentials.js';
 import { runSync } from './run-command.js';
 import { emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
 
@@ -42,6 +43,13 @@ function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.Proces
 export async function destroy(options: DestroyOptions) {
   return trackCommand('destroy', async () => {
     console.log('🗑️  Destroying production stack...');
+
+    // Fail fast on a missing/expired credential BEFORE entering the retry loop:
+    // a credential error is deterministic, so retrying it only burns the full
+    // [60s, 120s] backoff (the Telemetry E2E timeout this guards against). The
+    // retry loop is for transient teardown blockers (bucket-blocked delete,
+    // DeleteRestApi 429 throttle, ENI detach), never auth.
+    await assertAwsCredentials({ command: 'destroy', projectRoot: options.projectRoot });
 
     const cdkEnv = {
       ...process.env,
