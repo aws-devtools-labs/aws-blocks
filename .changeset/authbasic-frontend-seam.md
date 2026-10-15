@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/bb-auth-basic": patch
+"@aws-blocks/blocks": patch
 ---
 
 docs(bb-auth-basic): add the frontend login-UI mount + gate seam
