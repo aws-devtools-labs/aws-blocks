@@ -5,13 +5,14 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { CloudFrontClient, GetInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
-import { waitForLiveBuild } from './wait-live.js';
+import { waitForLiveBuild, PROBE_REQUEST_TIMEOUT_MS } from './wait-live.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -30,7 +31,7 @@ export interface DeployOptions {
 /** Default liveness-wait budget (seconds). */
 export const DEFAULT_WAIT_LIVE_TIMEOUT_SEC = 180;
 /** Poll interval for the liveness wait, in milliseconds. */
-export const WAIT_LIVE_INTERVAL_MS = 5_000;
+export const WAIT_LIVE_INTERVAL_MS = 2_000;
 
 /**
  * Parse the `--wait-live` flags from an argv tail. Pure and exported so flag
@@ -162,10 +163,11 @@ export async function deploy(options: DeployOptions) {
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
     const apiUrl = stackOutputs.ApiUrl;
     
-    // Resolve the frontend URL and build id from the SAME Hosting output group.
-    // Each Hosting construct emits `<prefix>HostingUrl…` and
-    // `<prefix>HostingBuildId…` sharing a logical-id prefix; keying off it pairs
-    // the two for the one frontend we poll rather than two independent
+    // Resolve the frontend URL, build id, and invalidation id from the SAME
+    // Hosting output group. Each Hosting construct emits `<prefix>HostingUrl…`,
+    // `<prefix>HostingBuildId…`, and (for a compute deploy)
+    // `<prefix>HostingInvalidationId…` sharing a logical-id prefix; keying off
+    // it pairs them for the one frontend we poll rather than independent
     // first-matches that could disagree on a two-Hosting stack. `--wait-live`
     // targets a single-frontend stack; the first Hosting group is that frontend.
     const hostingUrlEntry = Object.entries(stackOutputs).find(([key]) =>
@@ -173,15 +175,22 @@ export async function deploy(options: DeployOptions) {
     );
     const hostingUrl = hostingUrlEntry?.[1] ?? earlyHostingUrl;
     const hostingPrefix = hostingUrlEntry?.[0].split('HostingUrl')[0];
+    const scopedToHosting = (key: string): boolean =>
+      hostingPrefix ? key.startsWith(hostingPrefix) : key.includes('Hosting');
 
-    // Build id this deploy published (the `HostingBuildId` output), scoped to
-    // the same Hosting group. Lets the liveness poll confirm CloudFront serves
-    // THIS build, not a byte-identical config from the previous build still at
-    // an edge POP. Absent for a backend-only app or an older stack — the poll
-    // then falls back to the placeholder-vs-real check.
+    // Build id this deploy published (the `HostingBuildId` output). Lets the
+    // poll confirm CloudFront serves THIS build, not a byte-identical config
+    // from the previous build still at an edge POP. Present whenever the stack
+    // has a frontend (the construct always sets a build id); absent only for a
+    // backend-only app, where `hostingUrl` is also absent and the wait no-ops.
     const expectedBuildId = Object.entries(stackOutputs).find(([key]) =>
-      key.includes('BuildId') &&
-      (hostingPrefix ? key.startsWith(hostingPrefix) : key.includes('Hosting'))
+      key.includes('BuildId') && scopedToHosting(key)
+    )?.[1];
+
+    // `/*` invalidation id for a compute deploy (the `HostingInvalidationId`
+    // output). Absent for a pure-static deploy, which issues no invalidation.
+    const invalidationId = Object.entries(stackOutputs).find(([key]) =>
+      key.includes('InvalidationId') && scopedToHosting(key)
     )?.[1];
     
     if (!apiUrl) {
@@ -202,24 +211,34 @@ export async function deploy(options: DeployOptions) {
 
     // Liveness gate: block until the deployed frontend serves the new build
     // before emitting the completion signal, so a caller's immediate self-test
-    // can't hit a stale bundle. Skipped for a backend-only app.
-    if (waitLive && hostingUrl) {
+    // can't hit a stale bundle. Skipped for a backend-only app (no hostingUrl)
+    // and for the degenerate case of a frontend with no build-id output.
+    if (waitLive && hostingUrl && expectedBuildId) {
       const timeoutMs = waitLiveTimeoutSec * 1000;
       console.log(`\n⏳ Waiting for the new build to go live at ${hostingUrl} (up to ${timeoutMs / 1000}s)…`);
-      if (!expectedBuildId) {
-        // No HostingBuildId output → best-effort check. Surface the weaker
-        // guarantee at run time so an operator knows a re-synth upgrades it.
-        console.log(
-          '   ℹ️  No build-id output found — using best-effort liveness (reliable on a first deploy, ' +
-            'approximate on a re-deploy). Re-synthesize to emit HostingBuildId for an exact per-build check.',
-        );
+
+      // For a compute deploy, also wait on the fire-and-forget `/*`
+      // invalidation. The output carries `<distributionId>/<invalidationId>`.
+      let invalidationComplete: ((reqTimeoutMs: number) => Promise<boolean>) | undefined;
+      if (invalidationId) {
+        const [distributionId, invId] = invalidationId.split('/');
+        const cloudfront = new CloudFrontClient({});
+        invalidationComplete = async (reqTimeoutMs) => {
+          const res = await cloudfront.send(
+            new GetInvalidationCommand({ DistributionId: distributionId, Id: invId }),
+            { abortSignal: AbortSignal.timeout(reqTimeoutMs) },
+          );
+          return res.Invalidation?.Status === 'Completed';
+        };
       }
+
       const result = await waitForLiveBuild({
         hostingUrl,
         expectedBuildId,
+        invalidationComplete,
         timeoutMs,
         intervalMs: WAIT_LIVE_INTERVAL_MS,
-        fetch: (url) => fetch(url, { cache: 'no-store' }),
+        fetch: (url, reqTimeoutMs) => fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(reqTimeoutMs) }),
         now: () => Date.now(),
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         onAttempt: ({ attempt, result: r, detail }) => {
@@ -242,6 +261,14 @@ export async function deploy(options: DeployOptions) {
         return;
       }
       console.log(`\n✅ New build is live (confirmed in ${Math.round(result.elapsedMs / 1000)}s).`);
+    } else if (waitLive && hostingUrl && !expectedBuildId) {
+      // A frontend with no build-id output: the config poll has nothing to
+      // match, so it would wait the whole budget and fail. Skip it with a note
+      // rather than waste the time — re-synthesize to emit HostingBuildId.
+      console.log(
+        '\nℹ️  --wait-live skipped: this stack emits no HostingBuildId output, so build liveness ' +
+          'cannot be confirmed. Re-synthesize with the current hosting construct to enable it.',
+      );
     }
 
     // Machine-readable completion signal — a single stable line a caller (a

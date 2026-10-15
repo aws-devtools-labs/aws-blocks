@@ -19,10 +19,9 @@ import { AllowedMethods, CachePolicy, OriginRequestPolicy, ViewerProtocolPolicy 
 import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
-import { BLOCKS_BUILD_ID_CONFIG_KEY } from './scripts/wait-live.js';
 import { registerConfig } from './cdk/config-registry.js';
 import { getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
-import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
+import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
 	assertMarkersExistAtSynth,
@@ -917,6 +916,19 @@ export class Hosting extends Construct {
       new cdk.CfnOutput(this, 'HostingBuildId', {
         value: manifest.buildId,
         description: 'Build id stamped into the deployed runtime config',
+      });
+    }
+
+    // Surface the `/*` invalidation for a compute deploy so the liveness poll
+    // can wait for it to reach `Completed`. The invalidation is fire-and-forget
+    // at deploy time (cdn_construct.ts), so the config probe alone would miss
+    // the window where the edge still serves the previous build's SSR HTML.
+    // `GetInvalidation` needs both ids, so the value carries
+    // `<distributionId>/<invalidationId>`. Absent for a pure-static deploy.
+    if (hosting.invalidationId) {
+      new cdk.CfnOutput(this, 'HostingInvalidationId', {
+        value: `${hosting.distribution.distributionId}/${hosting.invalidationId}`,
+        description: 'CloudFront <distributionId>/<invalidationId> for the post-deploy liveness poll',
       });
     }
 

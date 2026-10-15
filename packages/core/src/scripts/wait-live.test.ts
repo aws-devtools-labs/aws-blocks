@@ -8,6 +8,7 @@ import {
   CONFIG_PROBE_PATH,
   type ProbeResponse,
   type ProbeFetch,
+  type InvalidationProbe,
 } from './wait-live.js';
 
 /** A fake Response wrapping a status + body. */
@@ -16,28 +17,18 @@ function res(status: number, body: string): ProbeResponse {
 }
 
 /** A fetch stub that returns queued responses in order, then repeats the last. */
-function seqFetch(responses: ProbeResponse[]): ProbeFetch & { calls: string[] } {
+function seqFetch(responses: ProbeResponse[]): ProbeFetch & { calls: string[]; timeouts: number[] } {
   const calls: string[] = [];
+  const timeouts: number[] = [];
   let i = 0;
-  const fn: ProbeFetch & { calls: string[] } = Object.assign(
-    async (url: string): Promise<ProbeResponse> => {
-      calls.push(url);
-      const r = responses[Math.min(i, responses.length - 1)];
-      i += 1;
-      return r;
-    },
-    { calls },
-  );
-  return fn;
-}
-
-/** A fetch stub that throws (network error) a given number of times, then serves. */
-function throwThenServe(throwCount: number, then: ProbeResponse): ProbeFetch {
-  let n = 0;
-  return async () => {
-    if (n++ < throwCount) throw new Error('ECONNREFUSED');
-    return then;
+  const fn = async (url: string, timeoutMs: number): Promise<ProbeResponse> => {
+    calls.push(url);
+    timeouts.push(timeoutMs);
+    const r = responses[Math.min(i, responses.length - 1)];
+    i += 1;
+    return r;
   };
+  return Object.assign(fn, { calls, timeouts });
 }
 
 /** A deterministic clock + sleep that advances virtual time on each sleep. */
@@ -69,45 +60,27 @@ const REAL_WITH_OLD_ID = JSON.stringify({
 const PLACEHOLDER = JSON.stringify({ _placeholder: true });
 
 describe('classifyConfigBody', () => {
-  describe('with an expected build id (the strong, re-deploy-correct path)', () => {
-    it('is live only when the served config carries the matching build id', () => {
-      assert.equal(classifyConfigBody(REAL_WITH_ID, BUILD_ID), 'live');
-    });
-
-    it('is pending when the served config carries a DIFFERENT build id (stale POP)', () => {
-      // The exact re-deploy scenario this feature targets: a byte-plausible
-      // real config from the OLD build is served during cutover — must NOT read
-      // as live.
-      assert.equal(classifyConfigBody(REAL_WITH_OLD_ID, BUILD_ID), 'pending');
-    });
-
-    it('is pending when the served config has no build id at all', () => {
-      assert.equal(classifyConfigBody(REAL, BUILD_ID), 'pending');
-      // {} no longer short-circuits to live once a discriminator is expected.
-      assert.equal(classifyConfigBody(JSON.stringify({}), BUILD_ID), 'pending');
-    });
-
-    it('is pending when the build id is present but not a string', () => {
-      assert.equal(classifyConfigBody(JSON.stringify({ __blocksBuildId: 123 }), BUILD_ID), 'pending');
-    });
-
-    it('is still pending for the synth placeholder', () => {
-      assert.equal(classifyConfigBody(PLACEHOLDER, BUILD_ID), 'pending');
-    });
+  it('is live only when the served config carries the matching build id', () => {
+    assert.equal(classifyConfigBody(REAL_WITH_ID, BUILD_ID), 'live');
   });
 
-  describe('without an expected build id (legacy fallback)', () => {
-    it('treats a non-placeholder config object as live', () => {
-      assert.equal(classifyConfigBody(REAL), 'live');
-      // Backend-config-only app whose config carries no apiUrl is still live.
-      assert.equal(classifyConfigBody(JSON.stringify({ environment: 'production' })), 'live');
-      assert.equal(classifyConfigBody(JSON.stringify({})), 'live');
-    });
+  it('is pending when the served config carries a DIFFERENT build id (stale POP)', () => {
+    // The exact re-deploy scenario this feature targets: a byte-plausible real
+    // config from the OLD build is served during cutover — must NOT read live.
+    assert.equal(classifyConfigBody(REAL_WITH_OLD_ID, BUILD_ID), 'pending');
+  });
 
-    it('treats the synth placeholder as pending', () => {
-      assert.equal(classifyConfigBody(PLACEHOLDER), 'pending');
-      assert.equal(classifyConfigBody(JSON.stringify({ _placeholder: true, extra: 1 })), 'pending');
-    });
+  it('is pending when the served config has no build id at all', () => {
+    assert.equal(classifyConfigBody(REAL, BUILD_ID), 'pending');
+    assert.equal(classifyConfigBody(JSON.stringify({}), BUILD_ID), 'pending');
+  });
+
+  it('is pending when the build id is present but not a string', () => {
+    assert.equal(classifyConfigBody(JSON.stringify({ __blocksBuildId: 123 }), BUILD_ID), 'pending');
+  });
+
+  it('is pending for the synth placeholder', () => {
+    assert.equal(classifyConfigBody(PLACEHOLDER, BUILD_ID), 'pending');
   });
 
   it('treats unparseable / non-object bodies as unknown (keep waiting, never false-live)', () => {
@@ -134,127 +107,155 @@ describe('buildProbeUrl', () => {
 });
 
 describe('waitForLiveBuild', () => {
-  it('returns live immediately when the first probe is the real config', async () => {
+  const base = {
+    hostingUrl: 'https://d.cloudfront.net',
+    expectedBuildId: BUILD_ID,
+    timeoutMs: 60_000,
+    intervalMs: 2_000,
+  };
+
+  it('returns live immediately when the first probe carries the matching build id', async () => {
     const clk = fakeClock();
-    const fetch = seqFetch([res(200, REAL)]);
-    const r = await waitForLiveBuild({
-      hostingUrl: 'https://d.cloudfront.net',
-      timeoutMs: 60_000,
-      intervalMs: 5_000,
-      fetch,
-      now: clk.now,
-      sleep: clk.sleep,
-    });
+    const fetch = seqFetch([res(200, REAL_WITH_ID)]);
+    const r = await waitForLiveBuild({ ...base, fetch, now: clk.now, sleep: clk.sleep });
     assert.equal(r.live, true);
     assert.equal(r.reason, 'live');
     assert.equal(r.attempts, 1);
     assert.equal(fetch.calls.length, 1);
   });
 
-  it('keeps polling while the placeholder is served, then returns live on cutover', async () => {
+  it('passes a per-request timeout to fetch, capped by the remaining budget', async () => {
     const clk = fakeClock();
-    const fetch = seqFetch([res(200, PLACEHOLDER), res(200, PLACEHOLDER), res(200, REAL)]);
-    const r = await waitForLiveBuild({
-      hostingUrl: 'https://d.cloudfront.net',
-      timeoutMs: 60_000,
-      intervalMs: 5_000,
-      fetch,
-      now: clk.now,
-      sleep: clk.sleep,
-    });
-    assert.equal(r.live, true);
-    assert.equal(r.attempts, 3);
+    const fetch = seqFetch([res(200, REAL_WITH_ID)]);
+    await waitForLiveBuild({ ...base, fetch, now: clk.now, sleep: clk.sleep });
+    // First probe: min(10s cap, 60s remaining) = 10s.
+    assert.equal(fetch.timeouts[0], 10_000);
   });
 
-  it('with an expected build id, waits through a stale OLD-build config and goes live only on the matching id', async () => {
+  it('waits through a stale OLD-build config and goes live only on the matching id', async () => {
     const clk = fakeClock();
-    // A POP serves the previous build's (byte-plausible) real config first,
-    // then the new build's config carrying the expected id.
     const fetch = seqFetch([res(200, REAL_WITH_OLD_ID), res(200, REAL_WITH_OLD_ID), res(200, REAL_WITH_ID)]);
-    const r = await waitForLiveBuild({
-      hostingUrl: 'https://d.cloudfront.net',
-      expectedBuildId: BUILD_ID,
-      timeoutMs: 60_000,
-      intervalMs: 5_000,
-      fetch,
-      now: clk.now,
-      sleep: clk.sleep,
-    });
+    const r = await waitForLiveBuild({ ...base, fetch, now: clk.now, sleep: clk.sleep });
     assert.equal(r.live, true);
     assert.equal(r.attempts, 3);
   });
 
-  it('with an expected build id, times out if only the OLD-build config is ever served', async () => {
+  it('times out if only the OLD-build config is ever served', async () => {
     const clk = fakeClock();
     const fetch = seqFetch([res(200, REAL_WITH_OLD_ID)]);
-    const r = await waitForLiveBuild({
-      hostingUrl: 'https://d.cloudfront.net',
-      expectedBuildId: BUILD_ID,
-      timeoutMs: 20_000,
-      intervalMs: 5_000,
-      fetch,
-      now: clk.now,
-      sleep: clk.sleep,
-    });
+    const r = await waitForLiveBuild({ ...base, timeoutMs: 10_000, fetch, now: clk.now, sleep: clk.sleep });
     assert.equal(r.live, false);
     assert.equal(r.reason, 'timeout');
   });
 
   it('retries through transient network/edge errors (never a false live)', async () => {
     const clk = fakeClock();
-    // Two thrown errors, then a 503, then the real config.
     let n = 0;
     const fetch: ProbeFetch = async () => {
       n += 1;
       if (n <= 2) throw new Error('socket hang up');
       if (n === 3) return res(503, 'Service Unavailable');
-      return res(200, REAL);
+      return res(200, REAL_WITH_ID);
     };
-    const r = await waitForLiveBuild({
-      hostingUrl: 'https://d.cloudfront.net',
-      timeoutMs: 60_000,
-      intervalMs: 5_000,
-      fetch,
-      now: clk.now,
-      sleep: clk.sleep,
-    });
+    const r = await waitForLiveBuild({ ...base, fetch, now: clk.now, sleep: clk.sleep });
     assert.equal(r.live, true);
     assert.equal(r.attempts, 4);
   });
 
-  it('times out (live=false) when the placeholder never clears within budget', async () => {
+  it('probes once at the deadline rather than giving up an interval early', async () => {
     const clk = fakeClock();
     const fetch = seqFetch([res(200, PLACEHOLDER)]);
-    const r = await waitForLiveBuild({
-      hostingUrl: 'https://d.cloudfront.net',
-      timeoutMs: 20_000,
-      intervalMs: 5_000,
-      fetch,
-      now: clk.now,
-      sleep: clk.sleep,
-    });
+    const r = await waitForLiveBuild({ ...base, timeoutMs: 10_000, fetch, now: clk.now, sleep: clk.sleep });
     assert.equal(r.live, false);
     assert.equal(r.reason, 'timeout');
-    // With a 20s budget and 5s interval, it polls until the next sleep would
-    // cross the deadline: attempts at t=0,5,10,15 → the t=15 check sees
-    // 15+5>=20 and stops. 4 attempts.
-    assert.equal(r.attempts, 4);
+    // 2s interval, 10s budget: probes at t=0,2,4,6,8,10 → the t=10 probe fires
+    // (loop checks `>= timeoutMs` AFTER the probe), so 6 attempts.
+    assert.equal(r.attempts, 6);
   });
 
   it('reports each non-live attempt through onAttempt', async () => {
     const clk = fakeClock();
-    const fetch = throwThenServe(1, res(200, REAL));
+    let n = 0;
+    const fetch: ProbeFetch = async () => {
+      n += 1;
+      if (n === 1) throw new Error('ECONNREFUSED');
+      return res(200, REAL_WITH_ID);
+    };
     const seen: string[] = [];
     const r = await waitForLiveBuild({
-      hostingUrl: 'https://d.cloudfront.net',
-      timeoutMs: 60_000,
-      intervalMs: 5_000,
+      ...base,
       fetch,
       now: clk.now,
       sleep: clk.sleep,
-      onAttempt: ({ result }) => seen.push(result),
+      onAttempt: ({ result }) => { seen.push(result); },
     });
     assert.equal(r.live, true);
     assert.deepEqual(seen, ['error', 'live']);
+  });
+
+  describe('with a compute deploy (invalidation probe)', () => {
+    it('is not live until BOTH the config matches AND the invalidation completes', async () => {
+      const clk = fakeClock();
+      const fetch = seqFetch([res(200, REAL_WITH_ID)]); // config live from the start
+      let invCalls = 0;
+      const invalidationComplete: InvalidationProbe = async () => {
+        invCalls += 1;
+        return invCalls >= 3; // completes on the third check
+      };
+      const r = await waitForLiveBuild({
+        ...base,
+        invalidationComplete,
+        fetch,
+        now: clk.now,
+        sleep: clk.sleep,
+      });
+      assert.equal(r.live, true);
+      // Config was live immediately, so the gate is the invalidation: 3 attempts.
+      assert.equal(r.attempts, 3);
+      assert.equal(invCalls, 3);
+    });
+
+    it('does not probe the invalidation until the config matches', async () => {
+      const clk = fakeClock();
+      const fetch = seqFetch([res(200, REAL_WITH_OLD_ID), res(200, REAL_WITH_ID)]);
+      let invCalls = 0;
+      const invalidationComplete: InvalidationProbe = async () => {
+        invCalls += 1;
+        return true;
+      };
+      await waitForLiveBuild({ ...base, invalidationComplete, fetch, now: clk.now, sleep: clk.sleep });
+      // Attempt 1 config is stale → no invalidation probe; attempt 2 config
+      // matches → one invalidation probe, which completes.
+      assert.equal(invCalls, 1);
+    });
+
+    it('treats an invalidation probe error as not-live-yet and retries', async () => {
+      const clk = fakeClock();
+      const fetch = seqFetch([res(200, REAL_WITH_ID)]);
+      let invCalls = 0;
+      const invalidationComplete: InvalidationProbe = async () => {
+        invCalls += 1;
+        if (invCalls === 1) throw new Error('throttled');
+        return true;
+      };
+      const r = await waitForLiveBuild({ ...base, invalidationComplete, fetch, now: clk.now, sleep: clk.sleep });
+      assert.equal(r.live, true);
+      assert.equal(r.attempts, 2);
+    });
+
+    it('stops re-probing the invalidation once it has completed', async () => {
+      const clk = fakeClock();
+      // Config stays live; invalidation completes on attempt 1. If the config
+      // somehow flapped we would still not re-probe a completed invalidation.
+      const fetch = seqFetch([res(200, REAL_WITH_ID)]);
+      let invCalls = 0;
+      const invalidationComplete: InvalidationProbe = async () => {
+        invCalls += 1;
+        return true;
+      };
+      const r = await waitForLiveBuild({ ...base, invalidationComplete, fetch, now: clk.now, sleep: clk.sleep });
+      assert.equal(r.live, true);
+      assert.equal(invCalls, 1);
+    });
   });
 });

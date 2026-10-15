@@ -694,6 +694,42 @@ describe('Hosting', () => {
       assert.ok(typeof value === 'string' && value.length > 0, 'HostingBuildId output value should be a non-empty build id');
     });
 
+    it('emits no HostingInvalidationId output for a pure-static deploy (no invalidation issued)', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'StaticNoInvalidationOutputStack');
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const outputs = Template.fromStack(stack).toJSON().Outputs ?? {};
+      const invKeys = Object.keys(outputs).filter((k) => k.includes('InvalidationId'));
+      assert.equal(invKeys.length, 0, 'a pure-static deploy issues no invalidation, so no output');
+    });
+
+    it('emits a HostingInvalidationId output for a compute deploy so the liveness poll can wait on it', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'ComputeInvalidationOutputStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+      });
+
+      const outputs = Template.fromStack(stack).toJSON().Outputs ?? {};
+      const invKeys = Object.keys(outputs).filter(
+        (k) => k.includes('Hosting') && k.includes('InvalidationId'),
+      );
+      assert.equal(invKeys.length, 1, 'exactly one HostingInvalidationId output should be emitted');
+      // The value carries `<distributionId>/<invalidationId>` as CDK tokens, so
+      // it resolves to a Fn::Join rather than a plain string — assert it is
+      // present and non-trivial rather than a literal.
+      assert.ok(outputs[invKeys[0]].Value !== undefined, 'HostingInvalidationId output should have a value');
+    });
+
     it('does not inject BLOCKS_API_URL into SSR Lambda when api is omitted', () => {
       createNextjsBuildOutput(tmpDir);
 
