@@ -35,13 +35,23 @@ Beyond `addAnnotation` and `addMetadata`, `Segment` exposes two additional metho
 
 ## Infrastructure (CDK)
 
-Tracer is a **composite Building Block** — it creates no new AWS resources. It configures tracing on the parent scope's Lambda function:
+Tracer is a **composite Building Block** — it creates no new AWS resources.
+Tracing is **presence-gated**: constructing a Tracer records intent by calling
+`registerTracer(this)` (core's tracer registry), and at finalize the framework
+enables tracing on **every** compute in the stack (`finalizeTracing()` →
+`compute.enableTracing()` for each). A Tracer never pokes an individual compute
+directly, so any number of Tracers coexist (the registry just records a
+boolean), and one Tracer anywhere in the app turns on tracing fleet-wide. This
+is deliberate: X-Ray provisions real, costed infrastructure, so it stays off
+until the app opts in by creating a Tracer.
 
-- **Tracing mode:** Sets `TracingConfig.Mode = 'Active'` on the Lambda `CfnFunction` (L1 construct).
-- **IAM permissions:** Adds `xray:PutTraceSegments` and `xray:PutTelemetryRecords` on resource `'*'` to the Lambda execution role.
+For a Lambda compute, `enableTracing()` turns on:
+
+- **Tracing mode:** `TracingConfig.Mode = 'Active'` on the Lambda `CfnFunction` (L1 construct).
+- **IAM permissions:** `xray:PutTraceSegments` and `xray:PutTelemetryRecords` on resource `'*'`, added to the shared execution role.
 - **No sampling rules:** X-Ray sampling rules are not managed by this BB. The default sampling rule (1 req/sec + 5% of additional requests) applies unless configured externally.
 
-When `enabled: false` is passed, no CDK mutations occur — the Lambda runs without active tracing.
+When `enabled: false` is passed, `registerTracer` is not called — that Tracer records no intent. (If another Tracer in the app is enabled, tracing is still turned on fleet-wide.)
 
 ## Mock Implementation
 

@@ -18,6 +18,7 @@
   "include": [
     "src/**/*",
     "aws-blocks/**/*",
-    "test/**/*"
+    "test/**/*",
+    ".blocks/**/*.d.ts"
   ]
 }

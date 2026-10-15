@@ -12,7 +12,7 @@ import {
 	BatchGetCommand,
 	BatchWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -47,7 +47,7 @@ import type {
 	TableKey,
 	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition, remapItemTooLarge, applyReadValidation } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, remapItemTooLarge, applyReadValidation } from './errors.js';
 import type { KeyCondition, QueryOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -103,6 +103,7 @@ export class DistributedTable<
 		const client = new DynamoDBClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(client);
 		this.docClient = DynamoDBDocumentClient.from(client);
 		registerSdkIdentifiers(this.fullId, { tableName });
 	}
@@ -129,6 +130,21 @@ export class DistributedTable<
 		try {
 			await this.docClient.send(new PutCommand(command));
 		} catch (err: unknown) {
+			// A failed conditional write is a Conflict, not an
+			// InternalServerError: map DynamoDB's raw
+			// ConditionalCheckFailedException to an ApiError with status 409 so the
+			// JSON-RPC serializer emits code 409 instead of 500. Name is preserved
+			// for isBlocksError(), the driver error is kept as `cause`. DynamoDB
+			// collapses every conditional failure under one exception with no
+			// sub-reason, so retriability is derived from the conditions THIS call
+			// set, matching the mock: existence assertion wins — retriable only for
+			// a pure `ifFieldEquals` optimistic-lock check (value presence, so an
+			// explicit `undefined` is treated as absent) and NOT when `ifNotExists`
+			// is also set. Other errors (e.g. oversized items) still flow through
+			// remapItemTooLarge.
+			if (err instanceof Error && err.name === DistributedTableErrors.ConditionalCheckFailed) {
+				throw conditionalCheckFailed(options?.ifFieldEquals !== undefined && !options?.ifNotExists, err);
+			}
 			throw remapItemTooLarge(err);
 		}
 	}
@@ -143,7 +159,21 @@ export class DistributedTable<
 			this.applyFieldEqualsCondition(command, options.ifFieldEquals);
 		}
 
-		await this.docClient.send(new DeleteCommand(command));
+		try {
+			await this.docClient.send(new DeleteCommand(command));
+		} catch (err: unknown) {
+			// A failed conditional delete is a Conflict, not an
+			// InternalServerError: map DynamoDB's raw
+			// ConditionalCheckFailedException to an ApiError with status 409 (see
+			// the put path above). Retriability is derived from the conditions THIS
+			// call set, matching the mock: existence assertion wins — retriable only
+			// for a pure `ifFieldEquals` optimistic-lock check (value presence) and
+			// NOT when `ifExists` is also set.
+			if (err instanceof Error && err.name === DistributedTableErrors.ConditionalCheckFailed) {
+				throw conditionalCheckFailed(options?.ifFieldEquals !== undefined && !options?.ifExists, err);
+			}
+			throw err;
+		}
 	}
 
 	/**

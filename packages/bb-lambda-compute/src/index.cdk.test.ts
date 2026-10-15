@@ -5,8 +5,9 @@
  * Unit tests for LambdaCompute.
  *
  * LambdaCompute is not yet instantiated by the default app and is not reachable
- * by customers. These tests exercise it directly to pin its shape: function +
- * gateway, shared role, distinct construct paths, and owner-derived identity.
+ * by customers. These tests exercise it directly to pin its shape: the function
+ * it owns (fronted by the stack's shared REST API gateway, not a per-compute
+ * one), shared role, distinct construct paths, and owner-derived identity.
  */
 
 import assert from 'node:assert';
@@ -14,10 +15,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { Scope } from '@aws-blocks/core/cdk';
+import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
 import { Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Architecture } from 'aws-cdk-lib/aws-lambda';
+import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
 import { LambdaCompute } from './index.cdk.js';
 
@@ -50,10 +53,12 @@ class StubBlocksStack extends cdk.Stack {
 	public readonly id: string;
 	public readonly executionRole: cdk.aws_iam.IRole;
 	public readonly backendHandlerPath: string;
-	constructor(scope: Construct, id: string) {
+	public readonly defaults: BlocksDefaults;
+	constructor(scope: Construct, id: string, defaults: BlocksDefaults = BlocksPresets.production) {
 		super(scope, id);
 		this.id = id;
 		this.backendHandlerPath = handlerPath;
+		this.defaults = defaults;
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
 		this.executionRole = new cdk.aws_iam.Role(this, 'BlocksRole', {
 			assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
@@ -61,25 +66,31 @@ class StubBlocksStack extends cdk.Stack {
 	}
 }
 
-function setup(stackId: string): { stack: StubBlocksStack; parent: Scope } {
+function setup(stackId: string, defaults?: BlocksDefaults): { stack: StubBlocksStack; parent: Scope } {
 	const app = new cdk.App();
-	const stack = new StubBlocksStack(app, stackId);
+	const stack = new StubBlocksStack(app, stackId, defaults);
 	const parent = new Scope('app');
 	return { stack, parent };
 }
 
 describe('LambdaCompute', () => {
-	test('provisions a Lambda function and its own API Gateway', () => {
+	test('provisions a Lambda function and owns no gateway (the stack owns the shared one)', () => {
 		const { stack, parent } = setup('LambdaComputeShape');
 
 		const compute = new LambdaCompute(parent, 'extra');
 
 		assert.ok(compute.fn, 'LambdaCompute should expose .fn');
-		assert.ok(compute.apiGateway, 'LambdaCompute should expose .apiGateway');
+		assert.strictEqual(
+			compute.apiHandler(),
+			compute.fn,
+			'apiHandler() returns the function the shared gateway integrates',
+		);
 		assert.ok(compute instanceof Compute, 'LambdaCompute should be a Compute');
 
 		const template = Template.fromStack(stack);
-		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+		// The compute itself provisions NO gateway — HTTP ingress is the stack's
+		// single shared REST API, built by BlocksStack/BlocksBackend.create().
+		template.resourceCountIs('AWS::ApiGateway::RestApi', 0);
 
 		const roles = template.findResources('AWS::IAM::Role');
 		const blocksRoleId = Object.keys(roles).find((k) => k.includes('BlocksRole'));
@@ -120,6 +131,21 @@ describe('LambdaCompute', () => {
 		assert.doesNotThrow(() => Template.fromStack(stack));
 	});
 
+	test('isLambdaCompute recognizes a LambdaCompute and rejects everything else', () => {
+		const { parent } = setup('LambdaComputeBrand');
+		const compute = new LambdaCompute(parent, 'branded');
+
+		// A real instance is recognized...
+		assert.ok(LambdaCompute.isLambdaCompute(compute));
+		// ...and it's a brand check, not an `instanceof` — so a plausible duck
+		// (a Compute-shaped object without the Symbol.for brand) is rejected,
+		// which is exactly how it survives a duplicate bb-lambda-compute copy.
+		assert.ok(!LambdaCompute.isLambdaCompute({ fn: {}, logGroup: {} }));
+		assert.ok(!LambdaCompute.isLambdaCompute({}));
+		assert.ok(!LambdaCompute.isLambdaCompute(null));
+		assert.ok(!LambdaCompute.isLambdaCompute(undefined));
+	});
+
 	test('setEnv adds an environment variable to the function', () => {
 		const { stack, parent } = setup('LambdaComputeSetEnv');
 
@@ -157,5 +183,196 @@ describe('LambdaCompute', () => {
 		(globalThis as any).CURRENT_BLOCKS_STACK = bareStack;
 
 		assert.throws(() => new LambdaCompute(new Scope('app'), 'orphan'));
+	});
+});
+
+// The compute reads its allowed CORS origins from the stack's `defaults`
+// (item 3), replacing the old `sandboxMode` context read.
+describe('LambdaCompute CORS origins from defaults', () => {
+	test('sandbox posture sets CORS_ALLOWED_ORIGINS to the allowed origins (comma-joined)', () => {
+		const { stack, parent } = setup('LambdaComputeCorsSandbox', BlocksPresets.sandbox);
+
+		new LambdaCompute(parent, 'extra');
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			Environment: {
+				Variables: Match.objectLike({
+					CORS_ALLOWED_ORIGINS: '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$',
+				}),
+			},
+		});
+	});
+
+	test('production posture sets no CORS_ALLOWED_ORIGINS (no allowed origins)', () => {
+		const { stack, parent } = setup('LambdaComputeCorsProd', BlocksPresets.production);
+
+		new LambdaCompute(parent, 'extra');
+
+		const fns = Template.fromStack(stack).findResources('AWS::Lambda::Function');
+		assert.ok(
+			!JSON.stringify(fns).includes('CORS_ALLOWED_ORIGINS'),
+			'no function should carry CORS_ALLOWED_ORIGINS under the production posture',
+		);
+	});
+});
+
+// arm64 (Graviton) is ~20% cheaper and the backend is a pure-JS bundle, so the
+// compute defaults to it; `architecture` overrides for x86-only native addons.
+describe('LambdaCompute architecture (Graviton default)', () => {
+	test('defaults the function to arm64', () => {
+		const { stack, parent } = setup('LambdaComputeArch');
+
+		new LambdaCompute(parent, 'extra');
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			Architectures: ['arm64'],
+		});
+	});
+
+	test('respects an architecture override (x86_64)', () => {
+		const { stack, parent } = setup('LambdaComputeArchOverride');
+
+		new LambdaCompute(parent, 'extra', { architecture: Architecture.X86_64 });
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			Architectures: ['x86_64'],
+		});
+	});
+});
+
+// The compute owns the handler log group, so the stack-wide logRetention
+// default is adopted here (throttling / access logging now live on the shared
+// REST API gateway at the stack level).
+describe('LambdaCompute handler log-group retention (defaults.logRetention)', () => {
+	test('production keeps handler logs for a year (365 days)', () => {
+		const { stack, parent } = setup('LambdaComputeLogProd', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		assert.ok(compute.logGroup, 'LambdaCompute should expose .logGroup');
+		// The function points at the framework-owned group (not Lambda's
+		// infinite-retention auto group).
+		Template.fromStack(stack).hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 365 });
+	});
+
+	test('sandbox keeps handler logs for a week (7 days)', () => {
+		const { stack, parent } = setup('LambdaComputeLogSandbox', BlocksPresets.sandbox);
+		new LambdaCompute(parent, 'extra');
+		Template.fromStack(stack).hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+	});
+});
+
+// Retention is a compute-level setting: the `logRetention` prop overrides the
+// stack-wide `defaults.logRetention` on the compute's OWN single handler log
+// group (the one the function writes to). Logging itself is always on — there
+// is no enable step — so this is purely about the retention policy of that group.
+describe('LambdaCompute logRetention prop', () => {
+	test('overrides the handler group retention without spawning a second group', () => {
+		const { stack, parent } = setup('LambdaComputeSetRetention', BlocksPresets.production);
+		new LambdaCompute(parent, 'extra', { logRetention: RetentionDays.ONE_MONTH });
+		const template = Template.fromStack(stack);
+		template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
+		// Still exactly one group — the prop configures the compute's owned group.
+		template.resourceCountIs('AWS::Logs::LogGroup', 1);
+	});
+
+	test('falls back to the stack-wide default retention when the prop is omitted', () => {
+		const { stack, parent } = setup('LambdaComputeRetentionDefault', BlocksPresets.production);
+		new LambdaCompute(parent, 'extra');
+		// No prop → the group keeps the production default (365).
+		Template.fromStack(stack).hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 365 });
+	});
+
+	test('the prop wins over the stack-wide default', () => {
+		const { stack, parent } = setup('LambdaComputeRetentionOverride', BlocksPresets.production);
+		new LambdaCompute(parent, 'extra', { logRetention: RetentionDays.ONE_WEEK });
+		// Production default is 365; the prop narrows it to 7.
+		Template.fromStack(stack).hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+	});
+});
+
+// Stage throttling and access logging moved from the per-compute REST stage to
+// the stack-level shared REST API gateway — covered in
+// packages/core/src/cdk/shared-gateway.test.ts.
+
+// Observability surface the Dashboard reads off the compute. Logging is always
+// on: the compute owns one handler log group (created in its constructor with
+// its resolved retention), so `dashboardSection().logging` is always present.
+// Tracing is presence-gated: it only turns on (and only then does the traces
+// section appear) after `enableTracing()`, which the framework calls on every
+// compute when the app contains a Tracer.
+describe('LambdaCompute observability', () => {
+	test('dashboardSection.logging is always present (logs are always captured)', () => {
+		const { parent } = setup('LambdaComputeLogEnabled');
+
+		const compute = new LambdaCompute(parent, 'extra');
+
+		// No enable step for logging — the logs section renders unconditionally.
+		assert.notStrictEqual(compute.dashboardSection('us-east-1').logging, undefined);
+	});
+
+	test('enableTracing turns on the function Active tracing mode', () => {
+		const { stack, parent } = setup('LambdaComputeTracing');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableTracing();
+
+		const template = Template.fromStack(stack);
+		template.hasResourceProperties('AWS::Lambda::Function', {
+			TracingConfig: { Mode: 'Active' },
+		});
+		// The X-Ray publish IAM grant is applied once on the shared role by core's
+		// finalizeTracing (not per compute) — asserted in tracing.cdk.test.ts.
+	});
+
+	test('dashboardSection returns the Lambda health widget rows', () => {
+		const { parent } = setup('LambdaComputeWidgets');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		const rows = compute.dashboardSection('us-east-1').health;
+
+		assert.strictEqual(rows.length, 2, 'two rows');
+		assert.strictEqual(rows[0].length, 2, 'first row has two widgets');
+		assert.strictEqual(rows[1].length, 2, 'second row has two widgets');
+
+		const titles = rows.flat().flatMap((w) => w.toJson().map((j: any) => j.properties?.title));
+		for (const t of ['Lambda Invocations', 'Lambda Errors', 'Lambda Duration', 'Lambda Concurrent Executions']) {
+			assert.ok(titles.includes(t), `expected a "${t}" widget`);
+		}
+	});
+
+	test('dashboardSection has logs always but omits traces until tracing is enabled', () => {
+		const { parent } = setup('LambdaComputeGating');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		const section = compute.dashboardSection('us-east-1');
+		assert.notStrictEqual(section.logging, undefined, 'logs section is always present');
+		assert.equal(section.tracing, undefined, 'no traces section until tracing is enabled');
+	});
+
+	test("dashboardSection.logging queries this compute's own handler log group", () => {
+		const { parent } = setup('LambdaComputeLogWidgets');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		const json = (compute.dashboardSection('us-east-1').logging ?? []).flat().flatMap((w) => w.toJson());
+
+		const titles = json.map((j: any) => j.properties?.title);
+		assert.ok(titles.includes('Recent Errors'), 'has a recent-errors log query widget');
+		assert.ok(titles.includes('Log Volume'), 'has a log-volume widget');
+		// The log query targets the compute's own handler log group.
+		const logWidget = json.find((j: any) => j.properties?.title === 'Recent Errors');
+		assert.equal(logWidget.type, 'log');
+	});
+
+	test('dashboardSection.tracing emits an X-Ray trace widget once a Tracer is attached', () => {
+		const { parent } = setup('LambdaComputeTraceWidgets');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableTracing();
+		const json = (compute.dashboardSection('eu-west-1').tracing ?? []).flat().flatMap((w) => w.toJson());
+
+		assert.strictEqual(json.length, 1, 'one trace widget');
+		assert.equal(json[0].type, 'trace');
+		assert.equal(json[0].properties.title, 'Traces');
+		assert.equal(json[0].properties.region, 'eu-west-1');
+		assert.ok(json[0].properties.filters.query.includes('AWS::Lambda::Function'));
 	});
 });

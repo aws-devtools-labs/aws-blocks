@@ -7,6 +7,15 @@
 export const CronJobErrors = {
 	/** Thrown when the schedule expression is not a valid cron or rate format. */
 	InvalidSchedule: 'InvalidScheduleExpression',
+	/**
+	 * Thrown by the local mock when a schedule is valid for EventBridge (and passes
+	 * the deploy-time synth gate) but uses cron forms the mock parser can't simulate
+	 * locally — e.g. `L`, `W`, `#`, or a year field. It will deploy and run; this is
+	 * a local-simulation limitation, not an invalid schedule.
+	 */
+	ScheduleNotSupported: 'ScheduleNotSupportedInMock',
 	/** Thrown when the timezone string is not a valid IANA timezone. */
 	InvalidTimezone: 'InvalidTimezoneExpression',
+	/** Thrown at synth time when the resolved compute is not a supported type (only Lambda today). */
+	UnsupportedCompute: 'UnsupportedComputeException',
 } as const;

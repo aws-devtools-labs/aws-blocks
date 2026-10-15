@@ -20,4 +20,6 @@ export const RealtimeErrors = {
 	PublishFailed: 'PublishFailedException',
 	ValidationFailed: 'ValidationFailedException',
 	ConnectionFailed: 'ConnectionFailedException',
+	/** Thrown at synth time when the resolved compute is not a supported type (only Lambda today). */
+	UnsupportedCompute: 'UnsupportedComputeException',
 } as const;

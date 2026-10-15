@@ -4,7 +4,7 @@
 import { test, describe } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { DistributedTable, DistributedTableErrors } from './index.mock.js';
-import { Scope } from '@aws-blocks/core';
+import { ApiError, isBlocksError, Scope } from '@aws-blocks/core';
 import { z } from 'zod';
 
 // ── Schemas ─────────────────────────────────────────────────────────────────
@@ -139,6 +139,110 @@ describe('DistributedTable', () => {
 			await assert.rejects(
 				() => table.put({ userId: 'u1', email: 'a@b.com', name: 'Fail', createdAt: 1000 }, { ifFieldEquals: { name: 'Wrong' } }),
 				(err: any) => err.name === DistributedTableErrors.ConditionalCheckFailed,
+			);
+		});
+	});
+
+	// ── OCC conflicts map to HTTP 409 (Conflict) ─────────────────────────────
+	// A conditional-write conflict must serialize to JSON-RPC code 409, not 500.
+	// The mock must throw an ApiError (status 409) that preserves the
+	// ConditionalCheckFailed name, matching the aws-runtime path. `retriable` is
+	// scoped to the assertion kind: true only for optimistic-lock ifFieldEquals
+	// conflicts (a re-read and retry can succeed), false for existence/uniqueness
+	// assertions (a blind retry fails identically).
+
+	describe('OCC conflicts map to 409', () => {
+		test('put ifNotExists conflict is an ApiError with status 409, not retriable', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			const user = { userId: 'user1', email: 'test@example.com', name: 'Test', createdAt: 1000 };
+			await table.put(user);
+			await assert.rejects(
+				() => table.put(user, { ifNotExists: true }),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, false);
+					return true;
+				},
+			);
+		});
+
+		test('put ifFieldEquals conflict is an ApiError with status 409, retriable', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await table.put({ userId: 'u1', email: 'a@b.com', name: 'Test', createdAt: 1000 });
+			await assert.rejects(
+				() => table.put({ userId: 'u1', email: 'a@b.com', name: 'Fail', createdAt: 1000 }, { ifFieldEquals: { name: 'Wrong' } }),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, true);
+					return true;
+				},
+			);
+		});
+
+		test('put ifNotExists + ifFieldEquals conflict is 409, not retriable (existence wins)', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await table.put({ userId: 'u1', email: 'a@b.com', name: 'Test', createdAt: 1000 });
+			// The typed API forbids combining ifNotExists with ifFieldEquals; force
+			// the combined shape to verify the runtime derivation is existence-wins
+			// (not retriable) for parity with the aws path and bb-kv-store.
+			const combined = { ifNotExists: true, ifFieldEquals: { name: 'Wrong' } } as unknown as Parameters<typeof table.put>[1];
+			await assert.rejects(
+				() => table.put({ userId: 'u1', email: 'a@b.com', name: 'Fail', createdAt: 1000 }, combined),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, false);
+					return true;
+				},
+			);
+		});
+
+		test('delete ifExists conflict is an ApiError with status 409, not retriable', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await assert.rejects(
+				() => table.delete({ userId: 'missing', createdAt: 1 }, { ifExists: true }),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, false);
+					return true;
+				},
+			);
+		});
+
+		test('delete ifFieldEquals conflict is an ApiError with status 409, retriable', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await table.put({ userId: 'u1', email: 'a@b.com', name: 'Test', createdAt: 1000 });
+			await assert.rejects(
+				() => table.delete({ userId: 'u1', createdAt: 1000 }, { ifFieldEquals: { name: 'Wrong' } }),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, true);
+					return true;
+				},
 			);
 		});
 	});
@@ -857,6 +961,51 @@ describe('DistributedTable', () => {
 				async () => { for await (const _ of table.query({ index: 'doesNotExist', where: { userId: { equals: 'u1' } } })) {} },
 				/Index 'doesNotExist' not found/,
 			);
+		});
+	});
+
+	// ── Query: index sort-key ties are ordered deterministically ────────────
+	describe('query (index sort-key ties)', () => {
+		const cardSchema = z.object({ boardId: z.string(), cardId: z.string(), position: z.number() });
+		// Base key is (boardId, cardId); the GSI sorts by `position`, which is NOT
+		// unique — several cards can share a position. DynamoDB tie-breaks such
+		// index rows by the base-table key, so the mock must too (not by Map
+		// insertion order, which varies by write order / disk reload).
+		function cardTable() {
+			return new DistributedTable(testScope(), 'cards', {
+				schema: cardSchema,
+				key: { partitionKey: 'boardId', sortKey: 'cardId' },
+				indexes: { byPosition: { partitionKey: 'boardId', sortKey: 'position' } },
+			});
+		}
+		const q = (t: ReturnType<typeof cardTable>, order?: 'asc' | 'desc') =>
+			collect(t.query({ index: 'byPosition', where: { boardId: { equals: 'b1' } }, ...(order ? { order } : {}) }));
+
+		test('ties on the index sort key order by the base-table key, regardless of write order', async () => {
+			const t1 = cardTable();
+			// All position=1; insert cardIds out of order.
+			for (const cardId of ['c3', 'c1', 'c2']) await t1.put({ boardId: 'b1', cardId, position: 1 });
+			assert.deepEqual((await q(t1)).map((c) => c.cardId), ['c1', 'c2', 'c3']);
+
+			// A different write order must yield the SAME result (deterministic).
+			const t2 = cardTable();
+			for (const cardId of ['c2', 'c3', 'c1']) await t2.put({ boardId: 'b1', cardId, position: 1 });
+			assert.deepEqual((await q(t2)).map((c) => c.cardId), ['c1', 'c2', 'c3']);
+		});
+
+		test('desc reverses ties too (whole index order flips)', async () => {
+			const t = cardTable();
+			for (const cardId of ['c1', 'c3', 'c2']) await t.put({ boardId: 'b1', cardId, position: 1 });
+			assert.deepEqual((await q(t, 'desc')).map((c) => c.cardId), ['c3', 'c2', 'c1']);
+		});
+
+		test('primary order stays by index sort key; base key only breaks ties', async () => {
+			const t = cardTable();
+			await t.put({ boardId: 'b1', cardId: 'zzz', position: 1 });
+			await t.put({ boardId: 'b1', cardId: 'aaa', position: 2 });
+			await t.put({ boardId: 'b1', cardId: 'mmm', position: 1 });
+			// position asc first (1,1,2); within position=1, base key (cardId) breaks the tie.
+			assert.deepEqual((await q(t)).map((c) => [c.position, c.cardId]), [[1, 'mmm'], [1, 'zzz'], [2, 'aaa']]);
 		});
 	});
 });

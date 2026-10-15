@@ -180,7 +180,7 @@ import type {
 |---|---|---|
 | `BlocksAuth` | interface | The common server-side auth contract `AuthBasic` implements: `requireAuth(context): Promise<AuthUser>`, `checkAuth(context): Promise<boolean>`, `getCurrentUser(context): Promise<AuthUser \| null>`. |
 | `AuthUser` | interface | Base user shape: `{ userId: string; username: string }`. `AuthBasicUser` extends it (adds `createdAt`). |
-| `AuthState` | interface | State returned by `getAuthState()` / `setAuthState()`: `{ state, user?, actions, error?, retriable? }`, where `state` is `'signedOut' \| 'signedIn' \| 'confirmingSignUp' \| 'confirmingSignIn' \| 'confirmingMfa' \| 'confirmingPasswordReset'`. |
+| `AuthState` | interface | State returned by `getAuthState()` / `setAuthState()`: `{ state, user?, actions, error?, errorName?, retriable? }`, where `state` is `'signedOut' \| 'signedIn' \| 'confirmingSignUp' \| 'confirmingSignIn' \| 'confirmingMfa' \| 'confirmingPasswordReset'`. |
 | `AuthAction` | interface | One action offered by a state: `{ name, label, fields: AuthField[], url?, method?: 'GET' \| 'POST', capability?: 'webauthn-get' \| 'webauthn-create' }`. |
 | `AuthField` | interface | A form field to render: `{ name, label, type: 'text' \| 'password' \| 'email' \| 'tel' \| 'number' \| 'hidden', required: boolean, defaultValue? }`. |
 | `AuthActionInput` | type | Discriminated union (keyed on `action`) passed to `setAuthState`. The variants AuthBasic handles are `signIn`, `signUp`, `confirmSignUp`, `signOut`, `resetPassword`, and `confirmResetPassword` (see the action-input note under [API](#api)). |
@@ -188,6 +188,8 @@ import type {
 ## Cookies and sessions
 
 The session is an `HttpOnly` cookie holding a signed JWT. By default the cookie is `SameSite=Lax` (plus `Secure` off localhost), which is correct for same-origin apps and the local dev proxy — the common case.
+
+When you serve the frontend through the Hosting block, CloudFront puts the static site and the API behind **one origin** (the API is a path on the same distribution), so the deployed app is same-origin and the `SameSite=Lax` default works without any configuration — leave `crossDomain` at its default `false`.
 
 Set `crossDomain: true` only when the frontend and API are served from **different registrable domains** in production (e.g. frontend on Vercel, API on AWS). That switches the cookie to `SameSite=None; Secure; Partitioned` so it survives the cross-site request:
 

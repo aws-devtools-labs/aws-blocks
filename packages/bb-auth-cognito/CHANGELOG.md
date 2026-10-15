@@ -1,5 +1,187 @@
 # @aws-blocks/bb-auth-cognito
 
+## 0.1.11
+
+### Patch Changes
+
+- bd9a1b8: fix(bb-auth-cognito): stop leaking raw Cognito SDK text in ApiError wire messages
+  
+  Cognito SDK failures are now translated to a BB-authored message keyed on the exception name; the raw SDK error stays on the non-enumerable `cause`. Error `name`, HTTP status, and `retriable` are unchanged. `auth.admin.scan()` now translates SDK failures the same way as every other admin method.
+- 2e72825: fix(bb-auth-cognito): `requireRole` reads group membership live so admin group changes take effect without a re-login
+  
+  `requireRole` checked the signed-in user's `cognito:groups` **token claim**, which
+  is a snapshot from sign-in. After an admin ran `auth.admin.addUserToGroup(user,
+  'admins')`, that user's live session kept getting **403** until their token
+  refreshed or they re-logged in — the "admin surface is unreachable / `requireRole`
+  returns 403 for everyone" symptom. The mirror bug: `removeUserFromGroup` did **not**
+  revoke a live session, so a removed member kept access until their stale token
+  expired.
+  
+  `requireRole` now reads membership live at call time — AWS: `AdminListGroupsForUser`
+  (paginated); mock: in-process `state.groups` — mirroring how `fetchUserAttributes`
+  reads live rather than trusting the token. The returned `CognitoUser.groups`
+  reflects the live read. Grants and revocations now apply on the user's next
+  request, with no re-login.
+  
+  - Costs one extra Cognito call per guarded request. The cheaper identity reads
+    (`requireAuth` / `getCurrentUser` / `signIn`) still surface the cached
+    `cognito:groups` claim — use `requireRole` when you need live membership.
+  - `cognito-idp:AdminListGroupsForUser` is now granted to the execution role
+    unconditionally (it backs a client-facing guard), independent of the opt-in
+    `admin` surface. Every other `Admin*` action still requires opt-in.
+  - Added `admin.test.ts` cases covering the sign-in-then-mutate ordering in both
+    directions (grant is honored, revocation locks out); updated the CDK IAM
+    least-privilege test for the new baseline grant.
+- 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
+- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
+  
+  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
+  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
+  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
+  and exports `installClientUserAgent`, an SDK middleware that appends the validated
+  token to the outgoing user agent. The 12 participating Building Blocks install it,
+  so native attribution rides the SDK user-agent chain AWS service telemetry already
+  counts. The Kotlin runtime already sends the header, so Kotlin
+  callers are attributed as soon as this ships; Swift and Dart follow.
+- Updated dependencies [4456fd7]
+- Updated dependencies [fac0e75]
+- Updated dependencies [0e18d5b]
+- Updated dependencies [20be3f0]
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [5454763]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/auth-common@0.1.9
+  - @aws-blocks/bb-app-setting@0.3.1
+  - @aws-blocks/bb-kv-store@0.3.0
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-logger@0.2.1
+
+## 0.1.10
+
+### Patch Changes
+
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
+- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
+  
+  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
+  
+  **Building Blocks declare VPC requirements via the constructor, not a method.**
+  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
+  requirements (a value, or a callback for values that depend on `fullId`) and
+  registers them in a central per-stack registry. This keeps the compile-time
+  forcing the previous `abstract getVpcRequirements()` provided — a block can't
+  silently omit its requirements — without a standing method on every subclass, and
+  gives the framework one place to read, deduplicate, and answer "does anything here
+  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
+  
+  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
+  function without a VPC declares `requiresVpc: true`; when one is needed and the
+  customer didn't bring their own, Blocks lazily creates a single shared VPC
+  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
+  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
+  bring-your-own override.
+  
+  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
+  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
+  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
+  compliance requirement to use specific subnets. Omit it to keep the default
+  (prefer isolated, fall back to `private-with-egress`).
+- Updated dependencies [7b86b8e]
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [81609a8]
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/bb-app-setting@0.3.0
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-kv-store@0.2.0
+  - @aws-blocks/auth-common@0.1.8
+  - @aws-blocks/bb-logger@0.2.0
+
+## 0.1.9
+
+### Patch Changes
+
+- 585feea: Document AuthCognito setAuthState error-state semantics, including retriable challenge failures and CodeMismatch handling.
+- 64ddd74: test: adapt CDK tests to the new config-registry finalize signature
+  
+  Test-only change: both packages' CDK tests were updated to call
+  `finalizeConfigRegistry` with its new `(root, executionRole, computes)`
+  signature. No runtime or public API change.
+- Updated dependencies [df667c5]
+- Updated dependencies [df667c5]
+- Updated dependencies [64ddd74]
+- Updated dependencies [df667c5]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [4a830a6]
+- Updated dependencies [f2f186c]
+- Updated dependencies [46b7c89]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+  - @aws-blocks/bb-app-setting@0.2.1
+  - @aws-blocks/auth-common@0.1.7
+  - @aws-blocks/bb-kv-store@0.1.8
+
+## 0.1.8
+
+### Patch Changes
+
+- 309a236: refactor(bb): attach IAM grants to the shared execution role
+  
+  Data and auth blocks now grant permissions to the shared Blocks execution role
+  (`this.executionRole`) instead of the handler function directly. Grants land on
+  the same role the handler assumes, so the effective runtime permissions are
+  identical — this decouples IAM wiring from the concrete Lambda function ahead of
+  the multi-compute model.
+  
+  For `bb-distributed-data`, the DSQL endpoint and region now flow through the
+  config registry (loaded into `process.env` at cold start, like every other
+  block) rather than being set as direct handler environment variables, and the
+  migration Lambda maps the shared execution role's ARN.
+- Updated dependencies [1ff9d03]
+- Updated dependencies [5798492]
+- Updated dependencies [f00adb0]
+- Updated dependencies [f00adb0]
+- Updated dependencies [309a236]
+- Updated dependencies [08ab129]
+- Updated dependencies [9d4ccea]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [0ac3879]
+- Updated dependencies [e4dac4a]
+  - @aws-blocks/bb-app-setting@0.2.0
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/bb-kv-store@0.1.7
+  - @aws-blocks/auth-common@0.1.6
+  - @aws-blocks/bb-logger@0.1.5
+
 ## 0.1.7
 
 ### Patch Changes

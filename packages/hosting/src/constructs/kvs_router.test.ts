@@ -393,6 +393,52 @@ void describe('request fn — F8 consolidated basePath strip (consistent boundar
   });
 });
 
+void describe('generated request fn — credential cache-key strip', () => {
+  // Static/image routes share one cache key, so configured cache-key cookies
+  // (meta.ck) and headers (meta.hh) are dropped from the request to avoid
+  // per-session cache fragmentation. This must also happen on the /builds/<id>/
+  // early-return path — CloudFront custom-error responses re-request
+  // /builds/<id>/<page> through this same behavior, and those are always static
+  // assets sent to S3, so they must be stripped like every other static fetch.
+  const entries = buildKvsEntries({
+    manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+    buildId: 'b1',
+    hasServer: false,
+    hasImage: false,
+    cacheKeyCookies: ['sid'],
+    cacheKeyHeaders: ['x-auth'],
+  });
+  const code = generateKvsRouterRequestCode();
+  const withCreds = (uri: string) => ({
+    uri,
+    headers: { host: { value: 'x.test' }, 'x-auth': { value: 't0ken' } },
+    cookies: { sid: { value: 'sess-1' } },
+  });
+
+  void it('strips creds on the /builds early-return branch (custom-error re-fetch)', async () => {
+    const { output, selectedOrigin } = await runRequestFn(code, entries, withCreds('/builds/b1/page.html'));
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(output.cookies.sid, undefined, '__cookie sid must be stripped on /builds path');
+    assert.equal(output.headers['x-auth'], undefined, 'x-auth header must be stripped on /builds path');
+  });
+
+  void it('strips creds on the normal static branch', async () => {
+    const { output } = await runRequestFn(code, entries, withCreds('/about'));
+    assert.equal(output.cookies.sid, undefined);
+    assert.equal(output.headers['x-auth'], undefined);
+  });
+
+  void it('emits the shared stripCred helper and calls it before the /builds return', () => {
+    // Source guard: the strip runs on the /builds early-return via the helper
+    // (not duplicated inline), so the credential drop precedes that return.
+    const buildsIdx = code.indexOf("uri.indexOf('/builds/') === 0");
+    const callIdx = code.indexOf('stripCred(request, meta)', buildsIdx);
+    const returnIdx = code.indexOf('return request', buildsIdx);
+    assert.ok(code.includes('function stripCred('), 'stripCred helper must be defined');
+    assert.ok(callIdx > buildsIdx && callIdx < returnIdx, 'stripCred must run before the /builds return');
+  });
+});
+
 void describe('generated request fn — skew cookie gating', () => {
   const manifest = baseManifest({ routes: [{ pattern: '/*', target: 'static' }] });
   const assetWithCookie = {
@@ -1655,5 +1701,102 @@ void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
     // non-prerendered slug still routes to the SSR origin, not S3-404.
     assert.ok(out.some(([p, k]) => p === '/blog/[slug]' && k === 'c'));
     assert.ok(!out.some(([p]) => p === '/blog/*'));
+  });
+});
+
+void describe('shared-route cache-key credential strip', () => {
+  void it('emits meta.ck / meta.hh only when configured', () => {
+    const withCreds = buildKvsEntries({
+      manifest: baseManifest(),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+      cacheKeyCookies: ['session'],
+      cacheKeyHeaders: ['authorization'],
+    });
+    const metaWith = JSON.parse(withCreds.meta);
+    assert.deepEqual(metaWith.ck, ['session']);
+    assert.deepEqual(metaWith.hh, ['authorization']);
+
+    // No cache-key options ⇒ meta blob is unchanged (no ck/hh keys).
+    const without = buildKvsEntries({
+      manifest: baseManifest(),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const metaWithout = JSON.parse(without.meta);
+    assert.equal('ck' in metaWithout, false);
+    assert.equal('hh' in metaWithout, false);
+  });
+
+  void it('lowercases + de-dupes cacheKeyHeaders into meta.hh', () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest(),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+      cacheKeyHeaders: ['Authorization', 'authorization', 'X-Api-Key'],
+    });
+    const meta = JSON.parse(entries.meta);
+    assert.deepEqual(meta.hh, ['authorization', 'x-api-key']);
+  });
+
+  void it('generated request fn contains the delete-cookies + delete-headers strip loops', () => {
+    const code = generateKvsRouterRequestCode();
+    assert.match(code, /delete request\.cookies\[/);
+    assert.match(code, /delete request\.headers\[hh\[/);
+  });
+
+  void it('strips the configured cookie + headers on a static route, keeps them on compute', async () => {
+    const manifest = baseManifest({
+      routes: [
+        { pattern: '/about', target: 'static' },
+        { pattern: '/api/*', target: 'server' },
+      ],
+    });
+    const entries = buildKvsEntries({
+      manifest,
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+      cacheKeyCookies: ['session'],
+      cacheKeyHeaders: ['authorization', 'x-api-key'],
+    });
+    const code = generateKvsRouterRequestCode();
+
+    const staticOut = await runRequestFn(
+      code,
+      entries,
+      req('/about', {
+        cookies: { session: { value: 's' } },
+        headers: {
+          host: { value: 'x.test' },
+          authorization: { value: 'Bearer t' },
+          'x-api-key': { value: 'k' },
+        },
+      }),
+    );
+    assert.equal(staticOut.selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(staticOut.output.cookies.session, undefined);
+    assert.equal(staticOut.output.headers.authorization, undefined);
+    assert.equal(staticOut.output.headers['x-api-key'], undefined);
+
+    const computeOut = await runRequestFn(
+      code,
+      entries,
+      req('/api/x', {
+        cookies: { session: { value: 's' } },
+        headers: {
+          host: { value: 'x.test' },
+          authorization: { value: 'Bearer t' },
+          'x-api-key': { value: 'k' },
+        },
+      }),
+    );
+    assert.equal(computeOut.selectedOrigin, ORIGIN_ID.server);
+    assert.ok(computeOut.output.cookies.session, 'compute keeps the session cookie');
+    assert.ok(computeOut.output.headers.authorization, 'compute keeps authorization');
+    assert.ok(computeOut.output.headers['x-api-key'], 'compute keeps x-api-key');
   });
 });

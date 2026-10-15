@@ -80,7 +80,7 @@ export function extractSkipCodegenMethods(sourcePath: string): Set<string> {
 		ts.ScriptKind.TS,
 	);
 
-	function visitObjectLiteral(obj: ts.ObjectLiteralExpression) {
+	function visitObjectLiteral(obj: ts.ObjectLiteralExpression, namespaceName?: string) {
 		for (const prop of obj.properties) {
 			if (
 				ts.isMethodDeclaration(prop) &&
@@ -88,7 +88,10 @@ export function extractSkipCodegenMethods(sourcePath: string): Set<string> {
 				ts.isIdentifier(prop.name) &&
 				hasBlocksSkipCodegenTag(prop)
 			) {
-				result.add(prop.name.text);
+				// Qualify by namespace (like extractMethodTypes) so a tag on one
+				// namespace's `create` doesn't cause another namespace's `create` to be
+				// dropped from the spec. Bare key only when the namespace is unknown.
+				result.add(namespaceName ? `${namespaceName}.${prop.name.text}` : prop.name.text);
 			}
 		}
 	}
@@ -98,22 +101,23 @@ export function extractSkipCodegenMethods(sourcePath: string): Set<string> {
 			const callee = node.expression;
 			if (ts.isIdentifier(callee) && callee.text === 'ApiNamespace' && node.arguments && node.arguments.length >= 2) {
 				const handler = node.arguments[node.arguments.length - 1];
+				const nsName = enclosingBindingName(node);
 				if (ts.isArrowFunction(handler) || ts.isFunctionExpression(handler)) {
 					const body = handler.body;
 					if (ts.isParenthesizedExpression(body) && ts.isObjectLiteralExpression(body.expression)) {
-						visitObjectLiteral(body.expression);
+						visitObjectLiteral(body.expression, nsName);
 					} else if (ts.isObjectLiteralExpression(body)) {
-						visitObjectLiteral(body);
+						visitObjectLiteral(body, nsName);
 					} else if (ts.isBlock(body)) {
 						for (const stmt of body.statements) {
 							if (ts.isReturnStatement(stmt) && stmt.expression) {
 								if (ts.isObjectLiteralExpression(stmt.expression)) {
-									visitObjectLiteral(stmt.expression);
+									visitObjectLiteral(stmt.expression, nsName);
 								} else if (
 									ts.isParenthesizedExpression(stmt.expression) &&
 									ts.isObjectLiteralExpression(stmt.expression.expression)
 								) {
-									visitObjectLiteral(stmt.expression.expression);
+									visitObjectLiteral(stmt.expression.expression, nsName);
 								}
 							}
 						}
@@ -197,11 +201,34 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 			const fnName = node.expression;
 			if (ts.isIdentifier(fnName) && fnName.text === 'ApiNamespace' && node.arguments && node.arguments.length >= 2) {
 				const handlerArg = node.arguments[node.arguments.length - 1];
-				extractMethodsFromHandler(handlerArg, checker, sourceFile!, result);
+				extractMethodsFromHandler(handlerArg, checker, sourceFile!, result, enclosingBindingName(node));
 			}
 		}
 		ts.forEachChild(node, visit);
 	});
+
+	// Recursively attribute every leaf identifier in a destructuring binding pattern
+	// to the namespace it binds, keyed by the leaf's LOCAL name. Object patterns
+	// (`{ ns }`, `{ ns: local }`), array/tuple patterns (`[ns]`), and any nesting
+	// (`{ a: { b } }`, `[{ ns }]`) all funnel here. The checker computes the
+	// destructuring, so each leaf's resolved type — a tuple element or a nested
+	// property — needs no manual index/property bookkeeping (#552).
+	function attributeBindingPattern(pattern: ts.BindingPattern): void {
+		for (const element of pattern.elements) {
+			if (ts.isOmittedExpression(element)) continue; // an array hole, e.g. `const [, ns] = …`
+			// A rest binding (`const [a, ...rest]` / `const { a, ...rest }`) resolves to
+			// an array/object type whose members (push/map/…) carry call signatures, which
+			// would add benign but noisy `rest.push`-style keys. A namespace is never a
+			// rest binding, so skip it and keep the map tight.
+			if (element.dotDotDotToken) continue;
+			if (ts.isIdentifier(element.name)) {
+				const elementType = checker.getTypeAtLocation(element.name);
+				extractMethodsFromResolvedType(elementType, checker, result, element.name.text);
+			} else {
+				attributeBindingPattern(element.name); // nested object/array pattern
+			}
+		}
+	}
 
 	// Second pass: resolve types for indirect ApiNamespace exports (e.g., auth.createApi()).
 	// The AST walk above only finds `new ApiNamespace(...)` in this file.
@@ -210,18 +237,48 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 	ts.forEachChild(sourceFile, (node) => {
 		if (!ts.isVariableStatement(node)) return;
 		for (const decl of node.declarationList.declarations) {
-			if (!decl.initializer || !ts.isIdentifier(decl.name)) continue;
-			// Skip if we already extracted methods for this via the AST walk
-			if (ts.isNewExpression(decl.initializer)) {
-				const callee = decl.initializer.expression;
-				if (ts.isIdentifier(callee) && callee.text === 'ApiNamespace') continue;
+			if (!decl.initializer) continue;
+
+			// (a) Simple binding: `const api = auth.createApi()` /
+			//     `export const api = backend.namespace`.
+			if (ts.isIdentifier(decl.name)) {
+				// Skip if we already extracted methods for this via the AST walk
+				if (ts.isNewExpression(decl.initializer)) {
+					const callee = decl.initializer.expression;
+					if (ts.isIdentifier(callee) && callee.text === 'ApiNamespace') continue;
+				}
+				// Use the type checker to get the type of the initializer expression.
+				// For `auth.createApi()`, this resolves through the method's return type
+				// to the `AsyncAPI<T>` type that ApiNamespace returns.
+				const initType = checker.getTypeAtLocation(decl.initializer);
+				extractMethodsFromResolvedType(initType, checker, result, decl.name.text);
+				continue;
 			}
 
-			// Use the type checker to get the type of the initializer expression.
-			// For `auth.createApi()`, this resolves through the method's return type
-			// to the `AsyncAPI<T>` type that ApiNamespace returns.
-			const initType = checker.getTypeAtLocation(decl.initializer);
-			extractMethodsFromResolvedType(initType, checker, result);
+			// (b) Destructuring binding: `const { indirectNamespace } = factory()`,
+			// `const [ns] = factory()`, or any nesting of the two. Each destructured
+			// binding is a separate namespace whose name is the LOCAL binding name (the
+			// name it's exported under), so a factory-returned namespace keys qualified
+			// (`indirectNamespace.method`) like a directly-constructed one — instead of
+			// landing on a bare key that collides with same-named methods in other
+			// namespaces (#444, #445). See `attributeBindingPattern`, which recurses to
+			// every leaf identifier so object, array/tuple, and nested patterns are all
+			// attributed (#552 — a tuple of namespaces sharing a method name would
+			// otherwise hit the #445 cross-assignment class).
+			//
+			// This adds the qualified key ALONGSIDE the bare key the first-pass AST
+			// walk already emitted for the same `new ApiNamespace(...)` (its
+			// `enclosingBindingName` returns undefined behind the factory, so it keys
+			// bare). Leaving the bare key is harmless: `generate-spec` looks up
+			// `tsTypes.get(qualified) ?? tsTypes.get(bare)`, so the qualified key
+			// added here always wins for an attributable namespace, and the bare
+			// entry never influences the emitted schema (a regression test asserts
+			// this under a name collision). The #498 bare-name fallback is retained
+			// on purpose — it's the last resort for namespaces this pass still can't
+			// attribute (default exports, deeper indirection), so it is NOT redundant.
+			if (ts.isObjectBindingPattern(decl.name) || ts.isArrayBindingPattern(decl.name)) {
+				attributeBindingPattern(decl.name);
+			}
 		}
 	});
 
@@ -249,6 +306,7 @@ function extractMethodsFromHandler(
 	checker: ts.TypeChecker,
 	sourceFile: ts.SourceFile,
 	result: Map<string, MethodTypeInfo>,
+	namespaceName?: string,
 ): void {
 	let objectLiteral: ts.ObjectLiteralExpression | undefined;
 
@@ -280,9 +338,39 @@ function extractMethodsFromHandler(
 		if (ts.isMethodDeclaration(prop) && prop.name && ts.isIdentifier(prop.name)) {
 			const methodName = prop.name.text;
 			const info = extractMethodTypeInfo(prop, checker, sourceFile);
-			if (info) result.set(methodName, info);
+			// Key by the namespace-qualified name when the namespace is known, so two
+			// namespaces sharing a method name (e.g. widgets.create / subscriptions.create)
+			// don't collide and cross-assign schemas. Fall back to the bare name when the
+			// namespace can't be determined (consumers try qualified, then bare).
+			if (info) result.set(namespaceName ? `${namespaceName}.${methodName}` : methodName, info);
 		}
 	}
+}
+
+/**
+ * Walk up from a `new ApiNamespace(...)` node to the name it's bound to
+ * (`export const widgets = new ApiNamespace(...)` → `"widgets"`). This is the
+ * name the dev server / Lambda handler route by, and the one `generate-spec`
+ * uses to qualify method names. Returns `undefined` when the namespace is
+ * created behind indirection (factory return, etc.), in which case methods key
+ * by their bare name.
+ *
+ * Limitation: this is the local binding name, not the export name. An export
+ * rename — `const widgets = new ApiNamespace(...); export { widgets as gadgets }`
+ * — keys `widgets.*` while `generate-spec` looks up `gadgets.*`, so the qualified
+ * lookup misses and falls back to the bare key (schemas resolve if there's no
+ * collision, else `unknown`). Rare; resolving the export alias would remove it.
+ */
+function enclosingBindingName(node: ts.Node): string | undefined {
+	let current: ts.Node | undefined = node.parent;
+	while (current) {
+		if (ts.isVariableDeclaration(current) && ts.isIdentifier(current.name)) return current.name.text;
+		// Don't cross a function/block boundary — beyond it the binding no longer
+		// corresponds to a directly-exported namespace.
+		if (ts.isSourceFile(current) || ts.isBlock(current) || ts.isFunctionLike(current)) return undefined;
+		current = current.parent;
+	}
+	return undefined;
 }
 
 function extractMethodTypeInfo(
@@ -365,6 +453,7 @@ function extractMethodsFromResolvedType(
 	type: ts.Type,
 	checker: ts.TypeChecker,
 	result: Map<string, MethodTypeInfo>,
+	namespaceName?: string,
 ): void {
 	// The runtime value of an ApiNamespace export is the handler function itself
 	// (with the marker symbol attached). Its TS type is `AsyncAPI<T>`, which is
@@ -392,8 +481,9 @@ function extractMethodsFromResolvedType(
 		const propName = prop.getName();
 		// Skip internal symbols and the marker
 		if (propName.startsWith('_') || propName === 'Symbol(blocks:ApiNamespace)') continue;
+		const key = namespaceName ? `${namespaceName}.${propName}` : propName;
 		// Don't overwrite methods already found by the AST walk
-		if (result.has(propName)) continue;
+		if (result.has(key)) continue;
 
 		const propType = checker.getTypeOfSymbol(prop);
 		const methodSigs = propType.getCallSignatures();
@@ -433,7 +523,7 @@ function extractMethodsFromResolvedType(
 			skipCodegen = true;
 		}
 
-		result.set(propName, { params, returnType, transferable, skipCodegen });
+		result.set(key, { params, returnType, transferable, skipCodegen });
 	}
 }
 

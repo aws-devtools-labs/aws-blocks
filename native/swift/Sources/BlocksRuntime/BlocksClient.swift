@@ -39,7 +39,7 @@ public final class BlocksClient {
     public let tokenStore: TokenStore
 
     private let url: String
-    private let session: URLSession
+    let session: URLSession
 
     /// Stored cookies persisted in the Keychain so auth sessions survive app restarts.
     /// Shared across all BlocksClient instances.
@@ -76,6 +76,8 @@ public final class BlocksClient {
         config.httpCookieAcceptPolicy = .never
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
+        // The Blocks server reads x-blocks-user-agent.
+        config.httpAdditionalHeaders = ["x-blocks-user-agent": blocksUserAgentToken]
         return URLSession(configuration: config)
     }
 

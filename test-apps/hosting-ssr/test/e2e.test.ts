@@ -331,6 +331,84 @@ test.describe('SSR origin regression coverage', () => {
   });
 });
 
+test.describe('SSR cache isolation (per-session cache key)', () => {
+  // /cache-isolation is an SSR route that echoes the `bb_session` cookie and
+  // emits `Cache-Control: public, s-maxage=300`, so CloudFront caches it. The
+  // app sets cdn.cacheKeyCookies=['bb_session'], putting the session cookie in
+  // the CDN cache key — so each session keys a separate cache entry. Without
+  // the cookie in the key, this s-maxage response would be a single shared
+  // cache entry.
+
+  test('each session cookie gets its own rendered body', async ({ request }) => {
+    // Functional check that runs in every env (no CDN required): the route
+    // renders per-session content, so distinct session cookies produce
+    // distinct bodies.
+    const isolationUrl = `${hostingUrl}/cache-isolation`;
+    const userA = `alice-${randomBytes(6).toString('hex')}`;
+    const userB = `bob-${randomBytes(6).toString('hex')}`;
+
+    const a = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userA}` } });
+    expect(a.status()).toBe(200);
+    expect(await a.text()).toContain(`user=${userA}`);
+
+    const b = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userB}` } });
+    expect(b.status()).toBe(200);
+    const bBody = await b.text();
+    expect(bBody).toContain(`user=${userB}`);
+    expect(bBody).not.toContain(userA);
+  });
+
+  test('per-session cache key: a warmed edge HIT for one session is not reused for a different session (sandbox)', async ({ request }) => {
+    // Only CloudFront (in front only in sandbox) sets `x-cache: Hit from
+    // cloudfront`; local/dev mode has no CDN and cannot exercise a real edge
+    // HIT, so this per-session cache-key proof runs in sandbox only.
+    if (ENV !== 'sandbox') {
+      test.skip();
+      return;
+    }
+
+    const isolationUrl = `${hostingUrl}/cache-isolation`;
+    const userA = `alice-${randomBytes(6).toString('hex')}`;
+    const userB = `bob-${randomBytes(6).toString('hex')}`;
+
+    // Warm the edge for user A: the first request is a MISS that populates the
+    // cache; a repeat is a HIT of A's body.
+    const a1 = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userA}` } });
+    expect(a1.status()).toBe(200);
+    expect(await a1.text()).toContain(`user=${userA}`);
+
+    const a2 = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userA}` } });
+    expect(a2.status()).toBe(200);
+    expect(await a2.text()).toContain(`user=${userA}`);
+
+    // Confirm A's repeat was actually served from the CloudFront cache — a real
+    // HIT is what makes the per-session check below meaningful (otherwise B
+    // could pass simply by MISSing and rendering its own body).
+    expect(a2.headers()['x-cache'] || '').toContain('Hit from cloudfront');
+
+    // User B hits the SAME URL with a different session cookie. Because the
+    // session cookie is in the cache key, B gets its own cache entry and its
+    // own body, not A's warmed entry.
+    const b1 = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userB}` } });
+    expect(b1.status()).toBe(200);
+    const bBody = await b1.text();
+    expect(bBody).toContain(`user=${userB}`);
+    expect(bBody).not.toContain(userA);
+  });
+
+  test('the isolation route is edge-cacheable (origin emits s-maxage)', async ({ request }) => {
+    const isolationUrl = `${hostingUrl}/cache-isolation`;
+    const resp = await request.get(isolationUrl, {
+      headers: { Cookie: `bb_session=probe-${randomBytes(4).toString('hex')}` },
+    });
+    expect(resp.status()).toBe(200);
+    // The origin's Cache-Control (honored by the SSR cache policy) makes the
+    // response cacheable; if this were absent the isolation test above would
+    // never exercise a cache entry.
+    expect(resp.headers()['cache-control'] || '').toMatch(/s-maxage=300/);
+  });
+});
+
 test.describe('Build cache infrastructure', () => {
   test('BuildCacheBucketName output exists when deployed', async () => {
     if (ENV !== 'sandbox') {
@@ -339,5 +417,63 @@ test.describe('Build cache infrastructure', () => {
     }
     expect(buildCacheBucketName).toBeTruthy();
     expect(buildCacheBucketName).toMatch(/^[a-z0-9][a-z0-9.-]+[a-z0-9]$/);
+  });
+});
+
+// Sandbox-only: the mock/local path (env-first resolution) is covered by the
+// hosting unit tests; this asserts the real AWS path — secret() resolves from
+// Secrets Manager and config() from SSM, each from its own store, via the exact
+// CLI-write → IAM-grant → getSecret/getConfig-read flow a customer would use.
+test.describe('Secrets & config (secret() → Secrets Manager, config() → SSM)', () => {
+  const sha8 = (v: string) => createHash('sha256').update(v).digest('hex').slice(0, 8);
+
+  test('resolves each value at runtime from its own store', async ({ request }) => {
+    if (ENV !== 'sandbox') {
+      test.skip();
+      return;
+    }
+
+    // Write both values out of band via the shipped CLI helpers (same code path
+    // as `npm run secret -- set` / `npm run config -- set`, region from AWS_REGION).
+    const { setSecret, setConfig, removeSecret, removeConfig } = await import('@aws-blocks/blocks/scripts');
+    const demoSecret = `sk_e2e_${randomBytes(12).toString('hex')}`;
+    const demoConfig = JSON.stringify({ beta: true, run: randomBytes(4).toString('hex') });
+
+    try {
+      await setSecret('DEMO_SECRET', demoSecret);
+      await setConfig('DEMO_CONFIG', demoConfig);
+    } catch (err) {
+      // Some deploy roles (e.g. the CI GitHub Actions role) can provision infra
+      // but are not permitted to WRITE the value stores (no
+      // `secretsmanager:CreateSecret` / `ssm:PutParameter`). The write path and
+      // the store→getSecret/getConfig resolution are already covered by the
+      // hosting unit tests, so skip (don't fail) where the runner can't provision.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/AccessDenied|not authorized|AuthorizationError/i.test(msg)) {
+        test.skip(true, `store write not permitted in this environment: ${msg}`);
+        return;
+      }
+      throw err;
+    }
+
+    try {
+      const resp = await request.get(`${hostingUrl}/api/probe/secret`);
+      expect(resp.status()).toBe(200);
+      const body = await resp.json();
+      expect(body.ok).toBe(true);
+
+      // secret() → Secrets Manager: fingerprint matches; the raw value is never echoed.
+      expect(body.secret).toEqual({ len: demoSecret.length, sha8: sha8(demoSecret) });
+      expect(JSON.stringify(body)).not.toContain(demoSecret);
+
+      // config() → SSM: resolved to the exact value the CLI wrote (non-sensitive, echoed).
+      expect(body.config.value).toBe(demoConfig);
+      expect(body.config.sha8).toBe(sha8(demoConfig));
+    } finally {
+      // The values are written out of band, so `destroy` won't remove them — clean
+      // up here (best-effort; ignore if the role can't delete). Fixes the leak.
+      await removeSecret('DEMO_SECRET').catch(() => {});
+      await removeConfig('DEMO_CONFIG').catch(() => {});
+    }
   });
 });

@@ -6,7 +6,7 @@ import {
 	GetParameterCommand,
 	PutParameterCommand,
 } from '@aws-sdk/client-ssm';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, blocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { AppSettingErrors } from './errors.js';
@@ -18,14 +18,14 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 // Re-export public types from types module (canonical source)
 export { AppSettingErrors } from './errors.js';
 export type { AppSettingOptions } from './types.js';
+export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
+// Uses core's prefixing `blocksError` (message prefixed with the error `name`).
+// The `blocksError` in validation.ts is deliberately UNPREFIXED to preserve the
+// CDK synth error text — keep that one local; do not route it through core.
+// @see validation.ts
 
 async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value: unknown): Promise<void> {
 	if (!schema) return;
@@ -67,7 +67,7 @@ export class AppSetting<T = string> extends Scope {
 	static fromExisting<T = string>(
 		scope: ScopeParent,
 		id: string,
-		options: { name: string; secret?: boolean },
+		options: { name: string; secret?: boolean; kmsKeyArn?: string },
 	): AppSetting<T> {
 		const opts: InternalAppSettingOptions<T> = { ...options, external: true };
 		return new AppSetting<T>(scope, id, opts);
@@ -76,6 +76,7 @@ export class AppSetting<T = string> extends Scope {
 	readonly bbName = BB_NAME;
 	private schema?: StandardSchemaV1<T>;
 	private isSecret: boolean;
+	private kmsKeyArn?: string;
 	private client: SSMClient;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
@@ -88,9 +89,11 @@ export class AppSetting<T = string> extends Scope {
 		const parameterName = options.name ?? `/${this.fullId}`;
 		this.schema = options.schema;
 		this.isSecret = options.secret ?? false;
+		this.kmsKeyArn = options.kmsKeyArn;
 		this.client = new SSMClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(this.client);
 		registerSdkIdentifiers(this.fullId, { parameterName });
 	}
 
@@ -160,6 +163,9 @@ export class AppSetting<T = string> extends Scope {
 			Value: serialized,
 			Type: this.isSecret ? 'SecureString' : 'String',
 			Overwrite: true,
+			// Re-specify the CMK on overwrite: SSM falls back to the default aws/ssm
+			// key when KeyId is omitted, which would silently downgrade encryption.
+			...(this.isSecret && this.kmsKeyArn ? { KeyId: this.kmsKeyArn } : {}),
 		}));
 	}
 }

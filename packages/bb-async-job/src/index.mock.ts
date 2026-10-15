@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, blocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { randomUUID } from 'node:crypto';
@@ -20,7 +20,7 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 
-export { AsyncJobErrors } from './errors.js';
+export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
 	AsyncJobContext,
 	AsyncJobOptions,
@@ -43,7 +43,8 @@ interface QueueEntry<T> {
 }
 
 const MAX_PAYLOAD_BYTES = 256 * 1024;
-const MAX_BATCH_SIZE = 10;
+/** Upper bound on payloads per `submitBatch` call — parity with the AWS runtime. */
+const MAX_BATCH_PAYLOADS = 10_000;
 
 /**
  * Background job processing backed by SQS and Lambda.
@@ -224,33 +225,33 @@ export class AsyncJob<T = unknown> extends Scope {
 	/**
 	 * Enqueue multiple jobs in a single call.
 	 *
-	 * In AWS, uses SQS's native `SendMessageBatch` for better throughput than
-	 * sequential `submit()` calls. Maximum 10 payloads per call (SQS limit).
+	 * The mock runtime enqueues each payload via `submit()` in turn; the AWS
+	 * runtime instead packs them into SQS `SendMessageBatch` requests. Either way a
+	 * batch of any size up to {@link MAX_BATCH_PAYLOADS} is accepted — larger
+	 * batches are rejected up front.
 	 *
-	 * @param payloads - Array of job payloads. Maximum 10.
+	 * @param payloads - Array of job payloads (at most {@link MAX_BATCH_PAYLOADS}).
 	 * @param options - Optional. `delaySeconds` applied to all messages.
 	 * @returns `{ jobIds, failed }` — `jobIds` in the same order as input payloads (`null` for failed entries); `failed` lists any entries that could not be enqueued.
 	 * @throws {AsyncJobErrors.BatchEmpty} If payloads array is empty.
-	 * @throws {AsyncJobErrors.BatchTooLarge} If more than 10 payloads.
+	 * @throws {AsyncJobErrors.BatchTooLarge} If more than {@link MAX_BATCH_PAYLOADS} payloads.
 	 * @throws {AsyncJobErrors.PayloadTooLarge} If any payload exceeds 256 KB.
 	 * @throws {AsyncJobErrors.ValidationFailed} If any payload fails schema validation.
-	 * @throws {AsyncJobErrors.BatchSubmitFailed} If one or more messages fail to send (AWS only). The error has `failed` and `jobIds` properties with partial results.
+	 * @throws {AsyncJobErrors.BatchSubmitFailed} If one or more messages fail to send (AWS only). A multi-chunk submit is not atomic; the error's `failed` and `jobIds` properties carry the partial results across all chunks.
 	 */
 	async submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult> {
 		if (payloads.length === 0) {
-			const err = new Error(
-				`${AsyncJobErrors.BatchEmpty}: Batch is empty, must contain at least 1 payload`
-			);
-			err.name = AsyncJobErrors.BatchEmpty;
-			throw err;
+			throw blocksError(AsyncJobErrors.BatchEmpty, 'Batch is empty, must contain at least 1 payload');
 		}
 
-		if (payloads.length > MAX_BATCH_SIZE) {
-			const err = new Error(
-				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, maximum is ${MAX_BATCH_SIZE}`
-			);
-			err.name = AsyncJobErrors.BatchTooLarge;
-			throw err;
+		if (payloads.length > MAX_BATCH_PAYLOADS) {
+			throw blocksError(AsyncJobErrors.BatchTooLarge, `Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`);
+		}
+
+		// Validate every payload before enqueuing any, so one bad payload fails the
+		// whole call rather than half-submitting the batch — matching the AWS runtime.
+		for (const payload of payloads) {
+			await this.validatePayload(payload);
 		}
 
 		const jobIds: Array<string | null> = [];
@@ -268,9 +269,7 @@ export class AsyncJob<T = unknown> extends Scope {
 			const result = rawResult instanceof Promise ? await rawResult : rawResult;
 			if (result && typeof result === 'object' && 'issues' in result && result.issues) {
 				const msg = result.issues[0]?.message ?? 'Validation failed';
-				const err = new Error(`${AsyncJobErrors.ValidationFailed}: ${msg}`);
-				err.name = AsyncJobErrors.ValidationFailed;
-				throw err;
+				throw blocksError(AsyncJobErrors.ValidationFailed, msg);
 			}
 		}
 
@@ -279,11 +278,7 @@ export class AsyncJob<T = unknown> extends Scope {
 		const bytes = Buffer.byteLength(serialized, 'utf8');
 		if (bytes > MAX_PAYLOAD_BYTES) {
 			const kb = Math.ceil(bytes / 1024);
-			const err = new Error(
-				`${AsyncJobErrors.PayloadTooLarge}: Serialized payload is ${kb} KB, exceeds 256 KB limit`
-			);
-			err.name = AsyncJobErrors.PayloadTooLarge;
-			throw err;
+			throw blocksError(AsyncJobErrors.PayloadTooLarge, `Serialized payload is ${kb} KB, exceeds 256 KB limit`);
 		}
 	}
 

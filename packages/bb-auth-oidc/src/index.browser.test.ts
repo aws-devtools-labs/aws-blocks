@@ -3,7 +3,8 @@
 
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { AuthOIDCClient, resolveApiBaseOrigin } from './index.browser.js';
+import { AuthOIDCClient, resolveApiBaseOrigin, handle401 } from './index.browser.js';
+import { ApiError } from '@aws-blocks/core/client';
 
 /**
  * Browser-client tests for `AuthOIDCClient.signIn()` redirect-target
@@ -651,5 +652,35 @@ describe('AuthOIDCClient.signOut — server-side (no window / BroadcastChannel)'
 		assert.strictEqual(signoutPosted, true, 'the server-side sign-out POST should still run');
 		assert.strictEqual(broadcasts.length, 0, 'no cross-tab broadcast should be attempted with no window');
 		assert.strictEqual(reloaded, false, 'no page reload server-side');
+	});
+});
+
+describe('handle401 — documented 401-redirect pattern', () => {
+	beforeEach(() => { installBrowserGlobals(CURRENT_PAGE); });
+	afterEach(() => { clearBrowserGlobals(); });
+
+	test('redirects to the provider sign-in route on a 401 ApiError (the requireAuth case)', () => {
+		// The shape requireAuth() now throws (and the wire decodes to). Pre-fix it was
+		// a bare Error → serialized as 500 → handle401 no-op'd (the reported bug).
+		const err = new ApiError('Authentication required', 401, { name: 'NotAuthenticatedException' });
+		const handled = handle401(err, 'google');
+		assert.strictEqual(handled, true);
+		assert.strictEqual(navigatedTo, '/aws-blocks/auth/signin/google');
+	});
+
+	test('does not redirect on a non-401 error (returns false, no navigation)', () => {
+		const err = new ApiError('Boom', 500, { name: 'InternalError' });
+		const handled = handle401(err, 'google');
+		assert.strictEqual(handled, false);
+		assert.strictEqual(navigatedTo, '');
+	});
+
+	test('regression: the pre-fix bare NotAuthenticated Error is NOT matched', () => {
+		// The old notAuthenticated() shape: not an ApiError, no status — the defect.
+		const bare = new Error('Authentication required');
+		bare.name = 'NotAuthenticatedException';
+		const handled = handle401(bare, 'google');
+		assert.strictEqual(handled, false);
+		assert.strictEqual(navigatedTo, '');
 	});
 });

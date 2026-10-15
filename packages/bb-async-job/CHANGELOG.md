@@ -1,5 +1,287 @@
 # @aws-blocks/bb-async-job
 
+## 0.2.2
+
+### Patch Changes
+
+- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
+  
+  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
+  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
+  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
+  and exports `installClientUserAgent`, an SDK middleware that appends the validated
+  token to the outgoing user agent. The 12 participating Building Blocks install it,
+  so native attribution rides the SDK user-agent chain AWS service telemetry already
+  counts. The Kotlin runtime already sends the header, so Kotlin
+  callers are attributed as soon as this ships; Swift and Dart follow.
+- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
+  
+  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
+  
+  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
+  
+  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
+  
+  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
+  
+  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
+  
+  ## Breaking change (why `@aws-blocks/core` is a minor)
+  
+  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
+  
+  ```ts
+  // before — message collapses to "Internal error" on the client
+  throw new Error('Todo not found');
+  
+  // after — status, message, and name all reach the client
+  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  ```
+  
+  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-distributed-table@0.2.1
+  - @aws-blocks/bb-lambda-compute@0.5.1
+  - @aws-blocks/bb-logger@0.2.1
+
+## 0.2.1
+
+### Patch Changes
+
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- d7312f9: test: adapt CDK test doubles to the compute-driven observability contract
+  
+  Test-only change: both packages' CDK tests use a stub `Compute` that must satisfy
+  the `Compute` base class. The compute-driven observability work adds abstract
+  observability hooks to `Compute` (`healthWidgets` / `loggingWidgets` /
+  `tracingWidgets`, and `applyTracing`), so the stubs now implement them (as no-ops
+  that fail the test if the block ever pokes the compute). No runtime or public API
+  change.
+- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
+- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
+  
+  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
+  
+  **Building Blocks declare VPC requirements via the constructor, not a method.**
+  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
+  requirements (a value, or a callback for values that depend on `fullId`) and
+  registers them in a central per-stack registry. This keeps the compile-time
+  forcing the previous `abstract getVpcRequirements()` provided — a block can't
+  silently omit its requirements — without a standing method on every subclass, and
+  gives the framework one place to read, deduplicate, and answer "does anything here
+  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
+  
+  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
+  function without a VPC declares `requiresVpc: true`; when one is needed and the
+  customer didn't bring their own, Blocks lazily creates a single shared VPC
+  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
+  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
+  bring-your-own override.
+  
+  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
+  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
+  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
+  compliance requirement to use specific subnets. Omit it to keep the default
+  (prefer isolated, fall back to `private-with-egress`).
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-distributed-table@0.2.0
+  - @aws-blocks/bb-lambda-compute@0.5.0
+  - @aws-blocks/bb-logger@0.2.0
+
+## 0.2.0
+
+### Minor Changes
+
+- 4a830a6: feat: route event-block resources to their resolved compute
+  
+  AsyncJob, CronJob, and Realtime now attach their compute-bound resources to a
+  compute resolved at synth rather than the stack's shared handler:
+  
+  - AsyncJob attaches its SQS event source to the resolved compute's function;
+  - CronJob points its EventBridge Scheduler target at the resolved compute's function;
+  - Realtime binds its shared WebSocket API integrations to the stack's **default**
+    compute (its routes are a stack-level singleton) and grants `postToConnection`
+    to the shared execution role, so `publish()` works from any compute.
+  
+  Each block requires a Lambda compute today and fails at synth with a typed
+  `UnsupportedCompute` error (assertable via `isBlocksError`) on any other type.
+  The check uses a duplicate-copy-safe brand (`LambdaCompute.isLambdaCompute`,
+  backed by a `Symbol.for` marker) instead of `instanceof`, so it does not misfire
+  when two copies of `bb-lambda-compute` resolve in one dependency tree.
+  
+  On the default single-Lambda setup the resolved/default compute is the stack's
+  default, whose function is the shared handler — so this is non-breaking with no
+  change to synthesized infrastructure. AsyncJob also grants SQS send to the shared
+  execution role rather than the handler directly.
+  
+  New public surface (hence `minor`):
+  
+  - `@aws-blocks/core` exports `blocksError(name, message)` (the producer half of
+    the `isBlocksError` contract) and `sanitizeConfigKey(id)` from `./bb-utils`
+    (the single env-var-key sanitizer both config writers and runtime readers use).
+  - `@aws-blocks/bb-lambda-compute` adds a `./cdk` subpath exposing the CDK-typed
+    `LambdaCompute` and its `LambdaCompute.isLambdaCompute` guard.
+  - `bb-async-job` / `bb-cron-job` / `bb-realtime` add an `UnsupportedCompute`
+    error member.
+  
+  `@aws-blocks/bb-agent` builds AsyncJob and Realtime internally, so its CDK test
+  moves onto the `BlocksStack.create` harness instead of a handler-only stub.
+  Test-only change — no runtime behavior change to the Agent.
+
+### Patch Changes
+
+- Updated dependencies [df667c5]
+- Updated dependencies [df667c5]
+- Updated dependencies [64ddd74]
+- Updated dependencies [df667c5]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [8de4a56]
+- Updated dependencies [4a830a6]
+- Updated dependencies [f2f186c]
+- Updated dependencies [46b7c89]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+  - @aws-blocks/bb-distributed-table@0.1.7
+  - @aws-blocks/bb-lambda-compute@0.4.0
+
+## 0.1.5
+
+### Patch Changes
+
+- 5798492: feat(bb-async-job): batch SQS messages by default, with a configurable batching window
+  
+  `AsyncJob` triggered its Lambda with `batchSize: 1`, so every queued job cost a
+  full invocation. The default is now `batchSize: 10` with a new
+  `maxBatchingWindowSeconds` option (0–300, default 5) that trades latency for
+  fuller batches. SQS partial batch failure reporting is always enabled, so only
+  the failed records of a batch are redelivered.
+  
+  Both options are now range-checked in the `AsyncJob` constructor, so an
+  out-of-range value fails fast at synth time with `InvalidOptionException` naming
+  the option instead of surfacing as an opaque CloudFormation error mid-deploy:
+  `batchSize` must be 1–10 without a batching window (1–10000 with one), and
+  `maxBatchingWindowSeconds` must be 0–300.
+  
+  Retry semantics are unchanged. SQS tracks `ApproximateReceiveCount` per message
+  and partial batch responses redeliver only failed records, so `maxRetries` still
+  means "attempts for this message" and the DLQ `maxReceiveCount` keeps its
+  meaning at any batch size.
+  
+  This is a `patch` bump. Every package here is pre-1.0, where a `minor` bump is
+  this repo's signal for a breaking change; this change is not breaking — the new
+  default is a behavior change with an opt-out (`batchSize: 1` /
+  `maxBatchingWindowSeconds: 0`), and both options are new and optional. The
+  umbrella `@aws-blocks/blocks` gets the same bump because it re-exports
+  `AsyncJob` and `AsyncJobOptions`.
+  
+  `@aws-blocks/core/cdk` now exports `SHARED_HANDLER_TIMEOUT_SECONDS`, the shared
+  handler Lambda's timeout, so resources that must size their own timeouts against
+  it stop re-hardcoding `900`.
+  
+  The main queue's visibility timeout is now `SHARED_HANDLER_TIMEOUT_SECONDS + maxBatchingWindowSeconds`
+  seconds instead of a flat `900`. A message becomes invisible when the poller
+  receives it, before the batching window elapses and before the handler runs, so
+  a flat 900s let SQS redeliver a message whose invocation was still running.
+  
+  `bb-agent` opts out of the new defaults with `batchSize: 1` and
+  `maxBatchingWindowSeconds: 0`. It submits an internal job per interactive agent
+  turn (plus a second on HITL resume) and the caller is blocked on that job
+  starting, so a batching window would add up to 5s of latency to a human-facing
+  path; `batchSize: 1` also keeps one failing turn from sharing a batch with
+  others, which matters because the handler is not idempotent. Both the runtime
+  and CDK construction sites set the same options so they synthesize an identical
+  event source mapping.
+- ca8cfb6: feat(bb-async-job): submitBatch auto-chunks batches larger than SQS limits
+  
+  `submitBatch` previously rejected any batch over 10 payloads with
+  `BatchTooLarge`, so a caller with more than 10 jobs had to reimplement SQS's
+  chunking rules by hand. It now accepts up to 10,000 payloads and packs them
+  into `SendMessageBatch` requests bounded by both SQS per-request limits — at
+  most 10 entries and at most 256 KB of aggregate message body — sent with
+  bounded concurrency (at most 5 requests in flight) rather than one long serial
+  loop. Each batch entry's `Id` is the payload's original index, so the returned
+  `jobIds` stay in input order and every id is the same SQS `MessageId` that
+  `getStatus()` / `waitUntilComplete()` look up. `BatchTooLarge` is now thrown
+  only when a batch exceeds the 10,000-payload soft cap — a guardrail against a
+  single call fanning out to an unbounded number of SQS requests.
+  
+  A batch spanning multiple chunks is **not atomic**: an earlier chunk can land
+  before a later one fails. The all-or-nothing signal is unchanged — a partial
+  failure still throws `BatchSubmitFailed` — but the thrown error (now a typed
+  `BatchSubmitFailedError`) reflects the partial reality across all chunks:
+  `.jobIds` carries the real `MessageId` for every entry that made it onto the
+  queue (with `null` at each failed index) and `.failed[]` lists every failure
+  sorted by index, so a caller can retry only the failed indexes instead of
+  re-submitting the whole batch. Two failure kinds feed `.failed[]`: an
+  entry-level rejection is scoped to its index, while a transport-level `send()`
+  rejection (throttling, connection, auth) fails that whole chunk and
+  short-circuits the chunks not yet started (`code: 'BatchSubmitAborted'`) instead
+  of hammering an unhealthy endpoint. An entry SQS returns in neither list becomes
+  a `MissingResult` failure so a `null` id never escapes as a success.
+  
+  On full success the `trackStatus` write is now best-effort — a failure recording
+  `queued` (e.g. DynamoDB throttling on a large fan-out) is logged rather than
+  thrown, since the handler backfills the record anyway; otherwise a bookkeeping
+  error would make a caller re-submit an already-enqueued batch. `recordQueuedBatch`
+  also issues its conditional writes in groups of 25 (mirroring `BatchWriteItem`)
+  rather than one unbounded `Promise.all`.
+  
+  The mock runtime submits one message at a time and never partially fails, so the
+  transport/abort paths are AWS-only; it enforces the same soft cap and validates
+  every payload before enqueuing any, matching the AWS runtime.
+  
+  This is a `patch` bump: pre-1.0, this repo uses `minor` to signal a breaking
+  change, and this is not breaking — a batch of ≤10 behaves exactly as before, no
+  public type changed (`BatchSubmitFailedError` is additive), and the previous
+  `BatchTooLarge` threshold simply moved from 10 to 10,000. `@aws-blocks/blocks`
+  gets the same bump because it re-exports `AsyncJob`.
+- Updated dependencies [5798492]
+- Updated dependencies [08ab129]
+- Updated dependencies [f00adb0]
+- Updated dependencies [f00adb0]
+- Updated dependencies [309a236]
+- Updated dependencies [08ab129]
+- Updated dependencies [9d4ccea]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [0ac3879]
+- Updated dependencies [e4dac4a]
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/bb-distributed-table@0.1.6
+  - @aws-blocks/bb-logger@0.1.5
+
 ## 0.1.4
 
 ### Patch Changes

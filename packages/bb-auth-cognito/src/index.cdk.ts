@@ -19,10 +19,11 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
 
-import { Scope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
@@ -64,7 +65,7 @@ export * from './types.js';
  * Grants the Lambda `cognito-idp:*` scoped to this pool's ARN; the SSM
  * secret's IAM is granted by AppSetting itself.
  */
-export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> extends Scope {
+export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> extends BuildingBlockScope {
 	public readonly userPool: cognito.IUserPool;
 	public readonly userPoolClient: cognito.IUserPoolClient;
 	private readonly sessions: KVStore;
@@ -72,7 +73,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	private readonly adminOptions?: AdminOptions;
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);
 		this.adminOptions = opts.admin;
@@ -276,7 +277,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 
 		// 4. Session HMAC secret — SSM SecureString via AppSetting. The
 		// construct generates a random value on first deploy, wires the
-		// custom resource, and grants `this.handler` ssm:GetParameter +
+		// custom resource, and grants the shared execution role ssm:GetParameter +
 		// kms:Decrypt automatically. The runtime (`index.aws.ts`) reads it
 		// by instantiating its own `AppSetting` at the same scope path, so
 		// no env var is needed.
@@ -324,6 +325,13 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		// Client-facing actions — work on the signed-in user via their access token.
 		role.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: [
+				// `requireRole` reads live group membership via
+				// AdminListGroupsForUser so admin-driven group changes take
+				// effect (and revocations apply) without a re-login. It is a
+				// client-facing guard available on every pool, so this action is
+				// granted unconditionally — independent of the opt-in `admin`
+				// surface. (The admin slices also list it; IAM dedups.)
+				'cognito-idp:AdminListGroupsForUser',
 				'cognito-idp:SignUp',
 				'cognito-idp:ConfirmSignUp',
 				'cognito-idp:ResendConfirmationCode',

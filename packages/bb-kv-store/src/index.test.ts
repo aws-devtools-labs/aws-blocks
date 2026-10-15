@@ -4,7 +4,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
-import { isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { KVStore, KVStoreErrors } from './index.mock.js';
 
 // Clean mock data between tests to avoid cross-contamination
@@ -65,6 +65,45 @@ test('put with ifValueEquals throws when value differs', async () => {
 	);
 });
 
+test('put with ifValueEquals: null is a real condition (null is distinct from undefined)', async () => {
+	// The guard is `!== undefined`, so `null` is a genuine compare-and-swap value
+	// (`JSON.stringify(null) === 'null'`), not a no-op.
+	const store = new KVStore<string | null>({ id: 'root' } as any, 'test');
+	await store.put('key1', null);
+	await store.put('key1', 'set', { ifValueEquals: null }); // matches the stored null
+	assert.strictEqual(await store.get('key1'), 'set');
+
+	await store.put('key2', 'v');
+	await assert.rejects(
+		() => store.put('key2', 'x', { ifValueEquals: null }), // 'v' !== null
+		(err: Error) => isBlocksError(err, KVStoreErrors.ConditionalCheckFailed),
+	);
+});
+
+// ── Conditional put: ifNotExists + ifValueEquals compose with OR ─────────────
+
+test('put with both conditions writes a NEW key (absent branch of OR)', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1', { ifNotExists: true, ifValueEquals: 'anything' });
+	assert.strictEqual(await store.get('key1'), 'v1');
+});
+
+test('put with both conditions updates an EXISTING key when the value matches (value branch of OR)', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	await store.put('key1', 'v2', { ifNotExists: true, ifValueEquals: 'v1' });
+	assert.strictEqual(await store.get('key1'), 'v2');
+});
+
+test('put with both conditions throws when the key exists AND the value differs', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	await assert.rejects(
+		() => store.put('key1', 'v2', { ifNotExists: true, ifValueEquals: 'wrong' }),
+		(err: Error) => isBlocksError(err, KVStoreErrors.ConditionalCheckFailed),
+	);
+});
+
 // ── Conditional deletes ─────────────────────────────────────────────────────
 
 test('delete with ifExists succeeds when key exists', async () => {
@@ -95,6 +134,92 @@ test('delete with ifValueEquals throws when value differs', async () => {
 	await assert.rejects(
 		() => store.delete('key1', { ifValueEquals: 'wrong' }),
 		(err: Error) => err.name === KVStoreErrors.ConditionalCheckFailed,
+	);
+});
+
+// ── OCC conflicts map to HTTP 409 (Conflict), not 500 ───────────────────────
+// A conditional-write conflict must serialize to JSON-RPC code 409 so callers
+// see a Conflict, not an InternalServerError. The mock must throw an ApiError
+// (status 409) that preserves the ConditionalCheckFailed name, matching the
+// aws-runtime path. `retriable` is scoped to the assertion kind: true only for
+// optimistic-lock value-equals conflicts (a re-read and retry can succeed),
+// false for existence/uniqueness assertions (a blind retry fails identically).
+
+test('put ifNotExists conflict is an ApiError with status 409, not retriable', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	await assert.rejects(
+		() => store.put('key1', 'v2', { ifNotExists: true }),
+		(err: unknown) => {
+			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+			assert.strictEqual(err.status, 409);
+			assert.ok(isBlocksError(err, KVStoreErrors.ConditionalCheckFailed));
+			assert.strictEqual(err.retriable, false);
+			return true;
+		},
+	);
+});
+
+test('put ifValueEquals conflict is an ApiError with status 409, retriable', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	await assert.rejects(
+		() => store.put('key1', 'v2', { ifValueEquals: 'wrong' }),
+		(err: unknown) => {
+			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+			assert.strictEqual(err.status, 409);
+			assert.ok(isBlocksError(err, KVStoreErrors.ConditionalCheckFailed));
+			assert.strictEqual(err.retriable, true);
+			return true;
+		},
+	);
+});
+
+test('put ifNotExists + ifValueEquals conflict is 409, retriable (OR: stale-value case)', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	// Combined existence + value check that fails: under OR composition the
+	// write fails only when the key EXISTS and the value DIFFERS — exactly the
+	// stale-value optimistic-lock case, which IS retriable (re-read and retry).
+	// A value arm participated, so mock and aws agree the conflict is retriable.
+	await assert.rejects(
+		() => store.put('key1', 'v2', { ifNotExists: true, ifValueEquals: 'wrong' }),
+		(err: unknown) => {
+			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+			assert.strictEqual(err.status, 409);
+			assert.ok(isBlocksError(err, KVStoreErrors.ConditionalCheckFailed));
+			assert.strictEqual(err.retriable, true);
+			return true;
+		},
+	);
+});
+
+test('delete ifExists conflict is an ApiError with status 409, not retriable', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await assert.rejects(
+		() => store.delete('missing', { ifExists: true }),
+		(err: unknown) => {
+			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+			assert.strictEqual(err.status, 409);
+			assert.ok(isBlocksError(err, KVStoreErrors.ConditionalCheckFailed));
+			assert.strictEqual(err.retriable, false);
+			return true;
+		},
+	);
+});
+
+test('delete ifValueEquals conflict is an ApiError with status 409, retriable', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	await assert.rejects(
+		() => store.delete('key1', { ifValueEquals: 'wrong' }),
+		(err: unknown) => {
+			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+			assert.strictEqual(err.status, 409);
+			assert.ok(isBlocksError(err, KVStoreErrors.ConditionalCheckFailed));
+			assert.strictEqual(err.retriable, true);
+			return true;
+		},
 	);
 });
 

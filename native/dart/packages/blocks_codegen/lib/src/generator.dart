@@ -49,6 +49,19 @@ class DartCodeGenerator {
         "export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;",
       );
     }
+
+    // Re-export UnknownTransferable for unbound top-level types and operation
+    // results.
+    final hasUnknownTransferable =
+        model.types.values.any(_isUnboundTransferable) ||
+        model.namespaces.any(
+          (ns) => ns.operations.any((op) => _isUnboundTransferable(op.result)),
+        );
+    if (hasUnknownTransferable) {
+      buf.writeln(
+        "export 'package:blocks_runtime/blocks_runtime.dart' show UnknownTransferable;",
+      );
+    }
     buf.writeln();
 
     // Collect all types to emit
@@ -461,7 +474,12 @@ class DartCodeGenerator {
 
     for (final op in ns.operations) {
       buf.writeln();
-      final returnType = _dartTypeStr(op.result, allTypes);
+      final unboundResult = _isUnboundTransferable(op.result)
+          ? op.result as TransferableType
+          : null;
+      final returnType = unboundResult != null
+          ? 'UnknownTransferable'
+          : _dartTypeStr(op.result, allTypes);
       final isVoid = returnType == 'void';
       final asyncReturn = isVoid ? 'Future<void>' : 'Future<$returnType>';
       final methodName = _escapeIdentifier(op.name);
@@ -511,9 +529,11 @@ class DartCodeGenerator {
         buf.writeln(
           "    final result = await _client.call('${op.fullName}', $paramsArg);",
         );
-        buf.writeln(
-          '    return ${_deserializeExpr('result', op.result, allTypes)};',
-        );
+        final deserExpr = unboundResult != null
+            ? 'UnknownTransferable.fromJson(result, expectedTag: '
+                  '${_dartStringLiteral(unboundResult.blocksType)})'
+            : _deserializeExpr('result', op.result, allTypes);
+        buf.writeln('    return $deserExpr;');
       }
       buf.writeln('  }');
     }
@@ -710,6 +730,8 @@ class DartCodeGenerator {
     List<ResolvedType> typeArgs,
     Map<String, ResolvedType> allTypes,
   ) {
+    // Tags outside the registry stay dynamic even if a switch arm exists.
+    if (!knownTransferableTags.contains(blocksType)) return 'dynamic';
     return switch (blocksType) {
       'realtime/channel' =>
         'RealtimeChannel<${typeArgs.isNotEmpty ? _dartTypeStr(typeArgs[0], allTypes) : 'dynamic'}>',
@@ -718,6 +740,32 @@ class DartCodeGenerator {
       'oidc/client' => 'OidcClient',
       _ => 'dynamic',
     };
+  }
+
+  /// The object message type carried by [t] (a record or sealed class, named
+  /// directly or via `$ref`, including the nullable `T?` form) unwrapped to
+  /// its non-nullable form; or null when [t] is not an object the runtime's
+  /// `Map`-only deserializer can decode. Shared by [_channelMessageType] and
+  /// [_mapValueFromJson] so the "unwrap nullable, resolve `$ref`, is it
+  /// record/sealed" logic cannot drift between them.
+  ResolvedType? _objectMessageType(
+    ResolvedType t,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    final arg = t is NullableType ? t.inner : t;
+    final resolved = arg is SchemaReference ? allTypes[arg.name] : arg;
+    return resolved is RecordType || resolved is SealedClassType ? arg : null;
+  }
+
+  /// The channel message type to hydrate, or null to leave the value raw. Only
+  /// an object type (record/sealed, incl. via `$ref`, and nullable `T?`) is
+  /// decodable by the runtime's `Map`-only deserializer.
+  ResolvedType? _channelMessageType(
+    List<ResolvedType> typeArgs,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    if (typeArgs.isEmpty) return null;
+    return _objectMessageType(typeArgs[0], allTypes);
   }
 
   // --- fromJson expression helpers ---
@@ -1031,8 +1079,34 @@ class DartCodeGenerator {
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
       SealedClassType(name: final name) =>
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
+      // Transferable result: `_nullableTransferable` wraps a hydrating
+      // deserializer with the `== null` guard, and collapses to a bare accessor
+      // when the value stays raw (a non-hydratable channel, or an unbound tag),
+      // avoiding a redundant `result == null ? null : result`.
+      TransferableType(blocksType: final kt, typeArgs: final args) =>
+        _nullableTransferable(accessor, kt, args, allTypes),
       _ => accessor,
     };
+  }
+
+  /// Wraps a bound transferable's deserializer with the `== null` guard, but
+  /// collapses `x == null ? null : x` to `x` when the transferable itself stays
+  /// raw (a non-hydratable channel message), so the nullable arm emits a bare
+  /// accessor rather than a redundant throwing ternary.
+  String _nullableTransferable(
+    String accessor,
+    String blocksType,
+    List<ResolvedType> typeArgs,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    final inner = _deserializeTransferable(
+      accessor,
+      blocksType,
+      typeArgs,
+      allTypes,
+    );
+    if (inner == accessor) return accessor;
+    return '$accessor == null ? null : $inner';
   }
 
   /// Per-value deserialization for a `Map<String, V>` entry value `v` (dynamic).
@@ -1058,18 +1132,10 @@ class DartCodeGenerator {
           return '$n.fromJson($v as String)';
         }
         return '$v as $n';
-      case NullableType(inner: final inner):
-        final innerName = switch (inner) {
-          SealedClassType(name: final n) => n,
-          RecordType(name: final n) => n,
-          SchemaReference(name: final n)
-              when allTypes[n] is RecordType ||
-                  allTypes[n] is SealedClassType =>
-            n,
-          _ => null,
-        };
-        if (innerName != null) {
-          return '$v == null ? null : $innerName.fromJson($v as Map<String, dynamic>)';
+      case NullableType():
+        final obj = _objectMessageType(valueType, allTypes);
+        if (obj != null) {
+          return '$v == null ? null : ${_dartTypeStr(obj, allTypes)}.fromJson($v as Map<String, dynamic>)';
         }
         return '$v as ${_dartTypeStr(valueType, allTypes)}';
       default:
@@ -1112,14 +1178,33 @@ class DartCodeGenerator {
     List<ResolvedType> typeArgs,
     Map<String, ResolvedType> allTypes,
   ) {
+    // Same registry gate as _transferableDartType: an unknown tag isn't
+    // hydrated to a concrete factory.
+    if (!knownTransferableTags.contains(blocksType)) return accessor;
     final cast = '$accessor as Map<String, dynamic>';
     return switch (blocksType) {
       'realtime/channel' => () {
-        if (typeArgs.isEmpty) {
-          return 'RealtimeChannel.fromJson($cast, (json) => json)';
+        // Raw-vs-hydrated decision shared with the builder's
+        // AWSBLOCKS-NATIVE-002 diagnostic so the two cannot disagree.
+        if (!channelMessageHydratable(typeArgs, allTypes)) {
+          // No valid `(json) => T` deserializer for this message type; the
+          // builder emits the diagnostic, the body stays raw.
+          return accessor;
         }
-        final argType = _dartTypeStr(typeArgs[0], allTypes);
-        return 'RealtimeChannel.fromJson($cast, (json) => $argType.fromJson(json))';
+        final msg = _channelMessageType(typeArgs, allTypes);
+        if (msg != null) {
+          return 'RealtimeChannel.fromJson($cast, (json) => ${_dartTypeStr(msg, allTypes)}.fromJson(json))';
+        }
+        // A `Map` message is decodable by the `Map`-only runtime: rebuild it
+        // per-value through the shared map decoder.
+        final arg = typeArgs.isEmpty ? null : typeArgs[0];
+        final unwrapped = arg is NullableType ? arg.inner : arg;
+        if (unwrapped is MapType) {
+          return 'RealtimeChannel.fromJson($cast, (json) => json.map((k, v) => MapEntry(k, ${_mapValueFromJson('v', unwrapped.valueType, allTypes)})))';
+        }
+        // `RealtimeChannel<dynamic>` (incl. `dynamic?` and the absent arg), so
+        // an identity deserializer type-checks.
+        return 'RealtimeChannel.fromJson($cast, (json) => json)';
       }(),
       'file-bucket/download' => 'FileDownloadHandle.fromJson($cast)',
       'file-bucket/upload' => 'FileUploadHandle.fromJson($cast)',
@@ -1127,6 +1212,24 @@ class DartCodeGenerator {
         'OidcClient.fromJson($cast, baseUrl: _client.baseUrl, tokenStore: _client.tokenStore, sessionStore: _client.sessionStore)',
       _ => accessor,
     };
+  }
+
+  /// A bare transferable whose tag has no runtime binding (the fallback case).
+  /// A nested/nullable/list-wrapped one is out of scope and stays `dynamic`.
+  bool _isUnboundTransferable(ResolvedType type) =>
+      type is TransferableType &&
+      !knownTransferableTags.contains(type.blocksType);
+
+  /// Single-quoted Dart string literal for [value], escaping `\`, `$`, `'`,
+  /// `\n`, and `\r`.
+  String _dartStringLiteral(String value) {
+    final escaped = value
+        .replaceAll(r'\', r'\\')
+        .replaceAll(r'$', r'\$')
+        .replaceAll("'", r"\'")
+        .replaceAll('\n', r'\n')
+        .replaceAll('\r', r'\r');
+    return "'$escaped'";
   }
 
   String _tupleFromJson(

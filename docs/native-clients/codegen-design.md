@@ -15,6 +15,8 @@ Content-Type: application/json
 { "jsonrpc": "2.0", "method": "api.kvGet", "params": ["myKey"], "id": 1 }
 ```
 
+The wire error contract follows Blocks' core JSON-RPC implementation: reserved JSON-RPC errors use the standard negative codes (`-32700`, `-32600`, `-32601`, `-32602`, `-32603`), while application `ApiError`s use the positive HTTP status code as `error.code` and carry the structured name in `error.data.name` when available.
+
 The TypeScript web client gets type safety for free — `client.js` is generated alongside the server. Native clients (Swift, Kotlin, Dart) need their own codegen pipeline.
 
 ### Reference architecture: MCP
@@ -153,6 +155,32 @@ The OpenRPC document is emitted as a single self-contained file (`blocks.spec.js
 Two `x-blocks-*` extension fields cover the gaps where standard OpenRPC doesn't capture Blocks semantics: `x-blocks-transferable` and `x-blocks-type-args` (on result schemas for Realtime / FileBucket handles).
 
 The full reference, including the tag table for native codegen authors, lives in [`schema-generation-guide-for-devs.md` § Spec extensions reference](./schema-generation-guide-for-devs.md#spec-extensions-reference).
+
+#### Declared native packages and bindings
+
+Two top-level extension objects let a block declare its own native package instead of relying on a generator's hard-coded tag switch.
+
+`x-blocks-native-packages` is keyed by logical package identity. Each entry holds a `platforms` object whose `dart`, `swift`, and `android` fields are independently optional; a present field carries a `package` object naming the package-manager identity and the import or module name.
+
+`x-blocks-native-bindings` holds an array of bindings. Each carries a stable `id`, a `kind` (only `transferable` in schema 1), and maps an exact `tag` to a package `export`, a factory `abi`, and a `genericArity` of 0 or 1.
+
+Both objects carry `schemaVersion: 1` and are emitted only when non-empty. An absent platform field means the package is not offered there, and that result degrades to `UnknownTransferable` on that platform alone.
+
+A block authors both catalogs as static JSON under an `aws-blocks.native` key in its own `package.json`, rather than in a TypeScript registration call.
+
+This supersedes the `Scope.registerNativePackage()` / `Scope.registerNativeBinding()` API specified in the native client codegen design. Declarations are carried in `package.json` because they are build-time dependencies; field names and nesting are unchanged, only the carrier moved.
+
+See [D-019](../DECISIONS.md#d-019-native-declarations-are-read-from-every-resolvable-manifest-not-only-declared-dependencies) for the scan's trust boundary.
+
+`blocks-generate-spec` reads that key from every `node_modules` level from the spec project up to the filesystem root, resolving each import specifier to its nearest installed copy, and passes what it finds as `nativeDeclarations`.
+
+#### Unbound transferables: the `UnknownTransferable` carrier
+
+When a bare direct result's `x-blocks-transferable` tag has no known runtime binding, the native clients degrade it to a typed `UnknownTransferable` carrier, validated against the declared `__blocks` tag. A malformed descriptor raises the platform's standard decoding error: Dart `FormatException`, Swift `DecodingError`, Kotlin `TransferableException`.
+
+The unbound fallback is direct-only; a transferable in any other position is unchanged from before the fallback, except that on Kotlin a nullable result still fails code generation.
+
+A nullable *bound* transferable result does hydrate to its optional concrete type.
 
 ---
 

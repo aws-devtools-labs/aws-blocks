@@ -6,4 +6,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 startSandbox({
   backendPath: join(__dirname, '..', 'index.cdk.ts')
+}).catch((error) => {
+  console.error(error);
+  process.exit(1);
 });

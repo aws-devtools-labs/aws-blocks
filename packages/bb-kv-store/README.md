@@ -33,6 +33,8 @@ const store = new KVStore(scope, id, options?)
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 | `removalPolicy` | `'destroy' \| 'retain'` | Removal behavior for the underlying DynamoDB table. When omitted, the stack-wide `defaults` (from `BlocksPresets.sandbox`/`production`, chosen at `BlocksStack.create`) apply — `production` retains data on `cdk destroy`, `sandbox` destroys it. Pass `'destroy'`/`'retain'` to override for this one store. The table's deletion protection also follows the stack `defaults`. Ignored by the mock and browser runtimes. |
 | `ttl` | `boolean` | Enable DynamoDB Time-to-Live so items written with an expiry are deleted automatically. Defaults to `false`. See [Expiring Items](#expiring-items-ttl). |
+| `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | DynamoDB Point-in-Time Recovery (continuous backups). `true` enables the default 35-day window; `{ retentionDays: n }` enables PITR and pins the window (`1`–`35`); `false` disables it. When omitted, the stack-wide `defaults` apply (on under `production`, off under `sandbox`). Ignored by the mock and browser runtimes. |
+| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. `'aws-managed'` (default) uses the `aws/dynamodb` key; `'customer-managed'` provisions a dedicated CMK per table; pass `KVStore.fromKmsKey(arn)` to reuse an existing CMK across stores. Ignored by the mock and browser runtimes. |
 
 ### Expiring Items (TTL)
 
@@ -71,6 +73,10 @@ await store.put('user:alice', data, { ifNotExists: true });
 // Only write if current value matches (optimistic locking / compare-and-swap)
 await store.put('counter', newVal, { ifValueEquals: oldVal });
 
+// Compose both (OR): create it, or update it only if unchanged — write succeeds
+// if the key is absent OR its current value matches; fails only if it exists and differs.
+await store.put('config', next, { ifNotExists: true, ifValueEquals: prev });
+
 // Only delete if key exists
 await store.delete('temp', { ifExists: true });
 
@@ -78,13 +84,13 @@ await store.delete('temp', { ifExists: true });
 await store.delete('lock', { ifValueEquals: expectedVal });
 ```
 
-All condition failures throw with `error.name === KVStoreErrors.ConditionalCheckFailed`.
+All condition failures throw with `error.name === KVStoreErrors.ConditionalCheckFailed`. They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500), so `error.status === 409` on the client and `isBlocksError` still matches by name. A conflict is flagged **retriable** when a value check participated (a stale-value optimistic-lock conflict — re-read and retry may succeed). For `put`, `ifNotExists` and `ifValueEquals` compose with OR, so a failure whenever `ifValueEquals` was set — including the combined `ifNotExists`+`ifValueEquals` case — is the stale-value case and is retriable; a pure `ifNotExists` `put` conflict is **not** retriable. For `delete` (independent checks, not OR), a pure `ifExists` conflict — or a combined `ifExists`+`ifValueEquals` conflict — is **not** retriable; only a value-only `ifValueEquals` delete conflict is. A blind retry of a non-retriable conflict fails identically.
 
 ### Error Handling
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifValueEquals` condition failed. |
+| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifValueEquals` condition failed. Serializes to HTTP **409 (Conflict)**; retriable when a value check participated (any `put` conflict where `ifValueEquals` was set, since `put` composes with OR; a value-only `ifValueEquals` `delete` conflict) — not retriable for a pure `ifNotExists` `put` or any `ifExists` `delete`. |
 | `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value failed the configured `schema` validation. |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | The serialized item exceeds the 400 KB DynamoDB per-item size limit. (In the AWS layer, DynamoDB raises a generic `ValidationException`; KVStore re-maps the size-specific case to this name.) |
 

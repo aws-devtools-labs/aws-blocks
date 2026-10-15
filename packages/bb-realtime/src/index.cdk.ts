@@ -14,15 +14,20 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
-import { WebSocketApi, WebSocketStage } from 'aws-cdk-lib/aws-apigatewayv2';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { WebSocketApi, WebSocketStage, LogGroupLogDestination } from 'aws-cdk-lib/aws-apigatewayv2';
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import { Scope, synthGuard } from '@aws-blocks/core/cdk';
+import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
+import { BuildingBlockScope, synthGuard, ensureApiGatewayAccount, blocksError, getOrCreateOnRoot } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { NamespaceConfig, NamespaceDefs, RealtimeOptions } from './types.js';
+import { RealtimeErrors } from './errors.js';
 
 export { RealtimeErrors } from './errors.js';
 export type {
@@ -54,7 +59,7 @@ const connectionsSchema: StandardSchemaV1<any> = {
 	},
 };
 
-// ── Shared infrastructure (one per stack) ───────────────────────────────────
+// ── Shared infrastructure (one per backend root) ─────────────────────────────
 
 const SHARED_KEY = Symbol.for('BLOCKS_REALTIME_SHARED');
 
@@ -63,53 +68,95 @@ interface SharedInfra {
 	stage: WebSocketStage;
 }
 
-function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunction, parent: Scope): SharedInfra {
-	const existing = (stack as any)[SHARED_KEY] as SharedInfra | undefined;
-	if (existing) return existing;
+function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: BuildingBlockScope): SharedInfra {
+	// The WebSocket API is one-per-backend, so key it on (and parent it under) the
+	// owning backend root — two BlocksBackends in one cdk.Stack each get their own
+	// WS API instead of B silently reusing A's. `ensureApiGatewayAccount` still keys
+	// on the cdk.Stack (the account/region role is a stack-level singleton).
+	return getOrCreateOnRoot(parent, SHARED_KEY, (root): SharedInfra => {
+		const stack = cdk.Stack.of(parent);
 
-	// ── Token secret via AppSetting ─────────────────────────────────────
-	new AppSetting(parent, 'token-secret', { secret: true });
+		// ── Token secret via AppSetting ─────────────────────────────────────
+		new AppSetting(parent, 'token-secret', { secret: true });
 
-	// ── DynamoDB connections table via DistributedTable ──────────────────
-	new DistributedTable(parent, 'connections', {
-		schema: connectionsSchema,
-		key: { partitionKey: 'connectionId', sortKey: 'channel' },
-		indexes: { 'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' } },
-		ttl: 'expiresAt',
+		// ── DynamoDB connections table via DistributedTable ──────────────────
+		new DistributedTable(parent, 'connections', {
+			schema: connectionsSchema,
+			key: { partitionKey: 'connectionId', sortKey: 'channel' },
+			indexes: { 'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' } },
+			ttl: 'expiresAt',
+		});
+
+		// ── WebSocket API — all routes point at the Blocks handler Lambda ──────
+		const wsApi = new WebSocketApi(root, 'BlocksRtWebSocket', {
+			connectRouteOptions: {
+				integration: new WebSocketLambdaIntegration('ConnectInteg', handler),
+			},
+			disconnectRouteOptions: {
+				integration: new WebSocketLambdaIntegration('DisconnectInteg', handler),
+			},
+			defaultRouteOptions: {
+				integration: new WebSocketLambdaIntegration('DefaultInteg', handler),
+			},
+		});
+
+		// Structured JSON access logging on the WebSocket stage, when the stack-wide
+		// default enables it. Needs the account-level CloudWatch Logs role — shared
+		// with (and typically already provisioned by) the core REST API stage.
+		let accessLogGroup: LogGroup | undefined;
+		let apiGatewayAccount: cdk.aws_apigateway.CfnAccount | undefined;
+		if (parent.defaults.accessLogging) {
+			apiGatewayAccount = ensureApiGatewayAccount(stack);
+			accessLogGroup = new LogGroup(root, 'BlocksRtAccessLogs', {
+				retention: parent.defaults.logRetention,
+				// Access logs are the request audit trail — follow the stack-wide
+				// removal policy (production RETAIN) so they survive a teardown.
+				removalPolicy: parent.defaults.removalPolicy,
+			});
+		}
+
+		const stage = new WebSocketStage(root, 'BlocksRtStage', {
+			webSocketApi: wsApi,
+			stageName: 'rt',
+			autoDeploy: true,
+			// Cap message throughput on the connection from the stack-wide default.
+			// On a WebSocket stage the throttle unit is messages/second across the
+			// connection (not HTTP requests) — see DESIGN.md.
+			throttle: {
+				rateLimit: parent.defaults.throttling.rateLimit,
+				burstLimit: parent.defaults.throttling.burstLimit,
+			},
+			...(accessLogGroup
+				? {
+						accessLogSettings: {
+							destination: new LogGroupLogDestination(accessLogGroup),
+							format: AccessLogFormat.jsonWithStandardFields(),
+						},
+					}
+				: {}),
+		});
+
+		// The stage must be created after the account setting is in place.
+		if (apiGatewayAccount) {
+			stage.node.addDependency(apiGatewayAccount);
+		}
+
+		// API Gateway Management API: postToConnection for fan-out + subscribe responses.
+		// Grant to the shared execution role (not a single function) so publish()
+		// works from ANY compute — publishing is compute-agnostic (a public IAM call),
+		// and every compute assumes this role. Mirrors the data-block / AsyncJob grant
+		// pattern (grant the role, not one handler).
+		wsApi.grantManageConnections(parent.executionRole);
+
+		// Env vars for the Blocks handler Lambda
+		registerConfig(parent, 'BLOCKS_RT_WS_URL', stage.url);
+		registerConfig(parent, 'BLOCKS_RT_CALLBACK_URL', stage.callbackUrl);
+
+		// CDK outputs
+		new cdk.CfnOutput(root, 'RealtimeWsUrl', { value: stage.url });
+
+		return { wsApi, stage };
 	});
-
-	// ── WebSocket API — all routes point at the Blocks handler Lambda ──────
-	const wsApi = new WebSocketApi(stack, 'BlocksRtWebSocket', {
-		connectRouteOptions: {
-			integration: new WebSocketLambdaIntegration('ConnectInteg', handler),
-		},
-		disconnectRouteOptions: {
-			integration: new WebSocketLambdaIntegration('DisconnectInteg', handler),
-		},
-		defaultRouteOptions: {
-			integration: new WebSocketLambdaIntegration('DefaultInteg', handler),
-		},
-	});
-
-	const stage = new WebSocketStage(stack, 'BlocksRtStage', {
-		webSocketApi: wsApi,
-		stageName: 'rt',
-		autoDeploy: true,
-	});
-
-	// API Gateway Management API: postToConnection for fan-out + subscribe responses
-	wsApi.grantManageConnections(handler);
-
-	// Env vars for the Blocks handler Lambda
-	registerConfig(parent, 'BLOCKS_RT_WS_URL', stage.url);
-	registerConfig(parent, 'BLOCKS_RT_CALLBACK_URL', stage.callbackUrl);
-
-	// CDK outputs
-	new cdk.CfnOutput(stack, 'RealtimeWsUrl', { value: stage.url });
-
-	const shared: SharedInfra = { wsApi, stage };
-	(stack as any)[SHARED_KEY] = shared;
-	return shared;
 }
 
 // ── Realtime CDK Construct ──────────────────────────────────────────────────
@@ -123,10 +170,26 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
  * Same constructor signature as the mock — `new Realtime(scope, id, options)` —
  * so the user's backend code works unchanged under `--conditions=cdk`.
  */
-export class Realtime extends Scope {
+export class Realtime extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
-		super(id, { parent: scope });
-		getOrCreateSharedInfra(cdk.Stack.of(this), this.handler, this);
+		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY] } });
+		// The WebSocket routes are a stack-level singleton (one WS API per stack)
+		// that integrates to a single Lambda target, so bind them to the stack's
+		// DEFAULT compute deterministically — not this block's resolved compute.
+		// Connection bookkeeping is compute-agnostic (it only touches the shared
+		// connections table), and publish() works from any compute via the
+		// shared-role grant in getOrCreateSharedInfra. Realtime currently requires
+		// the default compute to be Lambda; container WebSocket integration is a
+		// later track. The brand check (not `instanceof`) survives duplicate
+		// bb-lambda-compute copies in one dependency tree.
+		const compute = this.defaultCompute;
+		if (!LambdaCompute.isLambdaCompute(compute)) {
+			throw blocksError(
+				RealtimeErrors.UnsupportedCompute,
+				`Realtime "${this.fullId}" currently requires a Lambda default compute.`,
+			);
+		}
+		getOrCreateSharedInfra(compute.fn, this);
 	}
 
 	static namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M> {

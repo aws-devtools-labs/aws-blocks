@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { blocksError as coreBlocksError } from '@aws-blocks/core';
+
 /**
  * Typed error constants for KnowledgeBase. Use with `isBlocksError()` in catch blocks.
  *
@@ -33,3 +35,18 @@ export const KnowledgeBaseErrors = {
 	/** `waitUntilSynced()` exceeded its timeout before the knowledge base finished ingesting. */
 	Timeout: 'KnowledgeBaseTimeoutException',
 } as const;
+
+/** One of the `name` values in {@link KnowledgeBaseErrors}. */
+export type KnowledgeBaseErrorName = (typeof KnowledgeBaseErrors)[keyof typeof KnowledgeBaseErrors];
+
+/**
+ * Build a typed `Error` whose `name` is one of {@link KnowledgeBaseErrors}, so it
+ * crosses the RPC wire by `name` and is matchable with `isBlocksError()`.
+ *
+ * A thin typed wrapper over core's `blocksError` — it narrows `name` to a
+ * {@link KnowledgeBaseErrorName} so call sites are checked, while the error
+ * minting (prefixing, naming, wire-safe branding) stays in one place in core.
+ */
+export function blocksError(name: KnowledgeBaseErrorName, message: string): Error {
+	return coreBlocksError(name, message);
+}

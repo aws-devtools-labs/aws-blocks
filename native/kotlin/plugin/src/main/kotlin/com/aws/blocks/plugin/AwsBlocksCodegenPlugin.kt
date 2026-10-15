@@ -1,11 +1,16 @@
 package com.aws.blocks.plugin
 
 import com.android.build.api.variant.AndroidComponentsExtension
+import com.aws.blocks.kotlin.generator.RelayToRequirement
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.plugins.JavaPluginExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
+import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import org.jetbrains.kotlin.konan.target.Family
+import org.jetbrains.kotlin.konan.target.KonanTarget
 
 /**
  * Gradle plugin that registers an [AwsBlocksCodegenTask] to generate
@@ -92,12 +97,30 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
             it.packageName.set(extension.packageName)
             it.serverOverrides.set(extension.serverOverrides)
             it.visibility.set(extension.visibility)
-            it.redirectUrl.set(extension.redirectUrl)
+            it.relayTo.set(extension.relayTo)
+            it.relayToRequirement.set(RelayToRequirement.NotNeeded)
             it.outputDirectory.set(outputDir)
         }
 
         val kmpExtension = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
         kmpExtension.sourceSets.getByName("commonMain").kotlin.srcDir(task.map { it.outputDirectory })
+
+        // Targets are registered by the consumer's own `kotlin { }` block, so the decision
+        // has to wait until the project is evaluated. A plain value keeps the task input
+        // configuration-cache friendly.
+        project.afterEvaluate {
+            val requirement = relayToRequirementFor(
+                kmpExtension.targets.map { target ->
+                    TargetPlatform(
+                        platformType = target.platformType,
+                        konanTarget = (target as? KotlinNativeTarget)?.konanTarget,
+                    )
+                },
+            )
+            task.configure {
+                it.relayToRequirement.set(requirement)
+            }
+        }
 
         project.pluginManager.withPlugin("com.android.application") {
             injectOidcManifestPlaceholder(project, extension)
@@ -126,7 +149,8 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
                 it.packageName.set(extension.packageName)
                 it.serverOverrides.set(extension.serverOverrides)
                 it.visibility.set(extension.visibility)
-                it.redirectUrl.set(extension.redirectUrl)
+                it.relayTo.set(extension.relayTo)
+                it.relayToRequirement.set(RelayToRequirement.Required)
                 it.outputDirectory.set(outputDir)
             }
 
@@ -143,7 +167,8 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
             it.packageName.set(extension.packageName)
             it.serverOverrides.set(extension.serverOverrides)
             it.visibility.set(extension.visibility)
-            it.redirectUrl.set(extension.redirectUrl)
+            it.relayTo.set(extension.relayTo)
+            it.relayToRequirement.set(RelayToRequirement.NotNeeded)
             it.outputDirectory.set(outputDir)
         }
 
@@ -154,11 +179,55 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
     private fun injectOidcManifestPlaceholder(project: Project, extension: AwsBlocksExtension) {
         val androidComponents = project.extensions.getByType(AndroidComponentsExtension::class.java)
         androidComponents.onVariants { variant ->
-            val redirectUrl = extension.redirectUrl
-            val hasOidc = redirectUrl != null
-            val scheme = redirectUrl?.substringBefore("://") ?: "disabled"
+            val relayTo = extension.relayTo
+            val hasRedirectScheme = relayTo != null
+            val scheme = relayTo?.substringBefore("://") ?: "disabled"
             variant.manifestPlaceholders.put("oidcRedirectScheme", scheme)
-            variant.manifestPlaceholders.put("oidcActivityExported", if (hasOidc) "true" else "false")
+            variant.manifestPlaceholders.put("oidcActivityExported", if (hasRedirectScheme) "true" else "false")
         }
     }
+}
+
+/**
+ * One of a module's compilation targets, reduced to what the relay decision depends on.
+ *
+ * [konanTarget] is null for every target that is not Kotlin/Native.
+ */
+internal data class TargetPlatform(
+    val platformType: KotlinPlatformType,
+    val konanTarget: KonanTarget? = null,
+)
+
+/**
+ * Maps a multiplatform module's targets to how strongly it needs a relay target.
+ *
+ * A module emits one shared source set, so the decision covers every target at once: if they
+ * all register a URL scheme with the operating system then a missing value cannot work
+ * anywhere, while a module that also builds for a platform receiving the relay on loopback
+ * still has a working target without one.
+ *
+ * [KotlinPlatformType.common] is excluded because the metadata target is added automatically
+ * and compiles no platform code.
+ */
+internal fun relayToRequirementFor(targets: Collection<TargetPlatform>): RelayToRequirement {
+    val platforms = targets.filter { it.platformType != KotlinPlatformType.common }
+    return when {
+        platforms.isEmpty() -> RelayToRequirement.NotNeeded
+        platforms.all { it.registersUrlScheme() } -> RelayToRequirement.Required
+        platforms.any { it.registersUrlScheme() } -> RelayToRequirement.Recommended
+        else -> RelayToRequirement.NotNeeded
+    }
+}
+
+/**
+ * Whether apps built for this target register their relay scheme with the operating system.
+ *
+ * Only the platforms known to need one qualify. A platform this does not recognise is treated
+ * as not needing a relay target, so adding a target never turns a working build into one that
+ * emits stubs.
+ */
+private fun TargetPlatform.registersUrlScheme(): Boolean = when (platformType) {
+    KotlinPlatformType.androidJvm -> true
+    KotlinPlatformType.native -> konanTarget?.family == Family.IOS
+    else -> false
 }

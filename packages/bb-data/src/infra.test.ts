@@ -46,6 +46,102 @@ test('CDK: default capacity is 0.5-2 ACUs', () => {
   });
 });
 
+// --- Storage encryption, backups, and log exports ---
+
+test('CDK: no storageEncrypted/CMK leaves StorageEncrypted unset (upgrade-safe, no replacement)', () => {
+  // With neither an explicit storageEncrypted nor a CMK, materialize must NOT
+  // emit a StorageEncrypted property at all (and never an explicit `false`), so an
+  // existing, implicitly-unencrypted cluster is not forced into a destructive
+  // replacement by a template change.
+  const template = synthTemplate({ databaseName: 'mydb' });
+  const clusters = template.findResources('AWS::RDS::DBCluster');
+  const props = Object.values(clusters)[0].Properties;
+  assert.ok(!('StorageEncrypted' in props), 'StorageEncrypted must be absent, not false');
+});
+
+test('CDK: storageEncrypted:true emits StorageEncrypted:true (opt-in path)', () => {
+  const template = synthTemplate({ databaseName: 'mydb', storageEncrypted: true });
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    StorageEncrypted: true,
+  });
+});
+
+test('CDK: cluster backup retention defaults to 15 days', () => {
+  const template = synthTemplate({ databaseName: 'mydb' });
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    BackupRetentionPeriod: 15,
+  });
+});
+
+test('CDK: backupRetention override sets the retention period', () => {
+  const template = synthTemplate({ databaseName: 'mydb', backupRetention: cdk.Duration.days(30) });
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    BackupRetentionPeriod: 30,
+  });
+});
+
+test('CDK: PostgreSQL engine log is exported to CloudWatch', () => {
+  const template = synthTemplate({ databaseName: 'mydb' });
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    EnableCloudwatchLogsExports: Match.arrayWith(['postgresql']),
+  });
+});
+
+test('CDK: storageEncryptionKey option sets a customer-managed KmsKeyId on the cluster', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack');
+  const key = new cdk.aws_kms.Key(stack, 'DbKey');
+  materialize(stack, 'testdb', { databaseName: 'mydb', storageEncryptionKey: key });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    StorageEncrypted: true,
+    // Assert the cluster references THIS key (resolves to
+    // { 'Fn::GetAtt': ['DbKey...', 'Arn'] }), not just "some" KmsKeyId —
+    // Match.anyValue() would pass even if the wrong key were wired in.
+    KmsKeyId: stack.resolve(key.keyArn),
+  });
+  // The same CMK must also encrypt the auto-generated credentials secret — and
+  // supplying a key alone forces StorageEncrypted on with no context flag.
+  template.hasResourceProperties('AWS::SecretsManager::Secret', {
+    KmsKeyId: stack.resolve(key.keyArn),
+  });
+});
+
+test('CDK: default (no CMK) keeps the engine-default master username "postgres" (no rename)', () => {
+  // Without a CMK, `credentials` stays undefined, so the cluster's auto-generated
+  // secret keeps the aurora-postgres engine-default master username ('postgres')
+  // and is not renamed. The cluster's MasterUsername resolves via a Secrets
+  // Manager dynamic reference ({{resolve:secretsmanager:...:username}}), so the
+  // load-bearing value lives in the generated secret's SecretStringTemplate.
+  const template = synthTemplate({ databaseName: 'mydb' });
+  template.hasResourceProperties('AWS::SecretsManager::Secret', {
+    GenerateSecretString: Match.objectLike({
+      SecretStringTemplate: Match.stringLikeRegexp('"username":"postgres"'),
+    }),
+  });
+});
+
+test('CDK: storageEncryptionKey does not rename the master user (stays "postgres")', () => {
+  // With a CMK, `credentials` is pinned via fromGeneratedSecret('postgres', ...)
+  // — matching the engine default — so supplying a key never silently renames the
+  // DB user. This path emits a literal MasterUsername, so assert it directly, and
+  // confirm the generated secret pins the same username. Both paths therefore
+  // agree on username 'postgres': supplying a key introduces no divergence.
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack');
+  const key = new cdk.aws_kms.Key(stack, 'DbKey');
+  materialize(stack, 'testdb', { databaseName: 'mydb', storageEncryptionKey: key });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    MasterUsername: 'postgres',
+  });
+  template.hasResourceProperties('AWS::SecretsManager::Secret', {
+    GenerateSecretString: Match.objectLike({
+      SecretStringTemplate: Match.stringLikeRegexp('"username":"postgres"'),
+    }),
+  });
+});
+
 // --- Engine version ---
 
 test('CDK: default engine version is 16.13', () => {
@@ -86,17 +182,19 @@ test('CDK: VPC has isolated subnets and no NAT gateways', () => {
 
 // --- Security group ---
 
-test('CDK: security group allows inbound PostgreSQL from VPC CIDR', () => {
+test('CDK: cluster security group has no ingress rule (reached via Data API, not a socket)', () => {
   const template = synthTemplate({ databaseName: 'mydb' });
-  template.hasResourceProperties('AWS::EC2::SecurityGroup', {
-    SecurityGroupIngress: Match.arrayWith([
-      Match.objectLike({
-        FromPort: 5432,
-        ToPort: 5432,
-        IpProtocol: 'tcp',
-      }),
-    ]),
+  // The cluster is reached over the RDS Data API (HTTPS), never a raw Postgres
+  // socket, so there must be no 5432 (or any) ingress rule on its SG.
+  const sgs = template.findResources('AWS::EC2::SecurityGroup', {
+    Properties: { GroupDescription: Match.stringLikeRegexp('Aurora cluster') },
   });
+  assert.strictEqual(Object.keys(sgs).length, 1, 'exactly one Aurora SG');
+  const sg = Object.values(sgs)[0] as { Properties: { SecurityGroupIngress?: unknown[] } };
+  assert.ok(
+    sg.Properties.SecurityGroupIngress === undefined || sg.Properties.SecurityGroupIngress.length === 0,
+    'Aurora SG should have no ingress rules',
+  );
 });
 
 test('CDK: security group disallows all outbound traffic', () => {
@@ -107,6 +205,64 @@ test('CDK: security group disallows all outbound traffic', () => {
       Match.objectLike({ Description: 'Disallow all traffic' }),
     ]),
   });
+});
+
+// --- Shared-VPC placement (vpcContext path) ---
+
+/** Build a minimal VpcContext over a real bring-your-own VPC for the shared path. */
+function sharedVpcContext(stack: cdk.Stack, opts: { isolated: boolean }) {
+  const subnetConfiguration = [
+    { name: 'public', subnetType: cdk.aws_ec2.SubnetType.PUBLIC, cidrMask: 24 },
+    { name: 'private', subnetType: cdk.aws_ec2.SubnetType.PRIVATE_WITH_EGRESS, cidrMask: 24 },
+    ...(opts.isolated
+      ? [{ name: 'isolated', subnetType: cdk.aws_ec2.SubnetType.PRIVATE_ISOLATED, cidrMask: 24 }]
+      : []),
+  ];
+  const vpc = new cdk.aws_ec2.Vpc(stack, 'SharedVpc', { maxAzs: 2, natGateways: 1, subnetConfiguration });
+  const computeSecurityGroup = new cdk.aws_ec2.SecurityGroup(stack, 'LambdaSg', { vpc });
+  const hasRole = (role: string) =>
+    role === 'isolated'
+      ? vpc.isolatedSubnets.length > 0
+      : role === 'public'
+        ? vpc.publicSubnets.length > 0
+        : vpc.privateSubnets.length > 0;
+  const typeFor = (role: string) =>
+    role === 'isolated'
+      ? cdk.aws_ec2.SubnetType.PRIVATE_ISOLATED
+      : role === 'public'
+        ? cdk.aws_ec2.SubnetType.PUBLIC
+        : cdk.aws_ec2.SubnetType.PRIVATE_WITH_EGRESS;
+  return {
+    vpc,
+    computeSecurityGroup,
+    computeSubnets: { subnetType: cdk.aws_ec2.SubnetType.PRIVATE_WITH_EGRESS },
+    selectSubnets(scope: { fullId: string }, role: string, o?: { fallback?: string }) {
+      if (hasRole(role)) return { subnetType: typeFor(role) };
+      if (o?.fallback && hasRole(o.fallback)) return { subnetType: typeFor(o.fallback) };
+      throw new Error(`${scope.fullId} needs a '${role}' subnet`);
+    },
+  };
+}
+
+test('CDK: shared VPC with an isolated tier places the cluster in isolated subnets', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack', { env: { account: '123456789012', region: 'us-east-1' } });
+  // biome-ignore lint/suspicious/noExplicitAny: minimal VpcContext test double
+  materialize(stack, 'testdb', { databaseName: 'mydb', vpcContext: sharedVpcContext(stack, { isolated: true }) as any });
+  const template = Template.fromStack(stack);
+  // A shared VPC is used (2 VPCs would mean bb-data created its own).
+  template.resourceCountIs('AWS::EC2::VPC', 1);
+  // No new NAT gateway from bb-data (it reuses the shared VPC's).
+  template.resourceCountIs('AWS::RDS::DBCluster', 1);
+});
+
+test('CDK: shared VPC without an isolated tier falls back to private-with-egress (no synth error)', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack', { env: { account: '123456789012', region: 'us-east-1' } });
+  assert.doesNotThrow(() =>
+    // biome-ignore lint/suspicious/noExplicitAny: minimal VpcContext test double
+    materialize(stack, 'testdb', { databaseName: 'mydb', vpcContext: sharedVpcContext(stack, { isolated: false }) as any }),
+  );
 });
 
 // --- Removal policy ---

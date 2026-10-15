@@ -6,3 +6,4 @@ cdk.out/
 aws-blocks/client.js
 aws-blocks/blocks.spec.json
 .bb-data/
+.hosting/

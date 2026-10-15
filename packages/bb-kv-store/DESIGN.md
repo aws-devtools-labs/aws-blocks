@@ -15,9 +15,26 @@ Creates a single DynamoDB table:
 - **Table name:** Derived from `scope.fullId` (includes stack name for uniqueness)
 - **Removal policy:** DESTROY (sandbox), configurable for production
 - **Time-to-Live:** Disabled by default; `{ ttl: true }` sets `timeToLiveAttribute: 'ttl'`
+- **Durability & encryption:** Point-in-Time Recovery follows the stack-wide `defaults` (on under `production`, off under `sandbox`); server-side encryption is not preset-driven — it defaults to the AWS-managed `aws/dynamodb` key under every preset and the `encryption` option overrides it per store (see below)
 - **Permissions:** `grantReadWriteData` to the parent scope's handler automatically
 
 No sort key, no GSIs. This is intentional — `KVStore` is the simple case. Customers needing sort keys or secondary indexes should use `DistributedTable`.
+
+### Durability & encryption
+
+Point-in-Time Recovery (PITR) resolves the same way as `DistributedTable`, from the per-block option first and then the stack-wide `defaults.pointInTimeRecovery` (`BlocksPresets` — on under `production`, off under `sandbox`). Before this, `KVStore` ignored the preset entirely, so a consumer on the production preset believed PITR was on (as it is for `DistributedTable`) when it was not. Server-side encryption is **not** preset-driven: `BlocksDefaults` carries no encryption field, so SSE defaults to the AWS-managed `aws/dynamodb` key under every preset, and the per-block `encryption` option is the only thing that changes it per store.
+
+- **`pointInTimeRecovery?: boolean | { retentionDays: number }`** — `true` enables continuous backups with DynamoDB's default 35-day window; `{ retentionDays: n }` both enables PITR and pins the window (**1–35**; an out-of-range value warns at synth and falls back to the default window); `false` disables it. Omitted, it follows `defaults.pointInTimeRecovery`. The `PointInTimeRecoverySpecification` is only emitted when enabled, keeping sandbox/opt-out templates clean.
+- **`encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef`** — `'aws-managed'` (default) uses the `aws/dynamodb` key; `'customer-managed'` provisions a dedicated CMK per table; `KVStore.fromKmsKey(arn)` reuses an existing CMK you own, so several tables can share one key. An unrecognized value warns at synth and falls back to `'aws-managed'`.
+
+```typescript
+// Share one customer-managed key across several stores
+const key = KVStore.fromKmsKey('arn:aws:kms:us-east-1:111122223333:key/abcd-1234');
+const sessions = new KVStore(scope, 'sessions', { encryption: key, pointInTimeRecovery: { retentionDays: 7 } });
+const cache = new KVStore(scope, 'cache', { encryption: key });
+```
+
+Both options are ignored when wrapping an existing table via `fromExisting()` (the existing table owns its own configuration); passing them alongside `fromExisting()` warns at synth.
 
 ## Expiry (TTL)
 
@@ -43,7 +60,7 @@ When `options.schema` is provided (any `StandardSchemaV1` implementation — Zod
 
 - Data stored in `.bb-data/{scope.fullId}/store.json` via `getMockDataDir()` from core.
 - Data persists across dev server restarts. Customers can wipe with `rm -rf .bb-data`.
-- Conditional write/delete failures throw with `error.name = 'ConditionalCheckFailedException'`.
+- Conditional write/delete failures throw with `error.name = 'ConditionalCheckFailedException'`, mapped to an `ApiError` with status **409 (Conflict)** so the JSON-RPC serializer emits code 409, not 500. The mock and AWS runtime produce the same name + status (the AWS path re-maps DynamoDB's raw `ConditionalCheckFailedException` on both `put` and `delete`). `retriable` marks whether the conflict is a stale-value optimistic-lock case (re-read and retry may succeed) rather than a pure existence assertion (a blind identical retry fails identically). Because #490 made `put`'s `ifNotExists` and `ifValueEquals` **compose with OR** (write if absent OR value matches; fail only when the key exists AND the value differs), a `put` failure whenever a value check participated (`ifValueEquals` set — including the **combined** `ifNotExists`+`ifValueEquals` case) is exactly the stale-value case and **is retriable**; a pure `ifNotExists` `put` failure means the key already exists and is **not** retriable. So `put` derives `retriable = ifValueEquals !== undefined`. `delete` was **not** changed by #490 — its `ifExists` and `ifValueEquals` remain independent checks (no OR), so the **existence assertion still wins**: `delete` derives `retriable = ifValueEquals !== undefined && !ifExists` (a combined `ifExists`+`ifValueEquals` delete conflict is not retriable). DynamoDB collapses every conditional failure under one `ConditionalCheckFailedException` with no sub-reason, so the AWS runtime decides retriability per-operation from the conditions the caller set on that `put`/`delete`, matching the mock branch-for-branch. Both runtimes key on **value presence** (`ifValueEquals !== undefined`, so an explicit `undefined` counts as absent), so mock and AWS produce identical `retriable` for identical inputs. Note `retriable` marks the conflict *kind*, **not** a guarantee that a retry will succeed: an `ifValueEquals` conflict against a **missing** row is still flagged retriable, yet a blind retry fails identically — DynamoDB collapses every conditional failure (missing-vs-stale) into one indistinguishable exception, and the mock matches that for parity.
 - Schema validation on `put()` when configured, throws `ValidationFailedException`.
 - Validates the 400 KB item size limit; throws `ItemTooLargeException` (`KVStoreErrors.ItemTooLarge`) on oversized items. On AWS, DynamoDB raises a generic `ValidationException`; the runtime narrows on the size-specific message and re-maps only that case to `ItemTooLarge`, so both layers surface the same `error.name`.
 - Emulates TTL: items with an expiry are persisted as `{ "value": "...", "ttl": 1234567890 }` and pruned lazily on `get` (single key) and `scan` (full sweep), standing in for DynamoDB's background reaper. Items without an expiry stay bare serialized strings, so stores written by earlier versions load unchanged and non-expiring writes produce no format churn.
@@ -58,3 +75,4 @@ When `options.schema` is provided (any `StandardSchemaV1` implementation — Zod
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation at mock level — IAM is handled by CDK grants automatically |
 | Disk I/O vs DynamoDB latency | Local ops are faster and never timeout | No mitigation needed — latency differences don't affect correctness |
 | TTL deletion is immediate on read (vs up to 48 h in DynamoDB) | An expired item's storage is reclaimed sooner locally | Both layers hide expired items from `get`/`scan`, so observable behavior matches; only physical deletion timing differs |
+| Conditional-write composition | When both `ifNotExists` and `ifValueEquals` are set, both runtimes compose them with OR (`attribute_not_exists(pk) OR value = :expected`) — write succeeds if the key is absent OR its value matches (create-or-update) | No mitigation needed — mock and AWS are aligned. (Previously the two layers diverged: AWS silently ignored `ifValueEquals`; the mock rejected the write.) |

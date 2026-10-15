@@ -6,6 +6,11 @@ import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
+import kotlinx.coroutines.Dispatchers
+// On Kotlin/Native the public `Dispatchers.IO` is an extension property shadowed by an internal
+// member of the same name, so it resolves only when imported explicitly.
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.withContext
 import platform.CoreFoundation.CFDictionaryAddValue
 import platform.CoreFoundation.CFDictionaryCreateMutable
 import platform.CoreFoundation.CFDictionaryRef
@@ -25,14 +30,15 @@ import platform.Foundation.dataUsingEncoding
 import platform.Security.SecItemAdd
 import platform.Security.SecItemCopyMatching
 import platform.Security.SecItemDelete
+import platform.Security.SecItemUpdate
+import platform.Security.errSecItemNotFound
 import platform.Security.errSecSuccess
+import platform.Security.kSecAttrAccessible
+import platform.Security.kSecAttrAccessibleAfterFirstUnlock
 import platform.Security.kSecAttrAccount
 import platform.Security.kSecAttrService
 import platform.Security.kSecClass
 import platform.Security.kSecClassGenericPassword
-import platform.Security.kSecMatchLimit
-import platform.Security.kSecMatchLimitAll
-import platform.Security.kSecReturnAttributes
 import platform.Security.kSecReturnData
 import platform.Security.kSecValueData
 import platform.darwin.OSStatus
@@ -92,76 +98,84 @@ private class QueryBuilder {
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
 private class KeychainKeyValueStore(private val service: String) : KeyValueStore {
 
-    override fun put(key: String, value: String) {
-        remove(key)
-        val data = (value as NSString).dataUsingEncoding(NSUTF8StringEncoding) ?: return
-        withQuery({
+    /**
+     * Updates the item in place, adding it only when it is not there yet. Deleting and re-adding
+     * would leave nothing behind if the add failed, and the whole jar is one item, so that would
+     * discard every cookie rather than one. A status that is neither success nor "not found" is
+     * raised rather than dropped, so a caller does not read a failed write as a stored one.
+     */
+    override suspend fun put(key: String, value: String) = withContext(Dispatchers.IO) {
+        val data = (value as NSString).dataUsingEncoding(NSUTF8StringEncoding)
+            ?: throw KeyValueStoreException("The value for '$key' is not encodable as UTF-8")
+
+        val updateStatus = withQuery({
+            constant(kSecClass, kSecClassGenericPassword)
+            bridged(kSecAttrService, service as NSString)
+            bridged(kSecAttrAccount, key as NSString)
+        }) { query ->
+            withQuery({ bridged(kSecValueData, data) }) { attributes ->
+                SecItemUpdate(query, attributes)
+            }
+        }
+        if (updateStatus == errSecSuccess) return@withContext
+        if (updateStatus != errSecItemNotFound) {
+            throw KeyValueStoreException("Updating '$key' in the keychain failed: OSStatus $updateStatus")
+        }
+
+        val addStatus = withQuery({
             constant(kSecClass, kSecClassGenericPassword)
             bridged(kSecAttrService, service as NSString)
             bridged(kSecAttrAccount, key as NSString)
             bridged(kSecValueData, data)
+            // Readable once the device has been unlocked after boot, rather than only while it is
+            // unlocked, so a request that completes with the screen locked can still store what it
+            // received. Set only when the item is created; an existing item keeps its own.
+            constant(kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock)
         }) { query ->
             SecItemAdd(query, null)
         }
-    }
-
-    override fun get(key: String): String? = withQuery({
-        constant(kSecClass, kSecClassGenericPassword)
-        bridged(kSecAttrService, service as NSString)
-        bridged(kSecAttrAccount, key as NSString)
-        constant(kSecReturnData, kCFBooleanTrue)
-    }) { query ->
-        memScoped {
-            val result = alloc<CFTypeRefVar>()
-            val status: OSStatus = SecItemCopyMatching(query, result.ptr)
-            if (status != errSecSuccess) return@memScoped null
-            val data = CFBridgingRelease(result.value) as? NSData ?: return@memScoped null
-            NSString.create(data = data, encoding = NSUTF8StringEncoding) as? String
+        if (addStatus != errSecSuccess) {
+            throw KeyValueStoreException("Adding '$key' to the keychain failed: OSStatus $addStatus")
         }
     }
 
-    override fun remove(key: String) {
+    override suspend fun get(key: String): String? = withContext(Dispatchers.IO) {
         withQuery({
             constant(kSecClass, kSecClassGenericPassword)
             bridged(kSecAttrService, service as NSString)
             bridged(kSecAttrAccount, key as NSString)
+            constant(kSecReturnData, kCFBooleanTrue)
         }) { query ->
-            SecItemDelete(query)
+            memScoped {
+                val result = alloc<CFTypeRefVar>()
+                val status: OSStatus = SecItemCopyMatching(query, result.ptr)
+                // Only "not found" means the key is absent. Every other status — a locked device
+                // denying access being the common one — leaves the item in place, so reporting it
+                // as absent would invite the caller to overwrite an item it could not read.
+                if (status == errSecItemNotFound) return@memScoped null
+                if (status != errSecSuccess) {
+                    throw KeyValueStoreException("Reading '$key' from the keychain failed: OSStatus $status")
+                }
+                val data = CFBridgingRelease(result.value) as? NSData
+                    ?: throw KeyValueStoreException("The keychain returned no data for '$key'")
+                NSString.create(data = data, encoding = NSUTF8StringEncoding) as? String
+                    ?: throw KeyValueStoreException("The keychain value for '$key' is not valid UTF-8")
+            }
         }
     }
 
-    override fun getAll(): Map<String, String> = withQuery({
-        constant(kSecClass, kSecClassGenericPassword)
-        bridged(kSecAttrService, service as NSString)
-        constant(kSecReturnAttributes, kCFBooleanTrue)
-        constant(kSecReturnData, kCFBooleanTrue)
-        constant(kSecMatchLimit, kSecMatchLimitAll)
-    }) { query ->
-        memScoped {
-            val result = alloc<CFTypeRefVar>()
-            val status: OSStatus = SecItemCopyMatching(query, result.ptr)
-            if (status != errSecSuccess) return@memScoped emptyMap()
-
-            @Suppress("UNCHECKED_CAST")
-            val items = CFBridgingRelease(result.value) as? List<Map<Any?, Any?>>
-                ?: return@memScoped emptyMap()
-            items.mapNotNull { item ->
-                val account = item[kSecAttrAccount.bridgedKey()] as? String ?: return@mapNotNull null
-                val data = item[kSecValueData.bridgedKey()] as? NSData ?: return@mapNotNull null
-                val value = NSString.create(data = data, encoding = NSUTF8StringEncoding) as? String
-                    ?: return@mapNotNull null
-                account to value
-            }.toMap()
+    /**
+     * Deletes every item for this service. Omitting `kSecAttrAccount` widens the query from one
+     * entry to all of them, so entries this version never reads are still removed.
+     */
+    override suspend fun clear() {
+        withContext(Dispatchers.IO) {
+            withQuery({
+                constant(kSecClass, kSecClassGenericPassword)
+                bridged(kSecAttrService, service as NSString)
+            }) { query ->
+                SecItemDelete(query)
+            }
         }
     }
 }
-
-/**
- * The dictionary returned by `SecItemCopyMatching` is bridged to a Kotlin `Map` whose keys
- * are the `kSec*` attribute constants as bridged `NSString`s. `CFBridgingRelease` of a
- * retained copy yields that same `NSString` for lookup, without consuming the immortal
- * constant's own reference.
- */
-@OptIn(ExperimentalForeignApi::class)
-private fun CFTypeRef?.bridgedKey(): Any? =
-    CFBridgingRelease(this?.let { platform.CoreFoundation.CFRetain(it) })

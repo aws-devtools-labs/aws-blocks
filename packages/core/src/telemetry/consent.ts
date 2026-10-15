@@ -4,6 +4,15 @@ import { homedir } from 'node:os';
 
 const ENV_VAR = 'AWS_BLOCKS_DISABLE_TELEMETRY';
 
+/**
+ * Whether an `AWS_BLOCKS_DISABLE_TELEMETRY` value means "disabled".
+ */
+export function isDisableValue(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
 interface BlocksConfig {
   telemetry?: { enabled?: boolean };
   [key: string]: unknown;
@@ -55,7 +64,7 @@ export interface TelemetryStatus {
  * Get detailed telemetry status showing all mechanism values and the final result.
  *
  * Telemetry is enabled by default. If any mechanism disables it, telemetry is off:
- * - `AWS_BLOCKS_DISABLE_TELEMETRY=1` env var
+ * - `AWS_BLOCKS_DISABLE_TELEMETRY` env var set to `1`, `true`, or `yes` (case-insensitive, trimmed)
  * - `.blocks/config.json` → `telemetry.enabled: false` (per-project)
  * - `~/.blocks/config.json` → `telemetry.enabled: false` (global)
  *
@@ -83,7 +92,7 @@ export function getTelemetryStatus(projectRoot?: string): TelemetryStatus {
     status.projectConfig = projectEnabled;
   }
 
-  if (envValue === '1') {
+  if (isDisableValue(envValue)) {
     status.enabled = false;
     return status;
   }
@@ -105,7 +114,7 @@ export function getTelemetryStatus(projectRoot?: string): TelemetryStatus {
  * Determine whether telemetry collection is enabled.
  *
  * Disable mechanisms (any one disables telemetry):
- * - `AWS_BLOCKS_DISABLE_TELEMETRY=1` env var
+ * - `AWS_BLOCKS_DISABLE_TELEMETRY` env var set to `1`, `true`, or `yes` (case-insensitive, trimmed)
  * - `.blocks/config.json` → `telemetry.enabled: false` (per-project)
  * - `~/.blocks/config.json` → `telemetry.enabled: false` (global)
  *
@@ -115,7 +124,7 @@ export function getTelemetryStatus(projectRoot?: string): TelemetryStatus {
  * only as metadata in the telemetry payload (environment.ci field).
  */
 export function isTelemetryEnabled(): boolean {
-  if (process.env[ENV_VAR] === '1') {
+  if (isDisableValue(process.env[ENV_VAR])) {
     return false;
   }
 

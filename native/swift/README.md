@@ -68,6 +68,7 @@ _ = try await auth.setAuthState(input: .signUp(SetAuthState.SignUp(
 - **`const` literals** are first-class single-value enums.
 - **Default values** from the spec become Swift initializer defaults.
 - **Schema-ref reuse.** A `oneOf` variant referencing a component schema reuses that named type instead of inventing a duplicate struct.
+- **Unbound transferables.** A direct result with an unbound transferable tag returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of a raw `Data?` that did not type-check. Only bare direct results are covered.
 
 ## Configuration
 

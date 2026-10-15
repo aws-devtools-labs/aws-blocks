@@ -193,10 +193,12 @@ Returned by `getAuthState()` and `setAuthState()`.
 
 | Field | Type | Description |
 |---|---|---|
-| `state` | `string` | `'signedOut'`, `'signedIn'`, `'confirmingSignUp'`, `'confirmingMfa'`, `'confirmingPasswordReset'` |
+| `state` | `'signedOut' \| 'signedIn' \| 'confirmingSignUp' \| 'confirmingSignIn' \| 'confirmingMfa' \| 'confirmingPasswordReset'` | Current state name |
 | `user` | `AuthUser?` | Present when `state === 'signedIn'` |
 | `actions` | `AuthAction[]` | Available actions from this state |
 | `error` | `string?` | Error from the last action |
+| `errorName` | `string?` | Machine-readable name of the last action's error, mirroring the thrown `ApiError`'s `name` (e.g. `'InvalidCredentialsException'`). Branch on it with `hasAuthError(state, name)` instead of matching the human-facing `error`. Absent on success or a generic `ApiError`. |
+| `retriable` | `boolean?` | The last action failed recoverably: resubmit on the **same** state (preserving hidden fields such as `session`) and show `error` inline, instead of restarting the flow. |
 
 ### `AuthAction`
 

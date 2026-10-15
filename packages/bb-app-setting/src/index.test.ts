@@ -625,3 +625,87 @@ describe('Edge cases', () => {
 		assert.strictEqual(await setting.get(), value);
 	});
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Option validation — local mock rejects the same invalid combinations the
+// CDK constructor rejects at synth (issue #577). These are synchronous option
+// checks, so mock and CDK must throw identically.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('Option validation (parity with CDK)', () => {
+	function rejectsValidation(fn: () => unknown, msgIncludes?: string) {
+		assert.throws(fn, (err: Error) => {
+			assert.strictEqual(err.name, AppSettingErrors.ValidationFailed);
+			if (msgIncludes) assert.ok(err.message.includes(msgIncludes), `message should include "${msgIncludes}", got: ${err.message}`);
+			return true;
+		});
+	}
+
+	test('non-secret setting without a value throws (no longer silently defaults to "")', () => {
+		rejectsValidation(
+			() => new AppSetting({ id: 'root' } as any, 'no-value', { name: '/app/no-value' }),
+			'non-secret settings require a value',
+		);
+	});
+
+	test("'secret' and 'schema' together throw", () => {
+		const schema = makeSchema<string>((v) => (typeof v === 'string' ? v : null));
+		rejectsValidation(
+			() => new AppSetting({ id: 'root' } as any, 'secret-schema', { secret: true, schema } as any),
+			"'secret' and 'schema' cannot be used together",
+		);
+	});
+
+	test('schema without a value throws', () => {
+		const schema = makeSchema<string>((v) => (typeof v === 'string' ? v : null));
+		rejectsValidation(
+			() => new AppSetting({ id: 'root' } as any, 'schema-no-value', { schema } as any),
+			'a schema is provided but no value',
+		);
+	});
+
+	test("'kmsKeyArn' without 'secret: true' throws", () => {
+		rejectsValidation(
+			() => new AppSetting({ id: 'root' } as any, 'kms-no-secret', { value: 'x', kmsKeyArn: 'arn:aws:kms:us-east-1:111122223333:key/abc' }),
+			"'kmsKeyArn' is only valid with 'secret: true'",
+		);
+	});
+
+	test('empty kmsKeyArn throws', () => {
+		rejectsValidation(
+			() => new AppSetting({ id: 'root' } as any, 'kms-empty', { secret: true, kmsKeyArn: '   ' }),
+			"'kmsKeyArn' must be a non-empty KMS key ARN",
+		);
+	});
+
+	test('secret with a value throws', () => {
+		rejectsValidation(
+			() => new AppSetting({ id: 'root' } as any, 'secret-value', { secret: true, value: 'hardcoded' as any }),
+			'secrets should not have a value in source code',
+		);
+	});
+
+	test('external without a name throws', () => {
+		rejectsValidation(
+			() => AppSetting.fromExisting({ id: 'root' } as any, 'ext-no-name', { name: '' }),
+			"'external' requires an explicit 'name'",
+		);
+	});
+
+	// ── Valid combinations must NOT throw ──────────────────────────────────
+	test('non-secret with a value is valid', () => {
+		assert.doesNotThrow(() => new AppSetting({ id: 'root' } as any, 'ok-value', { value: 'hello' }));
+	});
+
+	test('secret without a value is valid (random generated)', () => {
+		assert.doesNotThrow(() => new AppSetting({ id: 'root' } as any, 'ok-secret', { secret: true }));
+	});
+
+	test('secret with a valid kmsKeyArn is valid', () => {
+		assert.doesNotThrow(() => new AppSetting({ id: 'root' } as any, 'ok-kms', { secret: true, kmsKeyArn: 'arn:aws:kms:us-east-1:111122223333:key/abc' }));
+	});
+
+	test('fromExisting with a name is valid', () => {
+		assert.doesNotThrow(() => AppSetting.fromExisting({ id: 'root' } as any, 'ok-ext', { name: '/app/existing' }));
+	});
+});

@@ -1,22 +1,28 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, hello as helloType } from 'aws-blocks';
+
+// npm is npm.cmd on Windows, which spawn won't resolve without a shell.
+const isWin = process.platform === 'win32';
 
 installCookieJar();
 
 let server: ChildProcess | null = null;
 let api: typeof apiType;
 let hello: typeof helloType;
+const serverPort = 3000;
+const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 test.before(async () => {
-  if (!await isServerRunning()) {
+  if (!await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
+      detached: !isWin,
+      shell: isWin,
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     server.unref();
@@ -27,21 +33,38 @@ test.before(async () => {
   api = mod.api;
   hello = mod.hello;
 
-  // Wait for server to be ready
+  // Wait for the Blocks server to be ready without depending on the sample API.
   for (let i = 0; i < 60; i++) {
-    try { await hello.greet('ping'); return; } catch {
-      await setTimeout(1000);
+    try {
+      const response = await fetch(readinessUrl);
+      if (response.ok) return;
+    } catch {
+      // The server is not listening yet.
     }
+    await setTimeout(1000);
   }
-  throw new Error('Server not ready');
+  throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
 test.after(() => {
   if (server?.pid) {
-    try { process.kill(-server.pid, 'SIGTERM'); } catch {}
+    try {
+      if (isWin) spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+      else process.kill(-server.pid, 'SIGTERM');
+    } catch {}
   }
 });
 
+// App-level readiness — independent of the sample API, so it keeps passing
+// after you replace `greet`/`setValue`/`getValue` with your own methods.
+test('app: server serves its Blocks config', async () => {
+  const response = await fetch(readinessUrl);
+  assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
+});
+
+// Run against the sample API the template ships with, so a freshly scaffolded
+// app is validated end to end. When you replace the sample API, update or
+// delete these tests to exercise your own methods instead.
 test('greet returns message and timestamp', async () => {
   const result = await hello.greet('World');
   assert.strictEqual(result.message, 'Hello, World!');

@@ -247,6 +247,86 @@ test('CDK: customer-managed encryption provisions a KMS key', () => {
 	});
 });
 
+test('CDK: an auto-created CMK is DESTROYED with the table under the sandbox preset', () => {
+	// #670: the dedicated CMK defaults to RemovalPolicy.RETAIN, so without the
+	// guard it would survive a DESTROY table teardown as an orphaned, billed,
+	// rotating key. Under sandbox the key must follow the table to DELETE.
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: 'customer-managed',
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' });
+});
+
+test('CDK: an auto-created CMK is RETAINED with the table under the production preset', () => {
+	// The key is never less durable than the table it encrypts: production
+	// RETAINs the table, so the key is retained too.
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: 'customer-managed',
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' });
+});
+
+test('CDK: protection override wins for the CMK — a retained table under sandbox keeps its key', () => {
+	// The guard applies the RESOLVED removal policy, which `protection` overrides
+	// — not the preset default. A `retained` table under the sandbox preset must
+	// keep its key: a retained table whose only CMK is scheduled for deletion is
+	// unreadable and unrecoverable after the 30-day KMS window. This case fails
+	// if the guard uses the preset (`this.defaults`) instead of the resolved
+	// policy, which the preset-only tests above cannot detect.
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: 'customer-managed',
+		protection: 'retained',
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' });
+});
+
+test('CDK: protection override wins for the CMK — a disposable table under production destroys its key', () => {
+	// The reverse override: a `disposable` table under the production preset must
+	// DESTROY its key, reached only through the resolved policy, not the preset.
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: 'customer-managed',
+		protection: 'disposable',
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' });
+});
+
+test('CDK: an imported fromKmsKey survives the removal-policy guard under sandbox', () => {
+	// The `!encryptionKey` guard matters because `applyRemovalPolicy` on an
+	// imported `Key.fromKeyArn` THROWS — an imported key has no `CfnResource`
+	// child to stamp a policy on. So the real thing this pins is that
+	// construction does not throw under the sandbox preset (where an auto-created
+	// key WOULD be destroyed) and that the table still encrypts with the imported
+	// ARN. (The sibling `fromKmsKey ... provisions no new KMS key` test below
+	// covers the resource count.)
+	const keyArn = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56';
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	assert.doesNotThrow(() => new DistributedTable(parent, 'orders', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: DistributedTable.fromKmsKey(keyArn),
+	}));
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		SSESpecification: { SSEEnabled: true, SSEType: 'KMS', KMSMasterKeyId: keyArn },
+	});
+});
+
 test('CDK: fromKmsKey encrypts with an existing key and provisions no new KMS key', () => {
 	const { stack, parent } = setup();
 	const keyArn = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56';
@@ -361,6 +441,20 @@ test('CDK: a per-block protection option overrides the stack defaults', () => {
 	const template = Template.fromStack(stack);
 	template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
 	template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: true });
+});
+
+test('CDK: GSI manager Lambda log groups adopt defaults.logRetention', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		indexes: { byEmail: { partitionKey: 'email' } },
+	});
+	const template = Template.fromStack(stack);
+	// The GSI manager + isComplete Lambdas now own explicit log groups whose
+	// retention follows the stack-wide default (sandbox → one week), instead of
+	// AWS's infinite default.
+	template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
 });
 
 test('CDK: DistributedTable.fromExisting does NOT provision a table (regression)', () => {

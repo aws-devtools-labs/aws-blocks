@@ -40,7 +40,12 @@ function synth(build: (stack: cdk.Stack) => void) {
 	(globalThis as any).CURRENT_BLOCKS_STACK = stack;
 	try {
 		build(stack);
-		finalizeConfigRegistry(stack, handler);
+		// Grant config read to the handler's role and stamp the `BLOCKS_CONFIG_*`
+		// coordinates on the handler function — the same target as before the
+		// shared-role refactor, so the template assertions are unchanged.
+		finalizeConfigRegistry(stack, handler.role!, [
+			{ setEnv: (key: string, value: string) => handler.addEnvironment(key, value) } as any,
+		]);
 		return Template.fromStack(stack);
 	} finally {
 		delete (globalThis as any).CURRENT_BLOCKS_STACK;
@@ -88,7 +93,7 @@ stack.handler = handler;
 stack.executionRole = executionRole;
 globalThis.CURRENT_BLOCKS_STACK = stack;
 new AuthCognito(stack, 'auth');
-finalizeConfigRegistry(stack, handler);
+finalizeConfigRegistry(stack, handler.role, [{ setEnv: (k, v) => handler.addEnvironment(k, v) }]);
 
 const resources = Template.fromStack(stack).toJSON().Resources;
 const tables = Object.entries(resources)
@@ -666,19 +671,31 @@ const LIFECYCLE_ADMIN_ACTIONS = [
 	'cognito-idp:AdminUserGlobalSignOut',
 ];
 // Actions granted by BOTH slices — excluded from the "does not grant the other
-// slice's actions" cross-checks below.
+// slice's actions" cross-checks below. AdminListGroupsForUser is additionally a
+// client-facing baseline grant (see BASELINE_ADMIN_ACTIONS) because `requireRole`
+// reads live membership.
 const SHARED_ADMIN_ACTIONS = ['cognito-idp:AdminListGroupsForUser'];
 const groupOnlyActions = GROUP_ADMIN_ACTIONS.filter((a) => !SHARED_ADMIN_ACTIONS.includes(a));
 const lifecycleOnlyActions = LIFECYCLE_ADMIN_ACTIONS.filter((a) => !SHARED_ADMIN_ACTIONS.includes(a));
+// Admin actions granted unconditionally to the execution role, independent of
+// the opt-in `admin` surface. `requireRole` is a client-facing guard that reads
+// live group membership via AdminListGroupsForUser, so that one action is always
+// present — every other Admin* action still requires opt-in.
+const BASELINE_ADMIN_ACTIONS = ['cognito-idp:AdminListGroupsForUser'];
 
 describe('AuthCognito (CDK) — admin IAM grant', () => {
-	test('no admin option → NO Admin* actions granted (least privilege)', () => {
+	test('no admin option → only the client-facing baseline Admin action granted (least privilege)', () => {
 		const template = synth((stack) => {
 			new AuthCognito(scope(stack), 'auth', { groups: ['admins'] });
 		});
 		const actions = grantedActions(template);
 		for (const a of [...GROUP_ADMIN_ACTIONS, ...LIFECYCLE_ADMIN_ACTIONS]) {
+			if (BASELINE_ADMIN_ACTIONS.includes(a)) continue;
 			assert.ok(!actions.has(a), `unexpected admin action granted without opt-in: ${a}`);
+		}
+		// requireRole reads live membership, so its one Admin action is the baseline.
+		for (const a of BASELINE_ADMIN_ACTIONS) {
+			assert.ok(actions.has(a), `missing client-facing baseline action ${a}`);
 		}
 	});
 
