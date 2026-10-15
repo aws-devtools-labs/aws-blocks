@@ -22,12 +22,13 @@ import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { isBlocksError } from '@aws-blocks/core';
-import { BlocksPresets, BlocksStack, Scope } from '@aws-blocks/core/cdk';
+import { BlocksPresets, BlocksStack, getOrCreateOnRoot, Scope } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import { Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { CronJob, CronJobErrors } from './index.cdk.js';
 
 const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
@@ -85,6 +86,33 @@ function scheduleTargets(template: Template, logicalId: string): boolean {
 }
 
 describe('CronJob compute targeting', () => {
+	test('reuses the scheduler Role already cached by the backend', async () => {
+		const stack = await makeStack('CronExistingRole');
+		const role = getOrCreateOnRoot(
+			stack,
+			Symbol.for('BLOCKS_SCHEDULER_ROLE'),
+			(root) =>
+				new iam.Role(root, 'BlocksSchedulerRole', {
+					assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
+				}),
+		);
+		const job = new CronJob(stack, 'job', { schedule: 'rate(1 day)', handler: async () => {} });
+		assert.strictEqual(
+			job.schedule.target && 'roleArn' in job.schedule.target ? job.schedule.target.roleArn : undefined,
+			role.roleArn,
+		);
+		const template = Template.fromStack(stack);
+		const schedulerRoles = Object.values(template.findResources('AWS::IAM::Role')).filter((resource) =>
+			JSON.stringify(resource.Properties.AssumeRolePolicyDocument).includes('scheduler.amazonaws.com'),
+		);
+		assert.strictEqual(schedulerRoles.length, 1);
+		const policy = Object.values(template.findResources('AWS::IAM::Policy')).find((resource) =>
+			JSON.stringify(resource).includes('BlocksSchedulerRole'),
+		);
+		assert.ok(policy);
+		assert.ok(JSON.stringify(policy).includes(fnLogicalId(stack, stack._defaultCompute as LambdaCompute)));
+	});
+
 	test('default: schedule target is the stack default compute function', async () => {
 		const stack = await makeStack('CronDefault');
 		new CronJob(stack, 'nightly', { schedule: 'rate(1 day)', handler: async () => {} });
@@ -111,6 +139,28 @@ describe('CronJob compute targeting', () => {
 			!scheduleTargets(template, fnLogicalId(stack, stack._defaultCompute as LambdaCompute)),
 			'schedule does NOT target the default compute',
 		);
+	});
+
+	test('shared scheduler role can invoke every targeted compute', async () => {
+		const stack = await makeStack('CronMultipleComputes');
+		new CronJob(stack, 'defaultJob', { schedule: 'rate(1 day)', handler: async () => {} });
+
+		const lambdaB = new LambdaCompute(stack, 'LambdaB');
+		const scoped = new Scope('scoped', { parent: stack });
+		scoped._compute = lambdaB;
+		new CronJob(scoped, 'targetedJob', { schedule: 'rate(1 day)', handler: async () => {} });
+
+		const policies = Template.fromStack(stack).findResources('AWS::IAM::Policy');
+		const schedulerPolicy = Object.values(policies).find((policy) =>
+			JSON.stringify(policy).includes('BlocksSchedulerRole'),
+		);
+		assert.ok(schedulerPolicy, 'shared scheduler role has an IAM policy');
+		const policyDocument = JSON.stringify(schedulerPolicy);
+		assert.ok(
+			policyDocument.includes(fnLogicalId(stack, stack._defaultCompute as LambdaCompute)),
+			'scheduler role can invoke the default compute',
+		);
+		assert.ok(policyDocument.includes(fnLogicalId(stack, lambdaB)), 'scheduler role can invoke the scoped compute');
 	});
 });
 
