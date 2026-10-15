@@ -46,15 +46,15 @@ extension SwiftCodeGenerator {
     /// `nonisolated`: it compiles in the app's target and must not inherit a `MainActor` default isolation.
     func emitNamespaceHeader(_ name: EntryPointName, defaultServer: String, lines: inout [String]) {
         lines.append("public final nonisolated class \(name.className): Sendable {")
-        lines.append("    private let client: BlocksClient")
+        lines.append("    private let client: \(runtimePrefix)BlocksClient")
         lines.append("")
-        lines.append("    public init(client: BlocksClient) {")
+        lines.append("    public init(client: \(runtimePrefix)BlocksClient) {")
         lines.append("        self.client = client")
         lines.append("    }")
         lines.append("")
         lines.append("    @available(*, deprecated, message: \"Use blocks.\(name.property) from one Blocks() or Blocks(server:) you hold\")")
-        lines.append("    public convenience init(server: BlocksServer = \(defaultServer)) {")
-        lines.append("        self.init(client: BlocksClient(server: server))")
+        lines.append("    public convenience init(server: \(runtimePrefix)BlocksServer = \(defaultServer)) {")
+        lines.append("        self.init(client: \(runtimePrefix)BlocksClient(server: server))")
         lines.append("    }")
     }
 
@@ -106,7 +106,10 @@ extension SwiftCodeGenerator {
         for server in servers {
             let name = swiftStringLiteral(server.name)
             let url = swiftStringLiteral(server.url)
-            lines.append("    public static let \(serverPropertyName(server.name)) = BlocksServer(name: \(name), url: \(url))")
+            lines.append(
+                "    public static let \(serverPropertyName(server.name)) = "
+                    + "\(runtimePrefix)BlocksServer(name: \(name), url: \(url))"
+            )
         }
         lines.append("}")
     }
