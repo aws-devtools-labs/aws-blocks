@@ -1,5 +1,5 @@
 {
-  "name": "aws-blocks",
+  "name": "cli-test-aws-blocks",
   "version": "0.1.0",
   "private": true,
   "type": "module",
