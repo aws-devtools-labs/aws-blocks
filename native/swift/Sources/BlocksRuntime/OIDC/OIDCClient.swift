@@ -27,6 +27,7 @@ public actor OIDCClient: AuthProvider {
     private var tokenStore: TokenStore { client.tokenStore }
 
     private var inflightRefresh: Task<Void, Error>?
+    private var legacyAdoption: Task<Void, Never>?
     private var subscribers: [UUID: AsyncStream<OIDCAuthState>.Continuation] = [:]
 
     public init(
@@ -241,11 +242,11 @@ public actor OIDCClient: AuthProvider {
         }
 
         if let accessToken = json["accessToken"] as? String {
-            await tokenStore.set("access_token", value: accessToken)
+            await storeToken("access_token", accessToken)
             if let refreshToken = json["refreshToken"] as? String {
-                await tokenStore.set("refresh_token", value: refreshToken)
+                await storeToken("refresh_token", refreshToken)
             }
-            await tokenStore.set("expires_at", value: Self.stringifyExpiry(json["expiresIn"]))
+            await storeToken("expires_at", Self.stringifyExpiry(json["expiresIn"]))
         }
 
         let user = try OIDCUser.fromJSON(userJSON)
@@ -268,7 +269,7 @@ public actor OIDCClient: AuthProvider {
     }
 
     private func performRefresh() async throws {
-        guard let refreshToken = await tokenStore.get("refresh_token") else {
+        guard let refreshToken = await storedToken("refresh_token") else {
             emit(.signedOut)
             return
         }
@@ -291,17 +292,17 @@ public actor OIDCClient: AuthProvider {
             return
         }
 
-        await tokenStore.set("access_token", value: accessToken)
-        await tokenStore.set("expires_at", value: Self.stringifyExpiry(json["expiresAt"]))
+        await storeToken("access_token", accessToken)
+        await storeToken("expires_at", Self.stringifyExpiry(json["expiresAt"]))
         if let newRefresh = json["refreshToken"] as? String {
-            await tokenStore.set("refresh_token", value: newRefresh)
+            await storeToken("refresh_token", newRefresh)
         }
     }
 
     // MARK: - Sign out
 
     public func signOut() async {
-        let refreshToken = await tokenStore.get("refresh_token")
+        let refreshToken = await storedToken("refresh_token")
         _ = try? await client.postRawRoute(path: signOutPath, body: ["refreshToken": refreshToken ?? ""])
         await clearTokens()
         emit(.signedOut)
@@ -312,8 +313,8 @@ public actor OIDCClient: AuthProvider {
     public func restore() async {
         emit(.loading)
 
-        let accessToken = await tokenStore.get("access_token")
-        let refreshToken = await tokenStore.get("refresh_token")
+        let accessToken = await storedToken("access_token")
+        let refreshToken = await storedToken("refresh_token")
 
         guard accessToken != nil, refreshToken != nil else {
             emit(.signedOut)
@@ -334,7 +335,7 @@ public actor OIDCClient: AuthProvider {
             }
         }
 
-        guard let token = await tokenStore.get("access_token") else {
+        guard let token = await storedToken("access_token") else {
             emit(.signedOut)
             return
         }
@@ -358,7 +359,7 @@ public actor OIDCClient: AuthProvider {
     // MARK: - AuthProvider
 
     public func getAccessToken() async -> String? {
-        guard let token = await tokenStore.get("access_token") else { return nil }
+        guard let token = await storedToken("access_token") else { return nil }
         if await isExpired() {
             do {
                 try await refresh()
@@ -366,7 +367,7 @@ public actor OIDCClient: AuthProvider {
                 // Only a closed client throws here, and its expired token is no use.
                 return nil
             }
-            return await tokenStore.get("access_token")
+            return await storedToken("access_token")
         }
         return token
     }
@@ -426,7 +427,7 @@ public actor OIDCClient: AuthProvider {
     // MARK: - Private helpers
 
     private func isExpired() async -> Bool {
-        guard let raw = await tokenStore.get("expires_at"),
+        guard let raw = await storedToken("expires_at"),
               let expiry = Int64(raw)
         else { return true }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1_000)
@@ -434,9 +435,45 @@ public actor OIDCClient: AuthProvider {
     }
 
     private func clearTokens() async {
-        await tokenStore.delete("access_token")
-        await tokenStore.delete("refresh_token")
-        await tokenStore.delete("expires_at")
+        for name in Self.tokenNames {
+            await tokenStore.delete(tokenKey(name))
+        }
+    }
+
+    private static let tokenNames = ["access_token", "refresh_token", "expires_at"]
+
+    /// Scoped by exchange path, so OIDC blocks sharing one `TokenStore` keep separate sessions.
+    private func tokenKey(_ name: String) -> String {
+        "\(exchangePath)#\(name)"
+    }
+
+    private func storedToken(_ name: String) async -> String? {
+        await adoptLegacyTokens()
+        return await tokenStore.get(tokenKey(name))
+    }
+
+    private func storeToken(_ name: String, _ value: String) async {
+        await adoptLegacyTokens()
+        await tokenStore.set(tokenKey(name), value: value)
+    }
+
+    /// Tokens saved under the unscoped keys move to the first client that uses the store, once.
+    private func adoptLegacyTokens() async {
+        if legacyAdoption == nil {
+            legacyAdoption = Task { await self.moveLegacyTokens() }
+        }
+        await legacyAdoption?.value
+    }
+
+    private func moveLegacyTokens() async {
+        for name in Self.tokenNames where await tokenStore.get(tokenKey(name)) != nil {
+            return
+        }
+        for name in Self.tokenNames {
+            guard let value = await tokenStore.get(name) else { continue }
+            await tokenStore.set(tokenKey(name), value: value)
+            await tokenStore.delete(name)
+        }
     }
 
     private static func stringifyExpiry(_ value: Any?) -> String {

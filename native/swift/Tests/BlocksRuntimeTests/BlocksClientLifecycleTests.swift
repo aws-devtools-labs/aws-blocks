@@ -186,9 +186,9 @@ final class BlocksClientLifecycleTests: XCTestCase {
 
     func testClosedClientKeepsStoredOIDCTokens() async {
         let store = InMemoryTokenStore()
-        await store.set("access_token", value: "at")
-        await store.set("refresh_token", value: "rt")
-        await store.set("expires_at", value: "0")
+        await store.set("/auth/exchange#access_token", value: "at")
+        await store.set("/auth/exchange#refresh_token", value: "rt")
+        await store.set("/auth/exchange#expires_at", value: "0")
         let client = BlocksClient(url: url, tokenStore: store)
         let oidc = OIDCClient(
             exchangePath: "/auth/exchange", refreshPath: "/auth/refresh", signOutPath: "/auth/signout",
@@ -205,8 +205,8 @@ final class BlocksClientLifecycleTests: XCTestCase {
         let token = await oidc.getAccessToken()
         await oidc.onAuthFailure()
         await oidc.restore()
-        let access = await store.get("access_token")
-        let refresh = await store.get("refresh_token")
+        let access = await store.get("/auth/exchange#access_token")
+        let refresh = await store.get("/auth/exchange#refresh_token")
         XCTAssertNil(token)
         XCTAssertEqual(access, "at")
         XCTAssertEqual(refresh, "rt")

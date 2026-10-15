@@ -35,7 +35,8 @@ private final class RecordingURLProtocol: URLProtocol {
         Self.lock.withLock { Self.recorded.append((method, request.url)) }
         let result = switch method {
         case "users.list": #"["ada"]"#
-        case "auth.getClient", "admin.getClient": #"{"exchangePath":"/auth/exchange","signOutPath":"/auth/signout"}"#
+        case "auth.getClient": #"{"exchangePath":"/auth/exchange","signOutPath":"/auth/signout"}"#
+        case "admin.getClient": #"{"exchangePath":"/admin/exchange","signOutPath":"/auth/signout"}"#
         default: #""pong""#
         }
         guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil) else {
@@ -115,16 +116,17 @@ final class GeneratedEntryPointTests: XCTestCase {
         XCTAssertEqual(renamed.map { "\(type(of: $0))" }, ["BlocksApiApi", "BlocksApi", "SendableApi", "SelfApi", "ServersApi"])
     }
 
-    func testTokenStoreIsSharedByEveryNamespace() async throws {
+    func testOIDCNamespacesShareTheStoreButNotTheirSessions() async throws {
         let store = BlocksRuntime.InMemoryTokenStore()
-        await store.set("access_token", value: "at")
-        await store.set("expires_at", value: "\(Int64.max)")
+        await store.set("/auth/exchange#access_token", value: "at")
+        await store.set("/auth/exchange#expires_at", value: "\(Int64.max)")
         let blocks = Blocks(session: mockSession(), tokenStore: store)
         let auth = try await blocks.auth.getClient()
         let admin = try await blocks.admin.getClient()
         let authToken = await auth.getAccessToken()
         let adminToken = await admin.getAccessToken()
-        XCTAssertEqual([authToken, adminToken], ["at", "at"])
+        XCTAssertEqual(authToken, "at")
+        XCTAssertNil(adminToken)
         XCTAssertIdentical(blocks.client.tokenStore as AnyObject, store)
     }
 
