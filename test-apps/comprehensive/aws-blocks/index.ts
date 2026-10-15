@@ -584,24 +584,31 @@ const secretSetting = new AppSetting(scope, 'secret-setting', {
 });
 
 // Secret - Single high-value credential backed by AWS Secrets Manager
-// Opaque string secret (e.g. a third-party API key). `cacheTtlSeconds` bounds
-// how long the runtime reuses a cached value — set here so the option is
-// exercised end to end (the round-trip tests below still see fresh writes
-// because `put()` clears the cache).
-const apiKeySecret = new Secret(scope, 'secret-api-key', { removalPolicy: 'destroy', cacheTtlSeconds: 300 });
+// Opaque string secret (e.g. a third-party API key). `cacheTtlSeconds: 0`
+// disables the read cache for this instance so the read-after-write e2e tests
+// below (round-trip, overwrite, grace window, listVersions) are deterministic:
+// with the default 5-min cache and warm-Lambda reuse, a get() could be served a
+// value cached by an earlier test on the same warm instance. The default TTL is
+// covered by the unit tests; here 0 both fixes isolation and exercises the
+// cache-disabled path end to end.
+const apiKeySecret = new Secret(scope, 'secret-api-key', { removalPolicy: 'destroy', cacheTtlSeconds: 0 });
 
 // Typed JSON secret with schema validation (e.g. a set of related credentials).
 const dbSecretSchema = z.object({ host: z.string(), port: z.number() });
+// cacheTtlSeconds: 0 — deterministic read-after-write for the e2e (see secret-api-key).
 const dbCredentialsSecret = new Secret(scope, 'secret-db-credentials', {
   schema: dbSecretSchema,
   removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
 });
 
 // Secret with an explicit well-known name (for CI/CD-driven management via the
 // aws CLI). Scoped by stack identity so parallel deploys don't collide.
+// cacheTtlSeconds: 0 — deterministic read-after-write for the e2e (see secret-api-key).
 const namedSecret = new Secret(scope, 'secret-named', {
   name: `${scope.fullId}/webhook-signing-key`,
   removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
 });
 
 // Unset secret: created empty (no `generate`), so get() returns null until a
