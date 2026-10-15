@@ -102,6 +102,12 @@ Every RPC call and every OIDC client share the one HTTP engine the instance owns
 realtime channels still open their own. `close()` shuts that engine down, after which calls through
 the instance report it rather than failing inside the HTTP client.
 
+The accessors and `Blocks()` are extensions on the runtime's `Blocks`, so one spec is assumed per
+compilation scope. Two generated packages visible in the same file make `Blocks()` ambiguous, and
+an accessor imported from one while `Blocks()` comes from the other would send its calls to the
+wrong backend. A module that generates a client for its own use should set
+`visibility = GeneratedVisibility.Internal` so its accessors stay out of its consumers' scope.
+
 When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable result still fails code generation.
 
 ## Gradle Tasks
