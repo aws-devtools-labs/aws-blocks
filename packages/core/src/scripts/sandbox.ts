@@ -467,7 +467,7 @@ export interface DestroyRetryDeps {
 	listStackNames: () => string[];
 	/** Empty the given stacks' versioned S3 buckets. */
 	emptyBuckets: (stackNames: string[]) => Promise<void>;
-	/** Sleep (VPC-ENI detach window). */
+	/** Backoff between retries (VPC-ENI detach, bucket-block clearing, DeleteRestApi 429 throttle). */
 	sleep: (ms: number) => Promise<void>;
 	/** Backoff between retries. Default: 1min, then 2min. */
 	retryDelays?: number[];
