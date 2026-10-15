@@ -284,7 +284,9 @@ export class Scope {
 
     const parents = collectBBParents(this.parent);
     for (const parent of parents) {
-      chain.push(['bb', `${parent.bbName}/${parent.bbVersion}`]);
+      if (parent.bbName && parent.bbVersion) {
+        chain.push(['bb', `${parent.bbName}/${parent.bbVersion}`]);
+      }
     }
 
     if (this.bbName && this.bbVersion && OFFICIAL_BB_NAMES.has(this.bbName)) {
@@ -369,7 +371,22 @@ function isOfficialBuildingBlock(obj: unknown): obj is BuildingBlockMeta {
   return isBuildingBlock(obj) && OFFICIAL_BB_NAMES.has(obj.bbName);
 }
 
-export function computeScopeFullId(scope: { id: string; parent?: any }) {
+/**
+ * The fully-qualified ID of a scope: its parent's `fullId` (or `id`) joined to its own.
+ *
+ * This is what `Scope.fullId` returns. Call it directly only when a block must know its
+ * own `fullId` before `super()` has run — a block that builds a child in its constructor
+ * cannot reach `this.fullId` yet, and must not restate the rule.
+ *
+ * @param scope - The scope's own `id` and its optional parent
+ * @returns The fully-qualified ID, e.g. `"myApp-auth"`
+ *
+ * @example
+ * ```typescript
+ * const fullId = computeScopeFullId({ id, parent: scope });
+ * ```
+ */
+export function computeScopeFullId(scope: { id: string; parent?: ScopeParent }): string {
   if (scope.parent) {
     if ('fullId' in scope.parent && scope.parent.fullId) {
       return `${scope.parent.fullId}-${scope.id}`;
@@ -379,6 +396,30 @@ export function computeScopeFullId(scope: { id: string; parent?: any }) {
     }
   }
   return scope.id;
+}
+
+/**
+ * A Building Block standing in as its own child's parent, for a block that must
+ * construct a child before `super()` has run and so cannot pass `this`.
+ *
+ * `bbName`/`bbVersion` are required because the chain walk skips a parent without
+ * them. It also skips a name outside `OFFICIAL_BB_NAMES`, so a custom block is not
+ * attributed by supplying them alone. `fullId` is derived here so the child's own
+ * `fullId`, and any resource name taken from it, is the same as under a real parent.
+ *
+ * @param meta - The block's own `id`, its parent scope, and its name and version
+ * @returns A parent carrying the identity and the user-agent metadata
+ *
+ * @example
+ * ```typescript
+ * const self = buildingBlockParent({ id, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+ * const child = new KVStore(self, 'sessions');
+ * ```
+ */
+export function buildingBlockParent(
+  meta: BuildingBlockMeta & { id: string; parent: ScopeParent },
+): BuildingBlockMeta & { id: string; parent: ScopeParent; fullId: string } {
+  return { ...meta, fullId: computeScopeFullId(meta) };
 }
 
 export interface BlocksStackProps extends StackProps {

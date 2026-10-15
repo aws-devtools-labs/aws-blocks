@@ -240,6 +240,7 @@ describe('buildCorsHeaders', () => {
       buildCorsHeaders('https://evil.example.com');
       buildCorsHeaders('https://evil.example.com');
       assert.strictEqual(lines.length, 1, 'repeat requests from one origin should warn once');
+      assert.match(lines[0], /defaults\.allowedOrigins/, 'the warning points at the stack default to fix it');
 
       buildCorsHeaders('https://other.example.com');
       assert.strictEqual(lines.length, 2, 'a distinct origin should still warn');

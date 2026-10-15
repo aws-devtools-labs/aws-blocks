@@ -149,7 +149,7 @@ static fromExisting(tableName: string): ExternalTableRef { return { __brand: 'Ex
 constructor(...) {
   super(id, { parent: scope });                                          // no bbName/bbVersion here
   this.table = new Table(this, 'table', { tableName: this.fullId.substring(0, 255) /* … */ });
-  this.table.grantReadWriteData(this.handler);                           // grant on the SHARED handler
+  this.table.grantReadWriteData(this.executionRole);                     // grant on the SHARED execution role
   registerConfig(this, 'BLOCKS_THING_FLAG', '…');                        // extra config only (not addEnvironment)
 }
 get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub EVERY runtime method

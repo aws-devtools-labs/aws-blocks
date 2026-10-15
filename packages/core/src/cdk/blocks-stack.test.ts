@@ -6,12 +6,12 @@ import { dirname, join } from 'node:path';
 import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
-import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
-import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
@@ -20,15 +20,14 @@ import { BlocksPresets, BlocksStack, Scope } from './index.js';
 
 // A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
 // @aws-blocks/blocks), which core's own tests can't depend on. Use an
-// equivalent inline stub: a Compute that owns a NodejsFunction + API Gateway,
-// so create() can build the default and the handler/gateway/apiUrl accessors
-// and synth-shape assertions have something real to resolve to. It is passed to
-// each create() via the internal `defaultComputeFactory` option (see makeStack /
-// makeBackend), exactly as @aws-blocks/blocks injects LambdaCompute.
+// equivalent inline stub: a Compute that owns a NodejsFunction and exposes it
+// via apiHandler(), so create() can build the default + the shared REST API
+// gateway and the handler/gateway/apiUrl accessors have something real to
+// resolve to. It is passed to each create() via the internal
+// `defaultComputeFactory` option (see makeStack / makeBackend), exactly as
+// @aws-blocks/blocks injects LambdaCompute.
 class StubLambdaCompute extends Compute {
 	readonly fn: lambda.NodejsFunction;
-	readonly apiGateway: apigateway.RestApi;
-	readonly apiUrl: string;
 	readonly logGroup: cdk.aws_logs.LogGroup;
 
 	constructor(scope: ScopeParent, id: string) {
@@ -45,16 +44,14 @@ class StubLambdaCompute extends Compute {
 			environment: { BLOCKS_STACK_NAME: this.backendStackName },
 			bundling: { minify: true, esbuildArgs: { '--conditions': 'aws-runtime' } },
 		});
-		this.apiGateway = new apigateway.RestApi(this, 'API', { restApiName: 'Blocks API' });
-		this.apiGateway.root.addProxy({
-			defaultIntegration: new apigateway.LambdaIntegration(this.fn),
-			anyMethod: true,
-		});
-		this.apiUrl = `${this.apiGateway.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
 	}
 
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
+	}
+
+	override apiHandler(): IFunction {
+		return this.fn;
 	}
 
 	protected applyTracing(): void {}
@@ -80,6 +77,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const handlerPath = join(__dirname, '__fixtures__', 'handler.js');
 const sideEffectBackendPath = join(__dirname, '__fixtures__', 'side-effect-backend.js');
 const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js');
+const gatewayReadingBackendPath = join(__dirname, '__fixtures__', 'gateway-reading-backend.js');
 
 // Wrap create(), injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
@@ -236,5 +234,38 @@ describe('assertCdkConditionActive', () => {
 			process.env.NODE_OPTIONS = origNodeOptions;
 			process.execArgv = origExecArgv;
 		}
+	});
+});
+
+// `create()` hands the stack's `defaults` to the shared gateway: throttling and
+// access logging on the stage must follow them (sandbox preset ⇒ 200/400).
+describe('shared gateway stage follows the stack defaults (BlocksStack)', () => {
+	test('sandbox throttling + opt-in access logging reach the stage', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'DefaultsToStageStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: { ...BlocksPresets.sandbox, accessLogging: true },
+			defaultComputeFactory: stubComputeFactory,
+		});
+		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
+			MethodSettings: Match.arrayWith([
+				Match.objectLike({ ThrottlingRateLimit: 200, ThrottlingBurstLimit: 400 }),
+			]),
+			AccessLogSetting: Match.objectLike({ DestinationArn: Match.anyValue() }),
+		});
+	});
+});
+
+// The shared gateway is built after the backend module import, so `.gateway` /
+// `.apiUrl` are only available once `create()` resolves — including inside the
+// backend's default export.
+describe('gateway is not available during the backend import (BlocksStack)', () => {
+	test('reading .gateway in the default export fails with the "not fully initialized" error', async () => {
+		const app = new cdk.App();
+		await assert.rejects(
+			makeStack(app, 'GatewayDuringImportStack', gatewayReadingBackendPath),
+			/not fully initialized/,
+		);
 	});
 });
