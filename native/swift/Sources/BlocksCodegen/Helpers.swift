@@ -181,6 +181,9 @@ let reservedNamespaceClassNames: Set<String> = [
     "Self", "Any"
 ]
 
+/// Names a spec model can't take: the entry point and servers the API file declares, and the module it qualifies with.
+let reservedModelNames: Set<String> = ["Blocks", "Servers", "BlocksRuntime"]
+
 /// Class name per namespace. A reserved or already claimed name gets an `Api` suffix;
 /// names that need no change claim first, so a rename never takes another's name.
 func namespaceClassNames(_ namespaces: [String]) -> [String: String] {

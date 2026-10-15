@@ -25,6 +25,12 @@ extension SwiftCodeGenerator {
         for typeDef in model.typeDefinitions where containsNestedOIDCClient(typeDef.type, atTop: false) {
             warnings.append("swift: model '\(typeDef.name)' holds an oidc/client, which decodes as JSONValue; return it directly to get an OIDCClient.")
         }
+        for typeDef in model.typeDefinitions where reservedModelNames.contains(typeDef.name) {
+            warnings.append(
+                "swift: model '\(typeDef.name)' takes a name the generated API file declares or qualifies with,"
+                + " so the output won't compile; rename the schema."
+            )
+        }
         return warnings
     }
 

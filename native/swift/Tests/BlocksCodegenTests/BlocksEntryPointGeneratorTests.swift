@@ -193,6 +193,15 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
         XCTAssertTrue(members.isSubset(of: blocksMemberNames))
     }
 
+    func testModelNamedLikeTheEntryPointIsReported() throws {
+        let output = try generate("""
+        { "openrpc": "1.3.2", "info": { "title": "test", "version": "1.0.0" },
+          "methods": [{ "name": "cms.get", "params": [], "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Blocks" } } }],
+          "components": { "schemas": { "Blocks": { "type": "object", "properties": { "title": { "type": "string" } }, "required": ["title"] } } } }
+        """)
+        XCTAssertEqual(output.warnings.filter { $0.hasPrefix("swift: model 'Blocks'") }.count, 1, "\(output.warnings)")
+    }
+
     // A namespace class named like any type the generated files name unqualified would shadow it.
     func testReservedClassNamesCoverEveryTypeGeneratedCodeNamesUnqualified() throws {
         let fixtures = swiftPackageURL.deletingLastPathComponent().appendingPathComponent("codegen-fixtures")
