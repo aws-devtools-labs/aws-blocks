@@ -193,6 +193,14 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
         XCTAssertTrue(members.isSubset(of: blocksMemberNames))
     }
 
+    // The MainActor target compiles a copy of the same spec; this keeps the copies from drifting apart.
+    func testMainActorTargetCompilesTheSameSpec() throws {
+        let tests = swiftPackageURL.appendingPathComponent("Tests")
+        let spec = try Data(contentsOf: tests.appendingPathComponent("BlocksGeneratedCodeTests/blocks.spec.json"))
+        let copy = try Data(contentsOf: tests.appendingPathComponent("BlocksGeneratedMainActorTests/blocks.spec.json"))
+        XCTAssertEqual(spec, copy, "keep Tests/BlocksGeneratedMainActorTests/blocks.spec.json identical to the BlocksGeneratedCodeTests copy")
+    }
+
     func testModelNamedLikeTheEntryPointIsReported() throws {
         let output = try generate("""
         { "openrpc": "1.3.2", "info": { "title": "test", "version": "1.0.0" },
