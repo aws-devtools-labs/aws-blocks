@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
-import { brandBlocksError, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
+import { blocksError, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { SecretErrors } from './errors.js';
@@ -19,12 +19,6 @@ export { SecretErrors } from './errors.js';
 export type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return brandBlocksError(err);
-}
 
 // Secrets share the same local store as AppSetting — `.bb-data/settings.json`,
 // a flat `{ key: value }` map at the project root — so the `/aws-blocks/settings`

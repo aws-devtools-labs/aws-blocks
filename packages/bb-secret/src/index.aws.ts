@@ -4,7 +4,7 @@
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
-import { brandBlocksError, installClientUserAgent, Scope } from '@aws-blocks/core';
+import { blocksError, installClientUserAgent, Scope } from '@aws-blocks/core';
 import {
 	GetSecretValueCommand,
 	ListSecretVersionIdsCommand,
@@ -22,12 +22,6 @@ export { SecretErrors } from './errors.js';
 export type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return brandBlocksError(err);
-}
 
 async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): Promise<T> {
 	const result = schema['~standard'].validate(value);
