@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Post-deploy liveness gate for `npm run deploy --wait-live`.
+// Post-deploy liveness gate for `npm run deploy -- --wait-live`.
 //
 // `cdk deploy` returning is not the same as the new build being served. Two
 // edge windows stay open after CloudFormation reports complete:
@@ -42,11 +42,19 @@ export interface ProbeResponse {
 export type ProbeFetch = (url: string, timeoutMs: number) => Promise<ProbeResponse>;
 
 /**
- * Probe one CloudFront invalidation's status. Returns `true` once it has
- * reached `Completed`. Injected so the SDK call lives in the deploy script and
- * this module stays pure.
+ * Probe one CloudFront invalidation's status. Resolves to:
+ *   - `'completed'` once it has reached `Completed`;
+ *   - `'pending'` while still in progress (retry);
+ *   - `{ fatal: <reason> }` for an error that can never clear during this
+ *     deploy (missing Region, `AccessDenied`, `NoSuchInvalidation`, …), so the
+ *     loop stops instead of burning the whole budget on a doomed retry.
+ * Injected so the SDK call lives in the deploy script and this module stays
+ * pure. A transient error (throttling, 5xx) should resolve `'pending'`.
  */
-export type InvalidationProbe = (timeoutMs: number) => Promise<boolean>;
+export type InvalidationProbe = (timeoutMs: number) => Promise<InvalidationProbeResult>;
+
+/** Outcome of a single invalidation-status probe. */
+export type InvalidationProbeResult = 'completed' | 'pending' | { fatal: string };
 
 /**
  * Classify a fetched config body against the build id this deploy published.
@@ -116,8 +124,10 @@ export interface WaitForLiveResult {
   live: boolean;
   attempts: number;
   elapsedMs: number;
-  /** Why the wait ended: new build confirmed, or budget exhausted. */
-  reason: 'live' | 'timeout';
+  /** Why the wait ended: new build confirmed, budget exhausted, or a terminal error. */
+  reason: 'live' | 'timeout' | 'fatal';
+  /** Set when `reason` is `'fatal'`: the error that can never clear this deploy. */
+  fatal?: string;
 }
 
 /**
@@ -136,10 +146,14 @@ export function buildProbeUrl(hostingUrl: string, now: number): string {
 /**
  * Poll until the new build is live or the budget is exhausted. Live requires
  * BOTH the served config matching this deploy's build id AND, for a compute
- * deploy, the `/*` invalidation reaching `Completed`. Never throws — a fetch or
- * invalidation error (the edge returns transient 403/503 during propagation) is
- * treated as "not live yet" and retried. The caller decides what to do with a
- * `live: false` result.
+ * deploy, the `/*` invalidation reaching `Completed`. Never throws. A fetch
+ * error (the edge returns transient 403/503 during propagation) is treated as
+ * "not live yet" and retried. The invalidation probe may instead report a
+ * TERMINAL failure (`{ fatal }`) — an error that can never clear this deploy
+ * (missing Region, `AccessDenied`, `NoSuchInvalidation`); the loop then stops
+ * early and returns `{ live: false, reason: 'fatal', fatal }` so the caller can
+ * print the real cause rather than burning the whole budget. The caller decides
+ * what to do with a `live: false` result.
  */
 export async function waitForLiveBuild(options: WaitForLiveOptions): Promise<WaitForLiveResult> {
   const {
@@ -162,7 +176,11 @@ export async function waitForLiveBuild(options: WaitForLiveOptions): Promise<Wai
   for (;;) {
     attempt += 1;
     const remaining = Math.max(0, timeoutMs - (now() - start));
-    const requestTimeout = Math.min(PROBE_REQUEST_TIMEOUT_MS, remaining || PROBE_REQUEST_TIMEOUT_MS);
+    // Cap the per-request budget by what's left, with a 1ms floor so the
+    // deadline probe (remaining 0) still carries a positive timeout instead of
+    // the full 10s — which would let the last probe (and the invalidation probe
+    // that reuses it) run ~20s past the overall budget.
+    const requestTimeout = Math.max(1, Math.min(PROBE_REQUEST_TIMEOUT_MS, remaining));
     let result: 'live' | 'pending' | 'unknown' | 'error' = 'error';
     let detail: string | undefined;
     try {
@@ -180,14 +198,23 @@ export async function waitForLiveBuild(options: WaitForLiveOptions): Promise<Wai
 
     // Config says this POP serves the new build; now confirm the compute
     // deploy's invalidation has propagated before declaring the whole deploy
-    // live, else the edge may still serve the previous build's SSR HTML.
+    // live, else the edge may still serve the previous build's SSR HTML. A
+    // terminal invalidation error stops the loop immediately.
     if (result === 'live' && !invalidationDone && invalidationComplete) {
+      let probe: InvalidationProbeResult;
       try {
-        invalidationDone = await invalidationComplete(requestTimeout);
+        probe = await invalidationComplete(requestTimeout);
       } catch (e) {
-        invalidationDone = false;
+        // An unexpected throw is treated as transient (retry) — the caller's
+        // probe is expected to classify terminal errors as `{ fatal }`.
+        probe = 'pending';
         detail = `invalidation: ${e instanceof Error ? e.message : String(e)}`;
       }
+      if (typeof probe === 'object') {
+        onAttempt?.({ attempt, result: 'error', detail: `invalidation: ${probe.fatal}` });
+        return { live: false, attempts: attempt, elapsedMs: now() - start, reason: 'fatal', fatal: probe.fatal };
+      }
+      invalidationDone = probe === 'completed';
       if (!invalidationDone) result = 'pending';
     }
 

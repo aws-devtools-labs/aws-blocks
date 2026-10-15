@@ -8,7 +8,15 @@ import assert from 'node:assert';
 // guards that re-export — if the re-export is ever dropped, this import fails
 // to resolve and the suite goes red. Its behavioural cases below double as a
 // smoke test that the re-exported binding is the real function.
-import { formatDeploySignal, parseWaitLiveArgs, DEFAULT_WAIT_LIVE_TIMEOUT_SEC } from './deploy.js';
+import {
+  formatDeploySignal,
+  parseWaitLiveArgs,
+  DEFAULT_WAIT_LIVE_TIMEOUT_SEC,
+  resolveHostingOutputs,
+  classifyInvalidationError,
+  makeInvalidationProbe,
+  type InvalidationStatusClient,
+} from './deploy.js';
 
 describe('formatDeploySignal — the machine-readable deploy completion line', () => {
   it('is re-exported by deploy.ts (the public surface external callers import)', () => {
@@ -62,5 +70,127 @@ describe('parseWaitLiveArgs — the --wait-live flag family', () => {
     assert.strictEqual(parseWaitLiveArgs(['--wait-live-timeout=0']).waitLiveTimeoutSec, DEFAULT_WAIT_LIVE_TIMEOUT_SEC);
     assert.strictEqual(parseWaitLiveArgs(['--wait-live-timeout=-5']).waitLiveTimeoutSec, DEFAULT_WAIT_LIVE_TIMEOUT_SEC);
     assert.strictEqual(parseWaitLiveArgs(['--wait-live-timeout=99999']).waitLiveTimeoutSec, DEFAULT_WAIT_LIVE_TIMEOUT_SEC);
+  });
+
+  it('rejects a sub-1s fractional timeout (floors to 0) rather than a 0s budget', () => {
+    // Floor happens BEFORE the range check, so 0.5 → 0 → out of range → default.
+    assert.strictEqual(parseWaitLiveArgs(['--wait-live-timeout=0.5']).waitLiveTimeoutSec, DEFAULT_WAIT_LIVE_TIMEOUT_SEC);
+  });
+});
+
+describe('resolveHostingOutputs — pairing the Hosting output group', () => {
+  // Real CDK logical ids: a nested construct's CfnOutput id = <path><localId><8-hex-hash>.
+  const single = {
+    ApiUrl: 'https://api.example.com/prod/aws-blocks',
+    HostingHostingUrl1A2B3C4D: 'https://d1.cloudfront.net',
+    HostingHostingBuildId8EDD8441: 'build-abc',
+    HostingHostingInvalidationIdF60AF4B3: 'DIST123/INV456',
+  };
+
+  it('pairs url, build id, and invalidation id from the same group', () => {
+    const r = resolveHostingOutputs(single);
+    assert.strictEqual(r.hostingUrl, 'https://d1.cloudfront.net');
+    assert.strictEqual(r.expectedBuildId, 'build-abc');
+    assert.strictEqual(r.invalidationId, 'DIST123/INV456');
+  });
+
+  it('omits the invalidation id for a pure-static deploy (no such output)', () => {
+    const { HostingHostingInvalidationIdF60AF4B3: _omit, ...staticOutputs } = single;
+    const r = resolveHostingOutputs(staticOutputs);
+    assert.strictEqual(r.invalidationId, undefined);
+    assert.strictEqual(r.expectedBuildId, 'build-abc');
+  });
+
+  it('falls back to the early stream url when no HostingUrl output is present', () => {
+    const r = resolveHostingOutputs({ ApiUrl: 'https://api.example.com' }, 'https://early.cloudfront.net');
+    assert.strictEqual(r.hostingUrl, 'https://early.cloudfront.net');
+    assert.strictEqual(r.expectedBuildId, undefined);
+  });
+
+  it('does NOT cross groups on a two-Hosting stack (Web vs WebAdmin overlap)', () => {
+    // `Web` is a prefix of `WebAdmin`; a loose startsWith would let the Web
+    // group pick up WebAdmin's build id. The exact prefix + hex-tail match must
+    // keep each group's ids with their own group.
+    const two = {
+      WebHostingUrl11111111: 'https://web.cloudfront.net',
+      WebHostingBuildId22222222: 'web-build',
+      WebHostingInvalidationId33333333: 'WDIST/WINV',
+      WebAdminHostingUrl44444444: 'https://admin.cloudfront.net',
+      WebAdminHostingBuildId55555555: 'admin-build',
+      WebAdminHostingInvalidationId66666666: 'ADIST/AINV',
+    };
+    const r = resolveHostingOutputs(two);
+    // The first Hosting group (Web) is the frontend --wait-live targets.
+    assert.strictEqual(r.hostingUrl, 'https://web.cloudfront.net');
+    assert.strictEqual(r.expectedBuildId, 'web-build');
+    assert.strictEqual(r.invalidationId, 'WDIST/WINV');
+  });
+});
+
+describe('classifyInvalidationError — terminal vs transient', () => {
+  const named = (name: string): Error => Object.assign(new Error(name), { name });
+
+  it('classifies AccessDenied / AccessDeniedException as terminal', () => {
+    assert.deepStrictEqual(classifyInvalidationError(named('AccessDenied')), { fatal: 'AccessDenied' });
+    assert.deepStrictEqual(classifyInvalidationError(named('AccessDeniedException')), { fatal: 'AccessDeniedException' });
+  });
+
+  it('classifies NoSuchInvalidation / NoSuchDistribution as terminal', () => {
+    assert.deepStrictEqual(classifyInvalidationError(named('NoSuchInvalidation')), { fatal: 'NoSuchInvalidation' });
+    assert.deepStrictEqual(classifyInvalidationError(named('NoSuchDistribution')), { fatal: 'NoSuchDistribution' });
+  });
+
+  it('classifies a missing Region as terminal (SDK v3 clients do not read cdk.json)', () => {
+    assert.deepStrictEqual(classifyInvalidationError(new Error('Region is missing')), { fatal: 'Region is missing' });
+  });
+
+  it('treats throttling / 5xx / timeout as transient (retry)', () => {
+    assert.strictEqual(classifyInvalidationError(named('ThrottlingException')), 'transient');
+    assert.strictEqual(classifyInvalidationError(named('InternalServerError')), 'transient');
+    assert.strictEqual(classifyInvalidationError(named('TimeoutError')), 'transient');
+  });
+});
+
+describe('makeInvalidationProbe — maps the SDK result to a pure outcome', () => {
+  const cmd = (DistributionId: string, Id: string) => ({ DistributionId, Id });
+
+  it("returns 'completed' once the invalidation reaches Completed", async () => {
+    const client: InvalidationStatusClient = {
+      async send() {
+        return { Invalidation: { Status: 'Completed' } };
+      },
+    };
+    const probe = makeInvalidationProbe(client, cmd, 'DIST', 'INV');
+    assert.strictEqual(await probe(1000), 'completed');
+  });
+
+  it("returns 'pending' while still InProgress", async () => {
+    const client: InvalidationStatusClient = {
+      async send() {
+        return { Invalidation: { Status: 'InProgress' } };
+      },
+    };
+    const probe = makeInvalidationProbe(client, cmd, 'DIST', 'INV');
+    assert.strictEqual(await probe(1000), 'pending');
+  });
+
+  it('maps a terminal SDK error to { fatal } (never a doomed retry)', async () => {
+    const client: InvalidationStatusClient = {
+      async send() {
+        throw Object.assign(new Error('AccessDenied'), { name: 'AccessDenied' });
+      },
+    };
+    const probe = makeInvalidationProbe(client, cmd, 'DIST', 'INV');
+    assert.deepStrictEqual(await probe(1000), { fatal: 'AccessDenied' });
+  });
+
+  it("maps a transient SDK error to 'pending' (retry)", async () => {
+    const client: InvalidationStatusClient = {
+      async send() {
+        throw Object.assign(new Error('ThrottlingException'), { name: 'ThrottlingException' });
+      },
+    };
+    const probe = makeInvalidationProbe(client, cmd, 'DIST', 'INV');
+    assert.strictEqual(await probe(1000), 'pending');
   });
 });

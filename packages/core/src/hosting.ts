@@ -952,11 +952,7 @@ export class Hosting extends Construct {
    * deploy-invariant.
    */
   private buildConfigJson(props: HostingProps, buildId: string): Record<string, unknown> {
-    return {
-      ...(props.backendConfig ?? {}),
-      ...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
-      [BLOCKS_BUILD_ID_CONFIG_KEY]: buildId,
-    };
+    return buildConfigJson(props, buildId);
   }
 
   /**
@@ -1023,4 +1019,23 @@ export class Hosting extends Construct {
       hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
     }
   }
+}
+
+/**
+ * Build the deployed `config.json` payload. Pure and exported so a test can
+ * assert the build-id stamp — half of the `--wait-live` contract — directly,
+ * without reaching into the hashed `BucketDeployment` asset.
+ *
+ * When `api` is provided, the config uses a relative `/aws-blocks/api` URL so
+ * the frontend fetches through the same CloudFront domain (no CORS). `buildId`
+ * is stamped under `__blocksBuildId` so a post-deploy liveness poll can tell
+ * this deploy's config from a previously-served one during the CloudFront
+ * cutover (see `scripts/wait-live.ts`); the rest of the body is deploy-invariant.
+ */
+export function buildConfigJson(props: HostingProps, buildId: string): Record<string, unknown> {
+  return {
+    ...(props.backendConfig ?? {}),
+    ...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
+    [BLOCKS_BUILD_ID_CONFIG_KEY]: buildId,
+  };
 }

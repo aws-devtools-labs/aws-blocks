@@ -13,7 +13,8 @@ import { App, Duration, Stack, Token } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
-import { type BlocksStackApi, Hosting } from './hosting.js';
+import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
+import { type BlocksStackApi, buildConfigJson, Hosting } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
 
 // ================================================================
@@ -691,7 +692,17 @@ describe('Hosting', () => {
       assert.equal(buildIdKeys.length, 1, 'exactly one HostingBuildId output should be emitted');
       // The value is the generated build id — a non-empty literal string.
       const value: unknown = outputs[buildIdKeys[0]].Value;
-      assert.ok(typeof value === 'string' && value.length > 0, 'HostingBuildId output value should be a non-empty build id');
+      if (typeof value !== 'string' || value.length === 0) {
+        assert.fail('HostingBuildId output value should be a non-empty build id');
+      }
+
+      // Guard the PRODUCER half of the --wait-live contract: the config this
+      // deploy serves must stamp the SAME build id under BLOCKS_BUILD_ID_CONFIG_KEY
+      // that the HostingBuildId output advertises. Renaming/dropping either side
+      // silently breaks every --wait-live deploy (the poll never matches), so
+      // assert the stamp directly against the output value via the pure seam.
+      const stamp = buildConfigJson({ root: tmpDir, api: MOCK_API }, value)[BLOCKS_BUILD_ID_CONFIG_KEY];
+      assert.equal(stamp, value, 'config stamp must equal the HostingBuildId output value');
     });
 
     it('emits no HostingInvalidationId output for a pure-static deploy (no invalidation issued)', () => {

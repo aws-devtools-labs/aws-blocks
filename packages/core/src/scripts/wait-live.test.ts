@@ -132,6 +132,17 @@ describe('waitForLiveBuild', () => {
     assert.equal(fetch.timeouts[0], 10_000);
   });
 
+  it('caps the per-request timeout at the remaining budget when under 10s', async () => {
+    const clk = fakeClock();
+    // 5s overall budget: the first probe's per-request timeout is capped to the
+    // 5s remaining, not the full 10s — so a stalled request can't run past the
+    // deploy's own budget. Serve a pending config so the loop reaches the probe.
+    const fetch = seqFetch([res(200, PLACEHOLDER)]);
+    await waitForLiveBuild({ ...base, timeoutMs: 5_000, fetch, now: clk.now, sleep: clk.sleep });
+    assert.equal(fetch.timeouts[0], 5_000);
+    assert.ok(fetch.timeouts.every((t) => t >= 1 && t <= 5_000), 'every probe timeout is within the 5s budget');
+  });
+
   it('waits through a stale OLD-build config and goes live only on the matching id', async () => {
     const clk = fakeClock();
     const fetch = seqFetch([res(200, REAL_WITH_OLD_ID), res(200, REAL_WITH_OLD_ID), res(200, REAL_WITH_ID)]);
@@ -200,7 +211,7 @@ describe('waitForLiveBuild', () => {
       let invCalls = 0;
       const invalidationComplete: InvalidationProbe = async () => {
         invCalls += 1;
-        return invCalls >= 3; // completes on the third check
+        return invCalls >= 3 ? 'completed' : 'pending'; // completes on the third check
       };
       const r = await waitForLiveBuild({
         ...base,
@@ -221,7 +232,7 @@ describe('waitForLiveBuild', () => {
       let invCalls = 0;
       const invalidationComplete: InvalidationProbe = async () => {
         invCalls += 1;
-        return true;
+        return 'completed';
       };
       await waitForLiveBuild({ ...base, invalidationComplete, fetch, now: clk.now, sleep: clk.sleep });
       // Attempt 1 config is stale → no invalidation probe; attempt 2 config
@@ -229,18 +240,34 @@ describe('waitForLiveBuild', () => {
       assert.equal(invCalls, 1);
     });
 
-    it('treats an invalidation probe error as not-live-yet and retries', async () => {
+    it('treats a pending invalidation (transient) as not-live-yet and retries', async () => {
       const clk = fakeClock();
       const fetch = seqFetch([res(200, REAL_WITH_ID)]);
       let invCalls = 0;
       const invalidationComplete: InvalidationProbe = async () => {
         invCalls += 1;
-        if (invCalls === 1) throw new Error('throttled');
-        return true;
+        return invCalls === 1 ? 'pending' : 'completed';
       };
       const r = await waitForLiveBuild({ ...base, invalidationComplete, fetch, now: clk.now, sleep: clk.sleep });
       assert.equal(r.live, true);
       assert.equal(r.attempts, 2);
+    });
+
+    it('stops immediately on a TERMINAL invalidation error (never burns the budget)', async () => {
+      const clk = fakeClock();
+      const fetch = seqFetch([res(200, REAL_WITH_ID)]); // config live from the start
+      let invCalls = 0;
+      const invalidationComplete: InvalidationProbe = async () => {
+        invCalls += 1;
+        return { fatal: 'AccessDenied' };
+      };
+      const r = await waitForLiveBuild({ ...base, invalidationComplete, fetch, now: clk.now, sleep: clk.sleep });
+      assert.equal(r.live, false);
+      assert.equal(r.reason, 'fatal');
+      assert.equal(r.fatal, 'AccessDenied');
+      // Stopped on the first terminal result rather than retrying to timeout.
+      assert.equal(invCalls, 1);
+      assert.equal(r.attempts, 1);
     });
 
     it('stops re-probing the invalidation once it has completed', async () => {
@@ -251,7 +278,7 @@ describe('waitForLiveBuild', () => {
       let invCalls = 0;
       const invalidationComplete: InvalidationProbe = async () => {
         invCalls += 1;
-        return true;
+        return 'completed';
       };
       const r = await waitForLiveBuild({ ...base, invalidationComplete, fetch, now: clk.now, sleep: clk.sleep });
       assert.equal(r.live, true);
