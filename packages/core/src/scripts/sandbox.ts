@@ -482,7 +482,10 @@ export interface DestroyRetryDeps {
  * failed, so the bucket blocks the delete and the stack (+ its IAM roles) leaks;
  * we empty them out-of-band — and (2) VPC ENIs that take 60-120s to detach (the
  * backoff). Stack names are resolved once and reused (topology is stable across
- * attempts). Factored out with injectable deps so this behavior is unit-testable.
+ * attempts). Deterministic auth/account failures never reach here: both callers
+ * run an {@link assertAwsCredentials} pre-flight first, so this loop only ever
+ * retries a transient teardown blocker. Factored out with injectable deps so
+ * this behavior is unit-testable.
  */
 export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
 	const retryDelays = deps.retryDelays ?? [60_000, 120_000];
@@ -514,6 +517,12 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 export async function destroySandbox(backendPath: string) {
   return trackCommand('sandbox:destroy', async () => {
     console.log("🗑️  Destroying sandbox...");
+
+    // Fail fast on a missing/expired credential BEFORE the retry loop: a
+    // credential error is deterministic and retrying only burns the backoff.
+    // Mirrors the `sandbox` deploy pre-flight; the retry is for transient
+    // teardown blockers, not auth.
+    await assertAwsCredentials({ command: 'sandbox:destroy', projectRoot: process.cwd() });
 
     // Load .env.local so CDK synth can read project refs and other config.
     try { loadEnvFile('.env.local'); } catch (e: any) {
