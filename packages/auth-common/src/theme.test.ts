@@ -196,3 +196,75 @@ describe('bb-* class contract: every class ui.ts assigns exists in THEME_CSS', (
 		}
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Forced-theme palette contract — a host forcing a palette with
+// `data-bb-theme` on ANY ancestor (per README and the theme.ts doc comment)
+// must get that palette's TOKEN VALUES, not just its `color-scheme`. The dark
+// palette applies at `:root` (always <html>) and inherits down, so a forced
+// subtree only overrides it if the `[data-bb-theme=...]` selector also carries
+// the token values. A rule that sets only `color-scheme` leaves the inherited
+// dark tokens in place — the white-widget-on-dark-surface defect. These scan
+// THEME_CSS structurally; happy-dom does not resolve `prefers-color-scheme`
+// cascades, so a getComputedStyle test here would be unreliable.
+// ---------------------------------------------------------------------------
+
+describe('data-bb-theme forced palette carries token values, not just color-scheme', () => {
+	/** The declaration block (between the matched selector and its closing `}`). */
+	function ruleBody(css: string, selectorPattern: string): string | null {
+		const re = new RegExp(`${selectorPattern}\\s*\\{([^}]*)\\}`);
+		const m = re.exec(css);
+		return m ? (m[1] ?? '') : null;
+	}
+
+	test('forced light overrides the inherited dark palette, not only color-scheme', () => {
+		// The light tokens must be reachable through `[data-bb-theme="light"]`.
+		// A shared `:root, [data-bb-theme="light"]` selector list satisfies this;
+		// a lone `[data-bb-theme="light"] { color-scheme: light }` does not.
+		const lightPalette = ruleBody(THEME_CSS, '\\[data-bb-theme="light"\\]');
+		assert.ok(lightPalette !== null, '[data-bb-theme="light"] selects a rule');
+		assert.ok(
+			/:root\s*,\s*\[data-bb-theme="light"\]\s*\{[^}]*--bb-color-bg:/.test(THEME_CSS),
+			'the light palette tokens are shared with [data-bb-theme="light"] (not :root only), ' +
+				'so a forced-light ancestor overrides the inherited dark tokens',
+		);
+	});
+
+	test('forced light still forces light-scheme UA widgets', () => {
+		assert.ok(
+			/\[data-bb-theme="light"\]\s*\{[^}]*color-scheme:\s*light\b/.test(THEME_CSS),
+			'[data-bb-theme="light"] sets color-scheme: light for UA-drawn widgets',
+		);
+	});
+
+	test('forced dark carries its full token palette', () => {
+		const darkForced = ruleBody(THEME_CSS, '\\[data-bb-theme="dark"\\]');
+		assert.ok(darkForced !== null, '[data-bb-theme="dark"] selects a rule');
+		assert.ok(/--bb-color-bg:\s*#0f1b2a/.test(darkForced ?? ''), 'forced dark declares the dark bg token');
+		assert.ok(/color-scheme:\s*dark\b/.test(darkForced ?? ''), 'forced dark sets color-scheme: dark');
+	});
+
+	test('the dark palette is scoped so a forced-light ancestor is not overridden by it', () => {
+		assert.ok(
+			/:root:not\(\[data-bb-theme="light"\]\)/.test(THEME_CSS),
+			'the prefers-color-scheme dark block is scoped :root:not([data-bb-theme="light"])',
+		);
+	});
+
+	test('the two dark palette blocks carry identical token values (no drift)', () => {
+		// The dark tokens live in two selectors that cannot merge into one list
+		// (one media-gated, one unconditional). They must stay byte-identical;
+		// this pins them so a one-sided edit fails loudly.
+		function darkTokens(selectorPattern: string): string[] {
+			const re = new RegExp(`${selectorPattern}\\s*\\{([^}]*)\\}`);
+			const body = re.exec(THEME_CSS)?.[1] ?? '';
+			return [...body.matchAll(/(--bb-color-[\w-]+):\s*([^;]+);/g)]
+				.map((m) => `${m[1]?.trim()}:${m[2]?.trim()}`)
+				.sort();
+		}
+		const mediaDark = darkTokens(':root:not\\(\\[data-bb-theme="light"\\]\\)');
+		const forcedDark = darkTokens('\\[data-bb-theme="dark"\\]');
+		assert.ok(mediaDark.length >= 12, 'the media-query dark block declares the color tokens');
+		assert.deepStrictEqual(forcedDark, mediaDark, 'forced-dark and media-dark token values match');
+	});
+});

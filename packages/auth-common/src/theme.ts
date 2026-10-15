@@ -31,15 +31,18 @@ export const THEME_STYLE_ID = 'bb-ui-theme';
  * assert against it without a DOM.
  */
 export const THEME_CSS: string = `
-:root {
+:root,
+[data-bb-theme="light"] {
 	/* Opt into both schemes so UA-drawn widgets (checkboxes, <select>,
 	   scrollbars, ::placeholder, autofill) follow the active palette
 	   instead of staying light on a dark surface. */
 	color-scheme: light dark;
 
-	/* Palette — light (default). The dark palette is a single scoped
-	   media query below; keeping the light values only here means each
-	   token has exactly one home and can't drift. */
+	/* Palette — light (default). Shared with the explicit [data-bb-theme="light"]
+	   override so a host forcing light on ANY ancestor overrides the inherited
+	   dark tokens, not just :root. The dark palette is a single scoped media
+	   query below; keeping the light values only here means each token has
+	   exactly one home and can't drift. */
 	--bb-color-bg: #ffffff;
 	--bb-color-surface: #ffffff;
 	--bb-color-surface-alt: #f4f6f9;
@@ -79,6 +82,10 @@ export const THEME_CSS: string = `
    way lets the single light block above double as the explicit-light
    override, so the light palette is written exactly once. */
 @media (prefers-color-scheme: dark) {
+	/* Dark palette (OS-preferred). These twelve values are duplicated in the
+	   [data-bb-theme="dark"] block below and MUST stay byte-identical — the two
+	   selectors can't merge into one list (one is media-gated, one is
+	   unconditional). A test asserts they match; see theme.test.ts. */
 	:root:not([data-bb-theme="light"]) {
 		color-scheme: dark;
 		--bb-color-bg: #0f1b2a;
@@ -103,6 +110,8 @@ export const THEME_CSS: string = `
 }
 
 [data-bb-theme="dark"] {
+	/* Dark palette (forced). Byte-identical to the media-query block above by
+	   contract; theme.test.ts asserts it. */
 	color-scheme: dark;
 	--bb-color-bg: #0f1b2a;
 	--bb-color-surface: #1a2634;

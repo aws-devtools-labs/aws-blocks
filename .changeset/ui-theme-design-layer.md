@@ -26,9 +26,10 @@ with no new runtime framework dependency.
 - `@aws-blocks/blocks` re-exports `injectTheme`, `THEME_CSS`, and
   `THEME_STYLE_ID` from `@aws-blocks/blocks/ui`, and adds a lean
   `@aws-blocks/blocks/theme` subpath that re-exports ONLY the token layer
-  (no `Authenticator`/WebAuthn surface) for non-auth hosts. Both packages
-  are marked `sideEffects: false` so a bundler can drop the unused UI
-  surface.
+  (no `Authenticator`/WebAuthn surface) for non-auth hosts. `@aws-blocks/auth-common`
+  is marked `sideEffects: false` so a bundler can drop the unused UI
+  surface; `@aws-blocks/blocks` is not, because as an aggregator that
+  re-exports side-effecting building blocks it is not side-effect-free.
 - `@aws-blocks/create-blocks-app` templates (`default`, `react`,
   `nextjs`, `demo`, `auth-cognito`) adopt the tokens for their own page
   chrome and todo UI, so the whole page is themed and dark-mode-aware;
