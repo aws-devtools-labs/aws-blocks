@@ -16,6 +16,7 @@ import { createSpecCommand } from './commands/spec_command_factory.js';
 import { createGenerateClientCommand } from './commands/generate_client_command_factory.js';
 import { createVendorizeCommand } from './commands/vendorize_command_factory.js';
 import { createTelemetryCommand } from './commands/telemetry_command_factory.js';
+import { createDbCommand } from './commands/db_command_factory.js';
 import { createHelpCommand } from './commands/help_command_factory.js';
 import { levelFromFlags, setLogLevel } from './logger.js';
 import { cliVersion } from './lib/cli-version.js';
@@ -71,6 +72,7 @@ export function createMainParser(argv: string[]): Argv {
 		.command(createGenerateClientCommand())
 		.command(createVendorizeCommand())
 		.command(createTelemetryCommand())
+		.command(createDbCommand())
 		.command(createHelpCommand())
 		.example('$0 sandbox', 'Deploy and watch a per-developer sandbox stack')
 		.example('$0 deploy --verbose', 'Deploy to production with detailed output')
