@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { deployManifestSchema } from './schema.js';
-import { DeployManifest } from './types.js';
+import type { DeployManifest } from './types.js';
 
 void describe('Deploy Manifest Schema', () => {
   void it('validates a valid SPA manifest', () => {
@@ -600,6 +600,31 @@ void describe('Deploy Manifest Schema', () => {
       issue,
       `Expected edge placement validation issue, got: ${JSON.stringify(result.error?.issues)}`,
     );
+  });
+
+  void it('rejects non-edge types with global placement', () => {
+    for (const type of ['handler', 'http-server'] as const) {
+      const result = deployManifestSchema.safeParse({
+        version: 1,
+        compute: {
+          default: {
+            type,
+            bundle: '/tmp/bundle',
+            handler: 'index.handler',
+            placement: 'global',
+          },
+        },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [{ pattern: '/*', target: 'default' }],
+      });
+      assert.ok(!result.success, `${type} type should reject global placement`);
+      assert.ok(
+        result.error?.issues.some((issue) =>
+          issue.message.includes('require placement to be "regional"'),
+        ),
+        `Expected non-edge placement validation issue, got: ${JSON.stringify(result.error?.issues)}`,
+      );
+    }
   });
 
   // ---- Duplicate route pattern validation ----

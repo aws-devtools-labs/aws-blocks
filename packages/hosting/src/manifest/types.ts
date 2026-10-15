@@ -227,7 +227,12 @@ export type ComputeResource = {
   /** Port for http-server type */
   port?: number;
 
-  /** Where to deploy */
+  /**
+   * Where to deploy this compute resource.
+   *
+   * `global` deploys a Lambda@Edge function and is valid only with
+   * `type: 'edge'`. `handler` and `http-server` compute must use `regional`.
+   */
   placement: 'regional' | 'global';
 
   /** Whether to enable response streaming */
