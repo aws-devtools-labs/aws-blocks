@@ -760,6 +760,26 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         XCTAssertTrue(output.api.contains("-> RealtimeChannel<GetChannel.ResultMessage>"), "return type must qualify the nested type-arg, got:\n\(output.api)")
     }
 
+    func testNestedOIDCClientDecodesAsItsDescriptorWithAWarning() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [
+                { "name": "auth.getSetup", "params": [], "result": { "name": "R", "schema": {
+                    "type": "object", "properties": { "client": { "x-blocks-transferable": "oidc/client" } }, "required": ["client"]
+                }}},
+                { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": { "x-blocks-transferable": "oidc/client" } } }
+            ]
+        }
+        """)
+        XCTAssertTrue(output.api.contains("public let client: JSONValue"), "a nested oidc/client decodes as its descriptor, got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("-> OIDCClient {"), "a direct oidc/client still hydrates, got:\n\(output.api)")
+        XCTAssertEqual(output.warnings.filter { $0.contains("oidc/client") }, [
+            "swift: auth.getSetup returns an oidc/client below the top level, which decodes as JSONValue; return it directly to get an OIDCClient."
+        ])
+    }
+
     func testUnboundTransferableDiagnosticQualifiesDefaultNamespace() throws {
         // A non-namespaced method nests under `_Default`; the diagnostic must
         // name that class, or the printed type is unusable from app scope.

@@ -60,6 +60,7 @@ public struct SwiftCodeGenerator {
         let defaultServerName = model.servers.first.map { "Servers.\(serverPropertyName($0.name))" } ?? "Servers.local"
         let entryPoint = entryPointNames(for: model.apiNamespaces)
         warnings += entryPoint.warnings
+        warnings += specWarnings(for: model)
 
         // Generate one class per namespace
         for (namespace, names) in zip(model.apiNamespaces, entryPoint.names) {
@@ -1104,7 +1105,7 @@ public struct SwiftCodeGenerator {
 
     // MARK: - Operation Emission
 
-    private func qualifiedSwiftTypeName(_ type: ResolvedType, qualifiedNames: [String: String]) -> String {
+    private func qualifiedSwiftTypeName(_ type: ResolvedType, qualifiedNames: [String: String], direct: Bool = false) -> String {
         switch type {
         case .record(let name, _, _, _), .enum(let name, _), .union(let name, _, _):
             return qualifiedNames[name] ?? name
@@ -1113,11 +1114,11 @@ public struct SwiftCodeGenerator {
         case .map(let valueType):
             return "[String: \(qualifiedSwiftTypeName(valueType, qualifiedNames: qualifiedNames))]"
         case .nullable(let inner):
-            return "\(qualifiedSwiftTypeName(inner, qualifiedNames: qualifiedNames))?"
+            return "\(qualifiedSwiftTypeName(inner, qualifiedNames: qualifiedNames, direct: direct))?"
         case .typeReference(let name):
             return qualifiedNames[name] ?? name
         case .transferable(let blocksType, let typeArgs):
-            return transferableTypeName(blocksType, typeArgs) { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) }
+            return transferableTypeName(blocksType, typeArgs, direct: direct) { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) }
         default:
             return swiftTypeNameNoEmit(type)
         }
@@ -1132,7 +1133,7 @@ public struct SwiftCodeGenerator {
         let unboundTag = unboundTransferableTag(operation.result.type)
         let returnType = unboundTag != nil
             ? "BlocksRuntime.UnknownTransferable"
-            : qualifiedSwiftTypeName(operation.result.type, qualifiedNames: qualifiedNames)
+            : qualifiedSwiftTypeName(operation.result.type, qualifiedNames: qualifiedNames, direct: true)
 
         // Build parameter list
         var paramList: [String] = []
@@ -1272,8 +1273,10 @@ public struct SwiftCodeGenerator {
         return blocksType
     }
 
-    private func transferableTypeName(_ blocksType: String, _ typeArgs: [ResolvedType], renderArg: (ResolvedType) -> String) -> String {
+    private func transferableTypeName(_ blocksType: String, _ typeArgs: [ResolvedType], direct: Bool = false, renderArg: (ResolvedType) -> String) -> String {
         guard let binding = knownTransferableBindings[blocksType] else { return "JSONValue" }
+        // Only a direct result hydrates an OIDCClient; below the top level it decodes as its descriptor.
+        if blocksType == "oidc/client", !direct { return "JSONValue" }
         guard binding.isGeneric else { return binding.base }
         let argType = typeArgs.first.map(renderArg) ?? "JSONValue"
         return "\(binding.base)<\(argType)>"

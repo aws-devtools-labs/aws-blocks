@@ -19,5 +19,6 @@ encoding one throws `EncodingError`: transferables are read-only, as on Kotlin.
 
 The three classes are now `final`. They were `public` and not `open`, so only code that imports
 `BlocksRuntime` with `@testable` could subclass them. `FileDownloadHandle` and `FileUploadHandle` are
-also `Sendable` now, so Swift 6 code can pass them between actors. An `oidc/client` below the top level is still
-unsupported.
+also `Sendable` now, so Swift 6 code can pass them between actors. An `oidc/client` below the top
+level, which used to fail to compile, now decodes as its `JSONValue` descriptor, and the generator
+prints a `swift:` line; return it directly to get an `OIDCClient`.
