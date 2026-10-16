@@ -83,22 +83,21 @@ const theme = await store.get(`user:${userId}:theme`);
 
 See [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) for the full API, options, TTL, and conditional writes.
 
-### SQLTable
-Relational database with SQL query support. Uses SQLite locally, DSQL on AWS.
+### DistributedDatabase
+Serverless SQL database backed by Amazon Aurora DSQL, with a local PGlite mock for development.
 
 ```typescript
-import { SQLTable } from '@aws-blocks/blocks';
+import { DistributedDatabase, sql } from '@aws-blocks/blocks';
 
-const db = new SQLTable('app', 'products', {
-  schema: `
-    CREATE TABLE products (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      price REAL
-    )
-  `
+const db = new DistributedDatabase(scope, 'main', {
+  migrationsPath: './aws-blocks/dsql-migrations',
 });
+
+// Data methods run at request time, inside a handler — not at CDK synth time.
+const products = await db.query<{ id: string; name: string }>(sql`SELECT id, name FROM products`);
 ```
+
+See [`packages/bb-distributed-data/README.md`](../bb-distributed-data/README.md) for migrations, transactions, and the Kysely adapter.
 
 ### Secret
 Secure secret storage using AWS Secrets Manager.

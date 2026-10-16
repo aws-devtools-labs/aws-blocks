@@ -65,9 +65,9 @@ test.describe('oidc-dsql-notes', () => {
 		const text = uniq('note');
 		const { body } = await rpc(page.request, 'api.addNote', [text]);
 		expect(body?.error, `JSON-RPC error from addNote: ${JSON.stringify(body?.error)}`).toBeFalsy();
-		// Accept any stable, non-empty id — numeric OR string/UUID. Aurora DSQL has no
-		// SERIAL/SEQUENCE/IDENTITY and steers toward gen_random_uuid()/client-generated ids, so the
-		// most idiomatic solution is UUID-keyed; requiring a numeric id would false-fail it.
+		// Accept any stable, non-empty id — numeric OR string/UUID. Aurora DSQL steers toward
+		// gen_random_uuid()/client-generated ids (identity columns and sequences are also available),
+		// so the most idiomatic solution is UUID-keyed; requiring a numeric id would false-fail it.
 		const id = body?.result?.id;
 		expect(
 			(typeof id === 'number' && Number.isFinite(id)) || (typeof id === 'string' && id.length > 0),

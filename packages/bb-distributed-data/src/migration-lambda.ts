@@ -90,16 +90,14 @@ export function isTransientConnectionError(e: unknown): boolean {
  * This runs on every deploy (idempotent) to ensure the role mapping stays in sync
  * if the app Lambda's IAM role is recreated, and to re-grant DML on any new tables.
  *
- * DSQL Limitations:
- * - ALTER DEFAULT PRIVILEGES is not supported
- * - GRANT ... ON ALL TABLES IN SCHEMA public is not supported (public is a system entity)
- * - We grant on individually enumerated user tables instead
+ * DML is granted on each user table by name, so every table the migrations
+ * create is covered on the deploy that creates it.
  */
 async function provisionAppRole(engine: DsqlEngine, dbRoleName: string, appRoleArn: string): Promise<void> {
   console.log(`[bb-distributed-data] Provisioning DB role '${dbRoleName}' for ${appRoleArn}`);
 
-  // Create the role if it doesn't exist. DSQL doesn't support IF NOT EXISTS on CREATE ROLE,
-  // so we check pg_roles first.
+  // Create the role on the first deploy; checking pg_roles first keeps
+  // CREATE ROLE idempotent across deploys.
   const existing = await engine.query<{ rolname: string }>(
     `SELECT rolname FROM pg_roles WHERE rolname = $1`, [dbRoleName]
   );
@@ -111,9 +109,8 @@ async function provisionAppRole(engine: DsqlEngine, dbRoleName: string, appRoleA
   // Map the DB role to the app Lambda's IAM ARN (idempotent — DSQL ignores duplicate grants)
   await engine.execute(`AWS IAM GRANT ${quoteIdent(dbRoleName)} TO '${escapeString(appRoleArn)}'`);
 
-  // Grant DML on user-created tables in public schema (excluding _migrations).
-  // DSQL does not support "ON ALL TABLES IN SCHEMA public" because public is a system entity.
-  // Instead, enumerate user tables and grant in a single batched statement.
+  // Grant DML on user-created tables in public schema (excluding _migrations),
+  // enumerated by name and granted in a single batched statement.
   const userTables = await engine.query<{ tablename: string }>(
     `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tableowner = 'admin' AND tablename != '_migrations'`
   );

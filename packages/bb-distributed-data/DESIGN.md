@@ -135,27 +135,20 @@ The `DistributedDatabase` class does not wrap errors — engines handle translat
 
 ### Deletion Protection
 
-`DeletionProtectionEnabled` is computed from `removalPolicy`:
-- `destroy` or `sandboxMode=true` → disabled
-- Otherwise → enabled
+`DeletionProtectionEnabled` comes from the stack-wide `defaults`, independently of the per-block `removalPolicy` override:
+- `BlocksPresets.sandbox` → disabled
+- `BlocksPresets.production` → enabled
 
 ### Migration Lambda
 
-- Connects via `pg.Client` + `DsqlSigner.getDbConnectAdminAuthToken()`
+- Connects via `DsqlEngine` (`pg.Pool`) + `DsqlSigner.getDbConnectAdminAuthToken()`
 - Retries with exponential backoff on transient connection errors (cluster may take a moment after creation)
 - `.sql` files bundled into the Lambda package via CDK `commandHooks`
 - `migrationsHash` property triggers re-invocation when files change
 - **Provisions custom DB role** on every deploy (idempotent):
   1. `CREATE ROLE "app_role" WITH LOGIN` (if not exists)
   2. `AWS IAM GRANT "app_role" TO 'arn:aws:iam::...:role/...'` (maps IAM to DB role)
-  3. Per-table `GRANT SELECT, INSERT, UPDATE, DELETE` on user-created tables
-
-### DSQL Permission Model Limitations
-
-- `ALTER DEFAULT PRIVILEGES` — not supported (system entity error)
-- `GRANT ... ON ALL TABLES IN SCHEMA public` — not supported (`public` is a system entity)
-- `GRANT USAGE ON SCHEMA public` — not supported (same reason)
-- Handled by enumerating user tables via `pg_tables` and granting DML individually on each deploy
+  3. Per-table `GRANT SELECT, INSERT, UPDATE, DELETE` on user-created tables in `public`, enumerated via `pg_tables` so tables added by later migrations are granted on the deploy that creates them
 
 ## Mock vs AWS Behavior Differences
 
@@ -165,7 +158,7 @@ The `DistributedDatabase` class does not wrap errors — engines handle translat
 | Available collations differ | String sorting may differ | `dsql-lint` rejects unsupported explicit collations |
 | No 60-min connection timeout | Dev sessions are short | Document only |
 | No 10 MiB / 5-min tx limits | Impractical to measure locally | Document only |
-| CREATE INDEX ASYNC is synchronous | Index immediately available locally | Log warning |
+| `ASYNC` DDL runs synchronously | `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC` complete before the statement returns locally | Document only |
 | `application_name` on the pg connection | Not reported by the mock engine; the AWS `DsqlEngine` reports the BB user-agent chain (see above) | Intentional. Attribution-only. |
 
 ## Connection Management

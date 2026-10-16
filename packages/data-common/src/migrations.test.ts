@@ -100,7 +100,7 @@ test('splitStatements: positional params inside a real $$ body do not break the 
 // treated as ordinary string content.
 
 test('splitStatements: line comment containing a semicolon is not split', () => {
-  const sql = '-- DSQL notes: one DDL per file; no sequences (use UUIDs);\nCREATE TABLE t (id TEXT PRIMARY KEY)';
+  const sql = '-- DSQL notes: one DDL per file; UUID keys distribute well;\nCREATE TABLE t (id TEXT PRIMARY KEY)';
   const result = splitStatements(sql);
   assert.strictEqual(result.length, 1, `expected 1 statement, got: ${JSON.stringify(result)}`);
   assert.ok(result[0].includes('CREATE TABLE t'), `expected the DDL to survive, got: ${result[0]}`);
@@ -134,7 +134,7 @@ test('splitStatements: -- inside a string literal is NOT treated as a comment', 
 });
 
 test('splitStatements: regression — commented DSQL migration yields a single CREATE TABLE', () => {
-  const sql = `-- DSQL notes: at most one DDL statement per migration file; no sequences (use UUIDs);
+  const sql = `-- DSQL notes: at most one DDL statement per migration file; UUID keys distribute well;
 CREATE TABLE IF NOT EXISTS "todos" (
   "id"        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "ownerId"   TEXT NOT NULL,

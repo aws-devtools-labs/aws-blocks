@@ -205,11 +205,32 @@ describe('DsqlMockEngine — CREATE INDEX ASYNC parity', () => {
     );
   });
 
-  it('rejects a partial CREATE INDEX ASYNC (WHERE clause)', async () => {
-    await assert.rejects(
+  it('accepts a partial CREATE INDEX ASYNC (WHERE clause)', async () => {
+    await assert.doesNotReject(
       () => engine.withDdl(() => db.execute(sql`CREATE INDEX ASYNC idx_users_active_email ON users(email) WHERE active = true`)),
-      { name: 'DsqlValidationError' },
     );
+  });
+
+  it('runs ALTER TABLE ASYNC ... VALIDATE CONSTRAINT against existing rows', async () => {
+    await engine.withDdl(() => db.execute(sql`CREATE TABLE accounts (id TEXT PRIMARY KEY, owner TEXT)`));
+    await db.execute(sql`INSERT INTO accounts (id, owner) VALUES (${'orphan'}, ${'missing-user'})`);
+    await engine.withDdl(() => db.execute(
+      sql`ALTER TABLE accounts ADD CONSTRAINT accounts_owner_fk FOREIGN KEY (owner) REFERENCES users (id) NOT VALID`,
+    ));
+    await assert.rejects(
+      () => engine.withDdl(() => db.execute(sql`ALTER TABLE ASYNC accounts VALIDATE CONSTRAINT accounts_owner_fk`)),
+      (e: Error) => {
+        assert.equal(e.name, DistributedDatabaseErrors.QueryFailed);
+        assert.equal((e.cause as { code?: string }).code, '23503', 'the existing orphan row must fail validation');
+        return true;
+      },
+    );
+    await db.execute(sql`DELETE FROM accounts WHERE id = ${'orphan'}`);
+    await engine.withDdl(() => db.execute(sql`ALTER TABLE ASYNC accounts VALIDATE CONSTRAINT accounts_owner_fk`));
+    const constraint = await db.queryOne<{ convalidated: boolean }>(
+      sql`SELECT convalidated FROM pg_constraint WHERE conname = ${'accounts_owner_fk'}`,
+    );
+    assert.equal(constraint?.convalidated, true);
   });
 
   it('rejects a plain CREATE INDEX (no ASYNC)', async () => {
@@ -249,6 +270,57 @@ describe('DsqlMockEngine — CREATE INDEX ASYNC parity', () => {
     await db.execute(sql`INSERT INTO notes (id, body) VALUES (${'n1'}, ${'run ASYNC index later'})`);
     const row = await db.queryOne<{ body: string }>(sql`SELECT body FROM notes WHERE id = ${'n1'}`);
     assert.equal(row?.body, 'run ASYNC index later');
+  });
+
+  it('keeps ASYNC DDL text inside an inline string literal unchanged', async () => {
+    await engine.withDdl(() => db.execute(sql`CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, body TEXT)`));
+    const body = 'ALTER TABLE ASYNC t VALIDATE CONSTRAINT c, then CREATE INDEX ASYNC i ON t (x)';
+    await db.execute(sql`INSERT INTO notes (id, body) VALUES (${'n2'}, 'ALTER TABLE ASYNC t VALIDATE CONSTRAINT c, then CREATE INDEX ASYNC i ON t (x)')`);
+    const row = await db.queryOne<{ body: string }>(sql`SELECT body FROM notes WHERE id = ${'n2'}`);
+    assert.equal(row?.body, body);
+  });
+
+  it('runs ASYNC DDL with comments before and between its keywords', async () => {
+    await engine.withDdl(() => db.execute(sql`CREATE TABLE commented (id TEXT PRIMARY KEY, tag TEXT)`));
+    await engine.withDdl(() => db.execute(
+      sql`-- index the tag column
+/* built asynchronously on DSQL */ CREATE /* c */ INDEX -- line comment
+/* outer /* nested */ still outer */ ASYNC idx_commented_tag ON commented (tag)`,
+    ));
+    const index = await db.queryOne<{ indexname: string }>(
+      sql`SELECT indexname FROM pg_indexes WHERE indexname = ${'idx_commented_tag'}`,
+    );
+    assert.equal(index?.indexname, 'idx_commented_tag');
+    await engine.withDdl(() => db.execute(sql`ALTER TABLE commented ADD CONSTRAINT commented_tag_check CHECK (tag <> '') NOT VALID`));
+    await engine.withDdl(() => db.execute(
+      sql`/* validate */ ALTER TABLE /* outer /* nested */ */ ASYNC commented VALIDATE CONSTRAINT commented_tag_check`,
+    ));
+    const constraint = await db.queryOne<{ convalidated: boolean }>(
+      sql`SELECT convalidated FROM pg_constraint WHERE conname = ${'commented_tag_check'}`,
+    );
+    assert.equal(constraint?.convalidated, true);
+  });
+
+  it('keeps table names that start with "async" intact', async () => {
+    const names = ['async1', 'async_jobs', 'async$x', 'asyncé', 'async\u{10400}', 'async\u0301', 'a\u017Fync'];
+    for (const name of names) {
+      const table = `"${name}"`;
+      await engine.withDdl(() => engine.execute(`CREATE TABLE ${table} (id TEXT PRIMARY KEY)`));
+      await engine.withDdl(() => engine.execute(`ALTER TABLE ${name} ADD COLUMN note TEXT`));
+    }
+    const columns = await db.query<{ table_name: string }>(
+      sql`SELECT table_name FROM information_schema.columns WHERE table_schema = ${'public'} AND column_name = ${'note'}`,
+    );
+    assert.deepEqual(columns.map(c => c.table_name).sort(), [...names].sort());
+  });
+
+  it('ends a line comment at a carriage return', async () => {
+    await engine.withDdl(() => db.execute(sql`CREATE TABLE cr_comment (id TEXT PRIMARY KEY, tag TEXT)`));
+    await engine.withDdl(() => engine.execute('-- index the tag column\rCREATE\fINDEX\vASYNC idx_cr_comment_tag ON cr_comment (tag)'));
+    const index = await db.queryOne<{ indexname: string }>(
+      sql`SELECT indexname FROM pg_indexes WHERE indexname = ${'idx_cr_comment_tag'}`,
+    );
+    assert.equal(index?.indexname, 'idx_cr_comment_tag');
   });
 
   it('runs migrations that use CREATE INDEX ASYNC', async () => {

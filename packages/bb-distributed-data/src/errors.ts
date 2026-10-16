@@ -22,9 +22,10 @@ export const DistributedDatabaseErrors = {
  *
  * INTERNAL, mock-path only — deliberately NOT a member of the public
  * {@link DistributedDatabaseErrors} and not re-exported from any entry point.
- * On the deployed path DSQL rejects unsupported statements (DDL, foreign keys)
- * with SQLSTATE 42501, which is indistinguishable from a genuine grant denial by
- * code alone, so {@link translateDsqlError} lets it fall through to
+ * On the deployed path DSQL rejects a statement the connection's role may not
+ * run (such as DDL on the app's DML-only connection) with SQLSTATE 42501, which
+ * is indistinguishable from a genuine grant denial by code alone, so
+ * {@link translateDsqlError} lets it fall through to
  * `QueryFailed`. A public matchable constant would match locally but never in a
  * deployed app, so it stays off the public surface until a deployed producer
  * exists.
@@ -156,11 +157,12 @@ export function translateDsqlError(e: Error): never {
     throw uniqueConstraintConflict(e);
   }
   // SQLSTATE 42501 (insufficient_privilege) is intentionally NOT special-cased:
-  // on DSQL it covers both a genuine grant denial AND the rejection of an
-  // unsupported statement (DDL, foreign keys), which cannot be told apart by
-  // code alone. Re-tagging every 42501 to `Permission` mislabels an unsupported
-  // FOREIGN KEY as a permission error, so it falls through to `QueryFailed` —
-  // the app-runtime DDL denial is surfaced by the mock's DDL guard, not here.
+  // on DSQL it covers both a genuine grant denial AND the rejection of a
+  // statement the connection's role may not run (such as DDL on the app's
+  // DML-only connection), which cannot be told apart by code alone. Re-tagging
+  // every 42501 to `Permission` would mislabel those rejections, so it falls
+  // through to `QueryFailed` — the app-runtime DDL denial is surfaced by the
+  // mock's DDL guard, not here.
   //
   // Brand the re-tagged connection/query error (stable BB message, raw driver
   // error kept as `cause`) so its name crosses the wire without leaking driver

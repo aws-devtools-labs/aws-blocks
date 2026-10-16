@@ -222,10 +222,9 @@ describe('validateStatement — complex scenarios', () => {
     ));
   });
 
-  it('rejects partial index with ASYNC', () => {
-    assert.throws(
+  it('allows partial index with ASYNC', () => {
+    assert.doesNotThrow(
       () => validateStatement('CREATE INDEX ASYNC idx_active ON users (email) WHERE active = true'),
-      { name: 'DsqlValidationError' },
     );
   });
 
@@ -559,10 +558,9 @@ describe('validateStatement — index key sort order', () => {
     );
   });
 
-  it('rejects a partial index whose WHERE mentions a column like "description"', () => {
-    assert.throws(
+  it('allows a partial index whose WHERE mentions a column like "description"', () => {
+    assert.doesNotThrow(
       () => validateStatement('CREATE INDEX ASYNC idx ON t (name) WHERE description IS NOT NULL'),
-      { name: 'DsqlValidationError' },
     );
   });
 
