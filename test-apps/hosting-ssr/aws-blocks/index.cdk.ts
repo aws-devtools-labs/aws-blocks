@@ -53,9 +53,6 @@ new Hosting(blocksStack, 'Hosting', {
   // are written out of band by the CLI (see test/e2e.test.ts) and read at runtime
   // via getSecret/getConfig in /api/probe/secret.
   environment: {
-    // A new marker forces a new server revision (the web-function CI job's
-    // second-deploy check, scripts/ci/web-function-redeploy.ts).
-    DEPLOY_MARKER: process.env.HOSTING_DEPLOY_MARKER ?? 'initial',
     DEMO_SECRET: secret('DEMO_SECRET'),
     DEMO_CONFIG: config('DEMO_CONFIG'),
   },

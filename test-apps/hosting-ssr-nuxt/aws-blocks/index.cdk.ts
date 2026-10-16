@@ -41,9 +41,6 @@ new Hosting(blocksStack, 'Hosting', {
     process.env.HOSTING_COMPUTE_TYPE === 'web-function'
       ? { type: 'web-function', timeout: cdk.Duration.seconds(30) }
       : { memorySize: 1024, timeout: cdk.Duration.seconds(30) },
-  // A new marker forces a new server revision (the web-function CI job's
-  // second-deploy check, scripts/ci/web-function-redeploy.ts).
-  environment: { DEPLOY_MARKER: process.env.HOSTING_DEPLOY_MARKER ?? 'initial' },
 });
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-ssr-nuxt');

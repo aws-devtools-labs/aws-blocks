@@ -391,9 +391,23 @@ CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framewor
   response headers policy, which applies to every status code including
   4xx/5xx. The policy has the same settings as AWS's managed
   `SecurityHeadersPolicy`, plus `removeHeaders`.
-  - It counts against the account's response headers policy quota.
-  - A BYO `cdn.responseHeadersPolicy` gets a synth warning, because Hosting
-    can't add the removal to it.
+  - It counts against the account's response headers policy quota (20 by
+    default). That's one policy per Web Function stack.
+  - To share one policy across stacks instead, create it once with
+    `removeHeaders` and pass it as `cdn.responseHeadersPolicy` in each stack:
+
+    ```ts
+    // once, e.g. in a shared-infra stack
+    new ResponseHeadersPolicy(shared, 'WebFunctionHeaders', {
+      securityHeadersBehavior: { /* … */ },
+      removeHeaders: ['lambda-web-logstream'],
+    });
+    // in each hosting stack
+    cdn: { responseHeadersPolicy: ResponseHeadersPolicy.fromResponseHeadersPolicyId(this, 'Headers', policyId) }
+    ```
+
+    A BYO policy gets a synth reminder to include the removal, because
+    Hosting can't inspect or extend it.
 - **Native modules.** Synth warns when the bundle contains x86-64 `.node`
   binaries. Web Functions run on Arm64, and Lambda doesn't check that the
   server starts when it activates a revision, so a server that crashes on

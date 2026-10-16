@@ -3,46 +3,68 @@
 //
 // Second-deploy check for `compute.type: 'web-function'` hosting e2e jobs.
 //
-// Sandbox deploys run CloudFormation in Express Mode (rollback disabled), which
-// rejects REPLACEMENT updates. Every Lambda Web Function revision property is
-// create-only, so a construct that updates its revision in place fails on the
-// SECOND sandbox deploy only — CI's fresh creates never see it. This redeploys
-// the sandbox the e2e suite left running (BLOCKS_SANDBOX_KEEP=1) with a changed
-// env var (forcing a new revision), then checks the site still serves.
+// Sandbox deploys use CloudFormation Express Mode, which can't update a Lambda
+// Web Function endpoint. That only breaks the SECOND sandbox deploy, and CI's
+// fresh creates never see it. This redeploys the sandbox the e2e suite left
+// running (BLOCKS_SANDBOX_KEEP=1) with a CODE change: it rewrites the app's
+// deploy-marker module, so the bundle is re-copied, a new revision is created
+// and the endpoint is re-pointed. It then requires the new code to be the one
+// serving, from a Web Function:
+// - the app's deploy-marker route returns the new marker;
+// - the response carries `lambda-web-request-id`.
 //
 // Usage: npx tsx scripts/ci/web-function-redeploy.ts <app-dir>
-import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 
-const appDir = resolve(process.argv[2] ?? '');
+/** Per-app deploy-marker module + the route that returns it. */
+const MARKERS: Record<string, { file: string; route: string }> = {
+  'hosting-ssr-sveltekit': { file: 'src/lib/deploy-marker.ts', route: '/api/deploy-marker' },
+  'hosting-ssr-nuxt': { file: 'server/deploy-marker.ts', route: '/api/deploy-marker' },
+  'hosting-ssr': { file: 'src/deploy-marker.ts', route: '/api/probe/deploy-marker' },
+};
+
 if (!process.argv[2]) {
   console.error('Usage: tsx scripts/ci/web-function-redeploy.ts <app-dir>');
   process.exit(1);
 }
-process.chdir(appDir);
-// The app reads HOSTING_DEPLOY_MARKER into its environment: a new value means a
-// new revision, exactly what an unchanged-but-rebuilt bundle also produces.
-process.env.HOSTING_DEPLOY_MARKER = `redeploy-${Date.now()}`;
+const appDir = resolve(process.argv[2]);
+const marker = MARKERS[basename(appDir)];
+if (!marker) throw new Error(`No deploy-marker module registered for ${basename(appDir)} in ${import.meta.url}`);
 
-const { startSandbox } = await import('@aws-blocks/blocks/scripts');
-await startSandbox({ backendPath: join(appDir, 'aws-blocks', 'index.cdk.ts'), deployOnly: true });
+const markerFile = join(appDir, marker.file);
+const original = readFileSync(markerFile, 'utf-8');
+const value = `redeploy-${Date.now()}`;
+writeFileSync(markerFile, original.replace(/DEPLOY_MARKER = '[^']*'/, `DEPLOY_MARKER = '${value}'`));
 
-const outputs = JSON.parse(readFileSync(join(appDir, '.blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
-  string,
-  Record<string, string>
->;
-const stackOutputs = Object.values(outputs)[0] ?? {};
-const urlKey = Object.keys(stackOutputs).find((k) => k.startsWith('HostingHostingUrl'));
-const url = urlKey ? stackOutputs[urlKey] : undefined;
-if (!url) throw new Error(`HostingHostingUrl* missing from outputs: ${JSON.stringify(stackOutputs)}`);
+try {
+  process.chdir(appDir);
+  const { startSandbox } = await import('@aws-blocks/blocks/scripts');
+  await startSandbox({ backendPath: join(appDir, 'aws-blocks', 'index.cdk.ts'), deployOnly: true });
 
-// The new revision serves: retry briefly while the endpoint re-points.
-let status = 0;
-for (let attempt = 1; attempt <= 10; attempt++) {
-  const res = await fetch(`${url.startsWith('http') ? url : `https://${url}`}/?__redeploy=${Date.now()}`);
-  status = res.status;
-  if (status === 200 && res.headers.get('lambda-web-request-id')) break;
-  await new Promise((r) => setTimeout(r, 6000));
+  const outputs = JSON.parse(readFileSync(join(appDir, '.blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
+    string,
+    Record<string, string>
+  >;
+  const stackOutputs = Object.values(outputs)[0] ?? {};
+  const urlKey = Object.keys(stackOutputs).find((k) => k.startsWith('HostingHostingUrl'));
+  const rawUrl = urlKey ? stackOutputs[urlKey] : undefined;
+  if (!rawUrl) throw new Error(`HostingHostingUrl* missing from outputs: ${JSON.stringify(stackOutputs)}`);
+  const url = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`;
+
+  // Retry briefly while the endpoint re-points to the new revision.
+  let last = 'no response';
+  let served = false;
+  for (let attempt = 1; attempt <= 15 && !served; attempt++) {
+    const res = await fetch(`${url}${marker.route}?__redeploy=${Date.now()}`);
+    const body = (await res.text()).trim();
+    const requestId = res.headers.get('lambda-web-request-id');
+    served = res.status === 200 && body === value && requestId !== null;
+    last = `status ${res.status}, body ${JSON.stringify(body.slice(0, 80))}, lambda-web-request-id ${requestId ?? 'missing'}`;
+    if (!served) await new Promise((r) => setTimeout(r, 6000));
+  }
+  if (!served) throw new Error(`redeploy did not serve the new code from a Web Function: ${last}`);
+  console.log(`✅ redeploy served the new code from a Web Function (${marker.route} → ${value}; ${last})`);
+} finally {
+  writeFileSync(markerFile, original);
 }
-if (status !== 200) throw new Error(`site returned ${status} after redeploy`);
-console.log(`✅ redeploy with a new Web Function revision succeeded; ${url} serves 200`);

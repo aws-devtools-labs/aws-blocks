@@ -10,9 +10,10 @@ import { join } from 'node:path';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import {
   buildSandboxDeployArgs,
+  buildSandboxSynthArgs,
   findExpressUnsafeStacks,
-  previousSandboxStackNames,
   sandboxFailureRecoveryHint,
+  stacksWithExpressUnsafeResources,
 } from './sandbox.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
 
@@ -108,39 +109,65 @@ describe('sandbox Express Mode fallback (Lambda Web Function endpoints)', () => 
     assert.ok(!args.includes('--no-rollback'), 'rollback stays at its default (on)');
   });
 
-  it('reads the stacks the previous sandbox deploy recorded', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sandbox-outputs-'));
+  it('synthesizes once into <outDir>/cdk.out and deploys that assembly', () => {
+    const synth = buildSandboxSynthArgs({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'aws-blocks/index.cdk.ts' });
+    assert.deepStrictEqual(synth.slice(0, 4), ['exec', 'cdk', '--', 'synth']);
+    assert.strictEqual(valueAfter(synth, '--output'), '.blocks-sandbox/cdk.out');
+    assert.ok(synth.includes('sandboxMode=true'));
+    const deploy = buildSandboxDeployArgs({
+      outDir: '.blocks-sandbox',
+      projectRoot: '/app',
+      backendPath: 'aws-blocks/index.cdk.ts',
+      assemblyDir: '.blocks-sandbox/cdk.out',
+    });
+    assert.strictEqual(valueAfter(deploy, '--app'), '.blocks-sandbox/cdk.out', 'no second synth/framework build');
+  });
+
+  it('finds stacks whose synthesized template has a Web Function endpoint', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sandbox-assembly-'));
     try {
-      assert.deepStrictEqual(previousSandboxStackNames(dir), [], 'no outputs before the first deploy');
-      writeFileSync(join(dir, 'outputs.json'), JSON.stringify({ 'app-stack': { HostingHostingUrl: 'x' }, 'edge-stack': {} }));
-      assert.deepStrictEqual(previousSandboxStackNames(dir), ['app-stack', 'edge-stack']);
+      writeFileSync(
+        join(dir, 'manifest.json'),
+        JSON.stringify({
+          artifacts: {
+            WfStack: { type: 'aws:cloudformation:stack', environment: 'aws://123456789012/us-east-1', properties: { templateFile: 'WfStack.template.json', stackName: 'wf-stack' } },
+            PlainStack: { type: 'aws:cloudformation:stack', environment: 'aws://unknown-account/unknown-region', properties: { templateFile: 'PlainStack.template.json' } },
+            Tree: { type: 'cdk:tree' },
+          },
+        }),
+      );
+      writeFileSync(join(dir, 'WfStack.template.json'), JSON.stringify({ Resources: { E: { Type: 'AWS::Lambda::WebFunctionEndpoint' } } }));
+      writeFileSync(join(dir, 'PlainStack.template.json'), JSON.stringify({ Resources: { F: { Type: 'AWS::Lambda::Function' } } }));
+      assert.deepStrictEqual(stacksWithExpressUnsafeResources(dir), [{ stackName: 'wf-stack', region: 'us-east-1' }]);
+      assert.deepStrictEqual(stacksWithExpressUnsafeResources(join(dir, 'missing')), []);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  const fakeCfn = (resources: Record<string, string[] | Error>): CloudFormationClient =>
+  const fakeCfn = (byStack: Record<string, string | Error>) => (): CloudFormationClient =>
     ({
       send: async (cmd: { input: { StackName: string } }) => {
-        const r = resources[cmd.input.StackName];
+        const r = byStack[cmd.input.StackName];
         if (r instanceof Error) throw r;
-        return { StackResourceSummaries: (r ?? []).map((ResourceType) => ({ ResourceType })) };
+        return { Stacks: [{ StackStatus: r }] };
       },
     }) as unknown as CloudFormationClient;
 
-  it('flags only stacks that contain a Web Function endpoint, skipping gone stacks', async () => {
+  it('turns Express off for an existing stack, keeps it for a create, and fails closed on errors', async () => {
     const unsafe = await findExpressUnsafeStacks(
-      ['wf-stack', 'lambda-stack', 'gone-stack'],
+      [{ stackName: 'existing' }, { stackName: 'new' }, { stackName: 'throttled' }, { stackName: 'deleted' }],
       fakeCfn({
-        'wf-stack': ['AWS::Lambda::WebFunction', 'AWS::Lambda::WebFunctionEndpoint'],
-        'lambda-stack': ['AWS::Lambda::Function', 'AWS::ApiGateway::RestApi'],
-        'gone-stack': new Error('Stack does not exist'),
+        existing: 'UPDATE_COMPLETE',
+        new: new Error('Stack with id new does not exist'),
+        throttled: new Error('Rate exceeded'),
+        deleted: 'DELETE_COMPLETE',
       }),
     );
-    assert.deepStrictEqual(unsafe, ['wf-stack']);
+    assert.deepStrictEqual(unsafe, ['existing', 'throttled']);
   });
 
-  it('keeps Express Mode before the first deploy (no recorded stacks)', async () => {
+  it('keeps Express Mode when no stack has an unsafe resource', async () => {
     assert.deepStrictEqual(await findExpressUnsafeStacks([], fakeCfn({})), []);
   });
 });

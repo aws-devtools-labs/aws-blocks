@@ -1178,7 +1178,8 @@ export class HostingConstruct extends Construct {
         Annotations.of(this).addWarningV2(
           '@aws-blocks/hosting:WebFunctionHeaderNotStripped',
           `cdn.responseHeadersPolicy is your own policy, so Hosting can't remove ${removeOriginHeaders.join(', ')} ` +
-            '(internal Web Function log stream name) from responses. Add it to the policy\'s removeHeaders.',
+            "(internal Web Function log stream name) from responses. Make sure the policy's removeHeaders includes it " +
+            '(a shared policy like this avoids one Hosting-created policy per stack).',
         );
       }
     } else if (props.cdn?.contentSecurityPolicy) {

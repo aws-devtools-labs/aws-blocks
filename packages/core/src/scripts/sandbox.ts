@@ -56,6 +56,29 @@ export interface SandboxDeployArgsOptions {
    * see {@link findExpressUnsafeStacks}.
    */
   express?: boolean;
+  /**
+   * Deploy an already-synthesized cloud assembly (`--app <dir>`) instead of
+   * synthesizing from `backendPath` again. The sandbox synthesizes once into
+   * `<outDir>/cdk.out` to inspect the templates, then deploys that output, so
+   * the framework build runs only once.
+   */
+  assemblyDir?: string;
+}
+
+/**
+ * Build the `npm exec cdk -- synth …` argv the sandbox runs first: synthesize
+ * once into `<outDir>/cdk.out`, inspect the templates (see
+ * {@link stacksWithExpressUnsafeResources}), then deploy that assembly.
+ */
+export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+  return [
+    "exec", "cdk", "--", "synth",
+    "--quiet",
+    "--output", `${outDir}/cdk.out`,
+    "--context", `projectRoot=${projectRoot}`,
+    "--context", "sandboxMode=true",
+    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+  ];
 }
 
 /**
@@ -94,6 +117,7 @@ export function buildSandboxDeployArgs({
   projectRoot,
   backendPath,
   express = true,
+  assemblyDir,
 }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
@@ -104,7 +128,7 @@ export function buildSandboxDeployArgs({
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${backendPath}`,
   ];
 }
 
@@ -187,27 +211,34 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("🚀 Deploying to AWS...");
   console.log("   (This may take a few minutes on first deploy)");
 
-  // Express Mode can't update some resources (see findExpressUnsafeStacks). A
-  // FIRST deploy (creates) is fine in Express Mode; check the stacks the previous
-  // sandbox deploy recorded and fall back to a full deploy when needed.
-  const expressUnsafe = await findExpressUnsafeStacks(previousSandboxStackNames(outDir));
-  if (expressUnsafe.length > 0) {
-    console.log(
-      `ℹ️  Express Mode off for this deploy: ${expressUnsafe.join(', ')} contains a Lambda Web Function ` +
-        "endpoint, which Express Mode can't update. Deploying with full stabilization + rollback instead.",
-    );
-  }
+  const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
+  const argOptions = { outDir, projectRoot: process.cwd(), backendPath };
+  const assemblyDir = `${outDir}/cdk.out`;
 
   try {
+    // Synthesize once, so the deploy decision is based on what is about to be
+    // deployed (not on local state that may be missing — a fresh clone, a
+    // cleaned .blocks-sandbox, another machine). The deploy below reuses this
+    // assembly, so the framework build still runs only once.
+    runSync("npm", buildSandboxSynthArgs(argOptions), { stdio: "inherit", env: cdkEnv });
+
+    // Express Mode can't UPDATE some resources (see EXPRESS_UNSAFE_RESOURCE_TYPES);
+    // creating them is fine. Fall back to a full deploy when a stack about to be
+    // deployed has one and already exists — or can't be inspected (fail closed).
+    const expressUnsafe = await findExpressUnsafeStacks(stacksWithExpressUnsafeResources(assemblyDir));
+    if (expressUnsafe.length > 0) {
+      console.log(
+        `ℹ️  Express Mode off for this deploy: ${expressUnsafe.join(', ')} has a Lambda Web Function endpoint, ` +
+          "which Express Mode can't update. Deploying with full stabilization + rollback instead.",
+      );
+    }
+
     runSync(
       "npm",
       // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
       // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
-      buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath, express: expressUnsafe.length === 0 }),
-      {
-        stdio: "inherit",
-        env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
-      },
+      buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir }),
+      { stdio: "inherit", env: cdkEnv },
     );
   } catch (error) {
     buildAndSendEvent({
@@ -399,41 +430,74 @@ export async function listStackBucketNames(cfn: CloudFormationClient, stackName:
  */
 export const EXPRESS_UNSAFE_RESOURCE_TYPES: ReadonlySet<string> = new Set(['AWS::Lambda::WebFunctionEndpoint']);
 
-/** Stack names recorded by the previous sandbox deploy (`<outDir>/outputs.json` keys); [] before the first deploy. */
-export function previousSandboxStackNames(outDir: string): string[] {
-	try {
-		return Object.keys(JSON.parse(readFileSync(`${outDir}/outputs.json`, 'utf-8')) as Record<string, unknown>);
-	} catch {
-		return [];
-	}
+/** A stack in a synthesized cloud assembly. `region` is unset for environment-agnostic stacks. */
+export interface AssemblyStack {
+	stackName: string;
+	region?: string;
 }
 
 /**
- * The deployed stacks (of `stackNames`) that contain a resource in
- * {@link EXPRESS_UNSAFE_RESOURCE_TYPES}. Best-effort: a stack that is gone or
- * unreadable is skipped, so the deploy keeps Express Mode (a create is safe).
+ * The stacks in the synthesized assembly at `assemblyDir` whose template
+ * contains a resource in {@link EXPRESS_UNSAFE_RESOURCE_TYPES}. Reads
+ * `manifest.json` + each stack's template; [] if the assembly can't be read.
+ */
+export function stacksWithExpressUnsafeResources(assemblyDir: string): AssemblyStack[] {
+	type Artifact = {
+		type?: string;
+		environment?: string;
+		displayName?: string;
+		properties?: { templateFile?: string; stackName?: string };
+	};
+	let artifacts: Record<string, Artifact>;
+	try {
+		artifacts = (JSON.parse(readFileSync(join(assemblyDir, 'manifest.json'), 'utf-8')) as { artifacts?: Record<string, Artifact> })
+			.artifacts ?? {};
+	} catch {
+		return [];
+	}
+	const stacks: AssemblyStack[] = [];
+	for (const [id, artifact] of Object.entries(artifacts)) {
+		if (artifact.type !== 'aws:cloudformation:stack' || !artifact.properties?.templateFile) continue;
+		let template: { Resources?: Record<string, { Type?: string }> };
+		try {
+			template = JSON.parse(readFileSync(join(assemblyDir, artifact.properties.templateFile), 'utf-8'));
+		} catch {
+			continue;
+		}
+		const hasUnsafe = Object.values(template.Resources ?? {}).some((r) => EXPRESS_UNSAFE_RESOURCE_TYPES.has(r.Type ?? ''));
+		if (!hasUnsafe) continue;
+		const region = artifact.environment?.split('/')[3];
+		stacks.push({
+			stackName: artifact.properties.stackName ?? id,
+			region: region && region !== 'unknown-region' ? region : undefined,
+		});
+	}
+	return stacks;
+}
+
+/**
+ * The stacks (of `stacks`, each containing a resource Express Mode can't
+ * update) that already exist — so this deploy would UPDATE them. Fails closed:
+ * any error other than "stack does not exist" (credentials, throttling, access)
+ * counts as existing, so a deploy never risks Express Mode's unrecoverable
+ * UPDATE_FAILED state on a guess.
  */
 export async function findExpressUnsafeStacks(
-	stackNames: string[],
-	cfnClient?: CloudFormationClient,
+	stacks: AssemblyStack[],
+	cfnFor?: (region: string | undefined) => CloudFormationClient,
 ): Promise<string[]> {
-	if (stackNames.length === 0) return [];
-	const { CloudFormationClient: Client, ListStackResourcesCommand } = await import('@aws-sdk/client-cloudformation');
-	const cfn = cfnClient ?? new Client({});
+	if (stacks.length === 0) return [];
+	const { CloudFormationClient: Client, DescribeStacksCommand } = await import('@aws-sdk/client-cloudformation');
+	const clientFor = cfnFor ?? ((region: string | undefined) => new Client(region ? { region } : {}));
 	const unsafe: string[] = [];
-	for (const stackName of stackNames) {
+	for (const { stackName, region } of stacks) {
 		try {
-			let token: string | undefined;
-			do {
-				const res = await cfn.send(new ListStackResourcesCommand({ StackName: stackName, NextToken: token }));
-				if ((res.StackResourceSummaries ?? []).some((r) => EXPRESS_UNSAFE_RESOURCE_TYPES.has(r.ResourceType ?? ''))) {
-					unsafe.push(stackName);
-					break;
-				}
-				token = res.NextToken;
-			} while (token);
-		} catch {
-			// stack deleted / not accessible: nothing to update
+			const res = await clientFor(region).send(new DescribeStacksCommand({ StackName: stackName }));
+			const status = res.Stacks?.[0]?.StackStatus;
+			if (status && status !== 'DELETE_COMPLETE') unsafe.push(stackName);
+		} catch (e) {
+			const message = (e as Error).message ?? '';
+			if (!/does not exist/i.test(message)) unsafe.push(stackName);
 		}
 	}
 	return unsafe;
