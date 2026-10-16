@@ -29,7 +29,7 @@
  */
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { AppSetting, SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
@@ -50,6 +50,7 @@ import type { AuthOIDCOptions, CognitoFederatedProvider, ProviderConfig } from '
 import {
 	DEFAULT_CALLBACK_PATH,
 	DEFAULT_SIGNOUT_PATH,
+	signInRoutePathFor,
 } from './auth-oidc.js';
 import { cognitoEnvPrefix, cookieSecretEnvVar } from './utils.js';
 
@@ -352,4 +353,25 @@ export class AuthOIDC<
 	createApi() {
 		return Object.assign(() => ({}), { [Symbol.for('blocks:ApiNamespace')]: 'auth' });
 	}
+
+	/**
+	 * The absolute-within-host path for a provider's sign-in kickoff route.
+	 * Derived from `callbackPath` with no I/O, so it works during synth too
+	 * (e.g. to build a link or a `RawRoute` path at module scope).
+	 */
+	signInRoutePath(providerName: string): string {
+		return signInRoutePathFor(this.callbackPath, providerName);
+	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	requireAuth(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'requireAuth'); }
+	checkAuth(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'checkAuth'); }
+	getCurrentUser(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'getCurrentUser'); }
+	getSignInUrl(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'getSignInUrl'); }
+	handleCallback(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'handleCallback'); }
+	handleCallbackDispatch(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'handleCallbackDispatch'); }
+	handleExchange(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'handleExchange'); }
+	getAuthorizeParams(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'getAuthorizeParams'); }
+	refreshBearerTokens(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'refreshBearerTokens'); }
+	signOut(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'signOut'); }
 }
