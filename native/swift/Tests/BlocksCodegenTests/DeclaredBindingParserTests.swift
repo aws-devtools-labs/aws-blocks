@@ -203,7 +203,7 @@ final class DeclaredBindingParserTests: XCTestCase {
         )
         assertInvalidCatalog(
             catalogSpec(packages: packages, bindings: bindings),
-            contains: "both declare Swift module 'SharedMod'"
+            contains: "declare Swift module 'SharedMod' with different package metadata"
         )
     }
 
@@ -304,14 +304,20 @@ final class DeclaredBindingParserTests: XCTestCase {
         )
     }
 
-    func testOptOutEntryMatchingNoDeclaredPackageIsAnError() {
+    func testOptOutEntryMatchingNoDeclaredPackageWarnsRatherThanFails() throws {
         let optOut = OpenRPCParser(optOutNativePackages: ["exampl-iot-native"])
-        XCTAssertThrowsError(try optOut.parse(data: catalogSpec())) { error in
-            guard case CodegenError.invalidNativeCatalog(let detail) = error else {
-                return XCTFail("Expected CodegenError.invalidNativeCatalog, got \(error)")
-            }
-            XCTAssertTrue(detail.contains("exampl-iot-native"), "got: \(detail)")
-        }
+        let model = try optOut.parse(data: catalogSpec())
+        XCTAssertTrue(
+            model.nativeCatalogWarnings.contains {
+                $0.contains("AWSBLOCKS-NATIVE-006") && $0.contains("exampl-iot-native")
+                    && $0.contains("not declared in x-blocks-native-packages")
+            },
+            "a typo'd opt-out must warn, got:\n\(model.nativeCatalogWarnings.joined(separator: "\n"))"
+        )
+        XCTAssertFalse(
+            model.declaredTransferableBindings.isEmpty,
+            "the real binding must still resolve"
+        )
     }
 
     func testMalformedMetadataIsRejectedEvenWhenTheBindingWouldBeDropped() {
@@ -335,7 +341,50 @@ final class DeclaredBindingParserTests: XCTestCase {
             binding(id: "a", tag: "example-iot/a", export: "deviceHandle", arity: 0),
             binding(id: "b", tag: "example-iot/b", export: "device-handle", arity: 0)
         )
-        assertInvalidCatalog(catalogSpec(bindings: bindings), contains: "which another binding already resolves to")
+        assertInvalidCatalog(catalogSpec(bindings: bindings), contains: "already resolved by export 'deviceHandle'")
+    }
+
+    func testOneExportDeclaredAtTwoGenericAritiesIsAnError() {
+        // `DeviceHandle` and `DeviceHandle<T>` cannot both be the emitted type.
+        let bindings = bindingsCatalog(
+            binding(id: "a", tag: "example-iot/a", export: "deviceHandle", arity: 0),
+            binding(id: "b", tag: "example-iot/b", export: "deviceHandle", arity: 1)
+        )
+        assertInvalidCatalog(catalogSpec(bindings: bindings), contains: "at generic arity 0")
+    }
+
+    func testOneSwiftModuleFromTwoDifferentProductsIsAnError() {
+        let packages = """
+        { "schemaVersion": 1, "packages": { \
+        "example-iot-native": { "platforms": { "swift": { "package": \
+        { "identity": "example-iot-native", "product": "ProductA", "module": "SharedMod" } } } }, \
+        "other-native": { "platforms": { "swift": { "package": \
+        { "identity": "example-iot-native", "product": "ProductB", "module": "SharedMod" } } } } } }
+        """
+        let bindings = bindingsCatalog(
+            binding(id: "a", tag: "example-iot/a", export: "handleOne", arity: 0),
+            binding(id: "b", tag: "example-iot/b", package: "other-native", export: "handleTwo", arity: 0)
+        )
+        assertInvalidCatalog(
+            catalogSpec(packages: packages, bindings: bindings),
+            contains: "with different package metadata"
+        )
+    }
+
+    func testTwoCatalogKeysNamingOneSwiftPackageIsAccepted() throws {
+        let packages = """
+        { "schemaVersion": 1, "packages": { \
+        "example-iot-native": { "platforms": { "swift": { "package": \
+        { "identity": "example-iot-native", "product": "ExampleIotNative", "module": "ExampleIotNative" } } } }, \
+        "example-iot-alias": { "platforms": { "swift": { "package": \
+        { "identity": "example-iot-native", "product": "ExampleIotNative", "module": "ExampleIotNative" } } } } } }
+        """
+        let bindings = bindingsCatalog(
+            binding(id: "a", tag: "example-iot/a", export: "handleOne", arity: 0),
+            binding(id: "b", tag: "example-iot/b", package: "example-iot-alias", export: "handleTwo", arity: 0)
+        )
+        let model = try parser.parse(data: catalogSpec(packages: packages, bindings: bindings))
+        XCTAssertEqual(model.declaredTransferableBindings.count, 2, "one package under two keys must resolve both")
     }
 
     func testNonTransferableBindingKindIsIgnored() throws {

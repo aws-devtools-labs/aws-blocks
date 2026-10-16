@@ -55,7 +55,10 @@ public struct SwiftCodeGenerator {
     /// Rejected rather than qualified: Swift has no syntax to force module resolution.
     private func rejectModulesShadowedByEmittedNames(_ model: CodegenModel) throws {
         let declared = declaredNames.names
-        for module in declaredModuleImports(model) where declared.contains(module) {
+        // `runtimePrefix` is what makes the runtime shadowable: an unqualified reference
+        // resolves fine beside a same-named declaration, a qualified one does not.
+        let qualified = runtimePrefix.isEmpty ? [] : [String(runtimePrefix.dropLast())]
+        for module in declaredModuleImports(model) + qualified where declared.contains(module) {
             throw CodegenError.invalidNativeCatalog(
                 "Swift module '\(module)' is also declared as a type by the generated code; "
                     + "a declaration in scope shadows a module of the same name"
@@ -69,7 +72,11 @@ public struct SwiftCodeGenerator {
     }
 
     private func emitSources(from model: CodegenModel) -> GeneratedSources {
-        var modelLines: [String] = ["import Foundation", ""]
+        var modelLines = ["import Foundation"]
+        if !runtimePrefix.isEmpty {
+            modelLines.append("import BlocksRuntime")
+        }
+        modelLines.append("")
         var apiLines: [String] = ["import Foundation", "import BlocksRuntime"]
         apiLines.append(contentsOf: declaredModuleImports(model).map { "import \($0)" })
         apiLines.append("")

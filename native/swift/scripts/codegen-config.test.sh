@@ -63,7 +63,7 @@ check "empty opt-out list keeps the typed binding"   0 "ExampleIotNative.DeviceH
 check "mistyped key is named"                        1 "declares unknown key(s): optOutNativePackage" '{"optOutNativePackage":["example-iot-native"]}'
 check "mistyped key beside a correct one is named"   1 "declares unknown key(s): optOutNativePackage" '{"optOutNativePackages":[],"optOutNativePackage":["example-iot-native"]}'
 check "an absent key is named"                      1 "optOutNativePackages" '{}'
-check "mistyped identity is reported"                1 "is not declared in x-blocks-native-packages" '{"optOutNativePackages":["exampl-iot-native"]}'
+check "mistyped identity is reported"                0 "AWSBLOCKS-NATIVE-006" '{"optOutNativePackages":["exampl-iot-native"]}'
 check "a JSON array is rejected as not an object"    1 "is not a JSON object" '["example-iot-native"]'
 check "malformed JSON is named as such"              1 "is not valid codegen configuration" '{"optOutNativePackages":'
 
@@ -158,7 +158,7 @@ printf '%s' '{"optOutNativePackages":["no-such-package"]}' > "$APP/Sources/App/b
 echo 'let appMarker = 0' > "$APP/Sources/App/Marker.swift"
 
 PLUGIN_OUT="$(swift build --package-path "$APP" 2>&1)" || true
-if grep -qF "opted-out package 'no-such-package' is not declared" <<<"$PLUGIN_OUT"; then
+if grep -qF "opted-out package 'no-such-package' has nothing to opt out of" <<<"$PLUGIN_OUT"; then
   echo "ok plugin forwarded the config path to the generator"
 else
   echo "FAIL plugin forwards the config: the generator never read it" >&2
@@ -179,7 +179,7 @@ if [[ -z "$SCOPED_API" ]] || ! grep -qF "ExampleIotNative.DeviceHandle" "$SCOPED
   echo "FAIL config scoping: no generated typed binding, so the generator never ran" >&2
   echo "$PLUGIN_OUT" | tail -5 >&2
   FAILED=1
-elif grep -qF "opted-out package 'no-such-package' is not declared" <<<"$PLUGIN_OUT"; then
+elif grep -qF "opted-out package 'no-such-package' has nothing to opt out of" <<<"$PLUGIN_OUT"; then
   echo "FAIL config scoping: a config outside the spec's directory was forwarded" >&2
   FAILED=1
 else
@@ -197,7 +197,7 @@ printf '%s' '{"optOutNativePackages":["no-such-package"]}' > "$CMD/Sources/App/b
 
 CMD_OUT="$(cd "$CMD" && swift package --allow-writing-to-package-directory \
   generate-code-from-blocks-spec --target App 2>&1)" || true
-if grep -qF "opted-out package 'no-such-package' is not declared" <<<"$CMD_OUT"; then
+if grep -qF "opted-out package 'no-such-package' has nothing to opt out of" <<<"$CMD_OUT"; then
   echo "ok command plugin forwarded the config path to the generator"
 else
   echo "FAIL command plugin forwards the config: the generator never read it" >&2
