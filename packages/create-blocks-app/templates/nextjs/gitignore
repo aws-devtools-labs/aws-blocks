@@ -12,8 +12,15 @@ dist/
 /.blocks-sandbox/
 cdk.out/
 
-# Environment
-.env*.local
+# Secrets and key material — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials
+.aws/
 
 # IDE
 .idea/

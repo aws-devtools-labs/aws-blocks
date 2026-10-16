@@ -6,3 +6,13 @@ cdk.out/
 aws-blocks/client.js
 aws-blocks/blocks.spec.json
 .bb-data/
+
+# Secrets and key material — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials
+.aws/
