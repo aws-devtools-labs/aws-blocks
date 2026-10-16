@@ -11,6 +11,15 @@ export {
 } from '../telemetry/index.js';
 export { listConfig, removeConfig, runConfigCli, setConfig } from './config.js';
 export { type ConsoleOptions, openConsole } from './console.js';
+export {
+	DEPLOY_HISTORY_FILE,
+	type DeployHistoryRecord,
+	type DeployRecorder,
+	appendDeployHistoryRecord,
+	createDeployRecorder,
+	getGitSha,
+	summarizeError,
+} from './deploy-history.js';
 export { type DeployedStack, type DeployOptions, deploy } from './deploy.js';
 export { type DeploymentTarget, resolveDeploymentTarget } from './deployment-target.js';
 export { type DeployedStackOptions, type DestroyOptions, deployedStackExists, destroy } from './destroy.js';
