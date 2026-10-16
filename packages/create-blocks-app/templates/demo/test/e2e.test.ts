@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import type { api as apiType, hello as helloType } from 'aws-blocks';
+import type { api as apiType, authApi as authApiType, hello as helloType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -12,6 +12,7 @@ installCookieJar();
 
 let server: ChildProcess | null = null;
 let api: typeof apiType;
+let authApi: typeof authApiType;
 let hello: typeof helloType;
 const serverPort = 3000;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
@@ -31,6 +32,7 @@ test.before(async () => {
 
   const mod = await import('aws-blocks');
   api = mod.api;
+  authApi = mod.authApi;
   hello = mod.hello;
 
   // Wait for the Blocks server to be ready without depending on the sample API.
@@ -71,10 +73,28 @@ test('greet returns message and timestamp', async () => {
   assert.ok(typeof result.timestamp === 'number');
 });
 
-test('KV Store - set and get', async () => {
+test('KV Store - rejects signed-out callers', async () => {
+  await authApi.setAuthState({ action: 'signOut' });
+  await assert.rejects(api.getValue('test-key'), { status: 401 });
+  await assert.rejects(api.setValue('test-key', 'test-value'), { status: 401 });
+});
+
+test('KV Store - set and get (signed in, keys isolated per user)', async () => {
+  // The installed cookie jar carries the session cookie across calls.
+  const signUp = (username: string) =>
+    authApi.setAuthState({ action: 'signUp', username, password: 'Password1!' });
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const alice = await signUp(`alice-${suffix}`);
+  assert.strictEqual(alice.state, 'signedIn', `signUp: ${alice.error ?? ''}`);
   const setResult = await api.setValue('test-key', 'test-value');
   assert.strictEqual(setResult.success, true);
+  assert.strictEqual(await api.getValue('test-key'), 'test-value');
 
-  const value = await api.getValue('test-key');
-  assert.strictEqual(value, 'test-value');
+  // A different user sees their own namespace, not alice's value.
+  const bob = await signUp(`bob-${suffix}`);
+  assert.strictEqual(bob.state, 'signedIn', `signUp: ${bob.error ?? ''}`);
+  assert.strictEqual(await api.getValue('test-key'), null);
+
+  await authApi.setAuthState({ action: 'signOut' });
 });
