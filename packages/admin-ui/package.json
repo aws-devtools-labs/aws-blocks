@@ -1,0 +1,79 @@
+{
+  "name": "@aws-blocks/admin-ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Blocks Admin UI — local dashboard for Blocks applications: deployments, logs, resources, environments, and cost.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "directory": "packages/admin-ui"
+  },
+  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/admin-ui#readme",
+  "bugs": {
+    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+  },
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "type": "module",
+  "files": [
+    "dist",
+    ".next",
+    "!.next/cache",
+    "app",
+    "src",
+    "public",
+    "next.config.ts",
+    "postcss.config.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./server": {
+      "types": "./dist/server/start.d.ts",
+      "default": "./dist/server/start.js"
+    },
+    "./doctor": {
+      "types": "./dist/server/doctor.d.ts",
+      "default": "./dist/server/doctor.js"
+    },
+    "./contract": {
+      "types": "./dist/contract/v1.d.ts",
+      "default": "./dist/contract/v1.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "node ../../scripts/generate-block-catalog.mjs",
+    "dev": "node ../../scripts/generate-block-catalog.mjs && tsc -p tsconfig.server.json && next dev --port 4400",
+    "build": "tsc -p tsconfig.server.json && next build",
+    "test": "node --test 'dist/**/*.test.js'"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudformation": "^3.700.0",
+    "@aws-sdk/client-cloudwatch": "^3.700.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.700.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.700.0",
+    "@aws-sdk/client-cost-explorer": "^3.700.0",
+    "@aws-sdk/client-dynamodb": "^3.700.0",
+    "@aws-sdk/client-ssm": "^3.700.0",
+    "@aws-sdk/client-sts": "^3.700.0",
+    "@aws-sdk/credential-providers": "^3.700.0",
+    "@aws-sdk/lib-dynamodb": "^3.700.0",
+    "@tanstack/react-query": "^5.62.0",
+    "@tanstack/react-table": "^8.20.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.460.0",
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^2.6.0",
+    "typescript": "^5.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0"
+  }
+}
