@@ -429,8 +429,8 @@ prop (on `HostingConstruct`, or on `Hosting` from `@aws-blocks/core`):
 | `frontDoor` | What serves the app |
 |---|---|
 | omitted / `'cloudfront'` | The global CloudFront CDN (default): edge cache, WAF, custom domain, streaming, skew protection. |
-| `{ kind: 'alb' }` | A regional Application Load Balancer (no CDN): asset-proxy Lambda, SSR/image Lambda targets, same-origin API forwarder; regional WAF, access logs and alarms. |
-| `{ kind: 'apiGateway', api?: 'http' \| 'rest' }` | Amazon API Gateway (no CDN, no VPC, scale-to-zero); SSR responses are buffered. |
+| `{ kind: 'alb' }` | A regional Application Load Balancer (no CDN): asset-proxy Lambda, SSR/image Lambda targets, same-origin API forwarder; regional WAF, access logs and alarms. SSR responses are buffered. |
+| `{ kind: 'apiGateway', api?: 'http' \| 'rest' }` | Amazon API Gateway (no CDN, no VPC, scale-to-zero). `'http'` (default) buffers SSR responses. `'rest'` streams them, but needs a custom `domain`: its own URL carries the `/prod` stage, which the app's root-relative links miss, so synth fails without one (`RestFrontDoorNeedsDomainError`). |
 | `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` | A thin CloudFront edge in front of a full ALB router (`Hosting` from `@aws-blocks/core` only). |
 | `'none'` | No front door: a public S3 website bucket (HTTP only, static sites only; the client calls the API cross-origin). |
 | `{ kind: 'custom', door }` | Your own door (see below). |
@@ -438,8 +438,20 @@ prop (on `HostingConstruct`, or on `Hosting` from `@aws-blocks/core`):
 There is no feature check: a door applies the features the app asks for
 (custom domain, WAF, logging, alarms, geo) as far as it supports them. An ALB,
 for example, has no edge, so it has no edge cache or geo restriction. `'none'`
-is the one door that refuses an app: it fails synth for an app with a server,
-because a website bucket only serves static files.
+fails synth for an app with a server, because a website bucket only serves
+static files.
+
+Every door except `'none'` serves the API on the app's own origin: `/aws-blocks/*`
+(RPC and sign-in) and each of the backend's raw routes. The ALB and API Gateway
+doors serve static files through an asset-proxy Lambda that answers like the
+CloudFront door: a missing file 404s (the SPA fallback is for extensionless
+paths only), and each file keeps the `Cache-Control` it was uploaded with.
+
+A door that invokes the server without streaming (the ALB, the stacked door's
+ALB router, the API Gateway HTTP API) gets a server built in buffered mode. Next.js
+is the exception: its OpenNext build targets a streaming API Gateway REST
+integration, so serve Next.js through CloudFront, the `'rest'` door, or a door
+that streams.
 
 ### Bring your own front door
 
@@ -478,6 +490,19 @@ export const myDoor = defineFrontDoor({
 new Hosting(stack, 'Hosting', { root: '..', api: stack, frontDoor: { kind: 'custom', door: myDoor } });
 ```
 
+**Streaming or buffered.** A door that invokes the server without streaming
+(an ALB Lambda target, an API Gateway HTTP API integration, a `BUFFERED`
+Function URL) declares `serverResponse: 'buffered'`, and AWS Blocks builds the
+server to answer with a complete response. The default is `'streaming'`.
+
+```ts
+export const myAlbDoor = defineFrontDoor({
+  service: 'my-alb',
+  serverResponse: 'buffered', // the ALB invokes the server without streaming
+  build: buildMyAlb, // your build: an ALB whose default target is origins.server.fn
+});
+```
+
 **What the door receives (`DoorInput`).**
 
 - `app`: the app facts. `buildId`, `basePath`, `assetPrefix`, `spaFallback`,
@@ -487,8 +512,9 @@ new Hosting(stack, 'Hosting', { root: '..', api: stack, frontDoor: { kind: 'cust
 - `origins`: what AWS Blocks provisioned.
   - `assets`: `{ bucket, prefix, sourceDir }`. The private bucket and the
     `builds/<buildId>/` prefix.
-  - `server`: `{ fn, url, streaming }`. The Function URL is created on first
-    read.
+  - `server`: `{ fn, url, streaming }`. `streaming` says whether the server
+    streams its response (see `serverResponse`). The Function URL is created on
+    first read, in the matching invoke mode.
   - `image`: `{ fn, url, pathPrefix }`.
   - `api`: `{ url, host, stagePath, paths, authPaths }`. `paths` is
     `/aws-blocks/*` plus every raw route; `authPaths` is `/aws-blocks/auth/*`.

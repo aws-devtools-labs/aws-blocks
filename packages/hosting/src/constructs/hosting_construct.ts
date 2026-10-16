@@ -414,8 +414,14 @@ export type HostingConstructProps = {
    *   Lambda, and proxies `/aws-blocks/*` same-origin to the backend natively
    *   (no forwarder Lambda). Best for a SPA/SSR app that wants no CDN and no
    *   always-on ALB baseline. Edge features (edge cache, per-route headers,
-   *   skew-pin, geo) and response streaming are not available. Choose the
-   *   flavor with `api`: `'http'` (default) or `'rest'`.
+   *   skew-pin, geo) are not available. Choose the flavor with `api`:
+   *   `'http'` (default; SSR responses are buffered) or `'rest'` (streamed SSR;
+   *   requires `domain`).
+   *
+   * Every door except `'none'` routes `/aws-blocks/*` and the backend's raw
+   * routes to the API same-origin. A door that invokes the server without
+   * streaming (ALB, the HTTP API, a custom door with `serverResponse:
+   * 'buffered'`) gets a server built in buffered mode.
    * - `{ kind: 'custom', door }` — bring your own front door, written as one
    *   `build` function (see {@link FrontDoor} and `defineFrontDoor`).
    *
@@ -451,6 +457,12 @@ export type HostingConstructProps = {
          * the `api` prop; enables cookie auth with no CORS.
          */
         backendApiUrl?: string;
+        /**
+         * Extra path patterns that must reach the backend (the backend's raw
+         * routes), beyond `/aws-blocks/*`. Set by the Blocks integration layer;
+         * each gets a listener rule to the API forwarder.
+         */
+        backendApiPaths?: string[];
       }
     | {
         kind: 'apiGateway';
@@ -461,9 +473,10 @@ export type HostingConstructProps = {
          * `'rest'` is a REST API: it invokes the SSR/image Lambdas with
          * `lambda:InvokeFunction` (no Function-URL body-hash mismatch), but a bare
          * REST `execute-api` URL always carries a **stage path** (`/prod/`), which
-         * breaks root-absolute asset URLs — so `'rest'` is only suitable behind a
-         * **custom domain** (base-path mapping to the stage) or a CloudFront edge,
-         * not as a bare standalone door for a root SPA.
+         * breaks root-absolute asset URLs — so `'rest'` requires a **custom
+         * domain** (base-path mapping to the stage); without `domain`, synth
+         * fails with `RestFrontDoorNeedsDomainError`. `'rest'` streams SSR
+         * responses; `'http'` buffers them.
          * @default 'http'
          */
         api?: 'rest' | 'http';
@@ -476,6 +489,12 @@ export type HostingConstructProps = {
          * HTTPS URL natively — no forwarder Lambda (unlike the ALB door).
          */
         backendApiUrl?: string;
+        /**
+         * Extra path patterns that must reach the backend (the backend's raw
+         * routes), beyond `/aws-blocks/*`. Set by the Blocks integration layer;
+         * each gets a route proxied to the same path on the backend.
+         */
+        backendApiPaths?: string[];
       }
     | {
         /** BYO — a customer-authored front door. */
@@ -569,6 +588,12 @@ export class HostingConstruct extends Construct {
    * the same input, plus `upstream`.
    */
   readonly doorInput: DoorInput;
+  /**
+   * How the front door invokes the server-rendering compute: `'buffered'` for a
+   * door that invokes it without streaming (ALB, API Gateway HTTP API, a custom
+   * door with `serverResponse: 'buffered'`), else `'streaming'`.
+   */
+  readonly serverResponse: 'streaming' | 'buffered';
   /**
    * What the front door handed back: its service id, public `url`, and the
    * `originHandle` a door stacked in front of it attaches to.
@@ -675,6 +700,12 @@ export class HostingConstruct extends Construct {
     const buildId = manifest.buildId ?? generateBuildId();
     this.buildId = buildId;
 
+    // A bare REST API URL carries its stage (`https://{id}.execute-api…/prod/`),
+    // but an app links from the root (`/assets/…`, `/aws-blocks/api`,
+    // `/.blocks-sandbox/config.json`), and those miss the stage (403). A
+    // custom domain's base-path mapping serves the stage at the domain root.
+    assertRestDoorAddressable(props.frontDoor, props.domain);
+
     // Skew-protection cookie must not outlive the build artifacts it pins
     // to. A `maxAge` longer than `buildRetentionDays` lets a returning
     // viewer present a cookie for a build whose `builds/<id>/` prefix the
@@ -740,6 +771,10 @@ export class HostingConstruct extends Construct {
     // ---- 2. Compute resources ----
     const computeEntries = Object.entries(manifest.compute);
     const hasCompute = computeEntries.length > 0;
+    // How the selected door invokes the server, known before the compute is
+    // built: a door that invokes it without streaming gets a buffered server.
+    const serverResponse = serverResponseFor(props.frontDoor);
+    this.serverResponse = serverResponse;
 
     for (const [name, resource] of computeEntries) {
       if (resource.type === 'edge') {
@@ -793,6 +828,7 @@ export class HostingConstruct extends Construct {
         skipRegionValidation: props.skipRegionValidation,
         skipFunctionUrl: isSsrCompute,
         environment: props.compute?.environment,
+        ...(isSsrCompute && serverResponse === 'buffered' ? { responseMode: 'buffered' as const } : {}),
       });
 
       this.computeFunctions.set(name, computeConstruct.function);
@@ -1751,7 +1787,7 @@ export class HostingConstruct extends Construct {
         built = buildFrontDoor(this, s3WebsiteDoor, { ...this.doorInput, plan }, { wiringCheck: false }).result;
         service = s3WebsiteDoor.service;
       } else if (fd?.kind === 'alb') {
-        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName, backendApiUrl);
+        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName, backendApiUrl, fd.backendApiPaths);
         built = buildFrontDoor(
           this,
           albDoor,
@@ -1780,7 +1816,7 @@ export class HostingConstruct extends Construct {
         // SSR/image Lambdas) plus native same-origin backend proxy. `api` picks
         // the HTTP API v2 (default) vs a REST API (lambda:InvokeFunction — no
         // Function-URL body-hash issue).
-        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName, backendApiUrl);
+        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName, backendApiUrl, fd.backendApiPaths);
         built = buildFrontDoor(
           this,
           apiGatewayDoor,
@@ -2328,7 +2364,13 @@ export class HostingConstruct extends Construct {
           ? {
               fn: serverFn,
               url: this.computeFunctionUrls.get(serverName),
-              streaming: manifest.compute?.[serverName]?.streaming !== false,
+              // The truth about the server as built: a Lambda Web Adapter server
+              // streams unless the door needs it buffered; a native handler
+              // streams as its build declared.
+              streaming:
+                manifest.compute?.[serverName]?.type === 'http-server'
+                  ? this.serverResponse === 'streaming'
+                  : manifest.compute?.[serverName]?.streaming !== false,
             }
           : undefined,
       image: imageFn instanceof LambdaFunction && imageUrl ? { fn: imageFn, url: imageUrl } : undefined,
@@ -2344,6 +2386,51 @@ export class HostingConstruct extends Construct {
     });
   }
 }
+
+/**
+ * How the selected front door invokes the server-rendering compute. Known
+ * before the compute is built, so the server answers in a form the door can
+ * carry: an ALB Lambda target (also the router of the stacked door) and an API
+ * Gateway HTTP API integration invoke it without streaming; the CloudFront
+ * default and the API Gateway REST door stream; a bring-your-own door says so
+ * with `serverResponse` (default `'streaming'`).
+ */
+const serverResponseFor = (frontDoor: HostingConstructProps['frontDoor']): 'streaming' | 'buffered' => {
+  if (typeof frontDoor !== 'object') return 'streaming';
+  switch (frontDoor.kind) {
+    case 'alb':
+      return albDoor.serverResponse ?? 'buffered';
+    case 'apiGateway':
+      return (frontDoor.api ?? 'http') === 'rest' ? 'streaming' : 'buffered';
+    case 'custom':
+      return frontDoor.door.serverResponse ?? 'streaming';
+    default:
+      return 'streaming';
+  }
+};
+
+/**
+ * Fail synth for an API Gateway REST door with no custom domain (see the call
+ * site). Making the stage the app's base path automatically is not possible:
+ * each framework bakes its base path into the build from its own config, and
+ * the AWS Blocks client fetches `/.blocks-sandbox/config.json` from the root.
+ */
+const assertRestDoorAddressable = (
+  frontDoor: HostingConstructProps['frontDoor'],
+  domain: HostingConstructProps['domain'],
+): void => {
+  if (typeof frontDoor !== 'object' || frontDoor.kind !== 'apiGateway' || frontDoor.api !== 'rest') return;
+  if (domain) return;
+  throw new HostingError('RestFrontDoorNeedsDomainError', {
+    message:
+      "frontDoor { kind: 'apiGateway', api: 'rest' } has no custom domain. A REST API's own URL carries the `/prod` " +
+      "stage path, so the app's root-relative links (its assets, `/aws-blocks/api`, `/.blocks-sandbox/config.json`) " +
+      'resolve outside the stage and get 403.',
+    resolution:
+      "Add `domain` (its base-path mapping serves the stage at the domain root), or use `api: 'http'` (the HTTP " +
+      "API's `$default` stage has no path), or another door (the CloudFront default, `{ kind: 'alb' }`).",
+  });
+};
 
 /**
  * Walk a directory looking for files matching any of the given

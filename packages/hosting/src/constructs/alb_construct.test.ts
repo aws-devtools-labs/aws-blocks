@@ -118,7 +118,7 @@ describe('AlbConstruct — BYO VPC vs default', () => {
 });
 
 describe('AlbConstruct — same-origin backend routing (plan.backend)', () => {
-  it('forwards /aws-blocks/* + /aws-blocks-auth/* to one ingress via a forwarder Lambda (single-compute)', () => {
+  it('forwards /aws-blocks/* (RPC + sign-in) to one ingress via a forwarder Lambda (single-compute)', () => {
     const plan: CapabilityPlan = {
       ...staticPlan,
       backend: {
@@ -126,8 +126,8 @@ describe('AlbConstruct — same-origin backend routing (plan.backend)', () => {
       },
     };
     const t = synth(plan);
-    // 2 routes + 1 redirect + 2 API paths (/aws-blocks/* + /aws-blocks-auth/*) = 5 rules.
-    t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 5);
+    // 2 routes + 1 redirect + 1 API rule (/aws-blocks/*, which covers /aws-blocks/auth/*) = 4 rules.
+    t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 4);
     // The forwarder target group preserves multiple Set-Cookie headers.
     t.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
       TargetType: 'lambda',

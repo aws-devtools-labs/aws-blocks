@@ -489,15 +489,16 @@ export interface HostingProps {
    *
    * What CloudFront does at the edge (edge caching, per-route response headers,
    * skew-pin, geo) is not available on an ALB. The ALB proxies the same-origin
-   * API (`/aws-blocks/*`) through a forwarder Lambda, so cookie auth works with
-   * no CORS.
+   * API (`/aws-blocks/*` and the backend's raw routes) through a forwarder
+   * Lambda, so cookie auth works with no CORS. SSR responses are buffered.
    *
    * Pass `{ kind: 'apiGateway', … }` to serve behind an Amazon API Gateway
    * instead — the serverless, no-VPC, scale-to-zero sibling of the ALB door.
-   * It owns routing and proxies `/aws-blocks/*` same-origin natively (no
-   * forwarder Lambda). Choose the flavor with `api`: `'http'` (HTTP API v2,
-   * default) or `'rest'`. Edge features and response streaming are not
-   * available.
+   * It owns routing and proxies `/aws-blocks/*` and the raw routes same-origin
+   * natively (no forwarder Lambda). Choose the flavor with `api`: `'http'`
+   * (HTTP API v2, default; SSR responses are buffered) or `'rest'` (streamed
+   * SSR; requires `domain`, since its own URL carries the `/prod` stage — synth
+   * fails without one). Edge features are not available.
    *
    * Pass `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` to STACK the two — a
    * thin CloudFront edge (TLS, cache, security headers, a BYO edge web ACL) whose
@@ -917,31 +918,30 @@ export class Hosting extends Construct {
       // (its single default behavior → the ALB), so CloudFront's ONE origin is
       // the ALB and the ALB routes to everything. The internal CF → ALB hop is
       // HTTP (no cert on the ALB); the viewer hop is HTTPS at the edge.
+      // Every door that proxies the API same-origin is handed every path that
+      // must reach the backend: `/aws-blocks/*` (added by the L3) plus this
+      // backend's raw routes, so it can't silently drop one — the same set the
+      // CloudFront default turns into behaviors (`addApiBehaviors`).
       frontDoor: cfOverRouter
         ? {
             kind: 'alb',
             vpc: cfOverRouter.vpc,
             internal: cfOverRouter.internal,
             backendApiUrl: props.api?.apiUrl,
+            ...(props.api ? { backendApiPaths: backendApiPathsFor(this.ownerRootIdFor(props.api)) } : {}),
           }
         : typeof props.frontDoor === 'object' &&
             props.api &&
             'kind' in props.frontDoor &&
-            props.frontDoor.kind === 'custom'
+            (props.frontDoor.kind === 'custom' ||
+              props.frontDoor.kind === 'alb' ||
+              props.frontDoor.kind === 'apiGateway')
           ? {
               ...props.frontDoor,
               backendApiUrl: props.api.apiUrl,
-              // A bring-your-own door is handed every path that must reach the
-              // backend: `/aws-blocks/*` (added by the L3) plus this backend's
-              // raw routes, so it can't silently drop one.
-              backendApiPaths: rawRouteBehaviors(this.ownerRootIdFor(props.api)).map((r) => r.pattern),
+              backendApiPaths: backendApiPathsFor(this.ownerRootIdFor(props.api)),
             }
-          : typeof props.frontDoor === 'object' &&
-              props.api &&
-              'kind' in props.frontDoor &&
-              (props.frontDoor.kind === 'alb' || props.frontDoor.kind === 'apiGateway')
-            ? { ...props.frontDoor, backendApiUrl: props.api.apiUrl }
-            : (props.frontDoor as HostingConstructProps['frontDoor']),
+          : (props.frontDoor as HostingConstructProps['frontDoor']),
     };
 
     const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
@@ -1318,6 +1318,11 @@ function rawRouteBehaviors(ownerRootId: string): Array<{ path: string; pattern: 
     behaviors.push({ path: route.path, pattern });
   }
   return behaviors;
+}
+
+/** The raw-route path patterns a non-CloudFront door must route to the backend. */
+function backendApiPathsFor(ownerRootId: string): string[] {
+  return rawRouteBehaviors(ownerRootId).map((r) => r.pattern);
 }
 
 /**

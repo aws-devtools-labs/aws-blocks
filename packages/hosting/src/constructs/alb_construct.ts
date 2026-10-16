@@ -23,6 +23,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { CfnWebACL, CfnWebACLAssociation } from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
+import { HostingError } from '../hosting_error.js';
 import type { CapabilityPlan, RouteKind } from '../plan/types.js';
 import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 import { generateAlbApiProxyCode } from './alb_api_proxy.js';
@@ -62,12 +63,22 @@ export type AlbConstructProps = {
    * — the native ALB metrics (`Alarms`), not CloudFront's metric set.
    */
   monitoring?: boolean;
+  /**
+   * Every path pattern the single-compute (`'*'`) backend serves — the
+   * `DoorInput.origins.api.paths`: `/aws-blocks/*` plus the backend's raw
+   * routes. Each reaches the API forwarder, as each gets a CloudFront behavior
+   * on the CloudFront door.
+   * @default ['/aws-blocks/*']
+   */
+  apiPaths?: readonly string[];
 };
 
 /** ALB listener rule priority bands (lower number = evaluated first). */
 const API_PRIORITY_BASE = 1;
 const REDIRECT_PRIORITY_BASE = 100;
 const ROUTE_PRIORITY_BASE = 1000;
+/** An ALB listener rule holds at most 5 condition values (a hard limit). */
+const MAX_PATHS_PER_RULE = 5;
 
 export class AlbConstruct extends Construct {
   readonly loadBalancer: elbv2.ApplicationLoadBalancer;
@@ -161,13 +172,15 @@ export class AlbConstruct extends Construct {
     // a small forwarder Lambda target (ALB can't target an external HTTPS URL, so
     // a Lambda relays it) — the ALB analogue of CloudFront's addApiBehaviors, so
     // the API is same-origin with the frontend (session cookies flow, no CORS). A
-    // lone `'*'` origin is the single-compute case (`/aws-blocks/*` + auth subtree
-    // → one backend); a named namespace routes `/aws-blocks/api/{ns}/*`. These
-    // rules win over the route/catch-all rules (lowest priority numbers).
+    // lone `'*'` origin is the single-compute case: every API path (`/aws-blocks/*`,
+    // which covers sign-in at `/aws-blocks/auth/*`, plus the backend's raw routes)
+    // → one backend; a named namespace routes `/aws-blocks/api/{ns}/*`. These
+    // rules win over the route/catch-all rules (lowest priority numbers). A rule
+    // holds at most 5 path values, so the paths are packed 5 to a rule.
     let apiPriority = API_PRIORITY_BASE;
     for (const origin of plan.backend?.origins ?? []) {
       const ns = origin.namespace;
-      const paths = ns === '*' ? ['/aws-blocks/*', '/aws-blocks-auth/*'] : [`/aws-blocks/api/${ns}/*`];
+      const paths = ns === '*' ? [...new Set(props.apiPaths ?? ['/aws-blocks/*'])] : [`/aws-blocks/api/${ns}/*`];
       const idSuffix = ns === '*' ? 'Default' : ns;
       const apiProxy = new LambdaFunction(this, `ApiProxy${idSuffix}`, {
         runtime: DEFAULT_NODE_RUNTIME,
@@ -190,10 +203,20 @@ export class AlbConstruct extends Construct {
         // Requires the LAMBDA target type (set explicitly above for the validator).
         multiValueHeadersEnabled: true,
       });
-      for (const pattern of paths) {
+      for (let i = 0; i < paths.length; i += MAX_PATHS_PER_RULE) {
+        if (apiPriority >= REDIRECT_PRIORITY_BASE) {
+          throw new HostingError('TooManyApiPathsError', {
+            message:
+              `The ALB front door needs more than ${REDIRECT_PRIORITY_BASE - API_PRIORITY_BASE} listener rules ` +
+              `for the backend's API paths (${paths.length} paths, ${MAX_PATHS_PER_RULE} per rule).`,
+            resolution:
+              'Group the raw routes under fewer path prefixes (a parameterized route `/hooks/{id}` is one `/hooks/*` ' +
+              'pattern), or move them under `/aws-blocks/`.',
+          });
+        }
         listener.addTargetGroups(`ApiRoute${apiPriority}`, {
           priority: apiPriority++,
-          conditions: [elbv2.ListenerCondition.pathPatterns([pattern])],
+          conditions: [elbv2.ListenerCondition.pathPatterns(paths.slice(i, i + MAX_PATHS_PER_RULE))],
           targetGroups: [apiTg],
         });
       }

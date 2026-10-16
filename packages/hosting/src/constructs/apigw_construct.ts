@@ -10,9 +10,10 @@
  *   - `$default`      → the SSR server Lambda (or the asset proxy for a static
  *     site, which serves index.html on a miss for SPA fallback).
  *   - image routes    → the image-opt Lambda.
- *   - `/aws-blocks/*` + `/aws-blocks-auth/*` → an HTTP proxy integration
- *     straight to the backend API Gateway (same-origin; no forwarder Lambda
- *     needed, unlike ALB — HTTP API can proxy an external HTTPS URL natively).
+ *   - every API path (`/aws-blocks/*` plus the backend's raw routes) → an HTTP
+ *     proxy integration straight to the backend API Gateway (same-origin; no
+ *     forwarder Lambda needed, unlike ALB — HTTP API can proxy an external
+ *     HTTPS URL natively).
  *
  * Not provided (an app that asks for these deploys without them — there is no
  * feature check): no global edge cache, no per-route response-header
@@ -20,7 +21,7 @@
  * ~10 MB payload / ~6 MB response cap. Stage-level config (WAF, TLS/domain,
  * access logs, throttle) applies to the whole API, not per route.
  */
-import { CfnOutput, Duration } from 'aws-cdk-lib';
+import { Annotations, CfnOutput, Duration } from 'aws-cdk-lib';
 import { ApiMapping, DomainName, HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration, HttpUrlIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { Code, Function as LambdaFunction, type IFunction } from 'aws-cdk-lib/aws-lambda';
@@ -31,7 +32,13 @@ import { Construct } from 'constructs';
 import type { CapabilityPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
-import { backendBaseUrl, globToProxyPath } from './apigw_routes.js';
+import {
+  APIGW_DEFAULT_ROUTE_QUOTA,
+  apiPathToRoute,
+  backendBaseUrl,
+  DEFAULT_API_PATHS,
+  globToProxyPath,
+} from './apigw_routes.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 export type ApiGatewayConstructProps = {
@@ -42,6 +49,13 @@ export type ApiGatewayConstructProps = {
   imageComputeName?: string;
   /** Custom domain(s) — a regional cert + DomainName + API mapping + Route 53 alias. */
   domain?: ApiGwCustomDomain;
+  /**
+   * Every path pattern the single-compute (`'*'`) backend serves — the
+   * `DoorInput.origins.api.paths`: `/aws-blocks/*` plus the backend's raw
+   * routes. Each becomes a route proxied to the same path on the backend.
+   * @default ['/aws-blocks/*']
+   */
+  apiPaths?: readonly string[];
 };
 
 export class ApiGatewayConstruct extends Construct {
@@ -87,24 +101,30 @@ export class ApiGatewayConstruct extends Construct {
     // Same-origin backend routing (native HTTP proxy — HTTP API can proxy an
     // external HTTPS URL directly, no forwarder Lambda). Each backend origin
     // path-routes its namespace to that compute's ingress. A lone `'*'` origin
-    // is the single-compute case (the whole `/aws-blocks/*` + `/aws-blocks-auth/*`
-    // subtree → one backend); a named namespace routes `/aws-blocks/api/{ns}/*`.
+    // is the single-compute case: every API path (`/aws-blocks/*`, which covers
+    // sign-in at `/aws-blocks/auth/*`, plus the backend's raw routes) → one
+    // backend; a named namespace routes `/aws-blocks/api/{ns}/*`.
+    const backendPaths = new Set<string>();
     for (const origin of plan.backend?.origins ?? []) {
       // Split the ingress URL on the `/aws-blocks/api` suffix (token-safe) to get
       // the backend base — the same URL shape whether it is a Lambda API Gateway,
       // a container ALB, or a BYOC endpoint.
       const base = backendBaseUrl(origin.ingress.url); // https://…/prod
       if (origin.namespace === '*') {
-        this.api.addRoutes({
-          path: '/aws-blocks/{proxy+}',
-          methods: [HttpMethod.ANY],
-          integration: new HttpUrlIntegration('BackendRpc', `${base}/aws-blocks/{proxy}`),
-        });
-        this.api.addRoutes({
-          path: '/aws-blocks-auth/{proxy+}',
-          methods: [HttpMethod.ANY],
-          integration: new HttpUrlIntegration('BackendAuth', `${base}/aws-blocks-auth/{proxy}`),
-        });
+        let i = 0;
+        for (const pattern of new Set(props.apiPaths ?? DEFAULT_API_PATHS)) {
+          const route = apiPathToRoute(pattern);
+          if (!route || backendPaths.has(route.path)) continue;
+          backendPaths.add(route.path);
+          // The first id stays `BackendRpc` (the `/aws-blocks/*` route), so an
+          // existing deploy's integration keeps its logical id.
+          const id = i++ === 0 ? 'BackendRpc' : `BackendRoute${i - 1}`;
+          this.api.addRoutes({
+            path: route.path,
+            methods: [HttpMethod.ANY],
+            integration: new HttpUrlIntegration(id, `${base}${route.target}`),
+          });
+        }
       } else {
         const ns = origin.namespace;
         this.api.addRoutes({
@@ -119,10 +139,17 @@ export class ApiGatewayConstruct extends Construct {
     const seen = new Set<string>();
     for (const entry of plan.routes.entries) {
       const path = globToProxyPath(entry.pattern);
-      if (path === null || seen.has(path)) continue;
-      if (path.startsWith('/aws-blocks/') || path.startsWith('/aws-blocks-auth/')) continue; // backend owns these
+      if (path === null || seen.has(path) || backendPaths.has(path)) continue;
+      if (path.startsWith('/aws-blocks/')) continue; // backend owns these
       seen.add(path);
       this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: integrationForKind(entry.kind) });
+    }
+    const routeCount = seen.size + backendPaths.size + 1; // + $default
+    if (routeCount > APIGW_DEFAULT_ROUTE_QUOTA) {
+      Annotations.of(this).addWarning(
+        `The API Gateway front door defines ${routeCount} routes; an HTTP API allows ${APIGW_DEFAULT_ROUTE_QUOTA} by default. ` +
+          'Request a quota increase, or group raw routes under fewer path prefixes.',
+      );
     }
 
     this.url = this.api.apiEndpoint; // https://<id>.execute-api.<region>.amazonaws.com

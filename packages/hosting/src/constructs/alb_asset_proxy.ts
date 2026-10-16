@@ -17,9 +17,12 @@
  *
  * Behaviour mirrors the CloudFront static branch:
  *   - strip a configured basePath prefix before the S3 lookup,
- *   - directory-index / SPA fallback for extensionless paths,
+ *   - directory-index / SPA fallback for extensionless paths (the SPA fallback
+ *     skips `/.well-known/`, as on CloudFront),
  *   - map to `builds/<buildId>/<path>` and return the bytes with the object's
- *     Content-Type; a miss is a 404 (or index.html under SPA fallback).
+ *     Content-Type and its stored Cache-Control (a default only when the
+ *     object has none); a miss is a 404 — a missing file with an extension
+ *     (`/missing.js`, `/.env`) never falls back to `index.html`.
  */
 
 /**
@@ -69,13 +72,24 @@ function stripBasePath(uri) {
 }
 
 // Extensionless paths resolve like the CloudFront static branch: SPA →
-// /index.html; multi-page → /<path>/index.html (directory index).
+// /index.html (except under /.well-known/); multi-page → /<path>/index.html
+// (directory index). A path with an extension is looked up as-is.
 function resolveIndex(uri) {
   const seg = uri.substring(uri.lastIndexOf('/') + 1);
-  if (seg.indexOf('.') !== -1) return uri; // has an extension already
-  if (SPA_FALLBACK) return '/index.html';
+  if (SPA_FALLBACK) {
+    return seg.indexOf('.') === -1 && uri.indexOf('/.well-known/') !== 0 ? '/index.html' : uri;
+  }
   if (uri.charAt(uri.length - 1) === '/') return uri + 'index.html';
+  if (seg.indexOf('.') !== -1) return uri; // has an extension already
   return uri + '/index.html';
+}
+
+// The object's own Cache-Control (set per file at upload); a default only when
+// it has none: HTML always revalidates, anything else revalidates too (an
+// unhashed file must not be pinned for a year).
+function cacheControlFor(stored, isHtml) {
+  if (stored) return stored;
+  return isHtml ? 'no-cache, no-store, must-revalidate' : 'public, max-age=0, must-revalidate';
 }
 
 async function readStream(body) {
@@ -87,7 +101,7 @@ async function readStream(body) {
 async function fetchKey(key) {
   const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
   const buf = await readStream(res.Body);
-  return { buf, contentType: res.ContentType || contentTypeFor(key) };
+  return { buf, contentType: res.ContentType || contentTypeFor(key), cacheControl: res.CacheControl };
 }
 
 exports.handler = async (event) => {
@@ -96,7 +110,7 @@ exports.handler = async (event) => {
   uri = resolveIndex(uri);
   const key = (KEY_PREFIX ? KEY_PREFIX.replace(/\\/+$/, '') + '/' : '') + uri.replace(/^\\/+/, '');
   try {
-    const { buf, contentType } = await fetchKey(key);
+    const { buf, contentType, cacheControl } = await fetchKey(key);
     const isHtml = contentType.indexOf('text/html') === 0;
     return {
       statusCode: 200,
@@ -104,25 +118,13 @@ exports.handler = async (event) => {
       isBase64Encoded: true,
       headers: {
         'content-type': contentType,
-        // HTML must always revalidate; hashed assets are immutable-friendly but
-        // the ALB path leaves long-term caching to the caller's own CDN if any.
-        'cache-control': isHtml ? 'no-cache, no-store, must-revalidate' : 'public, max-age=31536000, immutable',
+        'cache-control': cacheControlFor(cacheControl, isHtml),
       },
       body: buf.toString('base64'),
     };
   } catch (err) {
-    // On a miss, SPA sites fall back to index.html so client-side routing works.
-    if (SPA_FALLBACK && key.slice(-10) !== 'index.html') {
-      try {
-        const idxKey = (KEY_PREFIX ? KEY_PREFIX.replace(/\\/+$/, '') + '/' : '') + 'index.html';
-        const { buf } = await fetchKey(idxKey);
-        return {
-          statusCode: 200, statusDescription: '200 OK', isBase64Encoded: true,
-          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache, no-store, must-revalidate' },
-          body: buf.toString('base64'),
-        };
-      } catch (_e) { /* fall through to 404 */ }
-    }
+    // A miss is a 404. Extensionless SPA paths already resolved to index.html
+    // above, so a missing file here (/missing.js, /.env) is really missing.
     return {
       statusCode: 404, statusDescription: '404 Not Found', isBase64Encoded: false,
       headers: { 'content-type': 'text/plain; charset=utf-8' },

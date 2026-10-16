@@ -2403,17 +2403,15 @@ describe('Hosting', () => {
       });
     });
 
-    it("api: 'rest' selects a REST API (for use behind a custom domain / CloudFront)", () => {
+    it("api: 'rest' without a custom domain fails synth (its URL's `/prod` stage breaks root-relative links)", () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, 'ApiGwRestStack', { env: { account: '111111111111', region: 'us-east-1' } });
 
-      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'apiGateway', api: 'rest' } });
-
-      const t = Template.fromStack(stack);
-      t.resourceCountIs('AWS::ApiGateway::RestApi', 1);
-      t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
-      t.resourceCountIs('AWS::CloudFront::Distribution', 0);
+      assert.throws(
+        () => new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'apiGateway', api: 'rest' } }),
+        (err: Error) => err.name === 'RestFrontDoorNeedsDomainError',
+      );
     });
 
     it("api: 'rest' + a custom domain wires a regional cert + DomainName + Route 53 (root base-path mapping)", () => {
@@ -2460,6 +2458,56 @@ describe('Hosting', () => {
       t.hasResourceProperties('AWS::Lambda::Function', {
         Environment: { Variables: { ASSET_KEY_PREFIX: Match.stringLikeRegexp('^builds/') } },
       });
+    });
+  });
+
+  describe("every door routes the backend's raw routes same-origin (like the CloudFront default)", () => {
+    /** Path values of every ALB listener rule. */
+    const albPaths = (t: Template): string[] =>
+      Object.values(t.findResources('AWS::ElasticLoadBalancingV2::ListenerRule')).flatMap((r) =>
+        (r.Properties.Conditions as Array<{ PathPatternConfig?: { Values: string[] } }>).flatMap(
+          (c) => c.PathPatternConfig?.Values ?? [],
+        ),
+      );
+    const cases: Array<[string, HostingProps['frontDoor'], (t: Template) => string[]]> = [
+      ['alb', { kind: 'alb' }, albPaths],
+      ['stacked', { kind: 'stacked', edge: 'cloudfront', router: 'alb' }, albPaths],
+      [
+        'apiGateway (http)',
+        { kind: 'apiGateway' },
+        (t) => Object.values(t.findResources('AWS::ApiGatewayV2::Route')).map((r) => String(r.Properties.RouteKey)),
+      ],
+    ];
+    for (const [label, frontDoor, routed] of cases) {
+      it(`${label}: GET /hooks/door-probe and /users/{id} reach the backend`, () => {
+        createSpaBuildOutput(tmpDir);
+        registerRoute({ method: 'GET', path: '/hooks/door-probe', handler: async () => {} });
+        registerRoute({ method: 'GET', path: '/users/{id}', handler: async () => {} });
+        const stack = new Stack(new App(), `RawRoutes-${label.replace(/\W/g, '')}`, {
+          env: { account: '111111111111', region: 'us-east-1' },
+        });
+        new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor });
+        const paths = routed(Template.fromStack(stack)).join(' ');
+        assert.match(paths, /\/hooks\/door-probe/, `${label} routes the raw route (got: ${paths})`);
+        assert.match(paths, /\/users\/(\*|\{proxy\+\})/, `${label} routes the parameterized raw route`);
+        assert.doesNotMatch(paths, /aws-blocks-auth/, 'no stale /aws-blocks-auth path');
+      });
+    }
+
+    it('apiGateway (rest, custom domain): the raw route is a REST resource', () => {
+      createSpaBuildOutput(tmpDir);
+      registerRoute({ method: 'GET', path: '/hooks/door-probe', handler: async () => {} });
+      const stack = new Stack(new App(), 'RawRoutesRest', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        frontDoor: { kind: 'apiGateway', api: 'rest' },
+        domain: { domainName: 'app.example.com', hostedZoneId: 'Z1234567890ABC' },
+      });
+      const parts = Object.values(Template.fromStack(stack).findResources('AWS::ApiGateway::Resource')).map((r) =>
+        String(r.Properties.PathPart),
+      );
+      assert.ok(parts.includes('door-probe'), `REST resources: ${parts.join(', ')}`);
     });
   });
 

@@ -37,9 +37,15 @@ export type AlbDoorResult = FrontDoorResult & {
 /** The built-in ALB front door. */
 export const albDoor = defineFrontDoor<AlbDoorInput, AlbDoorResult>({
   service: 'alb',
+  // A Lambda target is invoked without streaming.
+  serverResponse: 'buffered',
 
   build(scope, input) {
-    const alb = new AlbConstruct(scope, 'Alb', input.alb);
+    // Route every API path the app has (`/aws-blocks/*` + the raw routes).
+    const alb = new AlbConstruct(scope, 'Alb', {
+      ...input.alb,
+      apiPaths: input.alb.apiPaths ?? input.origins.api?.paths,
+    });
     return {
       url: alb.url,
       originHandle: {
