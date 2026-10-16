@@ -68,4 +68,51 @@ final class TransferableDescriptorTests: XCTestCase {
             )
         }
     }
+
+    func testSubjectDefaultsToTransferableAndIsOverridable() throws {
+        let tag = "example-iot/device-link"
+        let cases: [([String: Any], String)] = [
+            ([:], "Transferable for '\(tag)' expected a string '__blocks' tag"),
+            (["__blocks": 1], "Transferable for '\(tag)' expected a string '__blocks' tag"),
+            (["__blocks": ""], "Transferable for '\(tag)' expected a non-empty '__blocks' tag"),
+            (["__blocks": "other/tag"], "Transferable expected tag '\(tag)', got 'other/tag'")
+        ]
+        for (descriptor, expected) in cases {
+            XCTAssertEqual(dataCorruptedDescription { _ = try validateTransferableDescriptor(descriptor, expectedTag: tag) }, expected)
+        }
+        XCTAssertEqual(
+            dataCorruptedDescription {
+                _ = try validateTransferableDescriptor([:], expectedTag: tag, subject: "UnknownTransferable")
+            },
+            "UnknownTransferable for '\(tag)' expected a string '__blocks' tag"
+        )
+    }
+
+    func testUnknownTransferableKeepsItsOwnSubjectInEveryMessage() throws {
+        let tag = "example-iot/device-link"
+        let expected = [
+            "UnknownTransferable for '\(tag)' expected a string '__blocks' tag",
+            "UnknownTransferable for '\(tag)' expected a non-empty '__blocks' tag",
+            "UnknownTransferable expected tag '\(tag)', got 'other/tag'"
+        ]
+        let descriptors: [[String: Any]] = [[:], ["__blocks": ""], ["__blocks": "other/tag"]]
+        for (descriptor, message) in zip(descriptors, expected) {
+            XCTAssertEqual(
+                dataCorruptedDescription { _ = try UnknownTransferable.fromJSON(descriptor, expectedTag: tag) },
+                message
+            )
+        }
+    }
+
+    private func dataCorruptedDescription(_ body: () throws -> Void) -> String {
+        do {
+            try body()
+            return "<no error>"
+        } catch let error as DecodingError {
+            guard case .dataCorrupted(let context) = error else { return "\(error)" }
+            return context.debugDescription
+        } catch {
+            return "\(error)"
+        }
+    }
 }

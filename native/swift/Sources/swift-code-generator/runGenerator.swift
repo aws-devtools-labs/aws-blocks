@@ -36,7 +36,11 @@ func reportSiblingConfig(specPath: String, configPath: String?) {
         .appendingPathComponent(blocksCodegenConfigName)
     guard FileManager.default.fileExists(atPath: sibling) else { return }
     guard let configPath else {
-        fputs("Error: \(sibling) exists but was not passed; re-run with it as the third argument\n", stderr)
+        fputs(
+                "Error: \(sibling) exists but was not passed; declare it in the target's "
+                    + "resources, as .copy(\"\(blocksCodegenConfigName)\"), so the plugin forwards it\n",
+                stderr
+            )
         exit(1)
     }
     if resolvedPath(configPath) != resolvedPath(sibling) {

@@ -487,7 +487,7 @@ final class DeclaredTransferableBindingTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/BlocksCodegen")
         let pattern = #"(\.append\(|\.insert\(|\+= \[)\s*"(\\\(indent\))?\s*"#
-            + #"((?:public|private|internal|fileprivate|open|package|final|indirect)\s+)*"#
+            + #"((?:public|private|internal|fileprivate|open|package|final|indirect|nonisolated)\s+)*"#
             + #"(class|struct|enum|actor|protocol|typealias)\s"#
         let regex = try NSRegularExpression(pattern: pattern)
         var offenders: [String] = []
@@ -502,6 +502,112 @@ final class DeclaredTransferableBindingTests: XCTestCase {
             offenders.isEmpty,
             "a type declaration is appended without recording its name; call emitDeclaration instead:\n"
                 + offenders.joined(separator: "\n")
+        )
+    }
+
+    func testModelsFileImportsTheRuntimeItQualifies() throws {
+        // A constrained component schema lands in Models.swift, where a qualified runtime
+        // name does not inherit Api.swift's import.
+        let spec = """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [\(transferableMethod("getHandle", tag: "example-iot/device-handle"))],
+            "components": { "schemas": { "Device": { "type": "object", "required": ["name"], \
+        "properties": { "name": { "type": "string", "minLength": 1 } } } } },
+            "x-blocks-native-packages": \(swiftPackagesCatalog()),
+            "x-blocks-native-bindings": { "schemaVersion": 1, "bindings": [\(
+            binding(id: "handle", tag: "example-iot/device-handle", export: "deviceHandle", arity: 0)
+        )] }
+        }
+        """
+        let output = try generate(from: spec)
+        XCTAssertTrue(
+            output.models.contains("BlocksRuntime.CodegenError"),
+            "the constrained model must qualify the runtime error, got:\n\(output.models)"
+        )
+        XCTAssertTrue(
+            output.models.contains("import BlocksRuntime"),
+            "Models.swift must import what it qualifies, got:\n\(output.models)"
+        )
+    }
+
+    func testModelsFileStaysUnqualifiedAndRuntimeFreeWithoutADeclaredModule() throws {
+        let spec = """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{ "name": "api.get", "params": [], \
+        "result": { "name": "R", "schema": { "type": "string" } } }],
+            "components": { "schemas": { "Device": { "type": "object", "required": ["name"], \
+        "properties": { "name": { "type": "string", "minLength": 1 } } } } }
+        }
+        """
+        let output = try generate(from: spec)
+        XCTAssertTrue(output.models.contains("CodegenError"), "got:\n\(output.models)")
+        XCTAssertFalse(
+            output.models.contains("import BlocksRuntime"),
+            "an unqualified models file must not gain the import, got:\n\(output.models)"
+        )
+    }
+
+    func testTwoTagsMayShareOneExport() throws {
+        let methods = [
+            transferableMethod("getHandle", tag: "example-iot/device-handle"),
+            transferableMethod("getHandleV2", tag: "example-iot/device-handle-v2")
+        ].joined(separator: ", ")
+        let output = try generate(from: catalogSpec(
+            methods: methods,
+            bindings: [
+                binding(id: "handle", tag: "example-iot/device-handle", export: "deviceHandle", arity: 0),
+                binding(id: "handle-v2", tag: "example-iot/device-handle-v2", export: "deviceHandle", arity: 0)
+            ]
+        ))
+        XCTAssertEqual(
+            output.api.components(separatedBy: "-> ExampleIotNative.DeviceHandle").count - 1, 2,
+            "both tags must hydrate to the shared export, got:\n\(output.api)"
+        )
+    }
+
+    func testAComponentNamedLikeTheQualifiedRuntimeModuleIsAnError() throws {
+        for occupied in ["BlocksRuntime"] {
+            let spec = """
+            {
+                "openrpc": "1.3.2",
+                "info": { "title": "test", "version": "1.0.0" },
+                "methods": [\(transferableMethod("getHandle", tag: "example-iot/device-handle"))],
+                "components": { "schemas": { "\(occupied)": { "type": "object", \
+            "required": ["n"], "properties": { "n": { "type": "string" } } } } },
+                "x-blocks-native-packages": \(swiftPackagesCatalog()),
+                "x-blocks-native-bindings": { "schemaVersion": 1, "bindings": [\(
+                binding(id: "handle", tag: "example-iot/device-handle", export: "deviceHandle", arity: 0)
+            )] }
+            }
+            """
+            XCTAssertThrowsError(try generate(from: spec), occupied) { error in
+                guard case CodegenError.invalidNativeCatalog(let detail) = error else {
+                    return XCTFail("\(occupied): expected invalidNativeCatalog, got \(error)")
+                }
+                XCTAssertTrue(detail.contains("'\(occupied)'"), "\(occupied): got \(detail)")
+            }
+        }
+    }
+
+    func testAComponentNamedLikeTheRuntimeIsAcceptedWhenNothingIsQualified() throws {
+        let spec = """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{ "name": "api.get", "params": [], \
+        "result": { "name": "R", "schema": { "type": "string" } } }],
+            "components": { "schemas": { "BlocksRuntime": { "type": "object", \
+        "required": ["n"], "properties": { "n": { "type": "string" } } } } }
+        }
+        """
+        let output = try generate(from: spec)
+        XCTAssertTrue(
+            output.models.contains("public nonisolated struct BlocksRuntime"),
+            "an unqualified client can declare the name, got:\n\(output.models)"
         )
     }
 

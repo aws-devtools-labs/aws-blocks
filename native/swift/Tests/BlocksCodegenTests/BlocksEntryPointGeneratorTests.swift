@@ -233,9 +233,6 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
                 .replacingOccurrences(of: #""(?:\\.|[^"\\])*""#, with: "", options: .regularExpression)
                 .replacingOccurrences(of: #"BlocksRuntime\.\w+"#, with: "", options: .regularExpression)
             let declared = Set(matches(#"\b(?:class|struct|enum|actor|protocol|typealias) `?(\w+)"#, in: code))
-            // A declared native package's module name is the block author's to choose, so it is
-            // never reserved: drop the import and the qualifier it introduces. The type it
-            // qualifies is still checked.
             // A declared native package's module and exported type names are the block author's
             // to choose, so neither is reserved here: drop the import, the qualifier, and the
             // member it qualifies. Everything the generator itself names is still checked.

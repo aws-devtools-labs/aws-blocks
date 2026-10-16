@@ -40,6 +40,20 @@ struct DeclaredTransferableBinding {
     let isGeneric: Bool
 }
 
+/// Two tags may share one export; a different export or arity cannot share its type.
+/// Keyed by module, so two catalog keys naming one package agree here and a differing
+/// identity or product does not: no dependency set provides one module twice.
+struct SwiftPackageRef: Equatable {
+    let identity: String?
+    let product: String?
+}
+
+struct TypeNameClaim: Equatable {
+    let package: String
+    let export: String
+    let arity: Int
+}
+
 struct ResolvedDeclaredBindings {
     var bindings: [String: DeclaredTransferableBinding] = [:]
     var unboundCauses: [String: String] = [:]
@@ -62,7 +76,7 @@ func resolveDeclaredTransferableBindings(
         )
     }
     try validateDeclaredSwiftModules(packages)
-    let optOutWarnings = try validateOptOutPackages(optOutPackages, packages: packages)
+    let optOutWarnings = validateOptOutPackages(optOutPackages, packages: packages)
     guard let bindings else { return ResolvedDeclaredBindings(warnings: optOutWarnings) }
     if bindings.schemaVersion != nativeCatalogSchemaVersion {
         throw CodegenError.invalidNativeCatalog(
@@ -73,8 +87,8 @@ func resolveDeclaredTransferableBindings(
     // Swift holds AWSBLOCKS-NATIVE-001 and 003 through 006; 002 is a Dart diagnostic.
     var resolved: [String: DeclaredTransferableBinding] = [:]
     var boundTags: Set<String> = []
-    var declaredTypeNames: Set<String> = []
-    var moduleOwners: [String: String] = [:]
+    var typeNameClaimants: [String: TypeNameClaim] = [:]
+    var moduleOwners: [String: (key: String, ref: SwiftPackageRef)] = [:]
     var unboundCauses: [String: String] = [:]
     var warnings: [String] = optOutWarnings
     for binding in bindings.bindings ?? [] {
@@ -136,18 +150,24 @@ func resolveDeclaredTransferableBindings(
         }
         // Reached only by an emitted binding, which is why the drops precede it: a
         // dropped binding contributes no import and no factory call, so nothing collides.
-        if let owner = moduleOwners[swiftPackage.module], owner != binding.package {
+        let packageRef = SwiftPackageRef(identity: swiftPackage.identity, product: swiftPackage.product)
+        if let owner = moduleOwners[swiftPackage.module], owner.ref != packageRef {
             throw CodegenError.invalidNativeCatalog(
-                "packages '\(owner)' and '\(binding.package)' both declare Swift module "
-                    + "'\(swiftPackage.module)'; no dependency set can satisfy both"
+                "packages '\(owner.key)' and '\(binding.package)' declare Swift module "
+                    + "'\(swiftPackage.module)' with different package metadata; "
+                    + "no dependency set can satisfy both"
             )
         }
-        moduleOwners[swiftPackage.module] = binding.package
-        guard declaredTypeNames.insert("\(swiftPackage.module).\(typeName)").inserted else {
+        moduleOwners[swiftPackage.module] = (key: binding.package, ref: packageRef)
+        let resolvedName = "\(swiftPackage.module).\(typeName)"
+        let claimant = TypeNameClaim(package: binding.package, export: binding.export, arity: arity)
+        if let prior = typeNameClaimants[resolvedName], prior != claimant {
             throw CodegenError.invalidNativeCatalog(
-                "binding '\(binding.id)' resolves to \(swiftPackage.module).\(typeName), which another binding already resolves to"
+                "binding '\(binding.id)' resolves to \(resolvedName), already resolved by export "
+                    + "'\(prior.export)' in package '\(prior.package)' at generic arity \(prior.arity)"
             )
         }
+        typeNameClaimants[resolvedName] = claimant
         resolved[binding.tag] = DeclaredTransferableBinding(
             module: swiftPackage.module,
             base: "\(swiftPackage.module).\(typeName)",
@@ -208,19 +228,17 @@ func validateDeclaredSwiftModules(_ packages: NativePackagesCatalog?) throws {
     }
 }
 
-func validateOptOutPackages(_ optOutPackages: Set<String>, packages: NativePackagesCatalog?) throws -> [String] {
-    guard let declared = packages?.packages, !declared.isEmpty else {
-        return optOutPackages.sorted().map {
-            "AWSBLOCKS-NATIVE-006: opted-out package '\($0)' has nothing to opt out of; "
-                + "the spec declares no native packages."
-        }
+/// An opt-out is build configuration, not spec metadata, so one that matches nothing is
+/// the author's own typo rather than a malformed catalog.
+func validateOptOutPackages(_ optOutPackages: Set<String>, packages: NativePackagesCatalog?) -> [String] {
+    let declared = packages?.packages ?? [:]
+    return optOutPackages.sorted().filter { declared[$0] == nil }.map {
+        declared.isEmpty
+            ? "AWSBLOCKS-NATIVE-006: opted-out package '\($0)' has nothing to opt out of; "
+            + "the spec declares no native packages."
+            : "AWSBLOCKS-NATIVE-006: opted-out package '\($0)' has nothing to opt out of; "
+            + "it is not declared in x-blocks-native-packages."
     }
-    for identity in optOutPackages.sorted() where declared[identity] == nil {
-        throw CodegenError.invalidNativeCatalog(
-            "opted-out package '\(identity)' is not declared in x-blocks-native-packages"
-        )
-    }
-    return []
 }
 
 let alwaysEmittedImports: Set<String> = ["Foundation", "BlocksRuntime"]
