@@ -490,7 +490,9 @@ export type HostingResources = {
   bucket: Bucket;
 
   /**
-   * The CloudFront distribution serving the site.
+   * The CloudFront distribution serving the site. Available for the default
+   * `cloudfront` front door; reading it for any other front door throws
+   * (`FrontDoorNotCloudFrontError`).
    */
   distribution: Distribution;
 

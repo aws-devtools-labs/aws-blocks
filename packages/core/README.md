@@ -173,7 +173,7 @@ Under either tier, the URL clients should call is `publicApiUrl` on the stack or
 
 The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
 
-**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, Hosting's distribution takes the front-door role and no second distribution is created.
+**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, Hosting's front door takes the front-door role and no second distribution is created. This holds for every `Hosting` `frontDoor` that proxies the API same-origin (the CloudFront default, `alb`, `apiGateway`, `stacked`, `custom`); `'none'` serves static files only, so the browser calls the API cross-origin.
 
 Neither tier makes CloudFront the only way in: the gateway's own `execute-api` URL stays publicly reachable, so a WebACL on a CloudFront distribution doesn't cover direct calls to it.
 

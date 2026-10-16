@@ -10,7 +10,7 @@ import { Bucket } from 'aws-cdk-lib/aws-s3';
 import {
   Code,
   FunctionUrlAuthType,
-  IVersion,
+  type IVersion,
   InvokeMode,
   Function as LambdaFunction,
   Runtime,
@@ -20,7 +20,7 @@ import { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { CdnConstruct } from './cdn_construct.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { HostingError } from '../hosting_error.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { ORIGIN_ID, buildKvsEntries } from './kvs_router.js';
 
 // ---- KVS edge-router helpers ----
@@ -166,6 +166,33 @@ void describe('CdnConstruct', () => {
       template.hasResourceProperties('AWS::CloudFront::Distribution', {
         DistributionConfig: Match.objectLike({
           HttpVersion: 'http2and3',
+        }),
+      });
+    });
+
+    void it('fronts a nested child layer via extraHttpOrigins (composition: CF → child)', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: spaManifest,
+        securityHeadersPolicy: policy,
+        extraHttpOrigins: [{ pattern: '/aws-blocks/api/*', domainName: 'my-alb-123.us-west-2.elb.amazonaws.com', protocol: 'https' }],
+      });
+
+      const template = Template.fromStack(stack);
+      // The child is bound as a custom (HTTP) origin with the given domain…
+      template.hasResourceProperties('AWS::CloudFront::Distribution', {
+        DistributionConfig: Match.objectLike({
+          Origins: Match.arrayWith([
+            Match.objectLike({ DomainName: 'my-alb-123.us-west-2.elb.amazonaws.com' }),
+          ]),
+          // …and an additional cache behavior routes its path to it.
+          CacheBehaviors: Match.arrayWith([
+            Match.objectLike({ PathPattern: '/aws-blocks/api/*' }),
+          ]),
         }),
       });
     });
