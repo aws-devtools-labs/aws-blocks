@@ -9,7 +9,7 @@ Shared interfaces and UI components for all AWS Blocks auth Building Blocks. Use
 | Export Path | What it provides |
 |---|---|
 | `@aws-blocks/auth-common` | Types: `BlocksAuth`, `AuthUser`, `AuthState`, `AuthAction`, `AuthField` |
-| `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `onAuthChange`, `broadcastAuthChange`, `submitAuthAction`; theme: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
+| `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `StatusMessage`, `onAuthChange`, `broadcastAuthChange`, `submitAuthAction`; theme: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
 | `@aws-blocks/auth-common/theme` | Design-token layer: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
 | `@aws-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLoopbackRequest` |
 
@@ -134,6 +134,35 @@ document.body.appendChild(
 ```
 
 When no fallback is provided the container renders nothing while signed out (backward-compatible).
+
+## StatusMessage
+
+A themed, accessible status line for the "loading / success / error" affordance apps otherwise hand-roll with inline styles. It returns a handle: mount `handle.element`, then drive it with `handle.set(kind, text)` as an async operation progresses.
+
+```typescript
+import { StatusMessage } from '@aws-blocks/auth-common/ui';
+
+const status = StatusMessage({ kind: 'loading', text: 'Loading…' });
+document.querySelector('#app-status')!.replaceWith(status.element);
+
+try {
+  await saveSettings(); // your own async work
+  status.set('success', 'Done.');
+} catch (e) {
+  status.set('error', `Failed: ${(e as Error).message}`);
+}
+```
+
+The element is a polite ARIA live region (`role="status"`, `aria-live="polite"`), so a screen reader announces each transition without stealing focus. The `loading` state renders a spinner that honors `prefers-reduced-motion`. All colors come from the shared `--bb-*` tokens, so it matches the active light/dark theme automatically.
+
+| `kind` | Appearance |
+|---|---|
+| `idle` | muted text (`--bb-color-text-muted`) |
+| `loading` | muted text + animated spinner |
+| `success` | green (`--bb-color-success`) |
+| `error` | red (`--bb-color-danger`) |
+
+Pass `testId` to scope the root (and its `-text` child) when a page renders more than one status region.
 
 ## Auth State Change Subscription
 

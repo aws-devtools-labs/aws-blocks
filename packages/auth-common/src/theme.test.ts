@@ -43,7 +43,7 @@ Object.assign(globalThis, {
 
 // Import after globals are set.
 const { injectTheme, THEME_CSS, THEME_STYLE_ID } = await import('./theme.js');
-const { Authenticator, AuthenticatedContent, AccountMenuBar } = await import('./ui.js');
+const { Authenticator, AuthenticatedContent, AccountMenuBar, StatusMessage } = await import('./ui.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -146,6 +146,14 @@ describe('UI factories inject the theme', () => {
 		});
 		assert.strictEqual(styleEls().length, 1, 'AuthenticatedContent injects the theme <style>');
 	});
+
+	test('StatusMessage injects the theme on construction', () => {
+		// Regression guard: StatusMessage is a presentational primitive that may be
+		// mounted on its own (no auth factory alongside it), so it must self-inject
+		// the tokens its .bb-status* rules depend on.
+		StatusMessage({ kind: 'idle', text: 'Ready' });
+		assert.strictEqual(styleEls().length, 1, 'StatusMessage injects the theme <style>');
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -194,6 +202,32 @@ describe('bb-* class contract: every class ui.ts assigns exists in THEME_CSS', (
 		for (const cls of renderedBbClasses()) {
 			assert.ok(cssDefinesClass(cls), `THEME_CSS defines a selector for .${cls} (assigned in ui.ts)`);
 		}
+	});
+
+	// StatusMessage builds its class with a template literal
+	// (`bb-status bb-status-${kind}`), so the `className = '...'` literal scan
+	// above cannot see the four per-kind classes. Assert each is defined
+	// explicitly, so renaming one (or leaving `loading` without a rule) fails
+	// here rather than silently rendering unstyled.
+	test('every StatusKind maps to a .bb-status-<kind> rule in THEME_CSS', () => {
+		for (const kind of ['idle', 'loading', 'success', 'error']) {
+			assert.ok(
+				cssDefinesClass(`bb-status-${kind}`),
+				`THEME_CSS defines a selector for .bb-status-${kind}`,
+			);
+		}
+	});
+
+	// The spinner's reduced-motion affordance is a structural CSS contract:
+	// deleting the @media block leaves every rendering test green, so scan
+	// THEME_CSS directly the same way the forced-palette tests do.
+	test('.bb-spinner is held still under prefers-reduced-motion: reduce', () => {
+		const mediaBlock = /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?\})\s*\}/.exec(THEME_CSS);
+		assert.ok(mediaBlock !== null, 'THEME_CSS has a prefers-reduced-motion: reduce block');
+		assert.ok(
+			/\.bb-spinner\s*\{[^}]*animation:\s*none\b/.test(mediaBlock?.[1] ?? ''),
+			'the reduced-motion block sets .bb-spinner { animation: none }',
+		);
 	});
 });
 
