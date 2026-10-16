@@ -37,7 +37,8 @@ class ApiSignUpInput {
     return {
       'username': username,
       'password': password,
-      ...additionalProperties,
+      for (final e in additionalProperties.entries)
+        if (!const {'username', 'password'}.contains(e.key)) e.key: e.value,
     };
   }
 
@@ -47,10 +48,10 @@ class ApiSignUpInput {
       other is ApiSignUpInput &&
           username == other.username &&
           password == other.password &&
-          additionalProperties == other.additionalProperties;
+          blocksDeepEquals(additionalProperties, other.additionalProperties);
 
   @override
-  int get hashCode => Object.hash(username, password, additionalProperties);
+  int get hashCode => Object.hash(username, password, blocksDeepHash(additionalProperties));
 
   @override
   String toString() => 'ApiSignUpInput(username: $username, password: $password, additionalProperties: $additionalProperties)';
@@ -95,14 +96,14 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<Map<String, num>> getScores() async {
-    final result = await _client.call('api.getScores', <String, dynamic>{});
+    final result = await _client.call('api.getScores', const <dynamic>[]);
     return (result as Map<String, dynamic>).map((k, v) => MapEntry(k, v as num));
   }
 
   Future<SignUpResult> signUp({required ApiSignUpInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('api.signUp', params);
     return SignUpResult.fromJson(result as Map<String, dynamic>);
   }

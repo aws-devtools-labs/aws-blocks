@@ -71,18 +71,25 @@ The CLI detects your Amplify project (`amplify/backend.ts`) and integrates Block
 
 **aws-blocks/index.ts**
 ```typescript
-import { ApiNamespace, Scope, AuthBasic, DistributedTable, Realtime } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, Auth, DistributedTable, Realtime } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
-const auth = new AuthBasic(scope, 'auth', {
-  passwordPolicy: { minLength: 8 },
+// Email + password sign-in. Sign-up confirms the email address with a code;
+// locally the code is printed in the `npm run dev` terminal. The email is the
+// username and matches ignoring case — both fixed when the user pool is created.
+const auth = new Auth(scope, 'auth', {
+  users: { signInWith: ['email'], caseSensitive: false },
+  codeDelivery: async (username, code, purpose) => {
+    console.log(`[auth] ${purpose} code for ${username}: ${code}`);
+  },
 });
 export const authApi = auth.createApi();
 
+// Per-user data is keyed on the owner's `userSub`, stable for the user's lifetime.
 const todoSchema = z.object({
-  userId: z.string(),
+  userSub: z.string(),
   todoId: z.string(),
   title: z.string(),
   completed: z.boolean(),
@@ -90,7 +97,7 @@ const todoSchema = z.object({
 
 const todos = new DistributedTable(scope, 'todos', {
   schema: todoSchema,
-  key: { partitionKey: 'userId', sortKey: 'todoId' },
+  key: { partitionKey: 'userSub', sortKey: 'todoId' },
 });
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
@@ -104,7 +111,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 **aws-blocks/index.cdk.ts**
 ```typescript
 import * as cdk from 'aws-cdk-lib';
-import { BlocksStack } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -115,6 +122,7 @@ const app = new cdk.App();
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: BlocksPresets.production,
 });
 ```
 
@@ -135,7 +143,9 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 ## Templates
 
-Available templates: `default`, `bare`, `react`, `backend`, `nextjs`, `auth-cognito`, `amplify`, `demo`.
+Available templates: `default`, `bare`, `react`, `backend`, `api-only`, `sql`, `nextjs`, `auth`, `amplify`, `demo`.
+
+The `auth` template was previously named `auth-cognito`; `--template auth-cognito` still works and scaffolds `auth`.
 
 Every folder under `templates/` is a self-registering template. Each `package.json` in that folder sets a `blocksTemplateDescription` field, which the CLI reads to build the `--help` catalog. To see the current list of templates and their one-line descriptions:
 

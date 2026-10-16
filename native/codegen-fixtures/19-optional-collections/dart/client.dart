@@ -50,13 +50,13 @@ class GetUserResult {
       identical(this, other) ||
       other is GetUserResult &&
           name == other.name &&
-          tags == other.tags &&
-          scores == other.scores &&
-          metadata == other.metadata &&
-          nicknames == other.nicknames;
+          blocksDeepEquals(tags, other.tags) &&
+          blocksDeepEquals(scores, other.scores) &&
+          blocksDeepEquals(metadata, other.metadata) &&
+          blocksDeepEquals(nicknames, other.nicknames);
 
   @override
-  int get hashCode => Object.hash(name, tags, scores, metadata, nicknames);
+  int get hashCode => Object.hash(name, blocksDeepHash(tags), blocksDeepHash(scores), blocksDeepHash(metadata), blocksDeepHash(nicknames));
 
   @override
   String toString() => 'GetUserResult(name: $name, tags: $tags, scores: $scores, metadata: $metadata, nicknames: $nicknames)';
@@ -95,11 +95,11 @@ class ApiUpdateUserInput {
       identical(this, other) ||
       other is ApiUpdateUserInput &&
           id == other.id &&
-          tags == other.tags &&
-          metadata == other.metadata;
+          blocksDeepEquals(tags, other.tags) &&
+          blocksDeepEquals(metadata, other.metadata);
 
   @override
-  int get hashCode => Object.hash(id, tags, metadata);
+  int get hashCode => Object.hash(id, blocksDeepHash(tags), blocksDeepHash(metadata));
 
   @override
   String toString() => 'ApiUpdateUserInput(id: $id, tags: $tags, metadata: $metadata)';
@@ -144,17 +144,17 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<GetUserResult> getUser({required String id}) async {
-    final params = <String, dynamic>{
-      'id': id,
-    };
+    final params = <dynamic>[
+      id,
+    ];
     final result = await _client.call('api.getUser', params);
     return GetUserResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<UpdateUserResult> updateUser({required ApiUpdateUserInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('api.updateUser', params);
     return UpdateUserResult.fromJson(result as Map<String, dynamic>);
   }

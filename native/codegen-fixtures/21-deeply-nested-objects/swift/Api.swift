@@ -40,13 +40,30 @@ public class Api {
             public let name: String
             public let owner: Owner
 
+            public init(address: Address, id: String, name: String, owner: Owner) {
+                self.address = address
+                self.id = id
+                self.name = name
+                self.owner = owner
+            }
+
             public struct Address: Codable {
                 public let city: String
                 public let contact: Contact
                 public let street: String
 
+                public init(city: String, contact: Contact, street: String) {
+                    self.city = city
+                    self.contact = contact
+                    self.street = street
+                }
+
                 public struct Contact: Codable {
                     public let email: String
+
+                    public init(email: String) {
+                        self.email = email
+                    }
                 }
             }
 
@@ -54,9 +71,19 @@ public class Api {
                 public let contact: Contact
                 public let name: String
 
+                public init(contact: Contact, name: String) {
+                    self.contact = contact
+                    self.name = name
+                }
+
                 public struct Contact: Codable {
                     public let email: String
                     public let phone: String
+
+                    public init(email: String, phone: String) {
+                        self.email = email
+                        self.phone = phone
+                    }
                 }
             }
         }
@@ -69,20 +96,41 @@ public class Api {
             public let name: String
             public let owner: Owner
 
+            public init(address: Address, name: String, owner: Owner) {
+                self.address = address
+                self.name = name
+                self.owner = owner
+            }
+
             public struct Address: Codable {
                 public let city: String
                 public let countryCode: String
                 public let street: String
+
+                public init(city: String, countryCode: String, street: String) {
+                    self.city = city
+                    self.countryCode = countryCode
+                    self.street = street
+                }
             }
 
             public struct Owner: Codable {
                 public let email: String
                 public let name: String
+
+                public init(email: String, name: String) {
+                    self.email = email
+                    self.name = name
+                }
             }
         }
 
         public struct Result: Codable {
             public let id: String
+
+            public init(id: String) {
+                self.id = id
+            }
         }
     }
 
@@ -109,25 +157,52 @@ public class Api {
                 try c.encodeIfPresent(self.owner, forKey: .owner)
             }
 
+            public init(address: Address? = nil, id: String, name: String? = nil, owner: Owner? = nil) {
+                self.address = address
+                self.id = id
+                self.name = name
+                self.owner = owner
+            }
+
             public struct Address: Codable {
                 public let city: String
                 public let street: String
                 public let zip: String
+
+                public init(city: String, street: String, zip: String) {
+                    self.city = city
+                    self.street = street
+                    self.zip = zip
+                }
             }
 
             public struct Owner: Codable {
                 public let contact: Contact
                 public let name: String
 
+                public init(contact: Contact, name: String) {
+                    self.contact = contact
+                    self.name = name
+                }
+
                 public struct Contact: Codable {
                     public let email: String
                     public let phone: String
+
+                    public init(email: String, phone: String) {
+                        self.email = email
+                        self.phone = phone
+                    }
                 }
             }
         }
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 }

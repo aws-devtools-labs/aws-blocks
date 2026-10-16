@@ -534,25 +534,25 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<GetOrganizationResult> getOrganization({required String id}) async {
-    final params = <String, dynamic>{
-      'id': id,
-    };
+    final params = <dynamic>[
+      id,
+    ];
     final result = await _client.call('api.getOrganization', params);
     return GetOrganizationResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<CreateOrganizationResult> createOrganization({required ApiCreateOrganizationInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('api.createOrganization', params);
     return CreateOrganizationResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<UpdateOrganizationResult> updateOrganization({required ApiUpdateOrganizationInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('api.updateOrganization', params);
     return UpdateOrganizationResult.fromJson(result as Map<String, dynamic>);
   }

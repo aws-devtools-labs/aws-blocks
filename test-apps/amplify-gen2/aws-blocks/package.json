@@ -16,10 +16,10 @@
     }
   },
   "dependencies": {
+    "@aws-blocks/bb-auth": "*",
     "@aws-blocks/blocks": "*",
     "@aws-blocks/bb-kv-store": "*",
     "@aws-blocks/bb-distributed-data": "*",
-    "@aws-blocks/data-common": "*",
-    "aws-jwt-verify": "^5.0.0"
+    "@aws-blocks/data-common": "*"
   }
 }

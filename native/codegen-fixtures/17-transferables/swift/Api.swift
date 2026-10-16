@@ -48,6 +48,11 @@ public class Api {
         public struct ResultMessage: Codable {
             public let message: String
             public let timestamp: Double
+
+            public init(message: String, timestamp: Double) {
+                self.message = message
+                self.timestamp = timestamp
+            }
         }
     }
 }

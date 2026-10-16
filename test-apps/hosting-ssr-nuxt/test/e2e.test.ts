@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect, type Page, type APIRequestContext, type BrowserContext } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -12,11 +11,20 @@ import { createHash, randomBytes } from 'node:crypto';
  * Navigate to a page and wait for Nuxt/Vue 3 hydration to complete.
  * `networkidle` only ensures JS bundles are downloaded; hydration (attaching event handlers)
  * is CPU work that finishes asynchronously. We check for Vue 3's `__vue_app__` on the root element.
+ *
+ * `__vue_app__` is set when the app *starts* mounting. A page with an async `<script setup>`
+ * (top-level `await useFetch(...)`, like `/dashboard`) hydrates inside `<Suspense>` and only gets
+ * its event handlers once that resolves, which Nuxt signals by setting `$nuxt.isHydrating` to
+ * `false`. We wait for both. A click on server-rendered markup before then is silently lost —
+ * under `nuxt dev` that window lasts seconds, because Vite serves hundreds of unbundled modules.
  */
 async function gotoHydrated(page: Page, url: string, opts?: { timeout?: number }) {
   await page.goto(url, { waitUntil: 'networkidle' });
   await page.waitForFunction(
-    () => !!(document.getElementById('__nuxt') as any)?.__vue_app__,
+    () => {
+      const app = (document.getElementById('__nuxt') as any)?.__vue_app__;
+      return !!app && app.config.globalProperties.$nuxt?.isHydrating === false;
+    },
     { timeout: opts?.timeout ?? 15_000 },
   );
 }
@@ -76,21 +84,63 @@ async function loginViaApi(
   }]);
 }
 
+/**
+ * Read the stack's test-support secret: a random SSM SecureString the stack
+ * generates at deploy, named by the `TestSupportSecretParameter` output. See
+ * "Sandbox e2e test support" in `aws-blocks/index.ts`.
+ */
+async function readTestSupportSecret(stackOutputs: Record<string, string>): Promise<string> {
+  const key = Object.keys(stackOutputs).find((k) => k.startsWith('TestSupportSecretParameter'));
+  if (!key) throw new Error(`TestSupportSecretParameter* not found in stack outputs: ${JSON.stringify(stackOutputs)}`);
+  const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
+  const out = await new SSMClient({}).send(new GetParameterCommand({ Name: stackOutputs[key], WithDecryption: true }));
+  if (!out.Parameter?.Value) throw new Error(`SSM parameter ${stackOutputs[key]} has no value`);
+  return out.Parameter.Value;
+}
+
+/** Call `testSupport.provisionUser` and return the raw JSON-RPC response body. */
+async function callProvisionUser(
+  request: APIRequestContext,
+  baseUrl: string,
+  secret: string,
+  username: string,
+  password: string,
+) {
+  const resp = await request.post(`${baseUrl}/aws-blocks/api`, {
+    headers: { 'Content-Type': 'application/json' },
+    data: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'testSupport.provisionUser',
+      params: [secret, username, password],
+      id: 1,
+    }),
+  });
+  return await resp.json();
+}
+
+/** The deployed stack's test-support secret (sandbox only). Never log it. */
+let testSupportSecret = '';
+
+/**
+ * Create a confirmed user through the backend's `testSupport.provisionUser`
+ * RPC (sandbox only — see `aws-blocks/index.ts`). Cognito emails the sign-up
+ * code and a deployed run has no mailbox to read it from.
+ */
+async function provisionUser(request: APIRequestContext, baseUrl: string, username: string, password: string) {
+  const body = await callProvisionUser(request, baseUrl, testSupportSecret, username, password);
+  expect(body.result).toEqual({ success: true });
+}
+
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
 let hostingUrl: string;
 
 test.beforeAll(async () => {
   if (ENV === 'sandbox') {
-    console.log('🚀 Deploying hosting-ssr-nuxt sandbox...\n');
-    execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
-      cwd: projectRoot,
-      stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
+    // The stack was deployed once for this run by `globalSetup` (test/global-setup.ts);
+    // this hook runs per worker, so a retry re-reads the outputs instead of redeploying.
 
     const outputs = JSON.parse(
       readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'),
@@ -106,22 +156,14 @@ test.beforeAll(async () => {
       );
     }
     if (!hostingUrl.startsWith('http')) hostingUrl = `https://${hostingUrl}`;
+    testSupportSecret = await readTestSupportSecret(stackOutputs);
     console.log(`\n✅ Deployed at: ${hostingUrl}\n`);
   } else {
     hostingUrl = process.env.HOSTING_URL || 'http://localhost:3000';
   }
 });
 
-test.afterAll(async () => {
-  if (ENV === 'sandbox' && !process.env.BLOCKS_SANDBOX_KEEP) {
-    console.log('\n🗑️  Destroying sandbox...');
-    execFileSync('npx', ['tsx', 'test/sandbox-destroy.ts', backendPath], {
-      cwd: projectRoot,
-      stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-  }
-});
+// Teardown: `globalTeardown` (test/global-teardown.ts) destroys the stack once, after all tests and retries.
 
 test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
   test.describe.configure({ mode: 'serial' });
@@ -164,14 +206,20 @@ test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
       }),
     ]);
 
-    await gotoHydrated(page, `${hostingUrl}/login`);
-    await page.fill('#login-username', testUser);
-    await page.fill('#login-password', testPassword);
-    await page.click('#btn-signup');
-    await expect(page.locator('#auth-info')).toContainText('Account created', { timeout: 30_000 });
-    await expect(page.locator('#confirm-section')).toBeVisible();
-    await page.click('#btn-confirm');
-    await expect(page.locator('#auth-info')).toContainText('Confirmed', { timeout: 30_000 });
+    if (ENV === 'sandbox') {
+      // No mailbox for the emailed sign-up code: provision a confirmed user.
+      // The local run covers the sign-up form and the code step.
+      await provisionUser(request, hostingUrl, testUser, testPassword);
+    } else {
+      await gotoHydrated(page, `${hostingUrl}/login`);
+      await page.fill('#login-username', testUser);
+      await page.fill('#login-password', testPassword);
+      await page.click('#btn-signup');
+      await expect(page.locator('#auth-info')).toContainText('Account created', { timeout: 30_000 });
+      await expect(page.locator('#confirm-section')).toBeVisible();
+      await page.click('#btn-confirm');
+      await expect(page.locator('#auth-info')).toContainText('Confirmed', { timeout: 30_000 });
+    }
 
     await loginViaApi(request, page.context(), hostingUrl, testUser, testPassword);
     await page.goto(`${hostingUrl}/dashboard`);
@@ -299,7 +347,9 @@ test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
 
   test('10. Delete post from dashboard', async ({ page, request }) => {
     await loginViaApi(request, page.context(), hostingUrl, testUser, testPassword);
-    await page.goto(`${hostingUrl}/dashboard`);
+    // The delete button is server-rendered, so it is visible (and "actionable" to `click()`)
+    // before Vue attaches its `@click` handler. Wait for hydration, or the click does nothing.
+    await gotoHydrated(page, `${hostingUrl}/dashboard`);
 
     await expect(page.locator('[data-testid="my-post-card"]')).toHaveCount(1);
     await page.locator('[data-testid="btn-delete"]').first().click();
@@ -420,5 +470,17 @@ test.describe('SSR origin regression coverage', () => {
     const span = timestamps[4] - timestamps[0];
     expect(span).toBeGreaterThanOrEqual(600);
     expect(span).toBeLessThan(3000);
+  });
+});
+
+// `testSupport.provisionUser` creates accounts, so it must not exist on a normal
+// build (local dev included), and on the sandbox e2e build it must refuse a
+// caller without the deploy's secret.
+test.describe('Test support endpoint is gated', () => {
+  test('absent from a normal build; refuses a wrong secret on the e2e build', async ({ request }) => {
+    const user = `e2e-gate-${Date.now()}@example.com`;
+    const body = await callProvisionUser(request, hostingUrl, 'not-the-secret', user, 'TestPass123!');
+    expect(body.result).toBeUndefined();
+    expect(body.error.code).toBe(ENV === 'sandbox' ? 403 : -32601);
   });
 });

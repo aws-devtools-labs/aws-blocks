@@ -23,11 +23,11 @@
     "preview": "vite preview",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "test": "npm run typecheck && npm run test:e2e",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize"
   },
   "dependencies": {
-    "@aws-blocks/bb-auth-supabase": "^0.3.34",
     "@aws-blocks/blocks": "*",
     "zod": "^4.3.0"
   },

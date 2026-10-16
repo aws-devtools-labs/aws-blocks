@@ -8,7 +8,7 @@ import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { FileBucketOptions, CorsRule, ExternalBucketRef } from './types.js';
-import { validateBucketName } from './bucket-name.js';
+import { deriveBucketName, validateBucketName } from './bucket-name.js';
 import { DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS, validateFileBucketOptions } from './validation.js';
 
 export { FileBucketErrors } from './errors.js';
@@ -61,12 +61,15 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 					: this.defaults.removalPolicy;
 		const destroy = removalPolicy === RemovalPolicy.DESTROY;
 
-		// Bucket name is derived from the scope chain. Validate against S3's
-		// naming rules at synth so an invalid name fails here rather than at
-		// `cdk deploy` (where CloudFormation rejects it with a cryptic error).
-		// Run this first: an unusable bucket name is the most fundamental synth
-		// error, so surface it before the option-level guards below.
-		validateBucketName(this.fullId);
+		// Bucket name is derived from the scope chain: `fullId` unchanged when it
+		// fits S3's 63 characters, else deterministically shortened (prefix + hash)
+		// — the AWS-runtime and mock layers derive the same name independently.
+		// Validate against S3's naming rules at synth so an invalid name fails
+		// here rather than at `cdk deploy` (where CloudFormation rejects it with a
+		// cryptic error). Run this first: an unusable bucket name is the most
+		// fundamental synth error, so surface it before the option-level guards below.
+		const bucketName = deriveBucketName(this.fullId);
+		validateBucketName(bucketName);
 
 		// Reject unsafe CORS and malformed noncurrent-version expiration at synth,
 		// before `cdk deploy`. Shared with the local mock via validation.ts so both
@@ -136,7 +139,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		}
 
 		this.bucket = new s3.Bucket(this, 'bucket', {
-			bucketName: this.fullId,
+			bucketName,
 			blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
 			encryption: s3.BucketEncryption.S3_MANAGED,
 			// All FileBucket traffic (SDK calls + presigned URLs) is HTTPS, so

@@ -1,0 +1,4 @@
+import { AuthOIDCClient, stubIdp } from '@aws-blocks/bb-auth-oidc/middleware';
+
+export const stub = stubIdp;
+export type Client = AuthOIDCClient;

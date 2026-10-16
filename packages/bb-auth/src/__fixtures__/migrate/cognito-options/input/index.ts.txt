@@ -1,0 +1,33 @@
+import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+
+// The production pool. Comments on the block survive.
+export const auth = new AuthCognito(scope, 'auth', {
+	// Who may sign up.
+	selfSignUp: false,
+	passwordPolicy: { minLength: 12, requireSymbols: false },
+	signInWith: 'email',
+	groups: ['admins', { name: 'readers', description: 'Read-only', precedence: 2 }] as const,
+	userAttributes: [{ name: 'tenant' }, { name: 'age', type: 'Number', mutable: false }],
+	mfa: 'optional', // TOTP only
+	mfaTypes: ['TOTP'],
+	sessionTtlSeconds: 86_400,
+	crossDomain: true,
+	deviceTracking: { challengeRequiredOnNewDevice: true },
+	admin: { actions: ['groups'] },
+	removalPolicy: 'retain',
+	featurePlan: 'plus',
+	authFlowType: 'USER_AUTH',
+	enablePasskeys: true,
+	webAuthnRelyingParty: { id: 'example.com', origins: ['https://example.com'], userVerification: 'discouraged' },
+	codeDelivery: async (username, code, purpose) => {
+		console.log(purpose, username, code);
+	},
+});
+
+// R10: MFA on without mfaTypes meant SMS only — the codemod writes that out.
+export const smsOnly = new AuthCognito(scope, 'sms-only', { mfa: 'required' });
+
+export const plain = new AuthCognito(scope, 'plain');

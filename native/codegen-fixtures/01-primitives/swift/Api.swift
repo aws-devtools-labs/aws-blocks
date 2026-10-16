@@ -23,6 +23,13 @@ public class Api {
             public let enabled: Bool
             public let score: Double
             public let text: String
+
+            public init(count: Int, enabled: Bool, score: Double, text: String) {
+                self.count = count
+                self.enabled = enabled
+                self.score = score
+                self.text = text
+            }
         }
     }
 }

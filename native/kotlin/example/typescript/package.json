@@ -21,6 +21,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "deploy": "tsx aws-blocks/deploy.ts",
+    "test": "npm run typecheck && npm run test:e2e",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize"
   },

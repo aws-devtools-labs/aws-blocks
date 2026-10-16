@@ -1,0 +1,16 @@
+import { Scope } from '@aws-blocks/core';
+import { AuthOIDC, stubIdp } from '@aws-blocks/bb-auth-oidc';
+
+const scope = new Scope('app');
+
+// AuthOIDC served the stub IdP from deployed stacks too (an e2e sandbox signs in through it).
+export const auth = new AuthOIDC(scope, 'e2e-auth', {
+	providers: [
+		stubIdp({ name: 'corp' }),
+		stubIdp({
+			name: 'staff',
+			users: [{ sub: 'u-1', email: 'alice@example.com', name: 'Alice', extra: { groups: ['admin'] } }],
+			onAuthorize: (req) => req.users[0],
+		}),
+	],
+});

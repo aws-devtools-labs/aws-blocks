@@ -5,6 +5,7 @@
 
 import 'package:blocks_runtime/blocks_runtime.dart';
 export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;
 
 // --- Models ---
 
@@ -161,7 +162,7 @@ class MessageGetSessionResultEvent extends GetSessionResultEvent {
 
   factory MessageGetSessionResultEvent.fromJson(Map<String, dynamic> json) {
     return MessageGetSessionResultEvent(
-      channel: json['channel'],
+      channel: RealtimeChannel.fromJson(json['channel'] as Map<String, dynamic>, (json) => MessageGetSessionResultEventChannelMessage.fromJson(json)),
     );
   }
 
@@ -169,7 +170,7 @@ class MessageGetSessionResultEvent extends GetSessionResultEvent {
   Map<String, dynamic> toJson() {
     return {
       'kind': 'message',
-      'channel': channel,
+      'channel': channel.toJson(),
     };
   }
 
@@ -195,7 +196,7 @@ class PresenceGetSessionResultEvent extends GetSessionResultEvent {
 
   factory PresenceGetSessionResultEvent.fromJson(Map<String, dynamic> json) {
     return PresenceGetSessionResultEvent(
-      channel: json['channel'],
+      channel: RealtimeChannel.fromJson(json['channel'] as Map<String, dynamic>, (json) => PresenceGetSessionResultEventChannelMessage.fromJson(json)),
     );
   }
 
@@ -203,7 +204,7 @@ class PresenceGetSessionResultEvent extends GetSessionResultEvent {
   Map<String, dynamic> toJson() {
     return {
       'kind': 'presence',
-      'channel': channel,
+      'channel': channel.toJson(),
     };
   }
 
@@ -233,13 +234,13 @@ class GetSessionResultInner {
 
   factory GetSessionResultInner.fromJson(Map<String, dynamic> json) {
     return GetSessionResultInner(
-      channel: json['channel'],
+      channel: RealtimeChannel.fromJson(json['channel'] as Map<String, dynamic>, (json) => CountResult.fromJson(json)),
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
-      'channel': channel,
+      'channel': channel.toJson(),
     };
   }
 
@@ -277,22 +278,22 @@ class GetSessionResult {
   factory GetSessionResult.fromJson(Map<String, dynamic> json) {
     return GetSessionResult(
       sessionId: json['sessionId'] as String,
-      channel: json['channel'],
+      channel: RealtimeChannel.fromJson(json['channel'] as Map<String, dynamic>, (json) => GetSessionResultChannelMessage.fromJson(json)),
       inner: GetSessionResultInner.fromJson(json['inner'] as Map<String, dynamic>),
       event: GetSessionResultEvent.fromJson(json['event'] as Map<String, dynamic>),
-      stringValues: json['stringValues'],
-      integerValues: json['integerValues'],
+      stringValues: RealtimeChannel.fromJsonValue(json['stringValues'] as Map<String, dynamic>, (payload) => (payload as List<dynamic>).cast<String>()),
+      integerValues: RealtimeChannel.fromJsonValue(json['integerValues'] as Map<String, dynamic>, (payload) => (payload as List<dynamic>).cast<int>()),
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
       'sessionId': sessionId,
-      'channel': channel,
+      'channel': channel.toJson(),
       'inner': inner.toJson(),
       'event': event.toJson(),
-      'stringValues': stringValues,
-      'integerValues': integerValues,
+      'stringValues': stringValues.toJson(),
+      'integerValues': integerValues.toJson(),
     };
   }
 
@@ -320,12 +321,12 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<GetSessionResult> getSession() async {
-    final result = await _client.call('api.getSession', <String, dynamic>{});
+    final result = await _client.call('api.getSession', const <dynamic>[]);
     return GetSessionResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<GetSessionResultInner> getOtherSession() async {
-    final result = await _client.call('api.getOtherSession', <String, dynamic>{});
+    final result = await _client.call('api.getOtherSession', const <dynamic>[]);
     return GetSessionResultInner.fromJson(result as Map<String, dynamic>);
   }
 }

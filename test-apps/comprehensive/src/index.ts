@@ -107,38 +107,29 @@ w.testError = () => run('ctx-result', () => api.throwError('intentional test err
 w.authRequired = () => run('auth-result', () => api.authRequired());
 
 // ============================================================================
-// AuthOIDC (Client-initiated PKCE against stub IdP)
+// Auth — OIDC (server-initiated sign-in against the stub IdP)
 // ============================================================================
+//
+// Each federated provider is a `signIn:<id>` action in the auth state, and the
+// action carries the sign-in URL. The backend handles the IdP callback, sets
+// the session cookie and lands the browser back on `/`.
 
-const auth = await oidcAuthApi.getClient();
-w.oidcSignInGoogle = () => auth.signIn('google');
-w.oidcSignInCorporate = () => auth.signIn('corporate');
-
-w.oidcHandleCallback = async () => {
-  try {
-    const user = await auth.handleRedirectCallback();
-    if (user) {
-      show('oidc-result', `Signed in! ${JSON.stringify(user, null, 2)}`);
-      window.history.replaceState({}, '', '/');
-    } else {
-      show('oidc-result', 'No pending OIDC flow', false);
-    }
-  } catch (e: any) {
-    show('oidc-result', `Error: ${e.message}`, false);
+async function oidcSignIn(provider: 'google' | 'corporate') {
+  const state = await oidcAuthApi.getAuthState();
+  const action = state.actions.find((a) => a.name === `signIn:${provider}`);
+  if (!action?.url) {
+    show('oidc-result', `No sign-in action for ${provider}`, false);
+    return;
   }
-};
+  window.location.assign(action.url);
+}
+
+w.oidcSignInGoogle = () => oidcSignIn('google');
+w.oidcSignInCorporate = () => oidcSignIn('corporate');
 
 w.oidcGetUser = () => run('oidc-result', () => api.oidcGetCurrentUser());
 
-w.oidcSignOut = async () => {
-  await auth.signOut();
-  show('oidc-result', 'Signed out');
-};
-
-// Auto-handle callback if we landed here with ?code=&state=
-if (window.location.search.includes('code=') && window.location.search.includes('state=')) {
-  w.oidcHandleCallback();
-}
+w.oidcSignOut = () => run('oidc-result', () => api.oidcSignOut());
 
 // ============================================================================
 // AsyncJob

@@ -10,7 +10,6 @@
 // covers (see 01-test-matrix.md).
 
 import { test, expect, type Page } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -18,18 +17,13 @@ import { dirname, join } from 'node:path';
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
 let hostingUrl: string;
 
 test.beforeAll(async () => {
   if (ENV === 'sandbox') {
-    console.log('🚀 Deploying hosting-ssr-astro sandbox...\n');
-    execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
-      cwd: projectRoot,
-      stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
+    // The stack was deployed once for this run by `globalSetup` (test/global-setup.ts);
+    // this hook runs per worker, so a retry re-reads the outputs instead of redeploying.
 
     const outputs = JSON.parse(
       readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'),
@@ -51,16 +45,7 @@ test.beforeAll(async () => {
   }
 });
 
-test.afterAll(async () => {
-  if (ENV === 'sandbox' && !process.env.BLOCKS_SANDBOX_KEEP) {
-    console.log('\n🗑️  Destroying sandbox...');
-    execFileSync('npx', ['tsx', 'test/sandbox-destroy.ts', backendPath], {
-      cwd: projectRoot,
-      stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-  }
-});
+// Teardown: `globalTeardown` (test/global-teardown.ts) destroys the stack once, after all tests and retries.
 
 /** Read the `data-testid="page-id"` heading text from raw HTML. */
 function pageId(html: string): string | null {

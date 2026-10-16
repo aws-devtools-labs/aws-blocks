@@ -30,6 +30,10 @@ public class Api {
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 }
