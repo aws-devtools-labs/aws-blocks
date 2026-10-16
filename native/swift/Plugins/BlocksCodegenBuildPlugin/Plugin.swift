@@ -8,6 +8,8 @@
 import PackagePlugin
 import Foundation
 
+let blocksCodegenConfigName = "blocks.codegen.json"
+
 /// A build plugin that automatically generates typed Swift models and API methods
 /// from a Blocks spec file (`blocks.spec.json`) at build time.
 ///
@@ -27,6 +29,11 @@ struct BlocksCodegenBuildPlugin: BuildToolPlugin {
             return []
         }
 
+        let configDir = specFile.path.removingLastComponent()
+        let configFile = sourceTarget.sourceFiles.first { file in
+            file.path.lastComponent == blocksCodegenConfigName && file.path.removingLastComponent() == configDir
+        }
+
         let generatorTool = try context.tool(named: "swift-code-generator")
         let outputDir = context.pluginWorkDirectory.appending("Generated")
 
@@ -37,8 +44,8 @@ struct BlocksCodegenBuildPlugin: BuildToolPlugin {
             .buildCommand(
                 displayName: "Generate Blocks API from \(specFile.path.lastComponent)",
                 executable: generatorTool.path,
-                arguments: [specFile.path.string, outputDir.string],
-                inputFiles: [specFile.path],
+                arguments: [specFile.path.string, outputDir.string] + [configFile?.path.string].compactMap { $0 },
+                inputFiles: [specFile.path] + [configFile?.path].compactMap { $0 },
                 outputFiles: [modelsOutput, apiOutput]
             )
         ]
@@ -58,6 +65,11 @@ extension BlocksCodegenBuildPlugin: XcodeBuildToolPlugin {
             return []
         }
 
+        let configDir = specFile.path.removingLastComponent()
+        let configFile = target.inputFiles.first { file in
+            file.path.lastComponent == blocksCodegenConfigName && file.path.removingLastComponent() == configDir
+        }
+
         let generatorTool = try context.tool(named: "swift-code-generator")
         let outputDir = context.pluginWorkDirectory.appending("Generated")
 
@@ -68,8 +80,8 @@ extension BlocksCodegenBuildPlugin: XcodeBuildToolPlugin {
             .buildCommand(
                 displayName: "Generate Blocks API from \(specFile.path.lastComponent)",
                 executable: generatorTool.path,
-                arguments: [specFile.path.string, outputDir.string],
-                inputFiles: [specFile.path],
+                arguments: [specFile.path.string, outputDir.string] + [configFile?.path.string].compactMap { $0 },
+                inputFiles: [specFile.path] + [configFile?.path].compactMap { $0 },
                 outputFiles: [modelsOutput, apiOutput]
             )
         ]

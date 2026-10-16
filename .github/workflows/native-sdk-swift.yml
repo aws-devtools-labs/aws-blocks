@@ -37,6 +37,8 @@ jobs:
       - name: Test the Swift scripts
         run: |
           for test in native/swift/scripts/*.test.sh; do
+            # codegen-config.test.sh needs a Swift toolchain, so it runs in the macOS job.
+            if [[ "$test" == */codegen-config.test.sh ]]; then continue; fi
             echo "== $test =="
             bash "$test"
           done
@@ -58,6 +60,9 @@ jobs:
 
       - name: Run unit tests
         run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests"
+
+      - name: Test the codegen configuration surface
+        run: scripts/codegen-config.test.sh
 
   build-and-test-ios:
     name: Build & Test (iOS)

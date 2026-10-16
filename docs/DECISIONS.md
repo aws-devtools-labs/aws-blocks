@@ -808,3 +808,34 @@ The carrier decision settled where declarations live and how they are shaped; it
 - `docs/native-clients/schema-generation-guide-for-devs.md` — the authoring surface and the three bounding rules
 - `packages/core/src/scripts/read-native-declarations.ts` — the walk
 - `packages/core/src/scripts/validate-native-catalogs.ts` — tag uniqueness, built-in tag protection, ABI allowlist
+
+## D-020: A native generator validates only what its own emission depends on
+
+**Date**: 2026-10-15
+**Authors:** varshpam
+
+### Context
+`validateNativeCatalogs` runs inside `generateSpec` and rejects a malformed catalog before `blocks.spec.json` is written. The Swift generator validates the catalogs again when it resolves bindings, which raised the question of how much of that second pass is re-validation that has to be kept in lockstep with the producer by hand.
+
+Auditing the overlap found one check that was: binding-`id` uniqueness. `binding.id` is read nowhere in the Swift generator except its own guard and error-message interpolation, so two bindings sharing an id but carrying different tags produced a named error even though the emitted client was correct and compiled. The producer already owns that rule, with cross-block reporting the generator cannot do.
+
+### Decision
+A native generator validates a catalog rule only when its own emission depends on it. The binding-`id` check is removed from the Swift generator; the producer's `seenIds` remains the single enforcement point.
+
+Six rules still coincide with producer checks, and each is load-bearing for Swift rather than a second opinion. A duplicate `tag` would make `resolved[binding.tag]` silently last-write-wins. A negative `genericArity` clears `isGeneric` and drops the trailing decoder; an arity above one cannot be expressed, since `isGeneric` is a flag and only the first type argument is emitted. A blank `tag` becomes the `expectedTag` literal, which `validateTransferableDescriptor` can never satisfy. A binding naming an undeclared package cannot reach `platforms.swift.package` to resolve a module. A built-in `tag` is routed to the hard-coded path rather than rejected. An unknown `abi` has no entry in `transferableFactoriesByABI`, so there is no factory name to emit. Removing most of them produces wrong or non-compiling generated source. The package and ABI references are the exceptions: dropping either degrades silently to `UnknownTransferable`, which the design doc requires be a generation error before any mutation instead.
+
+### Rationale
+The distinction that matters is not "does the producer also check this" but "does this generator need the answer". A check of the first kind is duplication, and duplication across two languages drifts silently. A check of the second kind is the generator doing its own job, and it stays correct whether or not a producer ran — which matters because `swift-code-generator` is a standalone executable that reads whatever JSON path it is given, and nothing in a spec records which producer wrote it.
+
+Applying that test shrank the overlap rather than documenting it, and it gives the next generator a rule to apply instead of a precedent to copy.
+
+### Alternatives Considered
+**Keep the binding-`id` check and document the lockstep.** Rejected: it records a maintenance cost instead of removing one, and the check earns nothing — the emitted client is correct with or without it.
+
+**Drop the remaining six and trust the producer.** Rejected: each one guards an emission decision, so dropping them converts a named configuration error into generated source that does not compile, or compiles and misbehaves. Before the iteration-0 fallback an unbound tag failed differently in each language: a `Data?` that did not type-check on Swift, `dynamic` on Dart, and a code-generation failure on Kotlin.
+
+**A cross-language drift guard over the overlap.** Rejected: drift guards in this repo are per-language, and a guard spanning TypeScript and Swift would have to parse one language from the other. With the overlap reduced to checks Swift needs anyway, there is nothing left for such a guard to protect.
+
+### References
+- `packages/core/src/scripts/validate-native-catalogs.ts` — `seenIds`, now the single enforcement point for binding-`id` uniqueness, with cross-block reporting
+- `native/swift/Sources/BlocksCodegen/CodegenModel.swift` — `resolveDeclaredTransferableBindings`, the six rules Swift keeps because its emission reads them
