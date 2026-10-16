@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-knowledge-base",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "keywords": [
     "aws-blocks",
     "knowledge-base",
@@ -44,8 +44,8 @@
     "test": "node --test --test-concurrency=1 dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/bb-logger": "^0.2.2",
-    "@aws-blocks/core": "^0.7.0",
+    "@aws-blocks/bb-logger": "^0.2.3",
+    "@aws-blocks/core": "^0.8.0",
     "@aws-sdk/client-bedrock-agent": "^3.0.0",
     "@aws-sdk/client-bedrock-agent-runtime": "^3.0.0"
   },
