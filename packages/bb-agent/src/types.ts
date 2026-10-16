@@ -244,6 +244,10 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	 * tries to make the agent call other tools), not a guarantee: also set `needsApproval` on
 	 * tools with side effects, and consider a Bedrock guardrail (`ModelConfig.guardrail`).
 	 *
+	 * The result is serialized to text inside the block: a string is kept as-is, and a
+	 * structured (object or array) result is presented to the model as JSON text rather than
+	 * as a structured tool result.
+	 *
 	 * @example
 	 * ```ts
 	 * searchDocs: tool({

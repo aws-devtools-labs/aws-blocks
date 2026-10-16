@@ -1231,6 +1231,23 @@ describe('model-factory', () => {
 		assert.ok(warnings.some((w) => /guardrails.*not applied/i.test(w)), `expected a warning, got ${JSON.stringify(warnings)}`);
 	});
 
+	test('warns about the deprecated guardrails field once per config, not once per turn', async () => {
+		const warnings: string[] = [];
+		const log = { warn: (msg: string) => warnings.push(msg), info() {}, error() {}, debug() {} } as never;
+		const config = { provider: 'bedrock' as const, modelId: 'm', guardrails: { blockedTopics: ['x'] } };
+		await createStrandsModel(config, log);
+		await createStrandsModel(config, log);
+		await createStrandsModel(config, log);
+		assert.strictEqual(warnings.filter((w) => /guardrails.*not applied/i.test(w)).length, 1);
+	});
+
+	test('rejects a guardrail on the canned provider too', async () => {
+		await assert.rejects(
+			() => createStrandsModel({ provider: 'canned', guardrail: { identifier: 'g', version: '1' } }),
+			(err: any) => err.name === AgentErrors.InvalidModelConfig,
+		);
+	});
+
 	test('rejects a guardrail on a non-Bedrock provider instead of silently ignoring it', async () => {
 		await assert.rejects(
 			() => createStrandsModel({ provider: 'openai-api', modelId: 'gpt-4', apiKey: 'k', guardrail: { identifier: 'g', version: '1' } }),
