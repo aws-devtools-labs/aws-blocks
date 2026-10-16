@@ -55,13 +55,16 @@ import {
 } from '../secret-resolve.js';
 import type { HostingResources } from '../types.js';
 import type { CdnConstruct, CdnConstructProps } from './cdn_construct.js';
-import { cloudFrontDoor } from './cloudfront_door.js';
-import { type CustomDoorContext, renderCustomDoor } from './custom_door.js';
-import { type FrontDoorHooks, runFrontDoor } from './door_hooks.js';
-import type { LayerHandle } from './layer.js';
-import { renderGraph } from './render-graph.js';
 import { buildCapabilityPlan } from '../plan/capability-plan.js';
-import { composeGraph } from '../plan/compose.js';
+import { albDoor } from './alb_door.js';
+import { apiGatewayDoor } from './apigw_door.js';
+import { registerUploads } from './cf_helpers.js';
+import { cloudFrontDoor } from './cloudfront_door.js';
+import { buildFrontDoor } from './custom_door.js';
+import { buildDoorInput } from './door_input.js';
+import type { DoorInput, FrontDoor, FrontDoorResult } from './front_door.js';
+import type { OriginHandle } from './layer.js';
+import { s3WebsiteDoor } from './s3_website_door.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
@@ -401,20 +404,24 @@ export type HostingConstructProps = {
    *   full edge caching, WAF, custom domains, streaming). Unchanged.
    * - `{ kind: 'alb', … }` — an Application Load Balancer (regional, no CDN).
    *   For enterprises behind an existing ALB, private/internal deploys, or
-   *   apps that simply don't need a global edge. Capabilities CloudFront does
-   *   at the edge (edge cache, per-route response headers, skew-pin, geo)
-   *   are unsupported on ALB and must be waived via `degrade` (the negotiator
-   *   fails synth otherwise — conscious, never silent).
+   *   apps that simply don't need a global edge. What CloudFront does at the
+   *   edge (edge cache, per-route response headers, skew-pin, geo) is not
+   *   available on an ALB.
    * - `{ kind: 'apiGateway', … }` — an Amazon API Gateway as the front door
    *   (regional, no CDN, no VPC/NAT, scale-to-zero, pay-per-request). The
    *   *serverless* sibling of the ALB door: API Gateway owns routing (a route
    *   per origin/namespace), serves private S3 assets via an asset-proxy
    *   Lambda, and proxies `/aws-blocks/*` same-origin to the backend natively
    *   (no forwarder Lambda). Best for a SPA/SSR app that wants no CDN and no
-   *   always-on ALB baseline. Edge capabilities (edge cache, per-route headers,
-   *   skew-pin, geo) and response streaming are unsupported and must
-   *   be accepted via `degrade`. Choose the flavor with `api`: `'rest'`
-   *   (default) or `'http'` (cheaper HTTP API v2).
+   *   always-on ALB baseline. Edge features (edge cache, per-route headers,
+   *   skew-pin, geo) and response streaming are not available. Choose the
+   *   flavor with `api`: `'http'` (default) or `'rest'`.
+   * - `{ kind: 'custom', door }` — bring your own front door, written as one
+   *   `build` function (see {@link FrontDoor} and `defineFrontDoor`).
+   *
+   * There is no feature check: a door applies the features the app asked for
+   * as far as it supports them. Only a bring-your-own door is checked, and only
+   * for its routing (see `wiringCheck`).
    *
    * Omit for the CloudFront default (backward-compatible).
    */
@@ -424,9 +431,10 @@ export type HostingConstructProps = {
      * No front door — the app is served DIRECTLY from S3 static-website hosting
      * (public bucket, HTTP-only, no edge, no router). The cheapest option for a
      * pure static site / SPA. There is no front door to route to a backend, so
-     * SSR / same-origin API / image-opt / TLS are `unsupported`; the negotiator
-     * fails synth for anything beyond static/SPA (use `'cloudfront'` or
-     * `{ kind: 'alb' }`). `s3-website` is the internal mechanism, not a front door.
+     * there is no SSR, same-origin API (the client calls the backend
+     * cross-origin), image optimization or TLS; an app with a server fails synth
+     * (use `'cloudfront'` or `{ kind: 'alb' }`). `s3-website` is the internal
+     * mechanism, not a front door.
      */
     | 'none'
     | {
@@ -443,15 +451,6 @@ export type HostingConstructProps = {
          * the `api` prop; enables cookie auth with no CORS.
          */
         backendApiUrl?: string;
-        /** Capabilities the app explicitly waives — deploy without them (else the negotiator fails). */
-        degrade?: import('../plan/types.js').CapabilityId[];
-        /**
-         * How strictly the capability check is enforced. `'strict'` (default) fails
-         * synth on a demanded capability the door can't serve; `'warn'` reports it
-         * and proceeds; `'off'` skips the check — the deploy then owns correctness.
-         * @default 'strict'
-         */
-        negotiation?: import('./negotiation_policy.js').NegotiationMode;
       }
     | {
         kind: 'apiGateway';
@@ -477,50 +476,44 @@ export type HostingConstructProps = {
          * HTTPS URL natively — no forwarder Lambda (unlike the ALB door).
          */
         backendApiUrl?: string;
-        /** Capabilities the app explicitly waives — deploy without them (else the negotiator fails). */
-        degrade?: import('../plan/types.js').CapabilityId[];
-        /**
-         * How strictly the capability check is enforced. `'strict'` (default) fails
-         * synth on a demanded capability the door can't serve; `'warn'` reports it
-         * and proceeds; `'off'` skips the check — the deploy then owns correctness.
-         * @default 'strict'
-         */
-        negotiation?: import('./negotiation_policy.js').NegotiationMode;
       }
     | {
         /** BYO — a customer-authored front door. */
         kind: 'custom';
         /**
-         * Your front door, defined with build hooks (see {@link FrontDoorHooks} and
-         * `defineFrontDoor`). Defining a hook is what declares support. At synth
-         * the framework checks that every capability the app DEMANDS has its
-         * hook (or is reported by `route`) — an unmet demand fails at synth
-         * (safe by construction) — and runs `create` → `route` → the demanded
-         * feature hooks → `handle` to build the door. You provision the door
-         * itself; Hosting still provisions the app (S3 assets, compute, backend)
-         * and hands them over via the render context + `plan.backend`.
+         * Your front door: `defineFrontDoor({ service, build(scope, input) })`
+         * (see {@link FrontDoor}). Hosting provisions the app (S3 assets, compute,
+         * backend) and calls `build` ONCE at synth with everything it built (the
+         * {@link DoorInput}); `build` creates the door and returns its public
+         * `url` (required — a missing `url` fails synth).
          */
-        door: FrontDoorHooks<unknown, CustomDoorContext>;
+        door: FrontDoor;
+        /**
+         * Check the door's routing after `build`: the static assets must be
+         * reachable, and when the app has an API at least one of its paths must
+         * reach it — as recorded by the `cf.*` helpers (or `cf.recordWired`).
+         * A door that wires correctly with raw CDK and doesn't declare it gets a
+         * false alarm; set `false` to turn the check off.
+         * @default true
+         */
+        wiringCheck?: boolean;
         /**
          * Backend API URL to proxy same-origin (`/aws-blocks/*`). Set by the
-         * Blocks integration layer from the `api` prop; surfaces as a
-         * `plan.backend` origin the door's `sameOriginApi` hook routes to.
+         * Blocks integration layer from the `api` prop; surfaces as
+         * `input.origins.api`.
          */
         backendApiUrl?: string;
-        /** Capabilities the app explicitly waives — deploy without them (else the negotiator fails). */
-        degrade?: import('../plan/types.js').CapabilityId[];
         /**
-         * How strictly the capability check is enforced. `'strict'` (default) fails
-         * synth on a demanded capability the door can't serve; `'warn'` reports it
-         * and proceeds; `'off'` skips the check — the deploy then owns correctness.
-         * @default 'strict'
+         * Extra path patterns that must reach the backend (the backend's raw
+         * routes), beyond `/aws-blocks/*`. Set by the Blocks integration layer;
+         * surfaces in `input.origins.api.paths`.
          */
-        negotiation?: import('./negotiation_policy.js').NegotiationMode;
+        backendApiPaths?: string[];
       };
   // NOTE: S3-website is not a public front-door *kind* — it is an ORIGIN, not a
   // front door (it fronts nothing). It is surfaced as `frontDoor: 'none'` (serve
-  // the origin directly); `s3-website` is the internal adapter/mechanism name,
-  // reachable via `composeGraph`/`renderGraph`, never via this public union.
+  // the origin directly); `s3-website` is the internal door name
+  // (`s3WebsiteDoor`), never part of this public union.
 };
 
 // ---- Main construct ----
@@ -541,11 +534,27 @@ export type HostingConstructProps = {
  */
 export class HostingConstruct extends Construct {
   readonly bucket: Bucket;
+  /** Backs {@link distribution}; set only for the CloudFront front door. */
+  private readonly _distribution?: Distribution;
   /**
-   * The CloudFront distribution. Present for the default `cloudfront` front
-   * door; `undefined` when a non-CloudFront front door (e.g. `alb`) is selected.
+   * The CloudFront distribution.
+   *
+   * Available for the default `cloudfront` front door. Any other door (`alb`,
+   * `apiGateway`, `'none'`, a custom door) has no built-in distribution, so
+   * reading it throws — check `frontDoor.service === 'cloudfront'` first, or use
+   * `distributionUrl` / `frontDoor` for the deploy's address.
+   *
+   * @throws HostingError('FrontDoorNotCloudFrontError') when the front door is not CloudFront.
    */
-  readonly distribution?: Distribution;
+  get distribution(): Distribution {
+    if (!this._distribution) {
+      throw new HostingError('FrontDoorNotCloudFrontError', {
+        message: `HostingConstruct.distribution is only available for the CloudFront front door; this deploy uses '${this.frontDoor.service}'.`,
+        resolution: 'Use `distributionUrl` (or `frontDoor.url`) for the address, or read `distribution` only when `frontDoor.service` is `cloudfront`.',
+      });
+    }
+    return this._distribution;
+  }
   /**
    * The Application Load Balancer's DNS name, present when the front door is an
    * ALB (`frontDoor: { kind: 'alb' }`, or the ALB router built for the composed
@@ -554,11 +563,17 @@ export class HostingConstruct extends Construct {
    */
   loadBalancerDnsName?: string;
   /**
-   * The service-agnostic capability plan the front door was checked and built
-   * against. A composed layer (the CloudFront edge of the stacked door) is run
-   * against the same plan.
+   * The {@link DoorInput} the front door was built from — the app facts, the
+   * provisioned origins, and the features the app asked for. A door stacked in
+   * front of this one (the CloudFront edge of the stacked door) is built from
+   * the same input, plus `upstream`.
    */
-  capabilityPlan?: import('../plan/types.js').CapabilityPlan;
+  readonly doorInput: DoorInput;
+  /**
+   * What the front door handed back: its service id, public `url`, and the
+   * `originHandle` a door stacked in front of it attaches to.
+   */
+  readonly frontDoor: { readonly service: string; readonly url: string; readonly originHandle: OriginHandle };
   /**
    * The PUBLIC website bucket, present only for `frontDoor: 'none'` (served
    * directly from S3 website hosting — its own public bucket, from root). The Blocks
@@ -1297,6 +1312,9 @@ export class HostingConstruct extends Construct {
     // non-CloudFront door rendered via the front-door graph below.
     const useCustomDoor = props.frontDoor !== undefined && props.frontDoor !== 'cloudfront';
     let cdn: CdnConstruct | undefined;
+    // A door's post-upload hook (`FrontDoorResult.onUpload`), called once every
+    // asset upload below has been declared (section 12d).
+    let onUpload: FrontDoorResult['onUpload'];
 
     if (!useCustomDoor) {
     // ---- 6. WAF (conditional) ----
@@ -1438,10 +1456,10 @@ export class HostingConstruct extends Construct {
         : undefined,
     };
 
-    // The CloudFront door is defined with hooks like every other door: each
-    // feature hook passes ONLY its own props to the distribution, and runs only
-    // when the app demands it. The demand flags below are derived from exactly
-    // the props those hooks carry, so every configured feature is built.
+    // The CloudFront door is a free-form door like every other door: one
+    // `build` that creates the CdnConstruct from `cdnProps` (the app's features
+    // included, exactly as configured). It receives the same DoorInput a
+    // bring-your-own door gets, plus that internal extra.
     const cfServerName = this.computeFunctions.has('default')
       ? 'default'
       : this.computeFunctions.has('server')
@@ -1454,26 +1472,15 @@ export class HostingConstruct extends Construct {
       hasImage: this.computeFunctions.has('image-optimization'),
       skewEnabled: (props.skewProtection ?? { enabled: true }).enabled !== false,
       wwwRedirect: props.domain?.wwwRedirect,
-      demand: {
-        customDomain: Boolean(cdnProps.certificate) || Boolean(cdnProps.domainName),
-        wafEnabled: Boolean(cdnProps.webAcl) || Boolean(cdnProps.webAclArn),
-        loggingEnabled: Boolean(cdnProps.accessLogBucket),
-        geoRestricted: Boolean(cdnProps.geoRestriction),
-        hasCustomErrorPages: Boolean(props.errorPages),
-        needsStreaming: cfServerName ? manifest.compute?.[cfServerName]?.streaming === true : false,
-        monitoringEnabled: props.monitoring?.enabled ?? true,
-      },
     });
-    this.capabilityPlan = cfPlan;
-    const cfRun = runFrontDoor(this, cfPlan, cloudFrontDoor, { cdnProps }, {
-      errorCode: 'CapabilityNotSupportedError',
-    });
-    if (!cfRun.door.cdn) throw new Error('cloudfront door: handle() did not build the distribution.');
-    cdn = cfRun.door.cdn;
+    this.doorInput = this.assembleDoorInput(cfPlan, manifest, props, cfServerName);
+    const cfBuild = buildFrontDoor(this, cloudFrontDoor, { ...this.doorInput, cdnProps }, { wiringCheck: false });
+    cdn = cfBuild.result.cdn;
+    this.frontDoor = { service: cloudFrontDoor.service, url: cfBuild.result.url, originHandle: cfBuild.result.originHandle };
 
     this.cdn = cdn;
     this.invalidationId = cdn.invalidationId;
-    this.distribution = cdn.distribution;
+    this._distribution = cdn.distribution;
     this.distributionUrl = cdn.distributionUrl;
 
     // Output the CloudFront distribution domain when custom domain is configured.
@@ -1538,7 +1545,7 @@ export class HostingConstruct extends Construct {
       const regionResolved = !Token.isUnresolved(region);
       const offRegion = regionResolved && region !== 'us-east-1';
 
-      if (!regionResolved && this.distribution) {
+      if (!regionResolved && this._distribution) {
         Annotations.of(this).addWarningV2(
           '@aws-blocks/hosting:CloudFrontAlarmRegionUnresolved',
           `The hosting stack is environment-agnostic (region is an ` +
@@ -1576,7 +1583,7 @@ export class HostingConstruct extends Construct {
       // stack, always (no opt-out). The same subscriptions are applied to
       // its topic so callers subscribe in one place and both topics are
       // covered.
-      if (this.distribution && monitoring.cloudFrontAlarmDeferred) {
+      if (this._distribution && monitoring.cloudFrontAlarmDeferred) {
         if (Token.isUnresolved(hostingStack.account)) {
           // Off-region + unresolved account (a legitimate single-synth,
           // multi-account pipeline shape): we CANNOT build the us-east-1
@@ -1626,7 +1633,7 @@ export class HostingConstruct extends Construct {
             `${hostingStack.stackName}-CfMonitoring-${this.node.addr.slice(0, 8)}`,
             {
               env: { account: hostingStack.account, region: 'us-east-1' },
-              distributionId: this.distribution.distributionId,
+              distributionId: this._distribution.distributionId,
               subscriptions,
             },
           );
@@ -1691,14 +1698,13 @@ export class HostingConstruct extends Construct {
     }
     } else {
       // ---- Front door: non-CloudFront (dispatch by kind) ----
-      // Storage + compute are already built above (front-door-agnostic). Each
-      // adapter renders the SAME neutral CapabilityPlan onto its service, after
-      // negotiating (conscious degradation). Static assets are uploaded to
-      // `builds/<buildId>/` by the shared section 12 below and read by each
-      // door's asset-proxy. Skew-pin is a CloudFront-edge capability; leave it
-      // off the plan so it is not a required capability these doors would reject
-      // (apps opt into other degradations via `degrade`).
-      // `'none'` (bare string) → serve S3 directly; otherwise an object door (alb).
+      // Storage + compute are already built above (front-door-agnostic). Every
+      // door is a free-form door: one `build`, called once here with the
+      // DoorInput (plus a built-in's internal extras). Static assets are uploaded
+      // to `builds/<buildId>/` by the shared section 12 below and read by each
+      // door's asset-proxy. Skew-pin is a CloudFront-edge feature, so the plan
+      // these doors render carries it off.
+      // `'none'` (bare string) → serve S3 directly; otherwise an object door.
       const isNone = props.frontDoor === 'none';
       const fd = isNone ? undefined : (props.frontDoor as Extract<HostingConstructProps['frontDoor'], { kind: string }>);
       const serverName = this.computeFunctions.has('default')
@@ -1713,18 +1719,12 @@ export class HostingConstruct extends Construct {
       >;
       // Same-origin backend routing: a single `'*'` origin (single-compute) from
       // the backend API URL the Blocks layer threads in. A future multi-compute
-      // caller passes several named-namespace origins here; the adapters already
-      // loop over `plan.backend.origins`. Omitting it = cross-origin API.
+      // caller passes several named-namespace origins here; the built-in doors
+      // already loop over `plan.backend.origins`. Omitting it = cross-origin API.
       const backendApiUrl = fd && 'backendApiUrl' in fd ? fd.backendApiUrl : undefined;
       const backendOrigins = backendApiUrl
         ? [{ namespace: '*', ingress: { kind: 'url' as const, url: backendApiUrl } }]
         : undefined;
-      // Demand signals from the app's props/manifest (the demand surface) — the
-      // negotiator requires the matching capability ONLY when the app asked for
-      // it, so a door that lacks an UN-demanded feature negotiates clean (missing
-      // ≠ degraded). A door that lacks a DEMANDED feature fails loudly (unless the
-      // app waives it via `degrade`) instead of silently dropping it.
-      const serverStreams = serverName ? manifest.compute?.[serverName]?.streaming === true : false;
       const plan = buildCapabilityPlan({
         manifest,
         buildId,
@@ -1733,107 +1733,89 @@ export class HostingConstruct extends Construct {
         skewEnabled: false,
         wwwRedirect: props.domain?.wwwRedirect,
         backendOrigins,
-        demand: {
-          customDomain: Boolean(props.domain),
-          wafEnabled: props.waf?.enabled === true || Boolean(props.waf?.webAclArn),
-          loggingEnabled: Boolean(props.logging),
-          hasCustomErrorPages: Boolean(props.errorPages),
-          needsStreaming: serverStreams,
-          geoRestricted: Boolean(props.cdn?.geoRestriction),
-          monitoringEnabled: Boolean(props.monitoring),
-        },
       });
-      this.capabilityPlan = plan;
       const common = {
+        plan,
         bucket: this.bucket,
         computeFunctions,
         serverComputeName: serverName,
         imageComputeName: hasImageOrigin ? 'image-optimization' : undefined,
       };
-      // Compose the (single-layer) front-door graph and render it. The graph is
-      // now the dispatch driver for the non-CloudFront doors; each door's ctx
-      // carries the CDK handles the neutral graph can't. Output is byte-identical
-      // to the previous direct `adapter.render(...)` (renderGraph → the same
-      // adapter's renderLayer → the same construct).
-      let handle: LayerHandle;
+      let built: FrontDoorResult & { originHandle: OriginHandle };
+      let service: string;
       if (isNone) {
         // No front door — serve the origin directly via S3 website hosting. The
-        // negotiator throws here if the app demands anything beyond static/SPA
-        // (SSR, same-origin API, image-opt, TLS) — never a silently broken deploy.
-        // ('none' maps to the internal `s3-website` renderer.)
-        handle = renderGraph(this, composeGraph(plan, 's3-website'), plan, {
-          staticDir: manifest.staticAssets.directory,
-        });
+        // door refuses an app with a server (a website bucket can't run one).
+        // ('none' maps to the internal `s3-website` door.)
+        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName);
+        built = buildFrontDoor(this, s3WebsiteDoor, { ...this.doorInput, plan }, { wiringCheck: false }).result;
+        service = s3WebsiteDoor.service;
       } else if (fd?.kind === 'alb') {
-        handle = renderGraph(this, composeGraph(plan, 'alb'), plan, {
-          ...common,
-          vpc: fd.vpc,
-          internal: fd.internal,
-          certificate: fd.certificate,
-          // Native ALB features, driven by the same props that set the demand
-          // flags — so a demanded capability is actually built, not just claimed.
-          accessLogging: Boolean(props.logging),
-          waf: props.waf,
-          monitoring: Boolean(props.monitoring),
-          degrade: fd.degrade,
-          negotiation: fd.negotiation,
-        });
-        // The ALB's DNS (from the layer's origin handle) — the composed CF → ALB
-        // edge reads this to point CloudFront's single origin at the ALB.
-        this.loadBalancerDnsName = handle.originHandle?.domainName;
+        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName, backendApiUrl);
+        built = buildFrontDoor(
+          this,
+          albDoor,
+          {
+            ...this.doorInput,
+            alb: {
+              ...common,
+              vpc: fd.vpc,
+              internal: fd.internal,
+              certificate: fd.certificate,
+              // Native ALB features, from the same props a bring-your-own door
+              // finds in `input.features`.
+              accessLogging: Boolean(props.logging),
+              waf: props.waf,
+              monitoring: Boolean(props.monitoring),
+            },
+          },
+          { wiringCheck: false },
+        ).result;
+        service = albDoor.service;
+        // The ALB's DNS — the composed CF → ALB edge points CloudFront's single
+        // origin at it.
+        this.loadBalancerDnsName = built.originHandle.domainName;
       } else if (fd?.kind === 'apiGateway') {
         // API Gateway owns routing: a route per origin (asset-proxy → private S3,
         // SSR/image Lambdas) plus native same-origin backend proxy. `api` picks
-        // REST (default; lambda:InvokeFunction — no Function-URL body-hash issue)
-        // vs the cheaper HTTP API v2. Edge capabilities (cache/headers/skew/geo)
-        // and streaming are unsupported and waived via `degrade`.
-        handle = renderGraph(this, composeGraph(plan, 'api-gateway'), plan, {
-          ...common,
-          apiType: fd.api ?? 'http',
-          // Custom domain: names come from `domain`; the regional cert is the
-          // door's `certificate` (BYO, stack-region) or `domain.certificate`,
-          // else DNS-validated against the hosted zone by the construct.
-          domain: props.domain
-            ? {
-                names: Array.isArray(props.domain.domainName) ? props.domain.domainName : [props.domain.domainName],
-                hostedZone: props.domain.hostedZone,
-                hostedZoneId: props.domain.hostedZoneId,
-                certificate: fd.certificate ?? props.domain.certificate,
-              }
-            : undefined,
-          degrade: fd.degrade,
-          negotiation: fd.negotiation,
-        });
-      } else if (fd?.kind === 'custom') {
-        // BYO custom door: check its hooks against the plan's demands
-        // (framework-enforced → an unmet demand fails at synth, never a silent
-        // runtime break), then run the customer's hooks to build the door. It
-        // reads the same ctx the built-in doors get; backend routing lives in
-        // `plan.backend.origins`.
-        handle = renderCustomDoor(
+        // the HTTP API v2 (default) vs a REST API (lambda:InvokeFunction — no
+        // Function-URL body-hash issue).
+        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName, backendApiUrl);
+        built = buildFrontDoor(
           this,
-          plan,
-          fd.door,
+          apiGatewayDoor,
           {
-            ...common,
-            degrade: fd.degrade,
-            // The feature hooks need the app's settings to build their feature.
-            features: {
-              domain: props.domain,
-              waf: props.waf,
-              logging: props.logging,
-              monitoring: props.monitoring,
-              geoRestriction: props.cdn?.geoRestriction,
+            ...this.doorInput,
+            apiType: fd.api ?? 'http',
+            apiGateway: {
+              ...common,
+              // Custom domain: names come from `domain`; the regional cert is the
+              // door's `certificate` (BYO, stack-region) or `domain.certificate`,
+              // else DNS-validated against the hosted zone by the construct.
+              domain: props.domain
+                ? {
+                    names: Array.isArray(props.domain.domainName) ? props.domain.domainName : [props.domain.domainName],
+                    hostedZone: props.domain.hostedZone,
+                    hostedZoneId: props.domain.hostedZoneId,
+                    certificate: fd.certificate ?? props.domain.certificate,
+                  }
+                : undefined,
             },
           },
-          {
-            degrade: fd.degrade,
-            negotiation: fd.negotiation,
-          },
-        );
+          { wiringCheck: false },
+        ).result;
+        service = apiGatewayDoor.service;
+      } else if (fd?.kind === 'custom') {
+        // BYO custom door: AWS Blocks hands it the DoorInput and calls `build`
+        // once. Its `url` is required; its routing (assets reachable, API paths
+        // wired) is checked from what the `cf.*` helpers recorded, unless the
+        // app turned that off. Features are the door's to apply — not checked.
+        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName, backendApiUrl, fd.backendApiPaths);
+        built = buildFrontDoor(this, fd.door, this.doorInput, { wiringCheck: fd.wiringCheck }).result;
+        service = fd.door.service;
         // If the door exposes a regional origin (e.g. an ALB it built), surface
-        // its DNS so a composed edge could point at it — same as the ALB door.
-        this.loadBalancerDnsName = handle.originHandle?.domainName;
+        // its host so a composed edge could point at it — same as the ALB door.
+        this.loadBalancerDnsName = built.originHandle.domainName;
       } else {
         throw new HostingError('UnsupportedFrontDoorError', {
           message: `Unknown front door '${JSON.stringify(props.frontDoor)}'.`,
@@ -1841,10 +1823,12 @@ export class HostingConstruct extends Construct {
             "Use 'cloudfront' (default), 'none' (S3 website), { kind: 'alb' }, { kind: 'apiGateway' }, or { kind: 'custom', door }.",
         });
       }
-      this.distributionUrl = handle.url ?? '';
+      this.distributionUrl = built.url;
+      this.frontDoor = { service, url: built.url, originHandle: built.originHandle };
+      onUpload = built.onUpload;
       // The S3-website door serves from its own public bucket; expose it so the
       // Blocks wrapper can publish config.json to the same (cross-origin) origin.
-      if (handle.publicBucket) this.websiteBucket = handle.publicBucket;
+      if (built.publicBucket) this.websiteBucket = built.publicBucket;
     }
 
     // ---- 11. Error page deployment (SSR only) ----
@@ -2199,6 +2183,16 @@ export class HostingConstruct extends Construct {
       }
     }
 
+    // ---- 12d. The front door's post-upload hook ----
+    // Every asset upload for this build is declared now, so a door can declare
+    // resources that must run after them (e.g. a CloudFront invalidation via
+    // `cf.invalidate`). Like the door itself, it only declares resources.
+    if (onUpload) {
+      const uploads: readonly BucketDeployment[] = [...buildAssetDeployments];
+      registerUploads(uploads, buildId);
+      onUpload({ uploads, buildId });
+    }
+
     // ---- CloudFormation resource-count guard ----
     // Retain the CDKBucketDeployment custom resources so they are skipped on
     // stack DELETE. A BucketDeployment CR runs a delete-time handler (object
@@ -2294,12 +2288,60 @@ export class HostingConstruct extends Construct {
    * Get the hosting resources for output wiring.
    */
   getResources(): HostingResources {
+    // `distribution` is read lazily, so a non-CloudFront deploy can still call
+    // this; reading `distribution` on it throws (see the getter).
+    const self = this;
     return {
       bucket: this.bucket,
-      distribution: this.distribution,
+      get distribution(): Distribution {
+        return self.distribution;
+      },
       distributionUrl: this.distributionUrl,
       buildCacheBucket: this.buildCacheBucket,
     };
+  }
+
+  /**
+   * Assemble the {@link DoorInput} from the plan, the resources this construct
+   * provisioned, and the feature props. Has no effect on the template unless a
+   * door reads `origins.server.url` (created on first read).
+   */
+  private assembleDoorInput(
+    plan: import('../plan/types.js').CapabilityPlan,
+    manifest: DeployManifest,
+    props: HostingConstructProps,
+    serverName: string | undefined,
+    backendApiUrl?: string,
+    backendApiPaths?: readonly string[],
+  ): DoorInput {
+    const serverFn = serverName ? this.computeFunctions.get(serverName) : undefined;
+    const imageFn = this.computeFunctions.get('image-optimization');
+    const imageUrl = this.computeFunctionUrls.get('image-optimization');
+    return buildDoorInput(this, {
+      plan,
+      bucket: this.bucket,
+      staticDir: manifest.staticAssets.directory,
+      // Lambda@Edge server functions have no Function URL and are reached
+      // through their own behavior, so only a regional server is an origin.
+      server:
+        serverName && serverFn instanceof LambdaFunction
+          ? {
+              fn: serverFn,
+              url: this.computeFunctionUrls.get(serverName),
+              streaming: manifest.compute?.[serverName]?.streaming !== false,
+            }
+          : undefined,
+      image: imageFn instanceof LambdaFunction && imageUrl ? { fn: imageFn, url: imageUrl } : undefined,
+      api: backendApiUrl ? { url: backendApiUrl, paths: backendApiPaths } : undefined,
+      domain: props.domain,
+      waf: props.waf,
+      cdnWebAclArn: props.cdn?.webAclArn,
+      logging: props.logging,
+      monitoring: props.monitoring,
+      geoRestriction: props.cdn?.geoRestriction,
+      errorPages: props.errorPages,
+      skewProtection: props.skewProtection,
+    });
   }
 }
 

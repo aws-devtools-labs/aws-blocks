@@ -1,52 +1,53 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
- * The layer handles — the attach-point seam for nesting front-door layers.
+ * The attach point for stacking front doors.
  *
- * A URL is a fine ADDRESS but not an ATTACH POINT: to put one layer in front of
- * another (CloudFront edge → ALB router → origin), the parent must point its
- * origin at the child, and for that it needs a handle — a hostname (or, later, a
- * VPC-origin target), not a bare string.
- *
- * A door's `handle` hook (see `door_hooks.ts`) returns a {@link LayerHandle}: the
- * public `url` (set only on the ROOT layer) PLUS an {@link OriginHandle} a parent
- * layer can attach to. The graph renderer consumes `originHandle` to stack layers.
+ * A URL is a fine ADDRESS but not an ATTACH POINT: to put one door in front of
+ * another (CloudFront edge → ALB router → origins), the outer door must point
+ * its origin at the inner one, and for that it needs a hostname + protocol, not
+ * a bare string. A door's `build` may return an {@link OriginHandle}
+ * (`FrontDoorResult.originHandle`); when it doesn't, one is derived from its
+ * `url` by {@link originHandleFromUrl}.
  *
  * These types are CDK-aware (constructs layer) — unlike the service-neutral
  * `plan/` layer, an attach handle inevitably references the concrete edge/origin.
  */
+import { Fn, Token } from 'aws-cdk-lib';
+
 /**
- * How a PARENT layer attaches to this layer as an origin. A hostname + protocol
+ * How an OUTER door attaches to this door as an origin. A hostname + protocol
  * covers the common HTTP(S)-origin attach (an ALB DNS name, an API Gateway host,
  * a CloudFront domain, an S3-website endpoint); it can be extended (e.g. with a
  * VPC-origin target for a private ALB) as needed.
  */
 export type OriginHandle = {
-  /** Hostname WITHOUT scheme that a parent points an HTTP(S) origin at. */
+  /** Hostname WITHOUT scheme that an outer door points an HTTP(S) origin at. */
   domainName: string;
   /** Origin protocol — `http` for the S3-website endpoint, `https` otherwise. */
   protocol: 'http' | 'https';
 };
 
-/** What a rendered layer exposes upward. */
-export type LayerHandle = {
-  /** The deploy's public URL — set ONLY on the root (outermost) layer. */
-  url?: string;
-  /** How a parent layer attaches to this layer (see {@link OriginHandle}). */
-  originHandle: OriginHandle;
-  /**
-   * The PUBLIC bucket this layer serves from, when the layer owns one that is
-   * also the origin the browser fetches (only the S3-website door: it creates
-   * its own public website bucket and serves from ROOT, unlike every other door
-   * which serves the private assets bucket under `builds/<id>/`). The wrapper
-   * uses it to publish `config.json` to the same origin the SPA reads. Absent
-   * for doors that serve the shared private assets bucket.
-   */
-  publicBucket?: import('aws-cdk-lib/aws-s3').IBucket;
-};
-
 /**
- * Already-rendered child layers, keyed by the parent forward's `match` selector.
- * The graph renderer builds these bottom-up and hands them to the parent's
- * `create` hook (see `door_hooks.ts`) so it can attach to each child's
- * {@link OriginHandle} (composition — e.g. CloudFront edge fronting an ALB).
+ * Derive the {@link OriginHandle} for a door from its public `url`.
+ *
+ * `url` is usually a CDK token (e.g. `https://${dist.distributionDomainName}`),
+ * so the host is sliced out IN-TEMPLATE with `Fn::Split`/`Fn::Select` — string
+ * methods would operate on the unresolved placeholder text. The scheme is read
+ * from the literal prefix when there is one (a template string keeps its
+ * `https://` prefix even around a token); a fully opaque token defaults to
+ * `https`.
+ *
+ * @param url the door's public URL (`<scheme>://<host>[/<path>]`).
+ * @returns the host to point an origin at, and the protocol to reach it with.
  */
-export type ChildHandles = ReadonlyMap<string, LayerHandle>;
+export function originHandleFromUrl(url: string): OriginHandle {
+  const protocol: OriginHandle['protocol'] = url.startsWith('http://') ? 'http' : 'https';
+  if (!Token.isUnresolved(url)) {
+    const host = url.replace(/^[a-z]+:\/\//i, '').split('/')[0] ?? '';
+    return { domainName: host, protocol };
+  }
+  // `https://host/path` split on '/' → ['https:', '', 'host', 'path'].
+  return { domainName: Fn.select(2, Fn.split('/', url)), protocol };
+}

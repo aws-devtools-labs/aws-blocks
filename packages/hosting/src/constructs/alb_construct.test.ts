@@ -6,7 +6,8 @@ import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { CapabilityPlan } from '../plan/types.js';
 import { AlbConstruct } from './alb_construct.js';
 import { albDoor } from './alb_door.js';
-import { runFrontDoor } from './door_hooks.js';
+import { buildFrontDoor } from './custom_door.js';
+import { buildDoorInput } from './door_input.js';
 
 const staticPlan: CapabilityPlan = {
   origins: [{ id: 'blocks-s3', kind: 'static' }],
@@ -149,54 +150,27 @@ describe('AlbConstruct — same-origin backend routing (plan.backend)', () => {
   });
 });
 
-describe('albDoor — check gating', () => {
-  it('reports streaming SSR from route(); no edge cache / session pinning', () => {
-    const stack = new Stack(new App(), 'R', { env: { account: '111111111111', region: 'us-west-2' } });
+describe('albDoor — free-form build', () => {
+  const buildAlb = (id: string, plan: CapabilityPlan) => {
+    const stack = new Stack(new App(), id, { env: { account: '111111111111', region: 'us-west-2' } });
     const bucket = new Bucket(stack, 'Assets');
-    const ssrPlan: CapabilityPlan = { ...staticPlan, policies: { ...staticPlan.policies, hasServer: true } };
-    const report = albDoor.route({ scope: stack, props: { bucket } }, ssrPlan, { bucket });
-    assert.equal(report.ssr, 'streaming');
-    assert.notEqual(report.cache, true);
-    assert.notEqual(report.pinSession, true);
+    const input = buildDoorInput(stack, { plan, bucket, staticDir: '.' });
+    return buildFrontDoor(stack, albDoor, { ...input, alb: { plan, bucket } }, { wiringCheck: false }).result;
+  };
+
+  it('returns the ALB URL and an http origin handle (no certificate → HTTP listener)', () => {
+    const res = buildAlb('R', staticPlan);
+    assert.ok(res.url.startsWith('http'));
+    assert.equal(res.originHandle.protocol, 'http');
+    assert.ok(res.originHandle.domainName);
+    assert.ok(res.construct instanceof AlbConstruct);
   });
 
-  it('throws when a plan requires an unsupported capability without a waiver (skew on)', () => {
-    const app = new App();
-    const stack = new Stack(app, 'S2', { env: { account: '111111111111', region: 'us-west-2' } });
-    const bucket = new Bucket(stack, 'Assets');
+  it('runs no capability check: a skew-on plan (an edge feature the ALB lacks) still builds', () => {
     const skewPlan: CapabilityPlan = {
       ...staticPlan,
       policies: { ...staticPlan.policies, skewEnabled: true },
     };
-    assert.throws(
-      () => runFrontDoor(stack, skewPlan, albDoor, { bucket }),
-      /PinSession/,
-    );
+    assert.ok(buildAlb('S2', skewPlan).url.startsWith('http'));
   });
-
-  it('renders when the unsupported capability is explicitly waived', () => {
-    const app = new App();
-    const stack = new Stack(app, 'S3', { env: { account: '111111111111', region: 'us-west-2' } });
-    const bucket = new Bucket(stack, 'Assets');
-    const skewPlan: CapabilityPlan = {
-      ...staticPlan,
-      policies: { ...staticPlan.policies, skewEnabled: true },
-    };
-    const res = runFrontDoor(stack, skewPlan, albDoor, { bucket }, { degrade: ['PinSession'] }).handle;
-    assert.ok(res.url?.startsWith('http'));
-  });
-
-  for (const negotiation of ['warn', 'off'] as const) {
-    it(`renders an unmet demand without opt-in when negotiation is '${negotiation}'`, () => {
-      const app = new App();
-      const stack = new Stack(app, `S-${negotiation}`, { env: { account: '111111111111', region: 'us-west-2' } });
-      const bucket = new Bucket(stack, 'Assets');
-      const skewPlan: CapabilityPlan = {
-        ...staticPlan,
-        policies: { ...staticPlan.policies, skewEnabled: true },
-      };
-      const res = runFrontDoor(stack, skewPlan, albDoor, { bucket }, { negotiation }).handle;
-      assert.ok(res.url?.startsWith('http'));
-    });
-  }
 });

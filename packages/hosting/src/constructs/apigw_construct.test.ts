@@ -7,7 +7,8 @@ import type { CapabilityPlan } from '../plan/types.js';
 import { ApiGatewayConstruct } from './apigw_construct.js';
 import { ApiGatewayRestConstruct } from './apigw_rest_construct.js';
 import { apiGatewayDoor } from './apigw_door.js';
-import { runFrontDoor } from './door_hooks.js';
+import { buildFrontDoor } from './custom_door.js';
+import { buildDoorInput } from './door_input.js';
 
 const staticPlan: CapabilityPlan = {
   origins: [{ id: 'blocks-s3', kind: 'static' }],
@@ -168,6 +169,13 @@ describe('ApiGatewayConstruct (HTTP) — custom domain', () => {
 	});
 });
 
+const buildApiGw = (stack: Stack, plan: CapabilityPlan, apiType?: 'rest' | 'http') => {
+	const bucket = new Bucket(stack, 'Assets');
+	const input = buildDoorInput(stack, { plan, bucket, staticDir: '.' });
+	return buildFrontDoor(stack, apiGatewayDoor, { ...input, apiType, apiGateway: { plan, bucket } }, { wiringCheck: false })
+		.result;
+};
+
 describe('apiGatewayDoor — flavor selection', () => {
 	it("renders an HTTP API v2 by default (apiType omitted) and for apiType: 'http' — its $default stage is rootless", () => {
 		for (const apiType of [undefined, 'http' as const]) {
@@ -175,8 +183,7 @@ describe('apiGatewayDoor — flavor selection', () => {
 			const stack = new Stack(app, `FH-${apiType ?? 'default'}`, {
 				env: { account: '111111111111', region: 'us-west-2' },
 			});
-			const bucket = new Bucket(stack, 'Assets');
-			runFrontDoor(stack, staticPlan, apiGatewayDoor, { bucket, apiType });
+			buildApiGw(stack, staticPlan, apiType);
 			const t = Template.fromStack(stack);
 			t.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
 			t.resourceCountIs('AWS::ApiGateway::RestApi', 0);
@@ -186,34 +193,30 @@ describe('apiGatewayDoor — flavor selection', () => {
 	it("renders a REST API for apiType: 'rest' (for use behind a custom domain / CloudFront)", () => {
 		const app = new App();
 		const stack = new Stack(app, 'FR', { env: { account: '111111111111', region: 'us-west-2' } });
-		const bucket = new Bucket(stack, 'Assets');
-		runFrontDoor(stack, staticPlan, apiGatewayDoor, { bucket, apiType: 'rest' });
+		buildApiGw(stack, staticPlan, 'rest');
 		const t = Template.fromStack(stack);
 		t.resourceCountIs('AWS::ApiGateway::RestApi', 1);
 		t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
 	});
 });
 
-describe('apiGatewayDoor — check', () => {
+describe('apiGatewayDoor — free-form build', () => {
   it('is the api-gateway service', () => assert.equal(apiGatewayDoor.service, 'api-gateway'));
-  it('builds a static plan (nothing beyond routing demanded)', () => {
+  it('builds a static plan and returns an https origin handle', () => {
     const app = new App();
     const stack = new Stack(app, 'S2', { env: { account: '111111111111', region: 'us-west-2' } });
-    const bucket = new Bucket(stack, 'Assets');
-    assert.ok(runFrontDoor(stack, staticPlan, apiGatewayDoor, { bucket }).handle.url);
+    const res = buildApiGw(stack, staticPlan);
+    assert.ok(res.url);
+    assert.equal(res.originHandle?.protocol, 'https');
   });
-  it('fails a plan that demands streaming SSR — route() reports buffered', () => {
+  it('runs no capability check: a streaming-SSR plan builds (served buffered)', () => {
     const app = new App();
     const stack = new Stack(app, 'S3', { env: { account: '111111111111', region: 'us-west-2' } });
-    const bucket = new Bucket(stack, 'Assets');
-    const streamPlan = {
+    const streamPlan: CapabilityPlan = {
       ...staticPlan,
       origins: [...staticPlan.origins, { id: 'blocks-server', kind: 'server' as const }],
-      policies: { ...staticPlan.policies, hasServer: true, needsStreaming: true },
+      policies: { ...staticPlan.policies, hasServer: true },
     };
-    assert.throws(
-      () => runFrontDoor(stack, streamPlan, apiGatewayDoor, { bucket }, { errorCode: 'CapabilityNotSupportedError' }),
-      /StreamServerRender/,
-    );
+    assert.ok(buildApiGw(stack, streamPlan).url);
   });
 });
