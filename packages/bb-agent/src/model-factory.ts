@@ -192,6 +192,15 @@ export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger
 		return new ThrowingProvider();
 	}
 
+	// `guardrails` was declared on ModelConfig but never wired to any provider. Say so rather
+	// than let a developer believe content filtering is on.
+	if (config.guardrails) {
+		log?.warn('ModelConfig.guardrails is not applied by any model provider. Use ModelConfig.guardrail to attach a Bedrock guardrail.', { provider: config.provider });
+	}
+	if (config.guardrail && config.provider !== 'bedrock') {
+		throw blocksAgentError(AgentErrors.InvalidModelConfig, `ModelConfig.guardrail is only supported for provider 'bedrock' (got '${config.provider}').`);
+	}
+
 	if (config.provider === 'bedrock') {
 		if (!config.modelId) {
 			throw blocksAgentError(AgentErrors.InvalidModelConfig, "Model provider 'bedrock' requires modelId.");
@@ -199,6 +208,13 @@ export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger
 		const { BedrockModel } = await import('@strands-agents/sdk');
 		return new BedrockModel({
 			modelId: config.modelId,
+			...(config.guardrail && {
+				guardrailConfig: {
+					guardrailIdentifier: config.guardrail.identifier,
+					guardrailVersion: config.guardrail.version,
+					...(config.guardrail.trace && { trace: config.guardrail.trace }),
+				},
+			}),
 			...(customUserAgent && {
 				clientConfig: { customUserAgent: formatUserAgentChain(customUserAgent) },
 			}),

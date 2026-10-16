@@ -6,7 +6,9 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
+import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { AgentCoreRuntime } from './agentcore-runtime.cdk.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig } from './types.js';
@@ -67,5 +69,19 @@ export class Agent extends BuildingBlockScope {
 			agentFullId: this.fullId,
 			agentcoreAssetPath: config?.agentcoreAssetPath,
 		});
+
+		// Bedrock evaluates `ModelConfig.guardrail` on each model call, which needs ApplyGuardrail on
+		// that guardrail. Granted per guardrail (never a wildcard) to the role the loop runs as.
+		const deployed = config?.model?.deployed;
+		const guardrailArns = [...new Set(
+			(Array.isArray(deployed) ? deployed : deployed ? [deployed] : [])
+				.flatMap((m) => (m.provider === 'bedrock' && m.guardrail ? [m.guardrail.identifier] : []))
+				.map((id) => (id.startsWith('arn:') ? id : cdk.Stack.of(this).formatArn({ service: 'bedrock', resource: 'guardrail', resourceName: id }))),
+		)];
+		if (guardrailArns.length > 0) {
+			this.executionRole.addToPrincipalPolicy(
+				new iam.PolicyStatement({ actions: ['bedrock:ApplyGuardrail'], resources: guardrailArns }),
+			);
+		}
 	}
 }
