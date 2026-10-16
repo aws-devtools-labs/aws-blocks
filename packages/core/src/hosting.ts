@@ -15,11 +15,16 @@ import {
 import {
   buildFrontDoor,
   cloudFrontEdgeDoor,
+  type FrontDoorAliases,
+  type FrontDoorSettings,
   generateBuildId,
   HostingConstruct,
   type HostingConstructProps,
   HostingError,
   type HostingDomainConfig,
+  type HostingFrontDoor,
+  resolveFrontDoorFeatures,
+  type StackedDoorFeatures,
   type HostingWafConfig,
   type SkewProtectionConfig,
   type WebFunctionConstruct,
@@ -282,6 +287,7 @@ export interface HostingProps {
    * so only `config()` (non-sensitive → SSM) is allowed here, never `secret()`
    * (which would leak into the template). Any domain marker requires constructing
    * via the async {@link Hosting.create}.
+   * @deprecated Use `frontDoor.features.domain` (CloudFront, API Gateway, custom doors).
    */
   domain?: HostingDomain;
 
@@ -301,7 +307,10 @@ export interface HostingProps {
    */
   configStore?: KindStoreOptions;
 
-  /** WAF protection configuration. */
+  /**
+   * WAF protection configuration.
+   * @deprecated Use `frontDoor.features.waf` (CloudFront, ALB, custom doors).
+   */
   waf?: HostingWafConfig;
 
   /** Retain the S3 bucket when the stack is deleted. Default: false. */
@@ -317,10 +326,16 @@ export interface HostingProps {
    */
   buildRetentionDays?: number;
 
-  /** Custom Content-Security-Policy header value. */
+  /**
+   * Custom Content-Security-Policy header value.
+   * @deprecated Use `frontDoor.features.contentSecurityPolicy` (the stacked door: `frontDoor.features.edge.contentSecurityPolicy`).
+   */
   contentSecurityPolicy?: string;
 
-  /** CloudFront price class. Default: PRICE_CLASS_100. */
+  /**
+   * CloudFront price class. Default: PRICE_CLASS_100.
+   * @deprecated Use `frontDoor.features.priceClass`.
+   */
   priceClass?: cdk.aws_cloudfront.PriceClass;
 
   /**
@@ -330,6 +345,7 @@ export interface HostingProps {
    * ```ts
    * geoRestriction: { type: 'whitelist', countries: ['US', 'CA', 'GB'] }
    * ```
+   * @deprecated Use `frontDoor.features.geoRestriction` (CloudFront, custom doors).
    */
   geoRestriction?: {
     type: 'whitelist' | 'blacklist';
@@ -359,6 +375,7 @@ export interface HostingProps {
    * // After AWS grants "Cache behaviors per distribution" = 50:
    * new Hosting(stack, 'Web', { root, quotas: { cacheBehaviors: 50 } });
    * ```
+   * @deprecated Use `frontDoor.features.quotas`.
    */
   quotas?: {
     cacheBehaviors?: number;
@@ -386,6 +403,7 @@ export interface HostingProps {
    * {@link cacheKeyCookies}/{@link cacheKeyHeaders} to declare which
    * credentials vary the response so cached entries are keyed per credential.
    * @default Duration.seconds(0)
+   * @deprecated Use `frontDoor.features.ssrDefaultTtl`.
    */
   ssrDefaultTtl?: cdk.Duration;
   /**
@@ -394,12 +412,14 @@ export interface HostingProps {
    * Required (with or instead of {@link cacheKeyHeaders}) to safely enable
    * {@link ssrDefaultTtl}. CloudFront allows at most 10 cookies in the key
    * (2 reserved for Next.js preview mode).
+   * @deprecated Use `frontDoor.features.cacheKeyCookies`.
    */
   cacheKeyCookies?: string[];
   /**
    * Header names to include in the SSR cache key (e.g. `'authorization'`).
    * Required (with or instead of {@link cacheKeyCookies}) to safely enable
    * {@link ssrDefaultTtl}. `'accept-encoding'` is not allowed.
+   * @deprecated Use `frontDoor.features.cacheKeyHeaders`.
    */
   cacheKeyHeaders?: string[];
 
@@ -443,6 +463,7 @@ export interface HostingProps {
   /**
    * CloudFront access logging configuration.
    * When enabled, access logs are written to a dedicated S3 bucket.
+   * @deprecated Use `frontDoor.features.logging` (CloudFront, ALB, custom doors).
    */
   logging?: {
     /** Enable CloudFront access logging. */
@@ -457,6 +478,7 @@ export interface HostingProps {
    * to an SNS topic.
    *
    * @default { enabled: true }
+   * @deprecated Use `frontDoor.features.monitoring` (CloudFront, ALB, custom doors).
    */
   monitoring?: {
     enabled?: boolean;
@@ -478,6 +500,7 @@ export interface HostingProps {
    * the build they started their session on.
    *
    * @default { enabled: true }
+   * @deprecated Use `frontDoor.features.skewProtection` (CloudFront, custom doors).
    */
   skewProtection?: SkewProtectionConfig;
 
@@ -516,14 +539,27 @@ export interface HostingProps {
    * Pass `'none'` to serve a static site / SPA straight from an S3 website
    * bucket (HTTP only, no front door; the client calls the API cross-origin).
    *
+   * Each door kind takes the settings the app asks it for as `features`, typed
+   * for that kind: only the settings that door implements compile. Pass
+   * `{ features }` (no `kind`) for the CloudFront default with settings. The
+   * names are the top-level props they replace (`domain`, `waf`, `logging`,
+   * `monitoring`, `priceClass`, …); those top-level props still work as
+   * deprecated aliases, merged into `frontDoor.features`. Setting one both
+   * ways fails synth (`FrontDoorSettingConflictError`), and so does a
+   * top-level prop the chosen kind doesn't implement
+   * (`UnsupportedFrontDoorSettingError`). The stacked door scopes its settings
+   * per layer: `features: { edge: { waf, contentSecurityPolicy }, router: { waf, logging, monitoring } }`.
+   *
    * @example
    * ```ts
    * new Hosting(stack, 'Web', { root, framework: 'nuxt', frontDoor: { kind: 'alb' } });
    * new Hosting(stack, 'Web', { root, api, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
    * new Hosting(stack, 'Web', { root, api, frontDoor: { kind: 'custom', door: myDoor } });
+   * new Hosting(stack, 'Web', { root, api, frontDoor: { features: { waf: { enabled: true }, domain: { domainName: 'app.example.com', hostedZone: 'example.com' } } } });
+   * new Hosting(stack, 'Web', { root, api, frontDoor: { kind: 'alb', features: { waf: { enabled: true }, logging: { enabled: true } } } });
    * ```
    */
-  frontDoor?: HostingConstructProps['frontDoor'] | CloudFrontOverRouterFrontDoor;
+  frontDoor?: HostingFrontDoor<HostingDomain> | CloudFrontOverRouterFrontDoor;
 }
 
 /**
@@ -543,6 +579,12 @@ export interface CloudFrontOverRouterFrontDoor {
   vpc?: import('aws-cdk-lib/aws-ec2').IVpc;
   /** Internal (private) ALB vs internet-facing. Default: internet-facing. */
   internal?: boolean;
+  /**
+   * The settings the app asks each layer for: the CloudFront `edge` (a
+   * CLOUDFRONT-scoped web ACL, the CSP header) and the ALB `router` (a REGIONAL
+   * web ACL, access logs, alarms). See `StackedDoorFeatures`.
+   */
+  features?: StackedDoorFeatures;
 }
 
 // ─── Default build output directories per framework ──────────────
@@ -661,7 +703,10 @@ export class Hosting extends Construct {
    */
   static async create(scope: Construct, id: string, props: HostingProps): Promise<Hosting> {
 		const storeConfig = { secretStore: props.secretStore, configStore: props.configStore };
-    const synthMarkers = collectSynthMarkers(props.domain?.domainName);
+    const synthMarkers = [
+      ...collectSynthMarkers(props.domain?.domainName),
+      ...collectSynthMarkers(featuresDomainOf(props.frontDoor)?.domainName),
+    ];
     const resolved = synthMarkers.length
 			? await resolveSecretsAtSynth(synthMarkers, undefined, storeConfig)
       : new Map<string, string>();
@@ -690,6 +735,12 @@ export class Hosting extends Construct {
       typeof props.frontDoor === 'object' && 'kind' in props.frontDoor && props.frontDoor.kind === 'stacked'
         ? props.frontDoor
         : undefined;
+
+    // The door's effective settings: `frontDoor.features` plus the deprecated
+    // top-level aliases. Resolved before the build, so a conflicting or
+    // unsupported setting fails fast. The L3 receives the settings only through
+    // `frontDoor.features`.
+    const doorSettings = resolveBlocksDoorSettings(props, cfOverRouter);
 
     // ── 1. Detect framework ──────────────────────────────────────
     const framework = props.framework ?? detectFramework(root);
@@ -852,12 +903,14 @@ export class Hosting extends Construct {
     // Resolved domain (markers → literals); falls back to the raw config when
     // no domain is set. resolveDomainNames throws a "use Hosting.create()"
     // error if a domain marker reached the sync path unresolved.
-    const resolvedDomain = props.domain
+    const settingsDomain = doorSettings.domain;
+    const resolvedDomain = settingsDomain
       ? {
-          ...props.domain,
-          domainName: resolveDomainNames(props.domain.domainName, resolvedSecrets),
+          ...settingsDomain,
+          domainName: resolveDomainNames(settingsDomain.domainName, resolvedSecrets),
         }
       : undefined;
+    const l3Settings: FrontDoorSettings = { ...doorSettings, domain: resolvedDomain };
 
     const hostingProps: HostingConstructProps = {
       manifest,
@@ -866,8 +919,6 @@ export class Hosting extends Construct {
       // secret-agnostic: it only ever sees plain strings). Runtime secrets are
       // wired separately below so we can attach IAM grants per function.
       environment: Object.keys(plainEnv).length ? plainEnv : undefined,
-      domain: resolvedDomain,
-      waf: props.waf,
       storage:
         props.retainOnDelete != null || props.buildRetentionDays != null
           ? {
@@ -879,32 +930,13 @@ export class Hosting extends Construct {
                 : {}),
             }
           : undefined,
-      cdn:
-        props.contentSecurityPolicy ||
-        props.priceClass ||
-        props.geoRestriction ||
-        props.quotas ||
-        props.ssrDefaultTtl ||
-        props.cacheKeyCookies ||
-        props.cacheKeyHeaders
-          ? {
-              contentSecurityPolicy: props.contentSecurityPolicy,
-              priceClass: props.priceClass,
-              geoRestriction: props.geoRestriction,
-              quotas: props.quotas,
-              ssrDefaultTtl: props.ssrDefaultTtl,
-              cacheKeyCookies: props.cacheKeyCookies,
-              cacheKeyHeaders: props.cacheKeyHeaders,
-            }
-          : undefined,
-      logging: props.logging,
       buildCache: props.buildCache,
       errorPages: skipPropsErrorPages ? undefined : props.errorPages,
-      // subscriptions and enabled flow straight through to the L3; the
-      // core layer adds nothing here beyond the monitoringTopic → monitoring
-      // surface rename on the output side.
-      monitoring: props.monitoring,
-      skewProtection: props.skewProtection,
+      // The door's settings (domain, WAF, logging, monitoring — subscriptions
+      // and enabled flow straight through —, skew protection, the CloudFront
+      // cache/CSP/price-class/geo/quotas settings) reach the L3 only as
+      // `frontDoor.features`, already merged with the deprecated top-level
+      // props above.
       // For the ALB front door, thread the backend API Gateway URL so the L3
       // wires the same-origin `/aws-blocks/*` proxy (a Lambda target) — the ALB
       // analogue of the CloudFront API behaviors below.
@@ -929,19 +961,19 @@ export class Hosting extends Construct {
             internal: cfOverRouter.internal,
             backendApiUrl: props.api?.apiUrl,
             ...(props.api ? { backendApiPaths: backendApiPathsFor(this.ownerRootIdFor(props.api)) } : {}),
+            // The router layer's settings (a REGIONAL web ACL, access logs, alarms).
+            ...(cfOverRouter.features?.router ? { features: cfOverRouter.features.router } : {}),
           }
-        : typeof props.frontDoor === 'object' &&
-            props.api &&
-            'kind' in props.frontDoor &&
-            (props.frontDoor.kind === 'custom' ||
-              props.frontDoor.kind === 'alb' ||
-              props.frontDoor.kind === 'apiGateway')
-          ? {
-              ...props.frontDoor,
-              backendApiUrl: props.api.apiUrl,
-              backendApiPaths: backendApiPathsFor(this.ownerRootIdFor(props.api)),
-            }
-          : (props.frontDoor as HostingConstructProps['frontDoor']),
+        : toL3FrontDoor(
+            nonStacked(props.frontDoor),
+            l3Settings,
+            props.api
+              ? {
+                  backendApiUrl: props.api.apiUrl,
+                  backendApiPaths: backendApiPathsFor(this.ownerRootIdFor(props.api)),
+                }
+              : undefined,
+          ),
     };
 
     const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
@@ -1208,6 +1240,9 @@ export class Hosting extends Construct {
     if (!hosting.loadBalancerDnsName) {
       throw new Error('Composed CF → ALB door: the ALB router was not provisioned by the hosting construct.');
     }
+    // The edge layer's settings: `frontDoor.features.edge`.
+    const edge =
+      typeof props.frontDoor === 'object' && props.frontDoor.kind === 'stacked' ? props.frontDoor.features?.edge : undefined;
     const { result } = buildFrontDoor(
       this,
       cloudFrontEdgeDoor,
@@ -1218,8 +1253,8 @@ export class Hosting extends Construct {
           url: hosting.frontDoor.url,
           originHandle: { domainName: hosting.loadBalancerDnsName, protocol: 'http' },
         },
-        contentSecurityPolicy: props.contentSecurityPolicy,
-        webAclArn: props.waf?.webAclArn,
+        contentSecurityPolicy: edge?.contentSecurityPolicy,
+        webAclArn: edge?.waf?.webAclArn,
       },
       { wiringCheck: false },
     );
@@ -1323,6 +1358,91 @@ function rawRouteBehaviors(ownerRootId: string): Array<{ path: string; pattern: 
 /** The raw-route path patterns a non-CloudFront door must route to the backend. */
 function backendApiPathsFor(ownerRootId: string): string[] {
   return rawRouteBehaviors(ownerRootId).map((r) => r.pattern);
+}
+
+/** The custom domain set in `frontDoor.features`, if the chosen door takes one. */
+function featuresDomainOf(frontDoor: HostingProps['frontDoor']): Omit<HostingDomain, 'wwwRedirect'> | undefined {
+  if (typeof frontDoor !== 'object' || frontDoor.kind === 'stacked' || frontDoor.kind === 'alb') return undefined;
+  return frontDoor.features?.domain;
+}
+
+/**
+ * The deprecated top-level props, by the `frontDoor.features` setting each one
+ * aliases (named as the app writes them, for the errors).
+ */
+function topLevelAliases(props: HostingProps): FrontDoorAliases<HostingDomain> {
+  return {
+    domain: { value: props.domain, prop: 'domain' },
+    waf: { value: props.waf, prop: 'waf' },
+    logging: { value: props.logging, prop: 'logging' },
+    monitoring: { value: props.monitoring, prop: 'monitoring' },
+    skewProtection: { value: props.skewProtection, prop: 'skewProtection' },
+    priceClass: { value: props.priceClass, prop: 'priceClass' },
+    contentSecurityPolicy: { value: props.contentSecurityPolicy, prop: 'contentSecurityPolicy' },
+    geoRestriction: { value: props.geoRestriction, prop: 'geoRestriction' },
+    ssrDefaultTtl: { value: props.ssrDefaultTtl, prop: 'ssrDefaultTtl' },
+    cacheKeyCookies: { value: props.cacheKeyCookies, prop: 'cacheKeyCookies' },
+    cacheKeyHeaders: { value: props.cacheKeyHeaders, prop: 'cacheKeyHeaders' },
+    quotas: { value: props.quotas, prop: 'quotas' },
+  };
+}
+
+/**
+ * The door's effective settings: `frontDoor.features` merged with the
+ * deprecated top-level props (see `resolveFrontDoorFeatures`). The stacked door
+ * takes its settings per layer only (`features.edge`, `features.router`), so
+ * every top-level prop is unsupported there.
+ *
+ * @throws HostingError('FrontDoorSettingConflictError') when a setting is set both ways.
+ * @throws HostingError('UnsupportedFrontDoorSettingError') when the door kind doesn't implement a setting.
+ */
+function resolveBlocksDoorSettings(
+  props: HostingProps,
+  stacked: CloudFrontOverRouterFrontDoor | undefined,
+): FrontDoorSettings<HostingDomain> {
+  const aliases = topLevelAliases(props);
+  if (stacked) {
+    for (const alias of Object.values(aliases)) {
+      if (alias?.value === undefined) continue;
+      throw new HostingError('UnsupportedFrontDoorSettingError', {
+        message: `\`${alias.prop}\` is not supported by the 'stacked' front door: it takes its settings per layer.`,
+        resolution:
+          'Set it on the layer that implements it: `frontDoor.features.edge` (`waf.webAclArn`, `contentSecurityPolicy`) ' +
+          'or `frontDoor.features.router` (`waf`, `logging`, `monitoring`).',
+      });
+    }
+    return {};
+  }
+  return resolveFrontDoorFeatures(nonStacked(props.frontDoor), aliases).features;
+}
+
+/** `frontDoor` without the stacked door (which only `Hosting` builds — the L3 never sees it). */
+function nonStacked(frontDoor: HostingProps['frontDoor']): HostingFrontDoor<HostingDomain> | undefined {
+  return typeof frontDoor === 'object' && frontDoor.kind === 'stacked' ? undefined : frontDoor;
+}
+
+/**
+ * The `frontDoor` the L3 receives: the app's door with its effective settings
+ * as `features` (domain markers resolved), plus the backend API to proxy
+ * same-origin for the doors that route it themselves.
+ */
+function toL3FrontDoor(
+  frontDoor: HostingFrontDoor<HostingDomain> | undefined,
+  features: FrontDoorSettings,
+  backend: { backendApiUrl: string; backendApiPaths: string[] } | undefined,
+): HostingFrontDoor {
+  if (frontDoor === 'none') return 'none';
+  if (frontDoor === undefined || frontDoor === 'cloudfront' || frontDoor.kind === undefined || frontDoor.kind === 'cloudfront') {
+    return { kind: 'cloudfront', features };
+  }
+  switch (frontDoor.kind) {
+    case 'alb':
+      return { ...frontDoor, ...backend, features };
+    case 'apiGateway':
+      return { ...frontDoor, ...backend, features };
+    case 'custom':
+      return { ...frontDoor, ...backend, features };
+  }
 }
 
 /**

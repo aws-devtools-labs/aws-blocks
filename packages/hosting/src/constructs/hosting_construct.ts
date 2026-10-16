@@ -62,7 +62,12 @@ import { registerUploads } from './cf_helpers.js';
 import { cloudFrontDoor } from './cloudfront_door.js';
 import { buildFrontDoor } from './custom_door.js';
 import { buildDoorInput } from './door_input.js';
-import type { DoorInput, FrontDoor, FrontDoorResult } from './front_door.js';
+import type { DoorInput, FrontDoorResult } from './front_door.js';
+import {
+  type HostingFrontDoor,
+  type ResolvedFrontDoor,
+  resolveFrontDoorFeatures,
+} from './front_door_options.js';
 import type { OriginHandle } from './layer.js';
 import { s3WebsiteDoor } from './s3_website_door.js';
 import { ComputeConstruct } from './compute_construct.js';
@@ -144,9 +149,15 @@ export type HostingConstructProps = {
    */
   skipRegionValidation?: boolean;
 
-  /** Custom domain configuration. */
+  /**
+   * Custom domain configuration.
+   * @deprecated Use `frontDoor.features.domain` (CloudFront, API Gateway, custom doors).
+   */
   domain?: HostingDomainConfig;
-  /** WAF configuration. */
+  /**
+   * WAF configuration.
+   * @deprecated Use `frontDoor.features.waf` (CloudFront, ALB, custom doors).
+   */
   waf?: HostingWafConfig;
   /** Compute (Lambda) overrides for all compute resources. */
   compute?: {
@@ -208,10 +219,17 @@ export type HostingConstructProps = {
       serviceName?: string;
     };
   };
-  /** CDN (CloudFront) configuration. */
+  /**
+   * CDN (CloudFront) configuration.
+   * @deprecated Use `frontDoor.features` — each `cdn.<x>` is `frontDoor.features.<x>`
+   * (`cdn.webAclArn` is `frontDoor.features.waf.webAclArn`).
+   */
   cdn?: {
+    /** @deprecated Use `frontDoor.features.priceClass`. */
     priceClass?: PriceClass;
+    /** @deprecated Use `frontDoor.features.contentSecurityPolicy`. */
     contentSecurityPolicy?: string;
+    /** @deprecated Use `frontDoor.features.geoRestriction` (CloudFront, custom doors). */
     geoRestriction?: {
       type: 'whitelist' | 'blacklist';
       countries: string[];
@@ -226,6 +244,7 @@ export type HostingConstructProps = {
      * @see HostingProps.cdn.ssrDefaultTtl for the full note on cache-key
      * credentials and the fail-closed guard.
      * @default Duration.seconds(0) — no caching unless origin opts in
+     * @deprecated Use `frontDoor.features.ssrDefaultTtl`.
      */
     ssrDefaultTtl?: Duration;
     /**
@@ -235,6 +254,7 @@ export type HostingConstructProps = {
      * `cacheKeyHeaders`) to safely enable `ssrDefaultTtl`.
      * CloudFront allows at most 10 cookies in the cache key (2 are reserved
      * for Next.js preview mode).
+     * @deprecated Use `frontDoor.features.cacheKeyCookies`.
      */
     cacheKeyCookies?: string[];
     /**
@@ -243,6 +263,7 @@ export type HostingConstructProps = {
      * `'accept-encoding'` is not allowed (handled automatically). Required
      * (together with or instead of `cacheKeyCookies`) to safely enable
      * `ssrDefaultTtl`.
+     * @deprecated Use `frontDoor.features.cacheKeyHeaders`.
      */
     cacheKeyHeaders?: string[];
     /**
@@ -259,6 +280,7 @@ export type HostingConstructProps = {
      * ```ts
      * cdn: { responseHeadersPolicy: ResponseHeadersPolicy.fromResponseHeadersPolicyId(this, 'Imported', policyId) }
      * ```
+     * @deprecated Use `frontDoor.features.responseHeadersPolicy`.
      */
     responseHeadersPolicy?: IResponseHeadersPolicy;
     /**
@@ -269,6 +291,7 @@ export type HostingConstructProps = {
      *
      * Takes precedence over `waf.enabled` — when set, the built-in WAF
      * construct is not created.
+     * @deprecated Use `frontDoor.features.waf.webAclArn`.
      */
     webAclArn?: string;
     /**
@@ -282,6 +305,7 @@ export type HostingConstructProps = {
      * synth cannot verify your real quota, so an over-set value does not raise
      * the AWS ceiling — it just moves the failure from a clear synth error to
      * an opaque CloudFormation rollback at deploy.
+     * @deprecated Use `frontDoor.features.quotas`.
      */
     quotas?: QuotaOverrides;
   };
@@ -310,7 +334,10 @@ export type HostingConstructProps = {
       ephemeralStorageMiB?: number;
     };
   };
-  /** CloudFront access logging configuration. */
+  /**
+   * CloudFront access logging configuration.
+   * @deprecated Use `frontDoor.features.logging` (CloudFront, ALB, custom doors).
+   */
   logging?: {
     enabled: boolean;
     retentionDays?: number;
@@ -362,6 +389,7 @@ export type HostingConstructProps = {
    * enabled, the L3 wires CloudFront 5xx, Lambda error / throttle,
    * and revalidation-DLQ alarms to an SNS topic. Opt out with
    * `{ enabled: false }`. See `MonitoringConstruct`.
+   * @deprecated Use `frontDoor.features.monitoring` (CloudFront, ALB, custom doors).
    */
   monitoring?: {
     /** @default true */
@@ -382,6 +410,7 @@ export type HostingConstructProps = {
    * build, preventing asset mismatches during rolling deployments.
    * @default \{ enabled: true \} — skew protection is enabled by default.
    * Set `\{ enabled: false \}` to disable.
+   * @deprecated Use `frontDoor.features.skewProtection` (CloudFront, custom doors).
    */
   skewProtection?: {
     enabled: boolean;
@@ -429,106 +458,26 @@ export type HostingConstructProps = {
    * as far as it supports them. Only a bring-your-own door is checked, and only
    * for its routing (see `wiringCheck`).
    *
+   * Each door kind takes its settings as `features`, typed for that kind: only
+   * the settings that door implements compile (see `CloudFrontDoorFeatures`,
+   * `AlbDoorFeatures`, `ApiGatewayDoorFeatures`, `CustomDoorFeatures`).
+   * `{ features }` (no `kind`) is the CloudFront default with settings. The
+   * top-level `domain`, `waf`, `cdn.*`, `logging`, `monitoring` and
+   * `skewProtection` props are deprecated aliases, merged into
+   * `frontDoor.features` at construction: setting one both ways fails synth
+   * (`FrontDoorSettingConflictError`), and so does one the chosen kind doesn't
+   * implement (`UnsupportedFrontDoorSettingError`).
+   *
+   * @example
+   * ```ts
+   * frontDoor: { features: { waf: { enabled: true }, priceClass: PriceClass.PRICE_CLASS_ALL } }
+   * frontDoor: { kind: 'alb', certificate, features: { waf: { enabled: true }, logging: { enabled: true } } }
+   * frontDoor: { kind: 'apiGateway', api: 'rest', features: { domain: { domainName: 'app.example.com', hostedZone: 'example.com' } } }
+   * ```
+   *
    * Omit for the CloudFront default (backward-compatible).
    */
-  frontDoor?:
-    | 'cloudfront'
-    /**
-     * No front door — the app is served DIRECTLY from S3 static-website hosting
-     * (public bucket, HTTP-only, no edge, no router). The cheapest option for a
-     * pure static site / SPA. There is no front door to route to a backend, so
-     * there is no SSR, same-origin API (the client calls the backend
-     * cross-origin), image optimization or TLS; an app with a server fails synth
-     * (use `'cloudfront'` or `{ kind: 'alb' }`). `s3-website` is the internal
-     * mechanism, not a front door.
-     */
-    | 'none'
-    | {
-        kind: 'alb';
-        /** BYO VPC; a default 2-AZ VPC is created when omitted. */
-        vpc?: import('aws-cdk-lib/aws-ec2').IVpc;
-        /** Internal (private) ALB vs internet-facing. Default: internet-facing. */
-        internal?: boolean;
-        /** Regional ACM certificate for an HTTPS listener (same region as the ALB). */
-        certificate?: ICertificate;
-        /**
-         * Backend API Gateway URL to proxy same-origin (`/aws-blocks/*`) through
-         * the ALB via a Lambda target. Set by the Blocks integration layer from
-         * the `api` prop; enables cookie auth with no CORS.
-         */
-        backendApiUrl?: string;
-        /**
-         * Extra path patterns that must reach the backend (the backend's raw
-         * routes), beyond `/aws-blocks/*`. Set by the Blocks integration layer;
-         * each gets a listener rule to the API forwarder.
-         */
-        backendApiPaths?: string[];
-      }
-    | {
-        kind: 'apiGateway';
-        /**
-         * The API Gateway flavor. `'http'` (default) is an HTTP API v2 — its auto
-         * `$default` stage is **rootless**, so a SPA/SSR app's root-absolute asset
-         * URLs (`/assets/*`, `/favicon.ico`) resolve directly; it's also cheaper.
-         * `'rest'` is a REST API: it invokes the SSR/image Lambdas with
-         * `lambda:InvokeFunction` (no Function-URL body-hash mismatch), but a bare
-         * REST `execute-api` URL always carries a **stage path** (`/prod/`), which
-         * breaks root-absolute asset URLs — so `'rest'` requires a **custom
-         * domain** (base-path mapping to the stage); without `domain`, synth
-         * fails with `RestFrontDoorNeedsDomainError`. `'rest'` streams SSR
-         * responses; `'http'` buffers them.
-         * @default 'http'
-         */
-        api?: 'rest' | 'http';
-        /** Regional ACM certificate for a custom-domain HTTPS listener (same region). */
-        certificate?: ICertificate;
-        /**
-         * Backend API URL to proxy same-origin (`/aws-blocks/*`) through the
-         * gateway. Set by the Blocks integration layer from the `api` prop;
-         * enables cookie auth with no CORS. API Gateway proxies an external
-         * HTTPS URL natively — no forwarder Lambda (unlike the ALB door).
-         */
-        backendApiUrl?: string;
-        /**
-         * Extra path patterns that must reach the backend (the backend's raw
-         * routes), beyond `/aws-blocks/*`. Set by the Blocks integration layer;
-         * each gets a route proxied to the same path on the backend.
-         */
-        backendApiPaths?: string[];
-      }
-    | {
-        /** BYO — a customer-authored front door. */
-        kind: 'custom';
-        /**
-         * Your front door: `defineFrontDoor({ service, build(scope, input) })`
-         * (see {@link FrontDoor}). Hosting provisions the app (S3 assets, compute,
-         * backend) and calls `build` ONCE at synth with everything it built (the
-         * {@link DoorInput}); `build` creates the door and returns its public
-         * `url` (required — a missing `url` fails synth).
-         */
-        door: FrontDoor;
-        /**
-         * Check the door's routing after `build`: the static assets must be
-         * reachable, and when the app has an API at least one of its paths must
-         * reach it — as recorded by the `cf.*` helpers (or `cf.recordWired`).
-         * A door that wires correctly with raw CDK and doesn't declare it gets a
-         * false alarm; set `false` to turn the check off.
-         * @default true
-         */
-        wiringCheck?: boolean;
-        /**
-         * Backend API URL to proxy same-origin (`/aws-blocks/*`). Set by the
-         * Blocks integration layer from the `api` prop; surfaces as
-         * `input.origins.api`.
-         */
-        backendApiUrl?: string;
-        /**
-         * Extra path patterns that must reach the backend (the backend's raw
-         * routes), beyond `/aws-blocks/*`. Set by the Blocks integration layer;
-         * surfaces in `input.origins.api.paths`.
-         */
-        backendApiPaths?: string[];
-      };
+  frontDoor?: HostingFrontDoor;
   // NOTE: S3-website is not a public front-door *kind* — it is an ORIGIN, not a
   // front door (it fronts nothing). It is surfaced as `frontDoor: 'none'` (serve
   // the origin directly); `s3-website` is the internal door name
@@ -704,18 +653,25 @@ export class HostingConstruct extends Construct {
     // but an app links from the root (`/assets/…`, `/aws-blocks/api`,
     // `/.blocks-sandbox/config.json`), and those miss the stage (403). A
     // custom domain's base-path mapping serves the stage at the domain root.
-    assertRestDoorAddressable(props.frontDoor, props.domain);
+    // The door's effective settings: `frontDoor.features` plus the deprecated
+    // top-level aliases (`domain`, `waf`, `cdn.*`, `logging`, `monitoring`,
+    // `skewProtection`). Everything below reads the settings from here.
+    const resolved = resolveHostingFrontDoor(props);
+    const f = resolved.features;
+    const cdnWebAclArn = resolved.cdnWebAclArn;
+
+    assertRestDoorAddressable(props.frontDoor, f.domain);
 
     // Skew-protection cookie must not outlive the build artifacts it pins
     // to. A `maxAge` longer than `buildRetentionDays` lets a returning
     // viewer present a cookie for a build whose `builds/<id>/` prefix the
     // S3 lifecycle rule has already deleted → hard 403 on every asset.
-    if (props.skewProtection?.enabled && props.skewProtection.maxAge) {
+    if (f.skewProtection?.enabled && f.skewProtection.maxAge) {
       const retentionDays = props.storage?.buildRetentionDays ?? DEFAULT_BUILD_RETENTION_DAYS;
       const retentionSeconds = retentionDays * 24 * 60 * 60;
-      if (props.skewProtection.maxAge > retentionSeconds) {
+      if (f.skewProtection.maxAge > retentionSeconds) {
         throw new HostingError('InvalidSkewProtectionMaxAgeError', {
-          message: `skewProtection.maxAge (${props.skewProtection.maxAge}s) exceeds storage.buildRetentionDays (${retentionDays}d = ${retentionSeconds}s).`,
+          message: `skewProtection.maxAge (${f.skewProtection.maxAge}s) exceeds storage.buildRetentionDays (${retentionDays}d = ${retentionSeconds}s).`,
           resolution:
             'Lower skewProtection.maxAge to at most storage.buildRetentionDays (in seconds), or raise storage.buildRetentionDays. A cookie that outlives the build prefix pins returning viewers to a deleted build → 403.',
         });
@@ -753,11 +709,11 @@ export class HostingConstruct extends Construct {
     // ---- 1. Storage (S3 buckets) ----
     const storage = new StorageConstruct(this, 'Storage', {
       retainOnDelete: props.storage?.retainOnDelete,
-      accessLogging: props.logging?.enabled ?? true,
+      accessLogging: f.logging?.enabled ?? true,
       encryption: props.storage?.encryption,
       encryptionKey: props.storage?.encryptionKey,
       buildRetentionDays: props.storage?.buildRetentionDays,
-      logRetentionDays: props.logging?.retentionDays,
+      logRetentionDays: f.logging?.retentionDays,
       // 3.2 — adapter-supplied lifecycle rules; storage construct
       // turns each `{prefix, days}` entry into an S3 lifecycle rule.
       extraLifecycleRules: manifest.lifecycle,
@@ -1346,7 +1302,7 @@ export class HostingConstruct extends Construct {
     // The CloudFront default handles `undefined` and `'cloudfront'`. Every other
     // value — `'none'` (serve S3 directly) or `{ kind: 'alb' }` — is a
     // non-CloudFront door rendered via the front-door graph below.
-    const useCustomDoor = props.frontDoor !== undefined && props.frontDoor !== 'cloudfront';
+    const useCustomDoor = resolved.kind !== 'cloudfront';
     let cdn: CdnConstruct | undefined;
     // A door's post-upload hook (`FrontDoorResult.onUpload`), called once every
     // asset upload below has been declared (section 12d).
@@ -1355,11 +1311,11 @@ export class HostingConstruct extends Construct {
     if (!useCustomDoor) {
     // ---- 6. WAF (conditional) ----
     // Determine effective WebACL ARN: waf.webAclArn > cdn.webAclArn > create new
-    const effectiveWebAclArn = props.waf?.webAclArn ?? props.cdn?.webAclArn;
+    const effectiveWebAclArn = f.waf?.webAclArn ?? cdnWebAclArn;
     if (!effectiveWebAclArn) {
       const wafConstruct = new WafConstruct(this, 'Waf', {
-        enabled: props.waf?.enabled ?? false,
-        rateLimit: props.waf?.rateLimit,
+        enabled: f.waf?.enabled ?? false,
+        rateLimit: f.waf?.rateLimit,
         skipRegionValidation: props.skipRegionValidation,
       });
       this.webAcl = wafConstruct.webAcl;
@@ -1368,19 +1324,20 @@ export class HostingConstruct extends Construct {
     // ---- 7. Custom domain resources (conditional) ----
     const dnsConstructs: DnsConstruct[] = [];
     let resolvedDomainNames: string[] = [];
-    if (props.domain) {
+    const domain = f.domain;
+    if (domain) {
       // Resolve domain names from single string or array
-      resolvedDomainNames = Array.isArray(props.domain.domainName)
-        ? props.domain.domainName
-        : [props.domain.domainName];
+      resolvedDomainNames = Array.isArray(domain.domainName)
+        ? domain.domainName
+        : [domain.domainName];
 
       // Create DNS construct for the first/primary domain (handles certificate)
       const primaryDomain = resolvedDomainNames[0];
       const primaryDns = new DnsConstruct(this, 'Dns', {
         domainName: primaryDomain,
-        hostedZone: props.domain.hostedZone,
-        hostedZoneId: props.domain.hostedZoneId,
-        certificate: props.domain.certificate,
+        hostedZone: domain.hostedZone,
+        hostedZoneId: domain.hostedZoneId,
+        certificate: domain.certificate,
         skipRegionValidation: props.skipRegionValidation,
       });
       dnsConstructs.push(primaryDns);
@@ -1391,8 +1348,8 @@ export class HostingConstruct extends Construct {
       for (let i = 1; i < resolvedDomainNames.length; i++) {
         const additionalDns = new DnsConstruct(this, `Dns${i + 1}`, {
           domainName: resolvedDomainNames[i],
-          hostedZone: props.domain.hostedZone,
-          hostedZoneId: props.domain.hostedZoneId,
+          hostedZone: domain.hostedZone,
+          hostedZoneId: domain.hostedZoneId,
           certificate: primaryDns.certificate,
           skipRegionValidation: props.skipRegionValidation,
         });
@@ -1422,8 +1379,8 @@ export class HostingConstruct extends Construct {
     // `x-amzn-requestid`, for support correlation.
     const removeOriginHeaders = this.computeWebFunctions.size > 0 ? [...WEB_FUNCTION_INTERNAL_HEADERS] : [];
     let securityHeadersPolicy: IResponseHeadersPolicy;
-    if (props.cdn?.responseHeadersPolicy) {
-      securityHeadersPolicy = props.cdn.responseHeadersPolicy;
+    if (f.responseHeadersPolicy) {
+      securityHeadersPolicy = f.responseHeadersPolicy;
       if (removeOriginHeaders.length > 0) {
         Annotations.of(this).addWarningV2(
           '@aws-blocks/hosting:WebFunctionHeaderNotStripped',
@@ -1432,9 +1389,9 @@ export class HostingConstruct extends Construct {
             '(a shared policy like this avoids one Hosting-created policy per stack).',
         );
       }
-    } else if (props.cdn?.contentSecurityPolicy) {
+    } else if (f.contentSecurityPolicy) {
       securityHeadersPolicy = createSecurityHeadersPolicy(this, 'SecurityHeaders', {
-        contentSecurityPolicy: props.cdn.contentSecurityPolicy,
+        contentSecurityPolicy: f.contentSecurityPolicy,
         removeHeaders: removeOriginHeaders,
       });
     } else if (removeOriginHeaders.length > 0) {
@@ -1464,7 +1421,7 @@ export class HostingConstruct extends Construct {
       bucket: this.bucket,
       manifest: manifestWithBuildId,
       securityHeadersPolicy,
-      contentSecurityPolicy: props.cdn?.contentSecurityPolicy,
+      contentSecurityPolicy: f.contentSecurityPolicy,
       computeFunctionUrls: this.computeFunctionUrls,
       computeFunctions: this.computeFunctions,
       computeAliases: this.computeAliases,
@@ -1474,16 +1431,16 @@ export class HostingConstruct extends Construct {
       webAcl: this.webAcl,
       certificate: this.certificate,
       domainName: resolvedDomainNames.length > 0 ? resolvedDomainNames : undefined,
-      wwwRedirect: props.domain?.wwwRedirect,
+      wwwRedirect: f.domain?.wwwRedirect,
       accessLogBucket: storage.accessLogBucket,
-      priceClass: props.cdn?.priceClass,
-      geoRestriction: props.cdn?.geoRestriction,
-      skewProtection: props.skewProtection ?? { enabled: true },
-      ssrDefaultTtl: props.cdn?.ssrDefaultTtl,
-      cacheKeyCookies: props.cdn?.cacheKeyCookies,
-      cacheKeyHeaders: props.cdn?.cacheKeyHeaders,
-      webAclArn: effectiveWebAclArn ?? props.cdn?.webAclArn,
-      quotas: props.cdn?.quotas,
+      priceClass: f.priceClass,
+      geoRestriction: f.geoRestriction,
+      skewProtection: f.skewProtection ?? { enabled: true },
+      ssrDefaultTtl: f.ssrDefaultTtl,
+      cacheKeyCookies: f.cacheKeyCookies,
+      cacheKeyHeaders: f.cacheKeyHeaders,
+      webAclArn: effectiveWebAclArn ?? cdnWebAclArn,
+      quotas: f.quotas,
       customErrorPages: props.errorPages
         ? {
             notFound: !!props.errorPages.notFound,
@@ -1506,10 +1463,10 @@ export class HostingConstruct extends Construct {
       buildId,
       hasServer: Boolean(cfServerName),
       hasImage: this.computeFunctions.has('image-optimization'),
-      skewEnabled: (props.skewProtection ?? { enabled: true }).enabled !== false,
-      wwwRedirect: props.domain?.wwwRedirect,
+      skewEnabled: (f.skewProtection ?? { enabled: true }).enabled !== false,
+      wwwRedirect: f.domain?.wwwRedirect,
     });
-    this.doorInput = this.assembleDoorInput(cfPlan, manifest, props, cfServerName);
+    this.doorInput = this.assembleDoorInput(cfPlan, manifest, props, resolved, cfServerName);
     const cfBuild = buildFrontDoor(this, cloudFrontDoor, { ...this.doorInput, cdnProps }, { wiringCheck: false });
     cdn = cfBuild.result.cdn;
     this.frontDoor = { service: cloudFrontDoor.service, url: cfBuild.result.url, originHandle: cfBuild.result.originHandle };
@@ -1551,9 +1508,9 @@ export class HostingConstruct extends Construct {
     // `monitoring: { enabled: false }`. When on, surfaces the SNS topic
     // ARN as a CloudFormation output so operators can wire subscriptions
     // externally without touching the construct again.
-    const monitoringEnabled = props.monitoring?.enabled ?? true;
+    const monitoringEnabled = f.monitoring?.enabled ?? true;
     if (monitoringEnabled) {
-      const subscriptions = props.monitoring?.subscriptions ?? [];
+      const subscriptions = f.monitoring?.subscriptions ?? [];
       const ssrComputeName = this.computeFunctions.has('default')
         ? 'default'
         : this.computeFunctions.has('server')
@@ -1727,7 +1684,7 @@ export class HostingConstruct extends Construct {
     // `AWS:SourceArn` matching this account's CloudFront distributions.
 
     // ---- 10. DNS records ----
-    if (props.domain && dnsConstructs.length > 0) {
+    if (f.domain && dnsConstructs.length > 0) {
       for (const dns of dnsConstructs) {
         dns.createDnsRecords(cdn.distribution);
       }
@@ -1741,8 +1698,8 @@ export class HostingConstruct extends Construct {
       // door's asset-proxy. Skew-pin is a CloudFront-edge feature, so the plan
       // these doors render carries it off.
       // `'none'` (bare string) → serve S3 directly; otherwise an object door.
-      const isNone = props.frontDoor === 'none';
-      const fd = isNone ? undefined : (props.frontDoor as Extract<HostingConstructProps['frontDoor'], { kind: string }>);
+      const isNone = resolved.kind === 'none';
+      const fd = typeof props.frontDoor === 'object' ? props.frontDoor : undefined;
       const serverName = this.computeFunctions.has('default')
         ? 'default'
         : this.computeFunctions.has('server')
@@ -1767,7 +1724,7 @@ export class HostingConstruct extends Construct {
         hasServer: Boolean(serverName),
         hasImage: hasImageOrigin,
         skewEnabled: false,
-        wwwRedirect: props.domain?.wwwRedirect,
+        wwwRedirect: f.domain?.wwwRedirect,
         backendOrigins,
       });
       const common = {
@@ -1783,11 +1740,11 @@ export class HostingConstruct extends Construct {
         // No front door — serve the origin directly via S3 website hosting. The
         // door refuses an app with a server (a website bucket can't run one).
         // ('none' maps to the internal `s3-website` door.)
-        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName);
+        this.doorInput = this.assembleDoorInput(plan, manifest, props, resolved, serverName);
         built = buildFrontDoor(this, s3WebsiteDoor, { ...this.doorInput, plan }, { wiringCheck: false }).result;
         service = s3WebsiteDoor.service;
       } else if (fd?.kind === 'alb') {
-        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName, backendApiUrl, fd.backendApiPaths);
+        this.doorInput = this.assembleDoorInput(plan, manifest, props, resolved, serverName, backendApiUrl, fd.backendApiPaths);
         built = buildFrontDoor(
           this,
           albDoor,
@@ -1798,11 +1755,11 @@ export class HostingConstruct extends Construct {
               vpc: fd.vpc,
               internal: fd.internal,
               certificate: fd.certificate,
-              // Native ALB features, from the same props a bring-your-own door
-              // finds in `input.features`.
-              accessLogging: Boolean(props.logging),
-              waf: props.waf,
-              monitoring: Boolean(props.monitoring),
+              // Native ALB features, from the ALB door's settings
+              // (`frontDoor.features`, plus the deprecated top-level aliases).
+              accessLogging: f.logging !== undefined && f.logging.enabled !== false,
+              waf: f.waf,
+              monitoring: f.monitoring !== undefined && f.monitoring.enabled !== false,
             },
           },
           { wiringCheck: false },
@@ -1816,7 +1773,7 @@ export class HostingConstruct extends Construct {
         // SSR/image Lambdas) plus native same-origin backend proxy. `api` picks
         // the HTTP API v2 (default) vs a REST API (lambda:InvokeFunction — no
         // Function-URL body-hash issue).
-        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName, backendApiUrl, fd.backendApiPaths);
+        this.doorInput = this.assembleDoorInput(plan, manifest, props, resolved, serverName, backendApiUrl, fd.backendApiPaths);
         built = buildFrontDoor(
           this,
           apiGatewayDoor,
@@ -1828,12 +1785,12 @@ export class HostingConstruct extends Construct {
               // Custom domain: names come from `domain`; the regional cert is the
               // door's `certificate` (BYO, stack-region) or `domain.certificate`,
               // else DNS-validated against the hosted zone by the construct.
-              domain: props.domain
+              domain: f.domain
                 ? {
-                    names: Array.isArray(props.domain.domainName) ? props.domain.domainName : [props.domain.domainName],
-                    hostedZone: props.domain.hostedZone,
-                    hostedZoneId: props.domain.hostedZoneId,
-                    certificate: fd.certificate ?? props.domain.certificate,
+                    names: Array.isArray(f.domain.domainName) ? f.domain.domainName : [f.domain.domainName],
+                    hostedZone: f.domain.hostedZone,
+                    hostedZoneId: f.domain.hostedZoneId,
+                    certificate: fd.certificate ?? f.domain.certificate,
                   }
                 : undefined,
             },
@@ -1846,7 +1803,7 @@ export class HostingConstruct extends Construct {
         // once. Its `url` is required; its routing (assets reachable, API paths
         // wired) is checked from what the `cf.*` helpers recorded, unless the
         // app turned that off. Features are the door's to apply — not checked.
-        this.doorInput = this.assembleDoorInput(plan, manifest, props, serverName, backendApiUrl, fd.backendApiPaths);
+        this.doorInput = this.assembleDoorInput(plan, manifest, props, resolved, serverName, backendApiUrl, fd.backendApiPaths);
         built = buildFrontDoor(this, fd.door, this.doorInput, { wiringCheck: fd.wiringCheck }).result;
         service = fd.door.service;
         // If the door exposes a regional origin (e.g. an ALB it built), surface
@@ -2346,6 +2303,7 @@ export class HostingConstruct extends Construct {
     plan: import('../plan/types.js').CapabilityPlan,
     manifest: DeployManifest,
     props: HostingConstructProps,
+    resolved: ResolvedHostingFrontDoor,
     serverName: string | undefined,
     backendApiUrl?: string,
     backendApiPaths?: readonly string[],
@@ -2375,17 +2333,66 @@ export class HostingConstruct extends Construct {
           : undefined,
       image: imageFn instanceof LambdaFunction && imageUrl ? { fn: imageFn, url: imageUrl } : undefined,
       api: backendApiUrl ? { url: backendApiUrl, paths: backendApiPaths } : undefined,
-      domain: props.domain,
-      waf: props.waf,
-      cdnWebAclArn: props.cdn?.webAclArn,
-      logging: props.logging,
-      monitoring: props.monitoring,
-      geoRestriction: props.cdn?.geoRestriction,
+      domain: resolved.features.domain,
+      waf: resolved.features.waf,
+      cdnWebAclArn: resolved.cdnWebAclArn,
+      logging: resolved.features.logging,
+      monitoring: resolved.features.monitoring,
+      geoRestriction: resolved.features.geoRestriction,
       errorPages: props.errorPages,
-      skewProtection: props.skewProtection,
+      skewProtection: resolved.features.skewProtection,
     });
   }
 }
+
+/** The door kind and its effective settings, plus the legacy `cdn.webAclArn`. */
+type ResolvedHostingFrontDoor = ResolvedFrontDoor & { cdnWebAclArn?: string };
+
+/**
+ * Resolve the door's effective settings from `frontDoor.features` and the
+ * deprecated top-level props (see `resolveFrontDoorFeatures`). `cdn.webAclArn`
+ * stays a separate, lower-precedence alias of `waf.webAclArn` (as it always
+ * was): it conflicts only with `frontDoor.features.waf.webAclArn`.
+ *
+ * @throws HostingError('FrontDoorSettingConflictError') when a setting is set both ways.
+ * @throws HostingError('UnsupportedFrontDoorSettingError') when the door kind doesn't implement a setting.
+ */
+const resolveHostingFrontDoor = (props: HostingConstructProps): ResolvedHostingFrontDoor => {
+  const cdn = props.cdn;
+  const resolved = resolveFrontDoorFeatures(props.frontDoor, {
+    domain: { value: props.domain, prop: 'domain' },
+    waf: { value: props.waf, prop: 'waf' },
+    logging: { value: props.logging, prop: 'logging' },
+    monitoring: { value: props.monitoring, prop: 'monitoring' },
+    skewProtection: { value: props.skewProtection, prop: 'skewProtection' },
+    priceClass: { value: cdn?.priceClass, prop: 'cdn.priceClass' },
+    contentSecurityPolicy: { value: cdn?.contentSecurityPolicy, prop: 'cdn.contentSecurityPolicy' },
+    geoRestriction: { value: cdn?.geoRestriction, prop: 'cdn.geoRestriction' },
+    ssrDefaultTtl: { value: cdn?.ssrDefaultTtl, prop: 'cdn.ssrDefaultTtl' },
+    cacheKeyCookies: { value: cdn?.cacheKeyCookies, prop: 'cdn.cacheKeyCookies' },
+    cacheKeyHeaders: { value: cdn?.cacheKeyHeaders, prop: 'cdn.cacheKeyHeaders' },
+    responseHeadersPolicy: { value: cdn?.responseHeadersPolicy, prop: 'cdn.responseHeadersPolicy' },
+    quotas: { value: cdn?.quotas, prop: 'cdn.quotas' },
+  });
+  const cdnWebAclArn = cdn?.webAclArn;
+  if (cdnWebAclArn !== undefined) {
+    const explicitWaf = typeof props.frontDoor === 'object' ? props.frontDoor.features : undefined;
+    if (explicitWaf && 'waf' in explicitWaf && explicitWaf.waf?.webAclArn !== undefined) {
+      throw new HostingError('FrontDoorSettingConflictError', {
+        message: '`cdn.webAclArn` and `frontDoor.features.waf.webAclArn` are both set. They are the same setting.',
+        resolution: 'Keep `frontDoor.features.waf.webAclArn` and remove `cdn.webAclArn` (deprecated).',
+      });
+    }
+    if (resolved.kind !== 'cloudfront' && resolved.kind !== 'custom') {
+      throw new HostingError('UnsupportedFrontDoorSettingError', {
+        message: `\`cdn.webAclArn\` is not supported by the '${resolved.kind}' front door.`,
+        resolution:
+          'Remove `cdn.webAclArn` (a CloudFront web ACL). For a door with a WAF, set `frontDoor.features.waf` instead.',
+      });
+    }
+  }
+  return { ...resolved, cdnWebAclArn };
+};
 
 /**
  * How the selected front door invokes the server-rendering compute. Known
