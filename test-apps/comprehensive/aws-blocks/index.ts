@@ -598,6 +598,12 @@ const apiKeySecret = new Secret(scope, 'secret-api-key', {
   allowRuntimeWrite: true,
 });
 
+const validatedStringSecret = new Secret(scope, 'secret-validated-string', {
+  schema: z.string().min(1),
+  removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
+});
+
 // Typed JSON secret with schema validation (e.g. a set of related credentials).
 const dbSecretSchema = z.object({ host: z.string(), port: z.number() });
 // cacheTtlSeconds: 0 — deterministic read-after-write for the e2e (see secret-api-key).
@@ -2249,6 +2255,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async secretPutApiKey(value: string) {
     await apiKeySecret.put(value);
     return { success: true };
+  },
+
+  async secretPutValidatedString(value: string) {
+    await validatedStringSecret.put(value);
+    return { success: true };
+  },
+
+  async secretGetValidatedString() {
+    return { value: await validatedStringSecret.get() };
   },
 
   async secretGetDbCredentials() {

@@ -204,8 +204,9 @@ class SecretImpl<T = string> extends Scope {
 	 * version — `'previous'` for the value before the last change (a rotation
 	 * grace window), or a {@link SecretVersion} obtained from {@link listVersions}.
 	 *
-	 * Without a schema, returns the raw stored string. With a schema, parses the
-	 * stored JSON and validates it, returning the typed value `T`.
+	 * Without a schema, returns the raw stored string. With a schema, validates
+	 * the stored structured value, returning the typed value `T`. A stored string
+	 * is decoded as legacy JSON only when the schema rejects the string itself.
 	 *
 	 * Returns `null` when the requested version has no value — reads never throw
 	 * for a missing value, so callers can use `null` for normal control flow
@@ -230,9 +231,12 @@ class SecretImpl<T = string> extends Scope {
 		if (raw === undefined) return null;
 
 		if (this.schema) {
-			// The stored value is the already-parsed JSON value (put() stores it
-			// structurally). Validate it directly; a legacy raw string is parsed
-			// first for forward-compat.
+			// put() stores structured values, including literal strings. Only try
+			// legacy JSON decoding when the schema rejects the string itself.
+			if (typeof raw === 'string') {
+				const result = await this.schema['~standard'].validate(raw);
+				if (!result.issues) return result.value;
+			}
 			const parsed = typeof raw === 'string' ? safeJsonParse(raw) : raw;
 			return await validateSchema(this.schema, parsed);
 		}
