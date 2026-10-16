@@ -114,7 +114,7 @@ test('CDK: per-block removalPolicy overrides the resolved default', () => {
 	Template.fromStack(stack).hasResource('AWS::SecretsManager::Secret', { DeletionPolicy: 'Delete' });
 });
 
-test('CDK: grants the execution role GetSecretValue + PutSecretValue', () => {
+test('CDK: grants the execution role GetSecretValue by default (read-only)', () => {
 	const { stack, parent } = setup();
 	new Secret(parent, 'stripe-key');
 	Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
@@ -123,6 +123,62 @@ test('CDK: grants the execution role GetSecretValue + PutSecretValue', () => {
 				Match.objectLike({
 					Action: Match.arrayWith(['secretsmanager:GetSecretValue']),
 				}),
+			]),
+		},
+	});
+});
+
+test('CDK: does NOT grant PutSecretValue by default (read-only)', () => {
+	const { stack, parent } = setup();
+	new Secret(parent, 'stripe-key');
+	// Every IAM policy statement in the template must avoid PutSecretValue —
+	// the default is read-only, matching the runtime object with no put().
+	const policies = Template.fromStack(stack).findResources('AWS::IAM::Policy');
+	const serialized = JSON.stringify(policies);
+	assert.ok(
+		!serialized.includes('secretsmanager:PutSecretValue'),
+		'default (allowRuntimeWrite unset) must not grant PutSecretValue',
+	);
+});
+
+test('CDK: allowRuntimeWrite grants GetSecretValue + PutSecretValue', () => {
+	const { stack, parent } = setup();
+	new Secret(parent, 'stripe-key', { allowRuntimeWrite: true });
+	Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
+		PolicyDocument: {
+			Statement: Match.arrayWith([
+				Match.objectLike({
+					Action: Match.arrayWith(['secretsmanager:GetSecretValue']),
+				}),
+				Match.objectLike({
+					Action: Match.arrayWith(['secretsmanager:PutSecretValue']),
+				}),
+			]),
+		},
+	});
+});
+
+test('CDK: a fromExisting secret is read-only by default (no PutSecretValue)', () => {
+	const { stack, parent } = setup();
+	new Secret(parent, 'legacy-key', {
+		secret: Secret.fromExisting('arn:aws:secretsmanager:us-east-1:123456789012:secret:legacy-AbCdEf'),
+	});
+	const serialized = JSON.stringify(Template.fromStack(stack).findResources('AWS::IAM::Policy'));
+	assert.ok(
+		!serialized.includes('secretsmanager:PutSecretValue'),
+		'fromExisting without allowRuntimeWrite must not grant PutSecretValue',
+	);
+});
+
+test('CDK: a fromExisting secret with allowRuntimeWrite grants PutSecretValue', () => {
+	const { stack, parent } = setup();
+	new Secret(parent, 'legacy-key', {
+		secret: Secret.fromExisting('arn:aws:secretsmanager:us-east-1:123456789012:secret:legacy-AbCdEf'),
+		allowRuntimeWrite: true,
+	});
+	Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
+		PolicyDocument: {
+			Statement: Match.arrayWith([
 				Match.objectLike({
 					Action: Match.arrayWith(['secretsmanager:PutSecretValue']),
 				}),

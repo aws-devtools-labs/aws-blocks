@@ -584,14 +584,19 @@ const secretSetting = new AppSetting(scope, 'secret-setting', {
 });
 
 // Secret - Single high-value credential backed by AWS Secrets Manager
-// Opaque string secret (e.g. a third-party API key). `cacheTtlSeconds: 0`
-// disables the read cache for this instance so the read-after-write e2e tests
-// below (round-trip, overwrite, grace window, listVersions) are deterministic:
-// with the default 5-min cache and warm-Lambda reuse, a get() could be served a
-// value cached by an earlier test on the same warm instance. The default TTL is
+// Opaque string secret (e.g. a third-party API key). `allowRuntimeWrite: true`
+// because the e2e sets the value via put(); `cacheTtlSeconds: 0` disables the
+// read cache for this instance so the read-after-write e2e tests below
+// (round-trip, overwrite, grace window, listVersions) are deterministic: with
+// the default 5-min cache and warm-Lambda reuse, a get() could be served a value
+// cached by an earlier test on the same warm instance. The default TTL is
 // covered by the unit tests; here 0 both fixes isolation and exercises the
 // cache-disabled path end to end.
-const apiKeySecret = new Secret(scope, 'secret-api-key', { removalPolicy: 'destroy', cacheTtlSeconds: 0 });
+const apiKeySecret = new Secret(scope, 'secret-api-key', {
+  removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
+});
 
 // Typed JSON secret with schema validation (e.g. a set of related credentials).
 const dbSecretSchema = z.object({ host: z.string(), port: z.number() });
@@ -600,6 +605,7 @@ const dbCredentialsSecret = new Secret(scope, 'secret-db-credentials', {
   schema: dbSecretSchema,
   removalPolicy: 'destroy',
   cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
 });
 
 // Secret with an explicit well-known name (for CI/CD-driven management via the
@@ -609,6 +615,7 @@ const namedSecret = new Secret(scope, 'secret-named', {
   name: `${scope.fullId}/webhook-signing-key`,
   removalPolicy: 'destroy',
   cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
 });
 
 // Unset secret: created empty (no `generate`), so get() returns null until a
