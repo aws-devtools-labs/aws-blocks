@@ -86,7 +86,7 @@ Creates a single S3 bucket (plus a dedicated log bucket when `accessLogging` is 
 - **TLS:** Enforced unconditionally (`enforceSSL: true`) — a bucket policy denies any request where `aws:SecureTransport` is `false`. Not configurable. See D-FB-9.
 - **Versioning:** Enabled by default (secure default); opt out via `options.versioned: false`. See D-FB-10. When on, a lifecycle rule expires noncurrent versions after `options.noncurrentVersionExpirationDays` (default 90, validated as a positive integer at synth) to bound version-storage cost. See D-FB-14.
 - **Server access logging:** Enabled per-block via `options.accessLogging`, falling back to `scope.defaults.accessLogging` when omitted; when on, provisions a separate, locked-down log bucket whose logs expire after the stack posture's `scope.defaults.logRetention` (`ONE_WEEK` sandbox / `ONE_YEAR` production; `INFINITE` = no expiry). See D-FB-11 and D-FB-13.
-- **CORS:** Configured from `options.corsRules` if provided. A wildcard origin (`'*'`) combined with a mutating method (PUT/POST/DELETE) is rejected at synth. See D-FB-12.
+- **CORS:** Configured from `options.corsRules` if provided; otherwise the bucket has no CORS configuration, so browser `fetch()` of presigned URLs is blocked. Deliberately not derived from `scope.defaults.allowedOrigins` (API-only regex patterns) or the Hosting domain. A wildcard origin (`'*'`) combined with a mutating method (PUT/POST/DELETE) is rejected at synth. See D-FB-12.
 - **Lifecycle rules:** Configured from `options.lifecycleRules` if provided (merged with the noncurrent-version expiration rule above)
 - **Removal policy:** Resolved from `options.removalPolicy` (`'destroy'|'retain'`) when set, else the stack posture default `scope.defaults.removalPolicy` (DESTROY sandbox / RETAIN production) — replacing the former `sandboxMode` context read. See D-FB-13.
 - **Auto-delete objects:** Enabled when removal policy is DESTROY
@@ -114,7 +114,7 @@ Creates a single S3 bucket (plus a dedicated log bucket when `accessLogging` is 
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
 | No lifecycle rules | Objects never expire or transition locally | No mitigation — lifecycle rules are a background S3 process |
-| No CORS enforcement | Browser requests succeed regardless of origin locally | No mitigation — CORS is enforced by the browser + S3, not the mock |
+| No CORS enforcement | Browser requests succeed regardless of origin locally; a missing `corsRules` only fails after deploy | CORS is enforced by the browser + S3, not the mock. The README's "Browser Uploads and Downloads (CORS)" section documents that `corsRules` is required for deployed browser access |
 | No storage classes | Transition rules have no effect locally | No mitigation — storage classes are a cost optimization |
 | No multipart upload | Large files use simple write locally | No mitigation — mock uses `fs.writeFile` regardless of size |
 | Presigned URLs are localhost-only | URLs only work against the local dev server | No mitigation — expected behavior for local development |
