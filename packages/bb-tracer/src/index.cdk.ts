@@ -4,6 +4,7 @@
 import type { ScopeParent } from '@aws-blocks/core';
 import { registerTracer, Scope } from '@aws-blocks/core/cdk';
 import type { TracerOptions } from './types.js';
+import { BB_NAME } from './version.js';
 
 export type { AnnotationValue, Segment, TracerOptions } from './types.js';
 
@@ -19,7 +20,7 @@ export type { AnnotationValue, Segment, TracerOptions } from './types.js';
  */
 export class Tracer extends Scope {
 	constructor(scope: ScopeParent, id: string, options?: TracerOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME });
 
 		if (options?.enabled !== false) {
 			// Tracing is presence-gated: creating a Tracer signals that the app

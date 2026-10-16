@@ -10,6 +10,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import { materialize, grantExternalDataApi } from './infra.js';
 import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX, DEFAULT_BACKUP_RETENTION_DAYS } from './constants.js';
 import type { DatabaseOptions, ExternalDatabaseRef, SubnetSelection } from './types.js';
+import { BB_NAME } from './version.js';
 
 /**
  * CDK layer for the Database Building Block.
@@ -75,6 +76,7 @@ export class Database extends BuildingBlockScope {
     // resolved by the Database construct itself via `selectSubnets`, not here.
     super(id, {
       parent: scope,
+      bbName: BB_NAME,
       vpc: {
         interfaceEndpoints: [
           ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,

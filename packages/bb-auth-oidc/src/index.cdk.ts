@@ -70,6 +70,7 @@ export type {
 	StubAuthorizeRequest,
 	StubUser,
 } from './types.js';
+import { BB_NAME } from './version.js';
 
 /**
  * CDK-synth `AuthOIDC`.
@@ -100,7 +101,7 @@ export class AuthOIDC<
 	public readonly signOutPath: string;
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 
 		this.callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
 		this.signOutPath = options.signOutPath ?? DEFAULT_SIGNOUT_PATH;
