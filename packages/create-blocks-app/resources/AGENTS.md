@@ -40,6 +40,14 @@ onAuthChange(authApi, (user) => { /* re-render for signed-in/out */ });
 
 `AuthBasic` without a `codeDelivery` config signs a user in immediately on sign-up (no email confirmation step).
 
+**The auth backend renders no UI — mount it on the frontend, or the app is unreachable.** `createApi()` provisions the user store but shows no sign-in screen on its own; if you stop at the backend, every gated route is unreachable. Fit these parts into whatever frontend structure you have:
+
+- Render `Authenticator(authApi)` for the sign-in / sign-up / confirm forms. Use it as-is; don't rebuild the form.
+- Gate the app shell on the session with `AuthenticatedContent(authApi, (user) => …, fallback)`, which swaps between signed-in content and a signed-out fallback for you. (`onAuthChange` above is the lower-level hook if you render the shell yourself.)
+- **Check:** load the deployed URL signed out — you should see the auth form; sign in — the form should disappear and the app shell appear.
+
+`Authenticator` emits stable testids. For `AuthBasic` and `AuthCognito` the fields are `authenticator-username` / `authenticator-password` and the actions `authenticator-action-signIn` / `authenticator-action-signUp` / `authenticator-submit`; `CUSTOMIZING-AUTH-UI.md` is the full contract (OIDC/federated actions carry a provider suffix, e.g. `authenticator-action-signIn:google`).
+
 ### The deployed frontend finds the backend on its own
 
 You do **not** wire an API URL into the frontend. The imported client resolves the API endpoint itself at runtime: locally, the dev server serves the backend and its config together (`npm run dev` in a fresh app, or `npm run dev:server` when Blocks was added to an existing project; it exposes `/.blocks-sandbox/config.json`); once deployed, the client reads the config served from the hosting origin, where the frontend and API sit same-origin. So build against the imported client and let the framework resolve the URL — don't hardcode one or curl-hunt for the API base.
