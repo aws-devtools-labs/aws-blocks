@@ -30,7 +30,7 @@ export class DistributedDatabase extends Scope {
     query<T>(query: SqlQuery): Promise<T[]>;
     // (undocumented)
     queryOne<T>(query: SqlQuery): Promise<T | null>;
-    simulateConflict(): never;
+    simulateConflict(): void;
     transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T>;
 }
 
