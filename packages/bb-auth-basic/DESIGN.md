@@ -92,10 +92,10 @@ This allows the Authenticator UI component to display errors without losing trac
 **Decision:** Session tokens are JWTs signed with HS256 using a secret stored in AppSetting (SSM SecureString in AWS, in-memory in mock). The secret is lazily fetched and cached per instance.
 
 **Rationale:**
-- **Stateless validation** — JWT tokens can be validated without a database round-trip (only need the secret, not a session table lookup).
+- **Mostly stateless validation** — a JWT is verified from the signing secret alone, with one small exception: sign-out revocation (below) adds a single KVStore read per authenticated request to check the token's `jti` against the revocation list. Tokens with no `jti` (issued before revocation shipped) skip that read and simply expire within `sessionDuration`.
 - **Shared secret** — AppSetting ensures all Lambda instances use the same signing key, so tokens are valid across cold starts.
 - **Security** — secret is stored in SSM SecureString (encrypted at rest); never exposed in code or environment variables.
-- **Trade-off** — cannot revoke individual sessions (JWT is valid until expiry). Acceptable for basic auth; if token revocation is needed, use AuthCognito.
+- **Revocable on sign-out** — `signOut` records the presented token's `jti` on a revocation list (the `codes` store, keyed `revoked:<jti>`), with an expiry equal to the token's own `exp` so the list self-trims. `getUserFromCookie` rejects a revoked `jti`, so a copied or replayed cookie no longer authenticates after sign-out. This trades pure in-memory validation for one KVStore read per request. `requireAuth` reports a revoked session as `SessionRevokedException` and an absent/aged-out one as `SessionExpiredException`, so a client can message "you signed out / your session was revoked" differently from "your token expired"; the session is resolved in a single pass that carries the reason, so classifying the failure costs no extra verify or read. For richer session management (refresh tokens, device management), use AuthCognito.
 
 ### D-AB-3: bcrypt for password hashing (cost factor 12)
 
@@ -235,9 +235,9 @@ The mock behavior is identical to AWS behavior with the following environment di
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
 | Secret regenerated on restart (mock) | Existing JWTs are invalidated when the dev server restarts | Intentional for local dev — sign in again after restart |
-| No DynamoDB TTL on codes (mock) | Expired codes remain in storage until explicitly checked | Code expiry is checked at verification time; stale entries are deleted on access |
+| No DynamoDB TTL reaper (mock) | Expired codes and revocation markers remain in the in-memory store until read | The AWS `codes` store is created with `ttl: true` so DynamoDB physically reaps them; reads filter expired entries on both layers regardless, so correctness never depends on the reaper |
 | No rate limiting on sign-in attempts | Brute-force attacks succeed locally | No mitigation — acceptable for local dev. Production should use CloudFront WAF or API Gateway throttling at the infrastructure level |
-| No cross-instance session invalidation | Signing out on one mock instance doesn't affect others | Not applicable in local dev (single instance). In AWS, JWT-based sessions are stateless — signOut only clears the client cookie |
+| No cross-instance session invalidation | Signing out on one mock instance doesn't affect others | In AWS the revocation list lives in the shared `codes` DynamoDB table, so sign-out revokes the token for every instance; the mock's in-memory store is per-process, so a multi-instance mock would not share it (not applicable in single-instance local dev) |
 | bcrypt timing may differ | Hashing speed varies between local machine and Lambda | No mitigation needed — timing differences don't affect correctness |
 | No email/SMS delivery infrastructure | Codes are delivered via callback (typically console.log in dev) | Intentional — codeDelivery is the integration point for real delivery in production |
 
@@ -246,7 +246,7 @@ The mock behavior is identical to AWS behavior with the following environment di
 | Decision | Trade-off |
 |----------|-----------|
 | Composite BB (no own infrastructure) | Cannot tune storage independently, but avoids CDK complexity |
-| JWT sessions (stateless) | Cannot revoke individual sessions, but avoids session store lookups |
+| JWT sessions, revocable on sign-out | One KVStore read per authenticated request (to check the revocation list), rather than pure in-memory JWT validation |
 | bcrypt cost 12 | ~250ms per hash, but meets OWASP minimum |
 | Single-file implementation | Cannot have env-specific behavior, but keeps code simple |
 | codeDelivery as callback | No built-in email/SMS, but maximum flexibility |
@@ -262,6 +262,7 @@ The mock behavior is identical to AWS behavior with the following environment di
 | Password storage | bcrypt with cost 12 (OWASP recommended minimum) |
 | Token theft (XSS) | HttpOnly cookies — not accessible via JavaScript |
 | Token theft (network) | Secure flag — only sent over HTTPS |
+| Token replay after sign-out | Revocation list keyed by `jti` — `signOut` records the token id (self-expiring at the token's `exp`), and every auth check rejects a revoked `jti`, so a copied/replayed cookie stops working at sign-out rather than at `exp` |
 | Timing attacks on code verification | `constantTimeEquals` for HMAC comparison |
 | User enumeration (resetPassword) | Silent success for non-existent users |
 | Code brute-force | 10-minute TTL + 900,000 possible values |
