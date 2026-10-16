@@ -27,7 +27,6 @@ public actor OIDCClient: AuthProvider {
     private var tokenStore: TokenStore { client.tokenStore }
 
     private var inflightRefresh: Task<Void, Error>?
-    private var legacyAdoption: Task<Void, Never>?
     private var subscribers: [UUID: AsyncStream<OIDCAuthState>.Continuation] = [:]
 
     public init(
@@ -457,12 +456,9 @@ public actor OIDCClient: AuthProvider {
         await tokenStore.set(tokenKey(name), value: value)
     }
 
-    /// Tokens saved under the unscoped keys move to the first client that uses the store, once.
+    /// Once per BlocksClient, the first of its OIDCClients to use the store takes the unscoped tokens, unless it has its own.
     private func adoptLegacyTokens() async {
-        if legacyAdoption == nil {
-            legacyAdoption = Task { await self.moveLegacyTokens() }
-        }
-        await legacyAdoption?.value
+        await client.adoptLegacyTokensOnce { await self.moveLegacyTokens() }
     }
 
     private func moveLegacyTokens() async {

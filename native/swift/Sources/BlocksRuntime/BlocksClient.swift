@@ -45,6 +45,8 @@ public final class BlocksClient: Sendable {
     private let url: String
     /// The only path to the session; read by tests.
     let gate: SessionGate
+    /// The one move of tokens saved under the old unscoped keys, shared by every OIDCClient on this client.
+    private let legacyTokenAdoption = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
 
     /// Stored cookies persisted in the Keychain so auth sessions survive app restarts.
     /// Shared across all BlocksClient instances.
@@ -77,6 +79,17 @@ public final class BlocksClient: Sendable {
     /// Later requests throw `ClientClosedError`; in-flight ones finish, then the session this client created is invalidated.
     public func close() {
         gate.close()
+    }
+
+    /// Runs only the first caller's `move`; every later caller waits for that run instead.
+    func adoptLegacyTokensOnce(_ move: @escaping @Sendable () async -> Void) async {
+        let adoption = legacyTokenAdoption.withLock { state in
+            if let existing = state { return existing }
+            let started = Task { await move() }
+            state = started
+            return started
+        }
+        await adoption.value
     }
 
     /// Clears all stored cookies (e.g. on sign-out).

@@ -77,6 +77,53 @@ private func tokenKey(_ name: String, exchangePath: String = "/auth/exchange") -
     "\(exchangePath)#\(name)"
 }
 
+/// Holds the first read of `heldKey`, value already taken, until a second arrives or 200 ms pass, so racing moves both read it.
+private actor RendezvousTokenStore: TokenStore {
+    private var storage: [String: String]
+    private let heldKey: String
+    private var reads = 0
+    private var held: CheckedContinuation<Void, Never>?
+    private(set) var writtenKeys: [String] = []
+
+    init(_ storage: [String: String], holding heldKey: String) {
+        self.storage = storage
+        self.heldKey = heldKey
+    }
+
+    func get(_ key: String) async -> String? {
+        let value = storage[key]
+        if key == heldKey {
+            reads += 1
+            if reads == 1 {
+                await withCheckedContinuation { continuation in
+                    held = continuation
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(200))
+                        self.release()
+                    }
+                }
+            } else {
+                release()
+            }
+        }
+        return value
+    }
+
+    func set(_ key: String, value: String) async {
+        storage[key] = value
+        writtenKeys.append(key)
+    }
+
+    func delete(_ key: String) async {
+        storage[key] = nil
+    }
+
+    private func release() {
+        held?.resume()
+        held = nil
+    }
+}
+
 // MARK: - Tests
 
 final class OIDCClientTests: XCTestCase {
@@ -388,8 +435,6 @@ final class OIDCClientTests: XCTestCase {
         if case .signedIn = event1 {} else { XCTFail("Expected signedIn") }
     }
 
-    // MARK: - fromJSON
-
     // MARK: - Shared token store
 
     func testClientsSharingAStoreKeepSeparateSessions() async throws {
@@ -440,6 +485,45 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(scoped, "legacy-refresh")
         XCTAssertNil(legacy)
     }
+
+    func testClientsFirstUsingTheStoreTogetherAdoptTheUnscopedSessionOnce() async {
+        let store = RendezvousTokenStore(
+            ["access_token": "legacy-access", "refresh_token": "legacy-refresh", "expires_at": "9999999999000"],
+            holding: "access_token"
+        )
+        let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession(), tokenStore: store)
+        let auth = makeClient(named: "auth", on: shared)
+        let admin = makeClient(named: "admin", on: shared)
+
+        async let authToken = auth.getAccessToken()
+        async let adminToken = admin.getAccessToken()
+        let tokens = await [authToken, adminToken]
+
+        let adopters = await Set(store.writtenKeys.map { $0.components(separatedBy: "#")[0] })
+        XCTAssertEqual(adopters.count, 1, "only one client adopts the old session: \(adopters)")
+        XCTAssertEqual(tokens.compactMap { $0 }, ["legacy-access"])
+        XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
+    }
+
+    // Each getClient() hydrates a new OIDCClient, so one exchange path can have several.
+    func testClientsOnOneExchangePathWaitForTheMoveOfTheUnscopedSession() async {
+        let store = RendezvousTokenStore(
+            ["access_token": "legacy-access", "refresh_token": "legacy-refresh", "expires_at": "9999999999000"],
+            holding: "access_token"
+        )
+        let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession(), tokenStore: store)
+        let first = makeClient(named: "auth", on: shared)
+        let second = makeClient(named: "auth", on: shared)
+
+        async let firstToken = first.getAccessToken()
+        async let secondToken = second.getAccessToken()
+        let tokens = await [firstToken, secondToken]
+
+        XCTAssertEqual(tokens, ["legacy-access", "legacy-access"])
+        XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
+    }
+
+    // MARK: - fromJSON
 
     func testFromJSONHydratesFromDescriptor() throws {
         let descriptor: [String: Any] = [
