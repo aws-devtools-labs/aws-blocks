@@ -116,6 +116,32 @@ test('AppSetting - set and get a flag', async () => {
   assert.strictEqual(value, 'on');
 });
 
+// ─── Secret ─────────────────────────────────────────────────────────────────
+// A credential backed by Secrets Manager (local file in dev). Unlike AppSetting
+// it keeps version history: after a rotation the previous value stays readable
+// for a grace window. We set, rotate, then assert current + previous + that two
+// versions are labeled.
+test('Secret - rotate keeps the previous value readable', async () => {
+  await api.rotateApiKey('key-v1');
+  await api.rotateApiKey('key-v2');
+
+  assert.strictEqual(await api.getApiKey(), 'key-v2');
+  assert.strictEqual(await api.getPreviousApiKey(), 'key-v1');
+  assert.strictEqual(await api.apiKeyVersionCount(), 2);
+});
+
+// ─── KnowledgeBase ────────────────────────────────────────────────────────
+// Semantic search over the ./knowledge corpus. Backed by Bedrock KB on deploy;
+// locally the mock builds a TF-IDF index over the committed docs (no AWS). We
+// query a billing question and assert the top hit comes from billing.md, not
+// the unrelated shipping doc, with a positive relevance score.
+test('KnowledgeBase - retrieves the relevant doc for a query', async () => {
+  const results = await api.searchDocs('how do I get a refund for a payment');
+  assert.ok(results.length > 0, 'expected at least one retrieval result');
+  assert.strictEqual(results[0].source, 'billing.md', 'top hit should be the billing doc');
+  assert.ok(results[0].score > 0, 'top hit should have a positive relevance score');
+});
+
 // ─── AsyncJob ─────────────────────────────────────────────────────────────────
 // Background processing. The handler runs locally (no SQS/Lambda); we submit a
 // job, wait for completion, and confirm the handler's side effect landed.
