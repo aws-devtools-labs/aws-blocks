@@ -223,7 +223,7 @@ The Metrics BB resolves this internally from its options (explicit `namespace` o
 
 ```typescript
 const metrics = new Metrics(scope, 'metrics', { namespace: 'MyApp/Orders' });
-const dashboard = new Dashboard(scope, 'dashboard', { metrics });
+const dashboard = new Dashboard(scope, 'dashboard', { metrics: { metrics } });
 // Dashboard uses 'MyApp/Orders' as the CloudWatch namespace
 ```
 
