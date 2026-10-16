@@ -218,6 +218,7 @@ export interface Message {
 // @public (undocumented)
 export interface ModelConfig {
     apiKey?: string | (() => Promise<string>);
+    cannedResponses?: Record<string, string> | string;
     // (undocumented)
     endpoint?: string;
     // Warning: (ae-forgotten-export) The symbol "GuardrailsConfig" needs to be exported by the entry point index.aws.d.ts

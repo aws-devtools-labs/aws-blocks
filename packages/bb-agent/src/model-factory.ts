@@ -182,7 +182,7 @@ function formatUserAgentChain(chain: [string, string][]): string {
 export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger, cannedHints?: Map<string, CannedToolHints>, customUserAgent?: [string, string][]): Promise<Model<BaseModelConfig>> {
 	if (!config || config.provider === 'canned') {
 		const { CannedProvider } = await import('./providers/canned.js');
-		return new CannedProvider({ hints: cannedHints });
+		return new CannedProvider({ hints: cannedHints, responses: config?.cannedResponses });
 	}
 
 	// Test-only provider — throws mid-stream to verify error handling
