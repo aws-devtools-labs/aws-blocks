@@ -28,7 +28,7 @@ export function resolveRegion(): string {
 }
 
 /** Launch the URL in the default browser. Best-effort: no opener (headless/CI) is not a failure. */
-function openInBrowser(url: string): void {
+export function openInBrowser(url: string): void {
   const opener =
     process.platform === 'darwin' ? 'open' :
     process.platform === 'win32' ? 'cmd' :
