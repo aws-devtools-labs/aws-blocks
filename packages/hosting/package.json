@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/hosting",
-  "version": "0.3.1",
+  "version": "0.4.1",
   "keywords": [
     "aws-blocks",
     "hosting",
@@ -75,7 +75,8 @@
     "parse-cache-control": "^1.0.1",
     "semver": "^7.6.0",
     "zod": "^3.25.0",
-    "@standard-schema/spec": "^1.1.0"
+    "@standard-schema/spec": "^1.1.0",
+    "@aws-sdk/client-lambda-web": "^3.1150.0"
   },
   "devDependencies": {
     "@types/cross-spawn": "^6.0.6",

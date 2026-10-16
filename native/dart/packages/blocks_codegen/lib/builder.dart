@@ -7,13 +7,21 @@ import 'src/generator.dart';
 /// Factory for the build_runner builder.
 Builder blocksCodegenBuilder(BuilderOptions options) => _BlocksCodegenBuilder(
   options.config['fail_on_collision'] as bool? ?? false,
+  ((options.config['native_package_opt_out'] as List?) ?? const [])
+      .cast<String>()
+      .map((s) => s.trim())
+      .where((s) => s.isNotEmpty)
+      .toSet(),
 );
 
 class _BlocksCodegenBuilder extends Builder {
   /// When true, collisions are a hard error instead of auto-suffixed + warned.
   final bool failOnCollision;
 
-  _BlocksCodegenBuilder(this.failOnCollision);
+  /// Logical package identities, as keyed in `x-blocks-native-packages`.
+  final Set<String> optedOutPackages;
+
+  _BlocksCodegenBuilder(this.failOnCollision, this.optedOutPackages);
 
   @override
   final buildExtensions = const {
@@ -28,6 +36,7 @@ class _BlocksCodegenBuilder extends Builder {
     final rpcModel = const OpenRpcParser().parse(contents);
     final codegenModel = codegen_builder.CodegenModelBuilder(
       failOnCollision: failOnCollision,
+      optedOutPackages: optedOutPackages,
     ).build(rpcModel);
     for (final w in codegenModel.warnings) {
       log.warning(w);

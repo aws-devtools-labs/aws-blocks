@@ -20,19 +20,28 @@ const MAX_DELAY_MS = 30000;
  * Covers both a freshly created cluster whose writer isn't up and a
  * `minCapacity: 0` (scale-to-zero) cluster resuming from auto-pause.
  *
- * `DataApiEngine` rewrites `error.name` to a `DatabaseErrors` name before it
- * reaches here, so `ConnectionFailed` is the check that actually fires in the
- * Lambda; the raw SDK names are kept for errors raised outside the engine.
+ * `DataApiEngine` re-tags the error to a `DatabaseErrors` name (a branded error
+ * with a stable BB message so no raw driver text crosses the RPC wire), keeping
+ * the raw SDK error as `cause`. So `ConnectionFailed` matches on the re-tagged
+ * name, while the raw SDK name / message — needed for the writer-not-ready and
+ * `BadRequestException` cases the translator maps to `QueryFailed` — is read off
+ * that `cause`. Errors raised outside the engine carry their raw name/message
+ * directly and are matched on the top-level error.
  */
-export const isRetryableMigrationError = (e: unknown): boolean =>
-  e instanceof Error && (
-    e.name === DatabaseErrors.ConnectionFailed ||
-    TRANSIENT_DATA_API_ERROR_NAMES.has(e.name) ||
-    e.name === 'BadRequestException' ||
-    // JDBC-style but load-bearing: only check for a not-yet-ready writer, whose
-    // name the engine rewrites while leaving the message intact.
-    e.message.includes('Communications link failure')
-  );
+export const isRetryableMigrationError = (e: unknown): boolean => {
+  if (!(e instanceof Error)) return false;
+  // Inspect both the (possibly re-tagged) error and the raw driver error kept as
+  // its cause — the re-tag path replaces name/message but preserves the original
+  // as cause (server-side only, so raw text never reaches the wire).
+  const raw = e.cause instanceof Error ? e.cause : undefined;
+  const matches = (err: Error): boolean =>
+    err.name === DatabaseErrors.ConnectionFailed ||
+    TRANSIENT_DATA_API_ERROR_NAMES.has(err.name) ||
+    err.name === 'BadRequestException' ||
+    // JDBC-style but load-bearing: a not-yet-ready writer's message.
+    err.message.includes('Communications link failure');
+  return matches(e) || (raw !== undefined && matches(raw));
+};
 
 /**
  * Execute a function with exponential backoff while Aurora is unreachable.

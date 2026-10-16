@@ -13,6 +13,7 @@ import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { isBlocksError } from '@aws-blocks/core';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Secret } from '@aws-blocks/bb-secret';
 import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -580,6 +581,47 @@ const numberSetting = new AppSetting<number>(scope, 'number-setting', {
 const secretSetting = new AppSetting(scope, 'secret-setting', {
   name: `${ssmPrefix}/api-key`,
   secret: true,
+});
+
+// Secret - Single high-value credential backed by AWS Secrets Manager
+// Opaque string secret (e.g. a third-party API key). `cacheTtlSeconds: 0`
+// disables the read cache for this instance so the read-after-write e2e tests
+// below (round-trip, overwrite, grace window, listVersions) are deterministic:
+// with the default 5-min cache and warm-Lambda reuse, a get() could be served a
+// value cached by an earlier test on the same warm instance. The default TTL is
+// covered by the unit tests; here 0 both fixes isolation and exercises the
+// cache-disabled path end to end.
+const apiKeySecret = new Secret(scope, 'secret-api-key', { removalPolicy: 'destroy', cacheTtlSeconds: 0 });
+
+// Typed JSON secret with schema validation (e.g. a set of related credentials).
+const dbSecretSchema = z.object({ host: z.string(), port: z.number() });
+// cacheTtlSeconds: 0 — deterministic read-after-write for the e2e (see secret-api-key).
+const dbCredentialsSecret = new Secret(scope, 'secret-db-credentials', {
+  schema: dbSecretSchema,
+  removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
+});
+
+// Secret with an explicit well-known name (for CI/CD-driven management via the
+// aws CLI). Scoped by stack identity so parallel deploys don't collide.
+// cacheTtlSeconds: 0 — deterministic read-after-write for the e2e (see secret-api-key).
+const namedSecret = new Secret(scope, 'secret-named', {
+  name: `${scope.fullId}/webhook-signing-key`,
+  removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
+});
+
+// Unset secret: created empty (no `generate`), so get() returns null until a
+// value is set. Exercises the "unset reads null on AWS, not a random string"
+// contract — this instance is deliberately never written in the e2e suite.
+const unsetSecret = new Secret(scope, 'secret-unset', { removalPolicy: 'destroy' });
+
+// Auto-generated secret: `generate: true` seeds a random value on first create,
+// so get() returns a non-null string before any put() — a signing/HMAC key that
+// just needs to exist.
+const generatedSecret = new Secret(scope, 'secret-generated', {
+  generate: true,
+  removalPolicy: 'destroy',
 });
 
 // CronJob - Scheduled task execution
@@ -1484,7 +1526,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // does NOT hydrate it into a channel client. Tests need the raw token fields.
     const ch = await realtime.getChannel('cursors', subChannel);
     const raw = ch.toJSON() as Record<string, unknown>;
-    const { __blocks, ...descriptor } = raw;
+    const { __blocks, ...rest } = raw;
+    // Preserve the descriptor's real channel key typed as string (see agentGetRawDescriptor)
+    // so a `refresh` callback can spread this cast-free without overriding channel.
+    const descriptor: { channel: string; [key: string]: unknown } = { ...rest, channel: raw.channel as string };
     return descriptor;
   },
 
@@ -1520,8 +1565,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async realtimePublishOversizedPayload() {
-    // Message will exceed 32KB WebSocket frame limit
-    const bigData = { userId: 'u1', x: 0, y: 0, color: 'x'.repeat(33_000) };
+    // Message will exceed the 128 KiB WebSocket logical message limit
+    const bigData = { userId: 'u1', x: 0, y: 0, color: 'x'.repeat(132_000) };
     await realtime.publish('cursors', 'oversized', bigData);
     return { success: true };
   },
@@ -1757,15 +1802,6 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     }
   },
 
-  async dsqlRejectForeignKey() {
-    try {
-      await dsql.execute(sql`CREATE TABLE bad_fk (id TEXT, ref TEXT REFERENCES dsql_items(id))`);
-      return { error: null };
-    } catch (e: any) {
-      return { error: e.name };
-    }
-  },
-
   async dsqlRejectTruncate() {
     try {
       await dsql.execute(sql`TRUNCATE TABLE dsql_items`);
@@ -1908,6 +1944,24 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async agentGetChannel(channelId: string) {
     return { channel: await agent.getChannel(channelId) };
+  },
+
+  async agentGetRawDescriptor(channelId: string) {
+    // Return the raw toJSON() descriptor for the AGENT's chunks channel with __blocks
+    // removed so client middleware does NOT hydrate it into a channel client. useChat's
+    // `refresh` callback needs the raw token fields to re-mint fresh credentials before a
+    // reconnect. Mirrors realtimeGetRawDescriptor, but sourced from the agent's chunks
+    // channel (agent.getChannel === realtime.getChannel('chunks', channelId)) so the
+    // descriptor targets the SAME channel useChat subscribes to via agentGetChannel.
+    const ch = await agent.getChannel(channelId);
+    const raw = ch.toJSON() as Record<string, unknown>;
+    const { __blocks, ...rest } = raw;
+    // Preserve the descriptor's real channel key (the full `{fullId}/chunks/{channelId}`
+    // path) typed as a string, so a consumer's `refresh` callback can spread this into a
+    // ChatChannelDescriptor cast-free — the fresh token must resubscribe under the SAME
+    // key the transport stored it under, so this channel must NOT be overridden downstream.
+    const descriptor: { channel: string; [key: string]: unknown } = { ...rest, channel: raw.channel as string };
+    return descriptor;
   },
 
   async agentResume(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string) {
@@ -2135,6 +2189,65 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async settingPutSecret(value: string) {
     await secretSetting.put(value);
     return { success: true };
+  },
+
+  // ------------------------------------------------------------------------
+  // Secret Tests (AWS Secrets Manager)
+  // ------------------------------------------------------------------------
+
+  async secretGetApiKey() {
+    return { value: await apiKeySecret.get() };
+  },
+
+  async secretPutApiKey(value: string) {
+    await apiKeySecret.put(value);
+    return { success: true };
+  },
+
+  async secretGetDbCredentials() {
+    return { value: await dbCredentialsSecret.get() };
+  },
+
+  async secretPutDbCredentials(value: { host: string; port: number }) {
+    await dbCredentialsSecret.put(value);
+    return { success: true };
+  },
+
+  async secretPutDbCredentialsInvalid(value: unknown) {
+    // Exercises schema validation on put. `value` is deliberately untyped here
+    // because the test passes an intentionally-wrong shape; the BB rejects it.
+    await dbCredentialsSecret.put(value as { host: string; port: number });
+    return { success: true };
+  },
+
+  async secretGetNamed() {
+    return { value: await namedSecret.get() };
+  },
+
+  async secretPutNamed(value: string) {
+    await namedSecret.put(value);
+    return { success: true };
+  },
+
+  async secretGetApiKeyPrevious() {
+    return { value: await apiKeySecret.get({ version: 'previous' }) };
+  },
+
+  async secretListApiKeyVersions() {
+    const versions = await apiKeySecret.listVersions();
+    // Return client-safe metadata (versionId + stages count), never values.
+    return versions.map((v) => ({ versionId: v.versionId, stages: v.stages }));
+  },
+
+  // Unset secret: never written, so get() must return null (not a random
+  // generated string) on AWS — the "unset reads null" contract.
+  async secretGetUnset() {
+    return { value: await unsetSecret.get() };
+  },
+
+  // Generated secret: get() before any put() returns the seeded random value.
+  async secretGetGenerated() {
+    return { value: await generatedSecret.get() };
   },
   // CronJob Tests
   // ------------------------------------------------------------------------

@@ -36,10 +36,19 @@ new Hosting(blocksStack, 'Hosting', {
   framework: 'nextjs',
   api: blocksStack,
   buildCache: { enabled: true },
-  compute: {
-    memorySize: 1024,
-    timeout: cdk.Duration.seconds(30),
-  },
+  // SSR cache-key credentials: include the app's session cookie
+  // in the CloudFront SSR cache key so cacheable per-user responses are keyed
+  // per session. Exercised over the wire by the
+  // /cache-isolation route + test/e2e.test.ts "SSR cache isolation" suite.
+  // (No app-wide ssrDefaultTtl: only routes that opt in via `s-maxage` cache,
+  // keeping the other e2e routes uncached.)
+  cacheKeyCookies: ['bb_session'],
+  // HOSTING_COMPUTE_TYPE=web-function runs the same suite against AWS Lambda
+  // Web Functions (OpenNext then builds a node-wrapper HTTP server).
+  compute:
+    process.env.HOSTING_COMPUTE_TYPE === 'web-function'
+      ? { type: 'web-function', timeout: cdk.Duration.seconds(30) }
+      : { memorySize: 1024, timeout: cdk.Duration.seconds(30) },
   // E2E: secret() → Secrets Manager, config() → SSM Parameter Store. The values
   // are written out of band by the CLI (see test/e2e.test.ts) and read at runtime
   // via getSecret/getConfig in /api/probe/secret.

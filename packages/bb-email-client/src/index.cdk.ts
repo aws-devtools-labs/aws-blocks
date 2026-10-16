@@ -5,7 +5,7 @@ import { CfnConfigurationSet } from 'aws-cdk-lib/aws-ses';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Stack } from 'aws-cdk-lib';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 
 // Re-export public types and errors (no runtime dependencies)
@@ -47,4 +47,8 @@ export class EmailClient extends BuildingBlockScope {
 			],
 		}));
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	send(..._args: unknown[]): never { return synthGuard('EmailClient', 'send'); }
+	sendBatch(..._args: unknown[]): never { return synthGuard('EmailClient', 'sendBatch'); }
 }

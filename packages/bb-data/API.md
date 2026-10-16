@@ -94,10 +94,14 @@ export interface DatabaseOptions {
     maxCapacity?: number;
     migrationsPath?: string;
     minCapacity?: number;
+    pointInTimeRecovery?: boolean | {
+        retentionDays: number;
+    };
     postgresVersion?: string;
     removalPolicy?: 'destroy' | 'retain' | 'snapshot';
     rlsPolicy?: 'enforce';
     schema?: TableSchema;
+    storageEncryptionKeyArn?: string;
     subnets?: SubnetSelection;
 }
 
@@ -152,6 +156,7 @@ export class PgClientEngine implements DatabaseEngine {
 
 // @public
 export interface PgClientEngineConfig {
+    applicationName?: string;
     connectionString: string;
     connectionTimeoutMillis?: number;
     poolSize?: number;

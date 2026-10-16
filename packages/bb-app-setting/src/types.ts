@@ -27,7 +27,7 @@ export interface AppSettingOptions<T = string> {
 	value?: T;
 	/** Runtime validation schema. Accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType). When provided, T is inferred from the schema. */
 	schema?: StandardSchemaV1<T>;
-	/** When true, creates an SSM SecureString parameter. Encrypted with the default `aws/ssm` KMS key unless `kmsKeyArn` is set. */
+	/** When true, encrypts the stored value at rest (an SSM SecureString, using the default `aws/ssm` KMS key unless `kmsKeyArn` is set). A free fallback for a low-value secret — for a production credential, use the `Secret` block instead. */
 	secret?: boolean;
 	/**
 	 * ARN of a **customer-managed KMS key** used to encrypt this secret's

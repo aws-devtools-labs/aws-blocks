@@ -1,5 +1,122 @@
 # @aws-blocks/bb-app-setting
 
+## 0.3.2
+
+### Patch Changes
+
+- 92fa27b: Internal: route named-error minting through `@aws-blocks/core`'s `blocksError`. No behavior change.
+- 66f4be2: BREAKING: remove `BlocksStack.handler`, `BlocksBackend.handler`, and `Scope.handler`.
+  
+  These returned the default compute's Lambda function, so anything wired through them reached only that one function — not every compute an app runs on. Use the stack-wide equivalents instead, which reach every compute:
+  
+  | Before | After |
+  |---|---|
+  | `blocksStack.handler.addEnvironment('KEY', value)` | `registerConfig(blocksStack, 'KEY', value)` — loaded into `process.env` on every compute at cold start, before the backend module is imported |
+  | `resource.grantRead(blocksStack.handler)` | `resource.grantRead(blocksStack.executionRole)` |
+  | `blocksStack.handler.addToRolePolicy(statement)` | `blocksStack.executionRole.addToPrincipalPolicy(statement)` |
+  | `this.handler` inside a custom Building Block | `this.executionRole` / `registerConfig(this, …)` |
+  | `handler.addEnvironment('CORS_ALLOWED_ORIGINS', …)` | `defaults: { ...BlocksPresets.production, allowedOrigins: [...] }` |
+  
+  `registerConfig` and `executionRole` are exported from `@aws-blocks/blocks/cdk` (and `@aws-blocks/core/cdk`).
+  
+  **Precedence differs from `addEnvironment`.** `addEnvironment` wrote a real Lambda environment variable, so the last call won. `registerConfig` entries are loaded at cold start only into keys that aren't already set, so a real environment variable of the same name always wins — for example one the framework sets itself (`NODE_ENV`, `BLOCKS_STACK_NAME`) or one set on the function outside CDK. When that happens with a different value, the compute now logs a warning at cold start naming the ignored keys (names only, never values).
+  
+  `registerConfig` can be called from app code after `BlocksStack.create()` / `BlocksBackend.create()` resolves. This already worked for every stack, because the framework always registers config of its own; finalize now creates the config deployment unconditionally, so it no longer depends on that.
+- ec7eebe: docs: recommend `Secret` for production secrets; position `AppSetting(secret: true)` as a free fallback
+  
+  Aligns the Secret ↔ AppSetting guidance with AWS's recommendation that credentials belong in a dedicated secret store. Customer- and agent-facing docs (READMEs, exported-symbol JSDoc) now steer users to `Secret` for any credential protecting a production app and describe `AppSetting` with `secret: true` as a free, encrypted fallback for a low-value secret only — phrased in Blocks terms (`Secret` / `AppSetting`) with a link out to the AWS guidance rather than naming the underlying services inline. The per-BB `DESIGN.md` docs carry the explicit service-level rationale (AWS Secrets Manager vs SSM Parameter Store SecureString).
+  
+  Also corrects an inaccurate security tip in the umbrella README that said to "never use `.env` files" — the framework documents legitimate `.env` usage for local dev (e.g. hosting, `bb-data`). The tip now says what it means: don't hardcode secret values in source, and don't ship real secrets to a deployed app through plaintext environment variables — set them through `Secret`/`AppSetting`.
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [9ebda66]
+- Updated dependencies [78f4396]
+- Updated dependencies [440ecce]
+- Updated dependencies [1a5c18e]
+- Updated dependencies [4ae500e]
+- Updated dependencies [6d764f7]
+- Updated dependencies [5d6656a]
+- Updated dependencies [60616b1]
+- Updated dependencies [a50fb46]
+- Updated dependencies [8a1a4a9]
+- Updated dependencies [38ce80c]
+- Updated dependencies [94a914a]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [005c095]
+- Updated dependencies [b8649dc]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [66f4be2]
+- Updated dependencies [32a4b73]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [e9241b5]
+- Updated dependencies [f1eb149]
+- Updated dependencies [122c49c]
+- Updated dependencies [7c19c4f]
+  - @aws-blocks/core@0.7.0
+  - @aws-blocks/bb-logger@0.2.2
+
+## 0.3.1
+
+### Patch Changes
+
+- 0e18d5b: Validate AppSetting option combinations in local mock, matching CDK synth (#577)
+  
+  The CDK constructor rejected several invalid option combinations at synth time (`secret` + `schema`, a `schema` with no `value`, `kmsKeyArn` without `secret: true`, an empty `kmsKeyArn`, a `secret` carrying a `value`, an `external` setting with a `value` or without a `name`, and a non-secret with no `value`), but the local mock had none of these checks. `npm run dev` stayed green on config that later failed at `ampx sandbox` or deploy, and a non-secret with no value silently became an empty string.
+  
+  The synchronous option-combination checks now live in a shared `validateAppSettingOptions()` (`src/validation.ts`, following the `bb-metrics` / `bb-distributed-data` pattern) that both the CDK and mock constructors call, so local dev fails fast with the same `ValidationFailedException`. Async Standard Schema value validation stays in each variant's `put()` path.
+  
+  Behavior change for local dev: the mock now rejects these combinations instead of accepting them. Any config that relied on the old lax behavior (most notably a non-secret setting declared with no `value`) will now throw locally, as it always would have at synth.
+- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
+  
+  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
+  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
+  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
+  and exports `installClientUserAgent`, an SDK middleware that appends the validated
+  token to the outgoing user agent. The 12 participating Building Blocks install it,
+  so native attribution rides the SDK user-agent chain AWS service telemetry already
+  counts. The Kotlin runtime already sends the header, so Kotlin
+  callers are attributed as soon as this ships; Swift and Dart follow.
+- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
+  
+  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
+  
+  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
+  
+  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
+  
+  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
+  
+  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
+  
+  ## Breaking change (why `@aws-blocks/core` is a minor)
+  
+  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
+  
+  ```ts
+  // before — message collapses to "Internal error" on the client
+  throw new Error('Todo not found');
+  
+  // after — status, message, and name all reach the client
+  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  ```
+  
+  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-logger@0.2.1
+
 ## 0.3.0
 
 ### Minor Changes

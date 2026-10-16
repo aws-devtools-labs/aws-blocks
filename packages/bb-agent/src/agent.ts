@@ -16,6 +16,7 @@ import { createStrandsModel, checkModelHealth } from './model-factory.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition, CannedToolHints } from './types.js';
 import { AgentErrors, blocksAgentError, InterruptError } from './errors.js';
+import { createUntrustedNonce, untrustedDataInstructions, wrapUntrustedToolOutput } from './untrusted.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { ulid } from 'ulid';
 
@@ -77,6 +78,32 @@ function validateCap(name: string, value: number | false | undefined): void {
 	if (!Number.isInteger(value) || value < 1) {
 		throw blocksAgentError(AgentErrors.InvalidModelConfig, `'${name}' must be a positive integer or false to disable the cap, got ${String(value)}.`);
 	}
+}
+
+/**
+ * Flattens the deepest diagnostic fields out of an error's `cause` chain for structured
+ * logging. An error may wrap its real cause one or more levels deep (e.g. Strands wraps a
+ * raw AWS error as `SessionError('…', { cause })`), and `.cause` / `$metadata` are often
+ * NON-enumerable, so a logger that serializes only the top-level `name`/`message`/`stack`
+ * never records what actually failed. Walks a bounded chain and returns the deepest
+ * `name` plus the AWS SDK `$metadata` (`httpStatusCode`, `requestId`) it finds — the
+ * concrete shape needed to diagnose an opaque wrapped error in production.
+ */
+export function errorCauseShape(error: unknown): { name?: string; httpStatusCode?: number; requestId?: string } {
+	const shape: { name?: string; httpStatusCode?: number; requestId?: string } = {};
+	let current: unknown = error;
+	for (let depth = 0; current !== null && typeof current === 'object' && depth < 5; depth++) {
+		if ('name' in current && typeof current.name === 'string') {
+			shape.name = current.name;
+		}
+		if ('$metadata' in current && current.$metadata !== null && typeof current.$metadata === 'object') {
+			const metadata = current.$metadata;
+			if ('httpStatusCode' in metadata && typeof metadata.httpStatusCode === 'number') shape.httpStatusCode = metadata.httpStatusCode;
+			if ('requestId' in metadata && typeof metadata.requestId === 'string') shape.requestId = metadata.requestId;
+		}
+		current = 'cause' in current ? current.cause : undefined;
+	}
+	return shape;
 }
 
 /**
@@ -199,9 +226,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @param id - unique agent ID (used in resource names, keep short for AppSync namespace limits)
 	 * @param config - developer-facing agent configuration
 	 * @param modelConfig - which model to use, picked by subclass (model.local or model.deployed)
-	 * @param createSnapshotStorage - factory that receives the internal FileBucket and returns the appropriate SnapshotStorage
+	 * @param createSnapshotStorage - factory that receives the internal FileBucket and the agent's logger and returns the appropriate SnapshotStorage
 	 */
-	constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>, modelConfig: ModelConfig | ModelConfig[] | undefined, createSnapshotStorage: (bucket: FileBucket) => SnapshotStorage) {
+	constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>, modelConfig: ModelConfig | ModelConfig[] | undefined, createSnapshotStorage: (bucket: FileBucket, log: ChildLogger) => SnapshotStorage) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = config?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.config = config;
@@ -212,7 +239,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 		// IDs shortened to keep S3 bucket names within the 63-char limit
 		this.sessionBucket = new FileBucket(this, 'sn');
-		this.snapshotStorage = createSnapshotStorage(this.sessionBucket);
+		this.snapshotStorage = createSnapshotStorage(this.sessionBucket, this.log);
 
 		if (!config.inferenceOnly) {
 			this.conversations = new DistributedTable(this, 'convos', {
@@ -264,7 +291,10 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			await this.runAgent(payload.message, payload.conversationId, payload.channelId, payload.userId, payload.interruptResponses, payload.context);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
-			this.log.error('runAgent error', { error: errorMessage });
+			// Log the deepest cause's name/status/requestId alongside the message: the thrown
+			// error is often an opaque wrapper (e.g. SessionError over a raw AWS error on a
+			// non-enumerable .cause), so err.message alone cannot identify what actually failed.
+			this.log.error('runAgent error', { error: errorMessage, ...errorCauseShape(err) });
 			// Best-effort: persist error to conversation history (don't let DB failure block error chunk)
 			try {
 				if (payload.conversationId && this.messages) {
@@ -526,16 +556,24 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		const readContext = (strandsCtx: { invocationState?: Record<string, unknown> } | undefined): TContext =>
 			((strandsCtx?.invocationState?.[TOOL_CONTEXT_KEY] as TContext) ?? fallbackContext ?? ({} as TContext));
 
+		// Tools flagged `untrustedOutput` return text the developer doesn't control (e.g.
+		// knowledge-base chunks). Their results are wrapped in a delimiter carrying a per-session
+		// nonce, and the system prompt tells the model that content is data, never instructions.
+		const untrustedNonce = toolDefs.some(t => t.untrustedOutput) ? createUntrustedNonce() : undefined;
+
 		const strandsTools = toolDefs.map(t => tool({
 			// `name` is always set by resolveTools() from the Record key.
 			name: t.name!,
 			description: t.description,
 			inputSchema: t.parameters,
-			callback: (input, context) => t.handler({
-				input,
-				context: readContext(context),
-				interrupt: (params) => context!.interrupt(params),
-			}),
+			callback: async (input, context) => {
+				const result = await t.handler({
+					input,
+					context: readContext(context),
+					interrupt: (params) => context!.interrupt(params),
+				});
+				return t.untrustedOutput && untrustedNonce ? wrapUntrustedToolOutput(t.name!, result, untrustedNonce) : result;
+			},
 		}));
 
 		// Collect local-dev hints for the canned provider (Strands strips these fields from
@@ -558,7 +596,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			const tried = configs.map(c => `${c.provider}${c.modelId ? ` (${c.modelId})` : ''}`).join(', ');
 			throw blocksAgentError(AgentErrors.ModelUnavailable, `No model available. Tried: ${tried}. Check logs for details.`);
 		}
-		const model = await createStrandsModel(resolvedConfig, this.log, cannedHints);
+		const model = await createStrandsModel(resolvedConfig, this.log, cannedHints, this.buildUserAgentChain());
 
 		// SessionManager restores/saves agent state across invocations.
 		// undefined when no conversationId (inference-only calls — no state to persist).
@@ -575,7 +613,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			// don't override Strands defaults with `undefined` when unset.
 			...(this.config.name !== undefined && { name: this.config.name }),
 			...(this.config.description !== undefined && { description: this.config.description }),
-			systemPrompt: this.config.systemPrompt,
+			systemPrompt: untrustedNonce ? this.config.systemPrompt + untrustedDataInstructions(untrustedNonce) : this.config.systemPrompt,
 			tools: strandsTools,
 			conversationManager: await createConversationManager(this.config.conversation),
 			sessionManager,

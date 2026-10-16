@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'aws-blocks';
+
+// npm is npm.cmd on Windows, which spawn won't resolve without a shell.
+const isWin = process.platform === 'win32';
 
 installCookieJar();
 
@@ -18,7 +21,8 @@ test.before(async () => {
     server = spawn('npm', ['run', 'dev'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
+      detached: !isWin,
+      shell: isWin,
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     server.unref();
@@ -44,7 +48,10 @@ test.before(async () => {
 
 test.after(() => {
   if (server?.pid) {
-    try { process.kill(-server.pid, 'SIGTERM'); } catch {}
+    try {
+      if (isWin) spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+      else process.kill(-server.pid, 'SIGTERM');
+    } catch {}
   }
 });
 
@@ -60,6 +67,30 @@ test('health: public liveness check', async () => {
   const result = await api.health();
   assert.strictEqual(result.status, 'ok');
   assert.ok(typeof result.timestamp === 'number');
+});
+
+// FileBucket via presigned URLs — the headless-client path. Ask the API for an
+// upload URL, PUT the bytes directly (no bytes through the API), then ask for a
+// download URL and GET them back. Backed by the dev server's local file server,
+// so it runs with no AWS. The Content-Type on the PUT must match the one the
+// upload URL was signed with (presigned-URL parity with S3).
+test('files: presigned upload/download round-trips', async () => {
+  const path = 'reports/data.txt';
+  const contentType = 'text/plain';
+  const payload = 'headless client via presigned url';
+
+  const { url: uploadUrl } = await api.createUploadUrl(path, contentType);
+  const putRes = await fetch(uploadUrl, {
+    method: 'PUT',
+    body: payload,
+    headers: { 'Content-Type': contentType },
+  });
+  assert.strictEqual(putRes.status, 200, 'presigned PUT should succeed');
+
+  const { url: downloadUrl } = await api.createDownloadUrl(path);
+  const getRes = await fetch(downloadUrl);
+  assert.strictEqual(getRes.status, 200, 'presigned GET should succeed');
+  assert.strictEqual(await getRes.text(), payload);
 });
 
 // Runs against the sample CRUD API the template ships with, so a freshly

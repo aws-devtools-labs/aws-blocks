@@ -19,6 +19,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DistributedDatabaseOptions } from './types.js';
 import { LAMBDA_MIGRATIONS_DIR, MIGRATION_LAMBDA_TIMEOUT_MINUTES, ENV_SANITIZE, sanitizeDbRoleName } from './constants.js';
+import { validateMigrations } from './validation.js';
 
 export class DistributedDatabase extends BuildingBlockScope {
   constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
@@ -71,6 +72,7 @@ export class DistributedDatabase extends BuildingBlockScope {
 
     // Resolve migrations path if provided
     const resolvedMigrationsPath = options?.migrationsPath ? resolve(options.migrationsPath) : undefined;
+    if (resolvedMigrationsPath) validateMigrations(readMigrationsDir(resolvedMigrationsPath));
     const migrationsHash = resolvedMigrationsPath ? hashMigrationsDir(resolvedMigrationsPath) : 'no-migrations';
 
     // Migration/provisioning Lambda — always created to provision the app DB role.
@@ -140,6 +142,13 @@ export class DistributedDatabase extends BuildingBlockScope {
   getEngine(): never {
     return synthGuard('DistributedDatabase', 'getEngine');
   }
+
+  // Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+  query(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'query'); }
+  queryOne(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'queryOne'); }
+  execute(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'execute'); }
+  transaction(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'transaction'); }
+  simulateConflict(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'simulateConflict'); }
 }
 
 /** Hash all .sql files in a directory to detect changes. */
@@ -151,6 +160,15 @@ function hashMigrationsDir(dir: string): string {
     hash.update(readFileSync(join(dir, file), 'utf-8'));
   }
   return hash.digest('hex').slice(0, 16);
+}
+
+function readMigrationsDir(dir: string): Record<string, string> {
+  return Object.fromEntries(
+    readdirSync(dir)
+      .filter(file => file.endsWith('.sql'))
+      .sort()
+      .map(file => [file, readFileSync(join(dir, file), 'utf-8')]),
+  );
 }
 
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';

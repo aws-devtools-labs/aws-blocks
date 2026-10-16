@@ -117,6 +117,31 @@ data class Method(
     val paramStructure: String? = null,
 )
 
+// ── Native binding catalogs ───────────────────────────────────────
+
+/**
+ * An `x-blocks-native-bindings` entry of kind `transferable`, joined to its package's
+ * `android` field. [kotlinPackage] is null when the bound package declares no `android`
+ * field, which keeps the tag on the `UnknownTransferable` fallback for Kotlin alone.
+ */
+data class NativeTransferableBinding(
+    val tag: String,
+    val packageIdentity: String,
+    val export: String,
+    val genericArity: Int,
+    val kotlinPackage: String?,
+)
+
+data class NativeCatalogs(
+    val bindings: List<NativeTransferableBinding> = emptyList(),
+    /** Declared identities that no binding of any kind names. */
+    val unreferencedPackages: Set<String> = emptySet(),
+) {
+    companion object {
+        val EMPTY = NativeCatalogs()
+    }
+}
+
 // ── Root Model ────────────────────────────────────────────────────
 
 /** Root model produced by the parser. */
@@ -126,6 +151,7 @@ data class RpcModel(
     val servers: List<Server> = emptyList(),
     val components: JsonObject? = null,
     val endpoint: String? = null,
+    val nativeCatalogs: NativeCatalogs = NativeCatalogs.EMPTY,
 )
 
 /** A reference to a type, which can be primitive, inline, union, array, nullable, or imported. */

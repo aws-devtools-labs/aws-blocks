@@ -24,7 +24,14 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
-    systemProperty("FIXTURES_DIR", project.file("../../codegen-fixtures").absolutePath)
+    val fixturesDir = project.file("../../codegen-fixtures")
+    systemProperty("FIXTURES_DIR", fixturesDir.absolutePath)
+    // The fixtures reach the test as a system property, so Gradle cannot infer them:
+    // without this the golden guard is UP-TO-DATE after a fixture-only change.
+    inputs.dir(fixturesDir).withPropertyName("codegenFixtures").withPathSensitivity(PathSensitivity.RELATIVE)
+    val authoringGuide = project.file("../../../docs/native-clients/schema-generation-guide-for-devs.md")
+    systemProperty("AUTHORING_GUIDE", authoringGuide.absolutePath)
+    inputs.file(authoringGuide).withPropertyName("authoringGuide").withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 tasks.register<Test>("regenerateFixtures") {
@@ -37,4 +44,7 @@ tasks.register<Test>("regenerateFixtures") {
         includeTestsMatching("com.aws.blocks.kotlin.CodegenFixturesTest")
     }
     systemProperty("REGENERATE_FIXTURES", "1")
+    // Regenerating identical goldens leaves the inputs unchanged, so the task
+    // would be skipped and an explicit regeneration request would write nothing.
+    outputs.upToDateWhen { false }
 }

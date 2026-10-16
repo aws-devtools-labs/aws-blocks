@@ -40,6 +40,7 @@ import {
 
 import { createRemoteJWKSet, decodeJwt, jwtVerify } from 'jose';
 
+import { brandBlocksError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import type {
 	AuthEngine,
@@ -322,7 +323,7 @@ export class OidcClientEngine implements AuthEngine {
 					idTokenExpected: true,
 				});
 			} catch (err) {
-				throw idpError(`code exchange failed: ${describeError(err)}`);
+				throw idpError('code exchange failed', err);
 			}
 			const claims = tokens.claims();
 			if (!claims) throw idpError('code exchange did not return an ID token');
@@ -641,7 +642,7 @@ export class OidcClientEngine implements AuthEngine {
 				idTokenExpected: true,
 			});
 		} catch (err) {
-			throw idpError(`code exchange failed: ${describeError(err)}`);
+			throw idpError('code exchange failed', err);
 		}
 		const claims = tokens.claims();
 		if (!claims) throw idpError('code exchange did not return an ID token');
@@ -683,7 +684,10 @@ export class OidcClientEngine implements AuthEngine {
 			body: tokenBody,
 		});
 		if (!tokenResp.ok) {
-			throw idpError(`token endpoint ${tokenResp.status} ${await tokenResp.text().catch(() => '')}`);
+			throw idpError(
+				`token endpoint rejected the code exchange (HTTP ${tokenResp.status})`,
+				new Error(await tokenResp.text().catch(() => '')),
+			);
 		}
 		const tokenJson = (await tokenResp.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
 		if (!tokenJson.access_token) throw idpError('token response missing access_token');
@@ -692,7 +696,10 @@ export class OidcClientEngine implements AuthEngine {
 			headers: { Authorization: `Bearer ${tokenJson.access_token}` },
 		});
 		if (!userInfoResp.ok) {
-			throw idpError(`userinfo ${userInfoResp.status} ${await userInfoResp.text().catch(() => '')}`);
+			throw idpError(
+				`userinfo endpoint request failed (HTTP ${userInfoResp.status})`,
+				new Error(await userInfoResp.text().catch(() => '')),
+			);
 		}
 		const raw = await userInfoResp.json();
 		const mapped = applyMapClaims(provider, raw);
@@ -767,7 +774,7 @@ export class OidcClientEngine implements AuthEngine {
 		});
 		if (!resp.ok) {
 			const text = await resp.text().catch(() => '');
-			throw idpError(`refresh_token grant failed: ${resp.status} ${text}`);
+			throw idpError(`refresh_token grant failed (HTTP ${resp.status})`, new Error(text));
 		}
 		const json = (await resp.json()) as {
 			access_token?: string;
@@ -827,7 +834,7 @@ export class OidcClientEngine implements AuthEngine {
 		try {
 			return await resolver();
 		} catch (err) {
-			throw providerNotConfigured(`${providerName}: clientId resolver threw: ${describeError(err)}`);
+			throw providerNotConfigured(`${providerName}: clientId resolver threw`, err);
 		}
 	}
 
@@ -837,7 +844,7 @@ export class OidcClientEngine implements AuthEngine {
 		try {
 			return await resolver();
 		} catch (err) {
-			throw providerNotConfigured(`${providerName}: clientSecret resolver threw: ${describeError(err)}`);
+			throw providerNotConfigured(`${providerName}: clientSecret resolver threw`, err);
 		}
 	}
 
@@ -870,14 +877,10 @@ function claimsToUser(claims: Record<string, unknown>, providerName: string): OI
 	};
 }
 
-function describeError(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
-}
-
 function blocksError(name: string, message: string): Error {
 	const err = new Error(message);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }
 
 function invalidState(msg: string): Error {
@@ -888,10 +891,38 @@ function invalidCallback(msg: string): Error {
 	return blocksError('InvalidCallbackException', `invalid OIDC callback: ${msg}`);
 }
 
-function idpError(msg: string): Error {
-	return blocksError('IdpErrorException', `IdP error: ${msg}`);
+/**
+ * Build a branded `IdpErrorException` with a stable, BB-authored message and the
+ * raw underlying error (openid-client / fetch failure) kept only on a
+ * non-enumerable `cause`. The raw text — which can carry IdP endpoints, tokens,
+ * or provider detail — never reaches the message that crosses the RPC wire.
+ * Exported for the per-helper wire-sanitization test.
+ */
+export function idpError(msg: string, cause?: unknown): Error {
+	return withCause(blocksError('IdpErrorException', `IdP error: ${msg}`), cause);
 }
 
-function providerNotConfigured(msg: string): Error {
-	return blocksError('ProviderNotConfiguredException', `provider not configured: ${msg}`);
+/**
+ * Build a branded `ProviderNotConfiguredException` with a stable, BB-authored
+ * message and the raw underlying error (typically an AppSetting/SSM resolver
+ * failure, which can carry SSM ARNs and account ids) kept only on a
+ * non-enumerable `cause`. The raw text never reaches the wire message.
+ * Exported for the per-helper wire-sanitization test.
+ */
+export function providerNotConfigured(msg: string, cause?: unknown): Error {
+	return withCause(blocksError('ProviderNotConfiguredException', `provider not configured: ${msg}`), cause);
+}
+
+/**
+ * Attach the raw underlying error as a NON-ENUMERABLE `cause` for server-side
+ * diagnostics. Non-enumerable so `JSON.stringify(err)` cannot leak it, and the
+ * branded error's own message (which crosses the RPC wire) stays BB-authored —
+ * the raw IdP/SDK/resolver text (which can carry SSM ARNs, account ids, provider
+ * detail) never reaches the wire. No-op when there is no underlying error.
+ */
+function withCause(err: Error, cause: unknown): Error {
+	if (cause !== undefined) {
+		Object.defineProperty(err, 'cause', { value: cause, enumerable: false, writable: true, configurable: true });
+	}
+	return err;
 }

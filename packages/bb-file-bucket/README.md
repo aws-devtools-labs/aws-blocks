@@ -230,7 +230,7 @@ const bucket = new FileBucket(scope, 'uploads', {
 
 ## Best Practices
 
-- Use path prefixes to organize files (e.g., `uploads/{userId}/`, `reports/`). If a segment can contain URL-shaped or special characters (e.g. an OIDC `userId` of `${iss}:${sub}` like `https://issuer:sub`), wrap it in `encodeURIComponent()` first — the local mock normalizes `//` in keys via the filesystem, so an un-encoded `//` makes `scan({ prefix })` miss the file locally even though it works against S3.
+- Use path prefixes to organize files (e.g., `uploads/{userId}/`, `reports/`). If a segment can contain URL-shaped or special characters (e.g. an OIDC `userId` of `${iss}:${sub}` like `https://issuer:sub`), wrap it in `encodeURIComponent()` first — an un-encoded `//` is an empty path segment, which FileBucket rejects (`ValidationFailed`) on both the local mock and AWS so a key can't mean one object locally and another in production.
 - Set `contentType` on `put()` to ensure correct MIME handling on download
 - Use presigned URLs (`getUrl` / `putUrl`) for direct browser upload/download
 - Prefer `scan({ prefix })` over unscoped `scan()` to limit enumeration cost

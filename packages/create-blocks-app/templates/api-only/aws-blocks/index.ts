@@ -17,7 +17,7 @@
  *   node_modules/@aws-blocks/blocks/README.md
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, Scope, AuthBasic, DistributedTable } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, AuthBasic, DistributedTable, FileBucket } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -25,7 +25,6 @@ const scope = new Scope('my-app');
 // ─── Auth ────────────────────────────────────────────────────────────────────
 const auth = new AuthBasic(scope, 'auth', {
   passwordPolicy: { minLength: 8 },
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
 });
 export const authApi = auth.createApi();
 
@@ -45,12 +44,31 @@ const items = new DistributedTable(scope, 'items', {
   key: { partitionKey: 'owner', sortKey: 'itemId' },
 });
 
+// ─── Files ─────────────────────────────────────────────────────────────────
+// Object storage for binary files. A headless client uploads/downloads via
+// presigned URLs: ask the API for a URL, then PUT/GET the bytes directly.
+const files = new FileBucket(scope, 'files', { versioned: false });
+
 // ─── API ─────────────────────────────────────────────────────────────────────
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   /** Public — no auth. A liveness probe for load balancers and uptime checks. */
   async health() {
     return { status: 'ok' as const, timestamp: Date.now() };
+  },
+
+  /**
+   * Public — mint a presigned URL to upload a file. The client PUTs the bytes
+   * directly to the returned URL with the same Content-Type. No bytes pass
+   * through the API itself.
+   */
+  async createUploadUrl(path: string, contentType: string) {
+    return { url: await files.putUrl(path, { contentType }) };
+  },
+
+  /** Public — mint a presigned URL to download a file. The client GETs the bytes directly. */
+  async createDownloadUrl(path: string) {
+    return { url: await files.getUrl(path) };
   },
 
   /** Create an item owned by the caller. */
@@ -81,7 +99,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getItem(itemId: string) {
     const user = await auth.requireAuth(context);
     const item = await items.get({ owner: user.username, itemId });
-    if (!item) throw new Error('Item not found');
+    if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     return item;
   },
 
@@ -96,7 +114,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async updateQuantity(itemId: string, quantity: number) {
     const user = await auth.requireAuth(context);
     const item = await items.get({ owner: user.username, itemId });
-    if (!item) throw new Error('Item not found');
+    if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     await items.put(
       { ...item, quantity, version: item.version + 1 },
       { ifFieldEquals: { version: item.version } },
@@ -115,7 +133,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async setQuantity(itemId: string, quantity: number, expectedVersion: number) {
     const user = await auth.requireAuth(context);
     const item = await items.get({ owner: user.username, itemId });
-    if (!item) throw new Error('Item not found');
+    if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     await items.put(
       { ...item, quantity, version: expectedVersion + 1 },
       { ifFieldEquals: { version: expectedVersion } },

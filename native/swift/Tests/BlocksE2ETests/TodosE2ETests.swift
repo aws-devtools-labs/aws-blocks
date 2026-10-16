@@ -20,9 +20,10 @@ final class TodosE2ETests: BlocksE2ETestCase {
     }
 
     func testAuthGateRejectsUnauthenticated() async throws {
-        let freshApi = Api(server: Self.server)
+        let fresh = Blocks(server: Self.server)
+        defer { fresh.close() }
         do {
-            _ = try await freshApi.listTodos(sortBy: nil)
+            _ = try await fresh.api.listTodos(sortBy: nil)
             XCTFail("Expected auth error")
         } catch {
             // Expected
