@@ -6,6 +6,7 @@ import org.gradle.api.Project
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 
 /**
  * Configuration extension for the AWS Blocks codegen plugin.
@@ -21,10 +22,10 @@ abstract class AwsBlocksExtension(project: Project) {
     abstract val packageName: Property<String>
 
     /**
-     * Visibility of generated types. Set to [GeneratedVisibility.INTERNAL] to prevent
+     * Visibility of generated types. Set to [GeneratedVisibility.Internal] to prevent
      * generated interfaces and data classes from leaking into your module's public API.
      *
-     * Defaults to [GeneratedVisibility.PUBLIC].
+     * Defaults to [GeneratedVisibility.Public].
      */
     abstract val visibility: Property<GeneratedVisibility>
 
@@ -36,6 +37,12 @@ abstract class AwsBlocksExtension(project: Project) {
      */
     abstract val serverOverrides: MapProperty<String, String>
 
+    /**
+     * Logical identities from `x-blocks-native-packages` whose transferable results stay
+     * `UnknownTransferable`. An identity the spec does not declare is ignored.
+     */
+    abstract val excludeNativePackages: SetProperty<String>
+
     internal val oidcDsl = OidcDsl()
 
     /** The OIDC relay target, resolved from the `oidc { }` DSL block. */
@@ -46,6 +53,7 @@ abstract class AwsBlocksExtension(project: Project) {
         packageName.convention("com.aws.blocks.generated")
         visibility.convention(GeneratedVisibility.Public)
         serverOverrides.convention(emptyMap())
+        excludeNativePackages.convention(emptySet())
     }
 
     /**

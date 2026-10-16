@@ -58,6 +58,33 @@ export type NativeValidation =
 	| { ok: true; sources: readonly NativeDeclarationSource[] }
 	| { ok: false; errors: SpecValidationError[] };
 
+/**
+ * Platform package fields a generator interpolates into generated source, so a
+ * value outside the grammar is a compile failure in the customer's app rather
+ * than a problem the generator can report against the block that declared it.
+ * A platform absent from this map constrains its fields to non-blank only.
+ */
+const PLATFORM_FIELD_GRAMMARS: Partial<
+	Record<NativePlatform, Readonly<Record<string, { pattern: RegExp; shape: string }>>>
+> = {
+	dart: {
+		name: { pattern: /^[a-z_][a-z0-9_]*$/, shape: 'a pub package name' },
+		library: {
+			pattern: /^(?!lib\/)[a-z_][a-z0-9_.]*(\/[a-z_][a-z0-9_.]*)*\.dart$/,
+			shape: 'a .dart file path inside lib/, without the leading "lib/"',
+		},
+	},
+};
+
+/** An export must name a public type once a generator upper-camel-cases it. */
+const EXPORT_GRAMMAR = /^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$/;
+
+/**
+ * Every generated Dart client imports this library, so a declared package of
+ * the same name would emit a second directive for it.
+ */
+const DART_RESERVED_PACKAGE_NAMES: readonly string[] = ['blocks_runtime'];
+
 export function validateNativeCatalogs(
 	sources: readonly NativeDeclarationInput[],
 	methods: readonly ValidatableMethod[] = [],
@@ -277,11 +304,30 @@ function validatePlatformEntry(
 	}
 
 	const fields = PLATFORM_PACKAGE_FIELDS[platform];
+	const grammars = PLATFORM_FIELD_GRAMMARS[platform];
 	for (const field of fields) {
-		if (!isNonBlankString(entry.package[field])) {
+		const value = entry.package[field];
+		if (!isNonBlankString(value)) {
 			errors.push({
 				path: `${pkgPath}.${field}`,
 				message: `${platform} "package" requires "${field}" as a non-blank string (${declaredBy})`,
+			});
+			continue;
+		}
+		const grammar = grammars?.[field];
+		if (grammar && !grammar.pattern.test(value)) {
+			errors.push({
+				path: `${pkgPath}.${field}`,
+				message: `${platform} "package" requires "${field}" to be ${grammar.shape}, got "${value}" (${declaredBy})`,
+			});
+			continue;
+		}
+		if (platform === 'dart' && field === 'name' && DART_RESERVED_PACKAGE_NAMES.includes(value)) {
+			errors.push({
+				path: `${pkgPath}.${field}`,
+				message:
+					`${platform} "package" requires "${field}" to name a package other than ` +
+					`"${value}", which every generated client already imports (${declaredBy})`,
 			});
 		}
 	}
@@ -390,6 +436,14 @@ function validateBindingShape(
 				message: `Binding "${field}" must be a non-blank string (${declaredBy})`,
 			});
 		}
+	}
+	if (isNonBlankString(binding.export) && !EXPORT_GRAMMAR.test(binding.export)) {
+		errors.push({
+			path: `${path}.export`,
+			message:
+				`Binding "export" must be a delimited run of alphanumeric segments starting with a letter, ` +
+				`got "${binding.export}" (${declaredBy})`,
+		});
 	}
 	return validateArity(binding.genericArity, path, declaredBy, errors);
 }

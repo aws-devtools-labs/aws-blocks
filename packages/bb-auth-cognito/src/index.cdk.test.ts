@@ -68,15 +68,21 @@ function scope(stack: cdk.Stack): ScopeParent {
  *
  * Runs against the built `dist/`, which the package's own test script requires
  * anyway (`node --test dist/**\/*.test.js`).
+ *
+ * Passing `sessionStore` exercises the standalone SessionStore constructor instead.
  */
-function synthUnderCdkConditions(): { id: string; timeToLive: unknown }[] {
+function synthUnderCdkConditions(sessionStore?: { ttlSeconds?: number }): { id: string; timeToLive: unknown }[] {
+	const construct =
+		sessionStore === undefined
+			? "new AuthCognito(stack, 'auth');"
+			: `new SessionStore(stack, 'standalone-sessions', ${sessionStore.ttlSeconds});`;
 	const probe = join(dirname(fileURLToPath(import.meta.url)), `.cdk-ttl-probe.${process.pid}.mjs`);
 	writeFileSync(probe, `
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Template } from 'aws-cdk-lib/assertions';
 import { finalizeConfigRegistry, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+import { AuthCognito, SessionStore } from '@aws-blocks/bb-auth-cognito';
 
 const app = new cdk.App();
 const stack = new cdk.Stack(app, 'TestStack');
@@ -92,7 +98,7 @@ const handler = new lambda.Function(stack, 'Handler', {
 stack.handler = handler;
 stack.executionRole = executionRole;
 globalThis.CURRENT_BLOCKS_STACK = stack;
-new AuthCognito(stack, 'auth');
+${construct}
 finalizeConfigRegistry(stack, handler.role, [{ setEnv: (k, v) => handler.addEnvironment(k, v) }]);
 
 const resources = Template.fromStack(stack).toJSON().Resources;
@@ -115,6 +121,24 @@ console.log('__TABLES__' + JSON.stringify(tables));
 		rmSync(probe, { force: true });
 	}
 }
+
+// ─── Standalone session retention ───────────────────────────────────────────
+
+describe('SessionStore (CDK) — retention', () => {
+	test('a positive session lifetime enables DynamoDB TTL on the standalone table', () => {
+		const tables = synthUnderCdkConditions({ ttlSeconds: 3600 });
+		assert.strictEqual(tables.length, 1);
+		assert.deepStrictEqual(tables[0].timeToLive, { AttributeName: 'ttl', Enabled: true });
+	});
+
+	for (const ttlSeconds of [undefined, 0, -1]) {
+		test(`session lifetime ${ttlSeconds} leaves DynamoDB TTL disabled`, () => {
+			const tables = synthUnderCdkConditions({ ttlSeconds });
+			assert.strictEqual(tables.length, 1);
+			assert.strictEqual(tables[0].timeToLive, undefined);
+		});
+	}
+});
 
 // ─── User Pool ──────────────────────────────────────────────────────────────
 

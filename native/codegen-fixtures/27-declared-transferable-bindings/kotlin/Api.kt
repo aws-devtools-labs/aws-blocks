@@ -4,32 +4,38 @@ import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
 import com.aws.blocks.kotlin.BlocksServer
 import com.aws.blocks.kotlin.UnknownTransferable
+import com.aws.blocks.kotlin.json.BlocksJson
+import com.aws.blocks.kotlin.validateTransferableDescriptor
+import com.example.blocks.gateway.GatewayLink
+import com.example.blocks.iot.DeviceHandle
+import com.example.blocks.iot.DeviceLink
 import kotlin.Double
 import kotlin.String
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.decodeFromJsonElement
 
 public class Api(
   private val server: BlocksServer = Servers.local,
 ) {
   private val client: BlocksClient = BlocksClient(server)
 
-  public suspend fun getDeviceHandle(deviceId: String): UnknownTransferable {
+  public suspend fun getDeviceHandle(deviceId: String): DeviceHandle {
     val request = BlocksRequest(method = "api.getDeviceHandle", params = listOf(JsonPrimitive(deviceId)), id = BlocksRequest.nextId())
     val result = client.execute(request)
-    return UnknownTransferable.fromJson(result, expectedTag = "example-iot/device-handle")
+    return DeviceHandle.fromBlocksDescriptor(validateTransferableDescriptor(result, expectedTag = "example-iot/device-handle"))
   }
 
-  public suspend fun connectDevice(deviceId: String): UnknownTransferable {
+  public suspend fun connectDevice(deviceId: String): DeviceLink<ConnectDevice.Result> {
     val request = BlocksRequest(method = "api.connectDevice", params = listOf(JsonPrimitive(deviceId)), id = BlocksRequest.nextId())
     val result = client.execute(request)
-    return UnknownTransferable.fromJson(result, expectedTag = "example-iot/device-link")
+    return DeviceLink.fromBlocksDescriptor<ConnectDevice.Result>(validateTransferableDescriptor(result, expectedTag = "example-iot/device-link")) { BlocksJson.decodeFromJsonElement<ConnectDevice.Result>(it) }
   }
 
-  public suspend fun findDeviceHandle(serialNumber: String): UnknownTransferable {
+  public suspend fun findDeviceHandle(serialNumber: String): DeviceHandle {
     val request = BlocksRequest(method = "api.findDeviceHandle", params = listOf(JsonPrimitive(serialNumber)), id = BlocksRequest.nextId())
     val result = client.execute(request)
-    return UnknownTransferable.fromJson(result, expectedTag = "example-iot/device-handle")
+    return DeviceHandle.fromBlocksDescriptor(validateTransferableDescriptor(result, expectedTag = "example-iot/device-handle"))
   }
 
   public suspend fun openSensorStream(sensorId: String): UnknownTransferable {
@@ -38,10 +44,10 @@ public class Api(
     return UnknownTransferable.fromJson(result, expectedTag = "example-sensor/stream")
   }
 
-  public suspend fun openGatewayLink(gatewayId: String): UnknownTransferable {
+  public suspend fun openGatewayLink(gatewayId: String): GatewayLink {
     val request = BlocksRequest(method = "api.openGatewayLink", params = listOf(JsonPrimitive(gatewayId)), id = BlocksRequest.nextId())
     val result = client.execute(request)
-    return UnknownTransferable.fromJson(result, expectedTag = "example-gateway/link")
+    return GatewayLink.fromBlocksDescriptor(validateTransferableDescriptor(result, expectedTag = "example-gateway/link"))
   }
 
   public suspend fun getFirmwareSession(deviceId: String): UnknownTransferable {

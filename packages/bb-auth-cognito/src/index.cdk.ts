@@ -38,6 +38,7 @@ import type {
 import { envVarNames, makeExternalUserPoolRef } from './types.js';
 
 export * from './types.js';
+export { SessionStore, type SessionRecord } from './sessions.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthCognito (CDK)
