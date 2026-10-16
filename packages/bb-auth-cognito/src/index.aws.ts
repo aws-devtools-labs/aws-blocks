@@ -752,7 +752,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			// throttling errors) with extra attempts so a transient throttle is
 			// absorbed here instead of surfacing as a failure to the caller.
 			retryMode: 'adaptive',
-			maxAttempts: 5,
+			maxAttempts: 10,
 		});
 		installClientUserAgent(this.client);
 		registerSdkIdentifiers(this.fullId, { userPoolId, clientId });
