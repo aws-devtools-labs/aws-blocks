@@ -1127,3 +1127,123 @@ export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 	onAuthChange(api, render);
 	return container;
 }
+
+// ---------------------------------------------------------------------------
+// StatusMessage
+// ---------------------------------------------------------------------------
+
+/**
+ * The lifecycle state a {@link StatusMessage} renders. Each maps to a
+ * `.bb-status-*` modifier class and the matching semantic token:
+ *
+ * - `idle` — muted text (`--bb-color-text-muted`); the resting state.
+ * - `loading` — muted text preceded by an animated `.bb-spinner`; the
+ *   spinner holds still under `prefers-reduced-motion`.
+ * - `success` — green (`--bb-color-success`).
+ * - `error` — red (`--bb-color-danger`).
+ */
+export type StatusKind = 'idle' | 'loading' | 'success' | 'error';
+
+/**
+ * The live handle {@link StatusMessage} returns: the rendered `element`
+ * to mount, plus a `set` function to drive it between states.
+ */
+export interface StatusMessageHandle {
+	/** The element to append to the DOM. A single `<div class="bb-status">`. */
+	readonly element: HTMLElement;
+	/**
+	 * Transition the message to `kind` with the given `text`. Replaces the
+	 * previous content; `text` defaults to `''`, so `set('loading')` renders
+	 * a bare spinner and `set('idle')` clears the message. Safe to call
+	 * repeatedly.
+	 */
+	set(kind: StatusKind, text?: string): void;
+}
+
+/** Options for {@link StatusMessage}. */
+export interface StatusMessageOptions {
+	/** Initial lifecycle state. Defaults to `'idle'`. */
+	kind?: StatusKind;
+	/** Initial message text. Defaults to `''` (empty). */
+	text?: string;
+	/**
+	 * `data-testid` for the root element. Defaults to `'status-message'`.
+	 * Override when a template renders more than one status region so each
+	 * is addressable in a test.
+	 */
+	testId?: string;
+}
+
+/**
+ * A themed, accessible status line for the "loading / success / error"
+ * affordance every starter template otherwise hand-rolls with inline
+ * styles.
+ *
+ * Returns a {@link StatusMessageHandle}: mount `handle.element`, then
+ * drive it with `handle.set(kind, text)` as an async operation progresses.
+ * The element is a polite ARIA live region (`role="status"`,
+ * `aria-live="polite"`), so a screen reader announces each transition
+ * without stealing focus. The `loading` state renders a spinner that
+ * honors `prefers-reduced-motion`.
+ *
+ * All colors come from the shared design tokens, so the message matches
+ * the active light/dark theme automatically.
+ *
+ * @example
+ * ```ts
+ * import { StatusMessage } from '@aws-blocks/auth-common/ui';
+ *
+ * const status = StatusMessage({ kind: 'loading', text: 'Loading…' });
+ * document.querySelector('#app-status')!.replaceWith(status.element);
+ *
+ * try {
+ *   await saveSettings(); // your own async work
+ *   status.set('success', 'Done.');
+ * } catch (e) {
+ *   status.set('error', `Failed: ${(e as Error).message}`);
+ * }
+ * ```
+ *
+ * @param options - initial state, text, and test id. See
+ *   {@link StatusMessageOptions}.
+ * @returns a {@link StatusMessageHandle} with the element and a `set` driver.
+ */
+export function StatusMessage(options?: StatusMessageOptions): StatusMessageHandle {
+	injectTheme();
+	const testId = options?.testId ?? 'status-message';
+	const element = document.createElement('div');
+	element.setAttribute('data-testid', testId);
+	// Polite live region: announce transitions to assistive tech without
+	// yanking focus away from the user's current task.
+	element.setAttribute('role', 'status');
+	element.setAttribute('aria-live', 'polite');
+
+	// Stable children, created once. set() mutates these in place and toggles
+	// their attachment rather than rebuilding the subtree — so the live region's
+	// text node keeps its identity across transitions (a same-text re-set does
+	// not spawn a fresh node), which is the point of a persistent live region.
+	const spinner = document.createElement('span');
+	spinner.className = 'bb-spinner';
+	// Decorative: the adjacent text carries the meaning for AT.
+	spinner.setAttribute('aria-hidden', 'true');
+	const label = document.createElement('span');
+	label.setAttribute('data-testid', `${testId}-text`);
+
+	function set(kind: StatusKind, text = ''): void {
+		element.className = `bb-status bb-status-${kind}`;
+		// Update the text node in place; attach the label only when there is
+		// text, so a blank state leaves the region genuinely empty.
+		label.textContent = text;
+		const children: Node[] = [];
+		if (kind === 'loading') {
+			children.push(spinner);
+		}
+		if (text) {
+			children.push(label);
+		}
+		element.replaceChildren(...children);
+	}
+
+	set(options?.kind ?? 'idle', options?.text ?? '');
+	return { element, set };
+}

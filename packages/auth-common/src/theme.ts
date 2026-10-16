@@ -283,6 +283,52 @@ export const THEME_CSS: string = `
 	height: 24px;
 	color: var(--bb-color-text-muted);
 }
+
+.bb-status {
+	display: flex;
+	align-items: center;
+	gap: var(--bb-space-2);
+	font-size: var(--bb-font-size-base);
+	color: var(--bb-color-text);
+}
+
+.bb-status-idle {
+	color: var(--bb-color-text-muted);
+}
+
+.bb-status-success {
+	color: var(--bb-color-success);
+	font-weight: 500;
+}
+
+.bb-status-error {
+	color: var(--bb-color-danger);
+	font-weight: 500;
+}
+
+.bb-spinner {
+	flex: none;
+	width: 1em;
+	height: 1em;
+	border: 2px solid var(--bb-color-border);
+	border-top-color: var(--bb-color-accent);
+	border-radius: 50%;
+	animation: bb-spin 0.6s linear infinite;
+}
+
+@keyframes bb-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* Honor the OS "reduce motion" setting: hold the spinner still rather than
+   animate it, so a motion-sensitive user still sees the busy affordance. */
+@media (prefers-reduced-motion: reduce) {
+	.bb-spinner {
+		animation: none;
+	}
+}
 `.trim();
 
 /**

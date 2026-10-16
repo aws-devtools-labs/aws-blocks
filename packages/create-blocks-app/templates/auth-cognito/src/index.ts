@@ -1,6 +1,6 @@
 // Direct import from backend - types available in IDE, Proxy injected at runtime
 import { api, authApi } from 'aws-blocks';
-import { Authenticator, onAuthChange, injectTheme } from '@aws-blocks/blocks/ui';
+import { Authenticator, onAuthChange, injectTheme, StatusMessage } from '@aws-blocks/blocks/ui';
 
 injectTheme();
 
@@ -14,15 +14,34 @@ let currentSort: 'priority' | 'title' | 'createdAt' | undefined ;
 // Every rendering path in this file goes through these; never use .innerHTML
 // on user-supplied or server-supplied strings directly.
 
+// One persistent StatusMessage handle per status container. Reusing a single
+// mounted live region (rather than re-creating it on every update) is what
+// makes screen-reader announcements reliable: a `role="status"` region that is
+// already in the DOM and whose text changes is announced consistently, whereas
+// a region inserted at the same instant its text appears is not.
+const statusHandles = new WeakMap<HTMLElement, ReturnType<typeof StatusMessage>>();
+
 function clear(el: HTMLElement) {
+  // Dropping the memoized handle on clear is required: clear() empties the
+  // container, so the next showMessage() must re-mount a fresh region instead
+  // of calling set() on a now-detached element.
+  statusHandles.delete(el);
   el.replaceChildren();
 }
 
-function showMessage(el: HTMLElement, text: string, cls?: 'success' | 'error') {
-  const span = document.createElement('span');
-  if (cls) span.className = cls;
-  span.textContent = text;
-  el.replaceChildren(span);
+// Render a themed status line (success/error) into `el`, driven by the shared
+// `StatusMessage` primitive — themed `--bb-*` tokens + a polite ARIA live
+// region, consistent with the Blocks UI components. The handle is mounted once
+// per container and updated in place via set() so the live region persists.
+function showMessage(el: HTMLElement, text: string, kind: 'success' | 'error' = 'success') {
+  let handle = statusHandles.get(el);
+  if (!handle) {
+    handle = StatusMessage({ kind, text });
+    statusHandles.set(el, handle);
+    el.replaceChildren(handle.element);
+  } else {
+    handle.set(kind, text);
+  }
 }
 
 function showError(el: HTMLElement, text: string) {
