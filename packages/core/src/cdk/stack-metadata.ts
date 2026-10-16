@@ -27,13 +27,10 @@ export function addBlocksStackMetadata(stack: cdk.Stack): void {
 
 	const rootStack = getRootStack(stack);
 	const existingMetadata = rootStack.templateOptions.metadata ?? {};
-	rootStack.templateOptions.metadata = {
-		...existingMetadata,
-		[TOOLS_METRICS_METADATA_KEY]: {
-			...asRecord(existingMetadata[TOOLS_METRICS_METADATA_KEY]),
-			[BLOCKS_TOOLS_METRICS_KEY]: `${BLOCKS_TOOLS_METRICS_FORMAT_VERSION};core=${CORE_VERSION};mode=${mode}`,
-		},
-	};
+	rootStack.addMetadata(TOOLS_METRICS_METADATA_KEY, {
+		...asRecord(existingMetadata[TOOLS_METRICS_METADATA_KEY]),
+		[BLOCKS_TOOLS_METRICS_KEY]: `${BLOCKS_TOOLS_METRICS_FORMAT_VERSION};core=${CORE_VERSION};mode=${mode}`,
+	});
 
 	cdk.Tags.of(stack).add('blocks:deployment-type', mode);
 }
