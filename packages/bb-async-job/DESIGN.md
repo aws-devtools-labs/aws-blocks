@@ -150,6 +150,7 @@ No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. Asyn
 ## Mock Implementation
 
 - An in-process queue drives processing via `setTimeout(…, 0)`; `delaySeconds` is honored with a deferred timer.
+- The mock retains the JSON body produced by payload validation. Single and batch submissions enqueue these bodies without revalidation or reserialization; all batch payloads are validated before any are queued. Each handler invocation parses the retained body afresh, matching AWS `_processRecord`, and queue inspection keeps a separate parsed payload. Neither caller changes after submission nor handler changes during an attempt alter later deliveries or the retained DLQ payload. This uses the existing JSON transport representation, not a general-purpose object clone.
 - Job IDs are a 13-character slice of `randomUUID()`.
 - Retry semantics mirror AWS: on handler error the entry is retried until `receiveCount >= maxRetries`, then moved to an in-memory `failed` (DLQ) list with `failedAt` and `lastError` recorded.
 - Queue state is exposed on `_queue` (`pending`, `processing`, `delayed`, `failed`, `totalSubmitted`, `totalCompleted`) for dev-server inspection.
