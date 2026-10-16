@@ -1,107 +1,49 @@
-/**
- * CloudFront front door, defined with hooks — the full-feature default door.
- *
- * It defines every feature hook and `route` reports every routing-level
- * capability (streaming SSR, image optimization, redirects, error pages, edge
- * caching, response headers, atomic release, session pinning), so CloudFront
- * delivers the whole capability vocabulary.
- *
- * {@link CdnConstruct} is one construct built around its behaviors, so the hooks
- * split its props: `route` carries the routing inputs, and each feature hook
- * adds ONLY its own props (`customDomain` → certificate + aliases, `waf` → the
- * web ACL, `restrictGeo` → geo restriction, `accessLogs` → the log bucket). A
- * feature whose hook isn't called (the app didn't demand it) is never passed to
- * the construct. `handle` materializes the distribution.
- */
-import type { Construct } from 'constructs';
-import type { AdapterContext } from '../plan/types.js';
-import { CdnConstruct, type CdnConstructProps } from './cdn_construct.js';
-import { defineFrontDoor } from './door_hooks.js';
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 /**
- * Context the CloudFront door needs beyond the neutral plan: the CDK handles the
- * plan cannot carry (the assets bucket, compute functions, certificate, WAF, …)
- * — exactly the {@link CdnConstruct} props.
+ * CloudFront front door — the full-feature default door, written as a
+ * free-form door (one `build`).
+ *
+ * `build` creates the {@link CdnConstruct}: the distribution, its behaviors and
+ * KVS route table, the skew-protection and www-redirect functions, the custom
+ * domain + certificate aliases, the web ACL, geo restriction and access logs.
+ * It reads those settings from an internal extra, `cdnProps` — the exact
+ * {@link CdnConstruct} props `HostingConstruct` assembled from the app (the
+ * same settings a bring-your-own door finds in `input.features`). The same-origin
+ * API behaviors (`/aws-blocks/*`, sign-in, raw routes) are added onto the
+ * distribution afterwards by the Blocks layer, and the CloudFront alarms by the
+ * `HostingConstruct`'s monitoring.
  */
-export type CloudFrontRenderContext = AdapterContext & {
-  /** The underlying CloudFront construct props (CDK handles + the manifest). */
+import type { Construct } from 'constructs';
+import { CdnConstruct, type CdnConstructProps } from './cdn_construct.js';
+import { type DoorInput, defineFrontDoor, type FrontDoorResult } from './front_door.js';
+
+/**
+ * The CloudFront door's input: the {@link DoorInput} plus the internal-only
+ * {@link CdnConstruct} props (CDK handles + the manifest) it builds from.
+ */
+export type CloudFrontDoorInput = DoorInput & {
+  /** The underlying CloudFront construct props. Internal to the built-in door. */
   cdnProps: CdnConstructProps;
 };
 
-/** Props owned by a feature hook — withheld from the construct unless that hook runs. */
-type FeatureProps = 'webAcl' | 'webAclArn' | 'certificate' | 'domainName' | 'accessLogBucket' | 'geoRestriction';
-
-/** The door's state: construct props the hooks fill in, and the construct once built. */
-export type CloudFrontDoorState = {
-  scope: Construct;
-  props: Omit<CdnConstructProps, FeatureProps> & Partial<Pick<CdnConstructProps, FeatureProps>>;
-  /** Set by `handle` — the distribution construct. */
-  cdn?: CdnConstruct;
+/** The CloudFront door's result: the {@link FrontDoorResult} plus the construct it built. */
+export type CloudFrontDoorResult = FrontDoorResult & {
+  /** The distribution construct. */
+  cdn: CdnConstruct;
 };
 
-export const cloudFrontDoor = defineFrontDoor<CloudFrontDoorState, CloudFrontRenderContext>({
+/** The built-in CloudFront front door. */
+export const cloudFrontDoor = defineFrontDoor<CloudFrontDoorInput, CloudFrontDoorResult>({
   service: 'cloudfront',
 
-  /**
-   * Composition: front each nested child layer (e.g. an ALB router) as a public
-   * HTTP origin at its path. The child's `match` selector is the behavior
-   * pattern; its `originHandle` gives the host + protocol.
-   */
-  create(scope, ctx, children) {
-    const { webAcl, webAclArn, certificate, domainName, accessLogBucket, geoRestriction, ...routing } = ctx.cdnProps;
-    const childOrigins = [...(children ?? new Map()).entries()].map(([match, handle]) => ({
-      pattern: match,
-      domainName: handle.originHandle.domainName,
-      protocol: handle.originHandle.protocol,
-    }));
-    const props =
-      childOrigins.length > 0
-        ? { ...routing, extraHttpOrigins: [...(routing.extraHttpOrigins ?? []), ...childOrigins] }
-        : routing;
-    return { scope, props };
-  },
-
-  // CdnConstruct builds its behaviors + KVS route table from the manifest it was
-  // given; every routing-level capability is delivered.
-  route: (_door, plan) => ({
-    ssr: plan.policies.hasServer ? 'streaming' : false,
-    images: true,
-    redirects: true,
-    errorPages: true,
-    cache: true,
-    responseHeaders: true,
-    atomicRelease: true,
-    pinSession: true,
-  }),
-
-  handle(door) {
-    const cdn = new CdnConstruct(door.scope, 'Cdn', door.props);
-    door.cdn = cdn;
+  build(scope: Construct, input) {
+    const cdn = new CdnConstruct(scope, 'Cdn', input.cdnProps);
     return {
       url: cdn.distributionUrl,
       originHandle: { domainName: cdn.distribution.distributionDomainName, protocol: 'https' },
+      cdn,
     };
   },
-
-  // API behaviors (`/aws-blocks/*`, one per namespace) are added onto the
-  // distribution by the Blocks layer from `plan.backend`.
-  sameOriginApi: () => 'namespaced',
-  customDomain(door, ctx) {
-    door.props.certificate = ctx.cdnProps.certificate;
-    door.props.domainName = ctx.cdnProps.domainName;
-  },
-  waf(door, ctx) {
-    door.props.webAcl = ctx.cdnProps.webAcl;
-    door.props.webAclArn = ctx.cdnProps.webAclArn;
-    return 'edge';
-  },
-  restrictGeo(door, ctx) {
-    door.props.geoRestriction = ctx.cdnProps.geoRestriction;
-  },
-  accessLogs(door, ctx) {
-    door.props.accessLogBucket = ctx.cdnProps.accessLogBucket;
-  },
-  // CloudFront alarms (5xx, Lambda errors/throttles, DLQ depth) are built by the
-  // HostingConstruct's MonitoringConstruct on the distribution this door returns.
-  alarms() {},
 });

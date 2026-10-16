@@ -419,6 +419,125 @@ CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framewor
   resource-based policy. A small custom resource grants the distribution
   `lambda:InvokeWebFunctionEndpoint`.
 
+## Front doors
+
+The front door is the public entry point in front of the app: it exposes one
+address and routes each request to the static assets, the server-rendering
+compute, image optimization, or the backend API. Pick it with the `frontDoor`
+prop (on `HostingConstruct`, or on `Hosting` from `@aws-blocks/core`):
+
+| `frontDoor` | What serves the app |
+|---|---|
+| omitted / `'cloudfront'` | The global CloudFront CDN (default): edge cache, WAF, custom domain, streaming, skew protection. |
+| `{ kind: 'alb' }` | A regional Application Load Balancer (no CDN): asset-proxy Lambda, SSR/image Lambda targets, same-origin API forwarder; regional WAF, access logs and alarms. |
+| `{ kind: 'apiGateway', api?: 'http' \| 'rest' }` | Amazon API Gateway (no CDN, no VPC, scale-to-zero); SSR responses are buffered. |
+| `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` | A thin CloudFront edge in front of a full ALB router (`Hosting` from `@aws-blocks/core` only). |
+| `'none'` | No front door: a public S3 website bucket (HTTP only, static sites only; the client calls the API cross-origin). |
+| `{ kind: 'custom', door }` | Your own door (see below). |
+
+There is no feature check: a door applies the features the app asks for
+(custom domain, WAF, logging, alarms, geo) as far as it supports them. An ALB,
+for example, has no edge, so it has no edge cache or geo restriction. `'none'`
+is the one door that refuses an app: it fails synth for an app with a server,
+because a website bucket only serves static files.
+
+### Bring your own front door
+
+A door is one function. `defineFrontDoor` types it:
+
+```ts
+// aws-blocks/my-door.ts
+import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
+import { cf, defineFrontDoor } from '@aws-blocks/hosting/constructs';
+
+export const myDoor = defineFrontDoor({
+  // A name for this door, used in error messages.
+  service: 'my-cdn',
+
+  // Called ONCE at synth, after AWS Blocks has created the bucket, the compute
+  // and the API, and before it declares the asset uploads.
+  build(scope, { app, origins, features }) {
+    const dist = new Distribution(scope, 'Cdn', {
+      defaultBehavior: { origin: cf.origin(origins.server ?? origins.assets) },
+      additionalBehaviors: {
+        ...cf.behaviors(app.routes), // each route → its origin
+        ...cf.apiBehaviors(origins.api), // /aws-blocks/* and raw routes → the API
+      },
+      webAclId: features.waf?.webAclArn,
+    });
+    return {
+      url: `https://${dist.distributionDomainName}`, // the app's address (required)
+      onUpload: ({ uploads }) => cf.invalidate(dist, { after: uploads }), // purge after the uploads
+    };
+  },
+});
+```
+
+```ts
+// aws-blocks/index.cdk.ts
+new Hosting(stack, 'Hosting', { root: '..', api: stack, frontDoor: { kind: 'custom', door: myDoor } });
+```
+
+**What the door receives (`DoorInput`).**
+
+- `app`: the app facts. `buildId`, `basePath`, `assetPrefix`, `spaFallback`,
+  `routes` (most-specific first, each already joined to its origin object),
+  `redirects`, `headers`, `errorPages`, `wwwRedirect`, and `skew` (present only
+  when skew protection is on).
+- `origins`: what AWS Blocks provisioned.
+  - `assets`: `{ bucket, prefix, sourceDir }`. The private bucket and the
+    `builds/<buildId>/` prefix.
+  - `server`: `{ fn, url, streaming }`. The Function URL is created on first
+    read.
+  - `image`: `{ fn, url, pathPrefix }`.
+  - `api`: `{ url, host, stagePath, paths, authPaths }`. `paths` is
+    `/aws-blocks/*` plus every raw route; `authPaths` is `/aws-blocks/auth/*`.
+- `features`: the features the app asked for, each present only when asked for:
+  `customDomain`, `waf`, `logging`, `alarms`, `geo`.
+- `upstream`: present only for a door stacked in front of another door.
+
+**What the door returns.**
+
+- `url` (required): the app's public address. It becomes the `HostingUrl`
+  output and `Hosting.url`, the backend's trusted origin
+  (`BLOCKS_PUBLIC_ORIGIN`), and an allowed CORS origin. When the door serves a
+  custom domain, return that domain. A missing or empty `url` fails synth with
+  `MissingFrontDoorUrlError`.
+- `originHandle`: how a door in front of this one reaches it. It is derived from
+  `url` unless given.
+- `publicBucket`: a public bucket the door serves from. The runtime
+  `config.json` is published there.
+- `onUpload({ uploads, buildId })`: called after the asset uploads are declared,
+  to declare resources that must run after them.
+
+**The wiring check.** AWS Blocks checks one thing about a bring-your-own door:
+its routing, from what the `cf.*` helpers recorded.
+
+- If nothing reaches the static assets, synth fails with `ServeStaticAsset`.
+- If the app has an API and none of `origins.api.paths` were wired, synth fails
+  with `ProxySameOriginApi`.
+- If some API paths (for example a raw route) were left unwired, synth warns.
+
+It does not check features. If a door ignores `features.waf`, the app deploys
+without a WAF.
+
+**Known limit.** The check sees only what the helpers recorded, so a door that
+wires correctly with raw CDK gets a false alarm. Declare hand-wired origins with
+`cf.recordWired(origins.assets)` and `cf.recordWired(origins.api)` (optionally
+with the paths you wired), or turn the check off with
+`frontDoor: { kind: 'custom', door, wiringCheck: false }`.
+
+**Testing a door.** Use `assertDoorConformance(door)` from
+`@aws-blocks/hosting/constructs` in the door's own tests. It builds the door
+against a sample SPA with an API and runs the same checks: the shape, a
+non-empty `url`, and the wiring.
+
+The built-in doors (`cloudFrontDoor`, `albDoor`, `apiGatewayDoor`,
+`s3WebsiteDoor`, `cloudFrontEdgeDoor`) are written the same way, and the pieces
+they share are exported for your own doors: `generateAlbAssetProxyCode`,
+`generateApiGwAssetProxyCode`, `backendBaseUrl`, `coalesceRoutes`,
+`routeSpecificity`, `createSecurityHeadersPolicy`.
+
 ## Build retention & rollback
 
 Each deploy uploads its assets under an immutable `builds/<buildId>/` prefix and

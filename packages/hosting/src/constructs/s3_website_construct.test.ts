@@ -5,9 +5,11 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { CapabilityPlan } from '../plan/types.js';
 import { S3WebsiteConstruct } from './s3_website_construct.js';
-import { runFrontDoor } from './door_hooks.js';
+import { buildFrontDoor } from './custom_door.js';
+import { buildDoorInput } from './door_input.js';
 import { s3WebsiteDoor } from './s3_website_door.js';
 
 const staticDir = mkdtempSync(join(tmpdir(), 's3site-'));
@@ -50,19 +52,24 @@ describe('S3WebsiteConstruct — static/SPA', () => {
   });
 });
 
-describe('s3WebsiteDoor — hooks + check', () => {
-  it('is the s3-website service and defines only the core hooks (no feature hooks)', () => {
+describe('s3WebsiteDoor — free-form build', () => {
+  const buildSite = (stack: Stack, plan: CapabilityPlan) => {
+    const input = buildDoorInput(stack, { plan, bucket: new Bucket(stack, 'Assets'), staticDir });
+    return buildFrontDoor(stack, s3WebsiteDoor, { ...input, plan }, { wiringCheck: false }).result;
+  };
+  it('is the s3-website service, defined by one build function', () => {
     assert.equal(s3WebsiteDoor.service, 's3-website');
-    for (const h of ['sameOriginApi', 'customDomain', 'waf', 'restrictGeo', 'accessLogs', 'alarms'] as const) {
-      assert.equal(s3WebsiteDoor[h], undefined, `${h} must be absent`);
-    }
+    assert.equal(typeof s3WebsiteDoor.build, 'function');
   });
-  it('renders a pure-static SPA plan (no atomicity opt-in needed)', () => {
+  it('renders a pure-static SPA plan and hands back its public website bucket', () => {
     const app = new App();
     const stack = new Stack(app, 'S2', { env: { account: '111111111111', region: 'us-west-2' } });
-    assert.ok(runFrontDoor(stack, spaPlan, s3WebsiteDoor, { staticDir }).handle.url);
+    const res = buildSite(stack, spaPlan);
+    assert.ok(res.url);
+    assert.equal(res.originHandle.protocol, 'http');
+    assert.ok(res.publicBucket, 'exposes the public website bucket');
   });
-  it('rejects an SSR plan', () => {
+  it('rejects an SSR plan (a website bucket cannot run a server)', () => {
     const app = new App();
     const stack = new Stack(app, 'S3', { env: { account: '111111111111', region: 'us-west-2' } });
     const ssrPlan: CapabilityPlan = {
@@ -73,6 +80,6 @@ describe('s3WebsiteDoor — hooks + check', () => {
       ],
       policies: { ...spaPlan.policies, hasServer: true },
     };
-    assert.throws(() => runFrontDoor(stack, ssrPlan, s3WebsiteDoor, { staticDir }), /RunServerRender/);
+    assert.throws(() => buildSite(stack, ssrPlan), /UnsupportedFrontDoorError|renders on a server/);
   });
 });

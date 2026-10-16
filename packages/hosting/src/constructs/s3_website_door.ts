@@ -1,48 +1,57 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
- * S3 static-website front door, defined with hooks — the simplest/cheapest door
- * for a pure static site / SPA (public website bucket, no CloudFront, no Lambda,
- * no TLS). Renders the {@link CapabilityPlan} onto an {@link S3WebsiteConstruct}.
+ * S3 static-website front door (`frontDoor: 'none'`), written as a free-form
+ * door — the simplest/cheapest option for a pure static site / SPA (public
+ * website bucket, no CloudFront, no Lambda, no TLS). `build` creates an
+ * {@link S3WebsiteConstruct}, which publishes the build output to its own
+ * public bucket; the door hands that bucket back as `publicBucket` so the
+ * runtime config is published where the browser reads it.
  *
- * It defines only the required core, and `route` reports nothing beyond static
- * routing — so SSR, same-origin API, image optimization, HTTPS, and every
- * feature hook are unsupported, and the check fails synth for anything beyond
- * static/SPA, steering those apps to a CDN/ALB/API Gateway door.
+ * A website bucket serves files only: there is no server, no same-origin API
+ * (the client calls the backend cross-origin), no image optimization and no
+ * HTTPS. The one thing the door refuses is an app with a server — it would
+ * deploy with nothing to render its pages.
  */
 import { Fn } from 'aws-cdk-lib';
-import type { Construct } from 'constructs';
-import type { AdapterContext, CapabilityId, CapabilityPlan } from '../plan/types.js';
-import { defineFrontDoor } from './door_hooks.js';
-import type { NegotiationMode } from './negotiation_policy.js';
+import { HostingError } from '../hosting_error.js';
+import type { CapabilityPlan } from '../plan/types.js';
+import { type DoorInput, defineFrontDoor, type FrontDoorResult } from './front_door.js';
 import { S3WebsiteConstruct } from './s3_website_construct.js';
 
-export type S3WebsiteRenderContext = AdapterContext & {
-  /** The built static assets directory to publish. */
-  staticDir: string;
-  degrade?: CapabilityId[];
-  /** How strictly the capability check is enforced (`'strict'` default · `'warn'` · `'off'`). */
-  negotiation?: NegotiationMode;
+/** The S3-website door's input: the {@link DoorInput} plus the internal-only route plan. */
+export type S3WebsiteDoorInput = DoorInput & {
+  /** The route plan (SPA fallback decides the error document). Internal to the built-in door. */
+  plan: CapabilityPlan;
 };
 
-type S3WebsiteDoorState = { scope: Construct; plan?: CapabilityPlan };
-
-export const s3WebsiteDoor = defineFrontDoor<S3WebsiteDoorState, S3WebsiteRenderContext>({
+/** The built-in S3 static-website door. */
+export const s3WebsiteDoor = defineFrontDoor<S3WebsiteDoorInput, FrontDoorResult>({
   service: 's3-website',
 
-  create: (scope) => ({ scope }),
-
-  // Website index/error-document routing over a public bucket — static only.
-  route(door, plan) {
-    door.plan = plan;
-    return {};
-  },
-
   /**
-   * The {@link OriginHandle} is the website endpoint host (HTTP-only — S3
-   * website endpoints don't support TLS).
+   * The origin handle is the website endpoint host (HTTP-only — S3 website
+   * endpoints don't support TLS).
+   *
+   * @throws HostingError('UnsupportedFrontDoorError') when the app has a server.
    */
-  handle(door, ctx) {
-    if (!door.plan) throw new Error("s3-website door: 'route' must run before 'handle'.");
-    const site = new S3WebsiteConstruct(door.scope, 'S3Website', { plan: door.plan, staticDir: ctx.staticDir });
+  build(scope, input) {
+    if (input.plan.policies.hasServer) {
+      throw new HostingError('UnsupportedFrontDoorError', {
+        message:
+          "Front door 's3-website' cannot serve this deploy: the app renders on a server, " +
+          'and an S3 website bucket only serves static files.',
+        resolution:
+          "`frontDoor: 'none'` serves a pure static site / SPA directly from S3 (HTTP only, no " +
+          'front door). For server rendering, use the CloudFront default (omit `frontDoor`), ' +
+          "`{ kind: 'alb' }`, or `{ kind: 'apiGateway' }`.",
+      });
+    }
+    const site = new S3WebsiteConstruct(scope, 'S3Website', {
+      plan: input.plan,
+      staticDir: input.origins.assets.sourceDir,
+    });
     return {
       url: site.url,
       originHandle: { domainName: Fn.select(1, Fn.split('://', site.url)), protocol: 'http' },

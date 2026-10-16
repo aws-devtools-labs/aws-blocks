@@ -536,11 +536,11 @@ export type HostingResources = {
   bucket: Bucket;
 
   /**
-   * The CloudFront distribution serving the site. Present for the default
-   * `cloudfront` front door; `undefined` when a non-CloudFront front door
-   * (e.g. `alb`) is selected.
+   * The CloudFront distribution serving the site. Available for the default
+   * `cloudfront` front door; reading it for any other front door throws
+   * (`FrontDoorNotCloudFrontError`).
    */
-  distribution?: Distribution;
+  distribution: Distribution;
 
   /**
    * The URL of the deployed site.

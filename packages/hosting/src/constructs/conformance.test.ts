@@ -1,82 +1,50 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { App, CfnResource, Stack } from 'aws-cdk-lib';
-import type { Construct } from 'constructs';
-import type { CapabilityPlan } from '../plan/types.js';
+import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
+import { cf } from './cf_helpers.js';
 import { assertDoorConformance } from './conformance.js';
-import { defineFrontDoor, type FrontDoorHooks, type RouteReport } from './door_hooks.js';
-import type { LayerHandle } from './layer.js';
+import { defineFrontDoor, type FrontDoor, type FrontDoorResult } from './front_door.js';
 
-/** A conforming door: core hooks only, serves static, returns a well-formed handle. */
-const goodDoor = (overrides: Partial<FrontDoorHooks<Construct>> = {}): FrontDoorHooks<Construct> =>
-	defineFrontDoor<Construct>({
-		service: 'good-edge',
-		create: (scope) => new CfnResource(scope, 'GoodDoorRes', { type: 'AWS::CloudFormation::WaitConditionHandle' }),
-		route: () => ({}),
-		handle: (): LayerHandle => ({
-			url: 'https://good.example',
-			originHandle: { domainName: 'good.example', protocol: 'https' },
-		}),
-		...overrides,
-	});
-
-const ssrPlan: CapabilityPlan = {
-	origins: [
-		{ id: 'blocks-s3', kind: 'static' },
-		{ id: 'blocks-server', kind: 'server' },
-	],
-	routes: { entries: [{ pattern: '/*', kind: 'server' }], redirects: [], headers: [] },
-	policies: { spaFallback: false, hasServer: true, skewEnabled: false },
-	release: { buildId: 'b1' },
-};
-
-const freshScope = () => new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-east-1' } });
+/** A conforming door: serves the assets and proxies the API with the helpers. */
+const goodDoor = defineFrontDoor({
+  service: 'good-cdn',
+  build(scope, { app, origins }) {
+    const dist = new Distribution(scope, 'Cdn', {
+      defaultBehavior: { origin: cf.origin(origins.server ?? origins.assets) },
+      additionalBehaviors: { ...cf.behaviors(app.routes), ...cf.apiBehaviors(origins.api) },
+    });
+    return { url: `https://${dist.distributionDomainName}` };
+  },
+});
 
 describe('assertDoorConformance', () => {
-	it('passes for a well-formed door and returns what it delivered', () => {
-		const run = assertDoorConformance(goodDoor(), { scope: freshScope() });
-		assert.ok(run.delivered.has('RouteRequest'));
-		assert.ok(run.delivered.has('ServeStaticAsset'));
-	});
+  it('passes a door that returns a url and wires the assets + API', () => {
+    const { result, wiring } = assertDoorConformance(goodDoor);
+    assert.ok(result.url);
+    assert.ok(result.originHandle.domainName, 'originHandle derived from url');
+    assert.ok(wiring.origins.has('assets'));
+    assert.ok(wiring.apiPaths.has('/aws-blocks/*'));
+  });
 
-	it('fails when `service` is missing', () => {
-		assert.throws(() => assertDoorConformance(goodDoor({ service: '' }), { scope: freshScope() }), /service/);
-	});
+  it('fails a door with no service id / no build function (shape)', () => {
+    const broken = { service: '' } as unknown as FrontDoor;
+    assert.throws(() => assertDoorConformance(broken), (err: Error) => err.name === 'InvalidPropsError');
+  });
 
-	it('fails when a required core hook is not a function', () => {
-		const door = { ...goodDoor(), route: 'nope' } as unknown as FrontDoorHooks<Construct>;
-		assert.throws(() => assertDoorConformance(door, { scope: freshScope() }), /`route` hook must be a function/);
-	});
+  it('fails a door that returns no url', () => {
+    const noUrl = defineFrontDoor({ service: 'no-url', build: () => ({}) as FrontDoorResult });
+    assert.throws(() => assertDoorConformance(noUrl), (err: Error) => err.name === 'MissingFrontDoorUrlError');
+  });
 
-	it('fails when an optional feature hook is present but not a function', () => {
-		const door = { ...goodDoor(), waf: true } as unknown as FrontDoorHooks<Construct>;
-		assert.throws(() => assertDoorConformance(door, { scope: freshScope() }), /`waf` must be a function or omitted/);
-	});
-
-	it('fails when the door cannot serve the plan it is handed (no ssr report)', () => {
-		assert.throws(
-			() => assertDoorConformance(goodDoor(), { scope: freshScope(), plan: ssrPlan }),
-			/does not serve|RunServerRender/,
-		);
-	});
-
-	it('passes the SSR plan once route() reports ssr + atomic release', () => {
-		const door = goodDoor({ route: (): RouteReport => ({ ssr: 'buffered', atomicRelease: true }) });
-		assert.doesNotThrow(() => assertDoorConformance(door, { scope: freshScope(), plan: ssrPlan }));
-	});
-
-	it('fails when route() reports a bogus ssr flavor', () => {
-		const door = goodDoor({ route: () => ({ ssr: 'sometimes' }) as unknown as RouteReport });
-		assert.throws(() => assertDoorConformance(door, { scope: freshScope() }), /expected false \| 'buffered'/);
-	});
-
-	it('fails when handle() returns a handle without a usable originHandle', () => {
-		const door = goodDoor({ handle: () => ({ url: 'https://x.example', originHandle: { domainName: '', protocol: 'https' } }) });
-		assert.throws(() => assertDoorConformance(door, { scope: freshScope() }), /domainName/);
-	});
-
-	it('fails when handle() omits the public url on the root layer', () => {
-		const door = goodDoor({ handle: () => ({ originHandle: { domainName: 'x.example', protocol: 'https' } }) });
-		assert.throws(() => assertDoorConformance(door, { scope: freshScope() }), /url/);
-	});
+  it('fails a door that serves the assets but does not proxy the API (wiring)', () => {
+    const noApi = defineFrontDoor({
+      service: 'no-api',
+      build(scope, { origins }) {
+        const dist = new Distribution(scope, 'Cdn', { defaultBehavior: { origin: cf.origin(origins.assets) } });
+        return { url: `https://${dist.distributionDomainName}` };
+      },
+    });
+    assert.throws(() => assertDoorConformance(noApi), /ProxySameOriginApi/);
+    assert.doesNotThrow(() => assertDoorConformance(noApi, { wiringCheck: false }));
+  });
 });

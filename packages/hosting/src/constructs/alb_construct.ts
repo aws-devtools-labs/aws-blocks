@@ -9,10 +9,9 @@
  * ordered by specificity so the first match wins — the ALB analogue of
  * CloudFront's KVS router.
  *
- * What ALB does NOT do (absent from its hooks and `route()` report, so the check
- * fails a demanding app instead of silently dropping it): global edge caching,
- * per-route response-header injection, skew-pin cookies, geo restriction. See
- * `albDoor`.
+ * What ALB does NOT do (it has no edge; an app that asks for these deploys
+ * without them — there is no feature check): global edge caching, per-route
+ * response-header injection, skew-pin cookies, geo restriction. See `albDoor`.
  */
 import { CfnOutput, Duration, Fn, RemovalPolicy } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';

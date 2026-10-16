@@ -4,13 +4,7 @@
 import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type {
-  DeployManifest,
-  FrameworkType,
-  KindStoreOptions,
-  NegotiationMode,
-  RouteBehavior,
-} from '@aws-blocks/hosting/constructs';
+import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
 import {
   detectFramework,
   type FrameworkAdapterFn,
@@ -19,13 +13,14 @@ import {
   withComputeTarget,
 } from '@aws-blocks/hosting/adapters';
 import {
+  buildFrontDoor,
   cloudFrontEdgeDoor,
   generateBuildId,
   HostingConstruct,
   type HostingConstructProps,
+  HostingError,
   type HostingDomainConfig,
   type HostingWafConfig,
-  runFrontDoor,
   type SkewProtectionConfig,
   type WebFunctionConstruct,
   type WebFunctionOptions,
@@ -494,31 +489,39 @@ export interface HostingProps {
    * regional Application Load Balancer instead — for enterprises behind an
    * existing ALB, private/internal deploys, or apps that don't need a CDN.
    *
-   * Edge-only capabilities (edge caching, per-route response headers, skew-pin,
-   * geo) are unsupported on ALB and must be waived via `degrade` (synth fails
-   * otherwise — conscious, never silent). Same-origin API proxy (`/aws-blocks/*`)
-   * is CloudFront-only for now; on ALB the frontend reaches the backend via
-   * `BLOCKS_API_URL` (cross-origin).
+   * What CloudFront does at the edge (edge caching, per-route response headers,
+   * skew-pin, geo) is not available on an ALB. The ALB proxies the same-origin
+   * API (`/aws-blocks/*`) through a forwarder Lambda, so cookie auth works with
+   * no CORS.
    *
    * Pass `{ kind: 'apiGateway', … }` to serve behind an Amazon API Gateway
    * instead — the serverless, no-VPC, scale-to-zero sibling of the ALB door.
    * It owns routing and proxies `/aws-blocks/*` same-origin natively (no
-   * forwarder Lambda). Choose the flavor with `api`: `'rest'` (default) or
-   * `'http'` (HTTP API v2). Edge capabilities and response streaming are
-   * unsupported and must be waived via `degrade`.
+   * forwarder Lambda). Choose the flavor with `api`: `'http'` (HTTP API v2,
+   * default) or `'rest'`. Edge features and response streaming are not
+   * available.
    *
-   * Pass `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` to STACK the two — a CloudFront
-   * edge (static/SSR/image served as today) that forwards the same-origin API
-   * subtree (`/aws-blocks/*`, `/aws-blocks-auth/*`) through a regional ALB before
-   * it reaches the backend. This is the composed "CF → ALB → rest of infra" door:
-   * the edge keeps every CloudFront capability, and the ALB becomes the API
-   * router (its own WAFv2/access-logs/alarms available via the ALB layer). Only
-   * meaningful with `api` set (there must be a backend to route to).
+   * Pass `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` to STACK the two — a
+   * thin CloudFront edge (TLS, cache, security headers, a BYO edge web ACL) whose
+   * single origin is a full regional ALB router that routes everything (static,
+   * SSR, image, and the same-origin API) to the rest of the infra. This is the
+   * composed "CF → ALB → rest of infra" door.
+   *
+   * Pass `{ kind: 'custom', door }` to bring your own door, written as one
+   * function: `defineFrontDoor({ service, build(scope, input) })` from
+   * `@aws-blocks/hosting/constructs`. Hosting calls `build` once at synth with
+   * everything it built (the `DoorInput`), and uses the `url` it returns as the
+   * app's address (`HostingUrl`, `BLOCKS_PUBLIC_ORIGIN`, CORS). The door's
+   * routing is checked (see `wiringCheck`); the features it applies are not.
+   *
+   * Pass `'none'` to serve a static site / SPA straight from an S3 website
+   * bucket (HTTP only, no front door; the client calls the API cross-origin).
    *
    * @example
    * ```ts
    * new Hosting(stack, 'Web', { root, framework: 'nuxt', frontDoor: { kind: 'alb' } });
    * new Hosting(stack, 'Web', { root, api, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
+   * new Hosting(stack, 'Web', { root, api, frontDoor: { kind: 'custom', door: myDoor } });
    * ```
    */
   frontDoor?: HostingConstructProps['frontDoor'] | CloudFrontOverRouterFrontDoor;
@@ -526,28 +529,21 @@ export interface HostingProps {
 
 /**
  * A COMPOSED front door: a CloudFront edge stacked over a regional router layer
- * (today, an ALB). The edge serves static/SSR/image exactly as the default
- * CloudFront door does; the same-origin API subtree is routed CloudFront → ALB →
- * backend instead of CloudFront → backend directly. See {@link HostingProps.frontDoor}.
+ * (today, an ALB). The edge is a thin distribution whose one origin is the
+ * router; the router routes static/SSR/image and the same-origin API to the
+ * rest of the infra. See {@link HostingProps.frontDoor}.
  */
 export interface CloudFrontOverRouterFrontDoor {
   /** Discriminant — a stacked (edge-over-router) door. */
   kind: 'stacked';
   /** The edge layer. Only CloudFront today. */
   edge: 'cloudfront';
-  /** The router layer the edge forwards the API subtree to. Only ALB today. */
+  /** The router layer the edge forwards to. Only ALB today. */
   router: 'alb';
   /** Bring-your-own VPC for the ALB; a default 2-AZ VPC is created when omitted. */
   vpc?: import('aws-cdk-lib/aws-ec2').IVpc;
   /** Internal (private) ALB vs internet-facing. Default: internet-facing. */
   internal?: boolean;
-  /**
-   * How strictly the ALB router layer enforces the capability check. `'strict'`
-   * (default) fails synth on a demanded capability it can't serve; `'warn'`
-   * reports it and proceeds; `'off'` skips the check.
-   * @default 'strict'
-   */
-  negotiation?: NegotiationMode;
 }
 
 // ─── Default build output directories per framework ──────────────
@@ -600,8 +596,27 @@ const DEFAULT_BUILD_DIRS: Record<string, string> = {
 export class Hosting extends Construct {
   /** The S3 bucket storing static assets. */
   public readonly bucket: cdk.aws_s3.Bucket;
-  /** The CloudFront distribution. `undefined` when a non-CloudFront front door (e.g. `alb`) is selected. */
-  public readonly distribution?: cdk.aws_cloudfront.Distribution;
+  /** Backs {@link distribution}; set for the CloudFront default door and the stacked door's edge. */
+  private readonly _distribution?: cdk.aws_cloudfront.Distribution;
+  /**
+   * The CloudFront distribution.
+   *
+   * Available for the default CloudFront front door, and for the stacked door
+   * (its CloudFront edge). Any other door (`alb`, `apiGateway`, `'none'`, a
+   * custom door) has no built-in distribution, so reading it throws — use `url`
+   * for the deploy's address.
+   *
+   * @throws HostingError('FrontDoorNotCloudFrontError') when the front door has no CloudFront distribution.
+   */
+  public get distribution(): cdk.aws_cloudfront.Distribution {
+    if (!this._distribution) {
+      throw new HostingError('FrontDoorNotCloudFrontError', {
+        message: 'Hosting.distribution is only available for a CloudFront front door (the default, or the stacked edge).',
+        resolution: 'Use `Hosting.url` for the address of a deploy served by another front door.',
+      });
+    }
+    return this._distribution;
+  }
   /** The public URL of the deployed site (https://...). */
   public readonly url: string;
   /** The primary SSR/compute Lambda function (first compute resource, if any). */
@@ -920,16 +935,25 @@ export class Hosting extends Construct {
             vpc: cfOverRouter.vpc,
             internal: cfOverRouter.internal,
             backendApiUrl: props.api?.apiUrl,
-            negotiation: cfOverRouter.negotiation,
           }
         : typeof props.frontDoor === 'object' &&
             props.api &&
             'kind' in props.frontDoor &&
-            (props.frontDoor.kind === 'alb' ||
-              props.frontDoor.kind === 'apiGateway' ||
-              props.frontDoor.kind === 'custom')
-          ? { ...props.frontDoor, backendApiUrl: props.api.apiUrl }
-          : (props.frontDoor as HostingConstructProps['frontDoor']),
+            props.frontDoor.kind === 'custom'
+          ? {
+              ...props.frontDoor,
+              backendApiUrl: props.api.apiUrl,
+              // A bring-your-own door is handed every path that must reach the
+              // backend: `/aws-blocks/*` (added by the L3) plus this backend's
+              // raw routes, so it can't silently drop one.
+              backendApiPaths: rawRouteBehaviors(this.ownerRootIdFor(props.api)).map((r) => r.pattern),
+            }
+          : typeof props.frontDoor === 'object' &&
+              props.api &&
+              'kind' in props.frontDoor &&
+              (props.frontDoor.kind === 'alb' || props.frontDoor.kind === 'apiGateway')
+            ? { ...props.frontDoor, backendApiUrl: props.api.apiUrl }
+            : (props.frontDoor as HostingConstructProps['frontDoor']),
     };
 
     const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
@@ -938,7 +962,8 @@ export class Hosting extends Construct {
     // The public origin the app is served from. Defaults to the L3's front-door
     // URL; the composed CF → ALB door overrides it to the CloudFront edge below.
     let publicUrl = hosting.distributionUrl;
-    let publicDistribution = hosting.distribution;
+    const isCloudFrontDoor = hosting.frontDoor.service === 'cloudfront';
+    let publicDistribution = isCloudFrontDoor ? hosting.distribution : undefined;
 
     if (cfOverRouter) {
       // Composed CF → ALB. The L3 already built the FULL ALB router
@@ -951,7 +976,7 @@ export class Hosting extends Construct {
       publicDistribution = cf.distribution;
     }
 
-    if (props.api && hosting.distribution && !cfOverRouter) {
+    if (props.api && isCloudFrontDoor && !cfOverRouter) {
       // CloudFront default door: proxy the same-origin API subtree (`/aws-blocks/*`,
       // the auth subtree, RawRoutes) as CloudFront behaviors → the backend API
       // Gateway, and claim the API front-door role for this distribution.
@@ -960,10 +985,7 @@ export class Hosting extends Construct {
       // (`new Hosting(stack, 'Hosting', { api: stack })`); when it's a branded
       // BlocksStack/BlocksBackend use its node.path directly, else walk up from
       // this Hosting construct to the owning root.
-      const ownerRootId = isBlocksBackendRoot(props.api)
-        ? props.api.node.path
-        : getBlocksRoot(this).node.path;
-      this.addApiBehaviors(hosting, props.api, ownerRootId);
+      this.addApiBehaviors(hosting, props.api, this.ownerRootIdFor(props.api));
     } else if (props.api && props.frontDoor !== 'none') {
       // Every other door that proxies the API same-origin (ALB, API Gateway, the
       // composed CF → ALB, a custom door) routes it inside its own router. It is
@@ -1107,7 +1129,7 @@ export class Hosting extends Construct {
 
     // ── 10. Expose resources ──────────────────────────────────────
     this.bucket = hosting.bucket;
-    this.distribution = publicDistribution;
+    this._distribution = publicDistribution;
     this.url = publicUrl;
     this.ssrFunction = primaryFunction;
     this.ssrWebFunction = [...hosting.computeWebFunctions.values()][0];
@@ -1137,7 +1159,7 @@ export class Hosting extends Construct {
     // the window where the edge still serves the previous build's SSR HTML.
     // `GetInvalidation` needs both ids, so the value carries
     // `<distributionId>/<invalidationId>`. Absent for a pure-static deploy.
-    if (hosting.invalidationId && hosting.distribution) {
+    if (hosting.invalidationId && isCloudFrontDoor) {
       new cdk.CfnOutput(this, 'HostingInvalidationId', {
         value: `${hosting.distribution.distributionId}/${hosting.invalidationId}`,
         description: 'CloudFront <distributionId>/<invalidationId> for the post-deploy liveness poll',
@@ -1202,33 +1224,30 @@ export class Hosting extends Construct {
     hosting: HostingConstruct,
     props: HostingProps,
   ): { distribution: Distribution; url: string } {
-    // The L3 built the full ALB router as its front door and exposes its DNS
-    // name. CloudFront's single origin is that ALB; the internal edge → ALB hop
-    // is always HTTP.
-    const albDns = hosting.loadBalancerDnsName;
-    if (!albDns || !hosting.capabilityPlan) {
+    // The L3 built the full ALB router as its front door. The edge is a
+    // free-form door (`cloudFrontEdgeDoor`) built from the same DoorInput, with
+    // the ALB as its `upstream`: CloudFront's single origin is that ALB, and the
+    // internal edge → ALB hop is always HTTP. Its internal extras are the CSP for
+    // its security headers and the app's BYO CLOUDFRONT-scoped web ACL.
+    if (!hosting.loadBalancerDnsName) {
       throw new Error('Composed CF → ALB door: the ALB router was not provisioned by the hosting construct.');
     }
-
-    // The edge is a hook-defined door (`cloudFrontEdgeDoor`) whose `'/*'` child
-    // is the ALB router. The router was already checked against the app's full
-    // demand, so the edge is checked only for what IT owns: a BYO
-    // CLOUDFRONT-scoped web ACL (`waf` hook) when the app supplies one.
-    const webAclArn = props.waf?.webAclArn;
-    const run = runFrontDoor(
+    const { result } = buildFrontDoor(
       this,
-      hosting.capabilityPlan,
       cloudFrontEdgeDoor,
-      { contentSecurityPolicy: props.contentSecurityPolicy, webAclArn },
       {
-        children: new Map([['/*', { originHandle: { domainName: albDns, protocol: 'http' as const } }]]),
-        required: webAclArn ? ['FilterRequests'] : [],
-        errorCode: 'CapabilityNotSupportedError',
+        ...hosting.doorInput,
+        upstream: {
+          service: hosting.frontDoor.service,
+          url: hosting.frontDoor.url,
+          originHandle: { domainName: hosting.loadBalancerDnsName, protocol: 'http' },
+        },
+        contentSecurityPolicy: props.contentSecurityPolicy,
+        webAclArn: props.waf?.webAclArn,
       },
+      { wiringCheck: false },
     );
-    const distribution = run.door.distribution;
-    if (!distribution) throw new Error('Composed CF → ALB door: the edge did not build its distribution.');
-    return { distribution, url: run.handle.url ?? `https://${distribution.distributionDomainName}` };
+    return { distribution: result.distribution, url: result.url };
   }
 
   /**
@@ -1247,10 +1266,9 @@ export class Hosting extends Construct {
    * paths cannot drift.
    */
   private addApiBehaviors(hosting: HostingConstruct, api: BlocksStackApi, ownerRootId: string): void {
-    // Only called for the CloudFront front door; the caller guards on
-    // `hosting.distribution` existing. Bind it locally for null-safety.
+    // Only called for the CloudFront front door (the caller checks
+    // `hosting.frontDoor.service`), so the distribution exists.
     const distribution = hosting.distribution;
-    if (!distribution) return;
     const apiUrl = api.apiUrl;
     // `distributionUrl` is custom-domain-aware (custom domain when configured,
     // else the CloudFront default), so clients are pointed at the domain the app
@@ -1276,38 +1294,54 @@ export class Hosting extends Construct {
     // AuthOIDC instances.
     distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
 
-    const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
-    for (const route of getRegisteredRoutes()) {
-      // The route registry is a process-global shared by every backend in the
-      // synth. Only add behaviors for routes owned by the backend this
-      // distribution fronts. Owner-less routes (framework built-ins) carry no
-      // ownerRootId and match every distribution, preserving prior behavior.
-      if (route.ownerRootId !== undefined && route.ownerRootId !== ownerRootId) continue;
-      if (route.path.startsWith(`${BLOCKS_RPC_PREFIX}/`)) continue;
-      if (route.path === BLOCKS_AUTH_PREFIX || route.path.startsWith(`${BLOCKS_AUTH_PREFIX}/`)) continue;
-
-      let behaviorPattern: string;
-      const paramIndex = route.path.indexOf('/{');
-      if (paramIndex !== -1) {
-        behaviorPattern = route.path.substring(0, paramIndex) + '/*';
-      } else {
-        behaviorPattern = route.path;
-      }
-
-      if (addedPatterns.has(behaviorPattern)) continue;
-
-      if (behaviorPattern.endsWith('/*')) {
+    for (const { path, pattern } of rawRouteBehaviors(ownerRootId)) {
+      if (pattern.endsWith('/*')) {
         console.warn(
-          `[Hosting] ⚠️  RawRoute '${route.path}' creates CloudFront behavior '${behaviorPattern}' ` +
+          `[Hosting] ⚠️  RawRoute '${path}' creates CloudFront behavior '${pattern}' ` +
             `which may shadow SSR/frontend routes under the same prefix. ` +
             `Consider placing this route under ${BLOCKS_RPC_PREFIX}/ to avoid conflicts.`,
         );
       }
-
-      addedPatterns.add(behaviorPattern);
-      distribution.addBehavior(behaviorPattern, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+      distribution.addBehavior(pattern, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
     }
   }
+
+  /**
+   * The backend root this Hosting fronts, so only its own RawRoutes are proxied.
+   * `api` is the backend in the canonical usage (`new Hosting(stack, 'Hosting',
+   * { api: stack })`); when it's a branded BlocksStack/BlocksBackend use its
+   * node.path directly, else walk up from this Hosting construct to the owning root.
+   */
+  private ownerRootIdFor(api: BlocksStackApi): string {
+    return isBlocksBackendRoot(api) ? api.node.path : getBlocksRoot(this).node.path;
+  }
+}
+
+/**
+ * The CloudFront behavior pattern for each RawRoute owned by `ownerRootId` —
+ * the paths, beyond the reserved `/aws-blocks/*` subtree, that must reach the
+ * backend. De-duplicated, in registration order; a parameterized route
+ * (`/hooks/{id}`) becomes its prefix wildcard (`/hooks/*`).
+ *
+ * The route registry is a process-global shared by every backend in the synth,
+ * so only routes owned by this backend are returned. Owner-less routes
+ * (framework built-ins) carry no ownerRootId and match every backend. Routes
+ * under the RPC or auth prefixes are already covered by their subtree.
+ */
+function rawRouteBehaviors(ownerRootId: string): Array<{ path: string; pattern: string }> {
+  const added = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
+  const behaviors: Array<{ path: string; pattern: string }> = [];
+  for (const route of getRegisteredRoutes()) {
+    if (route.ownerRootId !== undefined && route.ownerRootId !== ownerRootId) continue;
+    if (route.path.startsWith(`${BLOCKS_RPC_PREFIX}/`)) continue;
+    if (route.path === BLOCKS_AUTH_PREFIX || route.path.startsWith(`${BLOCKS_AUTH_PREFIX}/`)) continue;
+    const paramIndex = route.path.indexOf('/{');
+    const pattern = paramIndex !== -1 ? `${route.path.substring(0, paramIndex)}/*` : route.path;
+    if (added.has(pattern)) continue;
+    added.add(pattern);
+    behaviors.push({ path: route.path, pattern });
+  }
+  return behaviors;
 }
 
 /**

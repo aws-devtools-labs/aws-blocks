@@ -11,8 +11,9 @@
  *   - **no atomic build-id cutover** (deploy overwrites the root).
  *
  * SPA fallback uses the website error document → `index.html` (served with a
- * 404 status, which client-side routers tolerate). `s3WebsiteDoor` defines only
- * the core hooks, so the check makes these trade-offs explicit.
+ * 404 status, which client-side routers tolerate). `s3WebsiteDoor` (behind
+ * `frontDoor: 'none'`) builds this construct and rejects an app with a server,
+ * which a website bucket cannot run.
  */
 import { CfnOutput, RemovalPolicy } from 'aws-cdk-lib';
 import { AnyPrincipal, Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';

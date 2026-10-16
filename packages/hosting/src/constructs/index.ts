@@ -62,66 +62,70 @@ export {
 	wireManagedValue,
 } from '../secret-resolve.js';
 export { FrameworkType, HostingProps, HostingResources } from '../types.js';
-// Front doors, defined with build hooks. CloudFront is the default door; ALB,
-// API Gateway, and S3-website are the alternatives.
+// ── Front doors ───────────────────────────────────────────────────────────────
+// The free-form front-door interface: a door is `defineFrontDoor({ service,
+// build(scope, input) })`. AWS Blocks calls `build` once at synth with the
+// DoorInput and uses the `url` it returns as the app's address. CloudFront is
+// the default door; ALB, API Gateway, S3-website (`'none'`) and the stacked
+// CloudFront edge are the other built-ins, written the same way.
+export {
+	type ApiOrigin,
+	type AssetsOrigin,
+	type DoorApp,
+	type DoorFeatures,
+	type DoorHeaderRule,
+	type DoorInput,
+	type DoorOrigin,
+	type DoorOrigins,
+	type DoorRedirect,
+	type DoorRoute,
+	type DoorUpstream,
+	defineFrontDoor,
+	type FrontDoor,
+	type FrontDoorResult,
+	type ImageOrigin,
+	type ServerOrigin,
+	type UploadContext,
+} from './front_door.js';
+export type { OriginHandle } from './layer.js';
+// `cf.*` — CloudFront helpers for a free-form door. They also record what they
+// wired, which is what the routes/API wiring check reads.
+export { cf, type CloudFrontHelpers } from './cf_helpers.js';
+// The route plan the built-in doors render (service-agnostic data).
 export type {
-	AdapterContext,
 	BackendIngress,
 	BackendOrigin,
 	BackendPlan,
-	CapabilityId,
 	CapabilityPlan,
-	FrontDoorGraph,
-	FrontDoorLayer,
-	FrontDoorTarget,
-	LayerRole,
+	HeaderRule,
 	Origin,
-	OriginRef,
+	PlanPolicies,
+	RedirectRule,
+	ReleasePlan,
 	RouteTable,
 } from '../plan/types.js';
-export { isOriginRef } from '../plan/types.js';
-export type { ChildHandles, LayerHandle, OriginHandle } from './layer.js';
-export {
-	ALL_CAPABILITIES,
-	CAPABILITY_SOURCE,
-	type CapabilitySource,
-	defineFrontDoor,
-	type FeatureHookName,
-	type FrontDoorHooks,
-	type FrontDoorRun,
-	type RouteReport,
-	type RunFrontDoorOptions,
-	runFrontDoor,
-} from './door_hooks.js';
-export {
-	type CustomDoorContext,
-	type CustomDoorFeatures,
-	renderCustomDoor,
-	type RenderCustomDoorOptions,
-} from './custom_door.js';
-export { renderGraph } from './render-graph.js';
 export { buildCapabilityPlan, ORIGIN_IDS } from '../plan/capability-plan.js';
-export { composeGraph, composeCloudFrontOverRouter } from '../plan/compose.js';
-export type { FrontDoorChoice } from '../plan/compose.js';
-export { requiredCapabilities } from '../plan/negotiate.js';
-export { cloudFrontDoor, type CloudFrontDoorState, type CloudFrontRenderContext } from './cloudfront_door.js';
-export { cloudFrontEdgeDoor, type CloudFrontEdgeContext, type CloudFrontEdgeState } from './cloudfront_edge_door.js';
-export { albDoor, type AlbRenderContext } from './alb_door.js';
+export { cloudFrontDoor, type CloudFrontDoorInput, type CloudFrontDoorResult } from './cloudfront_door.js';
+export {
+	cloudFrontEdgeDoor,
+	type CloudFrontEdgeDoorInput,
+	type CloudFrontEdgeDoorResult,
+} from './cloudfront_edge_door.js';
+export { albDoor, type AlbDoorInput, type AlbDoorResult } from './alb_door.js';
 export { AlbConstruct, type AlbConstructProps } from './alb_construct.js';
-export { apiGatewayDoor, type ApiGatewayRenderContext } from './apigw_door.js';
+export { apiGatewayDoor, type ApiGatewayDoorInput } from './apigw_door.js';
 export { ApiGatewayConstruct, type ApiGatewayConstructProps } from './apigw_construct.js';
-export { s3WebsiteDoor, type S3WebsiteRenderContext } from './s3_website_door.js';
+export { s3WebsiteDoor, type S3WebsiteDoorInput } from './s3_website_door.js';
 export { S3WebsiteConstruct, type S3WebsiteConstructProps } from './s3_website_construct.js';
-// Security-headers ResponseHeadersPolicy factory — reused by core.Hosting to
-// attach HSTS / X-Frame-Options / X-Content-Type-Options on the thin CloudFront
-// edge of the composed CF → ALB door (parity with the default CloudFront door).
+// Security-headers ResponseHeadersPolicy factory — reused by the CloudFront edge
+// of the composed CF → ALB door (parity with the default CloudFront door).
 export { createSecurityHeadersPolicy, type SecurityHeadersProps } from './security_headers.js';
 // ── BYO custom-front-door building blocks ─────────────────────────────────────
-// So a customer-authored door (`defineFrontDoor`) composes the door's hard parts
-// (private-asset access, same-origin API base, route ordering) instead of
-// reimplementing them. See the "BYO / Custom Front Door" design doc.
+// So a customer-authored door composes the door's hard parts (private-asset
+// access, same-origin API base, route ordering) instead of reimplementing them,
+// and tests itself before an app synthesizes it.
 export { assertDoorConformance, type DoorConformanceOptions } from './conformance.js';
-export type { NegotiationMode } from './negotiation_policy.js';
+export { buildFrontDoor, type BuildFrontDoorOptions, type FrontDoorBuild } from './custom_door.js';
 export { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 export { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 export { backendBaseUrl } from './apigw_routes.js';

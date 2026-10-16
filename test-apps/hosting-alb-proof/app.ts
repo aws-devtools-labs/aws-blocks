@@ -6,7 +6,7 @@
  *
  * It builds a service-agnostic CapabilityPlan for a tiny static site, uploads
  * the assets to a PRIVATE S3 bucket under `builds/<buildId>/`, and renders the
- * plan onto an Application Load Balancer via the hook-defined `albDoor` — NO CloudFront.
+ * plan onto an Application Load Balancer via the free-form `albDoor` — NO CloudFront.
  * The ALB routes every request to the asset-proxy Lambda, which streams the
  * objects out of the private bucket (the ALB analogue of CloudFront's S3+OAC).
  */
@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { App, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import { Bucket, BlockPublicAccess } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
-import { albDoor, buildCapabilityPlan, type DeployManifest, runFrontDoor } from '@aws-blocks/hosting/constructs';
+import { albDoor, buildCapabilityPlan, type DeployManifest } from '@aws-blocks/hosting/constructs';
 
 const app = new App();
 const stackName = process.env.ALB_PROOF_STACK || 'blocks-hosting-alb-proof';
@@ -54,5 +54,12 @@ const manifest: DeployManifest = {
 
 const plan = buildCapabilityPlan({ manifest, buildId, hasServer: false, hasImage: false });
 
-// Render the plan onto an ALB (creates a default VPC since none is passed).
-runFrontDoor(stack, plan, albDoor, { bucket });
+// Render the plan onto an ALB (creates a default VPC since none is passed). The
+// door's own settings travel in its `alb` extra; this proof needs no DoorInput
+// fields beyond the assets origin.
+albDoor.build(stack, {
+  app: { buildId, spaFallback: true, routes: [], redirects: [], headers: [] },
+  origins: { assets: { kind: 'assets', bucket, prefix: `builds/${buildId}/`, sourceDir: siteDir } },
+  features: {},
+  alb: { plan, bucket },
+});

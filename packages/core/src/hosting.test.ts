@@ -7,7 +7,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { config, secret } from '@aws-blocks/hosting';
-import { _setSynthExistsChecker, type CustomDoorContext, defineFrontDoor } from '@aws-blocks/hosting/constructs';
+import { _setSynthExistsChecker, cf, type DoorInput, defineFrontDoor } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack, Token } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
@@ -18,7 +18,7 @@ import { coverBlocksRoot, forEachBlocksRole } from './cdk/blocks-roles.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
-import { type BlocksStackApi, buildConfigJson, Hosting } from './hosting.js';
+import { type BlocksStackApi, buildConfigJson, Hosting, type HostingProps } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
 
 // ================================================================
@@ -2385,8 +2385,8 @@ describe('Hosting', () => {
       const app = new App();
       const stack = new Stack(app, 'NoneSsrStack', { env: { account: '111111111111', region: 'us-east-1' } });
 
-      // 'none' serves static files only; an SSR app demands RunServerRender, which
-      // the negotiator rejects — never a silently broken deploy.
+      // 'none' serves static files only; the S3-website door refuses an app with
+      // a server — never a silently broken deploy.
       assert.throws(
         () =>
           new Hosting(stack, 'Hosting', {
@@ -2400,67 +2400,142 @@ describe('Hosting', () => {
     });
   });
 
-  describe("frontDoor: { kind: 'custom', door } (customer door defined with build hooks)", () => {
-    const probeDoor = () => {
-      const seen: { calls: string[]; features?: CustomDoorContext['features'] } = { calls: [] };
-      const door = defineFrontDoor<Construct, CustomDoorContext>({
-        service: 'probe-door',
-        create(scope) {
-          seen.calls.push('create');
-          return new cdk.CfnResource(scope, 'ProbeDoor', { type: 'AWS::CloudFormation::WaitConditionHandle' });
-        },
-        route() {
-          seen.calls.push('route');
-          return {};
-        },
-        sameOriginApi: () => 'single',
-        waf(_door, ctx) {
-          seen.calls.push('waf');
-          seen.features = ctx.features;
-          return 'regional';
-        },
-        accessLogs(_door, ctx) {
-          seen.calls.push('accessLogs');
-          seen.features = ctx.features;
-        },
-        handle() {
-          seen.calls.push('handle');
-          return { url: 'https://probe.example', originHandle: { domainName: 'probe.example', protocol: 'https' } };
+  describe("frontDoor: { kind: 'custom', door } (bring-your-own free-form door)", () => {
+    /** A door that wires the assets + API with the cf.* helpers and serves at a fixed literal address. */
+    const edgeDoor = (seen: { input?: DoorInput } = {}) =>
+      defineFrontDoor({
+        service: 'my-edge',
+        build(scope, input) {
+          seen.input = input;
+          new cdk.aws_cloudfront.Distribution(scope, 'Cdn', {
+            defaultBehavior: { origin: cf.origin(input.origins.assets) },
+            additionalBehaviors: cf.apiBehaviors(input.origins.api),
+          });
+          return { url: 'https://edge.example.com' };
         },
       });
-      return { door, seen };
-    };
 
-    it("feature hooks receive the app's feature settings (ctx.features) and run only when demanded", () => {
+    const configOf = (owner: unknown) =>
+      (owner as Record<symbol, unknown>)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
+        | { entries: Map<string, unknown> }
+        | undefined;
+
+    it("the door's url becomes HostingUrl, Hosting.url, BLOCKS_PUBLIC_ORIGIN and CORS_HOSTING_ORIGINS", () => {
       createSpaBuildOutput(tmpDir);
-      const stack = new Stack(new App(), 'CustomDoorFeatures', { env: { account: '111111111111', region: 'us-east-1' } });
-      const { door, seen } = probeDoor();
+      const stack = new Stack(new App(), 'CustomDoorUrl', { env: { account: '111111111111', region: 'us-east-1' } });
+      const hosting = new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'custom', door: edgeDoor() } });
+
+      assert.strictEqual(hosting.url, 'https://edge.example.com');
+      const outputs = Template.fromStack(stack).findOutputs('*');
+      const hostingUrl = Object.entries(outputs).find(([k]) => k.includes('HostingUrl'))?.[1];
+      assert.strictEqual(hostingUrl?.Value, 'https://edge.example.com');
+      const entries = configOf(stack)?.entries;
+      assert.strictEqual(entries?.get('BLOCKS_PUBLIC_ORIGIN'), 'https://edge.example.com');
+      assert.strictEqual(entries?.get('CORS_HOSTING_ORIGINS'), 'https://edge.example.com');
+      // A BYO door is not a built-in CloudFront door: Blocks adds no API behaviors
+      // of its own, and `distribution` (still typed as before) is not available.
+      assert.throws(() => hosting.distribution, /only available for a CloudFront front door/);
+    });
+
+    it("claims the API front-door role with the door's url (the managed API distribution stands down)", () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'CustomDoorClaim', { env: { account: '111111111111', region: 'us-east-1' } });
+      const claims: string[] = [];
+      const api: BlocksStackApi = { apiUrl: MOCK_API.apiUrl, claimApiFrontDoor: (url) => claims.push(url) };
+      new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor: { kind: 'custom', door: edgeDoor() } });
+      assert.deepStrictEqual(claims, ['https://edge.example.com']);
+    });
+
+    it("hands the door the backend's API, including its raw routes and the sign-in subset", () => {
+      createSpaBuildOutput(tmpDir);
+      registerRoute({ method: 'POST', path: '/webhooks/{id}', handler: async () => {} });
+      const stack = new Stack(new App(), 'CustomDoorInput', { env: { account: '111111111111', region: 'us-east-1' } });
+      const seen: { input?: DoorInput } = {};
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
         waf: { enabled: true, rateLimit: 500 },
-        frontDoor: { kind: 'custom', door },
+        frontDoor: { kind: 'custom', door: edgeDoor(seen) },
       });
-      // WAF demanded → waf hook runs with the app's settings; logging not demanded → accessLogs skipped.
-      assert.deepStrictEqual(seen.calls, ['create', 'route', 'waf', 'handle']);
-      assert.strictEqual(seen.features?.waf?.rateLimit, 500);
+      assert.deepStrictEqual(seen.input?.origins.api?.paths, ['/aws-blocks/*', '/webhooks/*']);
+      assert.deepStrictEqual(seen.input?.origins.api?.authPaths, ['/aws-blocks/auth/*']);
+      assert.strictEqual(seen.input?.origins.api?.url, MOCK_API.apiUrl);
+      assert.deepStrictEqual(seen.input?.features, { waf: { rateLimit: 500 } }, 'only what the app asked for');
     });
 
-    it('fails at synth when the app demands a capability whose hook the door lacks', () => {
+    it('fails at synth when the door proxies none of the API paths (wiring check), unless turned off', () => {
       createSpaBuildOutput(tmpDir);
-      const stack = new Stack(new App(), 'CustomDoorMissingHook', { env: { account: '111111111111', region: 'us-east-1' } });
-      const { door } = probeDoor();
+      const assetsOnly = defineFrontDoor({
+        service: 'assets-only',
+        build(scope, { origins }) {
+          new cdk.aws_cloudfront.Distribution(scope, 'Cdn', { defaultBehavior: { origin: cf.origin(origins.assets) } });
+          return { url: 'https://edge.example.com' };
+        },
+      });
+      const synth = (id: string, wiringCheck?: boolean) =>
+        new Hosting(new Stack(new App(), id, { env: { account: '111111111111', region: 'us-east-1' } }), 'Hosting', {
+          root: tmpDir,
+          api: MOCK_API,
+          frontDoor: { kind: 'custom', door: assetsOnly, wiringCheck },
+        });
+      assert.throws(() => synth('CustomDoorUnwired'), /ProxySameOriginApi/);
+      assert.doesNotThrow(() => synth('CustomDoorUnwiredOff', false));
+    });
+
+    it('fails at synth when the door returns no url', () => {
+      createSpaBuildOutput(tmpDir);
+      const noUrl = defineFrontDoor({ service: 'no-url', build: () => ({ url: '' }) });
+      const stack = new Stack(new App(), 'CustomDoorNoUrl', { env: { account: '111111111111', region: 'us-east-1' } });
       assert.throws(
+        () => new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'custom', door: noUrl } }),
+        /MissingFrontDoorUrlError|returned no `url`/,
+      );
+    });
+
+    it('does not check features: a door that ignores a requested custom domain still synthesizes', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'CustomDoorNoFeatureCheck', { env: { account: '111111111111', region: 'us-east-1' } });
+      assert.doesNotThrow(
         () =>
           new Hosting(stack, 'Hosting', {
             root: tmpDir,
             api: MOCK_API,
             domain: { domainName: 'app.example.com' },
-            frontDoor: { kind: 'custom', door },
+            frontDoor: { kind: 'custom', door: edgeDoor() },
           }),
-        /CustomDomainTls/,
       );
     });
+  });
+
+  describe("every door's url is the app's public origin (HostingUrl, BLOCKS_PUBLIC_ORIGIN, CORS)", () => {
+    const doors: Array<[string, HostingProps['frontDoor'], boolean]> = [
+      ['alb', { kind: 'alb' }, true],
+      ['apiGateway', { kind: 'apiGateway' }, true],
+      ['stacked', { kind: 'stacked', edge: 'cloudfront', router: 'alb' }, true],
+      ['none', 'none', false],
+    ];
+    for (const [label, frontDoor, claims] of doors) {
+      it(`${label}: registers the door url and ${claims ? 'claims' : 'does not claim'} the API front-door role`, () => {
+        createSpaBuildOutput(tmpDir);
+        const stack = new Stack(new App(), `PublicOrigin-${label}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        const claimed: string[] = [];
+        const api: BlocksStackApi = { apiUrl: MOCK_API.apiUrl, claimApiFrontDoor: (url) => claimed.push(url) };
+        const hosting = new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor });
+        const entries = (stack as unknown as Record<symbol, { entries: Map<string, unknown> } | undefined>)[
+          Symbol.for('BLOCKS_CONFIG_REGISTRY')
+        ]?.entries;
+        assert.strictEqual(entries?.get('BLOCKS_PUBLIC_ORIGIN'), hosting.url);
+        assert.strictEqual(entries?.get('CORS_HOSTING_ORIGINS'), hosting.url);
+        const outputs = Template.fromStack(stack).findOutputs('*');
+        const hostingUrl = Object.entries(outputs).find(([k]) => k.includes('HostingUrl'))?.[1];
+        assert.deepStrictEqual(hostingUrl?.Value, stack.resolve(hosting.url));
+        assert.deepStrictEqual(claimed, claims ? [hosting.url] : []);
+        // `distribution` keeps its released type: the stacked door exposes its
+        // CloudFront edge; a door with no CloudFront distribution throws on read.
+        if (label === 'stacked') assert.ok(hosting.distribution.distributionId);
+        else assert.throws(() => hosting.distribution, /only available for a CloudFront front door/);
+      });
+    }
   });
 
   describe("frontDoor: { kind: 'apiGateway' } (API Gateway owns routing — no CloudFront)", () => {

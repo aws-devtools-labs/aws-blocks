@@ -1,97 +1,127 @@
-/**
- * BYO custom front door — the framework-enforced check-then-build seam.
- *
- * A custom door is a customer-authored {@link FrontDoorHooks} definition (see
- * `door_hooks.ts`). The framework drives it: before anything is built, every
- * capability the app DEMANDS must have its hook; after the build, what `route`
- * and the hooks REPORTED must cover the demand. An unmet demand (not waived via
- * `degrade`) fails HERE, at synth — never as a silently broken runtime. This is
- * "safe by construction": the guarantee holds even if the door author never
- * checks anything themselves, because the framework runs the check around them.
- * A platform that validates its door its own way can relax this on purpose via
- * `frontDoor.negotiation` (`'warn'` reports unmet demands; `'off'` skips the check).
- *
- * The door builds itself and returns a {@link LayerHandle} (the public `url` +
- * an `originHandle` a parent layer could attach to). We do NOT provision the
- * door — its hooks do; Hosting still owns the app (S3 assets, compute, backend),
- * handed over via `ctx` and `plan.backend`.
- */
-import type { Construct } from 'constructs';
-import type { AdapterContext, CapabilityId, CapabilityPlan } from '../plan/types.js';
-import { type FrontDoorHooks, runFrontDoor } from './door_hooks.js';
-import type { LayerHandle } from './layer.js';
-import type { NegotiationMode } from './negotiation_policy.js';
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
 
-/** Options for {@link renderCustomDoor}. */
-export type RenderCustomDoorOptions = {
-	/** Capabilities the app waives — deploy without them (else they fail in `strict`). */
-	degrade?: CapabilityId[];
-	/** How strictly the capability check is enforced. @default 'strict' */
-	negotiation?: NegotiationMode;
+/**
+ * Running a front door at synth — the seam every door (built-in or
+ * bring-your-own) goes through.
+ *
+ * {@link buildFrontDoor} calls the door's `build` once, then:
+ *   1. requires a public `url` (a missing or empty `url` fails synth with
+ *      `MissingFrontDoorUrlError` — never a deploy with no address);
+ *   2. derives the `originHandle` from that `url` when the door didn't return one;
+ *   3. for a bring-your-own door, runs the WIRING CHECK: from what the `cf.*`
+ *      helpers recorded, the static assets must be reachable
+ *      (`ServeStaticAsset`) and, when the app has an API, at least one of its
+ *      paths must reach it (`ProxySameOriginApi`). An API path the door left
+ *      unwired is a synth warning.
+ *
+ * There is no feature check: AWS Blocks does not verify that a door applies
+ * the features the app asked for (`input.features`) — the door's author owns
+ * that. The wiring check covers only routing, because a door that doesn't
+ * route to the assets or the API cannot serve the app at all.
+ *
+ * Known limit: the check sees only what the helpers recorded. A door that
+ * wires correctly with raw CDK gets a false alarm; it declares its hand-wired
+ * origins with `cf.recordWired(...)`, or opts out with `wiringCheck: false`.
+ */
+import { Annotations } from 'aws-cdk-lib';
+import type { Construct } from 'constructs';
+import { HostingError } from '../hosting_error.js';
+import { startWiringRecord, type WiringRecord } from './cf_helpers.js';
+import type { DoorInput, FrontDoor, FrontDoorResult } from './front_door.js';
+import { type OriginHandle, originHandleFromUrl } from './layer.js';
+
+/** Options for {@link buildFrontDoor}. */
+export type BuildFrontDoorOptions = {
+  /**
+   * Run the routes/API wiring check after `build` (see the module doc).
+   * Bring-your-own doors default to `true`; built-in doors pass `false`.
+   * @default true
+   */
+  wiringCheck?: boolean;
+};
+
+/** The outcome of {@link buildFrontDoor}: the door's result with its `originHandle` settled. */
+export type FrontDoorBuild<TResult extends FrontDoorResult = FrontDoorResult> = {
+  /** What `build` returned, with `originHandle` derived from `url` when it was omitted. */
+  result: TResult & { originHandle: OriginHandle };
+  /** What the `cf.*` helpers (or `cf.recordWired`) recorded during `build`. */
+  wiring: WiringRecord;
 };
 
 /**
- * Check `door`'s hooks against `plan`, then build the custom door.
+ * Build a front door and settle its result (see the module doc).
  *
- * @param scope the construct scope the door provisions its resources under.
- * @param plan  the service-agnostic {@link CapabilityPlan} for the deploy.
- * @param door  the customer's {@link FrontDoorHooks} definition.
- * @param ctx   the render context (the same CDK handles the built-in doors get).
- * @param opts.degrade capabilities the app waives — deploy without them (else they fail).
- * @param opts.negotiation `'strict'` (default) · `'warn'` · `'off'` — see {@link NegotiationMode}.
- * @throws HostingError('UnsupportedFrontDoorError') in `strict` mode when a demanded
- *   capability has no hook / isn't reported, and is not listed in `degrade`.
+ * @param scope the construct scope the door creates its resources under.
+ * @param door the door (from `defineFrontDoor`, or a built-in door).
+ * @param input the {@link DoorInput} (or a built-in's extension of it).
+ * @param options.wiringCheck run the routes/API wiring check. @default true
+ * @returns the door's result (with `originHandle`) and its wiring record.
+ * @throws HostingError('InvalidPropsError') when `door` is not a front door.
+ * @throws HostingError('MissingFrontDoorUrlError') when `build` returns no `url`.
+ * @throws HostingError('UnsupportedFrontDoorError') when the wiring check fails.
  */
-export function renderCustomDoor<TDoor, TCtx extends AdapterContext>(
-	scope: Construct,
-	plan: CapabilityPlan,
-	door: FrontDoorHooks<TDoor, TCtx>,
-	ctx: TCtx,
-	opts: RenderCustomDoorOptions = {},
-): LayerHandle {
-	return runFrontDoor(scope, plan, door, ctx, {
-		degrade: opts.degrade,
-		negotiation: opts.negotiation,
-		errorCode: 'UnsupportedFrontDoorError',
-		resolution:
-			"Add the missing hook to your door (or report the capability from `route`), waive it via `frontDoor.degrade`, relax the check via `frontDoor.negotiation`, or choose a built-in door.",
-	}).handle;
+export function buildFrontDoor<TInput extends DoorInput, TResult extends FrontDoorResult>(
+  scope: Construct,
+  door: FrontDoor<TInput, TResult>,
+  input: TInput,
+  options: BuildFrontDoorOptions = {},
+): FrontDoorBuild<TResult> {
+  if (!door || typeof door.service !== 'string' || door.service.length === 0 || typeof door.build !== 'function') {
+    throw new HostingError('InvalidPropsError', {
+      message: 'frontDoor.door is not a front door: it needs a non-empty `service` id and a `build(scope, input)` function.',
+      resolution: 'Define the door with `defineFrontDoor({ service, build })` from @aws-blocks/hosting/constructs.',
+    });
+  }
+  const wiring = startWiringRecord(input);
+  const result = door.build(scope, input);
+  if (!result || typeof result.url !== 'string' || result.url.length === 0) {
+    throw new HostingError('MissingFrontDoorUrlError', {
+      message: `Front door '${door.service}' returned no \`url\` from build(). The url is the app's public address.`,
+      resolution:
+        "Return the address the door serves the app from as `url` (e.g. 'https://' + the distribution's domain name), " +
+        'or the custom domain when the door serves one.',
+    });
+  }
+  if (options.wiringCheck !== false) checkWiring(scope, door.service, input, wiring);
+  return {
+    result: { ...result, originHandle: result.originHandle ?? originHandleFromUrl(result.url) },
+    wiring,
+  };
 }
 
 /**
- * The render context a custom door's hooks receive: the app infrastructure
- * Hosting already built (the same handles the built-in doors get).
+ * The wiring check (see the module doc).
+ *
+ * @throws HostingError('UnsupportedFrontDoorError') listing every unmet wiring rule.
  */
-export type CustomDoorContext = AdapterContext & {
-	/** The private assets bucket; static assets live under `builds/<buildId>/`. */
-	bucket: import('aws-cdk-lib/aws-s3').IBucket;
-	/** Compute functions by manifest name (SSR server, image optimization), if any. */
-	computeFunctions?: Map<string, import('aws-cdk-lib/aws-lambda').IFunction>;
-	/** Name of the SSR/server compute in `computeFunctions` (e.g. `default` / `server`). */
-	serverComputeName?: string;
-	/** Name of the image-optimization compute in `computeFunctions`. */
-	imageComputeName?: string;
-	/** Capabilities the app waived via `frontDoor.degrade`. */
-	degrade?: CapabilityId[];
-	/**
-	 * The app's settings for the features a door's FEATURE HOOKS build — e.g. the
-	 * domain names + certificate a `customDomain` hook attaches, the WAF config a
-	 * `waf` hook applies. Each field is present only when the app configured it
-	 * (which is also what makes the matching capability demanded).
-	 */
-	features?: CustomDoorFeatures;
-};
-
-/** The app's feature settings handed to a custom door's feature hooks (see {@link CustomDoorContext}). */
-export type CustomDoorFeatures = {
-	/** Custom domain(s) + certificate / hosted zone (`customDomain` hook). */
-	domain?: import('./hosting_construct.js').HostingConstructProps['domain'];
-	/** WAF settings (`waf` hook). */
-	waf?: import('./hosting_construct.js').HostingConstructProps['waf'];
-	/** Access-log settings (`accessLogs` hook). */
-	logging?: import('./hosting_construct.js').HostingConstructProps['logging'];
-	/** Alarm settings, incl. subscriptions (`alarms` hook). */
-	monitoring?: import('./hosting_construct.js').HostingConstructProps['monitoring'];
-	/** Geo restriction (`restrictGeo` hook). */
-	geoRestriction?: NonNullable<import('./hosting_construct.js').HostingConstructProps['cdn']>['geoRestriction'];
-};
+function checkWiring(scope: Construct, service: string, input: DoorInput, wiring: WiringRecord): void {
+  const problems: string[] = [];
+  if (!wiring.origins.has('assets')) {
+    problems.push(
+      'ServeStaticAsset: nothing reaches the static assets — use cf.origin(origins.assets) or cf.behaviors(app.routes).',
+    );
+  }
+  const api = input.origins.api;
+  if (api) {
+    const missing = api.paths.filter((path) => !wiring.apiPaths.has(path));
+    if (missing.length === api.paths.length) {
+      problems.push(
+        `ProxySameOriginApi: the app has an API, but none of ${api.paths.join(', ')} were wired — use cf.apiBehaviors(origins.api).`,
+      );
+    } else if (missing.length > 0) {
+      Annotations.of(scope).addWarningV2(
+        '@aws-blocks/hosting:FrontDoorApiPathUnwired',
+        `Front door '${service}' did not wire these API paths, so requests to them won't reach the backend: ` +
+          `${missing.join(', ')}. Use cf.apiBehaviors(origins.api), or cf.recordWired(origins.api, paths) for paths wired by hand.`,
+      );
+    }
+  }
+  if (problems.length === 0) return;
+  throw new HostingError('UnsupportedFrontDoorError', {
+    message: `Front door '${service}' cannot serve this deploy:\n${problems.map((p) => `  • ${p}`).join('\n')}`,
+    resolution:
+      'Wire the missing origins with the cf.* helpers. If the door wires them with raw CDK, declare it with ' +
+      "cf.recordWired(origin), or turn the check off with `frontDoor: { kind: 'custom', door, wiringCheck: false }`.",
+  });
+}
