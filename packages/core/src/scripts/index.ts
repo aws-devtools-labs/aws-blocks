@@ -12,6 +12,15 @@ export {
 export { listConfig, removeConfig, runConfigCli, setConfig } from './config.js';
 export { type ConsoleOptions, openConsole } from './console.js';
 export {
+	DEFAULT_DASHBOARD_PORT,
+	type DashboardArgs,
+	type DashboardCommand,
+	type DashboardOptions,
+	buildDashboardUrl,
+	dashboard,
+	parseDashboardArgs,
+} from './dashboard.js';
+export {
 	DEPLOY_HISTORY_FILE,
 	type DeployHistoryRecord,
 	type DeployRecorder,
@@ -48,6 +57,20 @@ export {
 	readAwsIdentity,
 } from './preflight-credentials.js';
 export { readNativeDeclarations } from './read-native-declarations.js';
+export {
+	NoFreePortError,
+	type PortScanOptions,
+	findFreePort,
+	isPortFree,
+} from './port-scan.js';
+export {
+	PROJECT_MARKER,
+	type ProjectResolution,
+	type ResolveProjectOptions,
+	type ResolvedProject,
+	isBlocksProject,
+	resolveProject,
+} from './project-discovery.js';
 export { destroySandbox, PREVIEW_MODE_CONTEXT, type SandboxOptions, startSandbox } from './sandbox.js';
 export { listSecrets, removeSecret, runSecretCli, setSecret } from './secret.js';
 export { getSandboxId, getStackId, getStackName } from './stack-id.js';
