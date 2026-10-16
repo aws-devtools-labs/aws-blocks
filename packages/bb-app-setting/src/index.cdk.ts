@@ -18,6 +18,7 @@ export type { AppSettingOptions } from './types.js';
 export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 import { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
+import { BB_NAME } from './version.js';
 
 /**
  * CDK construct for AppSetting. Creates a single SSM parameter (String or
@@ -54,7 +55,7 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 	}
 
 	constructor(scope: ScopeParent, id: string, options: AppSettingOptions<T>) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 
 		// `external` is package-internal (set only by fromExisting), not on the
 		// public AppSettingOptions — read it via the internal options type.

@@ -4,6 +4,7 @@
 import type { ScopeParent } from '@aws-blocks/core';
 import { Scope } from '@aws-blocks/core/cdk';
 import type { LoggingOptions } from './types.js';
+import { BB_NAME } from './version.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { LoggingErrors } from './errors.js';
@@ -24,6 +25,6 @@ export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from './types.js
  */
 export class Logger extends Scope {
 	constructor(scope: ScopeParent, id: string, _options?: LoggingOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME });
 	}
 }
