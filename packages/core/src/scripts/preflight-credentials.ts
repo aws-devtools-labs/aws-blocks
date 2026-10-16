@@ -7,6 +7,7 @@ import {
 	credentialErrorLabel,
 	credentialFailureMessage,
 } from './credential-guidance.js';
+import { classifyDenialError, denialGuidance } from './denial-guidance.js';
 import { type DeploymentTargetOptions, resolveDeploymentTarget } from './deployment-target.js';
 
 /**
@@ -27,6 +28,10 @@ import { type DeploymentTargetOptions, resolveDeploymentTarget } from './deploym
  * On a credential failure, the message names the credential source (for example
  * an SSO or `aws login` profile, or access keys in the environment) and the
  * command that fixes it. The check never prompts, signs in, or changes credentials.
+ *
+ * When AWS denies the check (for example a role that the profile assumes), it warns
+ * and continues. The warning says whether an AWS Organizations policy explicitly
+ * denied the request, without the error details.
  */
 
 /**
@@ -108,6 +113,19 @@ export async function assertAwsCredentials({
 		const label = credentialErrorLabel(error);
 		const failure = classifyCredentialError(label);
 
+		// Denied, which does not prove that the deployment credentials are invalid.
+		const denial = classifyDenialError(error);
+		if (denial) {
+			console.warn(
+				[
+					`⚠️  AWS denied access while checking credentials for \`npm run ${command}\` (${label}); ` +
+						'continuing — the deploy will report the error if it is denied too.',
+					...denialGuidance(denial).map((line) => `  ${line}`),
+				].join('\n'),
+			);
+			return;
+		}
+
 		// Not a credential problem: don't block a deploy that might still work.
 		if (failure === 'network') {
 			console.warn(
@@ -131,6 +149,7 @@ export async function assertAwsCredentials({
 				env: options.env,
 				profile,
 				readAwsCliVersion,
+				region,
 			}),
 		);
 	}
