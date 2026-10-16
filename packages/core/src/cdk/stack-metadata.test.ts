@@ -132,7 +132,7 @@ describe('addBlocksStackMetadata', () => {
 		assert.strictEqual(nestedMetadata?.AWSToolsMetrics, undefined);
 	});
 
-	test('lists official building blocks sorted and deduplicated, recorded before or after the call', () => {
+	test('lists official blocks sorted and deduplicated', () => {
 		const app = new cdk.App();
 		const stack = new cdk.Stack(app, 'BlocksStack');
 		recordBuildingBlock(new Construct(stack, 'a'), 'KVStore');
@@ -149,7 +149,7 @@ describe('addBlocksStackMetadata', () => {
 		);
 	});
 
-	test('counts every non-official building block instance as custom without recording its name', () => {
+	test('counts custom blocks without naming them', () => {
 		const app = new cdk.App();
 		const stack = new cdk.Stack(app, 'CustomStack');
 		addBlocksStackMetadata(stack);
@@ -164,7 +164,7 @@ describe('addBlocksStackMetadata', () => {
 		assert.ok(!value.includes('MyWidget'));
 	});
 
-	test('counts building blocks in nested stacks toward the root stack only', () => {
+	test('counts nested-stack blocks on the root stack', () => {
 		const app = new cdk.App();
 		const root = new cdk.Stack(app, 'RootBlocksStack');
 		const nested = new cdk.NestedStack(root, 'Nested');
@@ -185,7 +185,7 @@ describe('addBlocksStackMetadata', () => {
 		assert.strictEqual(Template.fromStack(deeper).toJSON().Metadata?.AWSToolsMetrics, undefined);
 	});
 
-	test('keeps building blocks of separate root stacks apart', () => {
+	test('keeps separate root stacks apart', () => {
 		const app = new cdk.App();
 		const first = new cdk.Stack(app, 'FirstStack');
 		const second = new cdk.Stack(app, 'SecondStack');
@@ -199,7 +199,7 @@ describe('addBlocksStackMetadata', () => {
 		assert.strictEqual(blocksValue(second), `1;core=${CORE_VERSION};mode=production;bb=Tracer;custom=0`);
 	});
 
-	test('preserves sibling AWSToolsMetrics keys alongside the building block fields', () => {
+	test('preserves sibling AWSToolsMetrics keys', () => {
 		const app = new cdk.App();
 		const stack = new cdk.Stack(app, 'SiblingStack');
 		stack.templateOptions.metadata = { AWSToolsMetrics: { OtherTool: 'x' } };
@@ -212,11 +212,11 @@ describe('addBlocksStackMetadata', () => {
 		});
 	});
 
-	test('ignores a building block that is not inside a stack', () => {
+	test('ignores blocks outside a stack', () => {
 		assert.doesNotThrow(() => recordBuildingBlock(new Construct(new cdk.App(), 'Loose'), 'KVStore'));
 	});
 
-	test('Scope records its bbName on the root stack; scopes without one are not counted', () => {
+	test('Scope records only when bbName is set', () => {
 		const app = new cdk.App();
 		const stack = new cdk.Stack(app, 'ScopeStack');
 		addBlocksStackMetadata(stack);

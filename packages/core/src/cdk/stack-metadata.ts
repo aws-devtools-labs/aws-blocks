@@ -14,24 +14,8 @@ interface BuildingBlockCensus {
 }
 
 /**
- * Adds AWS Blocks identification metadata and a deployment-type tag to a CloudFormation stack.
- *
- * Writes `Metadata.AWSToolsMetrics.AWSBlocks` into the template of the top-level
- * (non-nested) stack containing `stack`, with the value
- * `1;core=<core version>;mode=<sandbox|production>;bb=<names>;custom=<count>`.
- * `bb` is the sorted, deduplicated, comma-separated list of official Building Block
- * names recorded on the top-level stack (empty when there are none) and `custom` is
- * the number of other Building Block instances; both are resolved at synth, so blocks
- * constructed after this call — including those in nested stacks — are included.
- * Other `Metadata` entries and sibling keys of an object-valued `AWSToolsMetrics` are
- * preserved; a non-object `AWSToolsMetrics` value is replaced. Nested stacks never
- * receive the entry.
- *
- * Also applies a `blocks:deployment-type` tag (`sandbox` or `production`) to `stack`.
- * The mode is derived from the CDK context key `sandboxMode`.
- *
- * @param stack - The CDK stack to annotate. May be a nested stack; the metadata is
- *   then written to its root stack.
+ * Adds `Metadata.AWSToolsMetrics.AWSBlocks` (`1;core=…;mode=…;bb=…;custom=…`) to the top-level stack
+ * and tags `stack` with `blocks:deployment-type`.
  */
 export function addBlocksStackMetadata(stack: cdk.Stack): void {
 	const isSandbox =
@@ -53,16 +37,7 @@ export function addBlocksStackMetadata(stack: cdk.Stack): void {
 	cdk.Tags.of(stack).add('blocks:deployment-type', mode);
 }
 
-/**
- * Records a Building Block instance on the top-level stack containing `scope`, for
- * the `AWSToolsMetrics.AWSBlocks` template metadata. Official Building Block names
- * are recorded by name; any other name only increments the custom count. A no-op
- * when `scope` is not inside a stack.
- *
- * @param scope - The Building Block construct.
- * @param bbName - The Building Block's name.
- * @internal
- */
+/** Records a Building Block on its top-level stack; non-official names only increment `custom`. @internal */
 export function recordBuildingBlock(scope: Construct, bbName: string): void {
 	const stack = scope.node.scopes.find((s): s is cdk.Stack => cdk.Stack.isStack(s));
 	if (!stack) return;
