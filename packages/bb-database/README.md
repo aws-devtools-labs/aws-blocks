@@ -158,7 +158,7 @@ Migration validation failed for a 'distributed' cluster:
   001_init.sql: array_type: Column `tags` uses an array type, which is not supported in DSQL. Use a join table for relational data, or store as JSON text. Checked against https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html
 ```
 
-Two checks are the block's own: dropping a primary-key column (seen from the `CREATE TABLE` earlier in the plan) and an unnamed `ADD CHECK` / `ADD FOREIGN KEY`, which the rewriter could not validate by name.
+Three checks are the block's own: dropping a primary-key column (seen from the `CREATE TABLE` earlier in the plan), an unnamed `ADD CHECK` / `ADD FOREIGN KEY`, which the rewriter could not validate by name, and `GRANT … ON SCHEMA public`, which dsql-lint accepts but DSQL rejects at runtime because `public` is a system schema that roles can use without a grant.
 
 `dsql-lint` is a native binary that `@aws/dsql-lint` installs per platform as an optional dependency (macOS, Linux, and Windows on x64; macOS and Linux on arm64). It runs on your machine and at synth, never on AWS. If your package manager skipped optional dependencies, run `npm install @aws/dsql-lint --include=optional`, or point `DSQL_LINT_PATH` at a build.
 
