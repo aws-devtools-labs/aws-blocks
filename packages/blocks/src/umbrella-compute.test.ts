@@ -25,6 +25,8 @@ import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let handlerPath: string;
 let backendPath: string;
+let earlyReadBackendPath: string;
+let throwingBackendPath: string;
 let tmpDir: string;
 
 before(() => {
@@ -38,6 +40,16 @@ before(() => {
 	writeFileSync(handlerPath, "export const handler = async () => ({ statusCode: 200, body: '{}' });\n");
 	backendPath = join(tmpDir, 'backend.mjs');
 	writeFileSync(backendPath, 'export default () => {};\n');
+	// Reads `publicApiUrl` from inside the backend module — before create() has
+	// built the gateway — and emits it as an `Early` output.
+	earlyReadBackendPath = join(tmpDir, 'backend-early-read.mjs');
+	writeFileSync(
+		earlyReadBackendPath,
+		"import { CfnOutput, Stack } from 'aws-cdk-lib';\n" +
+			"export default (root) => { new CfnOutput(Stack.of(root), 'Early', { value: root.publicApiUrl }); };\n",
+	);
+	throwingBackendPath = join(tmpDir, 'backend-throwing.mjs');
+	writeFileSync(throwingBackendPath, "throw new Error('backend module was imported');\n");
 });
 
 after(() => {
@@ -81,6 +93,96 @@ describe('umbrella injects the Lambda default compute', () => {
 
 		const template = Template.fromStack(parent);
 		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+	});
+});
+
+describe('apiFrontDoor tier selection', () => {
+	test('apigateway (the default) exposes the shared gateway directly — no CloudFront', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'ApiGatewayStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			// apiFrontDoor omitted ⇒ resolveApiFrontDoor defaults it to 'apigateway'.
+		});
+
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::CloudFront::Distribution', 0);
+
+		// ApiUrl is the raw gateway URL — references execute-api, no CloudFront.
+		const apiUrl = Object.values(template.findOutputs('ApiUrl'))[0];
+		assert.ok(apiUrl, 'expected an ApiUrl output');
+		const value = JSON.stringify(apiUrl.Value);
+		assert.ok(value.includes('execute-api'), `apigateway ApiUrl should be the gateway URL, got ${value}`);
+		assert.ok(value.includes('aws-blocks/api'), 'ApiUrl should carry the RPC prefix');
+	});
+
+	test('cloudfront provisions one CloudFront distribution whose origin is the shared gateway host', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'CloudFrontStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'cloudfront',
+		});
+
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+
+		const distribution = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0];
+		const origins = (
+			distribution as { Properties: { DistributionConfig: { Origins: Array<Record<string, unknown>> } } }
+		).Properties.DistributionConfig.Origins;
+		assert.strictEqual(origins.length, 1, 'cloudfront front door forwards to a single origin');
+		const domainName = JSON.stringify(origins[0].DomainName);
+		// The origin host is sliced from the gateway URL in-template (Fn::Select over
+		// the execute-api domain) — it is the shared gateway, not a baked string.
+		assert.ok(domainName.includes('Fn::Select'), `origin host should be derived in-template, got ${domainName}`);
+		assert.ok(domainName.includes('execute-api'), `origin host should be the gateway, got ${domainName}`);
+		// The REST API stage (part of the gateway URL) is carried as the OriginPath.
+		const originPath = JSON.stringify(origins[0].OriginPath);
+		assert.ok(originPath.includes('Fn::Select'), `OriginPath should be the gateway stage, got ${originPath}`);
+	});
+
+	test('BlocksBackend.create({ apiFrontDoor: "cloudfront" }) provisions one CloudFront distribution in the parent stack', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'BackendCloudFrontParent');
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'cloudfront',
+		});
+
+		// BlocksBackend is a construct nested in a caller-owned stack, so the managed
+		// cloudfront distribution lands in the PARENT stack's template — a different topology
+		// from the BlocksStack path above (where the stack IS the owner).
+		const template = Template.fromStack(parent);
+		template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+	});
+
+	test('cloudfront: the ApiUrl output resolves to the CloudFront front-door URL, not the raw gateway', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'CloudFrontApiUrlStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'cloudfront',
+		});
+
+		const template = Template.fromStack(stack);
+		const distId = Object.keys(template.findResources('AWS::CloudFront::Distribution'))[0];
+		assert.ok(distId, 'expected a CloudFront distribution');
+
+		const apiUrl = Object.values(template.findOutputs('ApiUrl'))[0];
+		const value = JSON.stringify(apiUrl.Value);
+		assert.ok(value.includes(distId), `ApiUrl should reference the CloudFront distribution, got ${value}`);
+		assert.ok(value.includes('DomainName'), 'ApiUrl should resolve the distribution domain');
+		assert.ok(value.includes('/aws-blocks/api'), 'ApiUrl should carry the RPC prefix');
+		assert.ok(
+			!value.includes('execute-api'),
+			'cloudfront ApiUrl should be the CloudFront URL, not the raw gateway',
+		);
 	});
 });
 
@@ -132,5 +234,142 @@ describe('shared gateway keeps the pre-move logical IDs', () => {
 			stage: ['BlocksDefaultComputeAPIDeploymentStageprod70A875D5'],
 			accessLogs: ['BlocksDefaultComputeApiAccessLogsBEFB0011'],
 		});
+	});
+});
+
+// The `cloudfront` tier, end to end through the real LambdaCompute.
+describe('apiFrontDoor: cloudfront', () => {
+	const create = async (tier: 'apigateway' | 'cloudfront') => {
+		const stackApp = new cdk.App();
+		const stack = await BlocksStack.create(stackApp, 'TierStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: tier,
+		});
+		const backendApp = new cdk.App();
+		const parent = new cdk.Stack(backendApp, 'TierParent');
+		const backend = await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: tier,
+		});
+		new cdk.CfnOutput(parent, 'PublicApiUrl', { value: backend.publicApiUrl });
+		return { stack: Template.fromStack(stack), parent: Template.fromStack(parent) };
+	};
+	const distributionIds = (template: Template) =>
+		Object.keys(template.findResources('AWS::CloudFront::Distribution'));
+	const restApi = (template: Template) =>
+		Object.values(template.findResources('AWS::ApiGateway::RestApi'))[0] as { Properties: Record<string, unknown> };
+	const configBlob = (template: Template) => JSON.stringify(template.findResources('Custom::CDKBucketDeployment'));
+	// The config JSON is one Lazy, so it lands as a single `Fn::Join` in the config
+	// deployment's `SourceMarkers`. Returns the join part right after `"KEY":"https://`
+	// — for a token value, the token itself.
+	const configValueAfterHttps = (template: Template, key: string): unknown => {
+		const [deployment] = Object.values(template.findResources('Custom::CDKBucketDeployment'));
+		const markers: Record<string, { 'Fn::Join': [string, unknown[]] }> = deployment.Properties.SourceMarkers[0];
+		const [, parts] = Object.values(markers)[0]['Fn::Join'];
+		const i = parts.findIndex((part) => typeof part === 'string' && part.endsWith(`"${key}":"https://`));
+		return i === -1 ? undefined : parts[i + 1];
+	};
+	const domainOf = (distributionId: string) => ({ 'Fn::GetAtt': [distributionId, 'DomainName'] });
+
+	// Renaming the distribution's construct id or moving its scope replaces it: a new
+	// *.cloudfront.net domain, so the public URL moves and users are signed out.
+	test('keeps the distribution logical IDs for BlocksStack and BlocksBackend', async () => {
+		const { stack, parent } = await create('cloudfront');
+		assert.deepStrictEqual(distributionIds(stack), ['ApiFrontDoorA48CED56']);
+		assert.deepStrictEqual(distributionIds(parent), ['BlocksApiFrontDoor9F3D9B2C']);
+	});
+
+	test('BlocksBackend.publicApiUrl resolves to the distribution', async () => {
+		const { parent } = await create('cloudfront');
+		const value = JSON.stringify(Object.values(parent.findOutputs('PublicApiUrl'))[0].Value);
+		assert.ok(value.includes('BlocksApiFrontDoor9F3D9B2C') && value.includes('DomainName'), value);
+		assert.ok(value.includes('/aws-blocks/api'), value);
+		assert.ok(!value.includes('execute-api'), `publicApiUrl should not be the gateway URL, got ${value}`);
+	});
+
+	test('apigateway: BlocksBackend.publicApiUrl is the gateway URL', async () => {
+		const { parent } = await create('apigateway');
+		const value = JSON.stringify(Object.values(parent.findOutputs('PublicApiUrl'))[0].Value);
+		assert.ok(value.includes('execute-api'), value);
+	});
+
+	// A Blocks distribution in front of an edge-optimized endpoint would be two
+	// CloudFront layers; the gateway becomes REGIONAL only under `cloudfront`, so
+	// existing `apigateway` apps synthesize exactly as before.
+	test('the gateway is a REGIONAL endpoint under cloudfront and unchanged under apigateway', async () => {
+		const cloudfront = await create('cloudfront');
+		assert.deepStrictEqual(restApi(cloudfront.stack).Properties.EndpointConfiguration, { Types: ['REGIONAL'] });
+		const apigateway = await create('apigateway');
+		assert.strictEqual(restApi(apigateway.stack).Properties.EndpointConfiguration, undefined);
+	});
+
+	// CloudFront forwards with ALL_VIEWER_EXCEPT_HOST_HEADER, so the runtime only
+	// learns the public origin (e.g. for AuthOIDC's callback URL) from config.
+	test('publishes BLOCKS_PUBLIC_ORIGIN as the distribution URL, under cloudfront only', async () => {
+		const cloudfront = await create('cloudfront');
+		assert.deepStrictEqual(
+			configValueAfterHttps(cloudfront.stack, 'BLOCKS_PUBLIC_ORIGIN'),
+			domainOf('ApiFrontDoorA48CED56'),
+			'stack',
+		);
+		assert.deepStrictEqual(
+			configValueAfterHttps(cloudfront.parent, 'BLOCKS_PUBLIC_ORIGIN'),
+			domainOf('BlocksApiFrontDoor9F3D9B2C'),
+			'backend',
+		);
+		const apigateway = await create('apigateway');
+		assert.ok(!configBlob(apigateway.stack).includes('BLOCKS_PUBLIC_ORIGIN'));
+	});
+
+	// The backend module runs before create() builds the gateway, so a read there
+	// must still resolve to the front door, not to the execute-api URL.
+	test('publicApiUrl read inside the backend module resolves to the distribution', async () => {
+		const stack = await BlocksStack.create(new cdk.App(), 'EarlyReadStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: earlyReadBackendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'cloudfront',
+		});
+		const stackOutputs = Template.fromStack(stack).findOutputs('*');
+		assert.deepStrictEqual(stackOutputs.Early.Value, stackOutputs.ApiUrl.Value, 'matches the ApiUrl output');
+		assert.ok(JSON.stringify(stackOutputs.Early.Value).includes('ApiFrontDoorA48CED56'), 'stack');
+
+		const parent = new cdk.Stack(new cdk.App(), 'EarlyReadParent');
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: earlyReadBackendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'cloudfront',
+		});
+		const early = JSON.stringify(Template.fromStack(parent).findOutputs('Early').Early.Value);
+		assert.ok(early.includes('BlocksApiFrontDoor9F3D9B2C') && !early.includes('execute-api'), early);
+	});
+
+	// TypeScript rejects other values, but plain-JS apps and `any`-typed callers
+	// (the Amplify template's `backend`) don't; they must fail, not lose the tier.
+	test('rejects an unknown tier before the backend module is imported', async () => {
+		const invalid = /apiFrontDoor must be 'apigateway' or 'cloudfront' \(got "edge"\)/;
+		await assert.rejects(
+			BlocksStack.create(new cdk.App(), 'BadTierStack', {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: throwingBackendPath,
+				defaults: BlocksPresets.production,
+				apiFrontDoor: 'edge' as never,
+			}),
+			invalid,
+		);
+		await assert.rejects(
+			BlocksBackend.create(new cdk.Stack(new cdk.App(), 'BadTierParent'), 'Blocks', {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: throwingBackendPath,
+				defaults: BlocksPresets.production,
+				apiFrontDoor: 'edge' as never,
+			}),
+			invalid,
+		);
 	});
 });

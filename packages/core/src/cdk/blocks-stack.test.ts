@@ -125,6 +125,41 @@ describe('factory function support', () => {
 	});
 });
 
+describe('ApiUrl output and the Hosting front-door claim', () => {
+	// Hosting claims the front-door role whenever it fronts the API. Only the
+	// `cloudfront` tier may move the ApiUrl output to that distribution; under
+	// `apigateway` it stays the gateway URL, so adding Hosting never changes the
+	// domain a client is bound to.
+	const apiUrlOutput = (stack: BlocksStack): string =>
+		JSON.stringify(Object.values(Template.fromStack(stack).findOutputs('ApiUrl'))[0]?.Value);
+
+	test('apigateway: a Hosting claim leaves ApiUrl on the gateway', async () => {
+		const app = new cdk.App();
+		const stack = await makeStack(app, 'ApiGatewayClaimStack', sideEffectBackendPath);
+		stack.claimApiFrontDoor('https://d123.cloudfront.net');
+		const value = apiUrlOutput(stack);
+		assert.ok(!value.includes('d123.cloudfront.net'), `apigateway ApiUrl must not follow the claim, got ${value}`);
+		assert.ok(value.includes('execute-api'), `apigateway ApiUrl should be the gateway URL, got ${value}`);
+	});
+
+	test('cloudfront: a Hosting claim moves ApiUrl to that distribution', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'CloudFrontClaimStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: stubComputeFactory,
+			apiFrontDoor: 'cloudfront',
+		});
+		stack.claimApiFrontDoor('https://d123.cloudfront.net');
+		const value = apiUrlOutput(stack);
+		assert.ok(
+			value.includes('https://d123.cloudfront.net/aws-blocks/api'),
+			`cloudfront ApiUrl should follow the claim, got ${value}`,
+		);
+	});
+});
+
 describe('legacy side-effect mode (no default export)', () => {
 	test('module with only side effects still registers constructs via globalThis', async () => {
 		const app = new cdk.App();

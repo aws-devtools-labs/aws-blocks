@@ -15,13 +15,12 @@ import {
   type SkewProtectionConfig,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
-import { AllowedMethods, CachePolicy, OriginRequestPolicy, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
-import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
+import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
 import { registerConfig } from './cdk/config-registry.js';
 import { getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
-import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
+import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
 	assertMarkersExistAtSynth,
@@ -121,6 +120,13 @@ export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
 export interface BlocksStackApi {
   /** Fully-qualified API Gateway URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks`). */
   readonly apiUrl: string;
+  /**
+   * Claim the API front-door role for this `Hosting` distribution, suppressing
+   * the backend's managed `cloudfront` distribution. Optional so any `{ apiUrl }`
+   * object stays assignable; `BlocksStack`/`BlocksBackend` implement it.
+   * @internal Framework-only.
+   */
+  claimApiFrontDoor?(distributionUrl: string): void;
 }
 
 /**
@@ -777,7 +783,7 @@ export class Hosting extends Construct {
       const ownerRootId = isBlocksBackendRoot(props.api)
         ? props.api.node.path
         : getBlocksRoot(this).node.path;
-      this.addApiBehaviors(hosting, props.api.apiUrl, ownerRootId);
+      this.addApiBehaviors(hosting, props.api, ownerRootId);
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -816,7 +822,7 @@ export class Hosting extends Construct {
     const buildId = manifest.buildId;
     if (buildId) {
       const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
-        sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props))],
+        sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props, buildId))],
         destinationBucket: hosting.bucket,
         destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
         prune: false,
@@ -908,6 +914,30 @@ export class Hosting extends Construct {
       description: 'Blocks Hosting URL',
     });
 
+    // Surface this deploy's build id so a post-deploy liveness poll can confirm
+    // the new build is served (matched against the config at
+    // `/.blocks-sandbox/config.json`). Gated on a build id existing, like the
+    // config deployment above.
+    if (manifest.buildId) {
+      new cdk.CfnOutput(this, 'HostingBuildId', {
+        value: manifest.buildId,
+        description: 'Build id stamped into the deployed runtime config',
+      });
+    }
+
+    // Surface the `/*` invalidation for a compute deploy so the liveness poll
+    // can wait for it to reach `Completed`. The invalidation is fire-and-forget
+    // at deploy time (cdn_construct.ts), so the config probe alone would miss
+    // the window where the edge still serves the previous build's SSR HTML.
+    // `GetInvalidation` needs both ids, so the value carries
+    // `<distributionId>/<invalidationId>`. Absent for a pure-static deploy.
+    if (hosting.invalidationId) {
+      new cdk.CfnOutput(this, 'HostingInvalidationId', {
+        value: `${hosting.distribution.distributionId}/${hosting.invalidationId}`,
+        description: 'CloudFront <distributionId>/<invalidationId> for the post-deploy liveness poll',
+      });
+    }
+
     if (hosting.buildCacheBucket) {
       new cdk.CfnOutput(this, 'BuildCacheBucketName', {
         value: hosting.buildCacheBucket.bucketName,
@@ -921,36 +951,47 @@ export class Hosting extends Construct {
    *
    * When `api` is provided, the config uses a relative `/aws-blocks/api` URL
    * so the frontend fetches through the same CloudFront domain (no CORS).
+   *
+   * `buildId` is stamped under `__blocksBuildId` so a post-deploy liveness poll
+   * can tell this deploy's config from a previously-served one during the
+   * CloudFront cutover (see `scripts/wait-live.ts`); the rest of the body is
+   * deploy-invariant.
    */
-  private buildConfigJson(props: HostingProps): Record<string, unknown> {
-    return {
-      ...(props.backendConfig ?? {}),
-      ...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
-    };
+  private buildConfigJson(props: HostingProps, buildId: string): Record<string, unknown> {
+    return buildConfigJson(props, buildId);
   }
 
   /**
-   * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
+   * Add CloudFront behaviors that proxy API traffic to the shared gateway origin,
+   * and claim the API front-door role for this distribution.
+   *
+   * Claiming is part of the same step: with the API served from this distribution,
+   * the backend's managed `cloudfront` distribution — decided later by an aspect
+   * at synth — must stand down, so the SPA/SSR frontend and the API are
+   * same-origin on one distribution (no CORS, no second hop). The claim is
+   * recorded on the backend object (`api.claimApiFrontDoor`), a live reference
+   * Hosting holds, so the aspect scheduled on that same object reads it back.
+   *
+   * The managed `cloudfront` front door and these behaviors forward to the same origin
+   * via the same `httpOriginFromEndpoint` + `API_BEHAVIOR_OPTIONS`, so the two
+   * paths cannot drift.
    */
-  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string, ownerRootId: string): void {
-    const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
-    const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
-    const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
-    const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
+  private addApiBehaviors(hosting: HostingConstruct, api: BlocksStackApi, ownerRootId: string): void {
+    const apiUrl = api.apiUrl;
+    // `distributionUrl` is custom-domain-aware (custom domain when configured,
+    // else the CloudFront default), so clients are pointed at the domain the app
+    // is actually served from. The claim is recorded on the backend object
+    // (`props.api`) itself — a live reference Hosting holds — so it suppresses
+    // that backend's managed `cloudfront` distribution. Optional: a bare
+    // `{ apiUrl }` origin simply isn't claimed.
+    api.claimApiFrontDoor?.(hosting.distributionUrl);
 
-    const apiGatewayOrigin = new HttpOrigin(hostname, {
-      originPath: `/${stage}`,
-    });
+    // The REST API URL embeds its `/{stage}` prefix, which the origin carries as
+    // `originPath` (see httpOriginFromEndpoint).
+    const apiGatewayOrigin = httpOriginFromEndpoint(apiUrl);
 
-    const behaviorDefaults = {
-      allowedMethods: AllowedMethods.ALLOW_ALL,
-      cachePolicy: CachePolicy.CACHING_DISABLED,
-      originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-    };
-
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
 
     // Proxy the auth BB's reserved subtree as a single behavior. The auth flow
     // (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
@@ -959,7 +1000,7 @@ export class Hosting extends Construct {
     // instance count, and never drifts as routes are added. Added directly (not
     // via the route loop below) so it's emitted exactly once even with multiple
     // AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
 
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
     for (const route of getRegisteredRoutes()) {
@@ -990,7 +1031,26 @@ export class Hosting extends Construct {
       }
 
       addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
+      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
     }
   }
+}
+
+/**
+ * Build the deployed `config.json` payload. Pure and exported so a test can
+ * assert the build-id stamp — half of the `--wait-live` contract — directly,
+ * without reaching into the hashed `BucketDeployment` asset.
+ *
+ * When `api` is provided, the config uses a relative `/aws-blocks/api` URL so
+ * the frontend fetches through the same CloudFront domain (no CORS). `buildId`
+ * is stamped under `__blocksBuildId` so a post-deploy liveness poll can tell
+ * this deploy's config from a previously-served one during the CloudFront
+ * cutover (see `scripts/wait-live.ts`); the rest of the body is deploy-invariant.
+ */
+export function buildConfigJson(props: HostingProps, buildId: string): Record<string, unknown> {
+  return {
+    ...(props.backendConfig ?? {}),
+    ...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
+    [BLOCKS_BUILD_ID_CONFIG_KEY]: buildId,
+  };
 }
