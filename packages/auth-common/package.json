@@ -1,6 +1,7 @@
 {
   "name": "@aws-blocks/auth-common",
   "version": "0.1.9",
+  "sideEffects": false,
   "keywords": [
     "aws-blocks",
     "authentication",
@@ -34,6 +35,10 @@
     "./ui": {
       "types": "./dist/ui.d.ts",
       "default": "./dist/ui.js"
+    },
+    "./theme": {
+      "types": "./dist/theme.d.ts",
+      "default": "./dist/theme.js"
     },
     "./cookies": {
       "types": "./dist/cookies.d.ts",

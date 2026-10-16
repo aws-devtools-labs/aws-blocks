@@ -191,6 +191,8 @@ export type {
 } from '@aws-blocks/bb-metrics';
 export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
 export { Realtime } from '@aws-blocks/bb-realtime';
+export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-blocks/bb-secret';
+export { Secret, SecretErrors } from '@aws-blocks/bb-secret';
 export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tracer';
 export { Tracer } from '@aws-blocks/bb-tracer';
 // Override core's untyped getSdkIdentifiers with typed overloads

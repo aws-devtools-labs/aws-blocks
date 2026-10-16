@@ -390,6 +390,12 @@ export class HostingConstruct extends Construct {
   readonly bucket: Bucket;
   readonly distribution: Distribution;
   readonly distributionUrl: string;
+  /**
+   * Physical id of the `/*` CloudFront invalidation issued on a compute deploy
+   * (a CDK token), or `undefined` for a pure-static deploy. Surfaced so the L3
+   * owner can output it for a post-deploy `GetInvalidation` liveness poll.
+   */
+  readonly invalidationId?: string;
   readonly computeFunctions: Map<string, LambdaFunction | experimental.EdgeFunction> = new Map();
   private readonly cdn: CdnConstruct;
   readonly computeFunctionUrls: Map<string, FunctionUrl> = new Map();
@@ -1191,6 +1197,7 @@ export class HostingConstruct extends Construct {
     });
 
     this.cdn = cdn;
+    this.invalidationId = cdn.invalidationId;
     this.distribution = cdn.distribution;
     this.distributionUrl = cdn.distributionUrl;
 

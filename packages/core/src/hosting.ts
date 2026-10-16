@@ -20,7 +20,7 @@ import { Construct } from 'constructs';
 import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
 import { registerConfig } from './cdk/config-registry.js';
 import { getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
-import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
+import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
 	assertMarkersExistAtSynth,
@@ -822,7 +822,7 @@ export class Hosting extends Construct {
     const buildId = manifest.buildId;
     if (buildId) {
       const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
-        sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props))],
+        sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props, buildId))],
         destinationBucket: hosting.bucket,
         destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
         prune: false,
@@ -914,6 +914,30 @@ export class Hosting extends Construct {
       description: 'Blocks Hosting URL',
     });
 
+    // Surface this deploy's build id so a post-deploy liveness poll can confirm
+    // the new build is served (matched against the config at
+    // `/.blocks-sandbox/config.json`). Gated on a build id existing, like the
+    // config deployment above.
+    if (manifest.buildId) {
+      new cdk.CfnOutput(this, 'HostingBuildId', {
+        value: manifest.buildId,
+        description: 'Build id stamped into the deployed runtime config',
+      });
+    }
+
+    // Surface the `/*` invalidation for a compute deploy so the liveness poll
+    // can wait for it to reach `Completed`. The invalidation is fire-and-forget
+    // at deploy time (cdn_construct.ts), so the config probe alone would miss
+    // the window where the edge still serves the previous build's SSR HTML.
+    // `GetInvalidation` needs both ids, so the value carries
+    // `<distributionId>/<invalidationId>`. Absent for a pure-static deploy.
+    if (hosting.invalidationId) {
+      new cdk.CfnOutput(this, 'HostingInvalidationId', {
+        value: `${hosting.distribution.distributionId}/${hosting.invalidationId}`,
+        description: 'CloudFront <distributionId>/<invalidationId> for the post-deploy liveness poll',
+      });
+    }
+
     if (hosting.buildCacheBucket) {
       new cdk.CfnOutput(this, 'BuildCacheBucketName', {
         value: hosting.buildCacheBucket.bucketName,
@@ -927,12 +951,14 @@ export class Hosting extends Construct {
    *
    * When `api` is provided, the config uses a relative `/aws-blocks/api` URL
    * so the frontend fetches through the same CloudFront domain (no CORS).
+   *
+   * `buildId` is stamped under `__blocksBuildId` so a post-deploy liveness poll
+   * can tell this deploy's config from a previously-served one during the
+   * CloudFront cutover (see `scripts/wait-live.ts`); the rest of the body is
+   * deploy-invariant.
    */
-  private buildConfigJson(props: HostingProps): Record<string, unknown> {
-    return {
-      ...(props.backendConfig ?? {}),
-      ...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
-    };
+  private buildConfigJson(props: HostingProps, buildId: string): Record<string, unknown> {
+    return buildConfigJson(props, buildId);
   }
 
   /**
@@ -1008,4 +1034,23 @@ export class Hosting extends Construct {
       hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
     }
   }
+}
+
+/**
+ * Build the deployed `config.json` payload. Pure and exported so a test can
+ * assert the build-id stamp — half of the `--wait-live` contract — directly,
+ * without reaching into the hashed `BucketDeployment` asset.
+ *
+ * When `api` is provided, the config uses a relative `/aws-blocks/api` URL so
+ * the frontend fetches through the same CloudFront domain (no CORS). `buildId`
+ * is stamped under `__blocksBuildId` so a post-deploy liveness poll can tell
+ * this deploy's config from a previously-served one during the CloudFront
+ * cutover (see `scripts/wait-live.ts`); the rest of the body is deploy-invariant.
+ */
+export function buildConfigJson(props: HostingProps, buildId: string): Record<string, unknown> {
+  return {
+    ...(props.backendConfig ?? {}),
+    ...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
+    [BLOCKS_BUILD_ID_CONFIG_KEY]: buildId,
+  };
 }
