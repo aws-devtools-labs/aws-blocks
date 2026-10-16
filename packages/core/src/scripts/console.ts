@@ -10,7 +10,12 @@ export interface ConsoleOptions {
   outputsFile?: string;
 }
 
-function resolveRegion(): string {
+/**
+ * The region this machine would deploy to, resolved the same way the AWS CLI
+ * does. Exported so a deploy record captures the region at deploy time rather
+ * than leaving a reader to trust ambient config, which can differ.
+ */
+export function resolveRegion(): string {
   const fromEnv = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
   if (fromEnv) return fromEnv;
   try {

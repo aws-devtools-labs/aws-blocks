@@ -12,6 +12,15 @@ export {
 export { listConfig, removeConfig, runConfigCli, setConfig } from './config.js';
 export { type ConsoleOptions, openConsole } from './console.js';
 export { type DeployOptions, deploy } from './deploy.js';
+export {
+	DEPLOY_HISTORY_FILE,
+	type DeployHistoryRecord,
+	type DeployRecorder,
+	appendDeployHistoryRecord,
+	createDeployRecorder,
+	getGitSha,
+	summarizeError,
+} from './deploy-history.js';
 export { type DestroyOptions, destroy } from './destroy.js';
 export {
 	type DevServerOptions,
