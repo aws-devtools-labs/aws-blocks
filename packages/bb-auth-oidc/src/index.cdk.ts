@@ -50,6 +50,7 @@ import type { AuthOIDCOptions, CognitoFederatedProvider, ProviderConfig } from '
 import {
 	DEFAULT_CALLBACK_PATH,
 	DEFAULT_SIGNOUT_PATH,
+	signInRoutePathFor,
 } from './auth-oidc.js';
 import { cognitoEnvPrefix, cookieSecretEnvVar } from './utils.js';
 
@@ -353,11 +354,16 @@ export class AuthOIDC<
 		return Object.assign(() => ({}), { [Symbol.for('blocks:ApiNamespace')]: 'auth' });
 	}
 
-	// ── Runtime methods are not available during CDK synth ────────────────
-	// Under `--conditions=cdk` an AuthOIDC resolves to this construct, which only
-	// provisions infrastructure; these methods live in the runtime build. Calling
-	// one at module top-level (which runs during synth) would otherwise fail with a
-	// cryptic `X is not a function`; these stubs turn that into an actionable message.
+	/**
+	 * The absolute-within-host path for a provider's sign-in kickoff route.
+	 * Derived from `callbackPath` with no I/O, so it works during synth too
+	 * (e.g. to build a link or a `RawRoute` path at module scope).
+	 */
+	signInRoutePath(providerName: string): string {
+		return signInRoutePathFor(this.callbackPath, providerName);
+	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
 	requireAuth(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'requireAuth'); }
 	checkAuth(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'checkAuth'); }
 	getCurrentUser(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'getCurrentUser'); }
@@ -368,5 +374,4 @@ export class AuthOIDC<
 	getAuthorizeParams(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'getAuthorizeParams'); }
 	refreshBearerTokens(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'refreshBearerTokens'); }
 	signOut(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'signOut'); }
-	signInRoutePath(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'signInRoutePath'); }
 }

@@ -160,11 +160,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.bucket.grantReadWrite(this.executionRole);
 	}
 
-	// ── Runtime methods are not available during CDK synth ────────────────
-	// Under `--conditions=cdk` a FileBucket resolves to this construct, which only
-	// provisions infrastructure; these methods live in the runtime build. Calling
-	// one at module top-level (which runs during synth) would otherwise fail with a
-	// cryptic `X is not a function`; these stubs turn that into an actionable message.
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
 	put(..._args: unknown[]): never { return synthGuard('FileBucket', 'put'); }
 	get(..._args: unknown[]): never { return synthGuard('FileBucket', 'get'); }
 	delete(..._args: unknown[]): never { return synthGuard('FileBucket', 'delete'); }

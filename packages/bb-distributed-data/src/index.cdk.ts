@@ -143,15 +143,12 @@ export class DistributedDatabase extends BuildingBlockScope {
     return synthGuard('DistributedDatabase', 'getEngine');
   }
 
-  // ── Runtime methods are not available during CDK synth ────────────────
-  // Under `--conditions=cdk` a DistributedDatabase resolves to this construct, which only
-  // provisions infrastructure; these methods live in the runtime build. Calling
-  // one at module top-level (which runs during synth) would otherwise fail with a
-  // cryptic `X is not a function`; these stubs turn that into an actionable message.
+  // Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
   query(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'query'); }
   queryOne(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'queryOne'); }
   execute(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'execute'); }
   transaction(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'transaction'); }
+  simulateConflict(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'simulateConflict'); }
 }
 
 /** Hash all .sql files in a directory to detect changes. */

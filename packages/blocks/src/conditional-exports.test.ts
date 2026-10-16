@@ -22,11 +22,11 @@ import ts from 'typescript';
  *
  * The public methods of every exported BB class are compared too, read from each
  * entry's `.d.ts`. Instance and static methods are checked separately — under
- * "cdk" a runtime-only method must exist as a `synthGuard` stub. Deliberate gaps
- * are listed per condition in METHOD_EXCEPTIONS.
+ * "cdk" a runtime-only method must exist as a `synthGuard` stub, and calling it
+ * must actually throw the `synthGuard` error.
  *
- * This checks exported names and method presence, not signature compatibility
- * or method behavior. CDK stubs intentionally have different signatures.
+ * This checks exported names, method presence and the cdk guards, not signature
+ * compatibility. CDK stubs intentionally have different signatures.
  *
  * BB packages are discovered automatically — any package under packages/ whose
  * exports["."] has an "aws-runtime" condition is treated as a Building Block.
@@ -59,7 +59,6 @@ const buildingBlocks = readdirSync(packagesDir, { withFileTypes: true })
 	.map((dir) => readPackage(join(packagesDir, dir.name)))
 	.sort((a, b) => a.name.localeCompare(b.name));
 const bbPackages = buildingBlocks.filter((pkg) => pkg.exports['aws-runtime']);
-const umbrellaPackage = readPackage(join(packagesDir, 'blocks'));
 const serverConditions: ServerCondition[] = ['aws-runtime', 'cdk'];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -132,28 +131,8 @@ for (const { name } of bbPackages) {
 // Methods are read from each entry's `.d.ts` with the TypeScript compiler, not
 // from the loaded module: TypeScript `private` is erased at runtime, so only the
 // declarations can tell public methods from internal helpers. Skipped: private,
-// protected, `@internal` and `_`-prefixed methods, and properties/accessors.
-
-/** Deliberate gaps, using `Class.prototype.method` for instance methods and `Class.method` for statics. */
-const METHOD_EXCEPTIONS: Record<ServerCondition, Record<string, string[]>> = {
-	'aws-runtime': {
-		// Test helper that drives the local mock database; there is no AWS equivalent.
-		'@aws-blocks/bb-distributed-data': ['DistributedDatabase.prototype.simulateConflict'],
-	},
-	cdk: {
-		'@aws-blocks/bb-distributed-data': ['DistributedDatabase.prototype.simulateConflict'],
-		// These CDK placeholders do not expose logging or child emitters. Keep this
-		// exception scoped to CDK: the AWS runtime must still implement them.
-		'@aws-blocks/bb-logger': [
-			'Logger.prototype.debug',
-			'Logger.prototype.info',
-			'Logger.prototype.warn',
-			'Logger.prototype.error',
-			'Logger.prototype.child',
-		],
-		'@aws-blocks/bb-metrics': ['Metrics.prototype.child'],
-	},
-};
+// protected, `@internal` and `_`-prefixed methods, and properties/accessors (an
+// accessor such as `AuthCognito.admin` is tested in its own package instead).
 
 /** `.d.ts` for an exports-map target: its explicit `types`, else the sibling of the `.js`. */
 const declarationFile = (pkgDir: string, target: ExportTarget | undefined): string | undefined => {
@@ -168,6 +147,7 @@ const declarationFile = (pkgDir: string, target: ExportTarget | undefined): stri
 const declarationEntry = ({ name, dir, exports: entry }: PackageEntry) => {
 	return {
 		name,
+		dir,
 		files: {
 			default: declarationFile(dir, entry.types),
 			'aws-runtime': declarationFile(dir, entry['aws-runtime']),
@@ -177,7 +157,10 @@ const declarationEntry = ({ name, dir, exports: entry }: PackageEntry) => {
 };
 
 const bbEntries = bbPackages.map(declarationEntry);
-const umbrellaEntry = declarationEntry(umbrellaPackage);
+// The umbrella re-exports core (`Scope`, `RawRoute`, `ApiNamespace`, ...) from a
+// different module per condition, so its classes get the same method-parity check.
+// Not the guard check below: core's cdk classes are constructs, not `synthGuard` stubs.
+const umbrellaEntry = declarationEntry(readPackage(join(packagesDir, 'blocks')));
 
 let program: ts.Program | undefined;
 
@@ -215,6 +198,17 @@ const declaredExports = (file: string): ts.Symbol[] => {
 	return checker.getExportsOfModule(moduleSymbol);
 };
 
+/** Every class `file` exports, keyed by export name, with aliases (re-exports) resolved. */
+const declaredClasses = (file: string): Map<string, ts.Symbol> => {
+	const checker = getProgram().getTypeChecker();
+	const result = new Map<string, ts.Symbol>();
+	for (const exported of declaredExports(file)) {
+		const symbol = exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
+		if (symbol.flags & ts.SymbolFlags.Class) result.set(exported.name, symbol);
+	}
+	return result;
+};
+
 /** Public instance and static methods (inherited included) of every class `file` exports. */
 const classMethods = (file: string): Set<string> => {
 	const checker = getProgram().getTypeChecker();
@@ -226,16 +220,14 @@ const classMethods = (file: string): Set<string> => {
 		}
 	};
 
-	for (const exported of declaredExports(file)) {
-		const symbol = exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
-		if (!(symbol.flags & ts.SymbolFlags.Class)) continue;
-		addMethods(`${exported.name}.prototype`, checker.getDeclaredTypeOfSymbol(symbol));
-		addMethods(exported.name, checker.getTypeOfSymbol(symbol));
+	for (const [name, symbol] of declaredClasses(file)) {
+		addMethods(`${name}.prototype`, checker.getDeclaredTypeOfSymbol(symbol));
+		addMethods(name, checker.getTypeOfSymbol(symbol));
 	}
 	return result;
 };
 
-for (const { name, files } of bbEntries) {
+for (const { name, files } of [...bbEntries, umbrellaEntry]) {
 	for (const condition of serverConditions) {
 		test(`${name}: ${condition} class methods match default`, { skip: !files[condition] }, () => {
 			assert.ok(files.default, `${name} has no "types" entry`);
@@ -243,8 +235,7 @@ for (const { name, files } of bbEntries) {
 			const conditionFile = files[condition];
 			assert.ok(conditionFile, `${name} has no "${condition}" entry`);
 			const actual = classMethods(conditionFile);
-			const allowed = new Set(METHOD_EXCEPTIONS[condition][name]);
-			const missing = [...expected].filter((method) => !actual.has(method) && !allowed.has(method));
+			const missing = [...expected].filter((method) => !actual.has(method));
 
 			assert.deepStrictEqual(
 				missing,
@@ -257,4 +248,107 @@ for (const { name, files } of bbEntries) {
 			);
 		});
 	}
+}
+
+// ── BB packages: cdk guards throw (auto-discovered) ─────────────────────────
+// Presence is not enough: a stub that throws the wrong message, or returns without
+// throwing, still passes the parity test above. Under cdk, calling a runtime-only
+// instance method must throw `synthGuard`'s error. Skipped:
+// - statics: they are synth-time helpers (`fromExisting()`, `fromKmsKey()`, ...);
+// - classes the cdk entry re-exports unchanged from the runtime (e.g. bb-data's
+//   `PgClientEngine`): same declaration as the default entry, so not a construct;
+// - methods the construct inherits from outside its package (core's `Scope`);
+// - SYNTH_SAFE_METHODS below.
+
+/** Instance methods that must work during synth, so the cdk class implements them for real. */
+const SYNTH_SAFE_METHODS = new Set([
+	'AuthCognito.prototype.createApi',
+	'AuthOIDC.prototype.createApi',
+	// Pure: derived from `callbackPath`.
+	'AuthOIDC.prototype.signInRoutePath',
+	// Synth-time config: sets an environment variable on the Lambda function.
+	'LambdaCompute.prototype.setEnv',
+	// Top-level logging also runs under `cdk synth`; it writes the same lines as at runtime.
+	'Logger.prototype.debug',
+	'Logger.prototype.info',
+	'Logger.prototype.warn',
+	'Logger.prototype.error',
+	'Logger.prototype.child',
+]);
+
+/** Instance methods of the cdk entry's constructs that must throw `synthGuard`'s error. */
+const guardedMethods = ({ dir, files }: (typeof bbEntries)[number]): string[] => {
+	assert.ok(files.default && files.cdk);
+	const checker = getProgram().getTypeChecker();
+	const sourceOf = (symbol: ts.Symbol | undefined) => symbol?.declarations?.[0]?.getSourceFile().fileName;
+	const defaultClasses = declaredClasses(files.default);
+	const cdkClasses = declaredClasses(files.cdk);
+	/** Whether the cdk class declares `method` in this package (not inherited from core). */
+	const ownMethod = (cdkClass: ts.Symbol, method: string) => {
+		const member = checker.getPropertyOfType(checker.getDeclaredTypeOfSymbol(cdkClass), method);
+		return sourceOf(member)?.startsWith(dir) ?? false;
+	};
+	return [...classMethods(files.default)].filter((method) => {
+		const [className, kind, methodName] = method.split('.');
+		const cdkClass = cdkClasses.get(className);
+		return (
+			kind === 'prototype' &&
+			!SYNTH_SAFE_METHODS.has(method) &&
+			cdkClass !== undefined &&
+			sourceOf(defaultClasses.get(className)) !== sourceOf(cdkClass) &&
+			ownMethod(cdkClass, methodName)
+		);
+	});
+};
+
+/**
+ * Load `pkg` under cdk and call each `Class.prototype.method` on a bare instance
+ * (no stack needed: the guards never touch `this`). Returns each call's error
+ * message, or a marker when it did not throw.
+ */
+const callUnderCdk = (pkg: string, methods: string[]): Record<string, string> => {
+	const script = `
+const mod = await import(${JSON.stringify(pkg)});
+const out = {};
+for (const key of ${JSON.stringify(methods)}) {
+	const [className, , method] = key.split('.');
+	const Class = mod[className];
+	try {
+		const result = Class.prototype[method].call(Object.create(Class.prototype));
+		if (result && typeof result.then === 'function') result.then(() => {}, () => {});
+		out[key] = '<returned without throwing>';
+	} catch (e) {
+		out[key] = String(e instanceof Error ? e.message : e);
+	}
+}
+process.stdout.write('\\n' + JSON.stringify(out) + '\\n', () => process.exit(0));
+`;
+	const out = execFileSync(process.execPath, ['--conditions=cdk', '--input-type=module', '-e', script], {
+		encoding: 'utf-8',
+	});
+	// The last line is the result; anything a module logged on import comes before it.
+	return JSON.parse(out.trim().split('\n').at(-1) ?? '{}');
+};
+
+for (const entry of bbEntries) {
+	const { name, files } = entry;
+	test(`${name}: cdk runtime methods throw the synthGuard error`, { skip: !files.cdk }, () => {
+		const methods = guardedMethods(entry);
+		const results = callUnderCdk(name, methods);
+		const wrong = methods
+			.map((method) => {
+				const [className, , methodName] = method.split('.');
+				const expected = `${className}.${methodName}() cannot be called during CDK synth.`;
+				return results[method]?.startsWith(expected) ? undefined : `${method}: ${results[method]}`;
+			})
+			.filter((line): line is string => line !== undefined);
+
+		assert.deepStrictEqual(
+			wrong,
+			[],
+			`${name} "cdk" entry has runtime methods that do not throw the synthGuard error:\n  ${wrong.join('\n  ')}\n\n` +
+				"Stub them with `synthGuard('<Class>', '<method>')`. If a method must work at synth, " +
+				'implement it for real and add it to SYNTH_SAFE_METHODS.',
+		);
+	});
 }

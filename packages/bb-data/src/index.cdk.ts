@@ -262,11 +262,7 @@ export class Database extends BuildingBlockScope {
     return config;
   }
 
-  // ── Runtime methods are not available during CDK synth ────────────────
-  // Under `--conditions=cdk` a Database resolves to this construct, which only
-  // provisions infrastructure; these methods live in the runtime build. Calling
-  // one at module top-level (which runs during synth) would otherwise fail with a
-  // cryptic `X is not a function`; these stubs turn that into an actionable message.
+  // Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
   query(..._args: unknown[]): never { return synthGuard('Database', 'query'); }
   queryOne(..._args: unknown[]): never { return synthGuard('Database', 'queryOne'); }
   execute(..._args: unknown[]): never { return synthGuard('Database', 'execute'); }

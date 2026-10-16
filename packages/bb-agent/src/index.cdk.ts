@@ -69,11 +69,7 @@ export class Agent extends BuildingBlockScope {
 		});
 	}
 
-	// ── Runtime methods are not available during CDK synth ────────────────
-	// Under `--conditions=cdk` an Agent resolves to this construct, which only
-	// provisions infrastructure; these methods live in the runtime build. Calling
-	// one at module top-level (which runs during synth) would otherwise fail with a
-	// cryptic `X is not a function`; these stubs turn that into an actionable message.
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
 	stream(..._args: unknown[]): never { return synthGuard('Agent', 'stream'); }
 	resume(..._args: unknown[]): never { return synthGuard('Agent', 'resume'); }
 	createConversationId(..._args: unknown[]): never { return synthGuard('Agent', 'createConversationId'); }
