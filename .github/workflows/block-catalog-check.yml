@@ -27,5 +27,10 @@ jobs:
           node-version-file: '.nvmrc'
       - name: Test Building Block catalog helpers
         run: node --test scripts/sync-catalog.test.mjs
+      # The dashboard's generated block catalog reads its descriptions through
+      # the same extractor, so its helpers belong to this gate rather than to the
+      # admin-ui suite (which cannot reach a repo-root .mjs script).
+      - name: Test generated block catalog helpers
+        run: node --test scripts/generate-block-catalog.test.mjs
       - name: Verify Building Block catalog is in sync
         run: node scripts/sync-catalog.mjs --check
