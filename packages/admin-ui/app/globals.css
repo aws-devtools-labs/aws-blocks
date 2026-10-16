@@ -1,0 +1,279 @@
+/* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+@import 'tailwindcss';
+
+/*
+ * Documentation is not a template. Tailwind's automatic content detection scans
+ * every project file, so prose that *names* a class emits a rule for it -- and
+ * DESIGN.md names the palette classes this codebase migrated away from. That is
+ * worse than the wasted bytes: a doc mention keeps a utility alive in the bundle
+ * after its last real usage is deleted, so an audit that greps the built CSS to
+ * prove a class is gone would be told it is still there.
+ */
+@source not '../**/*.md';
+
+/*
+ * Compact token system, themeable (design reference: Supabase Studio).
+ *
+ * HOW THE THEME SWITCH WORKS
+ * --------------------------
+ * Utilities are declared with `@theme inline`, so `bg-panel` compiles to
+ * `background-color: var(--tone-panel)` rather than freezing a value. The
+ * `--tone-*` variables are then declared per theme below, and because they are
+ * resolved on the element that uses them, re-declaring one restyles everything
+ * downstream with no `dark:` variants and no per-component branching.
+ *
+ *   :root                      the dark palette, and the server-rendered default
+ *   html[data-theme='light']   the light palette
+ *
+ * `system` is not a third palette: it is resolved to `dark` or `light` in JS and
+ * written to `data-theme`, so this file only ever describes two real themes.
+ *
+ * TOKEN ROLES
+ * -----------
+ * Surfaces, deepest to highest:  canvas → panel → hover → active
+ * Borders:                       line (visible), line-soft (barely there)
+ * Text, strongest to weakest:    fg → fg-soft → fg-dim
+ *
+ * Status families (danger / warn / ok) each carry a bare hue plus foregrounds.
+ * The roles matter because "more contrast" means *lighter* in dark and *darker*
+ * in light, so a maintainer tuning a palette must go by role, not by shade:
+ *
+ *   danger                 the hue itself — surfaces and borders, and only ever
+ *                          with an opacity modifier (`bg-danger/5`)
+ *   danger-fg              status text and solid accents on the page canvas
+ *   danger-fg-strong       status text sitting on a status-tinted surface, where
+ *                          the tint eats the contrast the canvas gave you
+ *   danger-fg-loud         long-form body text on a status tint, which needs
+ *                          more again than a chip label does
+ *   on-danger / on-brand   text on a *filled* danger/brand button, where the
+ *                          fill is the same in both themes so this is too
+ *
+ * Dark values deliberately reference Tailwind's own palette variables wherever
+ * the pre-theme code used a palette class (`text-red-400` → `--color-red-400`),
+ * so the dark theme is provably byte-identical rather than re-eyeballed.
+ */
+@theme inline {
+	/* surfaces */
+	--color-canvas: var(--tone-canvas);
+	--color-panel: var(--tone-panel);
+	--color-hover: var(--tone-hover);
+	--color-active: var(--tone-active);
+
+	/* borders */
+	--color-line: var(--tone-line);
+	--color-line-soft: var(--tone-line-soft);
+
+	/* text */
+	--color-fg: var(--tone-fg);
+	--color-fg-soft: var(--tone-fg-soft);
+	--color-fg-dim: var(--tone-fg-dim);
+
+	/* brand */
+	--color-brand: var(--tone-brand);
+	--color-brand-dark: var(--tone-brand-dark);
+	--color-brand-fg: var(--tone-brand-fg);
+	--color-on-brand: var(--tone-on-brand);
+
+	/* status: danger */
+	--color-danger: var(--tone-danger);
+	--color-danger-fg: var(--tone-danger-fg);
+	--color-danger-fg-strong: var(--tone-danger-fg-strong);
+	--color-danger-fg-loud: var(--tone-danger-fg-loud);
+	--color-on-danger: var(--tone-on-danger);
+
+	/* status: warn */
+	--color-warn: var(--tone-warn);
+	--color-warn-fg: var(--tone-warn-fg);
+	--color-warn-fg-strong: var(--tone-warn-fg-strong);
+
+	/* status: ok */
+	--color-ok: var(--tone-ok);
+	--color-ok-fg: var(--tone-ok-fg);
+	--color-ok-fg-strong: var(--tone-ok-fg-strong);
+
+	/* status: info */
+	--color-info-fg: var(--tone-info-fg);
+}
+
+/*
+ * Dark — the default, and what the server renders before any preference is known.
+ */
+:root {
+	color-scheme: dark;
+
+	--tone-canvas: hsl(240 6% 7%);
+	--tone-panel: hsl(240 6% 10%);
+	--tone-hover: hsl(240 5% 13%);
+	--tone-active: hsl(240 5% 16%);
+
+	--tone-line: hsl(240 4% 18%);
+	--tone-line-soft: hsl(240 4% 13%);
+
+	--tone-fg: hsl(240 5% 96%);
+	--tone-fg-soft: hsl(240 4% 64%);
+	--tone-fg-dim: hsl(240 4% 44%);
+
+	--tone-brand: hsl(153 60% 53%);
+	--tone-brand-dark: hsl(153 60% 42%);
+	--tone-brand-fg: hsl(153 60% 53%);
+	--tone-on-brand: var(--color-zinc-950);
+
+	--tone-danger: var(--color-red-500);
+	--tone-danger-fg: var(--color-red-400);
+	--tone-danger-fg-strong: var(--color-red-300);
+	--tone-danger-fg-loud: var(--color-red-200);
+	--tone-on-danger: var(--color-white);
+
+	--tone-warn: var(--color-amber-500);
+	--tone-warn-fg: var(--color-amber-400);
+	--tone-warn-fg-strong: var(--color-amber-300);
+
+	--tone-ok: var(--color-emerald-500);
+	--tone-ok-fg: var(--color-emerald-400);
+	--tone-ok-fg-strong: var(--color-emerald-300);
+
+	--tone-info-fg: var(--color-sky-300);
+
+	--tone-selection: hsl(153 60% 53% / 0.25);
+}
+
+/*
+ * Light.
+ *
+ * Elevation inverts: in dark, a raised surface is lighter than the canvas; in
+ * light, the canvas is the grey one and a raised surface goes to white. Keeping
+ * `panel` as the raised token means every card, the sidebar and the header
+ * follow without touching a component.
+ *
+ * `brand` and `brand-dark` are deliberately identical to dark: they are only
+ * ever a *fill* under `on-brand` text, so a filled button looks the same in both
+ * themes. Brand *text* is a separate token (`brand-fg`) precisely because the
+ * fill colour would fail contrast as text on white.
+ *
+ * Status foregrounds go two steps darker than their dark-theme counterparts
+ * rather than one: amber is the constraint, since amber-400 on white is about
+ * 1.7:1 and unreadable, while amber-700 clears 4.5:1.
+ */
+html[data-theme='light'] {
+	color-scheme: light;
+
+	--tone-canvas: hsl(240 10% 97%);
+	--tone-panel: hsl(0 0% 100%);
+	--tone-hover: hsl(240 8% 94%);
+	--tone-active: hsl(240 8% 89%);
+
+	--tone-line: hsl(240 8% 85%);
+	--tone-line-soft: hsl(240 8% 91%);
+
+	--tone-fg: hsl(240 10% 11%);
+	/*
+	 * Measured, not eyeballed. A rendered-DOM contrast audit over all eight pages
+	 * found `fg-dim` at 48% failing WCAG AA at 131 sites: 4.50 on a white card,
+	 * 4.20 on the canvas, 3.88 on a hover surface. 40% clears 4.5 on every surface
+	 * this theme has (worst case 4.63 on `active`). `fg-soft` moves with it, from
+	 * 36% to 30%, because 40% next to 36% collapses the three-step text ramp the
+	 * roles exist to express -- so the ramp is now fg 11% / soft 30% / dim 40%.
+	 */
+	--tone-fg-soft: hsl(240 5% 30%);
+	--tone-fg-dim: hsl(240 4% 40%);
+
+	--tone-brand: hsl(153 60% 53%);
+	--tone-brand-dark: hsl(153 60% 42%);
+	--tone-brand-fg: hsl(153 65% 27%);
+	--tone-on-brand: var(--color-zinc-950);
+
+	--tone-danger: var(--color-red-600);
+	--tone-danger-fg: var(--color-red-700);
+	--tone-danger-fg-strong: var(--color-red-800);
+	--tone-danger-fg-loud: var(--color-red-900);
+	--tone-on-danger: var(--color-white);
+
+	--tone-warn: var(--color-amber-600);
+	--tone-warn-fg: var(--color-amber-700);
+	--tone-warn-fg-strong: var(--color-amber-800);
+
+	--tone-ok: var(--color-emerald-600);
+	--tone-ok-fg: var(--color-emerald-700);
+	--tone-ok-fg-strong: var(--color-emerald-800);
+
+	--tone-info-fg: var(--color-sky-700);
+
+	--tone-selection: hsl(153 60% 40% / 0.22);
+}
+
+body {
+	/* 14px base — density reference: Studio uses text-sm body, 12px secondary */
+	@apply bg-canvas text-fg antialiased text-sm;
+}
+
+::selection {
+	background: var(--tone-selection);
+}
+
+/*
+ * First-level navigation collapse.
+ *
+ * Driven from `html[data-sidebar]`, which an inline <head> script applies before
+ * first paint (see src/nav/sidebar-preference.ts) — the same mechanism as the
+ * theme, and for the same reason: a stored collapsed rail must never render at
+ * full width and then snap shut on hydration.
+ *
+ * Collapsed, the RAIL keeps its narrow width in the layout while the PANEL
+ * inside it grows on hover and overlays the content. Widening the rail itself
+ * would reflow the entire page under the pointer, which is a worse cost than the
+ * overlay's shadow. Expanded, no rule here applies and the panel is in flow.
+ */
+[data-sidebar='collapsed'] .primary-rail {
+	width: 3.5rem;
+}
+
+[data-sidebar='collapsed'] .primary-rail-panel {
+	position: absolute;
+	inset-block: 0;
+	inset-inline-start: 0;
+	width: 3.5rem;
+	overflow: hidden;
+	background-color: var(--tone-panel);
+	transition: width 120ms ease-out;
+}
+
+[data-sidebar='collapsed'] .primary-rail:hover .primary-rail-panel,
+/*
+ * Keyboard parity: tabbing into the collapsed rail expands it too, or the labels
+ * would be reachable by pointer only.
+ *
+ * `:has(:focus-visible)` rather than `:focus-within`, because the collapse button
+ * lives INSIDE the rail and keeps focus after a click — so focus-within left the
+ * panel expanded over already-reflowed content, which reads as a control that did
+ * not work. A mouse click does not match `:focus-visible`, so this expands for the
+ * keyboard and settles immediately for the pointer.
+ */
+[data-sidebar='collapsed'] .primary-rail:has(:focus-visible) .primary-rail-panel {
+	width: 13rem;
+	z-index: 30;
+	border-inline-end: 1px solid var(--tone-line);
+	box-shadow: 0 8px 24px -12px rgb(0 0 0 / 0.45);
+}
+
+/* The labels are kept in the DOM so the accessible name of every link is intact
+   while collapsed; only their visibility changes. */
+[data-sidebar='collapsed'] .primary-rail-label {
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 90ms ease-out;
+}
+
+[data-sidebar='collapsed'] .primary-rail:hover .primary-rail-label,
+[data-sidebar='collapsed'] .primary-rail:has(:focus-visible) .primary-rail-label {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-sidebar='collapsed'] .primary-rail-panel,
+	[data-sidebar='collapsed'] .primary-rail-label {
+		transition: none;
+	}
+}
