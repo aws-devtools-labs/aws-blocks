@@ -32,7 +32,7 @@ Open http://localhost:3000 after `npm run dev`.
 - **KVStore** — a `getValue` / `setValue` pair gated by `requireAuth`, with
   keys namespaced per user.
 - **Cookies** — a public round-trip demo (`setCookie` / `getCookie` /
-  `deleteCookie`) on a single fixed-name `HttpOnly; SameSite=Lax` cookie.
+  `deleteCookie`) on a single fixed-name `HttpOnly; Secure; SameSite=Lax` cookie.
 - **DistributedTable** — per-user todos; `listTodos(sortBy)` sorts the list in
   the API (an in-memory sort, no secondary indexes to provision). Every todo
   method calls `auth.requireAuth(context)`, so data is isolated per user.
