@@ -173,6 +173,10 @@ When `options.schema` (any `StandardSchemaV1`) is provided:
 - `get()` returns the typed value (the mock reads the structured value; the AWS
   layer `JSON.parse`s the stored string), validating it. A validation failure —
   or malformed JSON on the AWS side — throws `SecretErrors.ValidationFailed`.
+  The mock validates stored strings directly first, preserving literal strings
+  and the schema's validated output. If the schema rejects the string itself,
+  it tries legacy JSON decoding before validation. Current, previous, and
+  explicit-version reads share this rule; the on-disk format is unchanged.
 
 Without a schema the value is an opaque `string` stored/returned verbatim. The
 schema library is never a runtime dependency of this package — it is the
