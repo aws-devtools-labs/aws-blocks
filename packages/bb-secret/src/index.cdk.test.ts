@@ -141,6 +141,18 @@ test('CDK: does NOT grant PutSecretValue by default (read-only)', () => {
 	);
 });
 
+test('CDK: does NOT grant PutSecretValue when allowRuntimeWrite: false (explicit)', () => {
+	const { stack, parent } = setup();
+	new Secret(parent, 'stripe-key', { allowRuntimeWrite: false });
+	const serialized = JSON.stringify(Template.fromStack(stack).findResources('AWS::IAM::Policy'));
+	assert.ok(
+		!serialized.includes('secretsmanager:PutSecretValue'),
+		'allowRuntimeWrite: false must not grant PutSecretValue',
+	);
+	// read access is still granted.
+	assert.ok(serialized.includes('secretsmanager:GetSecretValue'), 'read access must still be granted');
+});
+
 test('CDK: allowRuntimeWrite grants GetSecretValue + PutSecretValue', () => {
 	const { stack, parent } = setup();
 	new Secret(parent, 'stripe-key', { allowRuntimeWrite: true });

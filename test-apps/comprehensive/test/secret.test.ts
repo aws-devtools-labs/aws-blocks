@@ -88,5 +88,37 @@ export function secretTests(getApi: () => typeof apiType) {
       assert.ok(versions.some((v) => v.stages.includes('AWSCURRENT')));
       assert.ok(versions.some((v) => v.stages.includes('AWSPREVIOUS')));
     });
+
+    // allowRuntimeWrite matrix — the three cases, asserted end to end.
+    //
+    // Build/type behavior is proven in the backend module itself
+    // (aws-blocks/index.ts `_secretWriteTypeAssertions`): the read-only secrets
+    // carry `@ts-expect-error` on `.put`, and the writable one calls `.put` with
+    // a correctly-typed value and `@ts-expect-error` on a wrong-typed value. That
+    // module is compiled as part of this e2e build/synth, so a regression (put
+    // reappearing on the read-only type, or the writable type going wrong) fails
+    // this suite at build time. The runtime behavior is asserted below.
+
+    test('Secret (allowRuntimeWrite omitted) - put absent at runtime; forced call errors', async () => {
+      const api = getApi();
+      const { hasPut, callError } = await api.secretWriteProbeOmitted();
+      assert.strictEqual(hasPut, false, 'put must be absent from a read-only secret object');
+      // A customer who bypasses the type and calls put() gets a meaningful error.
+      assert.strictEqual(callError, 'TypeError', 'forcing a call to the absent put() must throw TypeError');
+    });
+
+    test('Secret (allowRuntimeWrite: false) - put absent at runtime; forced call errors', async () => {
+      const api = getApi();
+      const { hasPut, callError } = await api.secretWriteProbeFalse();
+      assert.strictEqual(hasPut, false, 'put must be absent when allowRuntimeWrite is false');
+      assert.strictEqual(callError, 'TypeError', 'forcing a call to the absent put() must throw TypeError');
+    });
+
+    test('Secret (allowRuntimeWrite: true) - put present, callable, round-trips', async () => {
+      const api = getApi();
+      const { hasPut, readBack } = await api.secretWriteProbeTrue('write-enabled-value');
+      assert.strictEqual(hasPut, true, 'put must be present when allowRuntimeWrite is true');
+      assert.strictEqual(readBack, 'write-enabled-value', 'the written value must read back');
+    });
   });
 }

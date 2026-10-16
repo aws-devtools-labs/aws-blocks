@@ -42,11 +42,39 @@ describe('Secret (mock)', () => {
 	});
 
 	describe('allowRuntimeWrite', () => {
+		// Build/type behavior for all three cases. These never run; they fail the
+		// unit build if the type contract regresses (an unused @ts-expect-error is
+		// itself a compile error). Runtime behavior is asserted by the tests below.
+		test('types: put present only when allowRuntimeWrite: true', () => {
+			const omitted = new Secret(freshScope(), 'ro-omitted');
+			const explicitFalse = new Secret(freshScope(), 'ro-false', { allowRuntimeWrite: false });
+			const writableSecret = new Secret(freshScope(), 'rw', { allowRuntimeWrite: true });
+			// @ts-expect-error — put is absent from the type when allowRuntimeWrite is omitted
+			void omitted.put;
+			// @ts-expect-error — put is absent from the type when allowRuntimeWrite: false
+			void explicitFalse.put;
+			// Writable: put is present and typed (string). No ts-expect-error.
+			void (writableSecret.put as (v: string) => Promise<void>);
+			// @ts-expect-error — a writable string secret rejects a non-string value
+			void writableSecret.put(123);
+			assert.ok(true);
+		});
+
 		test('put is absent from the instance by default (read-only)', () => {
 			const secret = new Secret(freshScope(), 'api-key');
 			// Absent from the object at runtime, not just the type.
 			assert.strictEqual('put' in secret, false);
 			assert.strictEqual((secret as { put?: unknown }).put, undefined);
+		});
+
+		test('forcing a call to the absent put() throws TypeError (read-only)', async () => {
+			const secret = new Secret(freshScope(), 'api-key');
+			// A caller who bypasses the types and invokes the absent method gets a
+			// meaningful "not a function" error, not a silent no-op.
+			await assert.rejects(
+				async () => (secret as unknown as { put: (v: string) => Promise<void> }).put('x'),
+				(e: unknown) => e instanceof TypeError,
+			);
 		});
 
 		test('allowRuntimeWrite: true exposes a working put()', async () => {

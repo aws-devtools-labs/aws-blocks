@@ -631,6 +631,40 @@ const generatedSecret = new Secret(scope, 'secret-generated', {
   removalPolicy: 'destroy',
 });
 
+// allowRuntimeWrite matrix — three secrets covering the write-gating contract so
+// the e2e can assert build + runtime behavior for each case:
+//   - omitted  → read-only (no put() on the object or type; read-only IAM)
+//   - false    → read-only (explicit)
+//   - true     → writable  (put() present, callable, correctly typed; write IAM)
+// The build-level assertions live inline here (this backend module is compiled
+// by the e2e build/synth, so a wrong type fails the suite); the runtime
+// assertions are exposed via the secretWrite* RPC methods below.
+const writeOmittedSecret = new Secret(scope, 'secret-write-omitted', { removalPolicy: 'destroy' });
+const writeFalseSecret = new Secret(scope, 'secret-write-false', {
+  removalPolicy: 'destroy',
+  allowRuntimeWrite: false,
+});
+const writeTrueSecret = new Secret(scope, 'secret-write-true', {
+  removalPolicy: 'destroy',
+  allowRuntimeWrite: true,
+});
+
+// Build-level proof that `put` is ABSENT from the type when writes aren't
+// allowed. If the read-only type ever regained `put`, `@ts-expect-error` would
+// itself become an unused-directive error and fail the e2e build — a meaningful,
+// non-silent failure. (These are never executed; see secretWrite* for runtime.)
+function _secretWriteTypeAssertions(): void {
+  // @ts-expect-error — put must be absent on a secret with allowRuntimeWrite omitted
+  void writeOmittedSecret.put;
+  // @ts-expect-error — put must be absent on a secret with allowRuntimeWrite: false
+  void writeFalseSecret.put;
+  // Writable: put IS present and typed (string value). No ts-expect-error here.
+  void writeTrueSecret.put('ok');
+  // @ts-expect-error — a writable string secret rejects a non-string value
+  void writeTrueSecret.put(123);
+}
+void _secretWriteTypeAssertions;
+
 // CronJob - Scheduled task execution
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
 const cronResults = new KVStore(scope, 'cron-results', {});
@@ -2255,6 +2289,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // Generated secret: get() before any put() returns the seeded random value.
   async secretGetGenerated() {
     return { value: await generatedSecret.get() };
+  },
+
+  // allowRuntimeWrite matrix — runtime behavior probes. Each reports whether
+  // `put` exists on the object, and what happens when it's invoked. For the
+  // read-only secrets we force the call through a minimal callable view (the
+  // only cast — representing a customer who bypasses the types with `as`/ignore)
+  // and expect a meaningful "not a function" TypeError. The writable one is
+  // called normally and must round-trip.
+  async secretWriteProbeOmitted() {
+    const hasPut = typeof (writeOmittedSecret as { put?: unknown }).put === 'function';
+    let callError: string | null = null;
+    try {
+      await (writeOmittedSecret as unknown as { put: (v: string) => Promise<void> }).put('x');
+    } catch (e) {
+      callError = e instanceof Error ? e.constructor.name : String(e);
+    }
+    return { hasPut, callError };
+  },
+
+  async secretWriteProbeFalse() {
+    const hasPut = typeof (writeFalseSecret as { put?: unknown }).put === 'function';
+    let callError: string | null = null;
+    try {
+      await (writeFalseSecret as unknown as { put: (v: string) => Promise<void> }).put('x');
+    } catch (e) {
+      callError = e instanceof Error ? e.constructor.name : String(e);
+    }
+    return { hasPut, callError };
+  },
+
+  async secretWriteProbeTrue(value: string) {
+    const hasPut = typeof writeTrueSecret.put === 'function';
+    await writeTrueSecret.put(value);
+    const readBack = await writeTrueSecret.get();
+    return { hasPut, readBack };
   },
   // CronJob Tests
   // ------------------------------------------------------------------------
