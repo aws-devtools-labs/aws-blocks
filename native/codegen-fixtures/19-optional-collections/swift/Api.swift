@@ -49,6 +49,14 @@ public class Api {
                 try c.encodeIfPresent(self.scores, forKey: .scores)
                 try c.encode(self.tags, forKey: .tags)
             }
+
+            public init(metadata: [String: String]? = nil, name: String, nicknames: [String?]? = nil, scores: [Int]? = nil, tags: [String]) {
+                self.metadata = metadata
+                self.name = name
+                self.nicknames = nicknames
+                self.scores = scores
+                self.tags = tags
+            }
         }
     }
 
@@ -71,10 +79,20 @@ public class Api {
                 try c.encodeIfPresent(self.metadata, forKey: .metadata)
                 try c.encodeIfPresent(self.tags, forKey: .tags)
             }
+
+            public init(id: String, metadata: [String: String]? = nil, tags: [String]? = nil) {
+                self.id = id
+                self.metadata = metadata
+                self.tags = tags
+            }
         }
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 }

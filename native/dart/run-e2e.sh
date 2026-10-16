@@ -38,7 +38,9 @@ done
 
 echo "📦 Step 1: Generate OpenRPC spec from test-apps/native-bindings"
 cd "$BACKEND"
-npx blocks-generate-spec
+# `npm run spec` (aws-blocks/scripts/generate-spec.ts) rather than the
+# `blocks-generate-spec` bin, which npm does not link for a workspace package.
+npm run spec
 SPEC_PATH="$BACKEND/aws-blocks/blocks.spec.json"
 echo "   ✅ Spec: $SPEC_PATH"
 
@@ -92,8 +94,10 @@ if [ -z "$BLOCKS_URL" ]; then
 else
   echo ""
   echo "🌐 Step 4: Using provided endpoint: $BLOCKS_URL"
-  echo "   ℹ️  Against a deployed pool, the AuthCognito suite skips the dev-only"
-  echo "       emailed-code leg and signs in a PRE-PROVISIONED user. Seed it first:"
+  echo "   ℹ️  Against a deployed backend, the Auth suites skip the dev-only"
+  echo "       emailed-code legs and sign in a PRE-PROVISIONED user (seeded into"
+  echo "       every user pool of the stack), and the OIDC suite skips (the stub"
+  echo "       IdP is local-only). Seed the user first:"
   echo "         (cd \"$BACKEND\" && BLOCKS_STACK_NAME=<stack> AWS_REGION=<region> npm run seed:cognito)"
 
   # Readiness gate (warm-up). A freshly-deployed stack's Lambda/API Gateway can
@@ -101,7 +105,7 @@ else
   # before the function is warm. Poll the JSON-RPC endpoint until it answers
   # HTTP 200 (it returns 200 with a JSON-RPC error body for any payload, which
   # proves the Lambda is up and serving) so no suite eats the cold-start on its
-  # first call. Hits the same Lambda that serves /auth/* (OIDC), so it protects
+  # first call. Hits the same Lambda that serves /aws-blocks/auth/* (OIDC), so it protects
   # the OIDC suite's first POST too. Bounded backoff; fails loudly if never ready.
   echo ""
   echo "♨️  Step 4b: Warm up endpoint (poll until HTTP 200)"

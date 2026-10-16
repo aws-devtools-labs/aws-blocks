@@ -34,23 +34,52 @@ public class Api {
             public let sessionId: String
             public let stringValues: RealtimeChannel<[String]>
 
+            public init(channel: RealtimeChannel<ChannelMessage>, event: Event, inner: Inner, integerValues: RealtimeChannel<[Int]>, sessionId: String, stringValues: RealtimeChannel<[String]>) {
+                self.channel = channel
+                self.event = event
+                self.inner = inner
+                self.integerValues = integerValues
+                self.sessionId = sessionId
+                self.stringValues = stringValues
+            }
+
             public struct ChannelMessage: Codable {
                 public let text: String
+
+                public init(text: String) {
+                    self.text = text
+                }
             }
 
             public struct Message: Codable {
                 public let channel: RealtimeChannel<ChannelMessage>
 
+                public init(channel: RealtimeChannel<ChannelMessage>) {
+                    self.channel = channel
+                }
+
                 public struct ChannelMessage: Codable {
                     public let body: String
+
+                    public init(body: String) {
+                        self.body = body
+                    }
                 }
             }
 
             public struct Presence: Codable {
                 public let channel: RealtimeChannel<ChannelMessage>
 
+                public init(channel: RealtimeChannel<ChannelMessage>) {
+                    self.channel = channel
+                }
+
                 public struct ChannelMessage: Codable {
                     public let online: Bool
+
+                    public init(online: Bool) {
+                        self.online = online
+                    }
                 }
             }
 
@@ -89,8 +118,16 @@ public class Api {
             public struct Inner: Codable {
                 public let channel: RealtimeChannel<ChannelMessage>
 
+                public init(channel: RealtimeChannel<ChannelMessage>) {
+                    self.channel = channel
+                }
+
                 public struct ChannelMessage: Codable {
                     public let count: Int
+
+                    public init(count: Int) {
+                        self.count = count
+                    }
                 }
             }
         }
@@ -101,8 +138,16 @@ public class Api {
         public struct Result: Codable {
             public let channel: RealtimeChannel<ChannelMessage>
 
+            public init(channel: RealtimeChannel<ChannelMessage>) {
+                self.channel = channel
+            }
+
             public struct ChannelMessage: Codable {
                 public let count: Int
+
+                public init(count: Int) {
+                    self.count = count
+                }
             }
         }
     }

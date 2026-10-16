@@ -23,6 +23,7 @@
     "vendorize": "node ../../packages/blocks/dist/vendorize.js"
   },
   "dependencies": {
+    "@aws-blocks/bb-auth": "*",
     "@aws-blocks/blocks": "*",
     "nuxt": "^4.0.0",
     "vue": "^3.5.0"

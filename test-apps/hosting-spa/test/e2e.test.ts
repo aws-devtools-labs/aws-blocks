@@ -1,8 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, expect } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -10,19 +9,17 @@ import { dirname, join } from 'node:path';
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
 let hostingUrl: string;
+/** The deployed stack's test-support secret (sandbox only). Never log it. */
+let testSupportSecret = '';
 
-// ── Deploy / Teardown ──────────────────────────────────────────────────────
+// ── Stack outputs (deployed by test/global-setup.ts) ────────────────────────
 
 test.beforeAll(async () => {
   if (ENV === 'sandbox') {
-    console.log('🚀 Deploying hosting-spa sandbox...\n');
-    execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
-      cwd: projectRoot, stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
+    // The stack was deployed once for this run by `globalSetup` (test/global-setup.ts);
+    // this hook runs per worker, so a retry re-reads the outputs instead of redeploying.
 
     const outputs = JSON.parse(readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
@@ -32,20 +29,51 @@ test.beforeAll(async () => {
     if (!hostingUrl) throw new Error('HostingHostingUrl* not found in stack outputs: ' + JSON.stringify(stackOutputs));
     if (!hostingUrl.startsWith('http')) hostingUrl = `https://${hostingUrl}`;
     console.log(`\n✅ Deployed at: ${hostingUrl}\n`);
+
+    testSupportSecret = await readTestSupportSecret(stackOutputs);
   } else {
     hostingUrl = process.env.HOSTING_URL || 'http://localhost:3000';
   }
 });
 
-test.afterAll(async () => {
-  if (ENV === 'sandbox' && !process.env.BLOCKS_SANDBOX_KEEP) {
-    console.log('\n🗑️  Destroying sandbox...');
-    execFileSync('npx', ['tsx', 'test/sandbox-destroy.ts', backendPath], {
-      cwd: projectRoot, stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-  }
-});
+// Teardown: `globalTeardown` (test/global-teardown.ts) destroys the stack once, after all tests and retries.
+
+/**
+ * Read the stack's test-support secret: a random SSM SecureString the stack
+ * generates at deploy, named by the `TestSupportSecretParameter` output. See
+ * "Sandbox e2e test support" in `aws-blocks/index.ts`.
+ */
+async function readTestSupportSecret(stackOutputs: Record<string, string>): Promise<string> {
+  const key = Object.keys(stackOutputs).find(k => k.startsWith('TestSupportSecretParameter'));
+  if (!key) throw new Error('TestSupportSecretParameter* not found in stack outputs: ' + JSON.stringify(stackOutputs));
+  const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
+  const out = await new SSMClient({}).send(new GetParameterCommand({ Name: stackOutputs[key], WithDecryption: true }));
+  if (!out.Parameter?.Value) throw new Error(`SSM parameter ${stackOutputs[key]} has no value`);
+  return out.Parameter.Value;
+}
+
+/** Call `testSupport.provisionUser` and return the raw JSON-RPC response body. */
+async function callProvisionUser(request: APIRequestContext, secret: string, username: string, password: string) {
+  const resp = await request.post(`${hostingUrl}/aws-blocks/api`, {
+    headers: { 'Content-Type': 'application/json' },
+    data: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'testSupport.provisionUser',
+      params: [secret, username, password],
+      id: 1,
+    }),
+  });
+  return await resp.json();
+}
+
+/**
+ * Create a confirmed user through the backend's `testSupport.provisionUser`
+ * RPC (sandbox only — see `aws-blocks/index.ts`).
+ */
+async function provisionUser(request: APIRequestContext, username: string, password: string) {
+  const body = await callProvisionUser(request, testSupportSecret, username, password);
+  expect(body.result).toEqual({ success: true });
+}
 
 // ── Full User Journey ──────────────────────────────────────────────────────
 
@@ -75,20 +103,29 @@ test.describe('Notes Manager — SPA Hosting', () => {
     await expect(page.locator('h1')).toContainText('Notes Manager');
   });
 
-  test('4. Sign up → confirm → login → dashboard', async ({ page }) => {
+  test('4. Sign up → confirm → login → dashboard', async ({ page, request }) => {
     await page.goto(hostingUrl);
     await expect(page.locator('#app-status')).toHaveText('Ready');
 
-    // Sign up
-    await page.fill('#login-username', testUser);
-    await page.fill('#login-password', testPassword);
-    await page.click('#btn-signup');
-    await expect(page.locator('#auth-info')).toContainText('Account created');
-    await expect(page.locator('#confirm-section')).toBeVisible();
+    if (ENV === 'sandbox') {
+      // Cognito emails the sign-up code and this run has no mailbox to read it
+      // from, so the deployed run provisions a confirmed user instead. The
+      // local run below covers the sign-up form and the emailed-code step.
+      await provisionUser(request, testUser, testPassword);
+      await page.fill('#login-username', testUser);
+      await page.fill('#login-password', testPassword);
+    } else {
+      // Sign up
+      await page.fill('#login-username', testUser);
+      await page.fill('#login-password', testPassword);
+      await page.click('#btn-signup');
+      await expect(page.locator('#auth-info')).toContainText('Account created');
+      await expect(page.locator('#confirm-section')).toBeVisible();
 
-    // Confirm (code auto-filled by test shortcut)
-    await page.click('#btn-confirm');
-    await expect(page.locator('#auth-info')).toContainText('Confirmed');
+      // Confirm (code auto-filled by test shortcut)
+      await page.click('#btn-confirm');
+      await expect(page.locator('#auth-info')).toContainText('Confirmed');
+    }
 
     // Login
     await page.click('#btn-login');
@@ -101,6 +138,9 @@ test.describe('Notes Manager — SPA Hosting', () => {
   });
 
   test('4b. authGetLastCode is keyed per-user', async ({ request }) => {
+    // The deployed run provisions its user instead of signing up (Cognito emails
+    // the code and the mock-only hook never runs), so there is no code to read.
+    test.skip(ENV === 'sandbox', 'no delivered code on AWS: test 4 provisions the user');
     // Pins the contract this fix introduces: the delivered-code read is scoped
     // to the username, so a code is never returned for a user who never signed
     // up, and the record returned belongs to the user asked for. Called over
@@ -213,5 +253,16 @@ test.describe('Notes Manager — SPA Hosting', () => {
     await expect(statsLocator).not.toHaveText('...');
     await expect(statsLocator).not.toHaveText('0');
     await expect(statsLocator).toHaveText(/^[1-9]\d*$/);
+  });
+});
+
+// `testSupport.provisionUser` creates accounts, so it must not exist on a normal
+// build (local dev included), and on the sandbox e2e build it must refuse a
+// caller without the deploy's secret.
+test.describe('Test support endpoint is gated', () => {
+  test('absent from a normal build; refuses a wrong secret on the e2e build', async ({ request }) => {
+    const body = await callProvisionUser(request, 'not-the-secret', `e2e-gate-${Date.now()}@example.com`, 'TestPass123!');
+    expect(body.result).toBeUndefined();
+    expect(body.error.code).toBe(ENV === 'sandbox' ? 403 : -32601);
   });
 });

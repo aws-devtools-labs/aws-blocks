@@ -6,9 +6,14 @@
  * native apps) and the server just needs to validate the incoming JWT.
  *
  * No session store, no sign-in flow, no cookies — pure stateless verification.
+ *
+ * Implements the `BlocksAuth` contract (the interface the `Auth` block
+ * implements), so any drift from that contract is a compile error here, and
+ * throws the same error names as `Auth` (`AuthErrors`), so clients can match
+ * them with `isBlocksError(e, 'NotAuthenticatedException')`.
  */
 
-import { ApiError, type BlocksContext } from '@aws-blocks/blocks';
+import { ApiError, AuthErrors, type BlocksAuth, type BlocksContext } from '@aws-blocks/blocks';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 
 type CognitoVerifierInstance = ReturnType<typeof CognitoJwtVerifier.create>;
@@ -35,7 +40,19 @@ export interface CognitoVerifiedUser {
   claims: Record<string, unknown>;
 }
 
-export class CognitoVerifier {
+/** A string claim, or `undefined` when it is absent or not a string. */
+function stringClaim(claims: Record<string, unknown>, name: string): string | undefined {
+  const value = claims[name];
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** A string-array claim (e.g. `cognito:groups`), or `[]` when it is absent or malformed. */
+function stringListClaim(claims: Record<string, unknown>, name: string): string[] {
+  const value = claims[name];
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+}
+
+export class CognitoVerifier implements BlocksAuth {
   private options: CognitoVerifierOptions;
   private verifier: CognitoVerifierInstance | null = null;
 
@@ -68,14 +85,16 @@ export class CognitoVerifier {
 
     try {
       const verifier = await this.getVerifier();
-      const payload = await verifier.verify(token) as Record<string, unknown>;
+      const claims: Record<string, unknown> = await verifier.verify(token);
+      const sub = stringClaim(claims, 'sub');
+      if (!sub) return null;
       return {
-        userId: payload.sub as string,
-        username: (payload['cognito:username'] as string) || (payload.sub as string),
-        sub: payload.sub as string,
-        groups: (payload['cognito:groups'] as string[]) || [],
-        email: payload.email as string | undefined,
-        claims: payload,
+        userId: sub,
+        username: stringClaim(claims, 'cognito:username') || sub,
+        sub,
+        groups: stringListClaim(claims, 'cognito:groups'),
+        email: stringClaim(claims, 'email'),
+        claims,
       };
     } catch {
       return null;
@@ -87,20 +106,24 @@ export class CognitoVerifier {
     return (await this.getCurrentUser(context)) !== null;
   }
 
-  /** Verify the bearer token. Throws 401 if missing or invalid. */
+  /** Verify the bearer token. Throws 401 `NotAuthenticatedException` if missing or invalid. */
   async requireAuth(context: BlocksContext): Promise<CognitoVerifiedUser> {
     const user = await this.getCurrentUser(context);
     if (!user) {
-      throw new ApiError('Unauthorized', 401);
+      throw new ApiError('Unauthorized', 401, { name: AuthErrors.NotAuthenticated });
     }
     return user;
   }
 
-  /** Require the user to be in a specific Cognito group. Throws 403 if not. */
-  async requireGroup(context: BlocksContext, group: string): Promise<CognitoVerifiedUser> {
+  /**
+   * Require the user to be in a specific Cognito group (the token's
+   * `cognito:groups` claim). Throws 401 `NotAuthenticatedException` if not
+   * signed in, 403 `NotAuthorizedException` if not in the group.
+   */
+  async requireRole(context: BlocksContext, role: string): Promise<CognitoVerifiedUser> {
     const user = await this.requireAuth(context);
-    if (!user.groups.includes(group)) {
-      throw new ApiError('Forbidden', 403);
+    if (!user.groups.includes(role)) {
+      throw new ApiError('Forbidden', 403, { name: AuthErrors.NotAuthorized });
     }
     return user;
   }

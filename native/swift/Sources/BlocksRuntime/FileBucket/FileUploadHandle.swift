@@ -42,6 +42,32 @@ public class FileUploadHandle {
         return FileUploadHandle(url: url, contentType: contentType)
     }
 
+    private enum DescriptorKeys: String, CodingKey {
+        case blocksType = "__blocks"
+        case url
+        case contentType
+    }
+
+    /// Decodes a handle from its `{ "__blocks": "file-bucket/upload", "url": …, "contentType"?: … }` descriptor,
+    /// so a generated model can hold one in a field, an array, a dictionary or an optional.
+    public required convenience init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DescriptorKeys.self)
+        try TransferableDescriptor.check(container, key: .blocksType, expected: "file-bucket/upload")
+        self.init(
+            url: try container.decode(String.self, forKey: .url),
+            contentType: try container.decodeIfPresent(String.self, forKey: .contentType)
+        )
+    }
+
+    /// Encodes the handle's descriptor, as the server's `toJSON()` sends it:
+    /// `{ "__blocks": "file-bucket/upload", "url", "contentType"? }`.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DescriptorKeys.self)
+        try container.encode("file-bucket/upload", forKey: .blocksType)
+        try container.encode(url, forKey: .url)
+        try container.encodeIfPresent(contentType, forKey: .contentType)
+    }
+
     /// Returns the presigned upload URL.
     public func getUrl() -> String { url }
 
@@ -116,3 +142,5 @@ public class FileUploadHandle {
         }
     }
 }
+
+extension FileUploadHandle: Codable {}

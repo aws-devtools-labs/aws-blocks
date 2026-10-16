@@ -17,21 +17,32 @@
  *   node_modules/@aws-blocks/blocks/README.md
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, ApiError, Scope, AuthBasic, DistributedTable, FileBucket } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, Auth, DistributedTable, FileBucket } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
-const auth = new AuthBasic(scope, 'auth', {
-  passwordPolicy: { minLength: 8 },
+// Email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// Sign-up confirms the email address with a 6-digit code; once the caller
+// submits it they are signed in automatically. On AWS, Cognito emails the code.
+const auth = new Auth(scope, 'auth', {
+  // Users sign in with their email, matched ignoring case. Both are fixed when
+  // the user pool is created, and this is also the pool shape Amplify's client
+  // libraries expect, so a frontend can later sign in with them too.
+  users: { signInWith: ['email'], caseSensitive: false },
+  // Local dev only: no email is sent, so print the code in the `npm run dev`
+  // terminal. Ignored on AWS.
+  codeDelivery: async (username, code, purpose) => {
+    console.log(`[auth] ${purpose} code for ${username}: ${code}`);
+  },
 });
 export const authApi = auth.createApi();
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 // Zod schema = runtime validation + TypeScript types + DynamoDB table shape.
 const itemSchema = z.object({
-  owner: z.string(),        // partition key — per-user isolation
+  owner: z.string(),        // partition key — the owner's userSub (per-user isolation)
   itemId: z.string(),       // sort key — unique within a user
   name: z.string(),
   quantity: z.number(),
@@ -76,7 +87,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     const itemId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const item = {
-      owner: user.username,
+      owner: user.userSub,
       itemId,
       name,
       quantity,
@@ -91,14 +102,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async listItems() {
     const user = await auth.requireAuth(context);
     return await Array.fromAsync(
-      items.query({ where: { owner: { equals: user.username } } }),
+      items.query({ where: { owner: { equals: user.userSub } } }),
     );
   },
 
   /** Fetch one of the caller's items by id. */
   async getItem(itemId: string) {
     const user = await auth.requireAuth(context);
-    const item = await items.get({ owner: user.username, itemId });
+    const item = await items.get({ owner: user.userSub, itemId });
     if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     return item;
   },
@@ -113,7 +124,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    */
   async updateQuantity(itemId: string, quantity: number) {
     const user = await auth.requireAuth(context);
-    const item = await items.get({ owner: user.username, itemId });
+    const item = await items.get({ owner: user.userSub, itemId });
     if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     await items.put(
       { ...item, quantity, version: item.version + 1 },
@@ -132,7 +143,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    */
   async setQuantity(itemId: string, quantity: number, expectedVersion: number) {
     const user = await auth.requireAuth(context);
-    const item = await items.get({ owner: user.username, itemId });
+    const item = await items.get({ owner: user.userSub, itemId });
     if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     await items.put(
       { ...item, quantity, version: expectedVersion + 1 },
@@ -144,7 +155,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   /** Delete one of the caller's items. */
   async deleteItem(itemId: string) {
     const user = await auth.requireAuth(context);
-    await items.delete({ owner: user.username, itemId });
+    await items.delete({ owner: user.userSub, itemId });
     return { success: true };
   },
 }));

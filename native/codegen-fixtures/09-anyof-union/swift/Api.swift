@@ -40,17 +40,22 @@ public class Api {
                 try c.encodeIfPresent(self.fuzzy, forKey: .fuzzy)
                 try c.encode(self.text, forKey: .text)
             }
+
+            public init(fuzzy: Bool? = nil, text: String) {
+                self.fuzzy = fuzzy
+                self.text = text
+            }
         }
 
         public enum Query: Codable {
-            case query_Variant0
+            case query_Variant0(String)
             case query_Variant1(Query_Variant1)
 
             public func encode(to encoder: Encoder) throws {
                 switch self {
-                case .query_Variant0:
-                    var c = encoder.container(keyedBy: EmptyKey.self)
-                    _ = c
+                case .query_Variant0(let payload):
+                    var container = encoder.singleValueContainer()
+                    try container.encode(payload)
                 case .query_Variant1(let payload):
                     try payload.encode(to: encoder)
                 }
@@ -59,10 +64,14 @@ public class Api {
             public init(from decoder: Decoder) throws {
                 var lastError: Error?
                 do {
+                    self = .query_Variant0(try decoder.singleValueContainer().decode(String.self))
+                    return
+                } catch { lastError = error }
+                do {
                     self = .query_Variant1(try Query_Variant1(from: decoder))
                     return
                 } catch { lastError = error }
-                self = .query_Variant0
+                throw lastError ?? DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "No Query variant matched"))
             }
 
             private enum EmptyKey: CodingKey {}
@@ -70,6 +79,10 @@ public class Api {
 
         public struct Result: Codable {
             public let count: Int
+
+            public init(count: Int) {
+                self.count = count
+            }
         }
     }
 }

@@ -2,23 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Native-bindings test backend — exercises the blocks that native clients
-// (Swift, Kotlin, Dart) consume: auth (basic, cognito, OIDC), realtime,
-// file storage, and key-value.
+// (Swift, Kotlin, Dart) consume: auth (three `Auth` instances: email +
+// password, a Cognito-style configuration, and OIDC through the local stub
+// IdP), realtime, file storage, and key-value.
 
 import {
   ApiNamespace,
   Scope,
   KVStore,
-  AuthBasic,
-  AuthCognito,
-  AuthOIDC,
-  stubIdp,
-  relayOrigin,
   Realtime,
   RealtimeChannel,
   FileBucket,
   DistributedTable,
 } from '@aws-blocks/blocks';
+import { Auth, relayOrigin, stubIdp } from '@aws-blocks/bb-auth';
+import type { AuthenticatedUser, AuthOptions, CodeDeliveryPurpose, SignInResult } from '@aws-blocks/bb-auth';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
@@ -32,41 +30,85 @@ const scope = new Scope('native-bindings');
 // --- KVStore -----------------------------------------------------------------
 const store = new KVStore(scope, 'store', {});
 
-// --- AuthBasic ---------------------------------------------------------------
-const authBasic = new AuthBasic(scope, 'auth-basic', {});
+// --- Verification codes (local dev only) --------------------------------------
+// Every self-service sign-up confirms the email address with a code. Locally no
+// email is sent: `codeDelivery` (a mock-only hook — the AWS runtime ignores it
+// and Cognito emails the code) hands each code to this backend, and the
+// `*GetLastCode` methods let the native e2e suites read it back. Against a
+// deployed backend they return `null`.
+interface DeliveredCode {
+  code: string;
+  purpose: CodeDeliveryPurpose;
+}
 
-// --- AuthCognito -------------------------------------------------------------
-let lastCognitoCode: { username: string; code: string; purpose: string } | null = null;
-const authCognito = new AuthCognito(scope, 'auth-cognito', {
-  passwordPolicy: { minLength: 8, requireDigits: true },
-  // NOTE: `email` is a built-in standard Cognito attribute and must NOT be
-  // declared here (see DESIGN.md — built-ins are implicit). Declaring it made
-  // the const-O-narrowed `CognitoUser.attributes` schema carry both `email`
-  // and `custom:email`, which the Dart codegen turned into a duplicate /
-  // `:`-in-identifier compile error. No custom attributes are needed here.
-  groups: ['admins', 'users'],
-  mfa: 'off',
-  mfaTypes: ['TOTP'],
-  selfSignUp: true,
-  codeDelivery: async (username, code, purpose) => {
-    lastCognitoCode = { username, code, purpose };
-    console.log(`[AuthCognito] ${purpose} code for "${username}": ${code}`);
-  },
+function codeInbox() {
+  const codes = new Map<string, DeliveredCode>();
+  return {
+    deliver: async (username: string, code: string, purpose: CodeDeliveryPurpose) => {
+      codes.set(username, { code, purpose });
+      console.log(`[auth] ${purpose} code for "${username}": ${code}`);
+    },
+    last: (username: string): DeliveredCode | null => codes.get(username) ?? null,
+  };
+}
+
+// --- Auth: email + password ----------------------------------------------------
+// Block id kept from the `AuthBasic` instance this replaces.
+const basicCodes = codeInbox();
+const authBasic = new Auth(scope, 'auth-basic', {
+  // Disposable test stack: say so explicitly (a real app retains its pool).
+  removalPolicy: 'destroy',
+  codeDelivery: basicCodes.deliver,
 });
 
-// --- AuthOIDC ----------------------------------------------------------------
+// --- Auth: Cognito-style configuration -----------------------------------------
+// Block id and options kept from the `AuthCognito` instance this replaces.
+// `email` is a built-in standard attribute, so it is not declared under
+// `users.attributes` (only custom attributes are).
+const cognitoCodes = codeInbox();
+const authCognito = new Auth(scope, 'auth-cognito', {
+  emailPassword: {
+    selfSignUp: true,
+    passwordPolicy: { minLength: 8, requireDigits: true },
+  },
+  users: { groups: ['admins', 'users'] },
+  mfa: { mode: 'off', types: ['TOTP'] },
+  removalPolicy: 'destroy',
+  codeDelivery: cognitoCodes.deliver,
+});
+
+// --- Auth: OIDC through the local stub IdP --------------------------------------
+// Block id kept from the `AuthOIDC` instance this replaces. No email + password,
+// so no Cognito user pool is provisioned for this block.
+//
+// The stub IdP is local-only by default; this test app opts in with
+// `unsafeAllowDeployed: true`, so a deployed backend (a disposable CI stack)
+// serves it too and the native OIDC suites can sign in against it — never do
+// this in a real app: a deployed stub signs anyone in as its users. To federate
+// a real IdP instead, deploy with NATIVE_E2E_OIDC_ISSUER and
+// NATIVE_E2E_OIDC_CLIENT_ID (requirements in `.github/workflows/native-sdk-e2e.yml`):
+// the provider keyed `google` (the id the suites sign in with) then federates
+// that IdP directly, as a public PKCE client. `index.cdk.ts` forwards both
+// variables to the deployed handler, so the Lambda builds the same provider
+// synth did.
+const e2eIdpIssuer = process.env.NATIVE_E2E_OIDC_ISSUER;
+const e2eIdpClientId = process.env.NATIVE_E2E_OIDC_CLIENT_ID;
+
 let lastOidcSignIn: { userId: string; email: string | null; provider: string } | null = null;
 
-const oidcAuth = new AuthOIDC(scope, 'auth-oidc', {
-  providers: [
-    stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
-  ],
-  allowedRelayOrigins: [
-    relayOrigin('nativebindings://auth'),
-    relayOrigin('com.example.nativebindings://auth'),
-  ],
+const oidcAuth = new Auth(scope, 'auth-oidc', {
+  emailPassword: false,
+  oidcProviders: {
+    google:
+      e2eIdpIssuer && e2eIdpClientId
+        ? { issuer: e2eIdpIssuer, clientId: e2eIdpClientId }
+        : stubIdp({ onAuthorize: (req) => req.users[0], unsafeAllowDeployed: true }),
+  },
+  redirects: {
+    allowedRelayOrigins: [relayOrigin('nativebindings://auth'), relayOrigin('com.example.nativebindings://auth')],
+  },
   onSignIn: async (user) => {
-    lastOidcSignIn = { userId: user.userId, email: user.email, provider: user.provider };
+    lastOidcSignIn = { userId: user.userId, email: user.attributes.email ?? null, provider: user.signInProvider };
   },
 });
 
@@ -92,8 +134,11 @@ const realtime = new Realtime(scope, 'collab', {
 });
 
 // --- DistributedTable (Todos) ------------------------------------------------
+// Per-user todos: the partition key is the owner's `userSub` (stable for the
+// user's lifetime), and every todo method reads and writes only the caller's
+// partition, so one user can never list, read or change another user's todos.
 const todoSchema = z.object({
-  userId: z.string(),
+  userSub: z.string(),
   todoId: z.string(),
   title: z.string(),
   completed: z.boolean(),
@@ -102,7 +147,7 @@ const todoSchema = z.object({
 });
 
 export interface Todo {
-  userId: string;
+  userSub: string;
   todoId: string;
   title: string;
   completed: boolean;
@@ -113,16 +158,16 @@ export interface Todo {
 const todos = new DistributedTable(scope, 'todos', {
   schema: todoSchema,
   key: {
-    partitionKey: 'userId',
+    partitionKey: 'userSub',
     sortKey: 'todoId',
   },
   indexes: {
     byPriority: {
-      partitionKey: 'userId',
+      partitionKey: 'userSub',
       sortKey: 'priority',
     },
     byCreatedAt: {
-      partitionKey: 'userId',
+      partitionKey: 'userSub',
       sortKey: 'createdAt',
     },
   },
@@ -130,6 +175,57 @@ const todos = new DistributedTable(scope, 'todos', {
 
 // --- FileBucket --------------------------------------------------------------
 const bucket = new FileBucket(scope, 'files', { removalPolicy: 'destroy' });
+
+// ============================================================================
+// Shapes returned to native clients
+// ============================================================================
+
+/** The signed-in user, as the native suites read it. */
+export interface NativeUser {
+  userId: string;
+  username: string;
+  userSub: string;
+}
+
+/**
+ * A flattened sign-in result. `status` is a string discriminator (the native
+ * generators need one); `nextStep` names the challenge when sign-in needs
+ * another step.
+ */
+export interface NativeSignInResult {
+  status: 'signedIn' | 'continueSignIn';
+  user: NativeUser | null;
+  nextStep: string | null;
+}
+
+/** An OIDC user, as the native suites read it. */
+export interface OidcUserInfo {
+  userId: string;
+  userSub: string;
+  email: string | null;
+  name: string | null;
+  provider: string;
+}
+
+function nativeUser(user: AuthenticatedUser): NativeUser {
+  return { userId: user.userId, username: user.username, userSub: user.userSub };
+}
+
+function nativeSignIn<O extends AuthOptions>(result: SignInResult<O>): NativeSignInResult {
+  return result.status === 'signedIn'
+    ? { status: 'signedIn', user: nativeUser(result.user), nextStep: null }
+    : { status: 'continueSignIn', user: null, nextStep: result.nextStep.name };
+}
+
+function oidcUserInfo(user: AuthenticatedUser): OidcUserInfo {
+  return {
+    userId: user.userId,
+    userSub: user.userSub,
+    email: user.attributes.email ?? null,
+    name: user.attributes.name ?? null,
+    provider: user.signInProvider,
+  };
+}
 
 // ============================================================================
 // API
@@ -166,17 +262,31 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   // --------------------------------------------------------------------------
-  // AuthBasic
+  // Auth — email + password (`auth-basic`)
   // --------------------------------------------------------------------------
 
-  async basicSignUp(username: string, password: string) {
-    await authBasic.signUp(username, password);
+  /** Register a user. The emailed code (`basicGetLastCode` locally) confirms it. */
+  async basicSignUp(username: string, password: string, email: string) {
+    const r = await authBasic.signUp(username, password, { attributes: { email } }, context);
+    return { isSignUpComplete: r.isSignUpComplete, userId: r.userId ?? null };
+  },
+
+  /** Confirm the sign-up with the emailed code; signs the user in (auto sign-in). */
+  async basicConfirmSignUp(username: string, code: string): Promise<NativeSignInResult> {
+    const confirmed = await authBasic.confirmSignUp(username, code, context);
+    if (confirmed.nextStep.signUpStep !== 'COMPLETE_AUTO_SIGN_IN') {
+      return { status: 'continueSignIn', user: null, nextStep: 'SIGN_IN' };
+    }
+    return nativeSignIn(await authBasic.autoSignIn(context));
+  },
+
+  async basicResendSignUpCode(username: string) {
+    await authBasic.resendSignUpCode(username);
     return { success: true };
   },
 
-  async basicSignIn(username: string, password: string) {
-    const user = await authBasic.signIn(username, password, context);
-    return { userId: user.userId, username: user.username };
+  async basicSignIn(username: string, password: string): Promise<NativeSignInResult> {
+    return nativeSignIn(await authBasic.signIn(username, password, context));
   },
 
   async basicSignOut() {
@@ -184,32 +294,36 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async basicGetCurrentUser() {
-    return await authBasic.getCurrentUser(context);
+  async basicGetCurrentUser(): Promise<NativeUser | null> {
+    const user = await authBasic.getCurrentUser(context);
+    return user ? nativeUser(user) : null;
   },
 
   async basicCheckAuth() {
     return await authBasic.checkAuth(context);
   },
 
-  async basicRequireAuth() {
-    const user = await authBasic.requireAuth(context);
-    return { userId: user.userId, username: user.username };
+  async basicRequireAuth(): Promise<NativeUser> {
+    return nativeUser(await authBasic.requireAuth(context));
   },
 
+  /** The last code sent to `username` (local dev server only; `null` on AWS). */
+  async basicGetLastCode(username: string) {
+    return basicCodes.last(username);
+  },
 
   // --------------------------------------------------------------------------
-  // AuthCognito
+  // Auth — Cognito-style configuration (`auth-cognito`)
   // --------------------------------------------------------------------------
 
   async cognitoSignUp(username: string, password: string, email: string) {
-    const r = await authCognito.signUp(username, password, { attributes: { email } });
-    return { isSignUpComplete: r.isSignUpComplete, userId: r.userId, nextStep: r.nextStep };
+    const r = await authCognito.signUp(username, password, { attributes: { email } }, context);
+    return { isSignUpComplete: r.isSignUpComplete, userId: r.userId ?? null, nextStep: r.nextStep ?? null };
   },
 
   async cognitoConfirmSignUp(username: string, code: string) {
-    await authCognito.confirmSignUp(username, code);
-    return { success: true };
+    const r = await authCognito.confirmSignUp(username, code, context);
+    return { success: true, signUpStep: r.nextStep.signUpStep };
   },
 
   async cognitoResendSignUpCode(username: string) {
@@ -242,14 +356,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return await authCognito.requireAuth(context);
   },
 
-  async cognitoRequireRole(role: string) {
-    // `const O` narrowed requireRole's param to the pool's group union; narrow
-    // the wire string at the boundary (runtime validates membership).
-    return await authCognito.requireRole(context, role as Parameters<typeof authCognito.requireRole>[1]);
+  async cognitoRequireRole(role: 'admins' | 'users') {
+    return await authCognito.requireRole(context, role);
   },
 
-  async cognitoFetchUserAttributes() {
-    return await authCognito.fetchUserAttributes(context);
+  async cognitoGetUserAttributes() {
+    return await authCognito.getUserAttributes(context);
   },
 
   async cognitoUpdatePassword(oldPassword: string, newPassword: string) {
@@ -282,7 +394,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // try-each-variant decoding that fails to compile. The explicit return type
   // also keeps the signed-out arm minimal — no phantom `null`-typed token
   // fields (which became invalid `Void?` in Swift).
-  async cognitoFetchAuthSession(): Promise<
+  async cognitoGetAuthSession(): Promise<
     | { status: 'signedOut' }
     | {
         status: 'signedIn';
@@ -291,7 +403,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
         accessToken: string;
       }
   > {
-    const session = await authCognito.fetchAuthSession(context);
+    const session = await authCognito.getAuthSession(context);
     if (!session.tokens) return { status: 'signedOut' };
     return {
       status: 'signedIn',
@@ -301,32 +413,31 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     };
   },
 
-  async cognitoGetLastCode() {
-    return lastCognitoCode;
+  /** The last code sent to `username` (local dev server only; `null` on AWS). */
+  async cognitoGetLastCode(username: string) {
+    return cognitoCodes.last(username);
   },
 
   // --------------------------------------------------------------------------
-  // AuthOIDC
+  // Auth — OIDC through the stub IdP (`auth-oidc`)
   // --------------------------------------------------------------------------
 
-  async oidcGetSignInUrl(provider: string) {
+  async oidcGetSignInUrl(provider: 'google') {
     const url = await oidcAuth.getSignInUrl(context, provider);
     return { url };
   },
 
-  async oidcRequireAuth() {
-    const user = await oidcAuth.requireAuth(context);
-    return { userId: user.userId, email: user.email, name: user.name, provider: user.provider, sub: user.sub };
+  async oidcRequireAuth(): Promise<OidcUserInfo> {
+    return oidcUserInfo(await oidcAuth.requireAuth(context));
   },
 
   async oidcCheckAuth() {
     return await oidcAuth.checkAuth(context);
   },
 
-  async oidcGetCurrentUser() {
+  async oidcGetCurrentUser(): Promise<OidcUserInfo | null> {
     const user = await oidcAuth.getCurrentUser(context);
-    if (!user) return null;
-    return { userId: user.userId, email: user.email, name: user.name, provider: user.provider, sub: user.sub };
+    return user ? oidcUserInfo(user) : null;
   },
 
   async oidcSignOut() {
@@ -336,10 +447,6 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async oidcGetLastSignIn() {
     return lastOidcSignIn;
-  },
-
-  async oidcGetProviders() {
-    return [...oidcAuth.providers];
   },
 
   // --------------------------------------------------------------------------
@@ -356,14 +463,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   // --------------------------------------------------------------------------
-  // Todos (DistributedTable)
+  // Todos (DistributedTable) — gated on the email + password block
   // --------------------------------------------------------------------------
 
   async createTodo(title: string, priority: number = 2): Promise<Todo> {
     const user = await authBasic.requireAuth(context);
     const ulid = Date.now().toString(36) + crypto.randomBytes(8).toString('hex');
     const todo: Todo = {
-      userId: user.username,
+      userSub: user.userSub,
       todoId: ulid,
       title,
       completed: false,
@@ -376,7 +483,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async listTodos(sortBy?: 'priority' | 'createdAt'): Promise<Todo[]> {
     const user = await authBasic.requireAuth(context);
-    const where = { userId: { equals: user.username } } as const;
+    const where = { userSub: { equals: user.userSub } } as const;
     let iterator;
     if (sortBy === 'priority') {
       iterator = todos.query({ index: 'byPriority', where });
@@ -390,20 +497,29 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async getTodo(todoId: string): Promise<Todo | null> {
     const user = await authBasic.requireAuth(context);
-    return await todos.get({ userId: user.username, todoId }) ?? null;
+    return await todos.get({ userSub: user.userSub, todoId }) ?? null;
   },
 
   async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {
     const user = await authBasic.requireAuth(context);
-    const existing = await todos.get({ userId: user.username, todoId });
+    const existing = await todos.get({ userSub: user.userSub, todoId });
     if (!existing) throw new Error('Todo not found');
-    await todos.put({ ...existing, ...updates });
+    // Copy only the editable fields. The RPC layer does not strip properties the
+    // signature doesn't declare, so spreading `updates` would let a caller rewrite
+    // `userSub` / `todoId` and write into another user's partition.
+    const { completed, priority, title } = updates ?? {};
+    await todos.put({
+      ...existing,
+      ...(completed !== undefined ? { completed } : {}),
+      ...(priority !== undefined ? { priority } : {}),
+      ...(title !== undefined ? { title } : {}),
+    });
     return { success: true };
   },
 
   async deleteTodo(todoId: string) {
     const user = await authBasic.requireAuth(context);
-    await todos.delete({ userId: user.username, todoId });
+    await todos.delete({ userSub: user.userSub, todoId });
     return { success: true };
   },
 
@@ -449,5 +565,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       files.push({ path: file.path, size: file.size });
     }
     return files;
+  },
+
+  // --------------------------------------------------------------------------
+  // Wire contract
+  // --------------------------------------------------------------------------
+
+  /**
+   * Echoes its arguments as the server received them; one left out is `null`. JSON-RPC params
+   * are positional here, so a native client that leaves out `middle` but sets `last` must send
+   * `last` in the third slot (native e2e: Kotlin `RpcWireE2ETest`, Dart `rpc_wire_test.dart`).
+   */
+  async echoArgs(first: string, middle?: string, last?: string) {
+    return { first, middle: middle ?? null, last: last ?? null };
   },
 }));

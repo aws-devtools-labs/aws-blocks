@@ -4,17 +4,19 @@
 /**
  * Shared session-cookie security policy for all Blocks auth Building Blocks.
  *
- * Historically each auth BB (`bb-auth-basic`, `bb-auth-cognito`,
- * `bb-auth-oidc`) hand-rolled its own `SameSite` / `Secure` / `Partitioned`
+ * Historically each of the three auth BBs that `Auth` (`bb-auth`) has since
+ * replaced — the removed `bb-auth-basic`, `bb-auth-cognito` and
+ * `bb-auth-oidc` — hand-rolled its own `SameSite` / `Secure` / `Partitioned`
  * selection. They drifted: basic and cognito defaulted to `SameSite=None`
  * (chosen to survive the legacy cross-port dev setup, frontend :3000 +
  * API :3001), while oidc defaulted to `SameSite=Lax`.
  *
  * With the single-origin dev proxy the API and frontend share one origin in
- * local dev, so the cross-port reason for `None` is gone. All three BBs now
- * default to `SameSite=Lax` and route every cookie set/clear through the
- * helpers in this module so they converge **structurally** rather than by
- * coincidence of matching strings.
+ * local dev, so the cross-port reason for `None` is gone. All three BBs then
+ * defaulted to `SameSite=Lax` and routed every cookie set/clear through the
+ * helpers in this module so they converged **structurally** rather than by
+ * coincidence of matching strings. `Auth` (`bb-auth`), which replaced all
+ * three, does the same.
  *
  * @module
  */
@@ -94,9 +96,9 @@ export function resolveCookieSecurity(input: CookieSecurityInput): CookieSecurit
  * Build the canonical security-attribute substring of a `Set-Cookie`
  * header (`SameSite=…[; Secure][; Partitioned]`) for the given inputs.
  *
- * BBs that assemble cookie strings by hand (`bb-auth-basic`,
- * `bb-auth-cognito`) concatenate this with the cookie name/value,
- * `HttpOnly`, `Path`, and `Max-Age`. Routing through one builder is what
+ * `bb-auth` assembles its cookie strings by hand: it concatenates this with
+ * the cookie name/value, `HttpOnly`, `Path`, and `Max-Age` (as the removed
+ * `bb-auth-basic` / `bb-auth-cognito` did before it). Routing through one builder is what
  * keeps the family from drifting again.
  *
  * @param input - Whether the deploy is cross-domain and whether the request
@@ -117,10 +119,10 @@ export function buildCookieSecurityAttrs(input: CookieSecurityInput): string {
  * (`localhost`, `127.0.0.1`, `[::1]`) by inspecting the `Origin` header
  * (falling back to `Host`).
  *
- * BBs that select cookie attributes per-request (`bb-auth-basic`,
- * `bb-auth-cognito`) use this to feed `isLocalhost`. The OIDC BB instead
- * decides localhost-ness at construction time via its runtime entry point
- * (mock vs aws), so it does not call this.
+ * `bb-auth` selects cookie attributes per request and uses this to feed
+ * `isLocalhost` (as the removed `bb-auth-basic` / `bb-auth-cognito` did
+ * before it). The removed OIDC BB instead decided localhost-ness at construction time via its
+ * runtime entry point (mock vs aws), so it did not call this.
  *
  * We can't sniff `https://` reliably because the Blocks dev server always
  * serves plain HTTP even when fronted by HTTPS in production.

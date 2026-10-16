@@ -1,0 +1,6 @@
+import type { AuthActionFields, AuthNextStepName } from '@aws-blocks/bb-auth/ui';
+import { authOverrides as typed } from '@aws-blocks/bb-auth/ui';
+
+export type SignInField = AuthActionFields['signIn'];
+export const step: AuthNextStepName = 'CONFIRM_SIGN_IN_WITH_TOTP_CODE';
+export const overrides = typed({ headings: { signedOut: 'Welcome back' } });

@@ -2,17 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Live AWS e2e suite for the AuthCognito Building Block.
+ * Live AWS e2e suite for the `Auth` Building Block's `authC` / `authCMfa`
+ * instances (formerly `AuthCognito`).
  *
  * Unlike the mock-backed `auth-cognito.test.ts` (which reads verification
  * codes via `authCGetLastCode`), this suite provisions real Cognito users
  * via admin APIs — `AdminCreateUser` + `AdminSetUserPassword` + optional
- * `AdminAddUserToGroup` — and exercises every public AuthCognito method
+ * `AdminAddUserToGroup` — and exercises every public `Auth` method
  * against the deployed API Gateway endpoint via HTTP.
  *
  * Prerequisites:
  *   - A deployed `bb-test-*` sandbox stack with the comprehensive backend.
- *   - `AWS_PROFILE=hsinghvq-Admin` (or equivalent) with Cognito admin + CFN
+ *   - `AWS_PROFILE=<your-sandbox-profile>` (or equivalent) with Cognito admin + CFN
  *     describe permissions.
  *   - Run from `test-apps/comprehensive` (reads `.blocks-sandbox/outputs.json`).
  *
@@ -93,8 +94,11 @@ async function discoverStack(): Promise<StackInfo> {
 	const apiUrl = stackOutputs.ApiUrl;
 	if (!apiUrl) throw new Error(`No ApiUrl in outputs for ${stackName}`);
 
-	// Walk stack resources to locate each AuthCognito's UserPool + Client.
-	// We can't rely on CfnOutputs — bb-auth-cognito doesn't emit any.
+	// Walk stack resources to locate the authC / authCMfa UserPool + Client.
+	// We can't rely on CfnOutputs — the Auth block doesn't emit any.
+	// Every email + password `Auth` instance in this app owns a pool (`auth`,
+	// `auth-same-origin` and `auth-cross-domain` too), so match each one by
+	// its construct path — `<id>/pool`, `<id>/client` — never by elimination.
 	const cfn = new CloudFormationClient({ region: REGION });
 	const resources: {
 		LogicalResourceId?: string;
@@ -115,10 +119,12 @@ async function discoverStack(): Promise<StackInfo> {
 		return arr.find((r) => (r.LogicalResourceId ?? '').toLowerCase().includes(needle));
 	}
 
-	const authCMfaPool = findByName(poolResources, 'authcmfa');
-	const authCPool = poolResources.find((r) => r !== authCMfaPool);
-	const authCMfaClient = findByName(clientResources, 'authcmfa');
-	const authCClient = clientResources.find((r) => r !== authCMfaClient);
+	// Logical ids are the construct path with separators removed, so
+	// `authC/pool` → `authCpool…` and `authCMfa/pool` → `authCMfapool…`.
+	const authCMfaPool = findByName(poolResources, 'authcmfapool');
+	const authCPool = findByName(poolResources, 'authcpool');
+	const authCMfaClient = findByName(clientResources, 'authcmfaclient');
+	const authCClient = findByName(clientResources, 'authcclient');
 
 	if (!authCPool || !authCClient) throw new Error('could not locate authC pool/client');
 	if (!authCMfaPool || !authCMfaClient) throw new Error('could not locate authCMfa pool/client');

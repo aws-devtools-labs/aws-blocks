@@ -20,10 +20,18 @@ public class Api {
 
         public struct Add: Codable {
             public let value: Double
+
+            public init(value: Double) {
+                self.value = value
+            }
         }
 
         public struct Remove: Codable {
             public let id: String
+
+            public init(id: String) {
+                self.id = id
+            }
         }
 
         public enum Input: Codable {
@@ -60,6 +68,10 @@ public class Api {
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { Hosting, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { Hosting, BlocksStack, BlocksPresets, registerConfig } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -37,6 +37,23 @@ new Hosting(blocksStack, 'Hosting', {
   framework: 'spa',
   api: blocksStack,
 });
+
+// Sandbox e2e only — see "Sandbox e2e test support" in `index.ts`. The flag
+// is read here at synth and registered as config (`registerConfig`, which
+// every compute loads into `process.env` before the backend module is
+// imported), so the deployed backend builds the same `testSupport` namespace
+// that synth did. The output names the SSM
+// parameter holding the per-deploy secret, which the harness reads.
+if (process.env.BLOCKS_TEST_ENV === 'sandbox') {
+  registerConfig(blocksStack, 'BLOCKS_TEST_ENV', 'sandbox');
+  // The `AppSetting` construct `index.ts` declares (its CDK layer carries `parameterName`).
+  const setting = blocksStack.node.findAll().find((c) => c.node.id === 'test-support-secret');
+  const parameterName = setting && 'parameterName' in setting ? setting.parameterName : undefined;
+  if (typeof parameterName !== 'string') {
+    throw new Error('BLOCKS_TEST_ENV=sandbox, but index.ts declared no test-support-secret AppSetting');
+  }
+  new cdk.CfnOutput(blocksStack, 'TestSupportSecretParameter', { value: parameterName });
+}
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-spa');
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');

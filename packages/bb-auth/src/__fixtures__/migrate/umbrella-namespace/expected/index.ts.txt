@@ -1,0 +1,29 @@
+import * as blocks from '@aws-blocks/blocks';
+
+const scope = new blocks.Scope('app');
+
+export const auth = new blocks.Auth(scope, 'auth', {
+	emailPassword: {
+		selfSignUp: true,
+	},
+	session: {
+		ttlSeconds: 3600,
+	},
+});
+
+export function label(user: blocks.AuthenticatedUser): string {
+	return user.username;
+}
+
+export const api = new blocks.ApiNamespace(scope, 'api', (context) => ({
+	async me() {
+		try {
+			const attrs = await auth.getUserAttributes(context);
+			return attrs.email ?? null;
+		} catch (e) {
+			// TODO(aws-blocks-auth-migrate): review this auth error check: Auth renamed some error names and changed which flows return which (see MIGRATION.md, "Error names").
+			if (blocks.isBlocksError(e, blocks.AuthErrors.NotAuthorized)) return null;
+			throw e;
+		}
+	},
+}));

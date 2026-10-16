@@ -85,18 +85,18 @@ dimensions* below — there is no per-task dimension to author.
 
 | Task | Template | Blocks exercised |
 |------|----------|------------------|
-| `auth-notes` | `demo` | AuthBasic + KVStore |
+| `auth-notes` | `demo` | Auth (email + password, emailed sign-up code) + KVStore |
 | `file-gallery` | `bare` | FileBucket |
 | `async-word-counter` | `bare` | AsyncJob + KVStore |
 | `collab-presence-board` | `default` | Realtime + DistributedTable |
-| `cognito-profile` | `auth-cognito` | AuthCognito (email-OTP) |
+| `cognito-profile` | `auth` | Auth (email + password sign-up confirmed with an emailed code; profile + session) |
 | `observability-api` | `backend` | Logger + Metrics + Tracer + AppSetting |
 | `sql-kb-catalog` | `nextjs` | Database + KnowledgeBase |
-| `oidc-dsql-notes` | `react` | AuthOIDC + DistributedDatabase |
+| `oidc-dsql-notes` | `react` | Auth (direct OIDC, stub IdP) + DistributedDatabase |
 | `email-digest` | `demo` | CronJob + EmailClient + KVStore |
 | `kb-chat-agent` | `demo` | Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use |
 
-These 10 cells cover 18 Building Blocks across 7 templates. The matrix in
+These 10 cells cover 16 Building Blocks across 7 templates. The matrix in
 `pr-agent-bench.yml` is an explicit `include:` list of (task, template) pairs —
 not a cross-product: each task runs on the single template that pre-ships (or
 best exercises) its blocks, to bound Bedrock spend. The `task` name is part of

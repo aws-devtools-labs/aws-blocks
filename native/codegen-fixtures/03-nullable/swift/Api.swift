@@ -35,6 +35,12 @@ public class Api {
                 try c.encodeIfPresent(self.bio, forKey: .bio)
                 try c.encode(self.name, forKey: .name)
             }
+
+            public init(age: Int? = nil, bio: String? = nil, name: String) {
+                self.age = age
+                self.bio = bio
+                self.name = name
+            }
         }
     }
 }

@@ -69,6 +69,8 @@ indirect enum JSONSchema: Decodable {
     case integer(format: String?, minimum: Int?, maximum: Int?)
     case boolean
     case null
+    /// `{"type": "unknown"}` — any JSON value (TypeScript `unknown`). Generated as `JSONValue`.
+    case unknown
     case oneOf([JSONSchema])
     case anyOf([JSONSchema])
     /// Hybrid arm: an `object` schema with fixed properties AND a nested
@@ -87,8 +89,10 @@ indirect enum JSONSchema: Decodable {
     case record(valueSchema: JSONSchema)
     /// Constant value (`{"const": "foo"}` or `{"const": 5}` from `z.literal`).
     /// Codegen treats these as a single-value enum so they participate in
-    /// discriminator detection.
-    case constLiteral(String)
+    /// discriminator detection. The value keeps its JSON type (a string, a
+    /// boolean or a number), and so does a one-value boolean or numeric `enum`
+    /// (`{"type": "boolean", "enum": [true]}`, a TypeScript `true` literal).
+    case constLiteral(LiteralValue)
 
     enum CodingKeys: String, CodingKey {
         case type, properties, required, items, title, format
@@ -111,10 +115,14 @@ indirect enum JSONSchema: Decodable {
 
         // const: any single literal — treat as a single-value enum so it can
         // participate in discriminator detection downstream. We accept any
-        // primitive shape (string / number / bool / null) and stringify it.
+        // primitive shape (string / number / bool / null), keeping its JSON type.
         if container.contains(.const) {
-            let constString = try Self.decodeConstAsString(container: container)
-            self = .constLiteral(constString)
+            if try container.decodeNil(forKey: .const) {
+                self = .null
+                return
+            }
+            let isInteger = (try? container.decodeIfPresent(String.self, forKey: .type)) == "integer"
+            self = .constLiteral(try Self.decodeConst(container: container, isInteger: isInteger))
             return
         }
 
@@ -208,12 +216,21 @@ indirect enum JSONSchema: Decodable {
             self = .string(enumValues: enumVals, format: format, minLength: minLength, maxLength: maxLength, pattern: pattern)
 
         case "integer":
+            // A one-value enum is a literal (TypeScript's `5` emits `{"type": "integer"|"number", "enum": [5]}`).
+            if let vals = try? container.decodeIfPresent([Int].self, forKey: .enumValues), vals.count == 1 {
+                self = .constLiteral(.integer(vals[0]))
+                return
+            }
             let format = try container.decodeIfPresent(String.self, forKey: .format)
             let minimum = try container.decodeIfPresent(Int.self, forKey: .minimum)
             let maximum = try container.decodeIfPresent(Int.self, forKey: .maximum)
             self = .integer(format: format, minimum: minimum, maximum: maximum)
 
         case "number":
+            if let vals = try? container.decodeIfPresent([Double].self, forKey: .enumValues), vals.count == 1 {
+                self = .constLiteral(.number(vals[0]))
+                return
+            }
             let format = try container.decodeIfPresent(String.self, forKey: .format)
             let minimum = try container.decodeIfPresent(Double.self, forKey: .minimum)
             let maximum = try container.decodeIfPresent(Double.self, forKey: .maximum)
@@ -228,9 +245,10 @@ indirect enum JSONSchema: Decodable {
             )
 
         case "boolean":
-            // Handle boolean enum (e.g. "type": "boolean", "enum": [true]) — used as discriminator
-            if let vals = try? container.decodeIfPresent([Bool].self, forKey: .enumValues), !vals.isEmpty {
-                self = .constLiteral(vals[0] ? "true" : "false")
+            // Handle boolean enum (e.g. "type": "boolean", "enum": [true]) — used as discriminator.
+            // `[true, false]` is any boolean.
+            if let vals = try? container.decodeIfPresent([Bool].self, forKey: .enumValues), Set(vals).count == 1 {
+                self = .constLiteral(.boolean(vals[0]))
             } else {
                 self = .boolean
             }
@@ -238,23 +256,26 @@ indirect enum JSONSchema: Decodable {
         case "null":
             self = .null
 
+        case "unknown":
+            self = .unknown
+
         default:
             self = .object(properties: nil, required: nil, title: nil, additionalProperties: nil)
         }
     }
 
-    /// Decode any `const` value as a string, regardless of underlying JSON
-    /// type. Strings are taken verbatim; numbers / booleans / null are
-    /// rendered with the same form they would take in the JSON wire payload.
-    private static func decodeConstAsString(container: KeyedDecodingContainer<CodingKeys>) throws -> String {
-        if let str = try? container.decode(String.self, forKey: .const) { return str }
-        if let int = try? container.decode(Int.self, forKey: .const) { return String(int) }
-        if let dbl = try? container.decode(Double.self, forKey: .const) { return String(dbl) }
-        if let bool = try? container.decode(Bool.self, forKey: .const) { return String(bool) }
-        if try container.decodeNil(forKey: .const) { return "null" }
+    /// Decode a non-null `const` value with its JSON type: a string, a boolean,
+    /// or a number (an integer when the schema says `type: integer`). Any other
+    /// value (an array or an object) is kept as its JSON text, a string literal,
+    /// as before.
+    private static func decodeConst(container: KeyedDecodingContainer<CodingKeys>, isInteger: Bool) throws -> LiteralValue {
+        if let str = try? container.decode(String.self, forKey: .const) { return .string(str) }
+        if let bool = try? container.decode(Bool.self, forKey: .const) { return .boolean(bool) }
+        if isInteger, let int = try? container.decode(Int.self, forKey: .const) { return .integer(int) }
+        if let dbl = try? container.decode(Double.self, forKey: .const) { return .number(dbl) }
         // Fallback: re-encode the raw JSON value as text for diagnostics.
         let raw = try container.decode(RawJSON.self, forKey: .const)
-        return raw.encodedString
+        return .string(raw.encodedString)
     }
 }
 

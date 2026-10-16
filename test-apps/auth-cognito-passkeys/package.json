@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Manual test app for AuthCognito passkey (WebAuthn) sign-in + management.",
+  "description": "Manual test app for Auth passkey (WebAuthn) sign-in + management.",
   "workspaces": [
     "aws-blocks"
   ],
@@ -20,6 +20,7 @@
     "test": "npm run typecheck"
   },
   "dependencies": {
+    "@aws-blocks/bb-auth": "*",
     "@aws-blocks/blocks": "*",
     "zod": "^4.3.0"
   },

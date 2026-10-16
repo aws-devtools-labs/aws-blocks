@@ -946,4 +946,19 @@ describe('test hooks', () => {
 		assert.strictEqual(testId(signedInBar, 'account-menu-username')?.textContent, '👤 alice');
 		assert.ok(testId(signedInBar, 'account-menu-signout'), 'sign-out hook present when signed in');
 	});
+
+	test('the signed-in heading and the menu bar show displayName over a generated username', async () => {
+		const uuid = '815424a9-f32e-4407-b845-d35bf6294725';
+		const state: AuthState = {
+			state: 'signedIn',
+			user: { userId: uuid, username: uuid, displayName: 'alice@example.com' },
+			actions: [{ name: 'signOut', label: 'Sign Out', fields: [] }],
+		};
+		const el = Authenticator(mockApi(state));
+		await flush();
+		assert.strictEqual(testId(el, 'authenticator-signed-in')?.textContent, 'Signed in as: alice@example.com');
+		const bar = AccountMenuBar(mockApi(state));
+		await flush();
+		assert.strictEqual(testId(bar, 'account-menu-username')?.textContent, '👤 alice@example.com');
+	});
 });

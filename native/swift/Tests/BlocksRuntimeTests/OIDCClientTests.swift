@@ -174,6 +174,76 @@ final class OIDCClientTests: XCTestCase {
         }
     }
 
+    func testExchangeSurfacesTheServersErrorOnNon2xx() async {
+        // A refused exchange is an HTTP error with the server's error body, not a
+        // malformed success: the caller must see the status and the error name.
+        OIDCMockURLProtocol.handler = { request in
+            // The shape bb-auth's routes answer with (pinned in bb-auth `stub-idp.test.ts`).
+            let body: [String: Any] = ["name": "IdpErrorException", "error": "The sign-in provider refused the sign-in."]
+            let data = try JSONSerialization.data(withJSONObject: body)
+            return (errorResponse(for: request.url!, status: 400), data)
+        }
+
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.exchange(
+                code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
+            )
+            XCTFail("Expected RawRouteError")
+        } catch let error as RawRouteError {
+            XCTAssertEqual(error.statusCode, 400)
+            XCTAssertEqual(error.errorName, "IdpErrorException")
+            XCTAssertTrue(error.message.contains("HTTP 400"), error.message)
+            XCTAssertTrue(error.message.contains("IdpErrorException"), error.message)
+            XCTAssertTrue(error.message.contains("refused the sign-in"), error.message)
+        } catch {
+            XCTFail("Expected RawRouteError, got \(error)")
+        }
+    }
+
+    func testRawRouteErrorReadsAPlainOAuthErrorBody() async {
+        OIDCMockURLProtocol.handler = { request in
+            let body: [String: Any] = ["error": "invalid_grant", "error_description": "unknown or expired code"]
+            let data = try JSONSerialization.data(withJSONObject: body)
+            return (errorResponse(for: request.url!, status: 400), data)
+        }
+
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.exchange(
+                code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
+            )
+            XCTFail("Expected RawRouteError")
+        } catch let error as RawRouteError {
+            XCTAssertEqual(error.errorName, "invalid_grant")
+            XCTAssertTrue(error.message.contains("unknown or expired code"), error.message)
+        } catch {
+            XCTFail("Expected RawRouteError, got \(error)")
+        }
+    }
+
+    func testExchangeSurfacesAnHTTPErrorWithANonJSONBody() async {
+        OIDCMockURLProtocol.handler = { request in
+            (errorResponse(for: request.url!, status: 502), Data("<html>Bad Gateway</html>".utf8))
+        }
+
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.exchange(
+                code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
+            )
+            XCTFail("Expected RawRouteError")
+        } catch let error as RawRouteError {
+            XCTAssertEqual(error.statusCode, 502)
+            XCTAssertNil(error.errorName)
+        } catch {
+            XCTFail("Expected RawRouteError, got \(error)")
+        }
+    }
+
     // MARK: - Refresh
 
     func testRefreshUpdatesAccessToken() async throws {
@@ -385,6 +455,56 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(client.signOutPath, "/auth/signout")
     }
 
+    /// The routes `OIDCClient` derives from `exchangePath` must be the ones the `Auth` block
+    /// serves (packages/bb-auth DESIGN.md → Routes): `POST <base>/authorize-params/<id>`,
+    /// `GET <base>/callback` as the IdP `redirect_uri`, `POST <base>/exchange`, and
+    /// `POST <base>/exchange/refresh` as the default refresh path.
+    func testSignInDerivesTheAuthBlockRoutesFromExchangePath() async throws {
+        let session = makeMockSession()
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path.hasSuffix("/authorize-params/google") {
+                let body = try JSONSerialization.data(withJSONObject: [
+                    "authorizeUrl": "https://idp.example.com/authorize",
+                    "clientId": "cid",
+                    "scopes": ["openid"],
+                    "kind": "oidc",
+                    "state": "signed-state"
+                ])
+                return (okResponse(for: url), body)
+            }
+            let body = try JSONSerialization.data(withJSONObject: ["user": ["userId": "u1", "username": "dave"]])
+            return (okResponse(for: url), body)
+        }
+        let blocksClient = BlocksClient(url: "https://api.example.com/prod/aws-blocks/api", session: session)
+        let client = try OIDCClient.fromJSON(
+            [
+                "exchangePath": "/aws-blocks/auth/exchange",
+                "signOutPath": "/aws-blocks/auth/signout",
+                "providers": ["google"]
+            ],
+            baseUrl: blocksClient.baseUrl,
+            client: blocksClient
+        )
+        let launcher = CapturingRelayLauncher(relay: "nativebindings://auth?code=c&state=signed-state")
+
+        let user = try await client.signIn(provider: "google", relayTo: "nativebindings://auth", launcher: launcher)
+
+        XCTAssertEqual(user.userId, "u1")
+        XCTAssertEqual(client.refreshPath, "/aws-blocks/auth/exchange/refresh")
+        XCTAssertEqual(
+            OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
+            [
+                "https://api.example.com/prod/aws-blocks/auth/authorize-params/google",
+                "https://api.example.com/prod/aws-blocks/auth/exchange"
+            ]
+        )
+        let authorizeURL = try XCTUnwrap(launcher.authorizeURL)
+        let redirectURI = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "redirect_uri" }?.value
+        XCTAssertEqual(redirectURI, "https://api.example.com/prod/aws-blocks/auth/callback")
+    }
+
     func testFromJSONThrowsOnMissingExchangePath() {
         let descriptor: [String: Any] = ["signOutPath": "/auth/signout"]
         XCTAssertThrowsError(try OIDCClient.fromJSON(descriptor, baseUrl: "x", client: BlocksClient(url: "x"))) { error in
@@ -407,5 +527,20 @@ final class OIDCClientTests: XCTestCase {
             guard let oidc = error as? OIDCError else { return XCTFail("Expected OIDCError") }
             XCTAssertEqual(oidc, .malformedDescriptor("kind"))
         }
+    }
+}
+
+/// Returns a fixed relay redirect and records the authorize URL it was launched with.
+private final class CapturingRelayLauncher: BrowserLauncher, @unchecked Sendable {
+    private let relay: String
+    private(set) var authorizeURL: URL?
+
+    init(relay: String) {
+        self.relay = relay
+    }
+
+    func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
+        self.authorizeURL = authorizeURL
+        return try XCTUnwrap(URL(string: relay))
     }
 }

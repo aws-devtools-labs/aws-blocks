@@ -45,8 +45,8 @@ indirect enum ResolvedType {
 
 /// Format keyword mappings that produce a non-`String` Swift type.
 enum FormatKind {
-    case dateTime  // → Foundation.Date
-    case date      // → Foundation.Date (via ISO 8601 day-only)
+    case dateTime  // → Foundation.Date (an ISO 8601 string on the wire, see `BlocksClient.makeDecoder()`)
+    case date      // → String (`"2026-10-05"`; Foundation has no day-only type)
     case time      // → String (Foundation has no time-only type)
     case uuid      // → Foundation.UUID
     case uri       // → Foundation.URL
@@ -139,8 +139,16 @@ struct UnionVariant {
     /// Types declared inside this variant's fields that should be scoped
     /// under the variant struct (e.g. `NextStep` inside `IsSignedInFalse`).
     let nestedTypes: [NestedTypeNode]
+    /// Set when the arm isn't an object: a primitive (`string`, `number`,
+    /// `integer`, `boolean`, `unknown`), a formatted string, an array or a map.
+    /// The case carries this value (`case query_Variant0(String)`), encoded and
+    /// decoded as a single JSON value, not as an object.
+    let valueType: ResolvedType?
+    /// Set when the arm is one literal (`{"const": "auto"}`, a TypeScript `false`). The case has no payload,
+    /// encodes as that bare JSON value, and decodes only from it.
+    let literal: LiteralValue?
 
-    init(name: String, fields: [ResolvedField], discriminatorValue: String? = nil, payloadTypeName: String? = nil, additionalPropertiesType: ResolvedType? = nil, embeddedUnion: ResolvedType? = nil, nestedTypes: [NestedTypeNode] = []) {
+    init(name: String, fields: [ResolvedField], discriminatorValue: String? = nil, payloadTypeName: String? = nil, additionalPropertiesType: ResolvedType? = nil, embeddedUnion: ResolvedType? = nil, nestedTypes: [NestedTypeNode] = [], valueType: ResolvedType? = nil, literal: LiteralValue? = nil) {
         self.name = name
         self.fields = fields
         self.discriminatorValue = discriminatorValue
@@ -148,12 +156,34 @@ struct UnionVariant {
         self.additionalPropertiesType = additionalPropertiesType
         self.embeddedUnion = embeddedUnion
         self.nestedTypes = nestedTypes
+        self.valueType = valueType
+        self.literal = literal
+    }
+
+    /// The same variant with another name and nested types (the builder renames colliding variants and
+    /// distributes nested types into variants).
+    func with(name: String? = nil, nestedTypes: [NestedTypeNode]? = nil) -> UnionVariant {
+        UnionVariant(
+            name: name ?? self.name, fields: fields, discriminatorValue: discriminatorValue,
+            payloadTypeName: payloadTypeName, additionalPropertiesType: additionalPropertiesType,
+            embeddedUnion: embeddedUnion, nestedTypes: nestedTypes ?? self.nestedTypes,
+            valueType: valueType, literal: literal
+        )
     }
 }
 
 struct DiscriminatorInfo {
     let fieldName: String
     let variants: [String: String] // discriminator value → variant name
+    /// The JSON type of the discriminator's values: every arm's value has the same one. A boolean
+    /// discriminator (`isUpdated: true`) encodes and decodes as a JSON boolean, a number as a number.
+    let kind: PrimitiveKind
+
+    init(fieldName: String, variants: [String: String], kind: PrimitiveKind = .string) {
+        self.fieldName = fieldName
+        self.variants = variants
+        self.kind = kind
+    }
 }
 
 // MARK: - Operations
@@ -221,11 +251,15 @@ struct TypeDefinition {
     let name: String
     let type: ResolvedType
     let shortName: String
+    /// Types nested inside this record's struct: its inline-object properties, and the types
+    /// declared inside those (`Shipment.Destination.Geo`).
+    let nestedTypes: [NestedTypeNode]
 
-    init(name: String, type: ResolvedType, shortName: String? = nil) {
+    init(name: String, type: ResolvedType, shortName: String? = nil, nestedTypes: [NestedTypeNode] = []) {
         self.name = name
         self.type = type
         self.shortName = shortName ?? name
+        self.nestedTypes = nestedTypes
     }
 }
 
