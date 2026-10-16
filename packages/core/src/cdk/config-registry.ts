@@ -5,7 +5,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import type { Construct } from 'constructs';
-import type { Compute } from './compute/compute.js';
+import type { ComputeBase } from './compute/compute.js';
 import { getBlocksRoot } from './root-registry.js';
 
 const REGISTRY_KEY = Symbol.for('BLOCKS_CONFIG_REGISTRY');
@@ -18,6 +18,13 @@ interface ConfigRegistryState {
 	finalized: boolean;
 	/** The shared config bucket, created once per backend root by {@link getConfigLocation}. */
 	bucket?: s3.Bucket;
+	/**
+	 * The S3 deployment that uploads the config JSON, set by
+	 * {@link finalizeConfigRegistry}. A compute that loads config at boot (e.g. a
+	 * container's parent process) depends on this so CloudFormation doesn't start
+	 * the service before the config object exists. See {@link getConfigDeployment}.
+	 */
+	deployment?: s3deploy.BucketDeployment;
 }
 
 /**
@@ -89,6 +96,24 @@ export function getConfigLocation(scope: Construct): { bucketName: string; key: 
 }
 
 /**
+ * The config S3 deployment for the backend root that owns `scope`, or `undefined`
+ * if no config was registered (so no deployment was created). A compute that reads
+ * config at boot — a container parent calls `loadConfigToProcessEnv()` once at
+ * startup, with no later retry — should add a CDK dependency on this so
+ * CloudFormation finishes uploading the config object before the service starts.
+ * Without the dependency the ordering is a race (a Lambda tolerates it because it
+ * reloads config per request; a long-lived container does not).
+ *
+ * Call from a compute's `finalize()` — it runs after `finalizeConfigRegistry`, so
+ * the deployment exists by then.
+ *
+ * @param scope - Any construct in the backend (used to locate the backend root).
+ */
+export function getConfigDeployment(scope: Construct): s3deploy.BucketDeployment | undefined {
+	return getRegistry(getBlocksRoot(scope)).deployment;
+}
+
+/**
  * Create-or-return the shared config bucket (memoized on the per-backend-root registry). Created
  * under the owning `BlocksStack`/`BlocksBackend` (resolved by walking the construct tree, see
  * `getBlocksRoot`), so its logical ID is stable regardless of which caller creates it first: a
@@ -136,7 +161,7 @@ function ensureConfigBucket(scope: Construct): s3.Bucket {
 export function finalizeConfigRegistry(
 	root: Construct,
 	executionRole: cdk.aws_iam.IRole,
-	computes: readonly Compute[],
+	computes: readonly ComputeBase[],
 ): void {
 	const registry = getRegistry(getBlocksRoot(root));
 
@@ -154,11 +179,12 @@ export function finalizeConfigRegistry(
 		produce: () => Object.fromEntries(registry.entries),
 	});
 
-	new s3deploy.BucketDeployment(root, 'BlocksConfigDeployment', {
+	const deployment = new s3deploy.BucketDeployment(root, 'BlocksConfigDeployment', {
 		sources: [s3deploy.Source.jsonData(configKey, configObject)],
 		destinationBucket: configBucket,
 		prune: false,
 	});
+	registry.deployment = deployment;
 
 	// Grant read once to the shared role (scoped to the config key), so every
 	// compute assuming the role can read it. We intentionally use `grantRead`

@@ -744,6 +744,15 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		this.client = new CognitoIdentityProviderClient({
 			region: this.region,
 			customUserAgent: this.buildUserAgentChain(),
+			// Cognito enforces per-account, per-category request-rate quotas (e.g.
+			// "Rate of UserRead requests") and returns `LimitExceededException`
+			// (HTTP 429) when a burst exceeds them — common when many operations
+			// run concurrently against one account (CI, batch admin tasks). Use
+			// adaptive retry (client-side rate limiting + exponential backoff on
+			// throttling errors) with extra attempts so a transient throttle is
+			// absorbed here instead of surfacing as a failure to the caller.
+			retryMode: 'adaptive',
+			maxAttempts: 5,
 		});
 		installClientUserAgent(this.client);
 		registerSdkIdentifiers(this.fullId, { userPoolId, clientId });

@@ -3,7 +3,7 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME, getVpcContext } from '@aws-blocks/core/cdk';
-import { Compute } from '@aws-blocks/core/cdk/internal';
+import { ComputeBase } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Architecture, type IFunction } from 'aws-cdk-lib/aws-lambda';
@@ -39,7 +39,7 @@ const LAMBDA_COMPUTE_BRAND: unique symbol = Symbol.for('blocks:LambdaCompute');
  * @internal Not exported from the package's public entry point. Customers
  * cannot instantiate a compute until the customer-facing surface exists.
  */
-export class LambdaCompute extends Compute {
+export class LambdaCompute extends ComputeBase {
 	/**
 	 * Brand enabling cross-copy identification via {@link LambdaCompute.isLambdaCompute}.
 	 * @internal
@@ -91,8 +91,8 @@ export class LambdaCompute extends Compute {
 			handler: 'handler',
 			role: this.executionRole,
 			logGroup: this.logGroup,
-			memorySize: 2048,
-			timeout: cdk.Duration.seconds(60 * 15),
+			memorySize: options?.memory ?? 2048,
+			timeout: cdk.Duration.seconds(options?.maxTimeoutSeconds ?? 60 * 15),
 			environment: {
 				NODE_ENV: 'production',
 				BLOCKS_STACK_NAME: this.backendStackName,
