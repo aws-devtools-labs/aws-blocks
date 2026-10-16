@@ -12,7 +12,14 @@ import { validateBucketName } from './bucket-name.js';
 import { DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS, validateFileBucketOptions } from './validation.js';
 
 export { FileBucketErrors } from './errors.js';
-export type { FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions, FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef } from './types.js';
+export type {
+	FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions,
+	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef,
+	FileDownloadClient, FileUploadClient, FileVersionInfo,
+	FileDownloadDescriptor, FileUploadDescriptor,
+	VersionedGetOptions, VersionedDeleteOptions, VersionedGetUrlOptions,
+	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
+} from './types.js';
 
 const httpMethodMap: Record<string, s3.HttpMethods> = {
 	GET: s3.HttpMethods.GET,

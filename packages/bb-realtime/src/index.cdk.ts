@@ -37,6 +37,9 @@ export type {
 	RealtimeSubscription,
 	RealtimeServer,
 	RealtimeOptions,
+	SubscribeOptions,
+	DisconnectReason,
+	RealtimeChannelDescriptor,
 } from './types.js';
 
 // ── Minimal schema for the connections table (CDK synth-time only) ──────────

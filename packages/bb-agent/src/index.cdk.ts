@@ -13,6 +13,8 @@ import type { AgentConfig } from './types.js';
 
 export { AgentErrors, InterruptError } from './errors.js';
 export { BedrockModels, OllamaModels } from './models.js';
+export type { AgentTurnPayload } from './agent.js';
+export type { AgentConfig, AgentResult, AgentStreamChunk, AgentStreamResult, ToolDefinition, AgentTool, ToolFactory, ToolsConfig, ToolHandlerArgs, DefaultToolContext, InterruptResponse, ToolCallRecord, ModelConfig, StreamOptions, Message, Conversation, JSONValue, TokenUsage } from './types.js';
 
 export class Agent extends BuildingBlockScope {
 	/**
