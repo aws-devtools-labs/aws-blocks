@@ -3,14 +3,14 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 
 /**
- * Reject cookie name/value components that contain CR or LF characters.
- * Prevents HTTP response-header (Set-Cookie) injection from user-controlled input.
+ * Cookie round-trip demo. The name is fixed so callers can't overwrite the
+ * auth session cookie (or any other cookie) on your domain. `HttpOnly` keeps
+ * it out of reach of page scripts and `SameSite=Lax` keeps it off cross-site
+ * requests. The value is URI-encoded, so CR/LF or `;` can't inject headers or
+ * cookie attributes.
  */
-function assertNoCrlf(value: string, field: string): void {
-  if (/[\r\n]/.test(value)) {
-    throw new Error(`Invalid cookie ${field}: must not contain CR or LF characters`);
-  }
-}
+const DEMO_COOKIE = 'blocks-demo';
+const DEMO_COOKIE_ATTRS = 'HttpOnly; Secure; SameSite=Lax';
 
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
@@ -92,13 +92,15 @@ export const hello = new ApiNamespace(scope, 'hello', (context) => ({
 export const authApi = auth.createApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-  // ── Public (no requireAuth) — anyone can call these ──────────────────
+  // ── Protected (requireAuth) — keys are namespaced per user ────────────
   async getValue(key: string) {
-    return await store.get(key);
+    const user = await auth.requireAuth(context);
+    return await store.get(`${user.username}:${key}`);
   },
   
   async setValue(key: string, value: string) {
-    await store.put(key, value);
+    const user = await auth.requireAuth(context);
+    await store.put(`${user.username}:${key}`, value);
     return { success: true };
   },
 
@@ -176,23 +178,28 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { messageId: result.messageId };
   },
   
-  // ── Public — cookie round-trip demo ──────────────────────────────────
-  async setCookie(name: string, value: string) {
-    assertNoCrlf(name, 'name');
-    assertNoCrlf(value, 'value');
-    context.response.headers.set('set-cookie', `${name}=${value}; Max-Age=3600; Secure; SameSite=None; Partitioned`);
+  // ── Public — cookie round-trip demo (fixed cookie name) ──────────────
+  async setCookie(value: string) {
+    context.response.headers.set(
+      'set-cookie',
+      `${DEMO_COOKIE}=${encodeURIComponent(value)}; Max-Age=3600; ${DEMO_COOKIE_ATTRS}`,
+    );
     return { success: true };
   },
   
-  async getCookie(name: string) {
+  async getCookie() {
     const cookies = context.request.headers.get('cookie') || '';
-    const match = cookies.split('; ').find(c => c.startsWith(`${name}=`));
-    return match ? match.split('=')[1] : null;
+    const match = cookies.split('; ').find(c => c.startsWith(`${DEMO_COOKIE}=`));
+    if (!match) return null;
+    try {
+      return decodeURIComponent(match.slice(DEMO_COOKIE.length + 1));
+    } catch {
+      return null; // malformed value sent by the client
+    }
   },
   
-  async deleteCookie(name: string) {
-    assertNoCrlf(name, 'name');
-    context.response.headers.set('set-cookie', `${name}=; Max-Age=0; Secure; SameSite=None; Partitioned`);
+  async deleteCookie() {
+    context.response.headers.set('set-cookie', `${DEMO_COOKIE}=; Max-Age=0; ${DEMO_COOKIE_ATTRS}`);
     return { success: true };
   },
 
