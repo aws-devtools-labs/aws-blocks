@@ -95,6 +95,23 @@ describe('Secret (mock)', () => {
 			});
 			assert.strictEqual('put' in secret, false);
 		});
+
+		test('a fromExisting secret with allowRuntimeWrite: false is read-only', () => {
+			const secret = new Secret(freshScope(), 'legacy', {
+				secret: Secret.fromExisting('arn:aws:secretsmanager:us-east-1:123456789012:secret:legacy-AbCdEf'),
+				allowRuntimeWrite: false,
+			});
+			assert.strictEqual('put' in secret, false);
+		});
+
+		test('a fromExisting secret with allowRuntimeWrite: true has a working put()', async () => {
+			const secret = writable(freshScope(), 'legacy', {
+				secret: Secret.fromExisting('arn:aws:secretsmanager:us-east-1:123456789012:secret:legacy-AbCdEf'),
+			});
+			assert.strictEqual(typeof secret.put, 'function');
+			await secret.put('legacy-value');
+			assert.strictEqual(await secret.get(), 'legacy-value');
+		});
 	});
 
 	test('generate:true seeds a non-null random value on first construction', async () => {
