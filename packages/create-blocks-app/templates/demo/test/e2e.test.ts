@@ -97,6 +97,9 @@ test('FileBucket - upload then download round-trips', async (t) => {
   await slot.upload(new Blob([payload], { type: contentType }));
 
   const handle = await api.getFileHandle(path);
+  // The upload skip-gate above already confirmed the middleware hydrates in this
+  // environment, so a bare assertion here is intentional: a non-function download
+  // at this point is a genuine regression, not the no-local-file-server case.
   assert.strictEqual(typeof handle.download, 'function', 'download handle should hydrate');
   const blob = await handle.download();
   const text = await blob.text();
