@@ -111,6 +111,118 @@ describe('AuthBasic confirm forms echo the username (no blank retype)', () => {
 });
 
 /**
+ * Server-side session revocation on sign-out (issue #766). A signed JWT stays
+ * cryptographically valid until its `exp`; clearing the browser cookie does not
+ * stop a copied/stolen token from being replayed. These tests prove sign-out
+ * records the token's `jti` so a replay of the same token is rejected, while an
+ * unrevoked session keeps working.
+ */
+
+/** Pull the auth token out of a response's `Set-Cookie`, or null if none/cleared. */
+function tokenFromResponse(context: BlocksContext): string | null {
+	const setCookie = context.response.headers.get('set-cookie');
+	if (!setCookie) return null;
+	const m = setCookie.match(/auth_[^=]+=([^;]+)/);
+	// A cleared cookie is `auth_...=; Max-Age=0`, i.e. an empty value.
+	return m && m[1] ? m[1] : null;
+}
+
+/** A fresh request context carrying `token` as the auth cookie. */
+function ctxWithToken(auth: AuthBasic, token: string): BlocksContext {
+	const headers = new Headers();
+	headers.set('cookie', `auth_${auth.fullId}=${token}`);
+	return {
+		request: { headers },
+		response: { headers: new Headers() },
+	} as unknown as BlocksContext;
+}
+
+describe('AuthBasic session revocation on sign-out', () => {
+	test('a token revoked at sign-out is rejected on replay', async () => {
+		const auth = makeAuth();
+		await auth.signUp('alice', 'password123');
+
+		// Sign in and capture the issued token.
+		const signInCtx = ctx();
+		await auth.signIn('alice', 'password123', signInCtx);
+		const token = tokenFromResponse(signInCtx);
+		assert.ok(token, 'signIn issued a session token');
+
+		// The token authenticates before sign-out.
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, token!)), true);
+
+		// Sign out WITH the token present, so its jti is revoked.
+		await auth.signOut(ctxWithToken(auth, token!));
+
+		// Replaying the exact same (still unexpired, still signature-valid) token
+		// now fails — this is the gap #762/#766 names: pre-fix it still worked.
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, token!)), false);
+		await assert.rejects(
+			() => auth.requireAuth(ctxWithToken(auth, token!)),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.SessionRevoked,
+		);
+	});
+
+	test('a different, unrevoked session keeps working after another signs out', async () => {
+		const auth = makeAuth();
+		await auth.signUp('alice', 'password123');
+
+		const firstCtx = ctx();
+		await auth.signIn('alice', 'password123', firstCtx);
+		const firstToken = tokenFromResponse(firstCtx)!;
+
+		const secondCtx = ctx();
+		await auth.signIn('alice', 'password123', secondCtx);
+		const secondToken = tokenFromResponse(secondCtx)!;
+
+		// Distinct tokens get distinct jti, so revoking one leaves the other.
+		assert.notStrictEqual(firstToken, secondToken, 'each sign-in issues a unique token');
+
+		await auth.signOut(ctxWithToken(auth, firstToken));
+
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, firstToken)), false, 'revoked session rejected');
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, secondToken)), true, 'other session still valid');
+	});
+
+	test('sign-out with no cookie is a no-op (nothing to revoke, no throw)', async () => {
+		const auth = makeAuth();
+		await assert.doesNotReject(() => auth.signOut(ctx()));
+	});
+
+	test('an absent session reports SessionExpired, not SessionRevoked', async () => {
+		const auth = makeAuth();
+		// No cookie at all → requireAuth must still throw SessionExpired, so the
+		// revoked name is reserved strictly for an actually-revoked token.
+		await assert.rejects(
+			() => auth.requireAuth(ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.SessionExpired,
+		);
+	});
+
+	test('a failed revocation write surfaces from signOut (not swallowed)', async () => {
+		const auth = makeAuth();
+		await auth.signUp('alice', 'password123');
+		const signInCtx = ctx();
+		await auth.signIn('alice', 'password123', signInCtx);
+		const token = tokenFromResponse(signInCtx)!;
+
+		// Make the revocation-list write fail like a transient DynamoDB error.
+		// The security-relevant write must not be silently swallowed: signOut has
+		// to reject so the caller knows the token was NOT revoked.
+		const store = (auth as unknown as { codes: { put: (...a: unknown[]) => Promise<void> } }).codes;
+		const realPut = store.put.bind(store);
+		store.put = async () => {
+			throw new Error('ProvisionedThroughputExceededException');
+		};
+		try {
+			await assert.rejects(() => auth.signOut(ctxWithToken(auth, token)), /ProvisionedThroughput/);
+		} finally {
+			store.put = realPut;
+		}
+	});
+});
+
+/**
  * Telemetry-registration tests for AuthBasic.
  *
  * `Scope.getRegisteredBlocks()` only names a block whose `bbName` is in
