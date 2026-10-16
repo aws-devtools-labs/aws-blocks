@@ -61,6 +61,15 @@ private val knownTransferableBindings = mapOf(
 
 private val knownTransferableTags: Set<String> = knownTransferableBindings.keys
 
+/**
+ * Class names this generator puts in the target package itself, one file each. A namespace that
+ * would produce one of these is renamed, since same-named files in one package overwrite each
+ * other. Keep in step with the `FileSpec.builder(packageName, ...)` calls below.
+ */
+private val RESERVED_FILE_NAMES = setOf("Types", "Serializers", "Servers")
+
+private const val API_SUFFIX = "Api"
+
 class KotlinCodeGenerator(
     private val packageName: String,
     private val internalVisibility: Boolean = false,
@@ -94,6 +103,30 @@ class KotlinCodeGenerator(
         val warnings = mutableListOf<String>()
         val serializerRegistry = TransferableSerializerRegistry()
 
+        for (namespace in model.apiNamespaces) {
+            val original = toPascalCase(namespace.name)
+            if (original in RESERVED_FILE_NAMES) {
+                warnings.add(
+                    "The \"${namespace.name}\" namespace would be generated as $original.kt, which " +
+                        "this generator emits itself. Its API is generated as " +
+                        "${apiClassName(namespace)} instead, reached through " +
+                        "blocks.${apiPropertyName(namespace)}."
+                )
+            }
+        }
+
+        // Suffixing can itself collide, e.g. namespaces "types" and "typesApi". One file would
+        // silently replace the other, so refuse instead.
+        model.apiNamespaces
+            .groupBy { apiClassName(it) }
+            .filterValues { it.size > 1 }
+            .forEach { (className, namespaces) ->
+                error(
+                    "Namespaces ${namespaces.joinToString { "\"${it.name}\"" }} would all be " +
+                        "generated as $className. Rename one in the spec."
+                )
+            }
+
         if (relayTo == null &&
             relayToRequirement != RelayToRequirement.NotNeeded &&
             model.hasOidcTransferable()
@@ -115,7 +148,7 @@ class KotlinCodeGenerator(
 
         // Generate API files before serializers so annotations register every serializer they use.
         val apiFiles = model.apiNamespaces.map { group ->
-            generateApiGroupFile(group, index, model.servers, model.endpoint, serializerRegistry)
+            generateApiGroupFile(group, index, serializerRegistry)
         }
 
         // Emit Serializers.kt for the transferables referenced by generated annotations.
@@ -130,7 +163,7 @@ class KotlinCodeGenerator(
 
         // Emit Servers.kt
         if (model.servers.isNotEmpty()) {
-            files.add(generateServersFile(model.servers))
+            files.add(generateServersFile(model.servers, model.endpoint))
         }
 
         // Emit per-API-group files (interface + impl)
@@ -802,7 +835,12 @@ class KotlinCodeGenerator(
 
     // ── Servers.kt generation ─────────────────────────────────────────
 
-    private fun generateServersFile(servers: List<ServerDefinition>): FileSpec {
+    /**
+     * [endpoint] is the path the spec serves RPC on. It is appended here rather than by the
+     * runtime, because the runtime never sees the spec: `Blocks(Servers.local)` has to reach the
+     * right URL from the constant alone.
+     */
+    private fun generateServersFile(servers: List<ServerDefinition>, endpoint: String?): FileSpec {
         val serverFileBuilder = FileSpec.builder(packageName, "Servers")
 
         // Servers object using BlocksServer from the runtime
@@ -815,14 +853,53 @@ class KotlinCodeGenerator(
                         "%T(name = %S, url = %S)",
                         blocksServerClass,
                         entry.name,
-                        entry.url,
+                        entry.url + (endpoint ?: ""),
                     )
                     .build(),
             )
         }
         serverFileBuilder.addType(serversObjectBuilder.build().withApiVisibility())
+        serverFileBuilder.addFunction(generateDefaultEntryPoint(servers.first().name))
 
         return serverFileBuilder.build()
+    }
+
+    /**
+     * Builds the accessor that lets callers write `Blocks()` for the spec's first server. The
+     * runtime cannot default the server itself, because it never sees the spec; an `invoke` on the
+     * companion puts the default where regenerating the spec keeps it current.
+     */
+    private fun generateDefaultEntryPoint(defaultServerName: String): FunSpec =
+        FunSpec
+            .builder("invoke")
+            .addModifiers(apiModifiers)
+            .addModifiers(KModifier.OPERATOR)
+            .receiver(ClassNames.blocksCompanion)
+            .returns(ClassNames.blocks)
+            .addStatement(
+                "return %T(%T.%N)",
+                ClassNames.blocks,
+                ClassName(packageName, "Servers"),
+                toCamelCase(defaultServerName),
+            )
+            .build()
+
+    // ── API naming ────────────────────────────────────────────────────
+
+    /**
+     * The class and file name for a namespace. A namespace whose name matches one of the files
+     * this generator emits itself takes an `Api` suffix, because two files of the same name in one
+     * package overwrite each other and the loser disappears without an error.
+     */
+    private fun apiClassName(namespace: ApiNamespace): String {
+        val name = toPascalCase(namespace.name)
+        return if (name in RESERVED_FILE_NAMES) name + API_SUFFIX else name
+    }
+
+    /** The accessor name for a namespace, suffixed alongside [apiClassName] so the two match. */
+    private fun apiPropertyName(namespace: ApiNamespace): String {
+        val name = toCamelCase(namespace.name)
+        return if (toPascalCase(namespace.name) in RESERVED_FILE_NAMES) name + API_SUFFIX else name
     }
 
     // ── Per-API-group file generation ─────────────────────────────────
@@ -830,11 +907,9 @@ class KotlinCodeGenerator(
     private fun generateApiGroupFile(
         group: ApiNamespace,
         index: TypeIndex,
-        servers: List<ServerDefinition>,
-        endpoint: String?,
         serializerRegistry: TransferableSerializerRegistry,
     ): FileSpec {
-        val className = toPascalCase(group.name)
+        val className = apiClassName(group)
         val builder = FileSpec.builder(packageName, className)
 
         // Add @OptIn(ExperimentalSerializationApi::class) if any operation has discriminated unions
@@ -850,10 +925,31 @@ class KotlinCodeGenerator(
         }
 
         builder.addType(
-            generateApiClass(group, className, index, servers, endpoint, serializerRegistry).withApiVisibility(),
+            generateApiClass(group, className, index, serializerRegistry).withApiVisibility(),
         )
+        builder.addProperty(generateApiAccessor(group, className))
 
         return builder.build()
+    }
+
+    /**
+     * Builds the extension property that reaches this namespace from a `Blocks` instance, so one
+     * entry point and one HTTP client serve every namespace in the spec. The API class is a
+     * stateless wrapper over the client, so building a new one on each access is not worth
+     * memoizing.
+     */
+    private fun generateApiAccessor(group: ApiNamespace, className: String): PropertySpec {
+        val apiClass = ClassName(packageName, className)
+        return PropertySpec
+            .builder(apiPropertyName(group), apiClass)
+            .addModifiers(apiModifiers)
+            .receiver(ClassNames.blocks)
+            .getter(
+                FunSpec.getterBuilder()
+                    .addStatement("return %T(client())", apiClass)
+                    .build(),
+            )
+            .build()
     }
 
     /** Recursively checks if a nested type tree contains any discriminated union. */
@@ -906,41 +1002,19 @@ class KotlinCodeGenerator(
         namespace: ApiNamespace,
         className: String,
         index: TypeIndex,
-        servers: List<ServerDefinition>,
-        endpoint: String?,
         serializerRegistry: TransferableSerializerRegistry,
     ): TypeSpec {
-        val clientInitializer = if (endpoint != null) {
-            com.squareup.kotlinpoet.CodeBlock.of("%T(%T(server.name, server.url.toString() + %S))", ClassNames.blocksClient, blocksServerClass, endpoint)
-        } else {
-            com.squareup.kotlinpoet.CodeBlock.of("%T(server)", ClassNames.blocksClient)
-        }
-
-        val constructorBuilder = FunSpec.constructorBuilder()
-        if (servers.isNotEmpty()) {
-            val serversClassName = ClassName(packageName, "Servers")
-            val defaultProperty = toCamelCase(servers[0].name)
-            constructorBuilder.addParameter(
-                ParameterSpec.builder("server", blocksServerClass)
-                    .defaultValue("%T.%N", serversClassName, defaultProperty)
-                    .build(),
-            )
-        } else {
-            constructorBuilder.addParameter("server", blocksServerClass)
-        }
-
         val classBuilder = TypeSpec
             .classBuilder(className)
-            .primaryConstructor(constructorBuilder.build())
+            .primaryConstructor(
+                FunSpec.constructorBuilder()
+                    .addParameter("client", ClassNames.blocksClient)
+                    .build(),
+            )
             .addProperty(
                 PropertySpec
-                    .builder("server", blocksServerClass, KModifier.PRIVATE)
-                    .initializer("server")
-                    .build(),
-            ).addProperty(
-                PropertySpec
                     .builder("client", ClassNames.blocksClient, KModifier.PRIVATE)
-                    .initializer(clientInitializer)
+                    .initializer("client")
                     .build(),
             )
 
