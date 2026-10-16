@@ -214,25 +214,32 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 (window as any).runAllTests = async () => {
   const results: string[] = [];
-  
+
+  // KV methods are requireAuth-gated: signed out, they reject with 401.
   try {
     await api.setValue('test1', 'value1');
     const val = await api.getValue('test1');
     results.push(val === 'value1' ? '✓ KV Store works' : '✗ KV Store failed');
-    
+  } catch (error: any) {
+    results.push(error.status === 401
+      ? '– KV Store skipped: sign in to run the KV test'
+      : `✗ KV Store failed: ${escapeHtml(error.message)}`);
+  }
+
+  // The cookie round-trip is public, so it runs whether or not you're signed in.
+  try {
     await api.setCookie('testValue');
     const cookie = await api.getCookie();
     results.push(cookie === 'testValue' ? '✓ Cookie set/get works' : '✗ Cookie failed');
-    
+
     await api.deleteCookie();
     const deleted = await api.getCookie();
     results.push(!deleted ? '✓ Cookie delete works' : '✗ Cookie delete failed');
-
-    document.getElementById('test-results')!.innerHTML = results.join('<br>');
   } catch (error: any) {
-    document.getElementById('test-results')!.innerHTML = 
-      `<span class="error">✗ Tests failed: ${escapeHtml(error.message)}</span>`;
+    results.push(`✗ Cookie test failed: ${escapeHtml(error.message)}`);
   }
+
+  document.getElementById('test-results')!.innerHTML = results.join('<br>');
 };
 
 console.log('AWS Blocks Demo loaded - using direct backend imports with Proxy');
