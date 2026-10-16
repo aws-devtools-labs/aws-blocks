@@ -11,11 +11,14 @@
  * assets), selected by `apiType`.
  *
  * Serverless — pay-per-request, scale-to-zero, no VPC/NAT. `build` creates a
- * route per origin (asset-proxy → private S3, SSR/image Lambdas), proxies
- * `/aws-blocks/*` same-origin natively (so cookie auth works with no CORS), and
- * maps the custom domain when the app has one. SSR responses are buffered (no
- * streaming); there are no redirects, error pages, edge cache, response
- * headers, session pinning, WAF, geo restriction, access logs or alarms.
+ * route per origin (asset-proxy → private S3, SSR/image Lambdas), proxies every
+ * API path (`/aws-blocks/*` plus the backend's raw routes) same-origin natively
+ * (so cookie auth works with no CORS), and maps the custom domain when the app
+ * has one. On the HTTP API, SSR responses are buffered (an HTTP API Lambda
+ * integration can't stream, so `HostingConstruct` builds the server buffered);
+ * the REST API streams them. There are no redirects, error pages, edge cache,
+ * response headers, session pinning, WAF, geo restriction, access logs or
+ * alarms.
  */
 import { Fn } from 'aws-cdk-lib';
 import { ApiGatewayConstruct, type ApiGatewayConstructProps } from './apigw_construct.js';
@@ -32,8 +35,9 @@ export type ApiGatewayDoorInput = DoorInput & {
   /**
    * Which API Gateway flavor to render. `'http'` (default) uses HTTP API v2 — its
    * `$default` stage is rootless, so a SPA's root-absolute assets resolve. `'rest'`
-   * uses a REST API (`lambda:InvokeFunction`, native `HTTP_PROXY` backend) but its
-   * URL carries a `/prod` stage path, so it needs a custom domain / CloudFront.
+   * uses a REST API (`lambda:InvokeFunction`, native `HTTP_PROXY` backend, streamed
+   * SSR) but its URL carries a `/prod` stage path, so it needs a custom domain
+   * (`HostingConstruct` fails synth without one).
    * @default 'http'
    */
   apiType?: 'rest' | 'http';
@@ -49,14 +53,20 @@ export const apiGatewayDoor = defineFrontDoor<ApiGatewayDoorInput, FrontDoorResu
    * URL's host segment (index 2 of `https://host/…`).
    */
   build(scope, input) {
+    // Route every API path the app has (`/aws-blocks/*` + the raw routes).
+    const apiPaths = input.apiGateway.apiPaths ?? input.origins.api?.paths;
     if ((input.apiType ?? 'http') === 'rest') {
-      const apigw = new ApiGatewayRestConstruct(scope, 'ApiGateway', input.apiGateway);
+      const apigw = new ApiGatewayRestConstruct(scope, 'ApiGateway', {
+        ...input.apiGateway,
+        apiPaths,
+        serverStreaming: input.origins.server?.streaming ?? true,
+      });
       return {
         url: apigw.url,
         originHandle: { domainName: Fn.select(2, Fn.split('/', apigw.url)), protocol: 'https' },
       };
     }
-    const apigw = new ApiGatewayConstruct(scope, 'ApiGateway', input.apiGateway);
+    const apigw = new ApiGatewayConstruct(scope, 'ApiGateway', { ...input.apiGateway, apiPaths });
     return {
       url: apigw.url,
       originHandle: { domainName: Fn.select(1, Fn.split('://', apigw.url)), protocol: 'https' },

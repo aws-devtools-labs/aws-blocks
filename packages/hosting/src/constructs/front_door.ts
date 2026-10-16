@@ -85,7 +85,12 @@ export type ServerOrigin = {
    * that reaches the server another way never provisions one.
    */
   readonly url: IFunctionUrl;
-  /** Whether the server streams its responses (response-stream Function URL). */
+  /**
+   * Whether the server streams its responses, as built for this door: `false`
+   * when the door declared `serverResponse: 'buffered'` (a Lambda Web Adapter
+   * server is then built buffered). {@link url} is created in the matching
+   * invoke mode (`RESPONSE_STREAM` or `BUFFERED`).
+   */
   readonly streaming: boolean;
 };
 
@@ -300,6 +305,27 @@ export interface FrontDoor<TInput extends DoorInput = DoorInput, TResult extends
   /** Stable id used in error messages and diagnostics (e.g. `cloudfront`, `alb`, `my-cdn`). */
   readonly service: string;
   /**
+   * How the door invokes the server-rendering compute, so AWS Blocks builds
+   * the server to answer in a form the door can carry. Read before the compute
+   * is built.
+   *
+   * - `'streaming'` (default): the door streams the server's response (a
+   *   CloudFront Function URL origin with `RESPONSE_STREAM`, an API Gateway
+   *   REST integration with `ResponseTransferMode.STREAM`).
+   * - `'buffered'`: the door invokes the server with a plain (non-streaming)
+   *   invoke and needs a complete response: an ALB Lambda target, an API
+   *   Gateway HTTP API integration, or a `BUFFERED` Function URL. A streaming
+   *   server behind such a door returns the stream's framing instead of the
+   *   page (a 502, a 500, or an empty 200).
+   *
+   * `input.origins.server.streaming` reports the result, and
+   * `input.origins.server.url` is created in the matching invoke mode. Has no
+   * effect on an app without a server.
+   *
+   * @default 'streaming'
+   */
+  readonly serverResponse?: 'streaming' | 'buffered';
+  /**
    * Create the door and wire it to the app. Called ONCE at synth, after AWS
    * Blocks has built the bucket, compute and API, and before it declares the
    * asset uploads.
@@ -323,6 +349,14 @@ export interface FrontDoor<TInput extends DoorInput = DoorInput, TResult extends
  *     const dist = new Distribution(scope, 'Cdn', { defaultBehavior: { origin: cf.origin(origins.assets) } });
  *     return { url: `https://${dist.distributionDomainName}` };
  *   },
+ * });
+ *
+ * @example
+ * // A door that invokes the server without streaming (e.g. an ALB Lambda target):
+ * export const myAlbDoor = defineFrontDoor({
+ *   service: 'my-alb',
+ *   serverResponse: 'buffered',
+ *   build: buildMyAlb, // your build: an ALB whose default target is origins.server.fn
  * });
  */
 export function defineFrontDoor<TInput extends DoorInput = DoorInput, TResult extends FrontDoorResult = FrontDoorResult>(

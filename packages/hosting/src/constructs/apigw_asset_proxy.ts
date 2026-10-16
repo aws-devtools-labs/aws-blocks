@@ -7,8 +7,9 @@
  * (`{ statusCode, headers, cookies?, body, isBase64Encoded }`). This is a
  * DIFFERENT envelope than the ALB↔Lambda contract (`alb_asset_proxy.ts`), so it
  * gets its own generator; the core logic (strip prefix, directory-index / SPA
- * fallback, read `builds/<buildId>/…` from the private bucket) is the same as
- * the ALB and CloudFront static branches.
+ * fallback for extensionless paths, read `builds/<buildId>/…` from the private
+ * bucket, serve the object's stored Cache-Control, 404 on a miss) is the same
+ * as the ALB and CloudFront static branches.
  *
  * Emitted INLINE (no bundle step) — uses only `@aws-sdk/client-s3` (present in
  * the Node.js Lambda runtime).
@@ -45,17 +46,28 @@ function stripBasePath(uri) {
   if (uri.indexOf(STRIP_PREFIX + '/') === 0) { const s = uri.substring(STRIP_PREFIX.length); return s.length === 0 ? '/' : s; }
   return uri;
 }
+// Like the CloudFront static branch: SPA → /index.html for extensionless paths
+// (except under /.well-known/); multi-page → directory index. A path with an
+// extension is looked up as-is, and a miss is a 404.
 function resolveIndex(uri) {
   const seg = uri.substring(uri.lastIndexOf('/') + 1);
-  if (seg.indexOf('.') !== -1) return uri;
-  if (SPA_FALLBACK) return '/index.html';
+  if (SPA_FALLBACK) {
+    return seg.indexOf('.') === -1 && uri.indexOf('/.well-known/') !== 0 ? '/index.html' : uri;
+  }
   if (uri.charAt(uri.length - 1) === '/') return uri + 'index.html';
+  if (seg.indexOf('.') !== -1) return uri;
   return uri + '/index.html';
+}
+// The object's own Cache-Control (set per file at upload); a default only when
+// it has none (never immutable: an unhashed file must not be pinned for a year).
+function cacheControlFor(stored, isHtml) {
+  if (stored) return stored;
+  return isHtml ? 'no-cache, no-store, must-revalidate' : 'public, max-age=0, must-revalidate';
 }
 async function readStream(body) { const chunks = []; for await (const c of body) chunks.push(c); return Buffer.concat(chunks); }
 async function fetchKey(key) {
   const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
-  return { buf: await readStream(res.Body), contentType: res.ContentType || contentTypeFor(key) };
+  return { buf: await readStream(res.Body), contentType: res.ContentType || contentTypeFor(key), cacheControl: res.CacheControl };
 }
 function keyFor(uri) {
   return (KEY_PREFIX ? KEY_PREFIX.replace(/\\/+$/, '') + '/' : '') + uri.replace(/^\\/+/, '');
@@ -70,24 +82,19 @@ exports.handler = async (event) => {
   uri = resolveIndex(stripBasePath(uri));
   const key = keyFor(uri);
   try {
-    const { buf, contentType } = await fetchKey(key);
+    const { buf, contentType, cacheControl } = await fetchKey(key);
     const isHtml = contentType.indexOf('text/html') === 0;
     return {
       statusCode: 200,
       headers: {
         'content-type': contentType,
-        'cache-control': isHtml ? 'no-cache, no-store, must-revalidate' : 'public, max-age=31536000, immutable',
+        'cache-control': cacheControlFor(cacheControl, isHtml),
       },
       isBase64Encoded: true,
       body: buf.toString('base64'),
     };
   } catch (err) {
-    if (SPA_FALLBACK && key.slice(-10) !== 'index.html') {
-      try {
-        const { buf } = await fetchKey(keyFor('/index.html'));
-        return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache, no-store, must-revalidate' }, isBase64Encoded: true, body: buf.toString('base64') };
-      } catch (_e) { /* fall through */ }
-    }
+    // A miss is a 404 (extensionless SPA paths already resolved to index.html).
     return { statusCode: 404, headers: { 'content-type': 'text/plain; charset=utf-8' }, isBase64Encoded: false, body: 'Not Found' };
   }
 };

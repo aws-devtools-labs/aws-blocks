@@ -57,10 +57,10 @@ describe('ApiGatewayConstruct — static plan', () => {
 });
 
 describe('ApiGatewayConstruct — with backend proxy', () => {
-  it('adds same-origin backend routes (/aws-blocks + /aws-blocks-auth) via HTTP integration', () => {
+  it('adds the same-origin backend route (/aws-blocks/*, which covers sign-in) via HTTP integration', () => {
     const t = synth(withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api'));
-    // 2 static + 2 backend + $default = 5 routes
-    t.resourceCountIs('AWS::ApiGatewayV2::Route', 5);
+    // 2 static + 1 backend + $default = 4 routes
+    t.resourceCountIs('AWS::ApiGatewayV2::Route', 4);
     // At least one HTTP_PROXY integration to the backend
     t.hasResourceProperties('AWS::ApiGatewayV2::Integration', { IntegrationType: 'HTTP_PROXY' });
   });

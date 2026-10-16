@@ -16,16 +16,22 @@
  *   - each static route pattern   → the asset-proxy Lambda (streams from the
  *     PRIVATE S3 bucket) — the REST analogue of CloudFront's S3+OAC.
  *   - the image prefix            → the image-opt Lambda.
- *   - `/aws-blocks/*` + `/aws-blocks-auth/*` (or `/aws-blocks/api/<ns>/*`) →
- *     an `HTTP_PROXY` integration straight to the backend (same-origin; no
- *     forwarder Lambda).
+ *   - every API path (`/aws-blocks/*` plus the backend's raw routes, or
+ *     `/aws-blocks/api/<ns>/*`) → an `HTTP_PROXY` integration straight to the
+ *     backend (same-origin; no forwarder Lambda).
+ *
+ * SSR streams: a streaming server is integrated with
+ * `ResponseTransferMode.STREAM`, exactly as the CloudFront door's SSR origin.
+ *
+ * Addressing: a bare `execute-api` URL carries the `/prod` stage path, which an
+ * app's root-relative links miss, so `HostingConstruct` requires a custom
+ * domain (its base-path mapping serves the stage at the domain root).
  *
  * Trade-offs (an app that asks for these deploys without them — there is no
  * feature check): no global edge cache, no per-route response headers, no
- * skew-pin, buffered SSR only (no streaming), ~10 MB payload cap, ~29 s
- * integration timeout.
+ * skew-pin, ~10 MB payload cap, ~29 s integration timeout.
  */
-import { CfnOutput, Duration } from 'aws-cdk-lib';
+import { Annotations, CfnOutput, Duration } from 'aws-cdk-lib';
 import {
 	BasePathMapping,
 	ConnectionType,
@@ -34,6 +40,7 @@ import {
 	Integration,
 	IntegrationType,
 	LambdaIntegration,
+	ResponseTransferMode,
 	RestApi,
 	SecurityPolicy,
 } from 'aws-cdk-lib/aws-apigateway';
@@ -45,7 +52,13 @@ import { Construct } from 'constructs';
 import type { CapabilityPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
-import { backendBaseUrl, globToProxyPath } from './apigw_routes.js';
+import {
+	APIGW_DEFAULT_ROUTE_QUOTA,
+	apiPathToRoute,
+	backendBaseUrl,
+	DEFAULT_API_PATHS,
+	globToProxyPath,
+} from './apigw_routes.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 export type ApiGatewayRestConstructProps = {
@@ -56,6 +69,20 @@ export type ApiGatewayRestConstructProps = {
 	imageComputeName?: string;
 	/** Custom domain(s) — a regional cert + DomainName + base-path mapping + Route 53 alias. */
 	domain?: ApiGwCustomDomain;
+	/**
+	 * Every path pattern the single-compute (`'*'`) backend serves — the
+	 * `DoorInput.origins.api.paths`: `/aws-blocks/*` plus the backend's raw
+	 * routes. Each becomes a resource proxied to the same path on the backend.
+	 * @default ['/aws-blocks/*']
+	 */
+	apiPaths?: readonly string[];
+	/**
+	 * Whether the server streams its response (`DoorInput.origins.server.streaming`).
+	 * A streaming server is integrated with `ResponseTransferMode.STREAM`; a
+	 * buffered one with a plain proxy integration.
+	 * @default true
+	 */
+	serverStreaming?: boolean;
 };
 
 export class ApiGatewayRestConstruct extends Construct {
@@ -107,7 +134,15 @@ export class ApiGatewayRestConstruct extends Construct {
 		});
 
 		const assetIntegration = new LambdaIntegration(assetProxy, { proxy: true });
-		const serverIntegration = serverFn ? new LambdaIntegration(serverFn, { proxy: true }) : undefined;
+		// A streaming server (the Lambda Web Adapter in `response_stream` mode, the
+		// OpenNext streaming wrapper) needs a STREAM integration, as on the
+		// CloudFront door's SSR origin; a plain invoke would return its framing.
+		const serverIntegration = serverFn
+			? new LambdaIntegration(serverFn, {
+					proxy: true,
+					...(props.serverStreaming !== false ? { responseTransferMode: ResponseTransferMode.STREAM } : {}),
+				})
+			: undefined;
 		const imageIntegration = imageFn ? new LambdaIntegration(imageFn, { proxy: true }) : undefined;
 		// Catch-all: SSR when present, else the asset proxy (SPA fallback on miss).
 		const defaultIntegration = serverIntegration ?? assetIntegration;
@@ -124,9 +159,9 @@ export class ApiGatewayRestConstruct extends Construct {
 					: assetIntegration;
 
 		// Same-origin backend routing via native HTTP_PROXY (no forwarder Lambda).
-		// A lone `'*'` origin is the single-compute case (`/aws-blocks/*` +
-		// `/aws-blocks-auth/*` → one backend); a named namespace path-routes
-		// `/aws-blocks/api/<ns>/*` to that compute's ingress.
+		// A lone `'*'` origin is the single-compute case (every API path → one
+		// backend); a named namespace path-routes `/aws-blocks/api/<ns>/*` to that
+		// compute's ingress.
 		const httpProxy = (uri: string): Integration =>
 			new Integration({
 				type: IntegrationType.HTTP_PROXY,
@@ -142,14 +177,34 @@ export class ApiGatewayRestConstruct extends Construct {
 				requestParameters: { 'method.request.path.proxy': true },
 			});
 		};
+		// An exact path carries no `{proxy}` to map.
+		const addExactRoute = (path: string, uri: string) => {
+			this.api.root.resourceForPath(path).addMethod(
+				'ANY',
+				new Integration({
+					type: IntegrationType.HTTP_PROXY,
+					integrationHttpMethod: 'ANY',
+					uri,
+					options: { connectionType: ConnectionType.INTERNET },
+				}),
+			);
+		};
+		const backendPaths = new Set<string>();
 		for (const origin of plan.backend?.origins ?? []) {
 			// Split the ingress URL on the `/aws-blocks/api` suffix (token-safe) to
 			// get the backend base — same shape whether Lambda API Gateway, an ALB,
 			// or a BYOC endpoint.
 			const base = backendBaseUrl(origin.ingress.url); // https://…/prod
 			if (origin.namespace === '*') {
-				addProxyRoute('/aws-blocks/{proxy+}', `${base}/aws-blocks/{proxy}`);
-				addProxyRoute('/aws-blocks-auth/{proxy+}', `${base}/aws-blocks-auth/{proxy}`);
+				// Every API path: `/aws-blocks/*` (RPC, and sign-in at
+				// `/aws-blocks/auth/*`) plus the backend's raw routes.
+				for (const pattern of new Set(props.apiPaths ?? DEFAULT_API_PATHS)) {
+					const route = apiPathToRoute(pattern);
+					if (!route || backendPaths.has(route.path)) continue;
+					backendPaths.add(route.path);
+					if (route.path.endsWith('/{proxy+}')) addProxyRoute(route.path, `${base}${route.target}`);
+					else addExactRoute(route.path, `${base}${route.target}`);
+				}
 			} else {
 				const ns = origin.namespace;
 				addProxyRoute(`/aws-blocks/api/${ns}/{proxy+}`, `${base}/aws-blocks/api/${ns}/{proxy}`);
@@ -160,10 +215,17 @@ export class ApiGatewayRestConstruct extends Construct {
 		const seen = new Set<string>();
 		for (const entry of plan.routes.entries) {
 			const path = globToProxyPath(entry.pattern);
-			if (path === null || seen.has(path)) continue;
-			if (path.startsWith('/aws-blocks/') || path.startsWith('/aws-blocks-auth/')) continue; // backend owns these
+			if (path === null || seen.has(path) || backendPaths.has(path)) continue;
+			if (path.startsWith('/aws-blocks/')) continue; // backend owns these
 			seen.add(path);
 			this.api.root.resourceForPath(path).addMethod('ANY', integrationForKind(entry.kind));
+		}
+		const resourceCount = this.api.methods.length;
+		if (resourceCount > APIGW_DEFAULT_ROUTE_QUOTA) {
+			Annotations.of(this).addWarning(
+				`The API Gateway REST front door defines ${resourceCount} methods; a REST API allows ${APIGW_DEFAULT_ROUTE_QUOTA} resources by default. ` +
+					'Request a quota increase, or group raw routes under fewer path prefixes.',
+			);
 		}
 
 		this.url = this.api.url; // https://<id>.execute-api.<region>.amazonaws.com/prod/
