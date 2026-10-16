@@ -142,6 +142,24 @@ describe('CronJob synth-time schedule validation', () => {
 		Template.fromStack(stack).resourceCountIs('AWS::Scheduler::Schedule', 1);
 	});
 
+	test('preserves explicit year expressions in synthesized schedules', async () => {
+		const stack = await makeStack('CronExplicitYears');
+		const years = ['1970', '2099', '2099-2100', '2099,2101', '2099/2', '*/2'];
+		for (const [index, year] of years.entries()) {
+			new CronJob(stack, `job-${index}`, {
+				schedule: `cron(* * * * ? ${year})`,
+				handler: async () => {},
+			});
+		}
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::Scheduler::Schedule', years.length);
+		for (const year of years) {
+			template.hasResourceProperties('AWS::Scheduler::Schedule', {
+				ScheduleExpression: `cron(* * * * ? ${year})`,
+			});
+		}
+	});
+
 	test('rejects a non-Lambda compute at synth', async () => {
 		const stack = await makeStack('CronUnsupportedCompute');
 		const scoped = new Scope('scoped', { parent: stack });
