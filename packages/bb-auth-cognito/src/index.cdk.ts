@@ -24,7 +24,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
 
 import { BuildingBlockScope } from '@aws-blocks/core/cdk';
-import { registerConfig } from '@aws-blocks/core/cdk';
+import { registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -383,6 +383,40 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		}
 	}
 
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	signUp(..._args: unknown[]): never { return synthGuard('AuthCognito', 'signUp'); }
+	confirmSignUp(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmSignUp'); }
+	autoSignIn(..._args: unknown[]): never { return synthGuard('AuthCognito', 'autoSignIn'); }
+	resendSignUpCode(..._args: unknown[]): never { return synthGuard('AuthCognito', 'resendSignUpCode'); }
+	signIn(..._args: unknown[]): never { return synthGuard('AuthCognito', 'signIn'); }
+	confirmSignIn(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmSignIn'); }
+	signOut(..._args: unknown[]): never { return synthGuard('AuthCognito', 'signOut'); }
+	requireAuth(..._args: unknown[]): never { return synthGuard('AuthCognito', 'requireAuth'); }
+	checkAuth(..._args: unknown[]): never { return synthGuard('AuthCognito', 'checkAuth'); }
+	getCurrentUser(..._args: unknown[]): never { return synthGuard('AuthCognito', 'getCurrentUser'); }
+	fetchAuthSession(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchAuthSession'); }
+	requireRole(..._args: unknown[]): never { return synthGuard('AuthCognito', 'requireRole'); }
+	fetchUserAttributes(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchUserAttributes'); }
+	updatePassword(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updatePassword'); }
+	updateUserAttributes(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updateUserAttributes'); }
+	updateUserAttribute(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updateUserAttribute'); }
+	confirmUserAttribute(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmUserAttribute'); }
+	sendUserAttributeVerificationCode(..._args: unknown[]): never { return synthGuard('AuthCognito', 'sendUserAttributeVerificationCode'); }
+	deleteUser(..._args: unknown[]): never { return synthGuard('AuthCognito', 'deleteUser'); }
+	resetPassword(..._args: unknown[]): never { return synthGuard('AuthCognito', 'resetPassword'); }
+	confirmResetPassword(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmResetPassword'); }
+	setUpTOTP(..._args: unknown[]): never { return synthGuard('AuthCognito', 'setUpTOTP'); }
+	verifyTOTPSetup(..._args: unknown[]): never { return synthGuard('AuthCognito', 'verifyTOTPSetup'); }
+	updateMFAPreference(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updateMFAPreference'); }
+	fetchMFAPreference(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchMFAPreference'); }
+	fetchDevices(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchDevices'); }
+	rememberDevice(..._args: unknown[]): never { return synthGuard('AuthCognito', 'rememberDevice'); }
+	forgetDevice(..._args: unknown[]): never { return synthGuard('AuthCognito', 'forgetDevice'); }
+	startPasskeyRegistration(..._args: unknown[]): never { return synthGuard('AuthCognito', 'startPasskeyRegistration'); }
+	completePasskeyRegistration(..._args: unknown[]): never { return synthGuard('AuthCognito', 'completePasskeyRegistration'); }
+	listPasskeys(..._args: unknown[]): never { return synthGuard('AuthCognito', 'listPasskeys'); }
+	deletePasskey(..._args: unknown[]): never { return synthGuard('AuthCognito', 'deletePasskey'); }
+	get admin(): never { return synthGuard('AuthCognito', 'admin'); }
 }
 
 /**

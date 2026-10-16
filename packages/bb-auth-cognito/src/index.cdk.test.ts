@@ -763,3 +763,13 @@ describe('AuthCognito (CDK) — admin IAM grant', () => {
 		assert.ok(actions.has('cognito-idp:AdminListGroupsForUser'), 'lifecycle must grant AdminListGroupsForUser for getUser groups');
 	});
 });
+
+// `admin` is an accessor, which the cross-package method-parity test skips, so pin
+// its guard here: `auth.admin.addUserToGroup(...)` at module scope must fail with
+// the actionable synth error, not "Cannot read properties of undefined".
+test('CDK: admin getter throws the synth-time guard error', () => {
+	synth((stack) => {
+		const auth = new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: {} });
+		assert.throws(() => auth.admin, { message: /^AuthCognito\.admin\(\) cannot be called during CDK synth\./ });
+	});
+});

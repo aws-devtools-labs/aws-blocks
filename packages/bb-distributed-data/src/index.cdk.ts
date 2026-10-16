@@ -142,6 +142,13 @@ export class DistributedDatabase extends BuildingBlockScope {
   getEngine(): never {
     return synthGuard('DistributedDatabase', 'getEngine');
   }
+
+  // Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+  query(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'query'); }
+  queryOne(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'queryOne'); }
+  execute(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'execute'); }
+  transaction(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'transaction'); }
+  simulateConflict(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'simulateConflict'); }
 }
 
 /** Hash all .sql files in a directory to detect changes. */

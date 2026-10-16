@@ -15,43 +15,56 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "Blocks
 /// Returns raw JSON `Data` from `execute()` — the generated code handles
 /// deserialization and transferable hydration.
 ///
-/// Usage (from generated code):
+/// Generated APIs run on the one the generated `Blocks` owns:
 /// ```swift
-/// let client = BlocksClient(url: "http://localhost:3001/api")
-/// let request = BlocksRequest(method: "api.createTodo", params: [title, priority], id: BlocksRequest.nextId())
-/// let result = try await client.execute(request)
-/// return Cursor.fromJson(result)
+/// let blocks = Blocks()
+/// let todos = try await blocks.api.listTodos(sortBy: nil)
 /// ```
-public final class BlocksClient {
+public final class BlocksClient: Sendable {
 
     /// Base host for localhost rewriting in transferable descriptors (e.g., WebSocket URLs).
-    /// Set to your Mac's LAN IP for physical device testing.
+    /// Only needed for a dev server started with `BLOCKS_DEV_HOST`: set it to the host the app reaches that server at.
     /// Default: "localhost" (no rewriting — works in Simulator).
-    public static var baseHost: String = "localhost"
+    public static var baseHost: String {
+        get { baseHostLock.withLock { $0 } }
+        set { baseHostLock.withLock { $0 = newValue } }
+    }
+
+    // Not a stored static var: Swift 6 app code cannot reference one.
+    private static let baseHostLock = OSAllocatedUnfairLock(initialState: "localhost")
 
     /// Base URL the client was constructed with — exposed for transferable
     /// hydration (e.g. `OIDCClient.fromJSON(descriptor, baseUrl: client.baseUrl, ...)`).
     public var baseUrl: String { url }
 
     /// Token store used to hydrate `OIDCClient` transferables returned by this client.
-    /// Defaults to in-memory storage; pass a Keychain-backed implementation for
-    /// session persistence across app restarts.
+    /// Defaults to in-memory storage; pass a Keychain-backed implementation, e.g.
+    /// `Blocks(tokenStore: store)`, for session persistence across app restarts.
     public let tokenStore: TokenStore
 
     private let url: String
-    let session: URLSession
+    /// The only path to the session; read by tests.
+    let gate: SessionGate
+    /// The one move of tokens saved under the old unscoped keys, shared by every OIDCClient on this client.
+    private let legacyTokenAdoption = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
 
     /// Stored cookies persisted in the Keychain so auth sessions survive app restarts.
     /// Shared across all BlocksClient instances.
     private static let cookieStore = KeychainCookieStore()
 
-    public init(
+    /// A `session` you pass stays yours; without one the client creates a session and invalidates it on close or release.
+    public convenience init(
         url: String,
         session: URLSession? = nil,
         tokenStore: TokenStore = InMemoryTokenStore()
     ) {
+        self.init(url: url, session: session ?? BlocksClient.makeSession(), ownsSession: session == nil, tokenStore: tokenStore)
+    }
+
+    /// Tests pass `ownsSession: true` to observe an owned session being invalidated.
+    init(url: String, session: URLSession, ownsSession: Bool, tokenStore: TokenStore) {
         self.url = url
-        self.session = session ?? BlocksClient.makeSession()
+        self.gate = SessionGate(session: session, ownsSession: ownsSession)
         self.tokenStore = tokenStore
     }
 
@@ -61,6 +74,22 @@ public final class BlocksClient {
         tokenStore: TokenStore = InMemoryTokenStore()
     ) {
         self.init(url: server.url, session: session, tokenStore: tokenStore)
+    }
+
+    /// Later requests throw `ClientClosedError`; in-flight ones finish, then the session this client created is invalidated.
+    public func close() {
+        gate.close()
+    }
+
+    /// Runs only the first caller's `move`; every later caller waits for that run instead.
+    func adoptLegacyTokensOnce(_ move: @escaping @Sendable () async -> Void) async {
+        let adoption = legacyTokenAdoption.withLock { state in
+            if let existing = state { return existing }
+            let started = Task { await move() }
+            state = started
+            return started
+        }
+        await adoption.value
     }
 
     /// Clears all stored cookies (e.g. on sign-out).
@@ -112,7 +141,7 @@ public final class BlocksClient {
 
         logger.debug("→ \(request.method) id=\(request.id)")
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await gate.send(urlRequest)
 
         // Process Set-Cookie headers
         if let httpResponse = response as? HTTPURLResponse {
@@ -208,7 +237,7 @@ public final class BlocksClient {
             urlRequest.setValue(cookies.joined(separator: "; "), forHTTPHeaderField: "Cookie")
         }
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await gate.send(urlRequest)
 
         // Store Set-Cookie headers
         if let httpResponse = response as? HTTPURLResponse {
@@ -288,6 +317,13 @@ public struct RPCError: BlocksError {
         self.message = message
         self.underlyingError = underlyingError
     }
+}
+
+/// Thrown by a request made after `BlocksClient.close()` or the generated `Blocks.close()`.
+public struct ClientClosedError: BlocksError {
+    public let message = "This BlocksClient is closed; create a new Blocks to make requests."
+
+    public init() {}
 }
 
 /// Error thrown by raw route (non-RPC) requests.

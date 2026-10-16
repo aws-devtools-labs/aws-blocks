@@ -16,6 +16,7 @@ import { createStrandsModel, checkModelHealth } from './model-factory.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition, CannedToolHints } from './types.js';
 import { AgentErrors, blocksAgentError, InterruptError } from './errors.js';
+import { createUntrustedNonce, untrustedDataInstructions, wrapUntrustedToolOutput } from './untrusted.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { ulid } from 'ulid';
 
@@ -555,16 +556,24 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		const readContext = (strandsCtx: { invocationState?: Record<string, unknown> } | undefined): TContext =>
 			((strandsCtx?.invocationState?.[TOOL_CONTEXT_KEY] as TContext) ?? fallbackContext ?? ({} as TContext));
 
+		// Tools flagged `untrustedOutput` return text the developer doesn't control (e.g.
+		// knowledge-base chunks). Their results are wrapped in a delimiter carrying a per-session
+		// nonce, and the system prompt tells the model that content is data, never instructions.
+		const untrustedNonce = toolDefs.some(t => t.untrustedOutput) ? createUntrustedNonce() : undefined;
+
 		const strandsTools = toolDefs.map(t => tool({
 			// `name` is always set by resolveTools() from the Record key.
 			name: t.name!,
 			description: t.description,
 			inputSchema: t.parameters,
-			callback: (input, context) => t.handler({
-				input,
-				context: readContext(context),
-				interrupt: (params) => context!.interrupt(params),
-			}),
+			callback: async (input, context) => {
+				const result = await t.handler({
+					input,
+					context: readContext(context),
+					interrupt: (params) => context!.interrupt(params),
+				});
+				return t.untrustedOutput && untrustedNonce ? wrapUntrustedToolOutput(t.name!, result, untrustedNonce) : result;
+			},
 		}));
 
 		// Collect local-dev hints for the canned provider (Strands strips these fields from
@@ -604,7 +613,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			// don't override Strands defaults with `undefined` when unset.
 			...(this.config.name !== undefined && { name: this.config.name }),
 			...(this.config.description !== undefined && { description: this.config.description }),
-			systemPrompt: this.config.systemPrompt,
+			systemPrompt: untrustedNonce ? this.config.systemPrompt + untrustedDataInstructions(untrustedNonce) : this.config.systemPrompt,
 			tools: strandsTools,
 			conversationManager: await createConversationManager(this.config.conversation),
 			sessionManager,

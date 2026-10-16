@@ -90,7 +90,7 @@ With the build plugin, code is regenerated automatically on every build. No need
 2. Select an iOS Simulator as the run destination
 3. Build and run (Cmd+R)
 
-The app connects to `http://localhost:3001/api` by default. If running on a physical device, update the URL in `App.swift` to your Mac's LAN IP.
+`AppState` builds one `Blocks()` for the app's lifetime. It follows the first server in the spec it was generated from: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends means regenerating (steps 2-4), not editing code. The dev server binds loopback by default, so run the app in the Simulator; a physical device needs a deployed backend (`npm run deploy`, then regenerate).
 
 ## 6. Run Tests
 
