@@ -216,6 +216,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
+On a versioned bucket, `delete(path)` creates a delete marker without removing stored versions; `get()` returns `null` and `scan()` omits the file. `delete(path, { versionId })` permanently removes that specific version. Deleting the current version makes the newest remaining version current, unless a delete marker still hides it from these reads. Deleting the last stored version leaves no file to retrieve or list in `scan()`. The local mock follows S3's version-deletion behavior without creating a replacement version.
+
 ### Access Logging
 
 Opt in to S3 server access logging. A dedicated, locked-down log bucket is provisioned and access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox, `ONE_YEAR` in production):
