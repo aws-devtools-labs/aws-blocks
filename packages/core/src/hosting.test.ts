@@ -2749,3 +2749,215 @@ describe('Hosting', () => {
     });
   });
 });
+
+// ================================================================
+// frontDoor.features on Hosting: each kind's settings reach its door, the
+// deprecated top-level props merge into them, and the stacked door scopes its
+// settings per layer.
+// ================================================================
+describe('Hosting — frontDoor.features', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-features-'));
+    createSpaBuildOutput(tmpDir);
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearRouteRegistry();
+  });
+
+  const EDGE_ACL = 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/edge/1';
+  const REGIONAL_ACL = 'arn:aws:wafv2:us-east-1:111111111111:regional/webacl/router/1';
+  const newStack = (id: string) => new Stack(new App(), id, { env: { account: '111111111111', region: 'us-east-1' } });
+
+  it('the CloudFront default with settings: { features } reaches the distribution', () => {
+    const stack = newStack('FeatCf');
+    new Hosting(stack, 'Hosting', {
+      root: tmpDir,
+      api: MOCK_API,
+      frontDoor: {
+        features: {
+          priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_ALL,
+          waf: { enabled: false, webAclArn: EDGE_ACL },
+          geoRestriction: { type: 'whitelist', countries: ['US'] },
+        },
+      },
+    });
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        PriceClass: 'PriceClass_All',
+        WebACLId: EDGE_ACL,
+        Restrictions: { GeoRestriction: { RestrictionType: 'whitelist', Locations: ['US'] } },
+      }),
+    });
+  });
+
+  it('the released top-level props and the same settings in frontDoor.features synthesize the same template', () => {
+    const settings = {
+      waf: { enabled: true, rateLimit: 500 },
+      logging: { enabled: true, retentionDays: 30 },
+      monitoring: { enabled: true },
+      skewProtection: { enabled: true, maxAge: 3600 },
+      priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_200,
+      contentSecurityPolicy: "default-src 'self'",
+      domain: { domainName: 'app.example.com', hostedZone: 'example.com', hostedZoneId: 'Z123' },
+    };
+    // A fixed build id (it feeds the asset hashes), the same root dir and the
+    // same stack name (in two Apps), so the whole template is compared.
+    const customAdapter = () => ({
+      version: 1 as const,
+      buildId: 'feat-eq',
+      compute: {},
+      staticAssets: { directory: path.join(tmpDir, 'dist'), spaFallback: true },
+      routes: [{ pattern: '/*', target: 'static' as const }],
+    });
+    const aliased = newStack('FeatEq');
+    new Hosting(aliased, 'Hosting', { root: tmpDir, api: MOCK_API, customAdapter, ...settings });
+    const migrated = newStack('FeatEq');
+    new Hosting(migrated, 'Hosting', { root: tmpDir, api: MOCK_API, customAdapter, frontDoor: { features: settings } });
+    assert.deepEqual(Template.fromStack(migrated).toJSON(), Template.fromStack(aliased).toJSON());
+  });
+
+  it('ALB: features (and a supported alias) reach the router', () => {
+    const stack = newStack('FeatAlb');
+    new Hosting(stack, 'Hosting', {
+      root: tmpDir,
+      api: MOCK_API,
+      frontDoor: { kind: 'alb', features: { waf: { enabled: true } } },
+      logging: { enabled: true },
+    });
+    const t = Template.fromStack(stack);
+    t.hasResourceProperties('AWS::WAFv2::WebACL', { Scope: 'REGIONAL' });
+    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
+      LoadBalancerAttributes: Match.arrayWith([{ Key: 'access_logs.s3.enabled', Value: 'true' }]),
+    });
+  });
+
+  it('stacked: features.edge reaches the edge and features.router the ALB — each its own WAF', () => {
+    const stack = newStack('FeatStacked');
+    new Hosting(stack, 'Hosting', {
+      root: tmpDir,
+      api: MOCK_API,
+      frontDoor: {
+        kind: 'stacked',
+        edge: 'cloudfront',
+        router: 'alb',
+        features: {
+          edge: { waf: { webAclArn: EDGE_ACL }, contentSecurityPolicy: "default-src 'self'" },
+          router: { waf: { enabled: true, webAclArn: REGIONAL_ACL }, monitoring: { enabled: true } },
+        },
+      },
+    });
+    const t = Template.fromStack(stack);
+    t.hasResourceProperties('AWS::CloudFront::Distribution', { DistributionConfig: Match.objectLike({ WebACLId: EDGE_ACL }) });
+    t.hasResourceProperties('AWS::WAFv2::WebACLAssociation', { WebACLArn: REGIONAL_ACL });
+    t.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+      ResponseHeadersPolicyConfig: Match.objectLike({
+        SecurityHeadersConfig: Match.objectLike({
+          ContentSecurityPolicy: { ContentSecurityPolicy: "default-src 'self'", Override: true },
+        }),
+      }),
+    });
+    // The ALB's own alarms (5xx + latency).
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 2);
+  });
+
+  it('stacked: a top-level prop fails synth (the door takes its settings per layer)', () => {
+    for (const extra of [{ waf: { enabled: true } }, { contentSecurityPolicy: "default-src 'self'" }, { logging: { enabled: true } }]) {
+      assert.throws(
+        () =>
+          new Hosting(newStack(`FeatStackedAlias${Object.keys(extra)[0]}`), 'Hosting', {
+            root: tmpDir,
+            api: MOCK_API,
+            frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+            ...extra,
+          }),
+        (e: Error) =>
+          e.name === 'UnsupportedFrontDoorSettingError' &&
+          e.message.includes("'stacked'") &&
+          e.message.includes(`\`${Object.keys(extra)[0]}\``),
+      );
+    }
+  });
+
+  it('a setting set both top-level and in frontDoor.features fails synth, naming both (core names)', () => {
+    assert.throws(
+      () =>
+        new Hosting(newStack('FeatConflict'), 'Hosting', {
+          root: tmpDir,
+          priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_100,
+          frontDoor: { features: { priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_ALL } },
+        }),
+      (e: Error) =>
+        e.name === 'FrontDoorSettingConflictError' &&
+        e.message.includes('`priceClass`') &&
+        e.message.includes('`frontDoor.features.priceClass`'),
+    );
+  });
+
+  it('a top-level prop the kind does not implement fails synth, naming the kind and the prop', () => {
+    assert.throws(
+      () =>
+        new Hosting(newStack('FeatUnsupported'), 'Hosting', {
+          root: tmpDir,
+          api: MOCK_API,
+          frontDoor: { kind: 'alb' },
+          geoRestriction: { type: 'whitelist', countries: ['US'] },
+        }),
+      (e: Error) =>
+        e.name === 'UnsupportedFrontDoorSettingError' && e.message.includes("'alb'") && e.message.includes('`geoRestriction`'),
+    );
+  });
+
+  it('a BYO door receives frontDoor.features (merged with aliases) as DoorInput.features', () => {
+    let seen: DoorInput | undefined;
+    const door = defineFrontDoor({
+      service: 'recorder',
+      build(scope, input) {
+        seen = input;
+        const dist = new cdk.aws_cloudfront.Distribution(scope, 'Cdn', {
+          defaultBehavior: { origin: cf.origin(input.origins.assets) },
+          additionalBehaviors: cf.apiBehaviors(input.origins.api),
+        });
+        return { url: `https://${dist.distributionDomainName}` };
+      },
+    });
+    new Hosting(newStack('FeatByo'), 'Hosting', {
+      root: tmpDir,
+      api: MOCK_API,
+      frontDoor: { kind: 'custom', door, features: { waf: { enabled: true, rateLimit: 100 } } },
+      geoRestriction: { type: 'blacklist', countries: ['KP'] },
+    });
+    assert.deepEqual(seen?.features.waf, { rateLimit: 100 });
+    assert.deepEqual(seen?.features.geo, { deny: ['KP'] });
+  });
+
+  it('a config() domain in frontDoor.features needs Hosting.create(), like the top-level domain', () => {
+    assert.throws(
+      () =>
+        new Hosting(newStack('FeatDomainMarker'), 'Hosting', {
+          root: tmpDir,
+          api: MOCK_API,
+          frontDoor: { features: { domain: { domainName: config('DOMAIN_PROD') } } },
+        }),
+      /requires async resolution/,
+    );
+  });
+});
+
+// Compile-time contract on the Blocks `Hosting`: each kind accepts exactly the
+// settings its door implements (this file is typechecked by the build).
+const _blocksFrontDoorTypes: Array<HostingProps['frontDoor']> = [
+  { features: { domain: { domainName: config('DOMAIN_PROD') }, priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_ALL } },
+  { kind: 'apiGateway', api: 'rest', features: { domain: { domainName: config('DOMAIN_PROD') } } },
+  { kind: 'stacked', edge: 'cloudfront', router: 'alb', features: { router: { logging: { enabled: true } } } },
+  // @ts-expect-error — the stacked edge has no access logs.
+  { kind: 'stacked', edge: 'cloudfront', router: 'alb', features: { edge: { logging: { enabled: true } } } },
+  // @ts-expect-error — the stacked door takes its settings per layer, not flat.
+  { kind: 'stacked', edge: 'cloudfront', router: 'alb', features: { waf: { enabled: true } } },
+  // @ts-expect-error — the ALB has no geo restriction.
+  { kind: 'alb', features: { geoRestriction: { type: 'whitelist', countries: ['US'] } } },
+  // @ts-expect-error — API Gateway has no WAF.
+  { kind: 'apiGateway', features: { waf: { enabled: true } } },
+];
+void _blocksFrontDoorTypes;

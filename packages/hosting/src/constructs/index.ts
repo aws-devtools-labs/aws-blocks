@@ -88,6 +88,33 @@ export {
 	type UploadContext,
 } from './front_door.js';
 export type { OriginHandle } from './layer.js';
+// The `frontDoor` prop: each door kind with its own typed `features` (exactly
+// the settings that door implements), and the merge of the deprecated
+// top-level props into them.
+export {
+	type AlbDoorFeatures,
+	type AlbDoorOptions,
+	type ApiGatewayDoorFeatures,
+	type ApiGatewayDoorOptions,
+	type CloudFrontDoorFeatures,
+	type CloudFrontDoorOptions,
+	type CustomDoorFeatures,
+	type CustomDoorOptions,
+	FRONT_DOOR_SETTINGS,
+	type FrontDoorAlias,
+	type FrontDoorAliases,
+	type FrontDoorKind,
+	type FrontDoorSettingName,
+	type FrontDoorSettings,
+	frontDoorKind,
+	type HostingFrontDoor,
+	type HostingGeoRestriction,
+	type HostingLoggingConfig,
+	type HostingMonitoringConfig,
+	type ResolvedFrontDoor,
+	resolveFrontDoorFeatures,
+	type StackedDoorFeatures,
+} from './front_door_options.js';
 // `cf.*` — CloudFront helpers for a free-form door. They also record what they
 // wired, which is what the routes/API wiring check reads.
 export { cf, type CloudFrontHelpers } from './cf_helpers.js';
