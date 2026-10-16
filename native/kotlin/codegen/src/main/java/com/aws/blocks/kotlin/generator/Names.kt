@@ -58,4 +58,6 @@ object MemberNames {
 
     // kotlinx.serialization.descriptors
     val buildClassSerialDescriptor = MemberName("kotlinx.serialization.descriptors", "buildClassSerialDescriptor")
+
+    val validateTransferableDescriptor = MemberName("com.aws.blocks.kotlin", "validateTransferableDescriptor")
 }

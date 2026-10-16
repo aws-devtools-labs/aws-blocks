@@ -4,7 +4,17 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 
-import { buildSandboxDeployArgs, sandboxFailureRecoveryHint } from './sandbox.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
+import {
+  buildSandboxDeployArgs,
+  buildSandboxSynthArgs,
+  findExpressUnsafeStacks,
+  sandboxFailureRecoveryHint,
+  stacksWithExpressUnsafeResources,
+} from './sandbox.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
 
 /**
@@ -88,5 +98,76 @@ describe('sandboxFailureRecoveryHint — no silent dead-end after a failed expre
 
   it('explains why (rollback is off under express mode)', () => {
     assert.match(hint, /rollback is off|automatic rollback/i);
+  });
+});
+
+describe('sandbox Express Mode fallback (Lambda Web Function endpoints)', () => {
+  it('drops --express (keeping --method direct, rollback on) when express is false', () => {
+    const args = buildSandboxDeployArgs({ outDir: 'o', projectRoot: '/a', backendPath: 'b.ts', express: false });
+    assert.ok(!args.includes('--express'), `unexpected --express in: ${args.join(' ')}`);
+    assert.strictEqual(valueAfter(args, '--method'), 'direct');
+    assert.ok(!args.includes('--no-rollback'), 'rollback stays at its default (on)');
+  });
+
+  it('synthesizes once into <outDir>/cdk.out and deploys that assembly', () => {
+    const synth = buildSandboxSynthArgs({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'aws-blocks/index.cdk.ts' });
+    assert.deepStrictEqual(synth.slice(0, 4), ['exec', 'cdk', '--', 'synth']);
+    assert.strictEqual(valueAfter(synth, '--output'), '.blocks-sandbox/cdk.out');
+    assert.ok(synth.includes('sandboxMode=true'));
+    const deploy = buildSandboxDeployArgs({
+      outDir: '.blocks-sandbox',
+      projectRoot: '/app',
+      backendPath: 'aws-blocks/index.cdk.ts',
+      assemblyDir: '.blocks-sandbox/cdk.out',
+    });
+    assert.strictEqual(valueAfter(deploy, '--app'), '.blocks-sandbox/cdk.out', 'no second synth/framework build');
+  });
+
+  it('finds stacks whose synthesized template has a Web Function endpoint', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sandbox-assembly-'));
+    try {
+      writeFileSync(
+        join(dir, 'manifest.json'),
+        JSON.stringify({
+          artifacts: {
+            WfStack: { type: 'aws:cloudformation:stack', environment: 'aws://123456789012/us-east-1', properties: { templateFile: 'WfStack.template.json', stackName: 'wf-stack' } },
+            PlainStack: { type: 'aws:cloudformation:stack', environment: 'aws://unknown-account/unknown-region', properties: { templateFile: 'PlainStack.template.json' } },
+            Tree: { type: 'cdk:tree' },
+          },
+        }),
+      );
+      writeFileSync(join(dir, 'WfStack.template.json'), JSON.stringify({ Resources: { E: { Type: 'AWS::Lambda::WebFunctionEndpoint' } } }));
+      writeFileSync(join(dir, 'PlainStack.template.json'), JSON.stringify({ Resources: { F: { Type: 'AWS::Lambda::Function' } } }));
+      assert.deepStrictEqual(stacksWithExpressUnsafeResources(dir), [{ stackName: 'wf-stack', region: 'us-east-1' }]);
+      assert.deepStrictEqual(stacksWithExpressUnsafeResources(join(dir, 'missing')), []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  const fakeCfn = (byStack: Record<string, string | Error>) => (): CloudFormationClient =>
+    ({
+      send: async (cmd: { input: { StackName: string } }) => {
+        const r = byStack[cmd.input.StackName];
+        if (r instanceof Error) throw r;
+        return { Stacks: [{ StackStatus: r }] };
+      },
+    }) as unknown as CloudFormationClient;
+
+  it('turns Express off for an existing stack, keeps it for a create, and fails closed on errors', async () => {
+    const unsafe = await findExpressUnsafeStacks(
+      [{ stackName: 'existing' }, { stackName: 'new' }, { stackName: 'throttled' }, { stackName: 'deleted' }],
+      fakeCfn({
+        existing: 'UPDATE_COMPLETE',
+        new: new Error('Stack with id new does not exist'),
+        throttled: new Error('Rate exceeded'),
+        deleted: 'DELETE_COMPLETE',
+      }),
+    );
+    assert.deepStrictEqual(unsafe, ['existing', 'throttled']);
+  });
+
+  it('keeps Express Mode when no stack has an unsafe resource', async () => {
+    assert.deepStrictEqual(await findExpressUnsafeStacks([], fakeCfn({})), []);
   });
 });

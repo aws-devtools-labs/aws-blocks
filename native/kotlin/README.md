@@ -53,6 +53,10 @@ awsBlocks {
         custom("staging", "https://staging.example.com")
     }
 
+    // Logical identities from x-blocks-native-packages that keep the
+    // UnknownTransferable fallback instead of a declared type (optional)
+    excludeNativePackages = setOf("example-iot-native")
+
     // Only needed to use the OIDC client on Android or iOS, where the relay scheme is
     // registered with the operating system. Must match an entry in the backend's
     // allowedRelayOrigins. JVM binds a loopback address per sign-in and ignores this.
@@ -110,7 +114,15 @@ and `visibility = GeneratedVisibility.Internal`, so that its accessors stay out 
 scope and its generated types do not share fully qualified names with another module's — two
 modules both left on the default `packageName` ship the same ones.
 
-When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable result still fails code generation.
+### Transferable Results
+
+When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable unbound result still fails code generation.
+
+When `x-blocks-native-bindings` binds the tag and its package has an `android` field, the client returns the declared type, hydrated through `<Type>.fromBlocksDescriptor` after the descriptor is checked against the tag. A nullable bound result returns null for a JSON-null body.
+
+A nullable built-in result now returns null for a JSON-null body as well, where it previously threw.
+
+The factory a declared package must expose is specified in [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
 
 ## Gradle Tasks
 

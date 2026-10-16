@@ -1,5 +1,278 @@
 # @aws-blocks/create-blocks-app
 
+## 0.3.0
+
+### Minor Changes
+
+- 8f725b6: fix(bb-data): enable Aurora storage encryption, backup retention, and log export
+  
+  Hardens the Aurora Serverless v2 cluster synthesized by `Database`:
+  
+  - **Storage encryption at rest** is opt-in via the
+    `@aws-blocks/bb-data:encryptStorageByDefault` context flag — set in the new
+    `create-blocks-app` cdk.json templates, so new projects encrypt by default with
+    the AWS-managed `aws/rds` key. A new optional `storageEncryptionKeyArn` (the ARN
+    of a customer-managed KMS key) turns encryption on regardless of the flag and
+    also encrypts the auto-generated credentials secret. When neither is set, the
+    `StorageEncrypted` property is left unset (so an existing cluster is untouched)
+    and a synth warning explains how to opt in.
+  - **Automated backups** are on by default and retained **15 days**; this is also
+    the point-in-time-recovery window. A single `pointInTimeRecovery` option
+    controls it (mirroring every other Blocks block): `true` enables the 15-day
+    window, `{ retentionDays: n }` pins a 1–35-day window, and `false` clamps to the
+    1-day minimum (Aurora cannot disable automated backups). When omitted it follows
+    the stack-wide `defaults.pointInTimeRecovery` (on under `production`, off under
+    `sandbox`).
+  - **CloudWatch log export** — the PostgreSQL engine log is exported to CloudWatch
+    Logs, with retention following the stack-wide `defaults.logRetention`.
+  - `iamAuthentication` remains intentionally off (access is exclusively via the RDS
+    Data API), and automatic secret rotation is documented as a follow-up.
+  
+  `@aws-blocks/create-blocks-app` scaffolds this default into new projects: every
+  template's `cdk.json` now sets the `@aws-blocks/bb-data:encryptStorageByDefault`
+  context flag, and the Amplify overlay sets the same flag via `setContext`. As a
+  result, a `Database` created in a newly scaffolded project encrypts its storage at
+  rest by default.
+  
+  **Breaking for existing stacks (0.x minor = breaking channel):** the
+  backup-retention and CloudWatch log-export changes alter synthesized cluster
+  properties, so existing stacks will show a CloudFormation diff.
+  
+  Storage encryption is **opt-in** specifically so it does **not** silently replace
+  existing clusters: with neither the context flag nor a `storageEncryptionKeyArn`
+  set, the `StorageEncrypted` property is left unset and the existing cluster is
+  untouched. Opting in (setting the flag, or supplying a key) on an
+  already-provisioned, unencrypted cluster requires a **replacement**, and the
+  replacement is destructive: RDS cannot encrypt an existing cluster in place, so
+  CloudFormation creates a **new, empty** encrypted cluster and repoints the stack.
+  There is no in-place path. The migration CustomResource does **not** re-run on a
+  cluster swap — its only CloudFormation properties are the service token and the
+  migrations hash, neither of which changes when the cluster is replaced — so the new
+  cluster comes up with **no schema**; migrations run only when a migration file
+  changes (which changes the migrations hash). Under production (RETAIN) the old
+  cluster is orphaned/unreferenced; under sandbox (DESTROY) it and its data are
+  deleted; under `removalPolicy: 'snapshot'` it is snapshotted as it is replaced
+  (though under production's `deletionProtection: true` the follow-up delete may fail
+  and leave it in place, unverified on a real deploy). The only safe route is to
+  snapshot the existing cluster, restore it with encryption enabled, then cut over.
+  Review the diff and snapshot before deploying. The replacement is symmetric:
+  turning encryption back off — removing the flag (or `storageEncryptionKeyArn`) from
+  a project that already deployed encrypted, e.g. deleting the cdk.json line or a
+  merge dropping it — also changes `StorageEncrypted` and so likewise replaces the
+  cluster (back to unencrypted), with the same new-empty-cluster / no-schema outcome.
+- 4ae500e: feat(create-blocks-app): add a dev:stop command for the local dev server
+  
+  Adds a first-class, sanctioned way to stop the local dev server, so there is an
+  alternative to `pkill -f tsx` / `killall node` — which match by process name and
+  can kill the caller's own shell/agent process.
+  
+  - `@aws-blocks/core/scripts` (re-exported by `@aws-blocks/blocks/scripts`) gains
+    `stopDevServer`, the CLI entry `runStopCli`, `stopMessage`, and the
+    `StopResult` type. Stop acts ONLY on the supervisor identity the dev server
+    recorded in its own pidfile (`{pid, ppid, port}`): it SIGTERMs the recorded
+    `tsx watch` watcher — the only thing that actually ends `npm run dev` — and
+    falls back to the recorded child's listener tree only when the watcher is
+    gone. It never scans a port and signals an arbitrary listener, so a stale
+    pidfile or an unrelated same-port process is never touched, and the pidfile is
+    removed only once the port is confirmed free. Idempotent; never throws;
+    `runStopCli` exits non-zero when the stop leaves the port bound.
+  
+  - `@aws-blocks/create-blocks-app`: every standalone template gains a `dev:stop`
+    npm script and a thin `stop.ts` wrapper; the existing-project and Amplify
+    integration paths get `dev:stop` / `blocks:stop` too. The scaffolded
+    `AGENTS.md` and the singleton-guard message point at `npm run dev:stop`
+    instead of `pkill` / the blunt cleanup script.
+- 6d764f7: `AWS_BLOCKS_DISABLE_TELEMETRY` now accepts `true` and `yes` in addition to `1` (case-insensitive, trimmed).
+  
+  Previously only the exact value `1` disabled telemetry, so `AWS_BLOCKS_DISABLE_TELEMETRY=true` kept telemetry on. Both packages now accept `1`, `true` and `yes`; `0`, `false`, empty and unset keep telemetry enabled. The `blocks-telemetry --help` output lists the accepted values, and the D-010 usage note in `docs/DECISIONS.md` is updated to match.
+  
+  Behavior change (0.x minor = breaking channel): if you already export `AWS_BLOCKS_DISABLE_TELEMETRY=true` or `=yes` for another tool, Blocks telemetry is now disabled where it was previously still on.
+- 122c49c: fix(telemetry): honor opt-out when `--telemetry-file` is set
+  
+  The flag let an opted-out run build an event, which persisted the installation ID to `~/.blocks/telemetry/installation-id` and printed the first-run notice, and in `@aws-blocks/core` also persisted a project ID into `<project>/.blocks/config.json`. Consent is now checked before the event is built, and in `@aws-blocks/create-blocks-app` again before it is emitted, so an opt-out landing mid-command is honored too. A disabled run writes no identifiers, prints no notice, writes no file and sends no HTTP. `--telemetry-file` now also ignores a whitespace-only path in the space-separated form, matching the `=` form.
+  
+  Behavior change (0.x minor = breaking channel): to capture events without sending them, use `BLOCKS_TELEMETRY_ENDPOINT=http://127.0.0.1:1 <cmd> --telemetry-file=<path>` rather than combining the flag with `AWS_BLOCKS_DISABLE_TELEMETRY`. The detached send worker still runs and fails fast against port 1. That run is consented, so it still writes the installation ID and prints the notice.
+- 66f4be2: Templates no longer set `BLOCKS_SANDBOX` or pass `crossDomain: process.env.BLOCKS_SANDBOX === 'true'` to the auth Building Block. `npm run sandbox` serves the app through the local dev server, which proxies to API Gateway, so the browser talks to `localhost` only and the default `SameSite=Lax` session cookie is correct. Set `crossDomain: true` yourself only when a frontend on a different registrable domain calls the API directly. The Amplify template passes its Cognito settings with `registerConfig` instead of `handler.addEnvironment`.
+  
+  Apps generated from an earlier template can delete the `if (sandboxMode) { blocksStack.handler.addEnvironment('BLOCKS_SANDBOX', 'true') }` block and the `crossDomain` line when upgrading `@aws-blocks/blocks`, since `blocksStack.handler` is removed.
+
+### Patch Changes
+
+- 299c0e9: docs(agents): spell out the auth frontend-mount outcome and a check in the scaffolded AGENTS.md
+  
+  The scaffolded `AGENTS.md` already shows the `Authenticator` + `onAuthChange`
+  mount, but an agent could still provision the auth backend and stop there,
+  leaving every gated route unreachable. Add a short, template-agnostic
+  outcome + available-parts + check note: state that the backend renders no UI,
+  name `Authenticator` and `AuthenticatedContent` as the parts to fit into
+  whatever frontend the task has, and give a signed-out/signed-in check. Scope
+  the stable testids to `AuthBasic`/`AuthCognito` and link `CUSTOMIZING-AUTH-UI.md`
+  for the full contract (OIDC/federated actions carry a provider suffix).
+  
+  Documentation only — no runtime or API change.
+- b8ec583: fix(create-blocks-app): set the storage-encryption flag in the api-only and sql templates
+  
+  The `api-only` and `sql` template `cdk.json` files did not set the
+  `@aws-blocks/bb-data:encryptStorageByDefault` context flag, so new projects
+  scaffolded from them started with Database storage encryption OFF — unlike every
+  other template. Add the `context` flag (boolean `true`) to both, matching the
+  other templates and the encrypt-by-default contract.
+- 440ecce: When the AWS credential check before `npm run deploy` and `npm run sandbox` fails, the message now names the profile and the command that fixes its credentials. A profile without credentials gets sign-up and `aws login` guidance, with an AWS CLI install or update hint when the installed CLI does not have `aws login`. Expired `aws login` and IAM Identity Center (SSO) sessions get `aws login` or `aws sso login` for that profile. Rejected access keys, `credential_process`, web identity, a role assumed with environment keys, and environment credentials get guidance for that source. Rejected or expired credentials from outside the AWS config files, such as an instance role, get a hint to check that source instead of sign-up guidance. When AWS cannot be reached, including the SSO portal, the deploy still continues, and the warning now says that AWS could not be reached. The deploy docs and the generated app's `AGENTS.md` describe this behavior.
+  
+  `@aws-blocks/core` now requires AWS SDK for JavaScript clients 3.936.0 or later, the first version that reads credentials from `aws login` profiles.
+- 5d6656a: feat(core): add the `apiFrontDoor` prop, the `cloudfront` tier, and `publicApiUrl`
+  
+  A Blocks app's API is served by the stack's single shared API Gateway REST API. By
+  default clients call that gateway's own `execute-api` endpoint — the `'apigateway'`
+  tier. You can now put a Blocks-managed CloudFront distribution in front of it
+  instead, with a new prop on `BlocksStackProps` / `BlocksBackendProps`:
+  
+  ```ts
+  await BlocksStack.create(app, 'App', {
+    // …
+    apiFrontDoor: 'cloudfront', // default: 'apigateway'
+  });
+  ```
+  
+  - `'apigateway'` — clients call the API Gateway endpoint directly. Nothing extra to
+    deploy; unchanged from before.
+  - `'cloudfront'` — one CloudFront distribution in front of the gateway (CloudFront →
+    API Gateway → Lambda), and the gateway is built as a regional endpoint so there is
+    a single CloudFront layer. One catch-all behavior forwards every request to the
+    gateway — uncached, all methods, everything except `Host`, HTTP→HTTPS. The
+    distribution's URL is published to the runtime as `BLOCKS_PUBLIC_ORIGIN`, so
+    absolute URLs the backend builds (such as AuthOIDC's sign-in callback) use it.
+  
+  **`publicApiUrl`** on `BlocksStack` / `BlocksBackend` is the URL clients should call
+  under either tier: the CloudFront URL + `/aws-blocks/api` under `'cloudfront'`, else
+  `apiUrl`. `apiUrl` stays the gateway's own URL (what `Hosting` forwards to). A
+  `BlocksStack`'s `ApiUrl` output — what `deploy` / `sandbox` hand a client as
+  `BLOCKS_API_URL` — is `publicApiUrl`; with `BlocksBackend`, emit it yourself. The
+  Amplify template now publishes `publicApiUrl` as `blocks_api_url`.
+  
+  The default is a constant `'apigateway'` — it is **never** derived from the app's
+  shape, so adding or removing Building Blocks never silently changes how the API is
+  exposed. Any value other than `'apigateway'` or `'cloudfront'` fails synth.
+  
+  When an app fronts its frontend with `Hosting`, the API is served from Hosting's
+  distribution; under `'cloudfront'` the managed distribution then stands down — one
+  distribution, same origin as the frontend, no CORS and no second hop.
+  
+  ⚠️ **Switching tiers — or adding or removing `Hosting` under `'cloudfront'` —
+  changes the API's endpoint domain.** Browser auth cookies and sessions are bound to
+  the origin they were set on, so the change signs every user out. (A stable custom
+  domain, a future feature, would avoid this.) Pick a tier, and decide on Hosting,
+  before you have real users, and treat a later change as a breaking migration.
+- 38ce80c: fix: the local dev surface is no longer reachable from the network or from other websites
+  
+  - **Dev server binds loopback.** `npm run dev` now listens on `127.0.0.1` instead of every
+    interface. It serves your whole API against local mock data with no authentication, so it
+    must not be reachable from other machines. For a container or remote devbox, opt in with
+    `BLOCKS_DEV_HOST=0.0.0.0` (or `startDevServer({ host })`); a warning is printed when the host
+    isn't loopback.
+  - **Local realtime WebSocket matches the deployed one.** A client-sent `publish` was broadcast
+    to every subscriber with no authorization. The deployed WebSocket has no client publish, so
+    the local server now rejects it as well; publish from the server with `Realtime.publish()`.
+  - **Local realtime tokens are signed with a per-process random secret** instead of a constant
+    published in this repository, so they can't be forged.
+  - **The `/realtime` WebSocket upgrade checks `Origin`.** Only loopback origins can connect, plus
+    the opted-in host: with `BLOCKS_DEV_HOST=0.0.0.0`, a same-origin page opened by IP address; with
+    a concrete `BLOCKS_DEV_HOST` hostname, that hostname. This closes cross-site WebSocket hijacking from any
+    page the developer visits. Non-browser clients that send no `Origin` still connect.
+  - **`GET /aws-blocks/settings` opens an editor only under the local dev server.** It no longer
+    spawns a process or echoes the working directory when the built-in routes run in a deployed
+    Lambda, and it opens the file with `execFile` instead of a shell command.
+  - **The `nextjs` template's frontend dev server binds loopback** (`next dev --hostname
+    127.0.0.1`), like the Blocks dev server.
+- 002b063: Keep the Next.js starter E2E independent of the sample page title by checking the home page response and Blocks config endpoint. Validate the sample API separately, with guidance to update its test when replacing the sample methods.
+- f1eb149: fix(telemetry): keep every event written to `--telemetry-file` instead of only the first
+  
+  The sink created the file with `O_CREAT | O_EXCL` and swallowed the resulting `EEXIST`, so a run that emitted more than one event recorded only the first. In `@aws-blocks/core` a `dev` server that retries a port bind emits `dev/FAIL` then `dev/SUCCESS`, and the success was lost. Events after the first are now appended to the same JSON array. A path that already existed when the run started is still left untouched. The container is unchanged — a JSON array, 2-space indented — so a consumer reading the first element is unaffected, but a file can now hold more than one event: anything asserting exactly one needs updating.
+- 8ca3692: feat: shared, framework-neutral `ui-theme` design-token layer
+  
+  Introduce a design-token layer for the Blocks UI so the shared Auth
+  components and the starter templates share one consistent, polished look
+  with no new runtime framework dependency.
+  
+  - `@aws-blocks/auth-common` ships a new theme module: CSS custom
+    properties (`--bb-*` for color, spacing, radius, typography, elevation)
+    on `:root`, a light and dark palette driven by `prefers-color-scheme`
+    with a `data-bb-theme` override hook, and base `.bb-*` component
+    classes. The palette declares `color-scheme` so UA-drawn widgets
+    (checkboxes, `<select>`, scrollbars, `::placeholder`, autofill) follow
+    the active palette, and `.bb-button` has a `:disabled` state. A new
+    idempotent, SSR-safe `injectTheme()` adds the stylesheet to the document
+    once. The shared `Authenticator`, `AccountMenuBar`, and
+    `AuthenticatedContent` now render against these token classes instead
+    of inline styles and inject the theme themselves, so the themed look
+    travels with the component into any host (lit-html, vanilla, React,
+    Next.js) with zero wiring. Every `data-testid` is preserved.
+  - `@aws-blocks/blocks` re-exports `injectTheme`, `THEME_CSS`, and
+    `THEME_STYLE_ID` from `@aws-blocks/blocks/ui`, and adds a lean
+    `@aws-blocks/blocks/theme` subpath that re-exports ONLY the token layer
+    (no `Authenticator`/WebAuthn surface) for non-auth hosts. `@aws-blocks/auth-common`
+    is marked `sideEffects: false` so a bundler can drop the unused UI
+    surface; `@aws-blocks/blocks` is not, because as an aggregator that
+    re-exports side-effecting building blocks it is not side-effect-free.
+  - `@aws-blocks/create-blocks-app` templates (`default`, `react`,
+    `nextjs`, `demo`, `auth-cognito`) adopt the tokens for their own page
+    chrome and todo UI, so the whole page is themed and dark-mode-aware;
+    the `bare` template stays deliberately minimal. The static templates
+    inline the first-paint palette and the `nextjs` template server-renders
+    the token `<style>` so a dark-mode user never sees a white flash before
+    the bundle runs. A `--bb-color-success` token keeps success messages
+    from reading as accent blue.
+  
+  Focus states use a real `outline` ring (preserved under forced-colors /
+  Windows high-contrast mode) rather than an `outline: none` + `box-shadow`
+  ring, which such modes drop.
+  
+  Additive and non-breaking.
+- 7c19c4f: feat: `npm run deploy -- --wait-live` holds `BLOCKS_DEPLOYED` until the new build is actually served
+  
+  `cdk deploy` returning is not the same as the new frontend build being served.
+  Two edge windows stay open after CloudFormation reports complete, and emitting
+  `BLOCKS_DEPLOYED` while either is open lets a caller's immediate self-test hit a
+  stale bundle and silently miss a regression.
+  
+  - **New opt-in `--wait-live` flag.** When set, `npm run deploy` only prints
+    `BLOCKS_DEPLOYED` once the new build is confirmed live, so a request issued
+    immediately after the signal returns the new asset.
+  - **Per-build config match (the KVS cutover).** Each deploy stamps its build id
+    into the runtime config (`/.blocks-sandbox/config.json`) and surfaces it as a
+    `HostingBuildId` stack output; the poll declares the config live only when the
+    body CloudFront serves carries that exact id, distinguishing the new build from
+    a byte-identical config still served by an edge POP routing to the previous
+    build during cutover — the common re-deploy case.
+  - **Invalidation wait (the compute/SSR window).** For a compute deploy the `/*`
+    CloudFront invalidation that flushes the previous build's edge-cached SSR HTML
+    is fire-and-forget, so CloudFormation returns before it propagates. The deploy
+    now surfaces the invalidation id as a `HostingInvalidationId` stack output and,
+    under `--wait-live`, polls `GetInvalidation` until `Completed` before signalling
+    — closing the window where the edge still serves old SSR HTML (referencing old
+    hashed assets → 403). Pure-static deploys issue no invalidation and skip this.
+  - **Bounded probing.** Each config probe carries a per-request timeout
+    (`AbortSignal`), so one stalled response cannot hold the deploy past its budget.
+    `--wait-live-timeout=<seconds>` tunes the overall budget (default 180); if
+    liveness can't be confirmed in time, the deploy — which itself succeeded — prints
+    a clear warning and exits non-zero rather than emitting a false "live" signal.
+  - **No-op for backend-only apps** (no frontend to verify) and off by default, so the
+    existing deploy flow is unchanged unless you opt in.
+- 74e5581: fix(templates): make the scaffolded e2e dev-server spawn cross-platform on Windows
+  
+  Every template's `test/e2e.test.ts` started the dev server with
+  `spawn('npm', [...])` and no shell, and tore it down with a POSIX
+  process-group kill (`process.kill(-pid)`). On Windows `npm` is `npm.cmd`,
+  which `child_process.spawn` cannot resolve without a shell, so the spawn threw
+  `spawn npm ENOENT`, the server never started, and the readiness probe timed
+  out — a customer running `npm run test:e2e` on Windows hit the same failure.
+  The spawn now passes `shell: isWin`, uses `detached: !isWin` (process groups
+  are POSIX-only), and the teardown reaps the tree with a synchronous
+  `spawnSync('taskkill', ['/T', '/F'])` on Windows (so the process cannot exit
+  before the reap completes) and keeps the existing graceful
+  `process.kill(-pid, 'SIGTERM')` group kill on POSIX. Behaviour on macOS/Linux
+  is unchanged.
+
 ## 0.2.0
 
 ### Minor Changes

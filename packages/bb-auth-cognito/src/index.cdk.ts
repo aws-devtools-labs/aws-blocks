@@ -38,6 +38,7 @@ import type {
 import { envVarNames, makeExternalUserPoolRef } from './types.js';
 
 export * from './types.js';
+export { SessionStore, type SessionRecord } from './sessions.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthCognito (CDK)
@@ -277,7 +278,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 
 		// 4. Session HMAC secret — SSM SecureString via AppSetting. The
 		// construct generates a random value on first deploy, wires the
-		// custom resource, and grants `this.handler` ssm:GetParameter +
+		// custom resource, and grants the shared execution role ssm:GetParameter +
 		// kms:Decrypt automatically. The runtime (`index.aws.ts`) reads it
 		// by instantiating its own `AppSetting` at the same scope path, so
 		// no env var is needed.

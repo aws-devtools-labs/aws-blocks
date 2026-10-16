@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets, registerConfig } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -43,7 +43,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 // Propagate E2E_FROM_EMAIL to the Lambda runtime so the EmailClient BB
 // resolves the verified SES sender address in deployed environments.
 if (process.env.E2E_FROM_EMAIL) {
-  blocksStack.handler.addEnvironment('E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
+  registerConfig(blocksStack, 'E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
 }
 
 // Tag every taggable resource in the stack for easy identification and cleanup

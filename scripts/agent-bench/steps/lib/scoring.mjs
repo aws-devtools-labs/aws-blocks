@@ -89,6 +89,61 @@ export const DEAD_SERVER_STATUS = 'dead';
 export const DEAD_SERVER_KLASS = 'dead_server';
 export const DEAD_SERVER_REASON = 'dev_server_dead';
 
+// PGLITE_INIT_TRAP_RE mirrors the regex in packages/data-common/src/pglite-init.ts (the signature the
+// mock engine's init-retry matches on a PGlite `_pg_initdb` WASM abort — `Aborted(Cannot enlarge memory
+// arrays…)` / `unreachable` — under the CI runner's ~290 MB-per-instance linear-memory ceiling). It is
+// kept as a local copy because scoring.mjs is a dependency-free `.mjs` that runs under bare `node` in CI
+// and must not import a TS package; a drift test in scoring.test.mjs pins the two together.
+//
+// Historically a dead_server whose dev-log tail matched this signature was reclassified harness_error.
+// That substring gate was REMOVED (osama-rizk, round 2): once bb-data keeps the dev server ALIVE through
+// a migration init trap, the trap no longer kills the process, so the engine's per-attempt `onRetry`
+// warning leaves `Aborted(` in the tail even after a SUCCESSFUL retry — meaning "exited + signature
+// somewhere in 100 lines" mostly selected a survived-trap-then-a-DIFFERENT-crash misclassification
+// (an agent crash wrongly excluded). The sole causal signal is now DATA_LAYER_UNAVAILABLE_SENTINEL
+// below, stamped by step 3 only when the data layer was still wedged at test end. The regex and
+// isPgliteInitOom helper remain exported for the drift guard and as a tested pure predicate; neither is
+// wired into classifyCell any more. Case-SENSITIVE on purpose (no /i).
+export const PGLITE_INIT_TRAP_RE = /RuntimeError:\s*unreachable\b|wasm trap:\s*unreachable\b|\bAborted\(/;
+export const PGLITE_OOM_REASON = 'pglite_init_oom';
+
+// The sole, CAUSAL data-layer signal. bb-data's mock Database logs PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL
+// when an eager migration run exhausts its retries on a PGlite WASM init trap, and
+// PGLITE_DATA_LAYER_RECOVERED_SENTINEL when a later re-run heals it (see
+// packages/data-common/src/pglite-init.ts). Step 3 (3-build-and-test.sh) scans the dev log AFTER
+// Playwright and stamps `data_layer_unavailable: true` ONLY when the LAST unavailable sentinel is not
+// followed by a recovery marker — i.e. the data layer was still down when the tests finished. That
+// makes the flag a CAUSAL claim (down at test time), not mere presence of a trap that may have recovered.
+// A cell carrying it is reclassified harness_error (EXCLUDED) for ANY class — including a `scored` cell
+// whose DB tests failed because the server stayed up but every query rejected. Both literals are kept
+// VALUE-IN-SYNC with the TS source (drift tests in scoring.test.mjs assert equality) since this .mjs
+// cannot import them.
+export const PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL = '[bb-data] PGlite init trap: data layer unavailable';
+export const PGLITE_DATA_LAYER_RECOVERED_SENTINEL = '[bb-data] PGlite init trap: data layer recovered';
+
+/**
+ * True when a dev-log tail shows the PGlite WASM init-trap signature. Non-string input → false. Pure.
+ * NOTE: no longer wired into classifyCell (the dead_server substring fallback was removed — see the
+ * comment above PGLITE_INIT_TRAP_RE); retained as a tested pure predicate and the drift-guard anchor.
+ * The primary causal signal is {@link isDataLayerUnavailable}.
+ * @param {unknown} devLogTail the captured dev.log tail (result.dev_log_tail)
+ * @returns {boolean}
+ */
+export function isPgliteInitOom(devLogTail) {
+	return typeof devLogTail === 'string' && PGLITE_INIT_TRAP_RE.test(devLogTail);
+}
+
+/**
+ * True when step 3 stamped the causal data-layer sentinel on the cell — the mock Database survived a
+ * PGlite init trap but its data layer is wedged (every DB query rejects). This is the primary,
+ * causation-proving signal; it fires for ANY class, including a `scored` cell with failing DB tests.
+ * @param {{data_layer_unavailable?: unknown}} result
+ * @returns {boolean}
+ */
+export function isDataLayerUnavailable(result) {
+	return result?.data_layer_unavailable === true;
+}
+
 /**
  * The klasses that are GENUINE failures counted in the mean as composite 0 (verdict 'fail', included
  * by isScoredCell) — as opposed to `harness_error` (excluded) or `scored` (graded on its tests).
@@ -152,8 +207,11 @@ export function isUngracefulStepTwoDeath(result) {
  *     throttle, or MaxTokensError budget exhaustion stays `agent_fail` (counted).
  *   - `dead_server` — the agent finished but the built app's dev-server never served / crashed
  *     (dev_server_status='dead'): a genuine product failure (verdict 'fail', composite 0, INCLUDED).
+ *     A PGlite init trap no longer lands here — bb-data keeps the server alive through it, and the
+ *     causal `data_layer_unavailable` carve-out above (not any dev_log_tail substring) excludes a
+ *     cell whose data layer was still wedged at test end. Every dead_server now stays counted.
  *   - `scored` — reached build/test/judge; its outcome is a real signal.
- * @param {{failed_at?: string|null, status?: string, dev_server_status?: string, builder_error?: unknown, stop_reason?: unknown, checkpoint?: unknown}} result
+ * @param {{failed_at?: string|null, status?: string, dev_server_status?: string, dev_pid_status?: string, dev_log_tail?: string, data_layer_unavailable?: boolean, builder_error?: unknown, stop_reason?: unknown, checkpoint?: unknown}} result
  * @returns {{klass: 'scored'|'harness_error'|'agent_fail'|'dead_server', reason: string|null}}
  */
 export function classifyCell(result) {
@@ -164,6 +222,18 @@ export function classifyCell(result) {
 	}
 	if (failedAt && Object.prototype.hasOwnProperty.call(HARNESS_FAIL_REASONS, failedAt)) {
 		return { klass: 'harness_error', reason: HARNESS_FAIL_REASONS[failedAt] };
+	}
+	// PRIMARY, causal PGlite-init-trap carve-out. Once bb-data keeps the dev server ALIVE through a
+	// migration init trap, the trap no longer kills the server: the front door serves, Playwright runs,
+	// and every DB-backed test fails because the data layer is wedged — so the cell reaches `scored`
+	// with failing tests and the dead_server+signature gate below NEVER sees it. bb-data logs a fixed
+	// sentinel on that trap and step 3 stamps `data_layer_unavailable: true` (any serve state). Its
+	// presence PROVES a WASM-memory trap caused the DB outage (the sentinel is emitted only on that
+	// path), so the cell is infra → harness_error (EXCLUDED) for ANY class — scored, agent_fail, or
+	// dead_server. Ordered AFTER cancellation / pre-grade harness returns (those keep their own reason)
+	// and BEFORE agent_fail / dead_server / scored, so it rescues exactly the cells they would miscount.
+	if (isDataLayerUnavailable(result)) {
+		return { klass: 'harness_error', reason: PGLITE_OOM_REASON };
 	}
 	// Agent failure is a real fail — except an ungraceful harness teardown (no terminal envelope) that
 	// happened WHILE agent-shell isolation was active, which is reclassified harness_error so a

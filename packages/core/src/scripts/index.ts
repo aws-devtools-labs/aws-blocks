@@ -24,7 +24,12 @@ export {
 export { ensureSecrets, loadEnvFile, loadProductionEnv } from './ensure-secrets.js';
 export { generateClientCode, writeClientCode } from './generate-client.js';
 export { generateSpec, type SpecGenerationOptions, writeSpec } from './generate-spec.js';
-export { NativeCatalogError, type NativeDeclarationSource } from './native-catalogs.js';
+export {
+	NativeCatalogError,
+	type NativeDeclarationInput,
+	type NativeDeclarationSource,
+} from './native-catalogs.js';
+export { readNativeDeclarations } from './read-native-declarations.js';
 export { destroySandbox, type SandboxOptions, startSandbox } from './sandbox.js';
 export { listSecrets, removeSecret, runSecretCli, setSecret } from './secret.js';
 export { getSandboxId, getStackId, getStackName } from './stack-id.js';

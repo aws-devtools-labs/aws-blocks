@@ -5,7 +5,13 @@ import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
-import { detectFramework, type FrameworkAdapterFn, getAdapter, normalizeBasePath } from '@aws-blocks/hosting/adapters';
+import {
+  detectFramework,
+  type FrameworkAdapterFn,
+  getAdapter,
+  normalizeBasePath,
+  withComputeTarget,
+} from '@aws-blocks/hosting/adapters';
 import {
   generateBuildId,
   HostingConstruct,
@@ -13,15 +19,16 @@ import {
   type HostingDomainConfig,
   type HostingWafConfig,
   type SkewProtectionConfig,
+  type WebFunctionConstruct,
+  type WebFunctionOptions,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
-import { AllowedMethods, CachePolicy, OriginRequestPolicy, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
-import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
+import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
 import { registerConfig } from './cdk/config-registry.js';
 import { getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
-import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
+import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
 	assertMarkersExistAtSynth,
@@ -54,6 +61,30 @@ import { getRegisteredRoutes } from './raw-route.js';
  * ```
  */
 export type ComputeConfig = {
+  /**
+   * Where the SSR server runs. Default: `'lambda'`.
+   *
+   * - `'lambda'` — a Lambda function behind API Gateway. Available in every Region.
+   * - `'web-function'` — **AWS Lambda Web Functions**: the framework's own
+   *   Node.js server runs directly on Lambda behind CloudFront (origin access
+   *   control, no API Gateway). One execution environment serves many
+   *   concurrent requests and is billed for active CPU — fewer cold starts and
+   *   lower cost for I/O-bound SSR. Works with Astro, SvelteKit, Nuxt/Nitro and
+   *   Next.js — the adapters build an HTTP server automatically (Nitro
+   *   `node-server` preset, OpenNext `node` wrapper) — in a Region where Web
+   *   Functions are available (us-east-1, us-east-2, us-west-2,
+   *   ap-northeast-1, eu-west-1). Runs on Node.js 24 / Arm64 with 2 GB per
+   *   environment, so `memorySize` and `reservedConcurrency` don't apply —
+   *   tune with {@link ComputeConfig.webFunction}.
+   *
+   * @example
+   * ```ts
+   * compute: { type: 'web-function', webFunction: { maxEnvironments: 20 } }
+   * ```
+   */
+  type?: 'lambda' | 'web-function';
+  /** Lambda Web Functions tuning. Only used when `type` is `'web-function'`. */
+  webFunction?: WebFunctionOptions;
   /** Lambda memory size in MB. Default: 512. */
   memorySize?: number;
   /**
@@ -121,6 +152,13 @@ export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
 export interface BlocksStackApi {
   /** Fully-qualified API Gateway URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks`). */
   readonly apiUrl: string;
+  /**
+   * Claim the API front-door role for this `Hosting` distribution, suppressing
+   * the backend's managed `cloudfront` distribution. Optional so any `{ apiUrl }`
+   * object stays assignable; `BlocksStack`/`BlocksBackend` implement it.
+   * @internal Framework-only.
+   */
+  claimApiFrontDoor?(distributionUrl: string): void;
 }
 
 /**
@@ -496,6 +534,13 @@ export class Hosting extends Construct {
   public readonly url: string;
   /** The primary SSR/compute Lambda function (first compute resource, if any). */
   public readonly ssrFunction?: cdk.aws_lambda.Function;
+  /**
+   * The SSR server on AWS Lambda Web Functions — set instead of
+   * {@link ssrFunction} when `compute.type` is `'web-function'`. Use its
+   * `grantPrincipal` / `addToRolePolicy` to give the server access to AWS
+   * resources.
+   */
+  public readonly ssrWebFunction?: WebFunctionConstruct;
   /** S3 bucket for framework build caches (present when `buildCache.enabled` is true). */
   public readonly buildCacheBucket?: cdk.aws_s3.Bucket;
   /**
@@ -606,7 +651,10 @@ export class Hosting extends Construct {
       process.env.BLOCKS_API_URL = props.api.apiUrl;
     }
     const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
-    const manifest: DeployManifest = adapter(root);
+    // Adapters build for the selected compute: Web Functions need a plain
+    // Node.js HTTP server (OpenNext `node` wrapper, Nitro `node-server`) and
+    // Arm64 native modules (Astro's sharp).
+    const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () => adapter(root));
 
     // ── 4b. Ensure buildId is set on the manifest ────────────────
     if (!manifest.buildId) {
@@ -777,7 +825,7 @@ export class Hosting extends Construct {
       const ownerRootId = isBlocksBackendRoot(props.api)
         ? props.api.node.path
         : getBlocksRoot(this).node.path;
-      this.addApiBehaviors(hosting, props.api.apiUrl, ownerRootId);
+      this.addApiBehaviors(hosting, props.api, ownerRootId);
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -790,8 +838,11 @@ export class Hosting extends Construct {
 
     const primaryFunction = [...hosting.computeFunctions.values()].find(canAddEnv);
 
-    for (const [, fn] of hosting.computeFunctions) {
-      if (!canAddEnv(fn)) continue; // Lambda@Edge: no env var support
+    const envTargets = [
+      ...[...hosting.computeFunctions.values()].filter(canAddEnv), // Lambda@Edge: no env var support
+      ...hosting.computeWebFunctions.values(),
+    ];
+    for (const fn of envTargets) {
       if (props.api) {
         fn.addEnvironment('BLOCKS_API_URL', props.api.apiUrl);
       }
@@ -816,7 +867,7 @@ export class Hosting extends Construct {
     const buildId = manifest.buildId;
     if (buildId) {
       const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
-        sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props))],
+        sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props, buildId))],
         destinationBucket: hosting.bucket,
         destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
         prune: false,
@@ -899,6 +950,7 @@ export class Hosting extends Construct {
     this.distribution = hosting.distribution;
     this.url = hosting.distributionUrl;
     this.ssrFunction = primaryFunction;
+    this.ssrWebFunction = [...hosting.computeWebFunctions.values()][0];
     this.buildCacheBucket = hosting.buildCacheBucket;
     this.monitoring = hosting.monitoring;
 
@@ -907,6 +959,30 @@ export class Hosting extends Construct {
       value: hosting.distributionUrl,
       description: 'Blocks Hosting URL',
     });
+
+    // Surface this deploy's build id so a post-deploy liveness poll can confirm
+    // the new build is served (matched against the config at
+    // `/.blocks-sandbox/config.json`). Gated on a build id existing, like the
+    // config deployment above.
+    if (manifest.buildId) {
+      new cdk.CfnOutput(this, 'HostingBuildId', {
+        value: manifest.buildId,
+        description: 'Build id stamped into the deployed runtime config',
+      });
+    }
+
+    // Surface the `/*` invalidation for a compute deploy so the liveness poll
+    // can wait for it to reach `Completed`. The invalidation is fire-and-forget
+    // at deploy time (cdn_construct.ts), so the config probe alone would miss
+    // the window where the edge still serves the previous build's SSR HTML.
+    // `GetInvalidation` needs both ids, so the value carries
+    // `<distributionId>/<invalidationId>`. Absent for a pure-static deploy.
+    if (hosting.invalidationId) {
+      new cdk.CfnOutput(this, 'HostingInvalidationId', {
+        value: `${hosting.distribution.distributionId}/${hosting.invalidationId}`,
+        description: 'CloudFront <distributionId>/<invalidationId> for the post-deploy liveness poll',
+      });
+    }
 
     if (hosting.buildCacheBucket) {
       new cdk.CfnOutput(this, 'BuildCacheBucketName', {
@@ -921,36 +997,47 @@ export class Hosting extends Construct {
    *
    * When `api` is provided, the config uses a relative `/aws-blocks/api` URL
    * so the frontend fetches through the same CloudFront domain (no CORS).
+   *
+   * `buildId` is stamped under `__blocksBuildId` so a post-deploy liveness poll
+   * can tell this deploy's config from a previously-served one during the
+   * CloudFront cutover (see `scripts/wait-live.ts`); the rest of the body is
+   * deploy-invariant.
    */
-  private buildConfigJson(props: HostingProps): Record<string, unknown> {
-    return {
-      ...(props.backendConfig ?? {}),
-      ...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
-    };
+  private buildConfigJson(props: HostingProps, buildId: string): Record<string, unknown> {
+    return buildConfigJson(props, buildId);
   }
 
   /**
-   * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
+   * Add CloudFront behaviors that proxy API traffic to the shared gateway origin,
+   * and claim the API front-door role for this distribution.
+   *
+   * Claiming is part of the same step: with the API served from this distribution,
+   * the backend's managed `cloudfront` distribution — decided later by an aspect
+   * at synth — must stand down, so the SPA/SSR frontend and the API are
+   * same-origin on one distribution (no CORS, no second hop). The claim is
+   * recorded on the backend object (`api.claimApiFrontDoor`), a live reference
+   * Hosting holds, so the aspect scheduled on that same object reads it back.
+   *
+   * The managed `cloudfront` front door and these behaviors forward to the same origin
+   * via the same `httpOriginFromEndpoint` + `API_BEHAVIOR_OPTIONS`, so the two
+   * paths cannot drift.
    */
-  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string, ownerRootId: string): void {
-    const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
-    const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
-    const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
-    const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
+  private addApiBehaviors(hosting: HostingConstruct, api: BlocksStackApi, ownerRootId: string): void {
+    const apiUrl = api.apiUrl;
+    // `distributionUrl` is custom-domain-aware (custom domain when configured,
+    // else the CloudFront default), so clients are pointed at the domain the app
+    // is actually served from. The claim is recorded on the backend object
+    // (`props.api`) itself — a live reference Hosting holds — so it suppresses
+    // that backend's managed `cloudfront` distribution. Optional: a bare
+    // `{ apiUrl }` origin simply isn't claimed.
+    api.claimApiFrontDoor?.(hosting.distributionUrl);
 
-    const apiGatewayOrigin = new HttpOrigin(hostname, {
-      originPath: `/${stage}`,
-    });
+    // The REST API URL embeds its `/{stage}` prefix, which the origin carries as
+    // `originPath` (see httpOriginFromEndpoint).
+    const apiGatewayOrigin = httpOriginFromEndpoint(apiUrl);
 
-    const behaviorDefaults = {
-      allowedMethods: AllowedMethods.ALLOW_ALL,
-      cachePolicy: CachePolicy.CACHING_DISABLED,
-      originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-    };
-
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
 
     // Proxy the auth BB's reserved subtree as a single behavior. The auth flow
     // (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
@@ -959,7 +1046,7 @@ export class Hosting extends Construct {
     // instance count, and never drifts as routes are added. Added directly (not
     // via the route loop below) so it's emitted exactly once even with multiple
     // AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
 
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
     for (const route of getRegisteredRoutes()) {
@@ -990,7 +1077,26 @@ export class Hosting extends Construct {
       }
 
       addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
+      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
     }
   }
+}
+
+/**
+ * Build the deployed `config.json` payload. Pure and exported so a test can
+ * assert the build-id stamp — half of the `--wait-live` contract — directly,
+ * without reaching into the hashed `BucketDeployment` asset.
+ *
+ * When `api` is provided, the config uses a relative `/aws-blocks/api` URL so
+ * the frontend fetches through the same CloudFront domain (no CORS). `buildId`
+ * is stamped under `__blocksBuildId` so a post-deploy liveness poll can tell
+ * this deploy's config from a previously-served one during the CloudFront
+ * cutover (see `scripts/wait-live.ts`); the rest of the body is deploy-invariant.
+ */
+export function buildConfigJson(props: HostingProps, buildId: string): Record<string, unknown> {
+  return {
+    ...(props.backendConfig ?? {}),
+    ...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
+    [BLOCKS_BUILD_ID_CONFIG_KEY]: buildId,
+  };
 }

@@ -71,7 +71,23 @@ export interface BuildingBlockMeta {
 }
 
 // @public
+export function buildingBlockParent(meta: BuildingBlockMeta & {
+    id: string;
+    parent: ScopeParent;
+}): BuildingBlockMeta & {
+    id: string;
+    parent: ScopeParent;
+    fullId: string;
+};
+
+// @public
 export function clearRouteRegistry(): void;
+
+// @public
+export function computeScopeFullId(scope: {
+    id: string;
+    parent?: ScopeParent;
+}): string;
 
 export { config }
 

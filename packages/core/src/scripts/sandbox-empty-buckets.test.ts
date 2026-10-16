@@ -188,4 +188,40 @@ describe('runDestroyWithRetries', () => {
 		);
 		assert.strictEqual(attempts, 3); // initial attempt + 2 retries
 	});
+
+	it('logs the default "Sandbox" label on success when none is given', async () => {
+		const logs: string[] = [];
+		const orig = console.log;
+		console.log = (...a: unknown[]) => { logs.push(a.join(' ')); };
+		try {
+			await runDestroyWithRetries({
+				runDestroy: () => {},
+				listStackNames: () => [],
+				emptyBuckets: async () => {},
+				sleep: async () => {},
+			});
+		} finally {
+			console.log = orig;
+		}
+		assert.ok(logs.some((l) => l.includes('✅ Sandbox destroyed!')), logs.join('\n'));
+	});
+
+	it('logs a custom successLabel (production path reuse)', async () => {
+		const logs: string[] = [];
+		const orig = console.log;
+		console.log = (...a: unknown[]) => { logs.push(a.join(' ')); };
+		try {
+			await runDestroyWithRetries({
+				runDestroy: () => {},
+				listStackNames: () => [],
+				emptyBuckets: async () => {},
+				sleep: async () => {},
+				successLabel: 'Production stack',
+			});
+		} finally {
+			console.log = orig;
+		}
+		assert.ok(logs.some((l) => l.includes('✅ Production stack destroyed!')), logs.join('\n'));
+		assert.ok(!logs.some((l) => l.includes('Sandbox')), 'must not log the sandbox label for a production destroy');
+	});
 });

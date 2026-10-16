@@ -66,6 +66,7 @@ import {
   routeSpecificity,
 } from './kvs_router.js';
 import { KvKeys } from './kv_keys.js';
+import type { WebFunctionConstruct } from './web_function_construct.js';
 import {
   AwsCustomResource,
   AwsCustomResourcePolicy,
@@ -134,6 +135,12 @@ export type CdnConstructProps = {
    * provisioned instances actually serve request traffic.
    */
   computeAliases?: Map<string, IFunction>;
+  /**
+   * Map of compute name → Lambda Web Function (`compute.type:
+   * 'web-function'`). A Web Function SSR compute is reached directly through
+   * its endpoint with CloudFront OAC — no API Gateway.
+   */
+  computeWebFunctions?: Map<string, WebFunctionConstruct>;
   /** WAFv2 WebACL to associate with the distribution. */
   webAcl?: CfnWebACL;
   /** ACM certificate for custom domain TLS. */
@@ -218,6 +225,15 @@ export class CdnConstruct extends Construct {
   readonly defaultNotFoundPageHtml?: string;
 
   /**
+   * Physical id of the `/*` invalidation issued on a compute deploy, as a CDK
+   * token (`getResponseField('Invalidation.Id')`). A post-deploy liveness poll
+   * waits on `GetInvalidation` reaching `Completed` so it does not report the
+   * build live while the fire-and-forget invalidation is still propagating.
+   * `undefined` for a pure-static deploy, which issues no invalidation.
+   */
+  readonly invalidationId?: string;
+
+  /**
    * Resources whose update is the atomic-deploy cutover and therefore MUST
    * happen only after the new build's assets are uploaded to S3. Under KVS
    * routing this is the {@link KvKeys} custom resource — its UpdateKeys call
@@ -268,6 +284,7 @@ export class CdnConstruct extends Construct {
     );
     const hasCompute =
       (props.computeFunctionUrls && props.computeFunctionUrls.size > 0) ||
+      (props.computeWebFunctions && props.computeWebFunctions.size > 0) ||
       hasComputeRoutes;
     this.errorPageHtml = props.errorPageHtml ?? SSR_ERROR_PAGE_HTML;
 
@@ -389,12 +406,14 @@ export class CdnConstruct extends Construct {
     // wrapper (REST API sends v1; most adapters default to v2). Image-opt
     // and other GET-only compute stay on OAC + FURL.
     const computeOrigins = new Map<string, IOrigin>();
-    const ssrComputeName: 'default' | 'server' | undefined =
-      props.computeFunctions?.has('default')
-        ? 'default'
-        : props.computeFunctions?.has('server')
-          ? 'server'
-          : undefined;
+    const hasSsr = (name: 'default' | 'server'): boolean =>
+      Boolean(props.computeFunctions?.has(name) || props.computeWebFunctions?.has(name));
+    const ssrComputeName: 'default' | 'server' | undefined = hasSsr('default')
+      ? 'default'
+      : hasSsr('server')
+        ? 'server'
+        : undefined;
+    const ssrWebFunction = ssrComputeName ? props.computeWebFunctions?.get(ssrComputeName) : undefined;
 
     // Hoisted out of the SSR branch so the IPX image Lambda can share the SAME
     // API Gateway (see the image-origin wiring below). `restApi`/`apiHostname`
@@ -413,18 +432,10 @@ export class CdnConstruct extends Construct {
       .update('origin-verify-v1')
       .digest('hex');
 
-    if (ssrComputeName && props.computeFunctions) {
-      // Target the warm `live` alias when provisioned concurrency is set;
-      // otherwise the unqualified function ($LATEST). Without this, the
-      // REST integration always hit $LATEST and provisioned instances on
-      // the alias sat idle.
-      const ssrFn =
-        props.computeAliases?.get(ssrComputeName) ??
-        props.computeFunctions.get(ssrComputeName)!;
-
-      // REGIONAL: CloudFront is already in front; edge-optimized would
-      // double-proxy and cap streaming idle timeout at 30s.
-      restApi = new RestApi(this, 'SsrRestApi', {
+    // REGIONAL: CloudFront is already in front; edge-optimized would
+    // double-proxy and cap streaming idle timeout at 30s.
+    const createOriginRestApi = (): RestApi =>
+      new RestApi(this, 'SsrRestApi', {
         endpointTypes: [EndpointType.REGIONAL],
         deployOptions: { stageName: 'prod' },
         // No per-stack CloudWatch role / AWS::ApiGateway::Account. The stage
@@ -468,6 +479,22 @@ export class CdnConstruct extends Construct {
           ],
         }),
       });
+
+    if (ssrWebFunction && ssrComputeName) {
+      // Web Function SSR: CloudFront signs every origin request with the
+      // function's OAC (IamAuth endpoint); the resource policy granting this
+      // distribution is attached once the distribution exists (below).
+      computeOrigins.set(ssrComputeName, ssrWebFunction.createOrigin());
+    } else if (ssrComputeName && props.computeFunctions?.has(ssrComputeName)) {
+      // Target the warm `live` alias when provisioned concurrency is set;
+      // otherwise the unqualified function ($LATEST). Without this, the
+      // REST integration always hit $LATEST and provisioned instances on
+      // the alias sat idle.
+      const ssrFn =
+        props.computeAliases?.get(ssrComputeName) ??
+        props.computeFunctions.get(ssrComputeName)!;
+
+      restApi = createOriginRestApi();
       const integration = new LambdaIntegration(ssrFn, {
         proxy: true,
         responseTransferMode: ResponseTransferMode.STREAM,
@@ -523,6 +550,12 @@ export class CdnConstruct extends Construct {
     // (hence a RestApi) — a static-only Nuxt deploy keeps the Function URL.
     const ipxBaseUrl = manifest.imageOptimization?.baseURL;
     const ipxFn = props.computeFunctions?.get('image-optimization');
+    if (ipxBaseUrl && ipxFn && ssrWebFunction && !restApi) {
+      // Web Function SSR needs no API Gateway, but the IPX Lambda still does
+      // (see above) — give it a REST API of its own.
+      restApi = createOriginRestApi();
+      apiHostname = Fn.select(2, Fn.split('/', restApi.url));
+    }
     if (ipxBaseUrl && ipxFn && (!restApi || !apiHostname)) {
       // IPX is configured but there's no SSR compute (hence no shared RestApi)
       // to ride — a static-only Nuxt deploy. The IPX Lambda stays on its OAC
@@ -1410,6 +1443,14 @@ export class CdnConstruct extends Construct {
       }
     }
 
+    // ---- Web Function invoke grant ----
+    // The endpoint is IamAuth: only principals its resource policy allows can
+    // invoke it. Grant exactly this distribution (aws:SourceArn), which signs
+    // origin requests with the function's OAC.
+    if (ssrWebFunction) {
+      ssrWebFunction.allowCloudFrontInvoke(this.distribution.distributionId);
+    }
+
     // ---- Distribution URL ----
     const domainNames = Array.isArray(props.domainName)
       ? props.domainName
@@ -1499,6 +1540,10 @@ export class CdnConstruct extends Construct {
       // Gate AFTER the atomic KVS cutover so we only flush the previous build's
       // pages (see ordering note above).
       invalidation.node.addDependency(kvKeys.resource);
+      // Surface the invalidation id (a CDK token) so the L3 can output it and a
+      // post-deploy poll can wait for it to reach `Completed` — the config
+      // probe alone proves the KVS cutover, not this invalidation's propagation.
+      this.invalidationId = invalidation.getResponseField('Invalidation.Id');
     }
 
     // ---- Self-enforcing atomic-deploy guard ----
