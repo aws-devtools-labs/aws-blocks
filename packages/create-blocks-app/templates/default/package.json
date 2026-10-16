@@ -21,6 +21,7 @@
     "sandbox:preview": "cdk-blocks sandbox preview",
     "sandbox:destroy": "cdk-blocks sandbox destroy",
     "sandbox:console": "cdk-blocks sandbox console",
+    "dashboard": "cdk-blocks dashboard",
     "cleanup": "cdk-blocks dev stop --all",
     "prebuild": "cdk-blocks generate client",
     "build": "tsc && vite build",
