@@ -1,5 +1,53 @@
 # @aws-blocks/blocks
 
+## 0.9.0
+
+### Minor Changes
+
+- 7477b6e: Add `compute.type: 'web-function'` to run the SSR server on AWS Lambda Web Functions. The framework's own Node.js server runs directly on Lambda behind CloudFront origin access control, with no API Gateway and no Lambda Web Adapter. Each execution environment serves many concurrent requests and is billed for active CPU. It works with Astro, SvelteKit, Nuxt/Nitro and Next.js in the Regions where Web Functions are available. When this compute is selected, Nitro builds with the `node-server` preset and Next.js builds with OpenNext's `node` wrapper automatically. Tune it with `compute.webFunction` (`maxConcurrencyPerEnvironment`, `maxEnvironments`, `rateLimit`). The default (`'lambda'`) is unchanged.
+  
+  Sandbox deploys (`npm run sandbox`) of a Web Function app skip CloudFormation Express Mode after the first deploy. Express Mode can't update a Web Function endpoint, so the deploy uses a full deploy with rollback instead.
+
+### Patch Changes
+
+- a3969b5: fix: actionable errors for runtime methods called during `cdk synth`
+  
+  Calling a Building Block's runtime method (for example `db.query()`, `bucket.put()`, `auth.requireAuth()`, or
+  `auth.admin`) at the top level of a backend module runs it during `cdk synth`. For many Building Blocks this failed with
+  a cryptic `TypeError: x is not a function`; it now throws the same actionable error the other Building Blocks already
+  give: `<Class>.<method>() cannot be called during CDK synth. Data methods run at request time — …`.
+- Updated dependencies [d1d129f]
+- Updated dependencies [a3969b5]
+- Updated dependencies [a3969b5]
+- Updated dependencies [a3969b5]
+- Updated dependencies [a3969b5]
+- Updated dependencies [a3969b5]
+- Updated dependencies [7477b6e]
+  - @aws-blocks/bb-agent@0.7.0
+  - @aws-blocks/bb-knowledge-base@0.2.7
+  - @aws-blocks/bb-logger@0.2.3
+  - @aws-blocks/bb-metrics@0.1.10
+  - @aws-blocks/bb-auth-oidc@0.2.3
+  - @aws-blocks/bb-app-setting@0.3.3
+  - @aws-blocks/bb-async-job@0.2.4
+  - @aws-blocks/bb-auth-cognito@0.1.13
+  - @aws-blocks/bb-data@0.4.1
+  - @aws-blocks/bb-distributed-data@0.2.3
+  - @aws-blocks/bb-email-client@0.1.10
+  - @aws-blocks/bb-file-bucket@0.3.2
+  - @aws-blocks/bb-tracer@0.2.3
+  - @aws-blocks/hosting@0.5.0
+  - @aws-blocks/core@0.8.0
+  - @aws-blocks/auth-common@0.2.1
+  - @aws-blocks/bb-auth-basic@0.1.12
+  - @aws-blocks/bb-cron-job@0.3.1
+  - @aws-blocks/bb-dashboard@0.2.3
+  - @aws-blocks/bb-distributed-table@0.2.3
+  - @aws-blocks/bb-kv-store@0.3.2
+  - @aws-blocks/bb-lambda-compute@0.6.1
+  - @aws-blocks/bb-realtime@0.4.1
+  - @aws-blocks/bb-secret@0.2.1
+
 ## 0.8.0
 
 ### Minor Changes

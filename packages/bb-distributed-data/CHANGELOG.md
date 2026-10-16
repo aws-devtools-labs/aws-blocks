@@ -1,5 +1,25 @@
 # @aws-blocks/bb-distributed-data
 
+## 0.2.3
+
+### Patch Changes
+
+- a3969b5: fix: actionable errors for runtime methods called during `cdk synth`
+  
+  Calling a Building Block's runtime method (for example `db.query()`, `bucket.put()`, `auth.requireAuth()`, or
+  `auth.admin`) at the top level of a backend module runs it during `cdk synth`. For many Building Blocks this failed with
+  a cryptic `TypeError: x is not a function`; it now throws the same actionable error the other Building Blocks already
+  give: `<Class>.<method>() cannot be called during CDK synth. Data methods run at request time — …`.
+- a3969b5: fix: clear error when `simulateConflict()` is called outside the local mock
+  
+  `simulateConflict()` is a test helper that only exists in the local mock. Calling it in the deployed AWS runtime
+  failed with `db.simulateConflict is not a function`; it now throws an error saying the helper is only available in the
+  local mock. During `cdk synth` it throws the usual actionable synth-time error.
+- Updated dependencies [a3969b5]
+- Updated dependencies [7477b6e]
+  - @aws-blocks/bb-logger@0.2.3
+  - @aws-blocks/core@0.8.0
+
 ## 0.2.2
 
 ### Patch Changes

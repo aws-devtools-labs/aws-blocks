@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-async-job",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "keywords": [
     "aws-blocks",
     "background-jobs",
@@ -45,10 +45,10 @@
     "test": "node --test --test-force-exit dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/bb-logger": "^0.2.2",
-    "@aws-blocks/bb-distributed-table": "^0.2.2",
-    "@aws-blocks/bb-lambda-compute": "^0.6.0",
-    "@aws-blocks/core": "^0.7.0",
+    "@aws-blocks/bb-logger": "^0.2.3",
+    "@aws-blocks/bb-distributed-table": "^0.2.3",
+    "@aws-blocks/bb-lambda-compute": "^0.6.1",
+    "@aws-blocks/core": "^0.8.0",
     "@aws-sdk/client-sqs": "^3.0.0"
   },
   "devDependencies": {

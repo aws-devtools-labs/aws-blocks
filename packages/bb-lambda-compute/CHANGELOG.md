@@ -1,5 +1,12 @@
 # @aws-blocks/bb-lambda-compute
 
+## 0.6.1
+
+### Patch Changes
+
+- Updated dependencies [7477b6e]
+  - @aws-blocks/core@0.8.0
+
 ## 0.6.0
 
 ### Minor Changes
