@@ -18,13 +18,6 @@ jobs:
       HUSKY: '0'
     steps:
       - uses: actions/checkout@v7
-        with:
-          # Use a PAT (not the default GITHUB_TOKEN) so the pushed branch and the
-          # bump PR it opens trigger downstream CI (pr-checks.yml). PRs opened by
-          # GITHUB_TOKEN do not fire `pull_request` workflows, which would leave
-          # the bump PR's gates (Require changeset, dependency-review-pr, e2e)
-          # un-run. Matches prepare-kotlin-release.yml.
-          token: ${{ secrets.OPS_GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v7
         with:
@@ -72,10 +65,7 @@ jobs:
 
       - name: Create PR
         env:
-          # Use the PAT (not GITHUB_TOKEN) so the opened PR triggers pr-checks.yml
-          # — PRs authored by GITHUB_TOKEN do not fire `pull_request` workflows,
-          # which would leave the bump PR's gates un-run.
-          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # See the changeset step: label the PR by how it was triggered, since
           # workflow_dispatch runs are not "weekly".
           TRIGGER: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
