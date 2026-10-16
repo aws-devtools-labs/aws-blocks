@@ -130,8 +130,11 @@ test('AsyncJob - submit, complete, and observe the effect', async () => {
 });
 
 // ─── EmailClient ────────────────────────────────────────────────────────────
-// Transactional email. The mock captures the message (no SES); we assert the
-// send succeeds and returns a message id.
+// Transactional email (no SES in local dev). This is a send-succeeds smoke
+// check: it asserts send() resolves with a message id. It does not assert the
+// mock recorded the mail — EmailClient's public API is send/sendBatch only (no
+// read-back method, matching the AWS runtime), so asserting capture would mean
+// reaching into mock-internal storage and breaking mock/AWS parity.
 test('EmailClient - send returns a message id', async () => {
   const { messageId } = await api.sendWelcome('user@example.com');
   assert.ok(typeof messageId === 'string' && messageId.length > 0, 'send should return a message id');
