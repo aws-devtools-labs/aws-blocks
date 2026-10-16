@@ -12,6 +12,10 @@ export {
 	broadcastAuthChange,
 	injectTheme,
 	onAuthChange,
+	type StatusKind,
+	StatusMessage,
+	type StatusMessageHandle,
+	type StatusMessageOptions,
 	THEME_CSS,
 	THEME_STYLE_ID,
 } from '@aws-blocks/auth-common/ui';
