@@ -78,3 +78,58 @@ test('KV Store - set and get', async () => {
   const value = await api.getValue('test-key');
   assert.strictEqual(value, 'test-value');
 });
+
+// ─── FileBucket ─────────────────────────────────────────────────────────────
+// `getUploadSlot()` / `getFileHandle()` return descriptors the client hydrates
+// into live upload/download handles backed by the dev server's local file
+// server (no AWS). We upload bytes, then download them back and assert they
+// round-trip unchanged.
+test('FileBucket - upload then download round-trips', async (t) => {
+  const path = 'uploads/greeting.txt';
+  const contentType = 'text/plain';
+  const payload = 'hello from the file bucket';
+
+  const slot = await api.getUploadSlot(path, contentType);
+  if (typeof slot.upload !== 'function') {
+    t.skip('FileBucket middleware not hydrated (no local file server — expected on Windows)');
+    return;
+  }
+  await slot.upload(new Blob([payload], { type: contentType }));
+
+  const handle = await api.getFileHandle(path);
+  assert.strictEqual(typeof handle.download, 'function', 'download handle should hydrate');
+  const blob = await handle.download();
+  const text = await blob.text();
+  assert.strictEqual(text, payload);
+});
+
+// ─── AppSetting ───────────────────────────────────────────────────────────────
+// A runtime config value backed by SSM Parameter Store (local file in dev).
+test('AppSetting - set and get a flag', async () => {
+  const setResult = await api.setFlag('on');
+  assert.strictEqual(setResult.success, true);
+
+  const value = await api.getFlag();
+  assert.strictEqual(value, 'on');
+});
+
+// ─── AsyncJob ─────────────────────────────────────────────────────────────────
+// Background processing. The handler runs locally (no SQS/Lambda); we submit a
+// job, wait for completion, and confirm the handler's side effect landed.
+test('AsyncJob - submit, complete, and observe the effect', async () => {
+  const name = `e2e-${Date.now().toString(36)}`;
+
+  const result = await api.runGreetingJob(name);
+  assert.strictEqual(result.state, 'complete');
+
+  const ran = await api.jobRan(name);
+  assert.strictEqual(ran, true, 'the job handler should have run and written its marker');
+});
+
+// ─── EmailClient ────────────────────────────────────────────────────────────
+// Transactional email. The mock captures the message (no SES); we assert the
+// send succeeds and returns a message id.
+test('EmailClient - send returns a message id', async () => {
+  const { messageId } = await api.sendWelcome('user@example.com');
+  assert.ok(typeof messageId === 'string' && messageId.length > 0, 'send should return a message id');
+});

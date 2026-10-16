@@ -17,7 +17,7 @@
  *   node_modules/@aws-blocks/blocks/README.md
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, ApiError, Scope, AuthBasic, DistributedTable } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, AuthBasic, DistributedTable, FileBucket } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -44,12 +44,31 @@ const items = new DistributedTable(scope, 'items', {
   key: { partitionKey: 'owner', sortKey: 'itemId' },
 });
 
+// ─── Files ─────────────────────────────────────────────────────────────────
+// Object storage for binary files. A headless client uploads/downloads via
+// presigned URLs: ask the API for a URL, then PUT/GET the bytes directly.
+const files = new FileBucket(scope, 'files', { versioned: false });
+
 // ─── API ─────────────────────────────────────────────────────────────────────
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   /** Public — no auth. A liveness probe for load balancers and uptime checks. */
   async health() {
     return { status: 'ok' as const, timestamp: Date.now() };
+  },
+
+  /**
+   * Public — mint a presigned URL to upload a file. The client PUTs the bytes
+   * directly to the returned URL with the same Content-Type. No bytes pass
+   * through the API itself.
+   */
+  async createUploadUrl(path: string, contentType: string) {
+    return { url: await files.putUrl(path, { contentType }) };
+  },
+
+  /** Public — mint a presigned URL to download a file. The client GETs the bytes directly. */
+  async createDownloadUrl(path: string) {
+    return { url: await files.getUrl(path) };
   },
 
   /** Create an item owned by the caller. */
