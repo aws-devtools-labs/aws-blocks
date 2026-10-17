@@ -19,6 +19,7 @@ import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
 import { createKyselyAdapter, DatabaseErrors } from '@aws-blocks/bb-data';
 import { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
+import { Database as SqlDatabase, DatabaseCluster } from '@aws-blocks/bb-database';
 import { z } from 'zod';
 
 
@@ -350,6 +351,17 @@ const dsql = new DistributedDatabase(scope, 'dsql', {
   migrationsPath: './aws-blocks/dsql-migrations',
   removalPolicy: 'destroy',
 });
+
+// bb-database: one Database block, running on a cluster.
+// `dbx` owns a distributed (Aurora DSQL) cluster; migrations default to
+// ./aws-blocks/migrations/dbx and go through the rewriter.
+const dbx = new SqlDatabase(scope, 'dbx');
+// `dbxa` and `dbxb` share one distributed cluster, each in its own schema.
+// Both migrations create a table named `items`; dbxb's adds a foreign key, a
+// check constraint, an index and a view, all rewritten for DSQL.
+const sharedDsql = new DatabaseCluster(scope, 'shareddsql', { type: 'distributed', removalPolicy: 'destroy' });
+const dbxa = new SqlDatabase(scope, 'dbxa', { cluster: sharedDsql });
+const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
 
 // AsyncJob - Background job processing
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
@@ -1602,6 +1614,189 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   
   async returnLargePayload(size: number) {
     return { data: 'x'.repeat(size) };
+  },
+
+  // ------------------------------------------------------------------------
+  // bb-database Tests (Database + DatabaseCluster)
+  // ------------------------------------------------------------------------
+
+  async dbxInfo() {
+    return {
+      dbx: { cluster: dbx.cluster, schemaName: dbx.schemaName },
+      dbxa: { cluster: dbxa.cluster, schemaName: dbxa.schemaName },
+      dbxb: { cluster: dbxb.cluster, schemaName: dbxb.schemaName },
+    };
+  },
+
+  async dbxInsert(id: string, name: string, value: number) {
+    const { rowCount } = await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${name}, ${value})`);
+    return { rowCount };
+  },
+
+  async dbxGet(id: string) {
+    return await dbx.queryOne<{ id: string; name: string; value: number; category: string }>(
+      sql`SELECT * FROM dbx_items WHERE id = ${id}`,
+    );
+  },
+
+  async dbxList() {
+    return await dbx.query<{ id: string; name: string; value: number; category: string }>(
+      sql`SELECT * FROM dbx_items ORDER BY id`,
+    );
+  },
+
+  async dbxDelete(id: string) {
+    const { rowCount } = await dbx.execute(sql`DELETE FROM dbx_items WHERE id = ${id}`);
+    return { rowCount };
+  },
+
+  // A read-modify-write with no side effects: safe to re-run on a conflict.
+  async dbxTransfer(fromId: string, toId: string, amount: number) {
+    await dbx.transaction(
+      async (tx) => {
+        const sender = await tx.queryOne<{ value: number }>(sql`SELECT value FROM dbx_items WHERE id = ${fromId}`);
+        if (!sender || sender.value < amount) throw new Error('Insufficient balance');
+        await tx.execute(sql`UPDATE dbx_items SET value = value - ${amount} WHERE id = ${fromId}`);
+        await tx.execute(sql`UPDATE dbx_items SET value = value + ${amount} WHERE id = ${toId}`);
+      },
+      { retryOnConflict: true, maxRetries: 3 },
+    );
+    return { success: true };
+  },
+
+  // Local mode only: simulateConflict() throws in the Lambda runtime, so the
+  // handler reports that nothing was simulated and the test skips.
+  async dbxSimulatedConflictTransfer(fromId: string, toId: string, amount: number) {
+    try {
+      dbx.simulateConflict();
+    } catch {
+      return { simulated: false, attempts: 0 };
+    }
+    let attempts = 0;
+    await dbx.transaction(
+      async (tx) => {
+        attempts++;
+        await tx.execute(sql`UPDATE dbx_items SET value = value - ${amount} WHERE id = ${fromId}`);
+        await tx.execute(sql`UPDATE dbx_items SET value = value + ${amount} WHERE id = ${toId}`);
+      },
+      { retryOnConflict: true },
+    );
+    return { simulated: true, attempts };
+  },
+
+  async dbxDuplicateInsert(id: string) {
+    try {
+      await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${'dup'}, ${0})`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // DDL on the app connection of a distributed cluster: the mock's guard
+  // locally, DSQL's own 42501 (→ QueryFailed) when deployed.
+  async dbxRejectDdl() {
+    try {
+      await dbx.execute(sql`CREATE TABLE dbx_should_not_exist (id TEXT PRIMARY KEY)`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  async dbxRejectTruncate() {
+    try {
+      await dbx.execute(sql`TRUNCATE dbx_items`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // More than 3,000 rows in one transaction: TransactionRowLimitExceeded, from
+  // the mock locally and from DSQL's SQLSTATE 54000 when deployed. Nothing is kept.
+  async dbxRowLimit() {
+    const prefix = `limit-${Date.now().toString(36)}-`;
+    let error: string | null = null;
+    try {
+      await dbx.transaction(async (tx) => {
+        await tx.execute(
+          sql`INSERT INTO dbx_items (id, name, value) SELECT ${prefix} || g, 'bulk', g FROM generate_series(1, 3001) g`,
+        );
+      });
+    } catch (e) {
+      error = e instanceof Error ? e.name : String(e);
+    }
+    const kept = await dbx.queryOne<{ n: number }>(
+      sql`SELECT count(*)::int AS n FROM dbx_items WHERE id LIKE ${`${prefix}%`}`,
+    );
+    return { error, kept: kept?.n ?? 0 };
+  },
+
+  async dbxKyselySelect(minValue: number) {
+    interface KyselySchema {
+      dbx_items: { id: string; name: string; value: number; category: string };
+    }
+    const kysely = createKyselyAdapter<KyselySchema>(dbx);
+    return kysely.selectFrom('dbx_items').select(['id', 'name', 'value']).where('value', '>=', minValue).execute();
+  },
+
+  // Shared distributed cluster: two blocks, two schemas, one table name.
+  async dbxaAdd(sku: string, qty: number) {
+    const row = await dbxa.queryOne<{ id: number | string; sku: string; qty: number }>(
+      sql`INSERT INTO items (sku, qty) VALUES (${sku}, ${qty}) RETURNING id, sku, qty`,
+    );
+    // BIGINT identity: pg returns bigint as a string; normalize for the client.
+    return row ? { id: Number(row.id), sku: row.sku, qty: row.qty } : null;
+  },
+
+  async dbxaDelete(sku: string) {
+    const { rowCount } = await dbxa.execute(sql`DELETE FROM items WHERE sku = ${sku}`);
+    return { rowCount };
+  },
+
+  async dbxbAdd(accountId: string, owner: string, amount: number) {
+    await dbxb.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO accounts (id, owner) VALUES (${accountId}, ${owner}) ON CONFLICT (id) DO NOTHING`);
+      await tx.execute(sql`INSERT INTO items (account_id, amount) VALUES (${accountId}, ${amount})`);
+    });
+    return await dbxb.queryOne<{ account_id: string; total: number }>(
+      sql`SELECT account_id, total::int AS total FROM account_totals WHERE account_id = ${accountId}`,
+    );
+  },
+
+  // The validated foreign key refuses an orphan; the check constraint refuses a negative amount.
+  async dbxbRejectOrphan(accountId: string) {
+    const outcome = async (fn: () => Promise<unknown>) => {
+      try {
+        await fn();
+        return null;
+      } catch (e) {
+        return e instanceof Error ? e.name : String(e);
+      }
+    };
+    return {
+      orphan: await outcome(() => dbxb.execute(sql`INSERT INTO items (account_id, amount) VALUES (${accountId}, ${1})`)),
+      negative: await outcome(() =>
+        dbxb.transaction(async (tx) => {
+          await tx.execute(sql`INSERT INTO accounts (id, owner) VALUES (${accountId}, ${'x'}) ON CONFLICT (id) DO NOTHING`);
+          await tx.execute(sql`INSERT INTO items (account_id, amount) VALUES (${accountId}, ${-1})`);
+        }),
+      ),
+    };
+  },
+
+  // ON DELETE CASCADE on DSQL: the cascaded rows count toward the row limit, but a handful is fine.
+  async dbxbDeleteAccount(accountId: string) {
+    await dbxb.execute(sql`DELETE FROM accounts WHERE id = ${accountId}`);
+    const row = await dbxb.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items WHERE account_id = ${accountId}`);
+    return { remainingItems: row?.n ?? 0 };
+  },
+
+  async sharedClusterCounts() {
+    const a = await dbxa.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
+    const b = await dbxb.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
+    return { dbxa: a?.n ?? 0, dbxb: b?.n ?? 0 };
   },
 
   // ------------------------------------------------------------------------
