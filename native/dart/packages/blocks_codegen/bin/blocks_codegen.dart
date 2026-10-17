@@ -25,8 +25,9 @@ void main(List<String> args) {
       'native-package-opt-out',
       help:
           'Logical native package identity whose transferable bindings are '
-          'not applied, so its direct results stay UnknownTransferable. '
-          'Repeatable.',
+          'not applied, so its direct results stay UnknownTransferable. An '
+          'identity the spec does not declare opts nothing out and is '
+          'reported as AWSBLOCKS-NATIVE-006. Repeatable.',
     )
     ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
 
