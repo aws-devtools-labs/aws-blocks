@@ -361,6 +361,14 @@ describe('CannedProvider', () => {
 		assert.strictEqual(await collectText(provider, [{ role: 'user', content: [{ text: '10 then 2' }] }]), 'two is enumerated first');
 	});
 
+	test('uses the same Unicode word boundaries for custom and built-in responses', async () => {
+		const messages = [{ role: 'user', content: [{ text: 'éweatheré' }] }];
+		const builtin = new CannedProvider();
+		const custom = new CannedProvider({ responses: { weather: 'custom match' } });
+		assert.match(await collectText(builtin, messages), /No real model was called/);
+		assert.match(await collectText(custom, messages), /No real model was called/);
+	});
+
 	test('rejects invalid inline responses at construction', () => {
 		assert.throws(() => new CannedProvider({ responses: { ' \n\t ': 'invalid' } }), /blank response phrase/);
 	});
@@ -465,6 +473,7 @@ describe('CannedProvider', () => {
 			{ prompt: 'what is the category of this item', tool: 'getCat' },
 			{ prompt: 'I forgot my password', tool: 'getPass' },
 			{ prompt: 'please reorder the list alphabetically', tool: 'getOrder' },
+			{ prompt: 'éweatheré', tool: 'getWeather' },
 		];
 		for (const { prompt, tool } of cases) {
 			const toolSpecs = [{ name: tool, description: '', inputSchema: {} }];

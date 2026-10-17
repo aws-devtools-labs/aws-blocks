@@ -149,11 +149,11 @@ Custom Strands model provider for local development. No network, no API keys, no
 - After Strands executes the tool and sends the result back, returns a fixed acknowledgment (`"I called the tool and got a result."`)
 - Token usage reports zeros (no real model call)
 
-`ModelConfig.cannedResponses` is forwarded to the lazily imported provider as `responses`. Inline dictionaries and JSON-file dictionaries replace only the built-in text lookup; tool-result summaries and tool selection still take priority, and the generic unmatched fallback remains. Custom phrase patterns are constructed per selection without adding to the tool phrase cache. Selected custom text is streamed verbatim; default text keeps the existing word-by-word emission.
+`ModelConfig.cannedResponses` is forwarded to the lazily imported provider as `responses`. Inline dictionaries and JSON-file dictionaries replace only the built-in text lookup; tool-result summaries and tool selection still take priority, and the generic unmatched fallback remains. Inline phrase patterns use the existing phrase cache; file-backed phrases do not add cache entries. Selected custom text is streamed verbatim; default text keeps the existing word-by-word emission.
 
-Inline dictionaries are validated and shallow-copied at provider construction; each provider owns its snapshot. Invalid inline configuration fails before tool selection. `Agent` creates a fresh provider for each turn.
+Inline dictionaries are validated once when the provider is created; each provider owns its snapshot. Matching patterns are compiled and cached on first use. Invalid inline configuration fails before tool selection. `Agent` creates a fresh provider for each turn.
 
-File paths are resolved against `process.cwd()` at provider construction. Each text selection reads and validates one complete dictionary snapshot, so subsequent requests see file updates without a watcher. Tool paths skip file access. Failed reads or validation do not retain stale responses, and the next request retries. Writers should replace the JSON file atomically using a temporary file in the same directory and rename.
+File paths are resolved against `process.cwd()` when the provider is created. Each text selection reads and validates one complete dictionary snapshot, so subsequent requests see file updates without a watcher. Tool paths skip file access. Failed reads or validation do not retain stale responses, and the next request retries. Writers should replace the JSON file atomically using a temporary file in the same directory and rename.
 
 ## Reconnect Recovery (createChat & useChat)
 

@@ -16,8 +16,9 @@
 
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import type { Message, ModelStreamEvent, StreamOptions } from '@strands-agents/sdk';
 import { Model } from '@strands-agents/sdk';
+import type { Message, ModelStreamEvent, StreamOptions } from '@strands-agents/sdk';
+import { ToolResultBlock } from '@strands-agents/sdk';
 import type { CannedToolHints } from '../types.js';
 
 interface CannedConfig {
@@ -46,11 +47,11 @@ const DEFAULT_RESPONSE = 'This is a canned mock response. No real model was call
  * inside "reorder" and `help` inside "helper", the same false-positive class the tool
  * matcher avoids.
  */
-function matchResponse(prompt: string, customResponses?: Record<string, string>): { response: string; verbatim: boolean } {
+function matchResponse(prompt: string, customResponses?: Record<string, string>, cache = true): { response: string; verbatim: boolean } {
 	const lower = prompt.toLowerCase();
 	if (customResponses) {
 		for (const [phrase, response] of Object.entries(customResponses)) {
-			if (promptMentionsCustomPhrase(lower, phrase)) return { response, verbatim: true };
+			if (wordBoundaryPattern(phrase.trim().toLowerCase(), cache).test(lower)) return { response, verbatim: true };
 		}
 		return { response: DEFAULT_RESPONSE, verbatim: false };
 	}
@@ -58,12 +59,6 @@ function matchResponse(prompt: string, customResponses?: Record<string, string>)
 		if (promptMentionsWord(lower, keyword)) return { response, verbatim: false };
 	}
 	return { response: DEFAULT_RESPONSE, verbatim: false };
-}
-
-/** Match a custom phrase without retaining patterns for user-provided dictionary keys. */
-function promptMentionsCustomPhrase(lowerPrompt: string, phrase: string): boolean {
-	const escaped = phrase.trim().toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-	return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'iu').test(lowerPrompt);
 }
 
 /** Validate the parsed dictionary before using it to select a response. */
@@ -101,20 +96,21 @@ const wordPatternCache = new Map<string, RegExp>();
 
 /**
  * Compile a word-boundary matcher for a word or phrase, cached by phrase.
- * Uses `\b...\b` rather than substring `includes()` so a tool word like "cat"
+ * Uses Unicode letter/mark/number/underscore boundaries rather than substring `includes()` so a tool word like "cat"
  * (from `getCat`) is NOT triggered by an unrelated word like "category", and
  * "pass" (from `getPass`) is not triggered by "password". Regex metacharacters are
  * escaped so punctuation in tool names can't break the pattern, and internal
  * whitespace becomes `\s+` so a multi-word phrase tolerates irregular spacing.
  * Compiled patterns are cached because matching re-runs for every tool on every
- * `stream()` call, and the key space is bounded by the agent's tool and trigger set.
+ * `stream()` call, and the key space is bounded by the agent's tool, trigger, and inline response keys.
+ * Pass `cache = false` to reuse existing patterns without retaining new file-backed phrases.
  */
-function wordBoundaryPattern(phrase: string): RegExp {
+function wordBoundaryPattern(phrase: string, cache = true): RegExp {
 	let pattern = wordPatternCache.get(phrase);
 	if (!pattern) {
 		const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-		pattern = new RegExp(`\\b${escaped}\\b`);
-		wordPatternCache.set(phrase, pattern);
+		pattern = new RegExp(`(?<![\\p{L}\\p{M}\\p{N}_])${escaped}(?![\\p{L}\\p{M}\\p{N}_])`, 'iu');
+		if (cache) wordPatternCache.set(phrase, pattern);
 	}
 	return pattern;
 }
@@ -315,7 +311,7 @@ export class CannedProvider extends Model<CannedConfig> {
 		// Default: keyword-based text response. Read a configured file exactly once for
 		// this selection so each request sees one coherent, current dictionary snapshot.
 		const responses = this.responsesFile ? await readResponsesFile(this.responsesFile) : this.responses;
-		const selected = matchResponse(prompt, responses);
+		const selected = matchResponse(prompt, responses, !this.responsesFile);
 		yield* this.emitText(selected.response, selected.verbatim);
 	}
 
