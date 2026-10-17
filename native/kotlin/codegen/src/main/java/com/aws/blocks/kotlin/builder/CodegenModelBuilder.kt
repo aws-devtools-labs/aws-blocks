@@ -447,10 +447,16 @@ class CodegenModelBuilder {
 
         fun typeDefinitions(): List<TypeDefinition> = definitions.values.sortedBy { it.name }
 
+        // For reference resolution we need the registered IDENTITY of a type:
+        //  - method-nested (inline) types are resolved through the per-operation node tree by their
+        //    short name, so return the bare suffix (unchanged behavior);
+        //  - schema-nested types live in the flat type index keyed by their (parent-qualified) name,
+        //    so a field referencing one must resolve to that same qualified name to find the right
+        //    entry when two components nest a same-named type.
         fun nameForRegistrationId(id: String): String? =
-            inlineObjectSources[id]?.let { it.suffix }
-                ?: enumSources[id]?.let { it.suffix }
-                ?: unionSources[id]?.let { it.suffix }
+            inlineObjectSources[id]?.let { if (it.parentSchemaName != null) it.name else it.suffix }
+                ?: enumSources[id]?.let { if (it.parentSchemaName != null) it.name else it.suffix }
+                ?: unionSources[id]?.let { if (it.parentSchemaName != null) it.name else it.suffix }
                 ?: schemaSources[id]?.name
 
         fun nameForTypeRef(typeRef: TypeRef): String? {
@@ -514,6 +520,13 @@ class CodegenModelBuilder {
          * @param explicitName If provided (from the spec's result "name" field), this type
          *   gets its own name directly.
          * @param parentNodeId The ID of the parent nested node (null for root-level params/result).
+         * @param qualifiedPrefix For types nested inside a component schema, the PascalCase name of
+         *   the immediate parent type (component or intermediate nested object). Used to build a
+         *   globally unique registered name (e.g. `FieldValue`) so two components can each nest a
+         *   type of the same field name without colliding in the generator's name-keyed type index.
+         *   The emitted class name still uses the bare `suffix` nested under its parent; this only
+         *   disambiguates the identity used for lookup. Null for method-nested (inline) types, which
+         *   are already uniquely named per method and resolved through a separate node tree.
          */
         fun collect(
             typeRef: TypeRef,
@@ -522,6 +535,7 @@ class CodegenModelBuilder {
             parentSchemaName: String?,
             explicitName: String? = null,
             parentNodeId: String? = null,
+            qualifiedPrefix: String? = null,
         ) {
             when (typeRef) {
                 is TypeRef.InlineObject -> {
@@ -530,7 +544,7 @@ class CodegenModelBuilder {
                     typeRefToId[System.identityHashCode(typeRef)] = id
                     if (!inlineObjectSources.containsKey(id)) {
                         val name = if (explicitName != null) toPascalCase(explicitName)
-                                   else if (parentSchemaName != null) suffix
+                                   else if (parentSchemaName != null) qualifyName(qualifiedPrefix, suffix)
                                    else toPascalCase(methodName) + suffix
                         inlineObjectSources[id] = TypeSource(name, suffix, typeRef, parentSchemaName)
                         // Track nesting for inline types (not under a schema)
@@ -540,12 +554,24 @@ class CodegenModelBuilder {
                     }
                     // Recurse into fields AFTER registering this type
                     val thisNodeId = if (parentSchemaName == null) id else null
+                    // For schema-nested types, children qualify under THIS type's name so that
+                    // same-named grandchildren under different parents stay distinct in the index.
+                    //
+                    // Emission limitation: parentSchemaName is passed through unchanged, and
+                    // buildTypeIndex nests every schema child directly under the TOP component
+                    // (single-level flattening). So two same-named grandchildren under different
+                    // intermediate parents of the SAME component (e.g. Field.a.Meta and Field.b.Meta)
+                    // would both emit as Field.Meta -- a duplicate nested declaration. The qualified
+                    // index key keeps them distinct in the model but the generator does not yet nest
+                    // a grandchild under its intermediate parent's class. Out of scope here (this PR
+                    // targets the two-sibling-component collision); tracked for a later change.
+                    val childPrefix = if (parentSchemaName != null) qualifyName(qualifiedPrefix, suffix) else null
                     for (field in typeRef.fields) {
-                        collect(field.type, methodName, toPascalCase(field.name), parentSchemaName, parentNodeId = thisNodeId)
+                        collect(field.type, methodName, toPascalCase(field.name), parentSchemaName, parentNodeId = thisNodeId, qualifiedPrefix = childPrefix)
                     }
                     // Recurse into additionalProperties value type
                     if (typeRef.additionalProperties != null) {
-                        collect(typeRef.additionalProperties, methodName, suffix + "Value", parentSchemaName, parentNodeId = thisNodeId)
+                        collect(typeRef.additionalProperties, methodName, suffix + "Value", parentSchemaName, parentNodeId = thisNodeId, qualifiedPrefix = childPrefix)
                     }
                 }
 
@@ -555,9 +581,10 @@ class CodegenModelBuilder {
                     if (!schemaSources.containsKey(id)) {
                         schemaSources[id] = TypeSource(typeRef.schemaName, typeRef.schemaName, typeRef, null)
                     }
-                    // Recurse into resolved fields with schema as parent
+                    // Recurse into resolved fields with schema as parent.
+                    // The component's own name seeds the qualified prefix for its nested types.
                     for (field in typeRef.resolved.fields) {
-                        collect(field.type, typeRef.schemaName, toPascalCase(field.name), typeRef.schemaName, parentNodeId = null)
+                        collect(field.type, typeRef.schemaName, toPascalCase(field.name), typeRef.schemaName, parentNodeId = null, qualifiedPrefix = typeRef.schemaName)
                     }
                 }
 
@@ -566,7 +593,7 @@ class CodegenModelBuilder {
                     typeRefToId[System.identityHashCode(typeRef)] = id
                     if (!enumSources.containsKey(id)) {
                         val shortName = suffix
-                        val name = if (parentSchemaName != null) suffix
+                        val name = if (parentSchemaName != null) qualifyName(qualifiedPrefix, suffix)
                                    else toPascalCase(methodName) + suffix
                         enumSources[id] = TypeSource(name, shortName, typeRef, parentSchemaName)
                         // Track nesting for inline enums (not under a schema)
@@ -581,7 +608,7 @@ class CodegenModelBuilder {
                     typeRefToId[System.identityHashCode(typeRef)] = id
                     if (!unionSources.containsKey(id)) {
                         val shortName = suffix
-                        val name = if (parentSchemaName != null) suffix
+                        val name = if (parentSchemaName != null) qualifyName(qualifiedPrefix, suffix)
                                    else toPascalCase(methodName) + suffix
                         unionSources[id] = TypeSource(name, shortName, typeRef, parentSchemaName)
                         // Track nesting for inline unions (not under a schema)
@@ -593,6 +620,7 @@ class CodegenModelBuilder {
                     // Each variant gets its own synthetic node so field-derived types
                     // nest under the variant class (not as siblings at the sealed level).
                     val thisNodeId = if (parentSchemaName == null) id else null
+                    val childPrefix = if (parentSchemaName != null) qualifyName(qualifiedPrefix, suffix) else null
                     for ((memberIndex, member) in typeRef.members.withIndex()) {
                         if (member is TypeRef.InlineObject) {
                             val discriminator = findDiscriminatorField(member)
@@ -608,38 +636,38 @@ class CodegenModelBuilder {
 
                             for (field in member.fields) {
                                 if (discriminator != null && field.name == discriminator.name) continue
-                                collect(field.type, methodName, toPascalCase(field.name), parentSchemaName, parentNodeId = variantNodeId ?: thisNodeId)
+                                collect(field.type, methodName, toPascalCase(field.name), parentSchemaName, parentNodeId = variantNodeId ?: thisNodeId, qualifiedPrefix = childPrefix)
                             }
                         } else {
-                            collect(member, methodName, suffix, parentSchemaName, parentNodeId = thisNodeId)
+                            collect(member, methodName, suffix, parentSchemaName, parentNodeId = thisNodeId, qualifiedPrefix = childPrefix)
                         }
                     }
                 }
 
                 is TypeRef.ArrayType -> {
-                    collect(typeRef.elementType, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
+                    collect(typeRef.elementType, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId, qualifiedPrefix = qualifiedPrefix)
                 }
 
                 is TypeRef.Nullable -> {
-                    collect(typeRef.inner, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
+                    collect(typeRef.inner, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId, qualifiedPrefix = qualifiedPrefix)
                 }
 
                 is TypeRef.Primitive -> { /* no type definition to register */ }
 
                 is TypeRef.MapType -> {
-                    collect(typeRef.valueType, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
+                    collect(typeRef.valueType, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId, qualifiedPrefix = qualifiedPrefix)
                 }
 
                 is TypeRef.TupleType -> {
                     for (element in typeRef.elements) {
-                        collect(element, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
+                        collect(element, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId, qualifiedPrefix = qualifiedPrefix)
                     }
                 }
 
                 is TypeRef.Transferable -> {
                     // Recurse into type args to collect any referenced types
                     for (arg in typeRef.typeArgs) {
-                        collect(arg, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
+                        collect(arg, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId, qualifiedPrefix = qualifiedPrefix)
                     }
                 }
 
@@ -649,17 +677,17 @@ class CodegenModelBuilder {
                     val discriminator = findDiscriminatorFieldInObjectWithOneOf(typeRef)
                     for (field in typeRef.fields) {
                         if (discriminator != null && field.name == discriminator.name) continue
-                        collect(field.type, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
+                        collect(field.type, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId, qualifiedPrefix = qualifiedPrefix)
                     }
                     for (member in typeRef.oneOf) {
                         if (member is TypeRef.InlineObject) {
                             val innerDiscriminator = findDiscriminatorField(member)
                             for (field in member.fields) {
                                 if (innerDiscriminator != null && field.name == innerDiscriminator.name) continue
-                                collect(field.type, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
+                                collect(field.type, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId, qualifiedPrefix = qualifiedPrefix)
                             }
                         } else {
-                            collect(member, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
+                            collect(member, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId, qualifiedPrefix = qualifiedPrefix)
                         }
                     }
                 }
@@ -737,6 +765,20 @@ class CodegenModelBuilder {
 
     companion object {
         fun toPascalCase(name: String): String = NamingUtils.toPascalCase(name)
+
+        /**
+         * Builds the globally unique registered name for a type nested inside a component schema by
+         * prefixing it with its parent chain (e.g. prefix `Field` + suffix `Value` -> `FieldValue`).
+         * This disambiguates the flat, name-keyed type index so two components can each nest a type
+         * of the same field name; the EMITTED class still uses the bare suffix nested under its
+         * parent. A null/blank prefix (should not happen for schema-nested types) falls back to the
+         * bare suffix.
+         *
+         * [suffix] is expected to already be PascalCase (all call sites pass `toPascalCase(field.name)`,
+         * `suffix + "Value"`, or a schema name); only the [prefix] is normalized here.
+         */
+        fun qualifyName(prefix: String?, suffix: String): String =
+            if (prefix.isNullOrBlank()) suffix else toPascalCase(prefix) + suffix
 
         fun variantNameFromDiscriminator(fieldName: String, value: String): String {
             return if (value == "true" || value == "false") {
