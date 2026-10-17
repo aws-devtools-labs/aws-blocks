@@ -39,7 +39,8 @@ abstract class AwsBlocksExtension(project: Project) {
 
     /**
      * Logical identities from `x-blocks-native-packages` whose transferable results stay
-     * `UnknownTransferable`. An identity the spec does not declare is ignored.
+     * `UnknownTransferable`. An identity the spec does not declare opts nothing out and is
+     * reported as `AWSBLOCKS-NATIVE-006`.
      */
     abstract val excludeNativePackages: SetProperty<String>
 
