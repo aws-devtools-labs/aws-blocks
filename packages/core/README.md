@@ -381,6 +381,42 @@ new Hosting(stack, 'Web', {
 
 Core's top-level `buildRetentionDays` maps to the L3 construct's `storage.buildRetentionDays`.
 
+#### Front door and its settings
+
+`frontDoor` picks the public entry point: omit it for CloudFront (the default), or pass `{ kind: 'alb' }`, `{ kind: 'apiGateway', api?: 'http' | 'rest' }`, `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }`, `{ kind: 'custom', door }` or `'none'` (a public S3 website bucket). The settings the app asks the door for go in `frontDoor.features`, typed per kind, so a setting the chosen door doesn't implement does not compile. `{ features }` with no `kind` is the CloudFront default with settings:
+
+```typescript
+import { PriceClass } from 'aws-cdk-lib/aws-cloudfront';
+import { Hosting } from '@aws-blocks/core/cdk';
+
+new Hosting(stack, 'Web', {
+  root: join(__dirname, '..'),
+  api: blocksStack,
+  frontDoor: {
+    features: {
+      domain: { domainName: 'app.example.com', hostedZone: 'example.com' },
+      waf: { enabled: true },
+      priceClass: PriceClass.PRICE_CLASS_ALL,
+    },
+  },
+});
+```
+
+A `config()` domain works in `frontDoor.features.domain` too, through the async `Hosting.create()`, as for the top-level `domain`.
+
+| Setting | CloudFront | ALB | API Gateway | Stacked | Custom |
+|---|---|---|---|---|---|
+| `domain` | ✓ | – | ✓ (no `wwwRedirect`) | – | ✓ |
+| `waf` | ✓ | ✓ (REGIONAL) | – | `edge.waf.webAclArn` (CLOUDFRONT), `router.waf` (REGIONAL) | ✓ |
+| `logging` | ✓ | ✓ | – | `router.logging` | ✓ |
+| `monitoring` | ✓ | ✓ (`enabled` only) | – | `router.monitoring` (`enabled` only) | ✓ |
+| `skewProtection` | ✓ | – | – | – | ✓ |
+| `geoRestriction` | ✓ | – | – | – | ✓ |
+| `contentSecurityPolicy` | ✓ | – | – | `edge.contentSecurityPolicy` | – |
+| `priceClass`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – | – |
+
+The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as before. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
+
 
 ## Building Blocks
 

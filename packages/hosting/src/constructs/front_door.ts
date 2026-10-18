@@ -48,13 +48,12 @@
  *
  * @module
  */
-import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import type { IFunction, IFunctionUrl } from 'aws-cdk-lib/aws-lambda';
-import type { IHostedZone } from 'aws-cdk-lib/aws-route53';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import type { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
-import type { ITopicSubscription } from 'aws-cdk-lib/aws-sns';
 import type { Construct } from 'constructs';
+import type { HostingGeoRestriction, HostingLoggingConfig, HostingMonitoringConfig } from './front_door_options.js';
+import type { HostingDomainConfig, HostingWafConfig } from './hosting_construct.js';
 import type { OriginHandle } from './layer.js';
 
 // ── Provisioned origins ─────────────────────────────────────────────────────
@@ -102,8 +101,6 @@ export type ImageOrigin = {
   readonly fn: IFunction;
   /** The image function's Function URL (IAM auth). */
   readonly url: IFunctionUrl;
-  /** URL prefix image requests are served under (e.g. `/_next/image`, `/_ipx`). */
-  readonly pathPrefix: string;
 };
 
 /**
@@ -125,11 +122,6 @@ export type ApiOrigin = {
    * plus each raw route the backend registered.
    */
   readonly paths: readonly string[];
-  /**
-   * The sign-in subset of {@link paths} (`/aws-blocks/auth/*`), so a door with
-   * its own auth gate can let it through.
-   */
-  readonly authPaths: readonly string[];
 };
 
 /** An origin a route can point at. */
@@ -178,7 +170,10 @@ export type DoorApp = {
   readonly buildId: string;
   /** URL prefix the whole site is served under (e.g. Next.js `basePath`). */
   readonly basePath?: string;
-  /** Asset-only URL prefix (e.g. Next.js `assetPrefix`). */
+  /**
+   * Asset-only URL prefix: Next.js `assetPrefix`. Only the Next.js adapter sets
+   * it (a custom adapter may too). Present only when the app has one.
+   */
   readonly assetPrefix?: string;
   /** Single-page-app fallback: unknown extensionless paths serve `index.html`. */
   readonly spaFallback: boolean;
@@ -193,39 +188,48 @@ export type DoorApp = {
    * (e.g. `404.html`). Present only when the app configured one.
    */
   readonly errorPages?: { readonly notFound?: string; readonly serverError?: string };
-  /** Canonical apex/www redirect. Present only when the app asked for one. */
-  readonly wwwRedirect?: 'toApex' | 'toWww';
-  /** Present only when skew protection is on: keep a visitor on one build for `maxAge` seconds. */
-  readonly skew?: { readonly maxAge: number };
 };
 
 // ── Features the app asked for ──────────────────────────────────────────────
 
 /**
- * The optional features this app asked the door for, with their settings. A
- * field is present ONLY when the app asked for that feature.
+ * The settings this app asked the door for — the door's `frontDoor.features`
+ * (merged with the deprecated top-level props), under the SAME names and
+ * shapes (see `CustomDoorFeatures`). A field is present ONLY when the app
+ * asked for that feature:
+ *
+ * - `domain`: when set (`domain.wwwRedirect` included when not `'none'`);
+ * - `waf`: when `enabled`, or a web ACL was given (`webAclArn`);
+ * - `logging`: when `enabled`;
+ * - `monitoring`: when set and not `enabled: false`;
+ * - `geoRestriction`: when set;
+ * - `skewProtection`: unless `enabled: false` (on by default), with `maxAge` resolved.
  *
  * AWS Blocks does not check that a door applies them: a free-form door reads
  * what is here and applies what it supports.
  */
 export type DoorFeatures = {
-  /** Custom domain(s) + TLS. `certificate`/`hostedZone` are set when the app supplied them. */
-  readonly customDomain?: {
-    readonly names: readonly string[];
-    readonly certificate?: ICertificate;
-    readonly hostedZone?: IHostedZone;
-  };
+  /**
+   * Custom domain(s) + TLS, as the app wrote them. Import a hosted zone given
+   * by id with `HostedZone.fromHostedZoneAttributes`.
+   */
+  readonly domain?: Readonly<HostingDomainConfig>;
   /** Request filtering. `webAclArn` when the app brought a web ACL; `rateLimit` per 5-minute window per IP. */
-  readonly waf?: { readonly webAclArn?: string; readonly rateLimit?: number };
-  /** Access logging. */
-  readonly logging?: { readonly retentionDays?: number };
+  readonly waf?: Readonly<HostingWafConfig>;
+  /** Access logging (`enabled` is always `true` here). */
+  readonly logging?: Readonly<HostingLoggingConfig>;
   /** Alarms on the door's metrics, with the endpoints to notify. */
-  readonly alarms?: { readonly subscriptions?: readonly ITopicSubscription[] };
-  /** Geo restriction: country codes to allow or deny. */
-  readonly geo?: { readonly allow?: readonly string[]; readonly deny?: readonly string[] };
+  readonly monitoring?: Readonly<HostingMonitoringConfig>;
+  /** Geo restriction: the country codes to allow (`whitelist`) or deny (`blacklist`). */
+  readonly geoRestriction?: Readonly<HostingGeoRestriction>;
+  /** Skew protection: keep a visitor on one build for `maxAge` seconds. */
+  readonly skewProtection?: { readonly enabled: true; readonly maxAge: number };
 };
 
-/** The door this one sits in front of, when doors are stacked (e.g. CloudFront → ALB). */
+/**
+ * The door this one sits in front of, when doors are stacked (e.g. CloudFront
+ * → ALB). Only the built-in stacked door has one (see `CloudFrontEdgeDoorInput`).
+ */
 export type DoorUpstream = {
   /** The inner door's service id (e.g. `alb`). */
   readonly service: string;
@@ -248,8 +252,6 @@ export type DoorInput = {
   readonly origins: DoorOrigins;
   /** The features this app asked for. A field is present only when asked for. */
   readonly features: DoorFeatures;
-  /** Present only when this door sits in front of another door. */
-  readonly upstream?: DoorUpstream;
 };
 
 // ── What the door hands back ────────────────────────────────────────────────

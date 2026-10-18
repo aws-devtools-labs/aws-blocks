@@ -29,10 +29,40 @@ distribution as before.
 Every door serves the API on the app's own origin (except `'none'`, where the
 browser calls the API cross-origin): `/aws-blocks/*` (RPC and sign-in) and each
 of the backend's raw routes. It also claims the backend's API front-door role,
-so `apiFrontDoor: 'cloudfront'` does not build a second distribution. A door
-applies the features the app asks for (custom domain, WAF, logging, alarms,
-geo) as far as it supports them. An ALB, for example, has no edge cache or geo
-restriction. There is no feature check.
+so `apiFrontDoor: 'cloudfront'` does not build a second distribution.
+
+Each door kind takes the settings the app asks it for as `features`, typed for
+that kind: a setting the chosen door doesn't implement does not compile.
+`{ features }` with no `kind` is the CloudFront default with settings.
+
+- CloudFront: `domain`, `waf`, `logging`, `monitoring`, `skewProtection`,
+  `geoRestriction`, `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`,
+  `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas`.
+- ALB: `waf` (a REGIONAL web ACL), `logging`, `monitoring` (`enabled` only).
+  Logging and alarms apply only when `enabled` is not `false`. For HTTPS, give
+  the door a regional `certificate`; the ALB door creates no DNS records.
+- API Gateway (HTTP and REST): `domain` (without `wwwRedirect`).
+- Stacked: per layer, `edge: { waf: { webAclArn }, contentSecurityPolicy }` (a
+  CLOUDFRONT-scoped web ACL) and `router: { waf, logging, monitoring }` (a
+  REGIONAL one).
+- Custom: `domain`, `waf`, `logging`, `monitoring`, `geoRestriction`,
+  `skewProtection`, handed to the door as `input.features`.
+- `'none'`: no settings.
+
+**Deprecated (still supported):** the top-level settings props. On `Hosting`
+(`@aws-blocks/core`): `domain`, `waf`, `logging`, `monitoring`,
+`skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`,
+`quotas`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`. On
+`HostingConstruct` (`@aws-blocks/hosting`): `domain`, `waf`, `logging`,
+`monitoring`, `skewProtection` and `cdn` (each `cdn.<x>` is
+`frontDoor.features.<x>`; `cdn.webAclArn` is `frontDoor.features.waf.webAclArn`).
+Use `frontDoor.features.<x>` instead: the names are the same, so migrating is a
+straight move. The aliases are merged into `frontDoor.features` at
+construction, and an app that sets them with no `frontDoor` (or `'cloudfront'`)
+synthesizes the same template. Setting a setting both ways fails synth with
+`FrontDoorSettingConflictError`, naming both; a top-level prop the chosen kind
+doesn't implement fails synth with `UnsupportedFrontDoorSettingError`, naming
+the kind and the prop.
 
 The ALB and API Gateway doors serve static files through an asset-proxy Lambda
 that answers like the CloudFront door: a missing file returns 404 (the SPA
@@ -53,16 +83,18 @@ uploads. A door that invokes the server without streaming sets
 `serverResponse: 'buffered'` (the default is `'streaming'`). The door receives
 a `DoorInput`:
 
-- `app`: the build id, base path, routes already joined to their origins,
-  redirects, headers, error pages, www redirect and skew settings.
+- `app`: the build id, base path, Next.js asset prefix, SPA fallback, routes
+  already joined to their origins, redirects, headers and error pages.
 - `origins`: the assets bucket and build prefix, the server and image Lambdas
   with their Function URLs (the server's `streaming` says whether it streams,
   and its Function URL uses the matching invoke mode), and the API with every
   path that must reach it.
-  The API paths are `/aws-blocks/*` plus the backend's raw routes, and
-  `authPaths` lists `/aws-blocks/auth/*`.
-- `features`: the features the app asked for. A field is present only when the
-  app asked for that feature.
+  The API paths are `/aws-blocks/*` (RPC and sign-in) plus the backend's raw
+  routes.
+- `features`: the door's `frontDoor.features`, under the same names and shapes
+  (`domain`, `waf`, `logging`, `monitoring`, `geoRestriction`,
+  `skewProtection`). A field is present only when the app asked for that
+  feature; skew protection is on by default.
 
 The door returns `{ url, originHandle?, publicBucket?, onUpload? }`.
 
@@ -74,10 +106,15 @@ The door returns `{ url, originHandle?, publicBucket?, onUpload? }`.
   something that runs after them, such as a cache invalidation.
 
 The `cf.*` helpers (`cf.origin`, `cf.behaviors`, `cf.apiBehaviors`,
-`cf.invalidate`) build CloudFront origins and behaviors from the input and
-record what they wired. From that record, synth fails if nothing reaches the
+`cf.redirects`, `cf.headers`, `cf.errorPages`, `cf.invalidate`) build
+CloudFront origins, behaviors, functions and error responses from the input
+and record what they wired. `cf.redirects` and `cf.headers` run the same
+matcher as the built-in CloudFront door; `cf.errorPages` returns the same error
+responses. From that record, synth fails if nothing reaches the
 static assets (`ServeStaticAsset`). It also fails if the app has an API and
-none of its paths were wired (`ProxySameOriginApi`). A door that wires with raw
+none of its paths were wired (`ProxySameOriginApi`). Unwired API paths, and
+app redirects, headers or error pages the door didn't wire, are synth warnings.
+A door that wires with raw
 CDK declares it with `cf.recordWired(...)`, or turns the check off with
 `wiringCheck: false`. `assertDoorConformance(door)` runs the same checks in a
 door's own tests.

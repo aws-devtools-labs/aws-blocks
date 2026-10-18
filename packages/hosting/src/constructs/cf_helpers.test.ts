@@ -25,7 +25,7 @@ const plan: CapabilityPlan = {
 
 const setup = () => {
   const stack = new Stack(new App(), 'Cf', { env: { account: '111111111111', region: 'us-east-1' } });
-  const input = buildDoorInput(stack, {
+  const input = buildDoorInput({
     plan,
     bucket: new Bucket(stack, 'Assets'),
     staticDir: '.',

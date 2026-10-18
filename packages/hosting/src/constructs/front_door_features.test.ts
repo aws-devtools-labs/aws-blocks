@@ -170,19 +170,19 @@ describe('HostingConstruct — frontDoor.features', () => {
     });
     const input = seen.input;
     assert.ok(input);
-    assert.deepEqual(input.features.customDomain?.names, ['app.example.com', 'www.example.com']);
-    assert.deepEqual(input.features.waf, { webAclArn: WEB_ACL, rateLimit: 700 });
-    assert.deepEqual(input.features.logging, { retentionDays: 14 });
-    assert.deepEqual(input.features.alarms, { subscriptions: [email] });
-    assert.deepEqual(input.features.geo, { deny: ['KP'] });
-    assert.equal(input.app.wwwRedirect, 'toApex');
-    assert.deepEqual(input.app.skew, { maxAge: 600 });
+    // The same names and shapes as `frontDoor.features` — no mapping.
+    assert.deepEqual(input.features.domain, { domainName: ['app.example.com', 'www.example.com'], wwwRedirect: 'toApex' });
+    assert.deepEqual(input.features.waf, { enabled: true, webAclArn: WEB_ACL, rateLimit: 700 });
+    assert.deepEqual(input.features.logging, { enabled: true, retentionDays: 14 });
+    assert.deepEqual(input.features.monitoring, { subscriptions: [email] });
+    assert.deepEqual(input.features.geoRestriction, { type: 'blacklist', countries: ['KP'] });
+    assert.deepEqual(input.features.skewProtection, { enabled: true, maxAge: 600 });
   });
 
-  it('custom: `skewProtection: { enabled: false }` removes app.skew', () => {
+  it('custom: `skewProtection: { enabled: false }` removes features.skewProtection', () => {
     const seen: { input?: DoorInput } = {};
     synth({ frontDoor: { kind: 'custom', door: recordingDoor(seen), features: { skewProtection: { enabled: false } } } });
-    assert.equal(seen.input?.app.skew, undefined);
+    assert.equal(seen.input?.features.skewProtection, undefined);
   });
 
   // ── the deprecated top-level aliases ──

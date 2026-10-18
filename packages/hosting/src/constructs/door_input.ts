@@ -13,13 +13,10 @@
  * @internal Framework-only.
  */
 import { Fn } from 'aws-cdk-lib';
-import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { FunctionUrlAuthType, type IFunction, type IFunctionUrl, InvokeMode } from 'aws-cdk-lib/aws-lambda';
-import { HostedZone, type IHostedZone } from 'aws-cdk-lib/aws-route53';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
-import type { ITopicSubscription } from 'aws-cdk-lib/aws-sns';
-import type { Construct } from 'constructs';
 import type { CapabilityPlan } from '../plan/types.js';
+import type { FrontDoorSettings } from './front_door_options.js';
 import type {
   ApiOrigin,
   AssetsOrigin,
@@ -33,8 +30,6 @@ import type {
 
 /** The backend's reserved RPC + sign-in subtree (`/aws-blocks/*`). */
 export const BLOCKS_API_SUBTREE = '/aws-blocks/*';
-/** The auth Building Block's sign-in subtree (`/aws-blocks/auth/*`). */
-export const BLOCKS_AUTH_SUBTREE = '/aws-blocks/auth/*';
 
 /** A Lambda function that can carry a Function URL (any regional function). */
 type UrlCapableFunction = IFunction & {
@@ -62,23 +57,15 @@ export type BuildDoorInputParams = {
 
 /**
  * The door's effective settings (`frontDoor.features` merged with the
- * deprecated top-level aliases), under their `features` names — the subset
- * {@link toDoorFeatures} maps into {@link DoorFeatures}.
+ * deprecated top-level aliases) that a door receives as {@link DoorFeatures}
+ * (see {@link toDoorFeatures}).
  */
-export type DoorFeatureSettings = {
-  domain?: {
-    domainName: string | string[];
-    hostedZone?: string;
-    hostedZoneId?: string;
-    certificate?: ICertificate;
-  };
-  waf?: { enabled: boolean; rateLimit?: number; webAclArn?: string };
+export type DoorFeatureSettings = Pick<
+  FrontDoorSettings,
+  'domain' | 'waf' | 'logging' | 'monitoring' | 'geoRestriction' | 'skewProtection'
+> & {
   /** `cdn.webAclArn` (the legacy location of a BYO web ACL); `waf.webAclArn` wins. */
   cdnWebAclArn?: string;
-  logging?: { enabled: boolean; retentionDays?: number };
-  monitoring?: { enabled?: boolean; subscriptions?: readonly ITopicSubscription[] };
-  geoRestriction?: { type: 'whitelist' | 'blacklist'; countries: string[] };
-  skewProtection?: { enabled: boolean; maxAge?: number };
 };
 
 /** Default skew-protection window (seconds) — matches `skewProtection.maxAge`'s default. */
@@ -99,11 +86,10 @@ const apiHostAndStage = (url: string): { host: string; stagePath: string } => {
 /**
  * Assemble the {@link DoorInput} for this deploy (see the module doc).
  *
- * @param scope the scope to import a BYO hosted zone under (no resources are created).
  * @param params the plan, the provisioned resources, and the feature props.
  * @returns the door input. Each origin object is fresh, so a wiring record can key on it.
  */
-export function buildDoorInput(scope: Construct, params: BuildDoorInputParams): DoorInput {
+export function buildDoorInput(params: BuildDoorInputParams): DoorInput {
   const { plan } = params;
   const buildId = plan.release.buildId;
 
@@ -140,14 +126,11 @@ export function buildDoorInput(scope: Construct, params: BuildDoorInputParams): 
     };
   }
 
-  const imageRoute = plan.routes.entries.find((e) => e.kind === 'image');
   const image: ImageOrigin | undefined = params.image
     ? {
         kind: 'image',
         fn: params.image.fn,
         url: params.image.url,
-        pathPrefix:
-          plan.policies.imagePrefix ?? (imageRoute ? imageRoute.pattern.replace(/\/?\*$/, '') : '/_next/image'),
       }
     : undefined;
 
@@ -157,7 +140,6 @@ export function buildDoorInput(scope: Construct, params: BuildDoorInputParams): 
         url: params.api.url,
         ...apiHostAndStage(params.api.url),
         paths: [...new Set([BLOCKS_API_SUBTREE, ...(params.api.paths ?? [])])],
-        authPaths: [BLOCKS_AUTH_SUBTREE],
       }
     : undefined;
 
@@ -173,10 +155,7 @@ export function buildDoorInput(scope: Construct, params: BuildDoorInputParams): 
     if (origin) routes.push({ pattern: entry.pattern, origin });
   }
 
-  const skewEnabled = params.skewProtection?.enabled ?? true;
-  const wwwRedirect = plan.policies.wwwRedirect;
-
-  const features = toDoorFeatures(scope, params);
+  const features = toDoorFeatures(params);
 
   return {
     app: {
@@ -195,8 +174,6 @@ export function buildDoorInput(scope: Construct, params: BuildDoorInputParams): 
             },
           }
         : {}),
-      ...(wwwRedirect && wwwRedirect !== 'none' ? { wwwRedirect } : {}),
-      ...(skewEnabled ? { skew: { maxAge: params.skewProtection?.maxAge ?? DEFAULT_SKEW_MAX_AGE } } : {}),
     },
     origins: {
       assets,
@@ -209,71 +186,37 @@ export function buildDoorInput(scope: Construct, params: BuildDoorInputParams): 
 }
 
 /**
- * Map the door's settings (their `frontDoor.features` names) to the
- * {@link DoorFeatures} a door receives — the ONE place the two vocabularies
- * meet:
+ * The {@link DoorFeatures} a door receives: its settings under their
+ * `frontDoor.features` names and shapes, keeping only what the app asked for
+ * (see {@link DoorFeatures} for when each one is present). The legacy
+ * `cdn.webAclArn` is folded into `waf.webAclArn` (`waf.webAclArn` wins), and
+ * skew protection's `maxAge` default is resolved.
  *
- * | setting (`frontDoor.features.`) | `DoorInput.features.` | present when |
- * | --- | --- | --- |
- * | `domain` (`domainName`, `certificate`, `hostedZoneId`/`hostedZone`) | `customDomain` (`names`, `certificate`, `hostedZone`) | set |
- * | `waf` (`webAclArn`, `rateLimit`; legacy `cdn.webAclArn`) | `waf` (`webAclArn`, `rateLimit`) | `enabled`, or a web ACL given |
- * | `logging` (`retentionDays`) | `logging` (`retentionDays`) | `enabled` |
- * | `monitoring` (`subscriptions`) | `alarms` (`subscriptions`) | set and not `enabled: false` |
- * | `geoRestriction` (`whitelist`/`blacklist` + `countries`) | `geo` (`allow` / `deny`) | set |
- *
- * `domain.wwwRedirect` and `skewProtection` are app facts, not features: they
- * reach the door as `app.wwwRedirect` and `app.skew` (see {@link buildDoorInput}).
- *
- * @param scope the scope to import a BYO hosted zone under (on first read; no resources are created).
  * @param settings the door's effective settings.
  * @returns the features; a field is present only when the app asked for it.
  * @internal Framework-only.
  */
-export function toDoorFeatures(scope: Construct, settings: DoorFeatureSettings): DoorFeatures {
+export function toDoorFeatures(settings: DoorFeatureSettings): DoorFeatures {
   const features: {
     -readonly [K in keyof DoorFeatures]: DoorFeatures[K];
   } = {};
   if (settings.domain) {
-    const names = Array.isArray(settings.domain.domainName) ? settings.domain.domainName : [settings.domain.domainName];
-    const { hostedZoneId, hostedZone: zoneName, certificate } = settings.domain;
-    const customDomain: { names: string[]; certificate?: ICertificate; readonly hostedZone?: IHostedZone } = {
-      names,
-      ...(certificate ? { certificate } : {}),
-    };
-    if (hostedZoneId) {
-      // Imported on first read only (an import creates no resources, but keeps
-      // the construct tree of a door that never reads it unchanged).
-      let zone: IHostedZone | undefined;
-      Object.defineProperty(customDomain, 'hostedZone', {
-        enumerable: true,
-        get: (): IHostedZone => {
-          zone ??= HostedZone.fromHostedZoneAttributes(scope, 'DoorHostedZone', {
-            hostedZoneId,
-            zoneName: zoneName ?? names[0] ?? '',
-          });
-          return zone;
-        },
-      });
-    }
-    features.customDomain = customDomain;
+    const { wwwRedirect, ...domain } = settings.domain;
+    features.domain = wwwRedirect && wwwRedirect !== 'none' ? { ...domain, wwwRedirect } : domain;
   }
   const webAclArn = settings.waf?.webAclArn ?? settings.cdnWebAclArn;
   if (settings.waf?.enabled || webAclArn) {
     features.waf = {
+      enabled: settings.waf?.enabled ?? false,
       ...(webAclArn ? { webAclArn } : {}),
       ...(settings.waf?.rateLimit !== undefined ? { rateLimit: settings.waf.rateLimit } : {}),
     };
   }
-  if (settings.logging?.enabled) {
-    features.logging = settings.logging.retentionDays !== undefined ? { retentionDays: settings.logging.retentionDays } : {};
+  if (settings.logging?.enabled) features.logging = settings.logging;
+  if (settings.monitoring && settings.monitoring.enabled !== false) features.monitoring = settings.monitoring;
+  if (settings.geoRestriction) features.geoRestriction = settings.geoRestriction;
+  if (settings.skewProtection?.enabled ?? true) {
+    features.skewProtection = { enabled: true, maxAge: settings.skewProtection?.maxAge ?? DEFAULT_SKEW_MAX_AGE };
   }
-  if (settings.monitoring && settings.monitoring.enabled !== false) {
-    features.alarms = settings.monitoring.subscriptions ? { subscriptions: settings.monitoring.subscriptions } : {};
-  }
-  if (settings.geoRestriction) {
-    const { type, countries } = settings.geoRestriction;
-    features.geo = type === 'whitelist' ? { allow: countries } : { deny: countries };
-  }
-
   return features;
 }

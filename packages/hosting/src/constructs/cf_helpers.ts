@@ -7,8 +7,10 @@
  *
  * The helpers do two things:
  *   1. turn an origin from the {@link DoorInput} into a CloudFront origin and
- *      behavior (`cf.origin`, `cf.behaviors`, `cf.apiBehaviors`), and declare
- *      a post-upload invalidation (`cf.invalidate`);
+ *      behavior (`cf.origin`, `cf.behaviors`, `cf.apiBehaviors`), wire the app's
+ *      redirects, per-pattern headers and error pages the way the built-in
+ *      CloudFront door does (`cf.redirects`, `cf.headers`, `cf.errorPages`), and
+ *      declare a post-upload invalidation (`cf.invalidate`);
  *   2. RECORD what they wired. After `build` returns, AWS Blocks reads that
  *      record to confirm the static assets are reachable and, when the app has
  *      an API, that the API paths really reach the API (see `custom_door.ts`).
@@ -25,6 +27,12 @@ import {
   AllowedMethods,
   type BehaviorOptions,
   CachePolicy,
+  type ErrorResponse,
+  type FunctionAssociation,
+  FunctionCode,
+  FunctionEventType,
+  FunctionRuntime,
+  Function as CloudFrontFunction,
   type IDistribution,
   type IOrigin,
   OriginRequestPolicy,
@@ -36,7 +44,18 @@ import type { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
 import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { HostingError } from '../hosting_error.js';
-import type { ApiOrigin, DoorInput, DoorOrigin, DoorRoute } from './front_door.js';
+import { customErrorResponses } from './error_responses.js';
+import type {
+  ApiOrigin,
+  DoorApp,
+  DoorHeaderRule,
+  DoorInput,
+  DoorOrigin,
+  DoorOrigins,
+  DoorRedirect,
+  DoorRoute,
+} from './front_door.js';
+import { CF_MATCH_HELPERS, headerRowsJs, redirectRowsJs } from './kvs_router.js';
 
 // ── Wiring record ───────────────────────────────────────────────────────────
 
@@ -46,7 +65,18 @@ export type WiringRecord = {
   readonly origins: Set<'assets' | 'server' | 'image' | 'api'>;
   /** API path patterns that were wired to the API. */
   readonly apiPaths: Set<string>;
+  /** The app rules (`app.redirects`, `app.headers`, `app.errorPages`) that were wired. */
+  readonly rules: Set<WiredRule>;
 };
+
+/** An app rule a door can wire: its redirects, per-pattern headers, or error pages. */
+export type WiredRule = 'redirects' | 'headers' | 'errorPages';
+
+/** An app rule set from the input, as handed to `cf.recordWired`. */
+type AppRules = readonly DoorRedirect[] | readonly DoorHeaderRule[] | NonNullable<DoorApp['errorPages']>;
+
+/** Which rule each app-rule object of an input is, so a helper called with it records the right one. */
+const ruleOf = new WeakMap<object, WiredRule>();
 
 const recordsByOrigin = new WeakMap<object, WiringRecord>();
 
@@ -58,15 +88,49 @@ const recordsByOrigin = new WeakMap<object, WiringRecord>();
  * @internal Framework-only (`HostingConstruct`, the conformance kit).
  */
 export function startWiringRecord(input: DoorInput): WiringRecord {
-  const record: WiringRecord = { origins: new Set(), apiPaths: new Set() };
+  const record: WiringRecord = { origins: new Set(), apiPaths: new Set(), rules: new Set() };
   const { assets, server, image, api } = input.origins;
   for (const origin of [assets, server, image, api]) {
     if (origin) recordsByOrigin.set(origin, record);
+  }
+  const rules: Array<[object | undefined, WiredRule]> = [
+    [input.app.redirects, 'redirects'],
+    [input.app.headers, 'headers'],
+    [input.app.errorPages, 'errorPages'],
+  ];
+  for (const [rule, name] of rules) {
+    if (!rule) continue;
+    recordsByOrigin.set(rule, record);
+    ruleOf.set(rule, name);
   }
   return record;
 }
 
 const recordOf = (origin: object): WiringRecord | undefined => recordsByOrigin.get(origin);
+
+const markRule = (rules: object): void => {
+  const rule = ruleOf.get(rules);
+  if (rule) recordOf(rules)?.rules.add(rule);
+};
+
+/** CloudFront's limit on a function's code size (10 KB). */
+const MAX_FUNCTION_CODE_BYTES = 10_240;
+
+/** A uniquely named CloudFront Function (JS 2.0) under `scope`, failing synth when its code is over the limit. */
+const inlineFunction = (scope: Construct, baseId: string, helper: string, code: string): CloudFrontFunction => {
+  const bytes = Buffer.byteLength(code, 'utf8');
+  if (bytes > MAX_FUNCTION_CODE_BYTES) {
+    throw new HostingError('InvalidPropsError', {
+      message: `cf.${helper}: the rules make a ${bytes}-byte CloudFront Function, over CloudFront's ${MAX_FUNCTION_CODE_BYTES}-byte limit.`,
+      resolution:
+        'Consolidate the rules into wildcard patterns, or serve them from a CloudFront KeyValueStore ' +
+        '(as the built-in CloudFront door does).',
+    });
+  }
+  let id = baseId;
+  for (let n = 2; scope.node.tryFindChild(id); n++) id = `${baseId}${n}`;
+  return new CloudFrontFunction(scope, id, { code: FunctionCode.fromInline(code), runtime: FunctionRuntime.JS_2_0 });
+};
 
 /** Build id for a set of uploads handed to `onUpload` (so `cf.invalidate` can key its caller reference). */
 const buildIdByUploads = new WeakMap<object, string>();
@@ -141,6 +205,55 @@ export interface CloudFrontHelpers {
    */
   apiBehaviors(api: ApiOrigin | undefined): Record<string, BehaviorOptions>;
   /**
+   * The app's redirects (`app.redirects`, first match wins), as a viewer-request
+   * CloudFront Function association — the same matching and wildcard splice as
+   * the built-in CloudFront door. Attach it to every behavior a redirect source
+   * can reach (usually `defaultBehavior`). Records the redirects as wired.
+   * Returns `[]` when the app has none, so it can be spread unconditionally.
+   * A behavior takes ONE viewer-request function.
+   *
+   * @param scope the construct scope to create the function under.
+   * @param redirects the app's redirects (`input.app.redirects`).
+   * @returns `functionAssociations` entries.
+   * @throws HostingError('InvalidPropsError') when the rules exceed CloudFront's 10 KB function limit.
+   *
+   * @example
+   * defaultBehavior: { origin, functionAssociations: [...cf.redirects(scope, app.redirects), ...cf.headers(scope, app.headers)] }
+   */
+  redirects(scope: Construct, redirects: readonly DoorRedirect[]): FunctionAssociation[];
+  /**
+   * The app's per-pattern response headers (`app.headers`), as a
+   * viewer-response CloudFront Function association — every matching rule is
+   * applied, as on the built-in CloudFront door. Records the headers as wired.
+   * Returns `[]` when the app has none. A behavior takes ONE viewer-response
+   * function.
+   *
+   * @param scope the construct scope to create the function under.
+   * @param headers the app's header rules (`input.app.headers`).
+   * @returns `functionAssociations` entries.
+   * @throws HostingError('InvalidPropsError') when the rules exceed CloudFront's 10 KB function limit.
+   */
+  headers(scope: Construct, headers: readonly DoorHeaderRule[]): FunctionAssociation[];
+  /**
+   * The app's custom error pages (`app.errorPages`): the distribution's
+   * `errorResponses` (404 → `404.html`; 500 → `500.html`, plus 502/503/504 for
+   * an app without a server — as on the built-in CloudFront door), and the
+   * behaviors that serve the pages from the static assets. Records the error
+   * pages (and the assets origin) as wired. Empty when the app has none.
+   *
+   * @param errorPages the app's error pages (`input.app.errorPages`).
+   * @param origins the input's origins (the pages are served from `origins.assets`).
+   * @returns `errorResponses` for the Distribution, and `behaviors` to spread into `additionalBehaviors`.
+   *
+   * @example
+   * const pages = cf.errorPages(app.errorPages, origins);
+   * new Distribution(scope, 'Cdn', { …, additionalBehaviors: { ...pages.behaviors }, errorResponses: pages.errorResponses });
+   */
+  errorPages(
+    errorPages: DoorApp['errorPages'],
+    origins: DoorOrigins,
+  ): { errorResponses: ErrorResponse[]; behaviors: Record<string, BehaviorOptions> };
+  /**
    * Declare a CloudFront invalidation that runs AFTER the given uploads. Meant
    * for `onUpload`: `onUpload: ({ uploads }) => cf.invalidate(dist, { after: uploads })`.
    * The caller reference is keyed on the build id, so an unchanged build is a
@@ -161,12 +274,13 @@ export interface CloudFrontHelpers {
   /**
    * Declare something the door wired WITHOUT the helpers (raw CDK), so the
    * wiring check sees it. For the API, pass the paths that were wired, or omit
-   * `paths` to declare every `api.paths` entry wired.
+   * `paths` to declare every `api.paths` entry wired. The app's rules
+   * (`app.redirects`, `app.headers`, `app.errorPages`) are declared the same way.
    *
-   * @param origin the origin from the input that the door wired by hand.
+   * @param origin the origin (or app rule set) from the input that the door wired by hand.
    * @param paths for the API origin only: the path patterns that reach it.
    */
-  recordWired(origin: DoorOrigin | ApiOrigin, paths?: readonly string[]): void;
+  recordWired(origin: DoorOrigin | ApiOrigin | AppRules, paths?: readonly string[]): void;
 }
 
 const markWired = (origin: DoorOrigin | ApiOrigin): void => {
@@ -223,6 +337,51 @@ export const cf: CloudFrontHelpers = {
     return behaviors;
   },
 
+  redirects(scope, redirects) {
+    markRule(redirects);
+    if (redirects.length === 0) return [];
+    const rows = JSON.stringify(redirects.map((r) => [r.source, r.destination, r.statusCode]));
+    const code = `${CF_MATCH_HELPERS}
+var REDIRECTS = ${rows};
+function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+${redirectRowsJs('REDIRECTS', '  ')}
+  return request;
+}`;
+    const fn = inlineFunction(scope, 'BlocksRedirects', 'redirects', code);
+    return [{ function: fn, eventType: FunctionEventType.VIEWER_REQUEST }];
+  },
+
+  headers(scope, headers) {
+    markRule(headers);
+    if (headers.length === 0) return [];
+    const rows = JSON.stringify(headers.map((h) => [h.pattern, h.headers]));
+    const code = `${CF_MATCH_HELPERS}
+var HEADERS = ${rows};
+function handler(event) {
+  var request = event.request;
+  var response = event.response;
+  var uri = request.uri;
+${headerRowsJs('HEADERS', '  ')}
+  return response;
+}`;
+    const fn = inlineFunction(scope, 'BlocksHeaders', 'headers', code);
+    return [{ function: fn, eventType: FunctionEventType.VIEWER_RESPONSE }];
+  },
+
+  errorPages(errorPages, origins) {
+    if (!errorPages) return { errorResponses: [], behaviors: {} };
+    markRule(errorPages);
+    // The assets origin sits at the build prefix, so a page is served at its key.
+    const errorResponses = customErrorResponses(errorPages, { pathPrefix: '', hasCompute: Boolean(origins.server) });
+    const behaviors: Record<string, BehaviorOptions> = {};
+    for (const page of new Set(errorResponses.map((r) => r.responsePagePath ?? ''))) {
+      if (page) behaviors[page] = behaviorFor(origins.assets);
+    }
+    return { errorResponses, behaviors };
+  },
+
   invalidate(distribution, options) {
     if (!(distribution instanceof Construct)) {
       throw new HostingError('InvalidPropsError', {
@@ -266,6 +425,10 @@ export const cf: CloudFrontHelpers = {
   recordWired(origin, paths) {
     const record = recordOf(origin);
     if (!record) return;
+    if (Array.isArray(origin) || !('kind' in origin)) {
+      markRule(origin);
+      return;
+    }
     record.origins.add(origin.kind);
     if (origin.kind === 'api') {
       for (const path of paths ?? origin.paths) record.apiPaths.add(path);

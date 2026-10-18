@@ -171,7 +171,7 @@ describe('ApiGatewayConstruct (HTTP) — custom domain', () => {
 
 const buildApiGw = (stack: Stack, plan: CapabilityPlan, apiType?: 'rest' | 'http') => {
 	const bucket = new Bucket(stack, 'Assets');
-	const input = buildDoorInput(stack, { plan, bucket, staticDir: '.' });
+	const input = buildDoorInput({ plan, bucket, staticDir: '.' });
 	return buildFrontDoor(stack, apiGatewayDoor, { ...input, apiType, apiGateway: { plan, bucket } }, { wiringCheck: false })
 		.result;
 };

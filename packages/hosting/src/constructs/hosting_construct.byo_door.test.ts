@@ -91,8 +91,7 @@ describe('HostingConstruct — bring-your-own front door', () => {
     assert.equal(input.origins.assets.sourceDir, tmpDir);
     assert.equal(input.origins.server, undefined, 'a static app has no server origin');
     assert.deepEqual(input.origins.api?.paths, ['/aws-blocks/*', '/webhooks/*']);
-    assert.deepEqual(input.origins.api?.authPaths, ['/aws-blocks/auth/*']);
-    assert.deepEqual(Object.keys(input.features), ['waf'], 'only the WAF was asked for');
+    assert.deepEqual(Object.keys(input.features), ['waf', 'skewProtection'], 'only the WAF (and default skew protection) asked for');
     assert.equal(input.features.waf?.webAclArn, 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/x/1');
   });
 

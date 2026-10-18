@@ -13,7 +13,9 @@
  *      helpers recorded, the static assets must be reachable
  *      (`ServeStaticAsset`) and, when the app has an API, at least one of its
  *      paths must reach it (`ProxySameOriginApi`). An API path the door left
- *      unwired is a synth warning.
+ *      unwired is a synth warning, and so are app redirects, per-pattern
+ *      headers or error pages it left unwired (`cf.redirects`, `cf.headers`,
+ *      `cf.errorPages` wire them; `cf.recordWired` declares hand-wired ones).
  *
  * There is no feature check: AWS Blocks does not verify that a door applies
  * the features the app asked for (`input.features`) — the door's author owns
@@ -116,6 +118,17 @@ function checkWiring(scope: Construct, service: string, input: DoorInput, wiring
           `${missing.join(', ')}. Use cf.apiBehaviors(origins.api), or cf.recordWired(origins.api, paths) for paths wired by hand.`,
       );
     }
+  }
+  const unwiredRules: string[] = [];
+  if (input.app.redirects.length > 0 && !wiring.rules.has('redirects')) unwiredRules.push('app.redirects (cf.redirects)');
+  if (input.app.headers.length > 0 && !wiring.rules.has('headers')) unwiredRules.push('app.headers (cf.headers)');
+  if (input.app.errorPages && !wiring.rules.has('errorPages')) unwiredRules.push('app.errorPages (cf.errorPages)');
+  if (unwiredRules.length > 0) {
+    Annotations.of(scope).addWarningV2(
+      '@aws-blocks/hosting:FrontDoorRuleUnwired',
+      `Front door '${service}' did not wire the app's ${unwiredRules.join(', ')}, so they won't apply. ` +
+        'Wire them with the named helpers, or declare hand-wired ones with cf.recordWired(app.redirects) (etc.).',
+    );
   }
   if (problems.length === 0) return;
   throw new HostingError('UnsupportedFrontDoorError', {

@@ -54,7 +54,7 @@ describe('S3WebsiteConstruct — static/SPA', () => {
 
 describe('s3WebsiteDoor — free-form build', () => {
   const buildSite = (stack: Stack, plan: CapabilityPlan) => {
-    const input = buildDoorInput(stack, { plan, bucket: new Bucket(stack, 'Assets'), staticDir });
+    const input = buildDoorInput({ plan, bucket: new Bucket(stack, 'Assets'), staticDir });
     return buildFrontDoor(stack, s3WebsiteDoor, { ...input, plan }, { wiringCheck: false }).result;
   };
   it('is the s3-website service, defined by one build function', () => {

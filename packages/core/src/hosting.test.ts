@@ -2458,9 +2458,12 @@ describe('Hosting', () => {
         frontDoor: { kind: 'custom', door: edgeDoor(seen) },
       });
       assert.deepStrictEqual(seen.input?.origins.api?.paths, ['/aws-blocks/*', '/webhooks/*']);
-      assert.deepStrictEqual(seen.input?.origins.api?.authPaths, ['/aws-blocks/auth/*']);
       assert.strictEqual(seen.input?.origins.api?.url, MOCK_API.apiUrl);
-      assert.deepStrictEqual(seen.input?.features, { waf: { rateLimit: 500 } }, 'only what the app asked for');
+      assert.deepStrictEqual(
+        seen.input?.features,
+        { waf: { enabled: true, rateLimit: 500 }, skewProtection: { enabled: true, maxAge: 86400 } },
+        'only what the app asked for (skew protection is on by default)',
+      );
     });
 
     it('fails at synth when the door proxies none of the API paths (wiring check), unless turned off', () => {
@@ -2928,8 +2931,8 @@ describe('Hosting — frontDoor.features', () => {
       frontDoor: { kind: 'custom', door, features: { waf: { enabled: true, rateLimit: 100 } } },
       geoRestriction: { type: 'blacklist', countries: ['KP'] },
     });
-    assert.deepEqual(seen?.features.waf, { rateLimit: 100 });
-    assert.deepEqual(seen?.features.geo, { deny: ['KP'] });
+    assert.deepEqual(seen?.features.waf, { enabled: true, rateLimit: 100 });
+    assert.deepEqual(seen?.features.geoRestriction, { type: 'blacklist', countries: ['KP'] });
   });
 
   it('a config() domain in frontDoor.features needs Hosting.create(), like the top-level domain', () => {

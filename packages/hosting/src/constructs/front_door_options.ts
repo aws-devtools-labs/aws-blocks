@@ -29,7 +29,7 @@
  * | `waf` | ✓ (CLOUDFRONT scope) | ✓ (REGIONAL scope) | – | ✓ |
  * | `logging` | ✓ | ✓ | – | ✓ |
  * | `monitoring` | ✓ | ✓ (`enabled` only) | – | ✓ |
- * | `skewProtection` | ✓ | – | – | ✓ (as `app.skew`) |
+ * | `skewProtection` | ✓ | – | – | ✓ |
  * | `geoRestriction` | ✓ | – | – | ✓ |
  * | `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – |
  *
@@ -44,8 +44,8 @@ import type { IResponseHeadersPolicy, PriceClass } from 'aws-cdk-lib/aws-cloudfr
 import type { IVpc } from 'aws-cdk-lib/aws-ec2';
 import type { EmailSubscription, UrlSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
 import { HostingError } from '../hosting_error.js';
+import type { DoorFeatures, DoorInput, FrontDoor } from './front_door.js';
 import type { AccessLogFormat, AccessLogPartitioning } from './access_logging.js';
-import type { DoorInput, FrontDoor } from './front_door.js';
 import type { HostingDomainConfig, HostingWafConfig } from './hosting_construct.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import type { SkewProtectionConfig } from './skew_protection.js';
@@ -174,32 +174,26 @@ export type ApiGatewayDoorFeatures<TDomain = HostingDomainConfig> = {
 
 /**
  * Settings a bring-your-own door receives. They reach the door as
- * {@link DoorInput} (`input.features`, plus `input.app` for `wwwRedirect` and
- * skew), under these names:
- *
- * | `features.` | reaches the door as |
- * | --- | --- |
- * | `domain` | `features.customDomain` (`names`, `certificate`, `hostedZone`); `domain.wwwRedirect` → `app.wwwRedirect` |
- * | `waf` | `features.waf` (`webAclArn`, `rateLimit`) |
- * | `logging` | `features.logging` (`retentionDays`), when `enabled` |
- * | `monitoring` | `features.alarms` (`subscriptions`), unless `enabled: false` |
- * | `geoRestriction` | `features.geo` (`allow` for `whitelist`, `deny` for `blacklist`) |
- * | `skewProtection` | `app.skew` (`maxAge`), unless `enabled: false` |
+ * `input.features` ({@link DoorFeatures}) under the SAME names and shapes,
+ * keeping only what the app asked for: `waf` when `enabled` or a web ACL is
+ * given, `logging` when `enabled`, `monitoring` unless `enabled: false`,
+ * `skewProtection` unless `enabled: false` (on by default, `maxAge` resolved),
+ * and `domain` / `geoRestriction` when set.
  *
  * AWS Blocks does not check that the door applies them.
  */
 export type CustomDoorFeatures<TDomain = HostingDomainConfig> = {
-  /** Custom domain(s) → `input.features.customDomain` (and `domain.wwwRedirect` → `input.app.wwwRedirect`). */
+  /** Custom domain(s), with `wwwRedirect` → `input.features.domain`. */
   domain?: TDomain;
   /** Request filtering → `input.features.waf`. */
   waf?: HostingWafConfig;
   /** Access logging → `input.features.logging` (also the asset bucket's access logs). */
   logging?: HostingLoggingConfig;
-  /** Alarms → `input.features.alarms`. */
+  /** Alarms → `input.features.monitoring`. */
   monitoring?: HostingMonitoringConfig;
-  /** Geo restriction → `input.features.geo`. */
+  /** Geo restriction → `input.features.geoRestriction`. */
   geoRestriction?: HostingGeoRestriction;
-  /** Skew protection → `input.app.skew`. @default \{ enabled: true \} */
+  /** Skew protection → `input.features.skewProtection`. @default \{ enabled: true \} */
   skewProtection?: SkewProtectionConfig;
 };
 

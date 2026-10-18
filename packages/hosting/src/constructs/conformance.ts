@@ -24,7 +24,7 @@ import { App, Stack } from 'aws-cdk-lib';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 import { type BuildFrontDoorOptions, buildFrontDoor, type FrontDoorBuild } from './custom_door.js';
-import { BLOCKS_API_SUBTREE, BLOCKS_AUTH_SUBTREE } from './door_input.js';
+import { BLOCKS_API_SUBTREE } from './door_input.js';
 import type { DoorInput, FrontDoor, FrontDoorResult } from './front_door.js';
 
 /** Options for {@link assertDoorConformance}. */
@@ -65,7 +65,6 @@ const baselineInput = (scope: Construct): DoorInput => {
         host: 'abc123.execute-api.us-east-1.amazonaws.com',
         stagePath: '/prod',
         paths: [BLOCKS_API_SUBTREE],
-        authPaths: [BLOCKS_AUTH_SUBTREE],
       },
     },
     features: {},
