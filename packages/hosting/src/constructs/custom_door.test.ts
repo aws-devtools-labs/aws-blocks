@@ -29,7 +29,7 @@ const API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blo
 
 const setup = (opts: { api?: boolean; rawRoutes?: string[] } = {}) => {
 	const stack = new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-east-1' } });
-	const input = buildDoorInput(stack, {
+	const input = buildDoorInput({
 		plan,
 		bucket: new Bucket(stack, 'Assets'),
 		staticDir: '.',

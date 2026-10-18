@@ -33,11 +33,13 @@ import {
   ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
 import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
-import { type DoorInput, defineFrontDoor, type FrontDoorResult } from './front_door.js';
+import { type DoorInput, type DoorUpstream, defineFrontDoor, type FrontDoorResult } from './front_door.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 
-/** The edge's input: the {@link DoorInput} (with `upstream` set) plus internal-only edge settings. */
+/** The edge's input: the {@link DoorInput} plus the router it fronts (`upstream`) and internal-only edge settings. */
 export type CloudFrontEdgeDoorInput = DoorInput & {
+  /** The door this edge sits in front of — the ALB router of the stacked door. */
+  upstream: DoorUpstream;
   /** CSP for the edge's security-headers policy. */
   contentSecurityPolicy?: string;
   /** BYO CLOUDFRONT-scoped web ACL ARN for the edge. */

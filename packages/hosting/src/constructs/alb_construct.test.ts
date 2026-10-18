@@ -154,7 +154,7 @@ describe('albDoor — free-form build', () => {
   const buildAlb = (id: string, plan: CapabilityPlan) => {
     const stack = new Stack(new App(), id, { env: { account: '111111111111', region: 'us-west-2' } });
     const bucket = new Bucket(stack, 'Assets');
-    const input = buildDoorInput(stack, { plan, bucket, staticDir: '.' });
+    const input = buildDoorInput({ plan, bucket, staticDir: '.' });
     return buildFrontDoor(stack, albDoor, { ...input, alb: { plan, bucket } }, { wiringCheck: false }).result;
   };
 

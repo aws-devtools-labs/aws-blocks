@@ -40,8 +40,8 @@ const setup = () => {
 
 describe('buildDoorInput — app facts and origins', () => {
   it('joins every route to its origin object (no lookup by name)', () => {
-    const { stack, bucket, server, image, imageUrl } = setup();
-    const input = buildDoorInput(stack, {
+    const { bucket, server, image, imageUrl } = setup();
+    const input = buildDoorInput({
       plan: ssrPlan,
       bucket,
       staticDir: '/tmp/static',
@@ -59,17 +59,17 @@ describe('buildDoorInput — app facts and origins', () => {
     );
     assert.equal(input.origins.assets.prefix, 'builds/b7/');
     assert.equal(input.origins.assets.sourceDir, '/tmp/static');
-    assert.equal(input.origins.image?.pathPrefix, '/_next/image');
+    assert.ok(input.origins.image, 'the image origin (its route is in app.routes)');
     assert.equal(input.app.buildId, 'b7');
     assert.equal(input.app.basePath, '/app');
     assert.deepEqual(input.app.redirects, ssrPlan.routes.redirects);
     assert.deepEqual(input.app.headers, ssrPlan.routes.headers);
-    assert.deepEqual(input.app.skew, { maxAge: 86400 }, 'skew protection is on by default');
+    assert.deepEqual(input.features.skewProtection, { enabled: true, maxAge: 86400 }, 'skew protection is on by default');
   });
 
   it('creates the server Function URL only when a door reads it', () => {
     const { stack, bucket, server } = setup();
-    const input = buildDoorInput(stack, { plan: ssrPlan, bucket, staticDir: '.', server: { fn: server, streaming: true } });
+    const input = buildDoorInput({ plan: ssrPlan, bucket, staticDir: '.', server: { fn: server, streaming: true } });
     assert.equal(server.node.tryFindChild('FunctionUrl'), undefined, 'building the input added no Function URL');
     const url = input.origins.server?.url;
     assert.ok(url);
@@ -78,16 +78,15 @@ describe('buildDoorInput — app facts and origins', () => {
     Template.fromStack(stack).resourceCountIs('AWS::Lambda::Url', 2); // the image URL + the server URL
   });
 
-  it('lists /aws-blocks/* plus the raw routes as API paths, and /aws-blocks/auth/* as the sign-in subset', () => {
-    const { stack, bucket } = setup();
-    const input = buildDoorInput(stack, {
+  it('lists /aws-blocks/* plus the raw routes as API paths, (sign-in included under /aws-blocks/*)', () => {
+    const { bucket } = setup();
+    const input = buildDoorInput({
       plan: ssrPlan,
       bucket,
       staticDir: '.',
       api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks', paths: ['/webhooks/*', '/health'] },
     });
     assert.deepEqual(input.origins.api?.paths, ['/aws-blocks/*', '/webhooks/*', '/health']);
-    assert.deepEqual(input.origins.api?.authPaths, ['/aws-blocks/auth/*']);
     assert.ok(!input.origins.api?.paths.includes('/aws-blocks-auth/*'), 'no stale /aws-blocks-auth/* path');
     // A literal URL resolves at synth; a token URL is split in-template.
     assert.equal(input.origins.api?.host, 'abc123.execute-api.us-east-1.amazonaws.com');
@@ -96,7 +95,7 @@ describe('buildDoorInput — app facts and origins', () => {
 
   it('splits a token API URL in-template (Fn::Split / Fn::Select)', () => {
     const { stack, bucket, image } = setup();
-    const input = buildDoorInput(stack, {
+    const input = buildDoorInput({
       plan: ssrPlan,
       bucket,
       staticDir: '.',
@@ -108,34 +107,35 @@ describe('buildDoorInput — app facts and origins', () => {
   });
 
   it('has no api origin when Hosting was given no API', () => {
-    const { stack, bucket } = setup();
-    assert.equal(buildDoorInput(stack, { plan: ssrPlan, bucket, staticDir: '.' }).origins.api, undefined);
+    const { bucket } = setup();
+    assert.equal(buildDoorInput({ plan: ssrPlan, bucket, staticDir: '.' }).origins.api, undefined);
   });
 });
 
 describe('buildDoorInput — features are present only when the app asked for them', () => {
-  it('no feature props → an empty features object', () => {
-    const { stack, bucket } = setup();
-    const input = buildDoorInput(stack, { plan: ssrPlan, bucket, staticDir: '.' });
-    assert.deepEqual(input.features, {});
+  it('no feature props → only the default-on skew protection', () => {
+    const { bucket } = setup();
+    const input = buildDoorInput({ plan: ssrPlan, bucket, staticDir: '.' });
+    assert.deepEqual(input.features, { skewProtection: { enabled: true, maxAge: 86400 } });
   });
 
   it('a disabled WAF / logging / monitoring is not a request', () => {
-    const { stack, bucket } = setup();
-    const input = buildDoorInput(stack, {
+    const { bucket } = setup();
+    const input = buildDoorInput({
       plan: ssrPlan,
       bucket,
       staticDir: '.',
       waf: { enabled: false },
       logging: { enabled: false },
       monitoring: { enabled: false },
+      skewProtection: { enabled: false },
     });
     assert.deepEqual(input.features, {});
   });
 
   it('each requested feature carries its settings', () => {
-    const { stack, bucket } = setup();
-    const input = buildDoorInput(stack, {
+    const { bucket } = setup();
+    const input = buildDoorInput({
       plan: ssrPlan,
       bucket,
       staticDir: '.',
@@ -146,19 +146,24 @@ describe('buildDoorInput — features are present only when the app asked for th
       geoRestriction: { type: 'whitelist', countries: ['US', 'CA'] },
       errorPages: { notFound: './404.html' },
     });
-    assert.deepEqual(input.features.customDomain?.names, ['app.example.com', 'www.example.com']);
-    assert.equal(input.features.customDomain?.hostedZone?.hostedZoneId, 'Z123');
-    assert.deepEqual(input.features.waf, { rateLimit: 500 });
-    assert.deepEqual(input.features.logging, { retentionDays: 7 });
-    assert.deepEqual(input.features.alarms, {});
-    assert.deepEqual(input.features.geo, { allow: ['US', 'CA'] });
+    // One vocabulary: the same names and shapes as `frontDoor.features`.
+    assert.deepEqual(input.features.domain, {
+      domainName: ['app.example.com', 'www.example.com'],
+      hostedZoneId: 'Z123',
+      hostedZone: 'example.com',
+    });
+    assert.deepEqual(input.features.waf, { enabled: true, rateLimit: 500 });
+    assert.deepEqual(input.features.logging, { enabled: true, retentionDays: 7 });
+    assert.deepEqual(input.features.monitoring, { enabled: true });
+    assert.deepEqual(input.features.geoRestriction, { type: 'whitelist', countries: ['US', 'CA'] });
     assert.deepEqual(input.app.errorPages, { notFound: '404.html' });
   });
 
   it('a BYO web ACL (waf.webAclArn or cdn.webAclArn) is a WAF request', () => {
-    const { stack, bucket } = setup();
+    const { bucket } = setup();
     const arn = 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/x/1';
-    assert.deepEqual(buildDoorInput(stack, { plan: ssrPlan, bucket, staticDir: '.', cdnWebAclArn: arn }).features.waf, {
+    assert.deepEqual(buildDoorInput({ plan: ssrPlan, bucket, staticDir: '.', cdnWebAclArn: arn }).features.waf, {
+      enabled: false,
       webAclArn: arn,
     });
   });

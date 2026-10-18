@@ -52,7 +52,7 @@ describe('originHandleFromUrl — derives the attach point from a door url', () 
 describe('built-in doors — the result carries an attachable originHandle', () => {
   it('s3-website: origin handle is the website host, protocol http', () => {
     const stack = freshStack('S1');
-    const input = buildDoorInput(stack, { plan: staticPlan, bucket: new Bucket(stack, 'Assets'), staticDir });
+    const input = buildDoorInput({ plan: staticPlan, bucket: new Bucket(stack, 'Assets'), staticDir });
     const { result } = buildFrontDoor(stack, s3WebsiteDoor, { ...input, plan: staticPlan }, { wiringCheck: false });
     assert.ok(result.url, 'has a public url');
     assert.equal(result.originHandle.protocol, 'http');
@@ -63,7 +63,7 @@ describe('built-in doors — the result carries an attachable originHandle', () 
   it('api-gateway: origin handle protocol https', () => {
     const stack = freshStack('S2');
     const bucket = new Bucket(stack, 'Assets');
-    const input = buildDoorInput(stack, { plan: staticPlan, bucket, staticDir });
+    const input = buildDoorInput({ plan: staticPlan, bucket, staticDir });
     const { result } = buildFrontDoor(
       stack,
       apiGatewayDoor,
@@ -77,7 +77,7 @@ describe('built-in doors — the result carries an attachable originHandle', () 
   it('alb: origin handle is the LB DNS; protocol reflects the certificate (http without one)', () => {
     const stack = freshStack('S3');
     const bucket = new Bucket(stack, 'Assets');
-    const input = buildDoorInput(stack, { plan: staticPlan, bucket, staticDir });
+    const input = buildDoorInput({ plan: staticPlan, bucket, staticDir });
     const { result } = buildFrontDoor(stack, albDoor, { ...input, alb: { plan: staticPlan, bucket } }, { wiringCheck: false });
     assert.ok(result.url);
     assert.equal(result.originHandle.protocol, 'http'); // no certificate → HTTP listener

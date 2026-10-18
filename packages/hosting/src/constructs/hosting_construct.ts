@@ -2311,7 +2311,7 @@ export class HostingConstruct extends Construct {
     const serverFn = serverName ? this.computeFunctions.get(serverName) : undefined;
     const imageFn = this.computeFunctions.get('image-optimization');
     const imageUrl = this.computeFunctionUrls.get('image-optimization');
-    return buildDoorInput(this, {
+    return buildDoorInput({
       plan,
       bucket: this.bucket,
       staticDir: manifest.staticAssets.directory,

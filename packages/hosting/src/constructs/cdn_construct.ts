@@ -55,6 +55,7 @@ import { HostingError } from '../hosting_error.js';
 import { prependBasePath } from '../adapters/shared/basepath.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
+import { customErrorResponses } from './error_responses.js';
 import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
@@ -1333,28 +1334,10 @@ export class CdnConstruct extends Construct {
     ];
 
     // ---- Custom error pages (user-provided) ----
-    if (props.customErrorPages?.notFound) {
-      errorResponses.push({
-        httpStatus: 404,
-        responseHttpStatus: 404,
-        responsePagePath: `/builds/${buildId}/404.html`,
-        ttl: Duration.seconds(0),
-      });
-    }
-    if (props.customErrorPages?.serverError) {
-      // For compute (SSR) stacks, the default 502/503/504 error pages are
-      // already wired above; only add 500 with the custom page.
-      // For static/SPA stacks, add all server error statuses.
-      const serverErrorStatuses = hasCompute ? [500] : [500, 502, 503, 504];
-      for (const status of serverErrorStatuses) {
-        errorResponses.push({
-          httpStatus: status,
-          responseHttpStatus: status,
-          responsePagePath: `/builds/${buildId}/500.html`,
-          ttl: Duration.seconds(10),
-        });
-      }
-    }
+    // Shared with `cf.errorPages` (a bring-your-own door): see error_responses.ts.
+    // For compute (SSR) stacks, the default 502/503/504 error pages are
+    // already wired above; only 500 gets the custom page.
+    errorResponses.push(...customErrorResponses(props.customErrorPages, { pathPrefix: `/builds/${buildId}`, hasCompute }));
 
 
     // ---- Distribution ----

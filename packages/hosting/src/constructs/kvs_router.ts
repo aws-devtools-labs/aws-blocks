@@ -369,11 +369,19 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
  * `${}` (no interpolation needed). Requires `cf` to be in scope (each generated
  * function declares `import cf from 'cloudfront';` first).
  */
-const SHARED_CF_HELPERS = `var KVS = cf.kvs();
+const CF_KVS_HELPERS = `var KVS = cf.kvs();
 async function getJson(key, dflt) {
   try { var raw = await KVS.get(key); return JSON.parse(raw); } catch (e) { return dflt; }
-}
-function matchPattern(uri, pattern) {
+}`;
+
+/**
+ * The pattern matcher and basePath strip of {@link SHARED_CF_HELPERS}, without
+ * the KVS reader — also shipped by the `cf.redirects` / `cf.headers` functions
+ * of a bring-your-own door, so both match a pattern the same way.
+ *
+ * @internal Framework-only.
+ */
+export const CF_MATCH_HELPERS = `function matchPattern(uri, pattern) {
   // Fast path: no wildcard → exact match.
   if (pattern.indexOf('*') === -1) {
     return uri === pattern ? { tail: '' } : null;
@@ -418,6 +426,61 @@ function stripBasePath(uri, bp) {
   }
   return uri;
 }`;
+
+const SHARED_CF_HELPERS = `${CF_KVS_HELPERS}
+${CF_MATCH_HELPERS}`;
+
+/**
+ * The first-match redirect over a `[[source, destination, status], …]` rows
+ * array (JS 2.0 source): returns the redirect response from the enclosing
+ * function. Shared by the edge router (per KVS chunk) and `cf.redirects`.
+ *
+ * @param rows the JS expression holding the rows.
+ * @param indent the indentation of the emitted lines.
+ * @internal Framework-only.
+ */
+export const redirectRowsJs = (rows: string, indent: string): string =>
+  [
+    `for (var j = 0; j < ${rows}.length; j++) {`,
+    `  var m = matchPattern(uri, ${rows}[j][0]);`,
+    '  if (m) {',
+    `    var dest = ${rows}[j][1];`,
+    "    // Splice the captured tail into a wildcard destination. Guard on the",
+    "    // DESTINATION shape (trailing '*'), NOT on m.tail being truthy: an exact",
+    "    // hit on a wildcard prefix (e.g. request '/old/' against source '/old/*')",
+    "    // yields tail '' , and a truthiness guard would skip the splice and leak",
+    "    // the literal '*' into Location (-> '/new/*'). Always strip the trailing",
+    "    // '*' and append the tail (empty string included).",
+    "    if (dest.charAt(dest.length - 1) === '*') {",
+    "      dest = dest.substring(0, dest.length - 1) + (m.tail || '');",
+    '    }',
+    `    return { statusCode: ${rows}[j][2], statusDescription: 'Redirect', headers: { location: { value: dest } } };`,
+    '  }',
+    '}',
+  ]
+    .map((line) => indent + line)
+    .join('\n');
+
+/**
+ * Apply every matching `[[pattern, { name: value }], …]` header rule to
+ * `response` (JS 2.0 source). Shared by the edge router (per KVS chunk) and
+ * `cf.headers`.
+ *
+ * @param rows the JS expression holding the rows.
+ * @param indent the indentation of the emitted lines.
+ * @internal Framework-only.
+ */
+export const headerRowsJs = (rows: string, indent: string): string =>
+  [
+    `for (var j = 0; j < ${rows}.length; j++) {`,
+    `  if (matchPattern(uri, ${rows}[j][0])) {`,
+    `    var hdrs = ${rows}[j][1];`,
+    '    for (var name in hdrs) { response.headers[name.toLowerCase()] = { value: hdrs[name] }; }',
+    '  }',
+    '}',
+  ]
+    .map((line) => indent + line)
+    .join('\n');
 
 /**
  * Viewer-request CloudFront Function (JS 2.0). Reads the route table + metadata
@@ -504,22 +567,7 @@ async function handler(event) {
   // 1. redirects (chunked, first match wins)
   for (var di = 0; di < meta.dc; di++) {
     var drows = await getJson('d' + di, []);
-    for (var j = 0; j < drows.length; j++) {
-      var m = matchPattern(uri, drows[j][0]);
-      if (m) {
-        var dest = drows[j][1];
-        // Splice the captured tail into a wildcard destination. Guard on the
-        // DESTINATION shape (trailing '*'), NOT on m.tail being truthy: an exact
-        // hit on a wildcard prefix (e.g. request '/old/' against source '/old/*')
-        // yields tail '' , and a truthiness guard would skip the splice and leak
-        // the literal '*' into Location (-> '/new/*'). Always strip the trailing
-        // '*' and append the tail (empty string included).
-        if (dest.charAt(dest.length - 1) === '*') {
-          dest = dest.substring(0, dest.length - 1) + (m.tail || '');
-        }
-        return { statusCode: drows[j][2], statusDescription: 'Redirect', headers: { location: { value: dest } } };
-      }
-    }
+${redirectRowsJs('drows', '    ')}
   }
 
   var bp = meta.bp;
@@ -705,12 +753,7 @@ async function handler(event) {
   // per-pattern headers
   for (var hi = 0; hi < meta.hc; hi++) {
     var hrows = await getJson('h' + hi, []);
-    for (var j = 0; j < hrows.length; j++) {
-      if (matchPattern(uri, hrows[j][0])) {
-        var hdrs = hrows[j][1];
-        for (var name in hdrs) { response.headers[name.toLowerCase()] = { value: hdrs[name] }; }
-      }
-    }
+${headerRowsJs('hrows', '    ')}
   }
 
   // skew-protection cookie (status-gated, HTML only)
