@@ -263,6 +263,14 @@ export class Database extends BuildingBlockScope {
   static fromExisting(config: ExternalDatabaseRef): ExternalDatabaseRef {
     return config;
   }
+
+  // Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+  query(..._args: unknown[]): never { return synthGuard('Database', 'query'); }
+  queryOne(..._args: unknown[]): never { return synthGuard('Database', 'queryOne'); }
+  execute(..._args: unknown[]): never { return synthGuard('Database', 'execute'); }
+  transaction(..._args: unknown[]): never { return synthGuard('Database', 'transaction'); }
+  withRLS(..._args: unknown[]): never { return synthGuard('Database', 'withRLS'); }
+  crud(..._args: unknown[]): never { return synthGuard('Database', 'crud'); }
 }
 
 export { fromExisting } from './from-existing.js';

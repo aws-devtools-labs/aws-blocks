@@ -5,7 +5,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { FileBucketOptions, CorsRule, ExternalBucketRef } from './types.js';
 import { validateBucketName } from './bucket-name.js';
@@ -160,4 +160,17 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 		this.bucket.grantReadWrite(this.executionRole);
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	put(..._args: unknown[]): never { return synthGuard('FileBucket', 'put'); }
+	get(..._args: unknown[]): never { return synthGuard('FileBucket', 'get'); }
+	delete(..._args: unknown[]): never { return synthGuard('FileBucket', 'delete'); }
+	deleteBatch(..._args: unknown[]): never { return synthGuard('FileBucket', 'deleteBatch'); }
+	getUrl(..._args: unknown[]): never { return synthGuard('FileBucket', 'getUrl'); }
+	putUrl(..._args: unknown[]): never { return synthGuard('FileBucket', 'putUrl'); }
+	getFileHandle(..._args: unknown[]): never { return synthGuard('FileBucket', 'getFileHandle'); }
+	createUploadHandle(..._args: unknown[]): never { return synthGuard('FileBucket', 'createUploadHandle'); }
+	scan(..._args: unknown[]): never { return synthGuard('FileBucket', 'scan'); }
+	listVersions(..._args: unknown[]): never { return synthGuard('FileBucket', 'listVersions'); }
+	restoreVersion(..._args: unknown[]): never { return synthGuard('FileBucket', 'restoreVersion'); }
 }

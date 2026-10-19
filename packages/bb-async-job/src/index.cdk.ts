@@ -175,4 +175,8 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 	waitUntilComplete(_jobId: string, _options?: WaitUntilCompleteOptions): Promise<AsyncJobStatus> {
 		return synthGuard('AsyncJob', 'waitUntilComplete');
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	submit(..._args: unknown[]): never { return synthGuard('AsyncJob', 'submit'); }
+	submitBatch(..._args: unknown[]): never { return synthGuard('AsyncJob', 'submitBatch'); }
 }

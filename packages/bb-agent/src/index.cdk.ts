@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
@@ -85,4 +85,14 @@ export class Agent extends BuildingBlockScope {
 			);
 		}
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	stream(..._args: unknown[]): never { return synthGuard('Agent', 'stream'); }
+	resume(..._args: unknown[]): never { return synthGuard('Agent', 'resume'); }
+	createConversationId(..._args: unknown[]): never { return synthGuard('Agent', 'createConversationId'); }
+	getChannel(..._args: unknown[]): never { return synthGuard('Agent', 'getChannel'); }
+	getPendingInterrupts(..._args: unknown[]): never { return synthGuard('Agent', 'getPendingInterrupts'); }
+	listConversations(..._args: unknown[]): never { return synthGuard('Agent', 'listConversations'); }
+	getConversation(..._args: unknown[]): never { return synthGuard('Agent', 'getConversation'); }
+	deleteConversation(..._args: unknown[]): never { return synthGuard('Agent', 'deleteConversation'); }
 }
