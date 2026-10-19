@@ -23,6 +23,7 @@ import {
   writeTypesAndMeta,
 } from './generate.js';
 import { generateBaseline } from '../migrations/baseline.js';
+import { upsertEnvFile } from './env-file.js';
 import { SUPABASE, SUPABASE_AUTH, SUPABASE_CONN_GUIDANCE, SUPABASE_MESSAGING, detectSupabase, extractProjectRef } from './supabase.js';
 import { Scope } from '@aws-blocks/core';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -229,12 +230,14 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
     console.log(`    MIGRATION_GUIDE.md`);
   }
 
-  // Write .env.local
+  // Set the connection in .env.local. The file is shared with the rest of the
+  // app (AWS profile, other secrets) and usually gitignored, so only the
+  // connection entry is touched — everything else is kept as-is.
   const envPath = path.join(path.dirname(outputDir), '.env.local');
-  const envContent = `${SUPABASE.connStringEnvVar}=${connString}\n`;
-
-  fs.writeFileSync(envPath, envContent);
-  console.log(`✓ Wrote ${envPath} — treating this as your development connection`);
+  const envWrite = upsertEnvFile(envPath, SUPABASE.connStringEnvVar, connString);
+  console.log(
+    `✓ ${envWrite.created ? 'Wrote' : `Set ${SUPABASE.connStringEnvVar} in`} ${envPath} — treating this as your development connection`,
+  );
 
   // Write the mock AppSetting value so `npm run dev` picks up the connection
   // string without any env-var bridging. Uses AppSetting directly — single
@@ -467,10 +470,14 @@ export function ensureGitignored(projectDir: string, entries: string[]): { chang
  * introspect — production is expected to share the dev schema (sync it with
  * `npm run deploy`, not from inside a pull). Returns the path written and whether
  * `.gitignore` was updated. Exported for unit testing.
+ *
+ * Only the connection-string entry is set: any other settings, comments and
+ * ordering in an existing `.env.production` are preserved, as is its file mode
+ * (see `upsertEnvFile`). The file is created when missing.
  */
 export function writeProductionEnv(projectDir: string, connString: string): { path: string; gitignoreUpdated: boolean } {
   const envProdPath = path.join(projectDir, '.env.production');
-  fs.writeFileSync(envProdPath, `${SUPABASE.connStringEnvVar}=${connString}\n`);
+  upsertEnvFile(envProdPath, SUPABASE.connStringEnvVar, connString);
   const gi = ensureGitignored(projectDir, ['.env.production']);
   return { path: envProdPath, gitignoreUpdated: gi.changed };
 }
@@ -559,7 +566,7 @@ async function dbPullProdInteractive(outputDir: string): Promise<void> {
   const projectDir = path.dirname(outputDir);
 
   console.log('Configure PRODUCTION:');
-  console.log('  • writes your production connection string to .env.production (local file)');
+  console.log(`  • sets ${SUPABASE.connStringEnvVar} in .env.production (local file; other settings in it are kept)`);
   console.log('  • does NOT modify your database and does NOT deploy');
   console.log('  • to apply your schema to production, run `npm run deploy` afterward\n');
 
@@ -583,10 +590,12 @@ async function dbPullProdInteractive(outputDir: string): Promise<void> {
   }
   console.log('  Detected provider: Supabase\n');
 
-  // Confirm before clobbering an existing .env.production.
+  // Confirm before replacing the connection in an existing .env.production.
   const envProdPath = path.join(projectDir, '.env.production');
   if (fs.existsSync(envProdPath)) {
-    const ans = await prompt('  .env.production already exists. Overwrite? (y/N) ');
+    const ans = await prompt(
+      `  .env.production already exists. Update its ${SUPABASE.connStringEnvVar} entry? Other settings in the file are kept. (y/N) `,
+    );
     if (ans.toLowerCase() !== 'y') {
       console.log('  Aborted — left .env.production unchanged.');
       process.exit(0);
@@ -594,7 +603,7 @@ async function dbPullProdInteractive(outputDir: string): Promise<void> {
   }
 
   const result = writeProductionEnv(projectDir, connectionString);
-  console.log(`✓ Wrote ${result.path}`);
+  console.log(`✓ Set ${SUPABASE.connStringEnvVar} in ${result.path}`);
   if (result.gitignoreUpdated) console.log('✓ Updated .gitignore');
 
   console.log('\n─────────────────────────────────────────');
