@@ -15,6 +15,7 @@ import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { formatDeploySignal } from './deploy-stream.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
+import { createDeployRecorder } from './deploy-history.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
@@ -215,6 +216,12 @@ export async function startSandbox(options: SandboxOptions) {
   const argOptions = { outDir, projectRoot: process.cwd(), backendPath };
   const assemblyDir = `${outDir}/cdk.out`;
 
+  // Structured deploy history (.blocks/deploy-history.jsonl): records the
+  // explicit sandbox deploy. Later `cdk watch` hot-swaps are not recorded,
+  // they have no clean deploy boundary. Best-effort, never fails the deploy.
+  const recorder = createDeployRecorder(process.cwd(), 'sandbox');
+  recorder.start();
+
   try {
     // Synthesize once, so the deploy decision is based on what is about to be
     // deployed (not on local state that may be missing — a fresh clone, a
@@ -241,6 +248,7 @@ export async function startSandbox(options: SandboxOptions) {
       { stdio: "inherit", env: cdkEnv },
     );
   } catch (error) {
+    recorder.fail(error);
     buildAndSendEvent({
       command: 'sandbox',
       state: 'FAIL',
@@ -251,6 +259,10 @@ export async function startSandbox(options: SandboxOptions) {
     console.error(sandboxFailureRecoveryHint());
     throw error;
   }
+
+  // The CloudFormation deploy itself succeeded; output parsing below is a
+  // separate concern and doesn't retroactively fail the deployment record.
+  recorder.succeed();
 
   const outputs = JSON.parse(readFileSync(`${outDir}/outputs.json`, "utf-8"));
   const stackOutputs = Object.values(outputs)[0] as Record<string, string> || {};
