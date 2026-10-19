@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, DEFAULT_API_ERROR_NAME } from '@aws-blocks/core';
+import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, DEFAULT_API_ERROR_NAME, isWireSafeError } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -70,6 +70,10 @@ export interface AuthBasicOptions {
 	 * - Password reset (user requests a code, enters it with new password)
 	 *
 	 * When absent, signup is immediate and password reset is not available.
+	 *
+	 * If the callback throws during `setAuthState()`, an `ApiError` (or a branded Building
+	 * Block error) reaches the client as `AuthState.error`; any other error is logged and
+	 * reported as `'Internal error'`.
 	 */
 	codeDelivery?: CodeDeliveryFn;
 	/**
@@ -454,10 +458,18 @@ export class AuthBasic extends Scope implements BlocksAuth {
 						default:
 							return { ...this.signedOutState(), error: `Unknown action: ${(input as any).action}` };
 					}
-				} catch (e: any) {
+				} catch (e) {
 					const currentUser = await this.getUserFromCookie(context);
 					const base = currentUser ? signedInState(currentUser) : this.signedOutState();
 					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
+					// AuthState is returned to unauthenticated clients, so only an ApiError's or a
+					// branded BB error's message is client-safe. Anything else (an SDK, KVStore,
+					// AppSetting or codeDelivery failure) can name accounts and ARNs: log it and
+					// return the same generic message core's RPC serializer uses.
+					if (!isWireSafeError(e)) {
+						this.log.error('AuthBasic setAuthState failed', { action: input.action, error: e });
+						return { ...base, error: 'Internal error' };
+					}
 					return { ...base, error: e.message, ...(errorName ? { errorName } : {}) };
 				}
 			},

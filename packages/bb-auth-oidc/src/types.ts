@@ -314,6 +314,11 @@ export interface AuthOIDCOptions<
 	 * send a welcome email, gate sign-in by domain, etc.
 	 *
 	 * Throwing fails the sign-in (callback returns 500; no session cookie is set).
+	 * Throw an `ApiError` to pick the status and a client-visible `name`/message
+	 * instead. A branded Building Block error (`blocksError()` / `brandBlocksError()`)
+	 * keeps its `name`/message and is answered with 400. Any other error is logged
+	 * server-side and answered with a generic 500 `{ "error": "Internal error" }`,
+	 * so its message never reaches the client.
 	 */
 	onSignIn?: (user: OIDCUser, ctx: BlocksContext) => Promise<void>;
 

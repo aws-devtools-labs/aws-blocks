@@ -404,7 +404,7 @@ try {
 | `AgentErrors.PersistenceRequired` | Conversation CRUD called on an inferenceOnly agent. |
 | `AgentErrors.InvalidModelConfig` | Missing modelId, apiKey, unknown provider, or `needsApproval` + `interrupt` both specified. |
 | `AgentErrors.ModelUnavailable` | All model candidates failed health checks. Check logs for details. |
-| `AgentErrors.StreamFailed` | Agent encountered an error during execution. |
+| `AgentErrors.StreamFailed` | Agent encountered an error during execution. The `error` chunk, the persisted `metadata.error`, and this error's message carry a branded Building Block error's message, or `Internal error` for any other failure (e.g. a Bedrock or AWS SDK error); the original error is logged server-side. |
 | `AgentErrors.InterruptRequired` | Agent paused for approval. Use `InterruptError` for typed access to pending interrupts. |
 | `AgentErrors.BrowserNotSupported` | Agent instantiated in the browser (server-side only). |
 

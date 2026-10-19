@@ -155,7 +155,7 @@ export class AuthOIDC<
 		registerSdkIdentifiers(this.fullId, {
 			sessionTableName: getSdkIdentifiers(sessions).tableName,
 		});
-		mountAuthRoutes(this);
+		mountAuthRoutes(this, this.log);
 
 		for (const provider of options.providers) {
 			if (provider.kind === 'stub') {

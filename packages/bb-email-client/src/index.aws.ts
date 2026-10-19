@@ -17,34 +17,39 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 
 const BATCH_CHUNK_SIZE = 50;
 
-function mapSesError(err: any): Error {
-	const message = err.message ?? 'Unknown SES error';
+/**
+ * Map an SES SDK error to a branded `EmailErrors` error.
+ *
+ * Every branch uses a STABLE, BB-authored message — never the raw SES
+ * `err.message`. A branded message crosses the RPC wire to the caller, and SES
+ * text names identities, regions, configuration sets and account state. The SES
+ * error is kept on the non-enumerable `cause` (so `JSON.stringify` cannot leak
+ * its `$metadata`) and is logged by the caller.
+ */
+function mapSesError(err: unknown): Error {
+	const name = err instanceof Error ? err.name : '';
+	const rawMessage = err instanceof Error ? err.message : String(err);
 
-	if (err.name === 'MailFromDomainNotVerifiedException') {
-		return blocksError(EmailErrors.DomainNotVerified, message);
+	let mapped: Error;
+	if (name === 'MailFromDomainNotVerifiedException') {
+		mapped = blocksError(EmailErrors.DomainNotVerified, 'The sending domain or address is not verified in SES.');
+	} else if (name === 'MessageRejected') {
+		// The raw text is only inspected to pick the code; it never reaches the message.
+		const lower = rawMessage.toLowerCase();
+		mapped = lower.includes('not verified') || lower.includes('identity')
+			? blocksError(EmailErrors.DomainNotVerified, 'The sending domain or address is not verified in SES.')
+			: blocksError(EmailErrors.SendFailed, 'SES rejected the message.');
+	} else if (name === 'AccountSuspendedException' || name === 'SendingPausedException') {
+		mapped = blocksError(EmailErrors.AccountPaused, 'Email sending is paused for this account.');
+	} else if (name === 'TooManyRequestsException' || name === 'ThrottlingException') {
+		mapped = blocksError(EmailErrors.RateLimited, 'SES rate limit exceeded. Retry after a backoff.');
+	} else if (name === 'BadRequestException') {
+		mapped = blocksError(EmailErrors.InvalidInput, 'SES rejected the request as invalid.');
+	} else {
+		mapped = blocksError(EmailErrors.SendFailed, 'Email send failed.');
 	}
-
-	if (err.name === 'MessageRejected') {
-		const lower = message.toLowerCase();
-		if (lower.includes('not verified') || lower.includes('identity')) {
-			return blocksError(EmailErrors.DomainNotVerified, message);
-		}
-		return blocksError(EmailErrors.SendFailed, message);
-	}
-
-	if (err.name === 'AccountSuspendedException' || err.name === 'SendingPausedException') {
-		return blocksError(EmailErrors.AccountPaused, message);
-	}
-
-	if (err.name === 'TooManyRequestsException' || err.name === 'ThrottlingException') {
-		return blocksError(EmailErrors.RateLimited, message);
-	}
-
-	if (err.name === 'BadRequestException') {
-		return blocksError(EmailErrors.InvalidInput, message);
-	}
-
-	return blocksError(EmailErrors.SendFailed, message);
+	Object.defineProperty(mapped, 'cause', { value: err, enumerable: false, writable: true, configurable: true });
+	return mapped;
 }
 
 /**
@@ -92,6 +97,9 @@ export class EmailClient extends Scope {
 	 *
 	 * Uses the SDK's built-in adaptive retry with maxAttempts: 3.
 	 *
+	 * Thrown errors carry a stable, BB-authored message (the caller may forward it to a client);
+	 * the raw SES error is logged and kept on the non-enumerable `cause`.
+	 *
 	 * @param message - The email message to send (to, subject, body, optional html/cc/bcc).
 	 * @returns The SES message ID for the sent email.
 	 * @throws {EmailErrors.SendFailed} General send failure.
@@ -127,8 +135,9 @@ export class EmailClient extends Scope {
 		try {
 			const response = await this.client.send(command);
 			return { messageId: response.MessageId ?? '' };
-		} catch (err: any) {
-			if (err.name && err.name in EmailErrors) throw err;
+		} catch (err) {
+			if (err instanceof Error && err.name in EmailErrors) throw err;
+			this.log.error('SES SendEmail failed', { error: err });
 			throw mapSesError(err);
 		}
 	}
@@ -141,7 +150,9 @@ export class EmailClient extends Scope {
 	 * TODO: Add retry logic for transient failures (throttling, 5xx).
 	 *
 	 * @param messages - Array of email messages to send.
-	 * @returns Result with per-message status in the same order as the input array.
+	 * @returns Result with per-message status in the same order as the input array. A failed
+	 *   entry's `error` is a stable message naming the `EmailErrors` code or SES entry status;
+	 *   the raw SES error text is logged server-side, not returned.
 	 */
 	async sendBatch(messages: EmailMessage[]): Promise<SendBatchResult> {
 		const results: Array<{ status: 'success' | 'failed'; messageId?: string; error?: string }> =
@@ -197,14 +208,17 @@ export class EmailClient extends Scope {
 					if (entry?.Status === 'SUCCESS') {
 						results[globalIdx] = { status: 'success', messageId: entry.MessageId ?? '' };
 					} else {
-						const errorMsg = entry?.Error ?? 'Unknown bulk send error';
-						results[globalIdx] = { status: 'failed', error: errorMsg };
+						// SES entry `Error` text can name configuration sets and identities: log it,
+						// return only the SES status enum.
+						this.log.error('SES bulk entry failed', { index: globalIdx, status: entry?.Status, error: entry?.Error });
+						results[globalIdx] = { status: 'failed', error: `${EmailErrors.SendFailed}: Email send failed (${entry?.Status ?? 'no result'}).` };
 					}
 				}
-			} catch (err: any) {
+			} catch (err) {
 				// Entire chunk failed — mark all as failed
+				this.log.error('SES SendBulkEmail failed', { error: err });
+				const mapped = mapSesError(err);
 				for (const globalIdx of chunkIndices) {
-					const mapped = mapSesError(err);
 					results[globalIdx] = { status: 'failed', error: mapped.message };
 				}
 			}

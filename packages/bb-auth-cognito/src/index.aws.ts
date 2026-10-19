@@ -68,6 +68,7 @@ import {
 	ApiNamespace,
 	DEFAULT_API_ERROR_NAME,
 	Scope,
+	isWireSafeError,
 	registerSdkIdentifiers,
 	getSdkIdentifiers,
 	installClientUserAgent,
@@ -2373,7 +2374,13 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 							return { ...baseSignedOut(), error: `Unknown action: ${(input as any).action}` };
 					}
 				} catch (e: unknown) {
-					const message = e instanceof Error ? e.message : 'An error occurred';
+					// AuthState reaches unauthenticated clients, so only an ApiError's (SDK errors
+					// arrive mapped by toCognitoApiError) or a branded BB error's message is
+					// client-safe. Anything else can carry account ids and ARNs: log it and report
+					// the same generic message core's RPC serializer uses.
+					const clientSafe = isWireSafeError(e);
+					if (!clientSafe) console.error('[bb-auth-cognito] setAuthState failed', { action: input.action, error: e });
+					const message = clientSafe ? e.message : 'Internal error';
 					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
 					// Retriable errors keep the challenge session valid. Surface
 					// the flag to the client so its Authenticator renderer can

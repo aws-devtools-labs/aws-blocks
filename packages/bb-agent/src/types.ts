@@ -422,6 +422,11 @@ export interface AgentStreamChunk {
 	toolName?: string;
 	input?: JSONValue;
 	usage?: TokenUsage;
+	/**
+	 * Set on an `error` chunk. The message of a branded Building Block error, or `'Internal error'`
+	 * for any other failure (raw model/SDK/storage text never reaches the client; it is logged
+	 * server-side).
+	 */
 	error?: string;
 	interrupts?: Array<{ id: string; name: string; reason?: any }>;
 }
@@ -433,6 +438,10 @@ export interface MessageMetadata {
 	toolOutput?: JSONValue;
 	usage?: TokenUsage;
 	latencyMs?: number;
+	/**
+	 * Why a turn ended early: a cap's stop reason, or a failed turn's client-safe message (a branded
+	 * Building Block error's message, or `'Internal error'`).
+	 */
 	error?: string;
 }
 
