@@ -73,7 +73,14 @@ export interface TelemetryStatus {
  */
 export function getTelemetryStatus(projectRoot?: string): TelemetryStatus {
   const envValue = process.env[ENV_VAR];
-  const globalConfig = readConfigFile(getGlobalConfigPath());
+  // homedir() throws when neither HOME nor a passwd entry exists (some CI containers).
+  // Treat that as no global config, so an env or project opt-out still works.
+  let globalConfig: BlocksConfig | null = null;
+  try {
+    globalConfig = readConfigFile(getGlobalConfigPath());
+  } catch {
+    // no resolvable home directory
+  }
   const projectConfig = readConfigFile(getProjectConfigPath(projectRoot));
 
   const globalEnabled = globalConfig?.telemetry?.enabled;

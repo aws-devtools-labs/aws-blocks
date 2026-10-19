@@ -88,6 +88,10 @@ function handleEnable(global: boolean): void {
     console.log('✅ Telemetry enabled for this project.');
     console.log(`   Config: ${configPath}`);
   }
+
+  if (!getTelemetryStatus().enabled) {
+    console.log('⚠️  Telemetry is still disabled by another setting. Run `npx blocks-telemetry --status` to see which.');
+  }
 }
 
 function handleDisable(global: boolean): void {

@@ -107,6 +107,18 @@ describe('telemetry CLI', () => {
       const config = JSON.parse(readFileSync(configPath, 'utf-8'));
       assert.strictEqual(config.telemetry.enabled, true);
     });
+
+    it('warns when a global opt-out still disables telemetry', () => {
+      const env = { HOME: tmpHome, ...NO_CI_ENV };
+      runCli(['--disable', '--global'], { cwd: tmpProject, env });
+
+      const projectEnable = runCli(['--enable'], { cwd: tmpProject, env });
+      assert.strictEqual(projectEnable.exitCode, 0);
+      assert.ok(projectEnable.stdout.includes('still disabled by another setting'));
+
+      const globalEnable = runCli(['--enable', '--global'], { cwd: tmpProject, env });
+      assert.ok(!globalEnable.stdout.includes('still disabled'));
+    });
   });
 
   describe('--disable (project-level default)', () => {

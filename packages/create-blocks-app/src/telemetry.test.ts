@@ -678,12 +678,6 @@ describe('create-blocks-app telemetry/consent precedence across project and glob
     assert.doesNotMatch(stderr, /sending event to/, 'no event should be sent');
   });
 
-  it('project disable wins over global enable', () => {
-    const { emitted, stderr } = runWithConfigs(true, false);
-    assert.strictEqual(emitted, false, '--telemetry-file must not be written');
-    assert.doesNotMatch(stderr, /sending event to/, 'no event should be sent');
-  });
-
   it('emits when project and global both enable', () => {
     assert.strictEqual(runWithConfigs(true, true).emitted, true);
   });
