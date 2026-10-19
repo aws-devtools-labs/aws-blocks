@@ -807,12 +807,17 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       const port = getNextPort();
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-        telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: '1' }, timeoutMs: 12_000,
+        telemetryFile,
+        env: {
+          PORT: String(port),
+          AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
+        },
+        timeoutMs: 12_000,
       });
 
-      // --telemetry-file still writes even when HTTP is disabled (D-010 contract)
-      assert.ok(await waitForFile(telemetryFile, 2_000), '--telemetry-file should write even when telemetry is disabled');
-      // but HTTP send should NOT happen
+      assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
+      assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
       assertNotDelivered(result.stderr);
     });
 
@@ -822,12 +827,17 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       const port = getNextPort();
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-        telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: 'true' }, timeoutMs: 12_000,
+        telemetryFile,
+        env: {
+          PORT: String(port),
+          AWS_BLOCKS_DISABLE_TELEMETRY: 'true',
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
+        },
+        timeoutMs: 12_000,
       });
 
-      // --telemetry-file still writes even when HTTP is disabled (D-010 contract)
-      assert.ok(await waitForFile(telemetryFile, 2_000), '--telemetry-file should write even when telemetry is disabled');
-      // but HTTP send should NOT happen
+      assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
+      assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
       assertNotDelivered(result.stderr);
     });
 
@@ -845,13 +855,20 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         const port = getNextPort();
 
         const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-          telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
+          telemetryFile,
+          env: {
+            PORT: String(port),
+            BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
+          },
+          timeoutMs: 12_000,
         });
 
+        assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
+        assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
         assertNotDelivered(result.stderr);
       } finally {
         // Restore original state
-        if (originalContent) writeFileSync(globalCfg, originalContent);
+        if (originalContent !== null) writeFileSync(globalCfg, originalContent);
         else rmSync(globalCfg, { force: true });
       }
     });
@@ -870,13 +887,20 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         const port = getNextPort();
 
         const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-          telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
+          telemetryFile,
+          env: {
+            PORT: String(port),
+            BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
+          },
+          timeoutMs: 12_000,
         });
 
+        assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
+        assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
         assertNotDelivered(result.stderr);
       } finally {
         // Restore original config
-        if (originalContent) {
+        if (originalContent !== null) {
           writeFileSync(projectConfig, originalContent);
         } else {
           rmSync(projectConfig, { force: true });
@@ -1085,6 +1109,46 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.environment.os, platform(), 'os should match process platform');
     });
+
+    test('environment.ci is true when a CI vendor variable is set', async () => {
+      tmpHome = createTmpDir('env-ci-true');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      // CI is cleared because ci-info bypasses every vendor check when it inherits CI=false.
+      const result = await spawnDevServer({
+        port, telemetryFile,
+        env: { CI: undefined, GITHUB_ACTIONS: 'true', BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable' },
+      });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000));
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.environment.ci, true, 'ci should be true under GITHUB_ACTIONS');
+    });
+
+    test('environment.ci is false when CI=false disables both detection paths', async () => {
+      tmpHome = createTmpDir('env-ci-false');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      // CI=false at startup disables both paths: ci-info skips its vendor loop, the guard blocks the
+      // extra vars; the endpoint is redirected so these forged variables never reach the collector.
+      const result = await spawnDevServer({
+        port, telemetryFile,
+        env: {
+          CI: 'false',
+          GITHUB_ACTIONS: 'true',
+          CODEBUILD_BUILD_ID: 'b',
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
+        },
+      });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000));
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.environment.ci, false, 'ci should be false when CI=false');
+    });
   });
 
   // ── 9. --telemetry-file sink ───────────────────────────────────────────────
@@ -1111,18 +1175,24 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       assert.ok(body.event, 'file should contain a valid event');
     });
 
-    test('--telemetry-file writes even when HTTP telemetry is disabled', async () => {
+    test('--telemetry-file does not write when telemetry is disabled', async () => {
       tmpHome = createTmpDir('file-disabled-http');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-        telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: '1' }, timeoutMs: 12_000,
+        telemetryFile,
+        env: {
+          PORT: String(port),
+          AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
+        },
+        timeoutMs: 12_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 3_000), '--telemetry-file should write even when HTTP disabled');
-      const body = readTelemetryFile(telemetryFile);
-      assert.ok(body.event, 'file should contain a valid event even when HTTP disabled');
+      assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
+      assert.ok(!(await waitForFile(telemetryFile, 3_000)), '--telemetry-file must not write when telemetry is disabled');
+      assertNotDelivered(result.stderr);
     });
 
     test('projectId persists across runs from same project', async () => {
@@ -1211,7 +1281,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         const config = JSON.parse(readFileSync(configPath, 'utf-8'));
         assert.strictEqual(config.telemetry.enabled, false);
       } finally {
-        if (originalContent) writeFileSync(configPath, originalContent);
+        if (originalContent !== null) writeFileSync(configPath, originalContent);
         else rmSync(configPath, { force: true });
       }
     });
@@ -1229,7 +1299,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         const config = JSON.parse(readFileSync(configPath, 'utf-8'));
         assert.strictEqual(config.telemetry.enabled, true);
       } finally {
-        if (originalContent) writeFileSync(configPath, originalContent);
+        if (originalContent !== null) writeFileSync(configPath, originalContent);
         else rmSync(configPath, { force: true });
       }
     });
@@ -1257,7 +1327,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         const config = JSON.parse(readFileSync(globalCfg, 'utf-8'));
         assert.strictEqual(config.telemetry.enabled, false);
       } finally {
-        if (originalContent) writeFileSync(globalCfg, originalContent);
+        if (originalContent !== null) writeFileSync(globalCfg, originalContent);
         else rmSync(globalCfg, { force: true });
       }
     });
@@ -1276,7 +1346,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         const config = JSON.parse(readFileSync(globalCfg, 'utf-8'));
         assert.strictEqual(config.telemetry.enabled, true);
       } finally {
-        if (originalContent) writeFileSync(globalCfg, originalContent);
+        if (originalContent !== null) writeFileSync(globalCfg, originalContent);
         else rmSync(globalCfg, { force: true });
       }
     });

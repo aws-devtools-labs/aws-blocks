@@ -17,6 +17,7 @@ import {
 	NATIVE_CATALOG_SCHEMA_VERSION,
 	NATIVE_PACKAGES_EXTENSION,
 	NATIVE_PLATFORMS,
+	type NativeDeclarationInput,
 	type NativeDeclarationSource,
 	type NativePlatform,
 } from './native-catalogs.js';
@@ -26,6 +27,8 @@ export interface ValidatableMethod {
 	name?: unknown;
 	result?: { schema?: unknown } | null;
 }
+
+const UNNAMED_SOURCE = '<unknown block>';
 
 const TRANSFERABLE_FIELD = 'x-blocks-transferable';
 const TYPE_ARGS_FIELD = 'x-blocks-type-args';
@@ -47,16 +50,53 @@ function isNonBlankString(v: unknown): v is string {
 	return typeof v === 'string' && v.trim().length > 0;
 }
 
+/**
+ * The checked declarations live on the success arm alone, so a caller reaches
+ * them only by handling the errors first and never asserts the narrowing.
+ */
+export type NativeValidation =
+	| { ok: true; sources: readonly NativeDeclarationSource[] }
+	| { ok: false; errors: SpecValidationError[] };
+
+/**
+ * Platform package fields a generator interpolates into generated source, so a
+ * value outside the grammar is a compile failure in the customer's app rather
+ * than a problem the generator can report against the block that declared it.
+ * A platform absent from this map constrains its fields to non-blank only.
+ */
+const PLATFORM_FIELD_GRAMMARS: Partial<
+	Record<NativePlatform, Readonly<Record<string, { pattern: RegExp; shape: string }>>>
+> = {
+	dart: {
+		name: { pattern: /^[a-z_][a-z0-9_]*$/, shape: 'a pub package name' },
+		library: {
+			pattern: /^(?!lib\/)[a-z_][a-z0-9_.]*(\/[a-z_][a-z0-9_.]*)*\.dart$/,
+			shape: 'a .dart file path inside lib/, without the leading "lib/"',
+		},
+	},
+};
+
+/** An export must name a public type once a generator upper-camel-cases it. */
+const EXPORT_GRAMMAR = /^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$/;
+
+/**
+ * Every generated Dart client imports this library, so a declared package of
+ * the same name would emit a second directive for it.
+ */
+const DART_RESERVED_PACKAGE_NAMES: readonly string[] = ['blocks_runtime'];
+
 export function validateNativeCatalogs(
-	sources: readonly NativeDeclarationSource[],
+	sources: readonly NativeDeclarationInput[],
 	methods: readonly ValidatableMethod[] = [],
-): SpecValidationError[] {
+): NativeValidation {
 	const errors: SpecValidationError[] = [];
+	const progress: ValidationProgress = { source: '<unknown block>' };
 	try {
 		const safeSources = Array.isArray(sources) ? sources : [];
 		const safeMethods = Array.isArray(methods) ? methods : [];
-		const registered = collectPackages(safeSources, errors);
-		collectBindings(safeSources, registered, safeMethods, errors);
+		const registered = collectPackages(safeSources, errors, progress);
+		progress.source = UNNAMED_SOURCE;
+		collectBindings(safeSources, registered, safeMethods, errors, progress);
 	} catch (cause) {
 		// A declaration can carry a throwing accessor or nest deeply enough to
 		// exhaust the stack, so `cause` is read as little as possible: `String(cause)`
@@ -72,14 +112,21 @@ export function validateNativeCatalogs(
 		}
 		errors.push({
 			path: NATIVE_PACKAGES_EXTENSION,
-			message: `Native declarations could not be read (${label})`,
+			message: `Native declarations could not be read (${label}) while reading ${progress.source}`,
 		});
 	}
-	return errors;
+	if (errors.length > 0) return { ok: false, errors };
+	return { ok: true, sources: (Array.isArray(sources) ? sources : []) as readonly NativeDeclarationSource[] };
+}
+
+/** The position the pass had reached, so an aborted pass can say where. */
+interface ValidationProgress {
+	source: string;
 }
 
 interface RegisteredPackage {
 	canonical: string;
+	sourceOrdinal: number;
 	sourcePackage: string;
 }
 
@@ -89,18 +136,24 @@ interface RegisteredPackage {
  * it correctly.
  */
 function collectPackages(
-	sources: readonly NativeDeclarationSource[],
+	sources: readonly NativeDeclarationInput[],
 	errors: SpecValidationError[],
+	progress: ValidationProgress,
 ): Map<string, RegisteredPackage> {
 	const registered = new Map<string, RegisteredPackage>();
-	let index = 0;
 
-	for (const source of sources) {
+	for (let sourceOrdinal = 0; sourceOrdinal < sources.length; sourceOrdinal += 1) {
+		// Set before the element is touched, so reading it is what the catch-all names.
+		const positional = `declaration source ${sourceOrdinal + 1}`;
+		progress.source = positional;
+		const source = sources[sourceOrdinal];
+		let index = 0;
+		progress.source = describeSourceForProgress(source, positional);
 		const declaredBy = `declared by ${describeSource(source)}`;
 		if (!isPlainObject(source)) {
 			errors.push({
 				path: NATIVE_PACKAGES_EXTENSION,
-				message: `Declaration source must be an object (${declaredBy})`,
+				message: `Declaration source must be an object (${positional})`,
 			});
 			continue;
 		}
@@ -152,14 +205,17 @@ function collectPackages(
 					errors.push({
 						path,
 						message:
-							`Package identity "${identity}" is registered with different contents by ` +
-							`${existing.sourcePackage} and ${describeSource(source)}. ` +
-							'A duplicate identity must be byte-identical.',
+							existing.sourceOrdinal === sourceOrdinal
+								? `Package identity "${identity}" is registered twice with different contents ` +
+									`within this block (${declaredBy}). A duplicate identity must be byte-identical.`
+								: `Package identity "${identity}" is registered with different contents by ` +
+									`${existing.sourcePackage} and ${progress.source}. ` +
+									'A duplicate identity must be byte-identical.',
 					});
 				}
 				continue;
 			}
-			registered.set(identity, { canonical, sourcePackage: describeSource(source) });
+			registered.set(identity, { canonical, sourceOrdinal, sourcePackage: progress.source });
 		}
 	}
 
@@ -167,8 +223,18 @@ function collectPackages(
 }
 
 function describeSource(source: unknown): string {
-	const name = isPlainObject(source) ? source.sourcePackage : undefined;
-	return isNonBlankString(name) ? name.trim() : '<unknown block>';
+	try {
+		const name = isPlainObject(source) ? source.sourcePackage : undefined;
+		return isNonBlankString(name) ? name.trim() : UNNAMED_SOURCE;
+	} catch {
+		return UNNAMED_SOURCE;
+	}
+}
+
+/** Keeps the caller's positional label, which locates better than a name the source lacks. */
+function describeSourceForProgress(source: unknown, positional: string): string {
+	const described = describeSource(source);
+	return described === UNNAMED_SOURCE ? positional : described;
 }
 
 function asDeclarationArray(
@@ -177,7 +243,7 @@ function asDeclarationArray(
 	declaredBy: string,
 	errors: SpecValidationError[],
 ): readonly unknown[] {
-	if (value === undefined || value === null) return [];
+	if (value === undefined) return [];
 	if (!Array.isArray(value)) {
 		errors.push({ path, message: `Expected an array (${declaredBy})` });
 		return [];
@@ -238,11 +304,30 @@ function validatePlatformEntry(
 	}
 
 	const fields = PLATFORM_PACKAGE_FIELDS[platform];
+	const grammars = PLATFORM_FIELD_GRAMMARS[platform];
 	for (const field of fields) {
-		if (!isNonBlankString(entry.package[field])) {
+		const value = entry.package[field];
+		if (!isNonBlankString(value)) {
 			errors.push({
 				path: `${pkgPath}.${field}`,
 				message: `${platform} "package" requires "${field}" as a non-blank string (${declaredBy})`,
+			});
+			continue;
+		}
+		const grammar = grammars?.[field];
+		if (grammar && !grammar.pattern.test(value)) {
+			errors.push({
+				path: `${pkgPath}.${field}`,
+				message: `${platform} "package" requires "${field}" to be ${grammar.shape}, got "${value}" (${declaredBy})`,
+			});
+			continue;
+		}
+		if (platform === 'dart' && field === 'name' && DART_RESERVED_PACKAGE_NAMES.includes(value)) {
+			errors.push({
+				path: `${pkgPath}.${field}`,
+				message:
+					`${platform} "package" requires "${field}" to name a package other than ` +
+					`"${value}", which every generated client already imports (${declaredBy})`,
 			});
 		}
 	}
@@ -257,17 +342,23 @@ function validatePlatformEntry(
 }
 
 function collectBindings(
-	sources: readonly NativeDeclarationSource[],
+	sources: readonly NativeDeclarationInput[],
 	registered: Map<string, RegisteredPackage>,
 	methods: readonly ValidatableMethod[],
 	errors: SpecValidationError[],
+	progress: ValidationProgress,
 ): void {
 	const seenTags = new Map<string, { id: string; sourcePackage: string }>();
-	const seenIds = new Map<string, string>();
-	let index = 0;
+	const seenIds = new Map<string, { position: number; sourceOrdinal: number; sourcePackage: string }>();
 
-	for (const source of sources) {
+	for (let sourceOrdinal = 0; sourceOrdinal < sources.length; sourceOrdinal += 1) {
+		// Set before the element is touched, so reading it is what the catch-all names.
+		const positional = `declaration source ${sourceOrdinal + 1}`;
+		progress.source = positional;
+		const source = sources[sourceOrdinal];
+		let index = 0;
 		const sourceName = describeSource(source);
+		progress.source = describeSourceForProgress(source, positional);
 		const declaredBy = `declared by ${sourceName}`;
 		// Silent, unlike every other guard here: `collectPackages` already reported it.
 		if (!isPlainObject(source)) continue;
@@ -292,17 +383,20 @@ function collectBindings(
 				errors.push({ path: `${path}.id`, message: `Binding "id" must be a non-blank string (${declaredBy})` });
 				continue;
 			}
-			const priorId = seenIds.get(id);
-			if (priorId) {
+			const prior = seenIds.get(id);
+			if (prior) {
 				errors.push({
 					path: `${path}.id`,
 					message:
-						`Binding id "${id}" is already declared by ${priorId}. ` +
-						'A binding id must be unique across all blocks.',
+						prior.sourceOrdinal === sourceOrdinal
+							? `Binding id "${id}" is already declared by binding ${prior.position + 1} of this block (${declaredBy}). ` +
+								'A binding id must be unique across all blocks.'
+							: `Binding id "${id}" is already declared by ${prior.sourcePackage}. ` +
+								'A binding id must be unique across all blocks.',
 				});
 				continue;
 			}
-			seenIds.set(id, sourceName);
+			seenIds.set(id, { position, sourceOrdinal, sourcePackage: sourceName });
 
 			if (!isNonBlankString(declaration.kind)) {
 				errors.push({
@@ -342,6 +436,14 @@ function validateBindingShape(
 				message: `Binding "${field}" must be a non-blank string (${declaredBy})`,
 			});
 		}
+	}
+	if (isNonBlankString(binding.export) && !EXPORT_GRAMMAR.test(binding.export)) {
+		errors.push({
+			path: `${path}.export`,
+			message:
+				`Binding "export" must be a delimited run of alphanumeric segments starting with a letter, ` +
+				`got "${binding.export}" (${declaredBy})`,
+		});
 	}
 	return validateArity(binding.genericArity, path, declaredBy, errors);
 }
@@ -455,7 +557,6 @@ function validateArity(
  * An unbound tag on a method result is deliberately not an error here; the
  * native generators degrade it to `UnknownTransferable`.
  */
-/** Tag-driven and kind-agnostic: a result is matched on `tag` alone. */
 function validateArityAgainstMethods(
 	tag: string,
 	arity: number,

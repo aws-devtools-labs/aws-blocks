@@ -12,8 +12,10 @@ import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack, Token } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
+import { claimApiFrontDoor, scheduleApiFrontDoor } from './cdk/api-front-door.js';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
-import { type BlocksStackApi, Hosting } from './hosting.js';
+import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
+import { type BlocksStackApi, buildConfigJson, Hosting } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
 
 // ================================================================
@@ -515,6 +517,70 @@ describe('Hosting', () => {
     });
   });
 
+  // ── cloudfront front door + Hosting coexistence (P2) ─────────────────
+  //
+  // When the app sets apiFrontDoor: 'cloudfront' AND fronts its frontend with Hosting in
+  // the same stack, the API belongs on Hosting's distribution — the standalone
+  // managed cloudfront distribution must stand down so there is exactly one.
+  describe('cloudfront front door + Hosting claim', () => {
+    it('leaves exactly one distribution (Hosting’s) when Hosting fronts the API under cloudfront', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'CloudFrontHostingClaimStack');
+
+      // Simulate what BlocksStack.create() does under cloudfront: schedule the managed
+      // front door over the shared gateway, then build Hosting in the same stack.
+      // In production `props.api` IS the owner the aspect is scheduled on (the
+      // BlocksStack), so its `claimApiFrontDoor` records the claim on that same
+      // object; the aspect reads it back and stands down. Mirror that here by
+      // backing the api's claim with the scheduled owner (`stack`).
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        claimApiFrontDoor: (url) => claimApiFrontDoor(stack, url),
+      };
+      scheduleApiFrontDoor(stack, true, api.apiUrl);
+      new Hosting(stack, 'Hosting', { root: tmpDir, api });
+
+      const template = Template.fromStack(stack);
+      // The managed front door stood down — only Hosting's single distribution remains.
+      template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    });
+
+    it('the claim is recorded on the backend instance, not in its stack’s state', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const backendStack = new Stack(app, 'BackendStack');
+      const frontendStack = new Stack(app, 'FrontendStack');
+
+      // The managed cloudfront front door is scheduled on the backend stack; a Hosting
+      // built in a SEPARATE stack claims the role on the backend object (a live
+      // reference), so the aspect — scheduled on that same object — reads the claim
+      // and stands the managed distribution down. This pins the claim mechanism only:
+      // a real BlocksStack with Hosting in another stack doesn't synthesize today
+      // (Hosting registers its domain back into the backend's config, a
+      // cross-stack cycle).
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        claimApiFrontDoor: (url) => claimApiFrontDoor(backendStack, url),
+      };
+      scheduleApiFrontDoor(backendStack, true, api.apiUrl);
+      new Hosting(frontendStack, 'Hosting', { root: tmpDir, api });
+
+      // Managed cloudfront distribution stood down in the backend stack (the claim reached it through the backend object)...
+      Template.fromStack(backendStack).resourceCountIs('AWS::CloudFront::Distribution', 0);
+      // ...and only Hosting's distribution exists, in the frontend stack — carrying
+      // the API behaviors, so the API is actually served from it.
+      const frontend = Template.fromStack(frontendStack);
+      frontend.resourceCountIs('AWS::CloudFront::Distribution', 1);
+      const distConfig = Object.values(frontend.findResources('AWS::CloudFront::Distribution'))[0].Properties
+        .DistributionConfig;
+      const patterns = (distConfig.CacheBehaviors ?? []).map((b: { PathPattern: string }) => b.PathPattern);
+      assert.ok(patterns.includes(BLOCKS_RPC_PREFIX), 'Hosting distribution carries the RPC behavior');
+    });
+  });
+
   // ── API integration tests ────────────────────────────────────
 
   describe('API integration', () => {
@@ -669,6 +735,75 @@ describe('Hosting', () => {
       const template = Template.fromStack(stack);
       const customResources = template.findResources('Custom::CDKBucketDeployment');
       assert.ok(Object.keys(customResources).length >= 1, 'Should have BucketDeployment even without api');
+    });
+
+    it('emits a HostingBuildId output so a post-deploy liveness poll can match the served build', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'HostingBuildIdOutputStack');
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const template = Template.fromStack(stack);
+      // CDK suffixes a nested construct's CfnOutput logical id with a hash
+      // (e.g. `HostingHostingBuildId8EDD8441`), and deploy.ts matches it by the
+      // same `Hosting`+`BuildId` substring it uses on outputs.json — so match
+      // by substring here too rather than an exact logical id.
+      const outputs = template.toJSON().Outputs ?? {};
+      const buildIdKeys = Object.keys(outputs).filter(
+        (k) => k.includes('Hosting') && k.includes('BuildId'),
+      );
+      assert.equal(buildIdKeys.length, 1, 'exactly one HostingBuildId output should be emitted');
+      // The value is the generated build id — a non-empty literal string.
+      const value: unknown = outputs[buildIdKeys[0]].Value;
+      if (typeof value !== 'string' || value.length === 0) {
+        assert.fail('HostingBuildId output value should be a non-empty build id');
+      }
+
+      // Guard the PRODUCER half of the --wait-live contract: the config this
+      // deploy serves must stamp the SAME build id under BLOCKS_BUILD_ID_CONFIG_KEY
+      // that the HostingBuildId output advertises. Renaming/dropping either side
+      // silently breaks every --wait-live deploy (the poll never matches), so
+      // assert the stamp directly against the output value via the pure seam.
+      const stamp = buildConfigJson({ root: tmpDir, api: MOCK_API }, value)[BLOCKS_BUILD_ID_CONFIG_KEY];
+      assert.equal(stamp, value, 'config stamp must equal the HostingBuildId output value');
+    });
+
+    it('emits no HostingInvalidationId output for a pure-static deploy (no invalidation issued)', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'StaticNoInvalidationOutputStack');
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const outputs = Template.fromStack(stack).toJSON().Outputs ?? {};
+      const invKeys = Object.keys(outputs).filter((k) => k.includes('InvalidationId'));
+      assert.equal(invKeys.length, 0, 'a pure-static deploy issues no invalidation, so no output');
+    });
+
+    it('emits a HostingInvalidationId output for a compute deploy so the liveness poll can wait on it', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'ComputeInvalidationOutputStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+      });
+
+      const outputs = Template.fromStack(stack).toJSON().Outputs ?? {};
+      const invKeys = Object.keys(outputs).filter(
+        (k) => k.includes('Hosting') && k.includes('InvalidationId'),
+      );
+      assert.equal(invKeys.length, 1, 'exactly one HostingInvalidationId output should be emitted');
+      // The value carries `<distributionId>/<invalidationId>` as CDK tokens, so
+      // it resolves to a Fn::Join rather than a plain string — assert it is
+      // present and non-trivial rather than a literal.
+      assert.ok(outputs[invKeys[0]].Value !== undefined, 'HostingInvalidationId output should have a value');
     });
 
     it('does not inject BLOCKS_API_URL into SSR Lambda when api is omitted', () => {

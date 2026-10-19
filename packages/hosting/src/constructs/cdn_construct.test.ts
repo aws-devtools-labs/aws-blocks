@@ -1155,6 +1155,38 @@ void describe('CdnConstruct', () => {
       });
     });
 
+    void it('RestApi does not provision a retained CloudWatch role / ApiGateway::Account', () => {
+      // CDK's RestApi defaults `cloudWatchRole: true` with
+      // `cloudWatchRoleRemovalPolicy: RETAIN`, so every destroyed SSR stack
+      // orphaned one IAM role — exhausting the account's role quota in CI.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn } = createSsrFunction(stack);
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: ssrManifest,
+        securityHeadersPolicy: policy,
+        computeFunctions: new Map([['default', fn]]),
+      });
+
+      const template = Template.fromStack(stack);
+      template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+      template.resourceCountIs('AWS::ApiGateway::Account', 0);
+      const resources = template.toJSON()['Resources'] as Record<string, Record<string, unknown>>;
+      const apigwRoles = Object.values(resources).filter(
+        (r) =>
+          r['Type'] === 'AWS::IAM::Role' &&
+          JSON.stringify(r['Properties']).includes('apigateway.amazonaws.com'),
+      );
+      assert.strictEqual(apigwRoles.length, 0);
+      const retainedRoles = Object.values(resources).filter(
+        (r) => r['Type'] === 'AWS::IAM::Role' && r['DeletionPolicy'] === 'Retain',
+      );
+      assert.strictEqual(retainedRoles.length, 0);
+    });
+
     void it('CloudFront origin custom headers include Referer', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');

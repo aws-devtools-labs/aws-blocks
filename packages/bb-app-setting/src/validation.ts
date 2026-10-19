@@ -5,15 +5,15 @@ import { brandBlocksError } from '@aws-blocks/core';
 import { AppSettingErrors } from './errors.js';
 import type { InternalAppSettingOptions } from './types.js';
 
-// Unlike the `blocksError` in index.mock.ts / index.aws.ts (which prefix the
-// message with `${name}: `), this one leaves the message unprefixed on purpose:
-// these checks moved out of the CDK constructor, which threw a plain message, so
-// keeping it unprefixed preserves the exact pre-refactor CDK synth error text.
+// The index.aws.ts / index.mock.ts error paths use core's prefixing
+// `blocksError` (message becomes `${name}: ${message}`). This helper stays
+// local and deliberately leaves the message UNPREFIXED: these checks moved out
+// of the CDK constructor, which threw a plain message, so keeping it unprefixed
+// preserves the exact pre-refactor CDK synth error text.
 //
-// NOTE: do not "DRY" these three helpers into one that prefixes — re-prefixing
-// this one would change the CDK synth text that existing behavior pins.
-// @see index.mock.ts `blocksError` (prefixes `${name}: `)
-// @see index.aws.ts `blocksError` (prefixes `${name}: `)
+// NOTE: do not re-prefix this one or route it through core's `blocksError` —
+// adding the `${name}: ` prefix would change the CDK synth text that existing
+// behavior pins.
 function blocksError(name: string, message: string): Error {
 	const err = new Error(message);
 	err.name = name;

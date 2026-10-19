@@ -45,14 +45,24 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
+      # Build before loading credentials because Gradle plugins, build scripts, and
+      # code generators execute during compilation.
+      - name: Build and test (pre-publish gate)
+        run: ./gradlew build
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@9632e9a60248a7e85f8d6c7f51208c2a1859e905 # v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
+      # Fetched immediately before publish. Every value is masked before it is
+      # written anywhere (the signing key line by line too, since a mask only
+      # matches a single line), and the properties file is owner-only and removed
+      # again in the always-run cleanup step below.
       - name: Fetch credentials and write Gradle properties
         run: |
+          set -euo pipefail
           MAVEN_SECRET=$(aws secretsmanager get-secret-value \
             --secret-id awsmobilesdk/android/sonatype_central_portal \
             --query SecretString --output text)
@@ -60,22 +70,36 @@ jobs:
             --secret-id awsmobilesdk/android/signing \
             --query SecretString --output text)
 
+          mask() {
+            # GitHub masks match only one line. Never echo the whole value: a
+            # multi-line value would print every line after the first.
+            while IFS= read -r line; do
+              if [ -n "$line" ]; then printf '::add-mask::%s\n' "$line"; fi
+            done <<< "$1"
+            return 0
+          }
+          MAVEN_USER=$(printf '%s' "$MAVEN_SECRET" | jq -r .username); mask "$MAVEN_USER"
+          MAVEN_PASS=$(printf '%s' "$MAVEN_SECRET" | jq -r .password); mask "$MAVEN_PASS"
+          KEY_ID=$(printf '%s' "$SIGNING_SECRET" | jq -r .keyId); mask "$KEY_ID"
+          KEY_PASS=$(printf '%s' "$SIGNING_SECRET" | jq -r .password); mask "$KEY_PASS"
+          KEY=$(printf '%s' "$SIGNING_SECRET" | jq -r .inMemoryKey); mask "$KEY"
+          unset MAVEN_SECRET SIGNING_SECRET
+
           PROPS="$HOME/.gradle/gradle.properties"
           mkdir -p "$(dirname "$PROPS")"
+          umask 077
 
           # jq -r unescapes the JSON \\n to literal \n text on a single line.
           # Java Properties.load() interprets \n as a real newline, so the
           # signing plugin receives a properly formatted multiline PGP key.
           {
-            printf 'mavenCentralUsername=%s\n' "$(printf '%s' "$MAVEN_SECRET" | jq -r .username)"
-            printf 'mavenCentralPassword=%s\n' "$(printf '%s' "$MAVEN_SECRET" | jq -r .password)"
-            printf 'signingInMemoryKeyId=%s\n' "$(printf '%s' "$SIGNING_SECRET" | jq -r .keyId)"
-            printf 'signingInMemoryKeyPassword=%s\n' "$(printf '%s' "$SIGNING_SECRET" | jq -r .password)"
-            printf 'signingInMemoryKey=%s\n' "$(printf '%s' "$SIGNING_SECRET" | jq -r .inMemoryKey)"
+            printf 'mavenCentralUsername=%s\n' "$MAVEN_USER"
+            printf 'mavenCentralPassword=%s\n' "$MAVEN_PASS"
+            printf 'signingInMemoryKeyId=%s\n' "$KEY_ID"
+            printf 'signingInMemoryKeyPassword=%s\n' "$KEY_PASS"
+            printf 'signingInMemoryKey=%s\n' "$KEY"
           } >> "$PROPS"
-
-      - name: Build and test (pre-publish gate)
-        run: ./gradlew build
+          chmod 600 "$PROPS"
 
       - name: Publish to Maven Central
         if: inputs.dry_run != true
@@ -84,6 +108,10 @@ jobs:
       - name: Publish dry-run
         if: inputs.dry_run == true
         run: ./gradlew publishToMavenLocal
+
+      - name: Remove publishing credentials
+        if: always()
+        run: rm -f "$HOME/.gradle/gradle.properties"
 
       - name: Tag and create GitHub Release
         # Only on a real publish (not dry-run). Runs after a successful publish,

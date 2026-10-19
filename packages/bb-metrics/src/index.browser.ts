@@ -4,6 +4,7 @@
 // Browser stub — Metrics is server-side only.
 // Provides a no-op implementation that silently drops all metric emissions.
 
+import { externalMetricsRef } from './from-existing.js';
 import type { EmitOptions, MetricDatum, ExternalMetricsRef, MetricsEmitter } from './types.js';
 
 export { MetricsErrors } from './errors.js';
@@ -24,6 +25,6 @@ export class Metrics implements MetricsEmitter {
 	flush(): void {}
 	child(_dimensions: Record<string, string>): MetricsEmitter { return new Metrics(); }
 	static fromExisting(namespace: string): ExternalMetricsRef {
-		return { __brand: 'ExternalMetricsRef' as const, namespace };
+		return externalMetricsRef(namespace);
 	}
 }

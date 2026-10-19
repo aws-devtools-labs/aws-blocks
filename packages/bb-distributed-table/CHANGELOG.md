@@ -1,5 +1,50 @@
 # @aws-blocks/bb-distributed-table
 
+## 0.2.2
+
+### Patch Changes
+
+- 92fa27b: Internal: route named-error minting through `@aws-blocks/core`'s `blocksError`. No behavior change.
+- 4fe7be4: fix(bb-distributed-table): auto-created CMK follows the table's removal policy on teardown
+  
+  When `encryption: 'customer-managed'` provisions a dedicated KMS key, that key
+  defaulted to `RemovalPolicy.RETAIN` and survived a `DESTROY` table teardown as
+  an orphaned, billed, rotating key — contradicting `sandbox:destroy`. The key now
+  has the same removal policy as the table it encrypts: destroyed with a
+  `disposable` table, retained otherwise, so it is never less durable than the
+  table. An imported key (`DistributedTable.fromKmsKey`) is owned by the caller and
+  left untouched. A `disposable` table with PITR on also makes that table's backups
+  unrestorable once destroyed — see DESIGN.md D-DT-11.
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [9ebda66]
+- Updated dependencies [78f4396]
+- Updated dependencies [440ecce]
+- Updated dependencies [1a5c18e]
+- Updated dependencies [4ae500e]
+- Updated dependencies [6d764f7]
+- Updated dependencies [5d6656a]
+- Updated dependencies [60616b1]
+- Updated dependencies [a50fb46]
+- Updated dependencies [8a1a4a9]
+- Updated dependencies [38ce80c]
+- Updated dependencies [94a914a]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [005c095]
+- Updated dependencies [b8649dc]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [66f4be2]
+- Updated dependencies [32a4b73]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [e9241b5]
+- Updated dependencies [f1eb149]
+- Updated dependencies [122c49c]
+- Updated dependencies [7c19c4f]
+  - @aws-blocks/core@0.7.0
+  - @aws-blocks/bb-logger@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes

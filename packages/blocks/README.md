@@ -116,7 +116,8 @@ Start from what you need:
   - Structured records with indexes and queries → `DistributedTable` (bb-distributed-table) — **default for most data**
   - Relational / SQL (joins, transactions) → see [Choosing a data block](#choosing-a-data-block) below
   - Files, blobs, uploads, static assets → `FileBucket` (bb-file-bucket)
-  - A single config value or secret → `AppSetting` (bb-app-setting)
+  - A single config value → `AppSetting` (bb-app-setting)
+  - A high-value credential (API key, OAuth secret, connection string) → `Secret` (bb-secret), backed by AWS Secrets Manager
 - **Authenticate users**
   - Username/password, prototypes/MVPs → `AuthBasic` (bb-auth-basic)
   - Cognito user pools, MFA, groups → `AuthCognito` (bb-auth-cognito)
@@ -142,7 +143,7 @@ Default to `DistributedTable` for your data models unless your domain specifical
 
 Reach for one of the SQL blocks when you need to filter or join results across more than one related record, filter models on many dimensions with no preset hierarchy, store large objects, require transactions, or otherwise need the flexibility or familiarity of SQL that NoSQL does not offer.
 
-If you need SQL, prefer `DistributedDatabase` for basic Postgres-compatible querying. Use `Database` specifically when you need a full (more expensive) Postgres implementation where the engine itself provides and enforces foreign keys, row level security, triggers, views, large transactions (more than 3,000 rows), or integration with an existing Postgres database. Note it carries an idle cost at minimum 0.5 ACU, or a cold start when scaling from zero, unlike the other two blocks.
+If you need SQL, prefer `DistributedDatabase` for Aurora DSQL, which is PostgreSQL wire-protocol compatible; see the [Aurora DSQL SQL compatibility documentation](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html) for supported SQL features. Use `Database` specifically when you need a full (more expensive) Postgres implementation with row level security, triggers, procedures, or PL/pgSQL functions; large transactions (more than 3,000 rows); or integration with an existing Postgres database. Note it carries an idle cost at minimum 0.5 ACU, or a cold start when scaling from zero, unlike the other two blocks.
 
 ## Building Block documentation
 
@@ -176,6 +177,7 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | bb-logger | Structured logging with consistent JSON format, log levels, and contextual metadata. | — |
 | bb-metrics | Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Format). | — |
 | bb-realtime | Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB. | — |
+| bb-secret | A single application secret backed by AWS Secrets Manager. | — |
 | bb-tracer | Distributed tracing backed by AWS X-Ray. | — |
 | core | Core primitives for building full-stack applications with the AWS Blocks. | — |
 | hosting | Low-level CDK L3 constructs for deploying web applications on AWS | — |
@@ -191,7 +193,7 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | Data | persists to `.bb-data/` (delete to reset) | lives in AWS |
 | Use for | rapid iteration, tests | pre-production validation against real services |
 
-> **Deploying needs AWS credentials.** `npm run dev` is fully local (no creds). `npm run sandbox` and `npm run deploy` provision real AWS resources, so configure credentials first — e.g. `aws configure sso` + `aws sso login`, or `aws configure` (verify with `aws sts get-caller-identity`). Use **least-privilege** credentials scoped to the services your blocks deploy — not broad `Administrator` access.
+> **Deploying needs AWS credentials.** `npm run dev` is fully local (no creds). `npm run sandbox` and `npm run deploy` provision real AWS resources, so configure credentials first — e.g. `aws login` (AWS CLI 2.32.0 or later), `aws configure sso` + `aws sso login`, or `aws configure` (verify with `aws sts get-caller-identity`). If the credentials are missing or expired, both commands stop before synthesizing and print the sign-in or refresh command for the profile they use. Use **least-privilege** credentials scoped to the services your blocks deploy — not broad `Administrator` access.
 
 `npm run deploy` does a full production deploy; `npm run sandbox:destroy` tears the sandbox down. The same backend code runs in all three — blocks switch implementations automatically.
 
@@ -237,11 +239,11 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 ## Security Considerations
 
 - Use `await auth.requireAuth(context)` in every method that shouldn't be public — ApiNamespace methods are **unauthenticated by default**
-- Use `new AppSetting(scope, id, { secret: true })` for API keys and credentials — never hardcode or use `.env` files
+- Use `new Secret(scope, id)` for API keys and credentials — `Secret` is the recommended home for production secrets. `new AppSetting(scope, id, { secret: true })` is a free, encrypted fallback only for a low-value secret. Don't hardcode secret values in source, and don't ship real secrets to a deployed app through plaintext environment variables — set them through `Secret`/`AppSetting`
 - Always attach a schema to KVStore/AppSetting that accepts user data — the RPC layer validates structure but not business logic
 - Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
 - Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
-- Configure `CORS_ALLOWED_ORIGINS` explicitly for production — avoid wildcards
+- Configure `defaults.allowedOrigins` explicitly for production — avoid wildcards
 - For cross-domain deployments, pass `crossDomain: true` to auth constructors (enables `SameSite=None; Secure; Partitioned`)
 - Enable `monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only)
 - Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default
