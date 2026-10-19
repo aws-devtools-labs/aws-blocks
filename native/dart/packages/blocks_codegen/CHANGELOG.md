@@ -11,6 +11,9 @@
   flag, which exclude a logical package identity from binding resolution.
 - Warn with `AWSBLOCKS-NATIVE-003` for a declared native package that no binding
   references, since nothing imports it.
+- Warn with `AWSBLOCKS-NATIVE-006` when an opt-out names a package the spec does
+  not declare. A misspelled identity used to opt nothing out in silence,
+  indistinguishable from a working opt-out.
 - Reject a string `pattern` constraint that is not a regular expression. It used
   to reach the generated client unchecked, compile cleanly, and then throw on the
   customer's first call.
