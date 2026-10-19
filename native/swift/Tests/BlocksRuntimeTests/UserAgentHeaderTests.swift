@@ -30,7 +30,7 @@ final class UserAgentHeaderTests: XCTestCase {
 
     func testRPCSessionSendsCustomUserAgentHeader() {
         let client = BlocksClient(url: "http://localhost")
-        let headers = client.session.configuration.httpAdditionalHeaders
+        let headers = client.gate.configuration.httpAdditionalHeaders
         XCTAssertEqual(headers?["x-blocks-user-agent"] as? String, blocksUserAgentToken)
     }
 

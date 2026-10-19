@@ -56,18 +56,15 @@ public struct SwiftCodeGenerator {
         // the same `operationQualifiedNames` authority that drives emission.
         var warnings: [String] = []
 
-        // Default server name for init parameter default
-        let defaultServerName = model.servers.first.map { "Servers.\(camelCase($0.name))" } ?? "Servers.local"
+        // The spec's first server, the default for `Blocks()` and the deprecated `init(server:)`
+        let defaultServerName = model.servers.first.map { "Servers.\(serverPropertyName($0.name))" } ?? "Servers.local"
+        let entryPoint = entryPointNames(for: model.apiNamespaces)
+        warnings += entryPoint.warnings
+        warnings += specWarnings(for: model)
 
         // Generate one class per namespace
-        for namespace in model.apiNamespaces {
-            let nsName = pascalCase(namespace.name)
-            apiLines.append("public class \(nsName) {")
-            apiLines.append("    private let client: BlocksClient")
-            apiLines.append("")
-            apiLines.append("    public init(server: BlocksServer = \(defaultServerName)) {")
-            apiLines.append("        self.client = BlocksClient(server: server)")
-            apiLines.append("    }")
+        for (namespace, names) in zip(model.apiNamespaces, entryPoint.names) {
+            emitNamespaceHeader(names, defaultServer: defaultServerName, lines: &apiLines)
 
             for operation in namespace.operations {
                 apiLines.append("")
@@ -78,7 +75,7 @@ public struct SwiftCodeGenerator {
                     let fullOp = namespace.name == "_default" ? operation.name : "\(namespace.name).\(operation.name)"
                     warnings.append(formatUnboundTransferable(
                         operation: fullOp, blocksType: blocksType, typeArgs: typeArgs,
-                        namespace: namespace.name, qualifiedNames: opQualified
+                        className: names.className, qualifiedNames: opQualified
                     ))
                 }
                 emitOperation(
@@ -99,16 +96,8 @@ public struct SwiftCodeGenerator {
             apiLines.append("")
         }
 
-        // Generate Servers enum
-        apiLines.append("")
-        apiLines.append("// MARK: - Servers")
-        apiLines.append("")
-        apiLines.append("public enum Servers {")
-        for server in model.servers {
-            let propertyName = camelCase(server.name)
-            apiLines.append("    public static let \(propertyName) = BlocksServer(name: \"\(server.name)\", url: \"\(server.url)\")")
-        }
-        apiLines.append("}")
+        emitBlocksEntryPoint(entryPoint.names, defaultServer: defaultServerName, lines: &apiLines)
+        emitServers(model.servers, lines: &apiLines)
 
         // Only include models file content if there are actual type definitions
         let hasTypes = !model.typeDefinitions.isEmpty
@@ -424,30 +413,29 @@ public struct SwiftCodeGenerator {
                 lines.append("\(indent)            try payload.encode(to: encoder)")
             } else {
                 lines.append("\(indent)        case .\(caseName):")
-                lines.append("\(indent)            var c = encoder.container(keyedBy: EmptyKey.self)")
-                lines.append("\(indent)            _ = c")
+                lines.append("\(indent)            _ = encoder.container(keyedBy: EmptyKey.self)")
             }
         }
         lines.append("\(indent)        }")
         lines.append("\(indent)    }")
         lines.append("")
-        lines.append("\(indent)    public init(from decoder: Decoder) throws {")
-        lines.append("\(indent)        var lastError: Error?")
-        for variant in variants {
-            let caseName = camelCase(variant.name)
-            let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
-            if let payload = variant.payloadTypeName ?? (hasSynthBody ? variant.name : nil) {
-                lines.append("\(indent)        do {")
-                lines.append("\(indent)            self = .\(caseName)(try \(payload)(from: decoder))")
-                lines.append("\(indent)            return")
-                lines.append("\(indent)        } catch { lastError = error }")
-            }
-        }
         let nestedFieldless = variants.first(where: {
             $0.fields.isEmpty && $0.payloadTypeName == nil
                 && $0.additionalPropertiesType == nil
                 && $0.embeddedUnion == nil
         })
+        lines.append("\(indent)    public init(from decoder: Decoder) throws {")
+        // With a fieldless fallback no error is rethrown, so none is kept.
+        if nestedFieldless == nil {
+            lines.append("\(indent)        var lastError: Error?")
+        }
+        for variant in variants {
+            let caseName = camelCase(variant.name)
+            let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
+            if let payload = variant.payloadTypeName ?? (hasSynthBody ? variant.name : nil) {
+                appendVariantAttempt(caseName, payload: payload, keepsError: nestedFieldless == nil, indent: indent + "        ", lines: &lines)
+            }
+        }
         if let nestedFieldless {
             lines.append("\(indent)        self = .\(camelCase(nestedFieldless.name))")
         } else {
@@ -489,7 +477,7 @@ public struct SwiftCodeGenerator {
         case .enum(_, let values):
             emitted.insert(name)
             lines.append("")
-            lines.append("public enum \(name): String, Codable {")
+            lines.append("public nonisolated enum \(name): String, Codable {")
             for val in values {
                 let caseName = camelCase(val)
                 if caseName != val {
@@ -535,7 +523,7 @@ public struct SwiftCodeGenerator {
             }
             var body: [String] = []
             body.append("")
-            body.append("public enum \(name): Codable {")
+            body.append("public nonisolated enum \(name): Codable {")
             for variant in variants {
                 let caseName = camelCase(variant.name)
                 let hasSynthBody = !variant.fields.isEmpty
@@ -577,7 +565,7 @@ public struct SwiftCodeGenerator {
         let fields = fields.filter { !isVoidType($0.type) }
         var body: [String] = []
         body.append("")
-        body.append("public struct \(name): Codable {")
+        body.append("public nonisolated struct \(name): Codable {")
         for field in fields {
             let swType = swiftTypeNameNoEmit(field.type)
             let alreadyOptional = swType.hasSuffix("?")
@@ -1075,32 +1063,31 @@ public struct SwiftCodeGenerator {
                 lines.append("            try payload.encode(to: encoder)")
             } else {
                 lines.append("        case .\(caseName):")
-                lines.append("            var c = encoder.container(keyedBy: EmptyKey.self)")
-                lines.append("            _ = c")
+                lines.append("            _ = encoder.container(keyedBy: EmptyKey.self)")
             }
         }
         lines.append("        }")
         lines.append("    }")
         lines.append("")
+        let fieldlessFirst = variants.first(where: {
+            $0.fields.isEmpty && $0.payloadTypeName == nil
+                && $0.additionalPropertiesType == nil
+                && $0.embeddedUnion == nil
+        })
         lines.append("    public init(from decoder: Decoder) throws {")
-        lines.append("        var lastError: Error?")
+        // With a fieldless fallback no error is rethrown, so none is kept.
+        if fieldlessFirst == nil {
+            lines.append("        var lastError: Error?")
+        }
         for variant in variants {
             let caseName = camelCase(variant.name)
             let hasSynthBody = !variant.fields.isEmpty
                 || variant.additionalPropertiesType != nil
                 || variant.embeddedUnion != nil
             if let payload = variant.payloadTypeName ?? (hasSynthBody ? variant.name : nil) {
-                lines.append("        do {")
-                lines.append("            self = .\(caseName)(try \(payload)(from: decoder))")
-                lines.append("            return")
-                lines.append("        } catch { lastError = error }")
+                appendVariantAttempt(caseName, payload: payload, keepsError: fieldlessFirst == nil, indent: "        ", lines: &lines)
             }
         }
-        let fieldlessFirst = variants.first(where: {
-            $0.fields.isEmpty && $0.payloadTypeName == nil
-                && $0.additionalPropertiesType == nil
-                && $0.embeddedUnion == nil
-        })
         if let fieldlessFirst {
             lines.append("        self = .\(camelCase(fieldlessFirst.name))")
         } else {
@@ -1118,7 +1105,7 @@ public struct SwiftCodeGenerator {
 
     // MARK: - Operation Emission
 
-    private func qualifiedSwiftTypeName(_ type: ResolvedType, qualifiedNames: [String: String]) -> String {
+    private func qualifiedSwiftTypeName(_ type: ResolvedType, qualifiedNames: [String: String], direct: Bool = false) -> String {
         switch type {
         case .record(let name, _, _, _), .enum(let name, _), .union(let name, _, _):
             return qualifiedNames[name] ?? name
@@ -1127,11 +1114,11 @@ public struct SwiftCodeGenerator {
         case .map(let valueType):
             return "[String: \(qualifiedSwiftTypeName(valueType, qualifiedNames: qualifiedNames))]"
         case .nullable(let inner):
-            return "\(qualifiedSwiftTypeName(inner, qualifiedNames: qualifiedNames))?"
+            return "\(qualifiedSwiftTypeName(inner, qualifiedNames: qualifiedNames, direct: direct))?"
         case .typeReference(let name):
             return qualifiedNames[name] ?? name
         case .transferable(let blocksType, let typeArgs):
-            return transferableTypeName(blocksType, typeArgs) { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) }
+            return transferableTypeName(blocksType, typeArgs, direct: direct) { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) }
         default:
             return swiftTypeNameNoEmit(type)
         }
@@ -1146,7 +1133,7 @@ public struct SwiftCodeGenerator {
         let unboundTag = unboundTransferableTag(operation.result.type)
         let returnType = unboundTag != nil
             ? "BlocksRuntime.UnknownTransferable"
-            : qualifiedSwiftTypeName(operation.result.type, qualifiedNames: qualifiedNames)
+            : qualifiedSwiftTypeName(operation.result.type, qualifiedNames: qualifiedNames, direct: true)
 
         // Build parameter list
         var paramList: [String] = []
@@ -1213,17 +1200,14 @@ public struct SwiftCodeGenerator {
                 lines.append(transferable.optional
                     ? "        guard let result else { return nil }"
                     : "        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
-                let descriptorNoun: String
+                let descriptorNoun: String?
                 let returnLines: [String]
                 switch blocksType {
                 case "realtime/channel":
                     let messageType = typeArgs.first.map { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) } ?? "JSONValue"
-                    descriptorNoun = "channel"
-                    returnLines = [
-                        "        return RealtimeChannel<\(messageType)>.fromJSON(descriptor, baseHost: BlocksClient.baseHost) { data in",
-                        "            try JSONDecoder().decode(\(messageType).self, from: data)",
-                        "        }"
-                    ]
+                    // Decoded in BlocksRuntime: a message decoder formed here inherits MainActor default isolation and traps off it.
+                    descriptorNoun = nil
+                    returnLines = ["        return try JSONDecoder().decode(RealtimeChannel<\(messageType)>.self, from: result)"]
                 case "file-bucket/download":
                     descriptorNoun = "file"
                     returnLines = ["        return try FileDownloadHandle.fromJSON(descriptor)"]
@@ -1238,9 +1222,11 @@ public struct SwiftCodeGenerator {
                     descriptorNoun = "transferable"
                     returnLines = ["        return try BlocksRuntime.UnknownTransferable.fromJSON(descriptor, expectedTag: \(swiftStringLiteral(blocksType)))"]
                 }
-                lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
-                lines.append("            throw RPCError(message: \"Invalid \(descriptorNoun) descriptor for \(fullMethodName)\")")
-                lines.append("        }")
+                if let descriptorNoun {
+                    lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
+                    lines.append("            throw RPCError(message: \"Invalid \(descriptorNoun) descriptor for \(fullMethodName)\")")
+                    lines.append("        }")
+                }
                 lines.append(contentsOf: returnLines)
             }
         } else if returnType == "Void" {
@@ -1287,34 +1273,36 @@ public struct SwiftCodeGenerator {
         return blocksType
     }
 
-    private func transferableTypeName(_ blocksType: String, _ typeArgs: [ResolvedType], renderArg: (ResolvedType) -> String) -> String {
+    private func transferableTypeName(_ blocksType: String, _ typeArgs: [ResolvedType], direct: Bool = false, renderArg: (ResolvedType) -> String) -> String {
         guard let binding = knownTransferableBindings[blocksType] else { return "JSONValue" }
+        // Only a direct result hydrates an OIDCClient; below the top level it decodes as its descriptor.
+        if blocksType == "oidc/client", !direct { return "JSONValue" }
         guard binding.isGeneric else { return binding.base }
         let argType = typeArgs.first.map(renderArg) ?? "JSONValue"
         return "\(binding.base)<\(argType)>"
     }
 
     /// From the emission `qualifiedNames`, so it matches the emitted nesting; a `$ref` stays bare.
-    private func diagnosticModelName(_ type: ResolvedType, namespace: String, qualifiedNames: [String: String]) -> String {
+    private func diagnosticModelName(_ type: ResolvedType, className: String, qualifiedNames: [String: String]) -> String {
         switch type {
         case .record(let name, _, _, _), .enum(let name, _), .union(let name, _, _):
-            return "\(pascalCase(namespace)).\(qualifiedNames[name] ?? name)"
+            return "\(className).\(qualifiedNames[name] ?? name)"
         case .typeReference(let name):
             return name
         case .list(let elementType, _):
-            return diagnosticModelName(elementType, namespace: namespace, qualifiedNames: qualifiedNames)
+            return diagnosticModelName(elementType, className: className, qualifiedNames: qualifiedNames)
         case .map(let valueType):
-            return diagnosticModelName(valueType, namespace: namespace, qualifiedNames: qualifiedNames)
+            return diagnosticModelName(valueType, className: className, qualifiedNames: qualifiedNames)
         case .nullable(let inner):
-            return diagnosticModelName(inner, namespace: namespace, qualifiedNames: qualifiedNames)
+            return diagnosticModelName(inner, className: className, qualifiedNames: qualifiedNames)
         default:
             return ""
         }
     }
 
     /// Names the operation, tag, platform, and generated type-argument models, never descriptor values.
-    private func formatUnboundTransferable(operation: String, blocksType: String, typeArgs: [ResolvedType], namespace: String, qualifiedNames: [String: String]) -> String {
-        let models = typeArgs.map { diagnosticModelName($0, namespace: namespace, qualifiedNames: qualifiedNames) }.filter { !$0.isEmpty }
+    private func formatUnboundTransferable(operation: String, blocksType: String, typeArgs: [ResolvedType], className: String, qualifiedNames: [String: String]) -> String {
+        let models = typeArgs.map { diagnosticModelName($0, className: className, qualifiedNames: qualifiedNames) }.filter { !$0.isEmpty }
         let typeArgClause = switch models.count {
         case 0: "no generated type-argument models"
         case 1: "type argument \(models[0])"
@@ -1329,7 +1317,7 @@ public struct SwiftCodeGenerator {
     }
 
     /// Escapes an untrusted tag so it cannot break the emitted Swift literal.
-    private func swiftStringLiteral(_ value: String) -> String {
+    func swiftStringLiteral(_ value: String) -> String {
         let escaped = value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
@@ -1460,6 +1448,23 @@ public struct SwiftCodeGenerator {
             return name
         case .transferable(let blocksType, let typeArgs):
             return transferableTypeName(blocksType, typeArgs) { swiftTypeName($0, emitted: &emitted, modelLines: &modelLines) }
+        }
+    }
+}
+
+extension SwiftCodeGenerator {
+    /// One variant attempt in a union's `init(from:)`; with a fieldless fallback no error is kept to rethrow.
+    func appendVariantAttempt(_ caseName: String, payload: String, keepsError: Bool, indent: String, lines: inout [String]) {
+        if keepsError {
+            lines.append("\(indent)do {")
+            lines.append("\(indent)    self = .\(caseName)(try \(payload)(from: decoder))")
+            lines.append("\(indent)    return")
+            lines.append("\(indent)} catch { lastError = error }")
+        } else {
+            lines.append("\(indent)if let value = try? \(payload)(from: decoder) {")
+            lines.append("\(indent)    self = .\(caseName)(value)")
+            lines.append("\(indent)    return")
+            lines.append("\(indent)}")
         }
     }
 }

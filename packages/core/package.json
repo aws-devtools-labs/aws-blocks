@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/core",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "keywords": [
     "aws-blocks",
     "framework",
@@ -88,6 +88,7 @@
     "@aws-blocks/hosting": "*",
     "@aws-blocks/pipeline": "*",
     "@aws-sdk/client-cloudformation": "^3.936.0",
+    "@aws-sdk/client-cloudfront": "^3.936.0",
     "@aws-sdk/client-s3": "^3.936.0",
     "@aws-sdk/client-ssm": "^3.936.0",
     "@aws-sdk/client-sts": "^3.936.0",

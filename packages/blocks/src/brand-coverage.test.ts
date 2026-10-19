@@ -23,18 +23,20 @@
  *     original `BatchSubmitFailedError` / `InvalidRelayError` misses slipped a
  *     file-level check).
  *
- *  2. FILE granularity: a file that assigns a BB `*Exception` / `*Errors.*` name to
- *     an error object's `.name` must contain at least one wire-safe marker
- *     (`brandBlocksError` / `blocksError(` / `new ApiError`). This is coarse (it
- *     cannot prove every `.name =` site is individually branded), but it catches a
- *     file that mints BB error names with NO wire-safe path at all.
+ *  2. SITE granularity: every place that assigns a BB `*Exception` / `*Errors.*`
+ *     name to an error object's `.name` must carry a wire-safe marker
+ *     (`brandBlocksError` / `blocksError(` / `new ApiError` / `reTagged`) within a
+ *     small window of that assignment — i.e. the SAME throw/reject site must brand
+ *     the error it just named. This catches a NEW unbranded `throw`/`reject` added
+ *     to a file that already contains OTHER branded producers (the per-file check
+ *     this replaced stayed green in that case, because the file still carried a
+ *     marker somewhere else). A local-helper `err.name = name` that forwards to a
+ *     branded minting path (e.g. core's `blocksError`) likewise satisfies the
+ *     window.
  *
- *     Tier 2 is PER-FILE, NOT per-site: adding a NEW unbranded `throw` to a file
- *     that already contains a branded producer stays green, because the file still
- *     carries a wire-safe marker. The same holds for a new local-helper
- *     `err.name = name` pattern. A per-site check (and the `blocksError` copy
- *     dedup that would shrink the surface it must police) is deferred to #658 — do
- *     not read this guard as proving every throw site is individually branded.
+ *     The companion dedup — routing the per-package `blocksError`-style mint copies
+ *     through core's one `blocksError` so there is a single wire-safe minting path
+ *     — shrinks the surface this must police.
  *
  * It is intentionally a TEXT scan, not a runtime import: it must catch a
  * never-instantiated class-field error, and must not need every BB's runtime deps
@@ -156,25 +158,53 @@ const NAME_ASSIGN = [
 ];
 const WIRE_SAFE_MARKERS = [/\bbrandBlocksError\b/, /\bblocksError\s*\(/, /\bnew\s+ApiError\b/, /\breTagged\b/];
 
-test('every file that mints a BB error name has a wire-safe path', () => {
+/**
+ * Lines of leeway around a `.name =` assignment within which a wire-safe marker
+ * must appear for that SITE to count as branded. Wide enough to span an
+ * intervening explanatory comment or a multi-line `new Error(...)` constructor
+ * between the assignment and the `brandBlocksError(err)` / `throw blocksError(...)`
+ * on the same object, tight enough that an unrelated branded producer elsewhere
+ * in the file does not vouch for an unbranded site.
+ */
+const SITE_WINDOW = 8;
+
+/**
+ * Per-site exceptions: a `<package>/<relative src path>:<lineText substring>` that
+ * is intentionally unbranded, each with a reason. Prefer branding the site over
+ * adding an entry — every entry is a documented exception, not a hiding place.
+ */
+const SITE_ALLOWLIST: Record<string, string> = {};
+
+test('every site that mints a BB error name brands it at that site', () => {
 	const offenders: string[] = [];
 	for (const { pkg, srcDir } of discoverBBSrcDirs()) {
 		for (const file of collectSources(srcDir)) {
-			const text = readFileSync(file, 'utf-8');
-			if (!NAME_ASSIGN.some(re => re.test(text))) continue;
-			if (WIRE_SAFE_MARKERS.some(re => re.test(text))) continue;
 			const key = rel(pkg, file);
 			if (key in FILE_ALLOWLIST) continue;
-			offenders.push(key);
+			const lines = readFileSync(file, 'utf-8').split('\n');
+			for (let i = 0; i < lines.length; i++) {
+				if (!NAME_ASSIGN.some(re => re.test(lines[i]))) continue;
+				const from = Math.max(0, i - SITE_WINDOW);
+				const to = Math.min(lines.length, i + SITE_WINDOW + 1);
+				const window = lines.slice(from, to).join('\n');
+				if (WIRE_SAFE_MARKERS.some(re => re.test(window))) continue;
+				const siteKey = Object.keys(SITE_ALLOWLIST).find(
+					k => k.startsWith(`${key}:`) && lines[i].includes(k.slice(k.indexOf(':', key.length) + 1)),
+				);
+				if (siteKey) continue;
+				offenders.push(`${key}:${i + 1}  ${lines[i].trim()}`);
+			}
 		}
 	}
 	assert.deepStrictEqual(
 		offenders.sort(),
 		[],
-		`These files assign a Building Block error name to an error's .name but have ` +
-		`no wire-safe path (brandBlocksError / blocksError / ApiError / reTagged), so ` +
-		`the name collapses to a nameless 500 over the RPC wire.\n  ${offenders.join('\n  ')}\n\n` +
-		`Route the throw through a branded helper, or add a FILE_ALLOWLIST entry with a reason.`,
+		`These SITES assign a Building Block error name to an error's .name but no ` +
+		`wire-safe marker (brandBlocksError / blocksError / ApiError / reTagged) ` +
+		`appears within ${SITE_WINDOW} lines, so the name collapses to a nameless 500 ` +
+		`over the RPC wire — even though the file may brand OTHER producers.\n  ${offenders.join('\n  ')}\n\n` +
+		`Route the throw through core's blocksError(name, message), brand the error ` +
+		`at the site, or add a SITE_ALLOWLIST entry with a reason.`,
 	);
 });
 

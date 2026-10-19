@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Add `validateTransferableDescriptor`, which checks a descriptor's `__blocks`
+  tag against the tag the spec declared and returns it.
 - Add `UnknownTransferable`, returned for a direct method result whose
   transferable tag has no known runtime binding, instead of untyped `dynamic`.
 

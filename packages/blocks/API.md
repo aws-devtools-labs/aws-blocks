@@ -151,6 +151,12 @@ import { relayOrigin } from '@aws-blocks/bb-auth-oidc';
 import { ResetPasswordResult } from '@aws-blocks/bb-auth-cognito';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
+import { Secret } from '@aws-blocks/bb-secret';
+import { SecretErrors } from '@aws-blocks/bb-secret';
+import { SecretOptions } from '@aws-blocks/bb-secret';
+import { SecretReadOptions } from '@aws-blocks/bb-secret';
+import { SecretVersion } from '@aws-blocks/bb-secret';
+import { SecretVersionInfo } from '@aws-blocks/bb-secret';
 import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
@@ -565,6 +571,18 @@ export { ResetPasswordResult }
 export { RetrieveOptions }
 
 export { RetrieveResult }
+
+export { Secret }
+
+export { SecretErrors }
+
+export { SecretOptions }
+
+export { SecretReadOptions }
+
+export { SecretVersion }
+
+export { SecretVersionInfo }
 
 export { Segment }
 

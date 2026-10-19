@@ -14,24 +14,24 @@ permissions:
 jobs:
   build-and-test:
     name: Build & Test
-    runs-on: macos-15
+    runs-on: macos-26
     defaults:
       run:
         working-directory: native/swift
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build
         run: swift build
 
       - name: Run unit tests
-        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests"
+        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests|BlocksGeneratedCodeTests|BlocksGeneratedMainActorTests"
 
       - name: Build for iOS
-        run: xcodebuild build -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 16'
+        run: xcodebuild build -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
       - name: Run unit tests on iOS
-        run: xcodebuild test -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
+        run: xcodebuild test -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
 
   create-release-prs:
     name: Create Release PRs
@@ -41,7 +41,7 @@ jobs:
       run:
         working-directory: native/swift
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ secrets.OPS_GITHUB_TOKEN }}
@@ -63,7 +63,7 @@ jobs:
         run: gh auth setup-git
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: npm
@@ -154,7 +154,7 @@ jobs:
             --body "$BODY"
 
       - name: Checkout aws-blocks-swift
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: aws-devtools-labs/aws-blocks-swift
           path: target-repo

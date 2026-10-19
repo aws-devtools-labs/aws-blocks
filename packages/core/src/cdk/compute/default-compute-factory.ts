@@ -7,19 +7,19 @@ import type { BlocksStack } from '../index.js';
 import type { BlocksBackend } from '../blocks-backend.js';
 
 /**
- * Lambda-shaped surface of the default compute that the legacy
- * `handler` / `gateway` / `apiUrl` accessors on BlocksStack/BlocksBackend read.
- * The default compute (`LambdaCompute` from `@aws-blocks/bb-lambda-compute`)
- * satisfies this structurally, so core exposes those accessors without
- * importing the concrete class. To be removed with those accessors once
- * consumers move to the multi-compute model.
+ * Lambda-shaped surface of the default compute that the `handlerLogGroup`
+ * accessor on BlocksStack/BlocksBackend reads. The default compute
+ * (`LambdaCompute` from `@aws-blocks/bb-lambda-compute`) satisfies this
+ * structurally, so core exposes that accessor without importing the concrete
+ * class.
+ *
+ * The HTTP ingress is no longer compute-owned: the single shared REST API
+ * gateway (built by `create()`) backs `gateway` / `apiUrl` and integrates the
+ * default compute's `apiHandler()` (defined on {@link Compute}).
  *
  * @internal
  */
 export interface LambdaShapedCompute extends Compute {
-	readonly fn: cdk.aws_lambda_nodejs.NodejsFunction;
-	readonly apiGateway: cdk.aws_apigateway.RestApi;
-	readonly apiUrl: string;
 	readonly logGroup: cdk.aws_logs.ILogGroup;
 }
 

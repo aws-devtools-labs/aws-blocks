@@ -157,9 +157,27 @@ curl http://localhost:3000/.blocks-sandbox/config.json
 # After a deploy: written by the deploy script and uploaded to the origin
 cat .blocks-sandbox/config.json
 # → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api", "environment": "production" }
+#   (under apiFrontDoor:'cloudfront' this is the CloudFront domain + /aws-blocks/api instead)
 ```
 
 So a real config problem looks like the client throwing `Blocks API URL not configured` (or `... is not configured (source: ...)`), not like a `404` on `/config.json`. If a **deployed** origin keeps serving `{"_placeholder":true}` after a successful deploy, that is a genuine bug: the config upload or the CloudFront invalidation did not land.
+
+### API front door
+
+How the backend's API is exposed to clients is chosen with the `apiFrontDoor` prop on `BlocksStack` / `BlocksBackend` (default `'apigateway'`):
+
+- **`'apigateway'`** (default) — clients call the stack's API Gateway endpoint directly, on its own `execute-api` domain. Nothing extra to deploy.
+- **`'cloudfront'`** — Blocks puts a CloudFront distribution in front of that gateway (and builds the gateway as a regional endpoint, so there is a single CloudFront layer); clients call the distribution's domain instead.
+
+Under either tier, the URL clients should call is `publicApiUrl` on the stack or backend — for a `BlocksStack` that is also the `ApiUrl` stack output. With `'cloudfront'` it is the distribution's URL + `/aws-blocks/api`; otherwise it equals `apiUrl`, the gateway's own URL.
+
+The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
+
+**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, Hosting's distribution takes the front-door role and no second distribution is created.
+
+Neither tier makes CloudFront the only way in: the gateway's own `execute-api` URL stays publicly reachable, so a WebACL on a CloudFront distribution doesn't cover direct calls to it.
+
+> ⚠️ **Switching tiers — or adding or removing `Hosting` under `'cloudfront'` — changes the API's endpoint domain.** Browser auth cookies and sessions are bound to the origin that set them, so the change invalidates every existing cookie/session — users are signed out and must sign in again. Pick a tier, and decide on Hosting, before you have real users, and treat a later change as a breaking migration.
 
 ### ApiError / isBlocksError / hasAuthError
 
@@ -394,7 +412,7 @@ Only server-side `Realtime.publish()` can publish. Clients can subscribe, but no
 
 ## CORS Configuration
 
-By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. CORS behavior is controlled entirely by the `CORS_ALLOWED_ORIGINS` environment variable.
+By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (regex patterns; every Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the distribution's own domain (registered automatically as `CORS_HOSTING_ORIGINS`).
 
 ### When using Hosting (recommended)
 
@@ -403,7 +421,7 @@ If you use the `Hosting` construct with your API, CORS is handled automatically:
 - **Same-origin requests** (frontend fetches through the CloudFront proxy at `/aws-blocks/api`) work without CORS headers since the browser treats them as same-origin.
 - **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct registers the CloudFront distribution's domain (or your custom domain) as `CORS_HOSTING_ORIGINS` in the backend's S3 config, where it is compiled separately as an escaped literal origin. Your `CORS_ALLOWED_ORIGINS` is left untouched. You do **not** need to configure CORS manually.
 
-In sandbox mode, the localhost pattern is also preserved so your local dev frontend still works.
+With the sandbox preset, the localhost pattern from `defaults.allowedOrigins` is also kept, so your local dev frontend still works.
 
 ### Local development (`npm run dev`)
 
@@ -411,18 +429,29 @@ The dev server automatically allows `localhost` / `127.0.0.1` origins. No config
 
 ### Sandbox deployments
 
-The sandbox CLI automatically sets `CORS_ALLOWED_ORIGINS=^https?://(localhost|127\.0\.0\.1)(:\d+)?$` so your local frontend can reach the deployed sandbox API.
+`BlocksPresets.sandbox` sets `allowedOrigins` to `['^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$']`, so your local frontend can reach the deployed sandbox API. To allow more origins in sandbox, append to the preset's list rather than replacing it:
+
+```typescript
+defaults: {
+  ...BlocksPresets.sandbox,
+  allowedOrigins: [...BlocksPresets.sandbox.allowedOrigins, 'https://preview\\.myapp\\.com'],
+},
+```
 
 ### Production (frontend hosted separately)
 
-If your frontend is hosted on a different domain (e.g., Vercel, Netlify), set the `CORS_ALLOWED_ORIGINS` environment variable on your Lambda:
+If your frontend is hosted on a different domain (e.g., Vercel, Netlify), list its origins in the stack's `defaults.allowedOrigins` — every Blocks compute gets them as `CORS_ALLOWED_ORIGINS`:
 
 ```typescript
 // aws-blocks/index.cdk.ts
-blocksStack.handler.addEnvironment(
-  'CORS_ALLOWED_ORIGINS',
-  'https://myapp\\.com,https://staging\\.myapp\\.com'
-);
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: {
+    ...BlocksPresets.production,
+    allowedOrigins: ['https://myapp\\.com', 'https://staging\\.myapp\\.com'],
+  },
+});
 ```
 
 Each entry is treated as a **regex pattern** (anchored with `^` and `$`). Examples:
