@@ -10,3 +10,5 @@ private val blocksUrl: String =
 private val server = BlocksServer(name = "e2e", url = blocksUrl)
 
 fun createApi(): Api = Api(server = server)
+
+fun e2eServer(): BlocksServer = server

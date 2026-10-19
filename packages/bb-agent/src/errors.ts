@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { blocksError as coreBlocksError, brandBlocksError } from '@aws-blocks/core';
+
 /**
  * Typed error constants for Agent BB. Use with `isBlocksError()` in catch blocks.
  *
@@ -25,12 +27,23 @@ export const AgentErrors = {
 	BrowserNotSupported: 'BrowserNotSupportedException',
 	StreamFailed: 'StreamFailedException',
 	InterruptRequired: 'InterruptRequiredException',
+	/** A client-side usage precondition was violated (e.g. subscribe() with no channel). */
+	InvalidUsage: 'InvalidUsageException',
 } as const;
 
-export function blocksAgentError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
+/** One of the `name` values in {@link AgentErrors}. */
+export type AgentErrorName = (typeof AgentErrors)[keyof typeof AgentErrors];
+
+/**
+ * Build a typed `Error` whose `name` is one of {@link AgentErrors}, so it crosses
+ * the RPC wire by `name` and is matchable with `isBlocksError()`.
+ *
+ * A thin typed wrapper over core's `blocksError` — it narrows `name` to an
+ * {@link AgentErrorName} so call sites are checked, while the error minting
+ * (prefixing, naming, wire-safe branding) stays in one place in core.
+ */
+export function blocksAgentError(name: AgentErrorName, message: string): Error {
+	return coreBlocksError(name, message);
 }
 
 export class InterruptError extends Error {
@@ -40,5 +53,6 @@ export class InterruptError extends Error {
 		super(`${AgentErrors.InterruptRequired}: ${message}`);
 		this.name = AgentErrors.InterruptRequired;
 		this.interrupts = interrupts;
+		brandBlocksError(this);
 	}
 }

@@ -3,8 +3,16 @@
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Scope } from '@aws-blocks/core';
 import { Metrics, MetricsErrors } from './index.mock.js';
+import { Metrics as AwsMetrics } from './index.aws.js';
 import type { MetricsEmitter } from './types.js';
+import { BB_NAME, BB_VERSION } from './version.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -628,5 +636,54 @@ describe('scope integration', () => {
 		assert.ok(typeof m.emitBatch === 'function');
 		assert.ok(typeof m.flush === 'function');
 		assert.ok(typeof m.child === 'function');
+	});
+});
+
+// ── Telemetry Registration ──────────────────────────────────────────────────
+
+/**
+ * `Scope.getRegisteredBlocks()` only names a block whose `bbName` is in
+ * OFFICIAL_BB_NAMES, and that set is generated from the umbrella's
+ * `aws-blocks.vendorize` map. These tests pin the three coupled artifacts to
+ * each other: the block's generated BB_NAME, its vendorize entry, and the
+ * generated name set. A block that omits `bbMeta` still constructs fine and
+ * every other test still passes, so that gap is only visible here.
+ *
+ * Imported through `./index.mock.js`, the package's default entry, which
+ * re-exports the AWS runtime class — so both conditions resolve to the class
+ * asserted here.
+ */
+describe('telemetry registration', () => {
+	beforeEach(() => {
+		Scope._resetRegistry();
+	});
+
+	test('BB_NAME is the name the vendorize map and OFFICIAL_BB_NAMES carry', () => {
+		assert.strictEqual(BB_NAME, 'Metrics');
+	});
+
+	test('BB_VERSION tracks the package version', () => {
+		const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
+		assert.strictEqual(BB_VERSION, pkg.version);
+	});
+
+	test('the default entry re-exports the AWS runtime class', () => {
+		assert.strictEqual(Metrics, AwsMetrics);
+	});
+
+	test('an instance carries bbName and bbVersion', () => {
+		const m = new Metrics(fakeScope, 'metrics');
+		assert.strictEqual(m.bbName, BB_NAME);
+		assert.strictEqual(m.bbVersion, BB_VERSION);
+	});
+
+	test('registers as an official block, so telemetry is allowed to name it', () => {
+		new Metrics(fakeScope, 'metrics');
+		const { blocks, customBlocksCount } = Scope.getRegisteredBlocks();
+		assert.deepStrictEqual(
+			blocks.filter(b => b.name === BB_NAME),
+			[{ name: BB_NAME, version: BB_VERSION }],
+		);
+		assert.strictEqual(customBlocksCount, 0, 'must not be filtered out as an unnamed custom block');
 	});
 });

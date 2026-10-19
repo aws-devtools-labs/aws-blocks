@@ -10,7 +10,15 @@
  * @see https://www.jsonrpc.org/specification
  */
 
-import { ApiError } from './errors.js';
+import { ApiError, DEFAULT_API_ERROR_NAME, isApiErrorLike, isWireSafeError } from './errors.js';
+
+/**
+ * The `.name` a plain `new Error(...)` carries. A throw whose name is still this
+ * default is treated as an unhandled internal error (generic 500, no name);
+ * a Building Block error thrown via `blocksError()` overrides it with a BB
+ * constant, which is what lets its name cross the wire (D-003).
+ */
+const DEFAULT_ERROR_NAME = 'Error';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -31,6 +39,28 @@ export type RpcParseResult =
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const VERSION = '2.0' as const;
+
+/**
+ * Maximum accepted request-body size, in bytes (10 MiB).
+ *
+ * Matches the payload limit API Gateway enforces in production (~10 MB for a
+ * REST API). In prod an oversized body is rejected by API Gateway at the edge —
+ * before the Lambda is invoked — so this guard's rejection path effectively
+ * runs on the dev/mock server, where there is no edge to stop it: an oversized
+ * body would otherwise buffer and wedge the local database (e.g. PGlite). By
+ * enforcing the *same* limit locally, the dev server rejects the same oversized
+ * body prod would 413 at the edge, instead of failing only in one environment.
+ * Enforced in `parseRpcRequest`, the single choke point both the Lambda handler
+ * and the dev server route through.
+ *
+ * Note: this value is the Lambda + API Gateway limit. It lives here (in the
+ * compute-agnostic parser) because Lambda is the only compute path today. When
+ * a non-API-Gateway compute (e.g. container/ALB) is introduced, this should
+ * become compute-aware — sourced from / overridden by the compute layer (via
+ * the Compute `setEnv` config hook) rather than a fixed constant in `core` —
+ * since an ALB has a different payload limit. Tracked with the multi-compute work.
+ */
+export const MAX_RPC_BODY_BYTES = 10 * 1024 * 1024;
 
 /** Reserved JSON-RPC error codes. */
 export const RpcErrorCode = {
@@ -89,6 +119,25 @@ export function decodeRpcResponse(body: unknown): unknown {
  * anything about the JSON-RPC spec.
  */
 export function parseRpcRequest(bodyText: string): RpcParseResult {
+  // Reject oversized bodies before parsing or dispatch. See MAX_RPC_BODY_BYTES
+  // for the limit and its rationale.
+  if (Buffer.byteLength(bodyText, 'utf8') > MAX_RPC_BODY_BYTES) {
+    // Emit the real HTTP status (413) as the error code, not a reserved -32xxx:
+    // `decodeRpcResponse` maps a positive code straight to `ApiError.status`
+    // (reserved codes collapse to 500), mirroring the 504 handler-timeout path,
+    // so a caller's `e.status === 413` works. `name` (which crosses the wire,
+    // not the code) lets callers match with `isBlocksError(e, 'PayloadTooLarge')`.
+    return {
+      ok: false,
+      response: errorResponse(
+        413,
+        `Request body exceeds the ${MAX_RPC_BODY_BYTES} byte (${MAX_RPC_BODY_BYTES / (1024 * 1024)} MiB) limit`,
+        null,
+        { name: 'PayloadTooLarge' },
+      ),
+    };
+  }
+
   let parsed: any;
   try {
     parsed = JSON.parse(bodyText || '{}');
@@ -118,15 +167,31 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     };
   }
 
+  const hasParams = Object.hasOwn(parsed, 'params');
+  if (hasParams && (parsed.params === null || typeof parsed.params !== 'object')) {
+    return {
+      ok: false,
+      response: errorResponse(
+        RpcErrorCode.InvalidParams,
+        'Invalid params: expected an array or object',
+        id,
+        { name: 'InvalidParams' },
+      ),
+    };
+  }
+
+  let args: unknown[] = [];
+  if (hasParams) {
+    args = Array.isArray(parsed.params) ? parsed.params : Object.values(parsed.params);
+  }
+
   return {
     ok: true,
     request: {
       apiNamespace: parsed.method.substring(0, dotIndex),
       method: parsed.method.substring(dotIndex + 1),
       // JSON-RPC 2.0 §4.2: params may be an array (positional) or object (named).
-      args: Array.isArray(parsed.params)
-        ? parsed.params
-        : Object.values(parsed.params ?? {}),
+      args,
       id,
     },
   };
@@ -140,17 +205,98 @@ export function successResponse(result: unknown, id: string | number | null): st
 /**
  * Encode an error as a JSON-RPC 2.0 response string.
  *
- * For `ApiError` instances the HTTP status becomes the error code (positive
- * integers never collide with the reserved -32xxx range). Generic errors
- * use code 500.
+ * Three cases, in order:
+ *
+ * 1. `ApiError` — a deliberate, wire-safe shape. Its HTTP status becomes the
+ *    error code (positive integers never collide with the reserved -32xxx
+ *    range), and its BB-level `name`/`retriable` flags cross the wire.
+ * 2. A wire-safe Building Block error — a plain `Error` thrown via
+ *    `blocksError()`, which stamps a non-enumerable brand identifying it as an
+ *    intentional BB error (e.g. `ValidationFailedException`). Per D-003 both the
+ *    `name` AND the `message` cross the wire: `isBlocksError()` keeps matching on
+ *    the client, and the BB-authored message (e.g. "Batch contains 150 payloads,
+ *    exceeds the 100 limit") reaches the caller instead of a generic string. This
+ *    rests on the invariant that a branded message never embeds raw driver text
+ *    (see `brandBlocksError`). The brand — not a non-generic `.name` — is the
+ *    signal, so a raw driver/SDK exception whose class name happens to be
+ *    non-generic (`PostgresError`) is NOT treated as wire-safe.
+ * 3. Anything else — a driver/SDK exception, a bare `Error`, or a non-`Error`
+ *    throw — collapses to a nameless generic 500 so raw exception class names
+ *    and messages never leak.
+ *
+ * Callers log the full error server-side in every case.
+ *
+ * The same decision (see {@link sanitizeCaughtError}) also shapes the RawRoute
+ * uncaught-exception response ({@link rawRouteErrorFromCatch}). A raw route
+ * still owns whatever it writes through `ctx.response` — only an exception that
+ * escapes the handler is sanitized.
  */
 export function errorResponseFromCatch(error: unknown, id: string | number | null): string {
-  const code = error instanceof ApiError ? error.status : 500;
-  const message = error instanceof Error ? error.message : String(error);
+  const safe = sanitizeCaughtError(error);
   const data: Record<string, unknown> = {};
-  if (error instanceof Error && error.name && error.name !== 'Error') data.name = error.name;
-  if (error instanceof ApiError && error.retriable) data.retriable = true;
-  return errorResponse(code, message, id, Object.keys(data).length > 0 ? data : undefined);
+  if (safe.name) data.name = safe.name;
+  if (safe.retriable) data.retriable = true;
+  return errorResponse(safe.status, safe.message, id, Object.keys(data).length > 0 ? data : undefined);
+}
+
+/** The wire-safe view of a caught error: what may be shown to the client. */
+export interface SanitizedError {
+  status: number;
+  message: string;
+  /** Present only for a wire-safe error with a non-default name. */
+  name?: string;
+  retriable?: boolean;
+}
+
+/**
+ * Reduce a caught error to the fields that may cross the wire, applying the
+ * three cases documented on {@link errorResponseFromCatch}. Shared by the
+ * JSON-RPC serializer and the RawRoute uncaught-exception path so both make the
+ * same leak decision.
+ */
+export function sanitizeCaughtError(error: unknown): SanitizedError {
+  // Branch 1 matches an ApiError by SHAPE (`isApiErrorLike`), not a bare
+  // `instanceof ApiError`, so an ApiError built by a separately bundled copy of
+  // core (a duplicated `@aws-blocks/core` under a dependency) is still recognized
+  // and its HTTP status / name / retriable survive — a plain `instanceof` would
+  // miss it and collapse a deliberate 409 into a nameless 500 (branch 3).
+  if (isApiErrorLike(error)) {
+    const safe: SanitizedError = { status: error.status, message: error.message };
+    if (error.name && error.name !== DEFAULT_API_ERROR_NAME) safe.name = error.name;
+    if (error.retriable) safe.retriable = true;
+    return safe;
+  }
+  // A named Building Block error thrown via blocksError() carries the wire-safe
+  // brand: forward BOTH its BB `name` AND its `message` over the wire (D-003: the
+  // wire carries `name` alongside `message`). A branded error's message is
+  // BB-authored on purpose — e.g. "Batch contains 150 payloads, exceeds the 100
+  // limit" — and dropping it to a generic string is a DX regression, so it is
+  // preserved. The invariant this relies on: a branded error's message must never
+  // embed raw driver/SDK text (see brandBlocksError). The brand — not a
+  // non-generic `.name` — is the signal, so raw driver/SDK exceptions
+  // (PostgresError, …) are NOT branded and still collapse to a nameless 500 with a
+  // generic message, so their class name and raw text never leak.
+  // (Every ApiError is wire-safe too, but branch 1 already returned for those, so
+  // this arm only ever sees the branded plain-Error case.)
+  if (isWireSafeError(error) && error.name && error.name !== DEFAULT_ERROR_NAME) {
+    return { status: 500, message: error.message, name: error.name };
+  }
+  return { status: 500, message: 'Internal error' };
+}
+
+/**
+ * Build the HTTP response for an exception that escaped a RawRoute handler.
+ *
+ * The body keeps the RawRoute error shape (`{ error, name? }`), but its content
+ * goes through {@link sanitizeCaughtError}: an `ApiError` or a branded Building
+ * Block error keeps its status/name/message, while a raw driver/SDK exception
+ * collapses to a nameless generic 500. Callers log the full error server-side.
+ */
+export function rawRouteErrorFromCatch(error: unknown): { status: number; body: string } {
+  const safe = sanitizeCaughtError(error);
+  const body: { error: string; name?: string } = { error: safe.message };
+  if (safe.name) body.name = safe.name;
+  return { status: safe.status, body: JSON.stringify(body) };
 }
 
 /** Encode a "method not found" error. */

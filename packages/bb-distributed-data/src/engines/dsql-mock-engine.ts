@@ -8,8 +8,9 @@
 import { PGlite } from '@electric-sql/pglite';
 import { existsSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
-import { DistributedDatabaseErrors, PG_SERIALIZATION_FAILURE, translateDsqlError } from '../errors.js';
+import { initializePgliteWithRetry, type DatabaseEngine, type TransactionHandle } from '@aws-blocks/data-common';
+import { DistributedDatabaseErrors, DSQL_PERMISSION_ERROR_NAME, DDL_NOT_ALLOWED_MESSAGE, PG_SERIALIZATION_FAILURE, translateDsqlError } from '../errors.js';
+import { brandBlocksError } from '@aws-blocks/core';
 import { validateStatement, classifyStatement, TransactionTracker } from '../validation.js';
 
 function cleanStaleLock(dataDir: string): void {
@@ -23,7 +24,7 @@ interface MockTxHandle { active: boolean; tracker: TransactionTracker; }
  * Preprocess a SQL statement for execution on the DSQL mock (PGlite).
  *
  * 1. Validates the statement against DSQL compatibility rules (throws on
- *    unsupported features like FK, TRUNCATE, SERIAL, etc.).
+ *    unsupported features like TRUNCATE, SERIAL, etc.).
  * 2. Rejects DDL statements — in production the app Lambda only has
  *    dsql:DbConnect (DML-only). DDL must go in migration files.
  * 3. Normalizes DSQL-only syntax that PGlite doesn't understand — currently
@@ -34,12 +35,13 @@ interface MockTxHandle { active: boolean; tracker: TransactionTracker; }
 function preprocessSqlForDsqlMock(sql: string, { allowDdl = false } = {}): string {
   validateStatement(sql);
   if (!allowDdl && classifyStatement(sql) === 'ddl') {
-    const err = new Error(
-      'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime. ' +
-      'Use migration files instead — the migration Lambda has dsql:DbConnectAdmin for DDL.',
-    );
-    err.name = 'DsqlPermissionError';
-    throw err;
+    const err = new Error(DDL_NOT_ALLOWED_MESSAGE);
+    err.name = DSQL_PERMISSION_ERROR_NAME;
+    // Branded so the name crosses the RPC wire on the mock path. The name is
+    // internal (not on the public DistributedDatabaseErrors) because only this
+    // mock guard produces it. The message is BB-authored (no raw driver text),
+    // so forwarding it is safe (D-003).
+    throw brandBlocksError(err);
   }
   return sql.replace(/\b(CREATE\s+(?:UNIQUE\s+)?INDEX)\s+ASYNC\b/gi, '$1');
 }
@@ -49,11 +51,61 @@ export class DsqlMockEngine implements DatabaseEngine {
   private closed = false;
   private shouldConflict = false;
   private _allowDdl = false;
+  private readonly dataDir: string;
+  private readonly createClient: (dataDir: string) => PGlite;
+  private ready?: Promise<PGlite>;
 
-  constructor(dataDir: string) {
-    cleanStaleLock(dataDir);
-    mkdirSync(dataDir, { recursive: true });
-    this.db = new PGlite(dataDir);
+  /**
+   * @param dataDir - directory the PGlite mock persists to.
+   * @param createClient - factory for the underlying PGlite instance; defaults
+   *   to a real `PGlite`. Exposed as a seam so tests can inject an instance
+   *   that simulates a WASM init trap.
+   */
+  constructor(dataDir: string, createClient: (dataDir: string) => PGlite = (dir) => new PGlite(dir)) {
+    this.dataDir = dataDir;
+    this.createClient = createClient;
+    this.db = this.createDb();
+  }
+
+  private createDb(): PGlite {
+    cleanStaleLock(this.dataDir);
+    mkdirSync(this.dataDir, { recursive: true });
+    return this.createClient(this.dataDir);
+  }
+
+  /**
+   * Force PGlite's lazy WASM initialization, retrying past intermittent
+   * `_pg_initdb` `unreachable` traps by recreating the instance. Runs once per
+   * engine; a permanent failure is not cached, so a later query can retry once
+   * transient memory pressure eases.
+   */
+  private ensureReady(): Promise<PGlite> {
+    if (!this.ready) {
+      this.ready = initializePgliteWithRetry(this.db, () => (this.db = this.createDb()), {
+        onRetry: (attempt, error) =>
+          console.warn(`[DsqlMockEngine] PGlite init trap on attempt ${attempt}; recreating instance`, error),
+      })
+        // Pin this.db to the settled instance explicitly (not just via the recreate closure).
+        .then((db) => (this.db = db))
+        .catch((error) => {
+          // Init retry is exhausted; initializePgliteWithRetry has already closed
+          // the last trapped instance, so this.db now points at a dead handle.
+          // Reset readiness AND swap in a fresh, un-probed instance. Without the
+          // swap, the next call would re-probe the CLOSED handle, whose error is a
+          // "closed" error (not an `unreachable` trap) and is therefore classified
+          // non-retryable — permanently wedging the engine and defeating the
+          // "a later query can retry" recovery documented above. Recreating here
+          // is best effort; if it throws we keep propagating the original init error.
+          this.ready = undefined;
+          try {
+            this.db = this.createDb();
+          } catch {
+            // Leave the dead handle in place; the original init error is more useful.
+          }
+          throw error;
+        });
+    }
+    return this.ready;
   }
 
   /** Test helper: simulate OCC conflict on next commit. */
@@ -70,19 +122,22 @@ export class DsqlMockEngine implements DatabaseEngine {
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
     const normalized = preprocessSqlForDsqlMock(sql, { allowDdl: this._allowDdl });
-    try { return (await this.db.query<T>(normalized, params)).rows; }
+    try { await this.ensureReady(); return (await this.db.query<T>(normalized, params)).rows; }
     catch (e) { translateDsqlError(e as Error); }
   }
 
   async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
     const normalized = preprocessSqlForDsqlMock(sql, { allowDdl: this._allowDdl });
-    try { return { rowCount: (await this.db.query(normalized, params)).affectedRows ?? 0 }; }
+    try { await this.ensureReady(); return { rowCount: (await this.db.query(normalized, params)).affectedRows ?? 0 }; }
     catch (e) { translateDsqlError(e as Error); }
   }
 
   async beginTransaction(): Promise<TransactionHandle> {
-    await this.db.query('BEGIN');
-    return { active: true, tracker: new TransactionTracker() } as MockTxHandle;
+    try {
+      await this.ensureReady();
+      await this.db.query('BEGIN');
+      return { active: true, tracker: new TransactionTracker() } as MockTxHandle;
+    } catch (e) { translateDsqlError(e as Error); }
   }
 
   async commitTransaction(handle: TransactionHandle): Promise<void> {
@@ -93,7 +148,10 @@ export class DsqlMockEngine implements DatabaseEngine {
         new Error('SerializationFailureException: OCC conflict — transaction not committed.'),
         { code: PG_SERIALIZATION_FAILURE, name: DistributedDatabaseErrors.SerializationFailure }
       );
-      throw err;
+      // Route through translateDsqlError so the mock surfaces the SAME 409
+      // ApiError (name preserved, retriable) the real DSQL engine produces for
+      // SQLSTATE 40001 — keeping mock and aws paths behaviorally identical.
+      translateDsqlError(err);
     }
     await this.db.query('COMMIT');
     (handle as MockTxHandle).tracker.reset();

@@ -62,8 +62,14 @@ window.doSignUp = async () => {
   try {
     await api.authSignUp(username, password);
     pendingSignUpUsername = username;
-    // Auto-retrieve code (test shortcut)
-    const codeInfo = await api.authGetLastCode();
+    // Auto-retrieve code (test shortcut). The code is delivered asynchronously
+    // and read back over a separate request against an eventually-consistent
+    // store, so a single read can race the write and see nothing — poll briefly.
+    let codeInfo = null;
+    for (let i = 0; i < 15 && !codeInfo; i++) {
+      codeInfo = await api.authGetLastCode(username);
+      if (!codeInfo) await new Promise((r) => setTimeout(r, 200));
+    }
     if (codeInfo) ($('confirm-code') as HTMLInputElement).value = codeInfo.code;
     show('confirm-section');
     setText('auth-info', 'Account created! Confirm with the verification code.');

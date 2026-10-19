@@ -28,6 +28,9 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AsyncJobContext } from '@aws-blocks/bb-async-job';
 import { AsyncJobErrors } from '@aws-blocks/bb-async-job';
 import { AsyncJobOptions } from '@aws-blocks/bb-async-job';
+import { AsyncJobState } from '@aws-blocks/bb-async-job';
+import { AsyncJobStatus } from '@aws-blocks/bb-async-job';
+import { AsyncJobTransition } from '@aws-blocks/bb-async-job';
 import { AuthAction } from '@aws-blocks/auth-common';
 import { AuthActionInput } from '@aws-blocks/auth-common';
 import { AuthBasic } from '@aws-blocks/bb-auth-basic';
@@ -80,6 +83,7 @@ import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableOptions } from '@aws-blocks/bb-distributed-table';
 import { DeleteOptions as DTDeleteOptions } from '@aws-blocks/bb-distributed-table';
+import { ExternalKmsKeyRef as DTExternalKmsKeyRef } from '@aws-blocks/bb-distributed-table';
 import { PutOptions as DTPutOptions } from '@aws-blocks/bb-distributed-table';
 import { QueryOptions as DTQueryOptions } from '@aws-blocks/bb-distributed-table';
 import { ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
@@ -89,6 +93,7 @@ import { EmailMessage } from '@aws-blocks/bb-email-client';
 import { EmailOptions } from '@aws-blocks/bb-email-client';
 import { EmitOptions } from '@aws-blocks/bb-metrics';
 import { ExternalDatabaseRef } from '@aws-blocks/bb-data';
+import { ExternalKmsKeyRef } from '@aws-blocks/bb-kv-store';
 import { ExternalMetricsRef } from '@aws-blocks/bb-metrics';
 import { ExternalTableRef } from '@aws-blocks/bb-kv-store';
 import { ExternalUserPoolRef } from '@aws-blocks/bb-auth-cognito';
@@ -108,6 +113,7 @@ import { GroupAdmin } from '@aws-blocks/bb-auth-cognito';
 import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseOptions } from '@aws-blocks/bb-knowledge-base';
+import { PutOptions as KVPutOptions } from '@aws-blocks/bb-kv-store';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { KVStoreOptions } from '@aws-blocks/bb-kv-store';
@@ -115,7 +121,6 @@ import { LifecycleAdmin } from '@aws-blocks/bb-auth-cognito';
 import { LifecycleRule } from '@aws-blocks/bb-file-bucket';
 import { LogEntry } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
-import { LoggerBBRef } from '@aws-blocks/bb-dashboard';
 import { LoggingErrors } from '@aws-blocks/bb-logger';
 import { LoggingOptions } from '@aws-blocks/bb-logger';
 import { LogLevel } from '@aws-blocks/bb-logger';
@@ -129,6 +134,7 @@ import { MetricsBBRef } from '@aws-blocks/bb-dashboard';
 import { MetricsEmitter } from '@aws-blocks/bb-metrics';
 import { MetricsErrors } from '@aws-blocks/bb-metrics';
 import { MetricsOptions } from '@aws-blocks/bb-metrics';
+import { MetricsSource } from '@aws-blocks/bb-dashboard';
 import { MetricUnit } from '@aws-blocks/bb-metrics';
 import { MFAPreference } from '@aws-blocks/bb-auth-cognito';
 import { ModelConfig } from '@aws-blocks/bb-agent';
@@ -136,15 +142,21 @@ import { OIDCUser } from '@aws-blocks/bb-auth-oidc';
 import { OllamaModels } from '@aws-blocks/bb-agent';
 import { PasswordPolicy } from '@aws-blocks/bb-auth-basic';
 import { PutUrlOptions } from '@aws-blocks/bb-file-bucket';
+import { ReadValidationMode } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { RealtimeChannel } from '@aws-blocks/bb-realtime';
 import { RealtimeSubscription } from '@aws-blocks/bb-realtime';
 import { RelayOrigin } from '@aws-blocks/bb-auth-oidc';
 import { relayOrigin } from '@aws-blocks/bb-auth-oidc';
 import { ResetPasswordResult } from '@aws-blocks/bb-auth-cognito';
-import { RetentionDays } from '@aws-blocks/bb-logger';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
+import { Secret } from '@aws-blocks/bb-secret';
+import { SecretErrors } from '@aws-blocks/bb-secret';
+import { SecretOptions } from '@aws-blocks/bb-secret';
+import { SecretReadOptions } from '@aws-blocks/bb-secret';
+import { SecretVersion } from '@aws-blocks/bb-secret';
+import { SecretVersionInfo } from '@aws-blocks/bb-secret';
 import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
@@ -170,12 +182,12 @@ import { ToolFactory } from '@aws-blocks/bb-agent';
 import { ToolHandlerArgs } from '@aws-blocks/bb-agent';
 import { ToolsConfig } from '@aws-blocks/bb-agent';
 import { Tracer } from '@aws-blocks/bb-tracer';
-import { TracerBBRef } from '@aws-blocks/bb-dashboard';
 import { TracerOptions } from '@aws-blocks/bb-tracer';
 import { Transaction } from '@aws-blocks/bb-data';
 import { TransactionOptions } from '@aws-blocks/bb-distributed-data';
 import { UpdateAttributeOutcome } from '@aws-blocks/bb-auth-cognito';
 import { UserAttribute } from '@aws-blocks/bb-auth-cognito';
+import { WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
 import { WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 
 export { AdminAction }
@@ -225,6 +237,12 @@ export { AsyncJobContext }
 export { AsyncJobErrors }
 
 export { AsyncJobOptions }
+
+export { AsyncJobState }
+
+export { AsyncJobStatus }
+
+export { AsyncJobTransition }
 
 export { AuthAction }
 
@@ -330,6 +348,8 @@ export { DistributedTableOptions }
 
 export { DTDeleteOptions }
 
+export { DTExternalKmsKeyRef }
+
 export { DTPutOptions }
 
 export { DTQueryOptions }
@@ -347,6 +367,8 @@ export { EmailOptions }
 export { EmitOptions }
 
 export { ExternalDatabaseRef }
+
+export { ExternalKmsKeyRef }
 
 export { ExternalMetricsRef }
 
@@ -443,7 +465,6 @@ export function getSdkIdentifiers(bb: Agent): {
     sessionBucketName: string;
     realtimeWsUrl: string;
     realtimeCallbackUrl: string;
-    jobQueueUrl: string;
 };
 
 // @public (undocumented)
@@ -475,6 +496,8 @@ export { KnowledgeBaseErrors }
 
 export { KnowledgeBaseOptions }
 
+export { KVPutOptions }
+
 export { KVStore }
 
 export { KVStoreErrors }
@@ -488,8 +511,6 @@ export { LifecycleRule }
 export { LogEntry }
 
 export { Logger }
-
-export { LoggerBBRef }
 
 export { LoggingErrors }
 
@@ -517,6 +538,8 @@ export { MetricsErrors }
 
 export { MetricsOptions }
 
+export { MetricsSource }
+
 export { MetricUnit }
 
 export { MFAPreference }
@@ -531,6 +554,8 @@ export { PasswordPolicy }
 
 export { PutUrlOptions }
 
+export { ReadValidationMode }
+
 export { Realtime }
 
 export { RealtimeChannel }
@@ -543,11 +568,21 @@ export { relayOrigin }
 
 export { ResetPasswordResult }
 
-export { RetentionDays }
-
 export { RetrieveOptions }
 
 export { RetrieveResult }
+
+export { Secret }
+
+export { SecretErrors }
+
+export { SecretOptions }
+
+export { SecretReadOptions }
+
+export { SecretVersion }
+
+export { SecretVersionInfo }
 
 export { Segment }
 
@@ -599,8 +634,6 @@ export { ToolsConfig }
 
 export { Tracer }
 
-export { TracerBBRef }
-
 export { TracerOptions }
 
 export { Transaction }
@@ -610,6 +643,8 @@ export { TransactionOptions }
 export { UpdateAttributeOutcome }
 
 export { UserAttribute }
+
+export { WaitUntilCompleteOptions }
 
 export { WaitUntilSyncedOptions }
 

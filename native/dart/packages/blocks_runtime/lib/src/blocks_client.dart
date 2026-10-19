@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth_provider.dart';
 import 'blocks_rpc_exception.dart';
+import 'rpc_user_agent_headers.dart';
 import 'session_store.dart';
 import 'token_store.dart';
 
@@ -25,9 +26,9 @@ class BlocksClient {
     SessionStore? sessionStore,
     TokenStore? tokenStore,
     this.authProvider,
-  })  : _httpClient = client ?? http.Client(),
-        sessionStore = sessionStore ?? InMemorySessionStore(),
-        tokenStore = tokenStore ?? InMemoryTokenStore();
+  }) : _httpClient = client ?? http.Client(),
+       sessionStore = sessionStore ?? InMemorySessionStore(),
+       tokenStore = tokenStore ?? InMemoryTokenStore();
 
   /// Calls a JSON-RPC method with the given params and returns the result.
   Future<dynamic> call(String method, Map<String, dynamic> params) async {
@@ -43,7 +44,9 @@ class BlocksClient {
   }
 
   Future<http.Response> _doCall(
-      String method, Map<String, dynamic> params) async {
+    String method,
+    Map<String, dynamic> params,
+  ) async {
     final id = _nextId++;
     final body = jsonEncode({
       'jsonrpc': '2.0',
@@ -54,6 +57,7 @@ class BlocksClient {
 
     final headers = <String, String>{
       'Content-Type': 'application/json',
+      ...rpcUserAgentHeaders(),
     };
 
     // Bearer token takes priority
@@ -69,11 +73,7 @@ class BlocksClient {
       }
     }
 
-    return _httpClient.post(
-      Uri.parse(baseUrl),
-      headers: headers,
-      body: body,
-    );
+    return _httpClient.post(Uri.parse(baseUrl), headers: headers, body: body);
   }
 
   dynamic _parseResponse(http.Response response) {

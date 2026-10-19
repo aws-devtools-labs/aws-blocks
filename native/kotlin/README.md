@@ -52,10 +52,24 @@ awsBlocks {
         prod("https://api.example.com")
         custom("staging", "https://staging.example.com")
     }
+
+    // Logical identities from x-blocks-native-packages that keep the
+    // UnknownTransferable fallback instead of a declared type (optional).
+    // An identity the spec does not declare only warns, as AWSBLOCKS-NATIVE-006
+    excludeNativePackages = setOf("example-iot-native")
+
+    // Only needed to use the OIDC client on Android or iOS, where the relay scheme is
+    // registered with the operating system. Must match an entry in the backend's
+    // allowedRelayOrigins. JVM binds a loopback address per sign-in and ignores this.
+    oidc {
+        relayTo = "com.yourcompany.yourapp://auth/callback"
+    }
 }
 ```
 
 Servers defined in the `servers` block override entries from the spec file that share the same name. New names are added alongside the spec's servers.
+
+On iOS, declare the same `relayTo` scheme in the app's `Info.plist` under `CFBundleURLTypes` — the Gradle plugin cannot reach an Xcode project. Android needs nothing further; the plugin injects the scheme into the merged manifest.
 
 ## Using the Generated Code
 
@@ -74,6 +88,14 @@ val todos: List<Todo> = api.listTodos(sortBy = ListTodos.SortBy.Priority)
 // Update a todo
 api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = true))
 ```
+
+When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable unbound result still fails code generation.
+
+When `x-blocks-native-bindings` binds the tag and its package has an `android` field, the client returns the declared type, hydrated through `<Type>.fromBlocksDescriptor` after the descriptor is checked against the tag. A nullable bound result returns null for a JSON-null body.
+
+A nullable built-in result now returns null for a JSON-null body as well, where it previously threw.
+
+The factory a declared package must expose is specified in [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
 
 ## Gradle Tasks
 
@@ -102,7 +124,7 @@ See the [`example/android`](example/android) directory for a complete Android ap
 | General/RPC | ✅ | ✅ | ✅ |
 | Realtime    | ✅ | ✅ | ✅ |
 | File Bucket | ✅ | ✅ | ✅ |
-| OIDC        | ✅ | ❌ | ❌ |
+| OIDC        | ✅ | ✅ | ✅ |
 
 ## Requirements
 

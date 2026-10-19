@@ -1,5 +1,6 @@
 /** Shared shell Sandbox + backgrounded-process-safe runner for the builder and judge steps. */
 import { spawn, spawnSync } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
 	type ExecuteOptions,
@@ -42,10 +43,12 @@ function resolveAgentHome(): string {
 // sudo+runuser, using the EXACT privilege transition runShell uses; false → caller falls back.
 // NOTE (probe breadth): this only exercises `sudo -n runuser`, but the reap path (killGroup)
 // also relies on `sudo -n kill` — and the harness's stale-server sweep on `sudo -n fuser`/`rm`.
-// We probe just the one verb because the runner grants benchagent's sudoers entry as
+// We probe just the one verb because the HARNESS user (the GitHub-hosted `runner`) holds
 // `NOPASSWD:ALL` (a single rule covering every command), so a passing `runuser` probe implies
 // the others pass too. If that sudoers policy is ever narrowed to per-command rules, this probe
-// must be widened to verify each verb the reap/sweep depends on.
+// must be widened to verify each verb the reap/sweep depends on. benchagent itself holds NO sudo
+// rights (plain `useradd -m`, no sudoers entry): that is what makes the uid boundary contain the
+// agent, and agent-bench.yml fails the job if benchagent can ever run sudo.
 export function isolationAvailable(): boolean {
 	if (isolationProbe !== undefined) return isolationProbe;
 	try {
@@ -65,7 +68,9 @@ export function isolationAvailable(): boolean {
 // files either creates later stay mutually accessible), AND grant benchagent search (x) on
 // every ANCESTOR dir — the kernel checks x on each parent when resolving an ABSOLUTE path,
 // and npm/node/tsc resolve modules absolutely, so without it absolute-path opens EACCES
-// even though the workspace itself is rwx. Ancestor grant is best-effort per dir. Returns
+// even though the workspace itself is rwx. Search (x) only lets benchagent traverse an
+// ancestor, not list or read it; files outside the workspace keep their own permissions.
+// Ancestor grant is best-effort per dir. Returns
 // true only if the workspace grants succeed; false → caller disables isolation.
 export function prepareWorkspaceIsolation(root: string): boolean {
 	if (!isolationAvailable()) return false;
@@ -152,6 +157,27 @@ export class WorkspaceSandbox extends PosixShellSandbox {
 		// minTimeoutSec; `undefined` means the caller opted out of a timeout — leave untouched.
 		const timeout = options?.timeout === undefined ? undefined : Math.max(options.timeout, this.minTimeoutSec);
 		const result = await runShell(command, cwd, timeout, options?.signal, options?.env, this.isolate);
+		// Persist each command's exit code + output — the Strands trace records tool
+		// CALLS but not shell OUTPUT. Opt-in via BENCH_CMD_LOG; best-effort so logging can't break a
+		// command; sliced to 4000 chars/side.
+		const cmdLogPath = process.env.BENCH_CMD_LOG;
+		if (cmdLogPath) {
+			try {
+				appendFileSync(
+					cmdLogPath,
+					`${JSON.stringify({
+						ts: new Date().toISOString(),
+						cwd,
+						command,
+						exitCode: result.exitCode,
+						stdout: result.stdout.slice(0, 4000),
+						stderr: result.stderr.slice(0, 4000),
+					})}\n`,
+				);
+			} catch {
+				/* best-effort: never let command logging break a command */
+			}
+		}
 		if (result.stdout) yield { type: 'streamChunk', data: result.stdout, streamType: 'stdout' };
 		if (result.stderr) yield { type: 'streamChunk', data: result.stderr, streamType: 'stderr' };
 		yield result;

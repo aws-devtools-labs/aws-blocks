@@ -4,11 +4,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { App, Duration, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { ComputeConstruct } from './compute_construct.js';
 import { HostingError } from '../hosting_error.js';
-import { ComputeResource } from '../manifest/types.js';
+import type { ComputeResource } from '../manifest/types.js';
 
 // ---- Test helpers ----
 
@@ -42,7 +42,7 @@ const handlerResource = (bundle: string): ComputeResource => ({
   handler: 'index.handler',
   placement: 'regional',
   streaming: true,
-  runtime: 'nodejs20.x',
+  runtime: 'nodejs24.x',
 });
 
 const httpServerResource = (bundle: string): ComputeResource => ({
@@ -52,7 +52,7 @@ const httpServerResource = (bundle: string): ComputeResource => ({
   port: 3000,
   placement: 'regional',
   streaming: false,
-  runtime: 'nodejs20.x',
+  runtime: 'nodejs24.x',
 });
 
 const edgeResource = (bundle: string): ComputeResource => ({
@@ -61,7 +61,7 @@ const edgeResource = (bundle: string): ComputeResource => ({
   handler: 'index.handler',
   placement: 'global',
   streaming: false,
-  runtime: 'nodejs20.x',
+  runtime: 'nodejs24.x',
 });
 
 // ================================================================
@@ -89,7 +89,7 @@ void describe('ComputeConstruct', () => {
       const template = Template.fromStack(stack);
 
       template.hasResourceProperties('AWS::Lambda::Function', {
-        Runtime: 'nodejs20.x',
+        Runtime: 'nodejs24.x',
         Handler: 'index.handler',
       });
 
@@ -236,6 +236,96 @@ void describe('ComputeConstruct', () => {
     });
   });
 
+  // ---- Runtime resolution ----
+
+  void describe('runtime resolution', () => {
+    void it('defaults to nodejs24.x when no runtime is declared', () => {
+      const bundle = createBundleDir();
+      const stack = createStack();
+
+      const { runtime: _omitted, ...withoutRuntime } = handlerResource(bundle);
+
+      new ComputeConstruct(stack, 'Compute', {
+        name: 'default',
+        computeResource: withoutRuntime as ComputeResource,
+      });
+
+      Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+        Runtime: 'nodejs24.x',
+      });
+    });
+
+    void it('honors explicitly declared supported runtimes', () => {
+      const bundle = createBundleDir();
+      const stack = createStack();
+
+      new ComputeConstruct(stack, 'Compute', {
+        name: 'default',
+        computeResource: { ...handlerResource(bundle), runtime: 'nodejs22.x' },
+      });
+
+      Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+        Runtime: 'nodejs22.x',
+      });
+    });
+
+    void it('throws UnsupportedRuntimeError for an unrecognized runtime', () => {
+      const bundle = createBundleDir();
+      const stack = createStack();
+
+      assert.throws(
+        () =>
+          new ComputeConstruct(stack, 'Compute', {
+            name: 'serverFn',
+            computeResource: {
+              ...handlerResource(bundle),
+              runtime: 'python3.12',
+            },
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof HostingError);
+          assert.strictEqual(error.code, 'UnsupportedRuntimeError');
+          assert.match(error.message, /python3\.12/);
+          assert.match(error.message, /serverFn/);
+          return true;
+        },
+      );
+    });
+
+    // EOL runtimes are still accepted (an explicit pin must not hard-break a
+    // deployed function at synth), but they emit a deprecation warning (#378).
+    for (const runtime of ['nodejs20.x', 'nodejs18.x'] as const) {
+      void it(`accepts ${runtime} but warns it is end-of-life`, () => {
+        const bundle = createBundleDir();
+        const stack = createStack();
+
+        new ComputeConstruct(stack, 'Compute', {
+          name: 'serverFn',
+          computeResource: { ...handlerResource(bundle), runtime },
+        });
+
+        const template = Template.fromStack(stack);
+        template.hasResourceProperties('AWS::Lambda::Function', { Runtime: runtime });
+        Annotations.fromStack(stack).hasWarning(
+          '*',
+          Match.stringLikeRegexp(`'serverFn' pins '${runtime.replace('.', '\\.')}'.*deprecation`),
+        );
+      });
+    }
+
+    void it('does NOT warn for a supported runtime', () => {
+      const bundle = createBundleDir();
+      const stack = createStack();
+
+      new ComputeConstruct(stack, 'Compute', {
+        name: 'default',
+        computeResource: { ...handlerResource(bundle), runtime: 'nodejs22.x' },
+      });
+
+      Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('end-of-life|deprecation'));
+    });
+  });
+
   // ---- Edge type ----
 
   void describe('edge compute type', () => {
@@ -250,7 +340,7 @@ void describe('ComputeConstruct', () => {
       const template = Template.fromStack(stack);
 
       template.hasResourceProperties('AWS::Lambda::Function', {
-        Runtime: 'nodejs20.x',
+        Runtime: 'nodejs24.x',
         Handler: 'index.handler',
       });
     });

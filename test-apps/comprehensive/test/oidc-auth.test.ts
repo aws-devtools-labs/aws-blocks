@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
+import { signInPoller } from './poll-for-signin.js';
 
 const NotAuthenticated = 'NotAuthenticatedException';
 
@@ -44,6 +45,57 @@ async function rpcCall(
   });
   const body = await resp.json();
   return { status: resp.status, result: body.result, error: body.error };
+}
+
+/** Wait for the sign-in record the first AuthOIDC instance wrote for `userId`. */
+const pollOidcSignIn = (api: typeof apiType, userId: string) =>
+  signInPoller('oidcGetLastSignInUser', (id) => api.oidcGetLastSignInUser(id))(userId);
+
+/** Wait for the sign-in record the `extras` AuthOIDC instance wrote for `userId`. */
+const pollExtrasSignIn = (api: typeof apiType, userId: string) =>
+  signInPoller('oidcExtrasGetLastSignInUser', (id) => api.oidcExtrasGetLastSignInUser(id))(userId);
+
+/**
+ * Drive a full stub-IdP sign-in and return the resulting session, including the
+ * `userId` it authenticated as. Tests need that id to read back anything the
+ * `onSignIn` hook recorded, since those records are keyed per user.
+ *
+ * @param signinPath Path segment before `/signin`, e.g. `signin` for the first
+ *        instance or `extras/signin` for the second.
+ * @param requireAuthMethod The instance's `requireAuth` RPC, used to resolve the
+ *        session back to a `userId`.
+ */
+async function signInVia(
+  baseUrl: string,
+  signinPath: string,
+  provider: string,
+  requireAuthMethod: string,
+): Promise<{ userId: string; sessionCookies: string[] }> {
+  const signinResp = await fetch(`${baseUrl}/aws-blocks/auth/${signinPath}/${provider}`, { redirect: 'manual' });
+  assert.strictEqual(signinResp.status, 302, `signin kickoff should 302, got ${signinResp.status}`);
+  const cookies = collectCookies(signinResp);
+
+  const authResp = await fetch(signinResp.headers.get('location')!, { redirect: 'manual' });
+  const cbResp = await fetch(authResp.headers.get('location')!, {
+    redirect: 'manual',
+    headers: { cookie: cookies.join('; ') },
+  });
+  assert.strictEqual(cbResp.status, 302, `callback should 302, got ${cbResp.status}`);
+  const sessionCookies = mergeCookies(cookies, collectCookies(cbResp));
+
+  const meCall = await rpcCall(baseUrl, 'api', requireAuthMethod, [], { cookies: sessionCookies });
+  assert.strictEqual(meCall.status, 200, `${requireAuthMethod} should succeed after sign-in`);
+
+  // Every caller keys a sign-in record read on this id. A missing or non-string
+  // one would still build a key (`signin:instance:undefined`), so the poller
+  // would wait out its full timeout and report "no record" for what is really a
+  // broken requireAuth response. Fail here instead, where the cause is obvious.
+  const userId = meCall.result?.userId;
+  assert.ok(
+    typeof userId === 'string' && userId.length > 0,
+    `${requireAuthMethod} should return a non-empty string userId, got ${JSON.stringify(meCall.result)}`,
+  );
+  return { userId, sessionCookies };
 }
 
 export function oidcAuthTests(getApi: () => typeof apiType) {
@@ -114,6 +166,15 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         } catch (e) {
           assert.ok(isBlocksError(e, 'ProviderNotConfiguredException'), `Expected ProviderNotConfiguredException, got ${e}`);
         }
+      });
+
+      test('an undeclared provider has no signin route at all (404)', async () => {
+        const baseUrl = getBaseUrl();
+        const resp = await fetch(`${baseUrl}/aws-blocks/auth/signin/nonexistent`, { redirect: 'manual' });
+        await resp.text();
+        // One GET route is mounted per *configured* provider, so an unknown name
+        // never reaches a handler and cannot surface ProviderNotConfigured.
+        assert.strictEqual(resp.status, 404, 'Undeclared provider should have no route');
       });
 
       test('full sign-in flow via HTTP redirects — google', async () => {
@@ -230,17 +291,84 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const authResp = await fetch(authorizeUrl, { redirect: 'manual' });
         const callbackUrl = authResp.headers.get('location')!;
 
-        await fetch(callbackUrl, {
+        const cbResp = await fetch(callbackUrl, {
           redirect: 'manual',
           headers: { cookie: cookies.join('; ') },
         });
+        const sessionCookies = mergeCookies(cookies, collectCookies(cbResp));
+
+        // Who did we just sign in as? The hook record is keyed by userId, so we
+        // need the session's own id to look it up rather than asking for
+        // whichever sign-in happened to be most recent.
+        const meCall = await rpcCall(baseUrl, 'api', 'oidcRequireAuth', [], { cookies: sessionCookies });
+        assert.strictEqual(meCall.status, 200);
+        const me = meCall.result;
 
         // Verify the hook fired
-        const lastUser = await api.oidcGetLastSignInUser();
-        assert.ok(lastUser, 'onSignIn should have been called');
-        assert.strictEqual(lastUser!.provider, 'google');
-        assert.ok(lastUser!.userId, 'Should have userId');
-        assert.strictEqual(lastUser!.email, 'google-user@stub.invalid');
+        const lastUser = await pollOidcSignIn(api, me.userId);
+        assert.strictEqual(lastUser.provider, 'google');
+        assert.strictEqual(lastUser.userId, me.userId);
+        assert.strictEqual(lastUser.email, 'google-user@stub.invalid');
+
+        // Cleanup: sign out
+        await fetch(`${baseUrl}/aws-blocks/auth/signout`, {
+          method: 'POST',
+          headers: { cookie: sessionCookies.join('; ') },
+        });
+      });
+
+      // ── Sign-in read-back durability (regression, #284) ──────────────────
+      //
+      // The record used to live in a module-level variable, so only the Lambda
+      // instance that served the callback could see it. A reader on any other
+      // instance got its own `null`, or the previous sign-in it had handled —
+      // and because the assertions only checked `provider`, a leftover record
+      // from the same provider would pass while proving nothing.
+
+      test('sign-in record is keyed per user, not a shared "last sign-in" slot', async () => {
+        const baseUrl = getBaseUrl();
+        const api = getApi();
+
+        const { userId, sessionCookies } = await signInVia(baseUrl, 'signin', 'google', 'oidcRequireAuth');
+        await pollOidcSignIn(api, userId);
+
+        // Asking for a user who never signed in must not hand back somebody
+        // else's record. With a single module-level slot this returned the user
+        // above, which is the bug.
+        assert.strictEqual(
+          await api.oidcGetLastSignInUser(`${userId}-never-signed-in`),
+          null,
+          'unknown userId should read as null, not the most recent sign-in',
+        );
+
+        await fetch(`${baseUrl}/aws-blocks/auth/signout`, {
+          method: 'POST',
+          headers: { cookie: sessionCookies.join('; ') },
+        });
+      });
+
+      test('each AuthOIDC instance keeps its own sign-in records', async () => {
+        const baseUrl = getBaseUrl();
+        const api = getApi();
+
+        const first = await signInVia(baseUrl, 'signin', 'google', 'oidcRequireAuth');
+        const second = await signInVia(baseUrl, 'extras/signin', 'google-extras', 'oidcExtrasRequireAuth');
+
+        // Each instance answers for its own user...
+        assert.strictEqual((await pollOidcSignIn(api, first.userId)).provider, 'google');
+        assert.strictEqual((await pollExtrasSignIn(api, second.userId)).provider, 'google-extras');
+
+        // ...and does not answer for the other instance's user. The later
+        // sign-in also must not have clobbered the earlier record.
+        assert.strictEqual(await api.oidcGetLastSignInUser(second.userId), null);
+        assert.strictEqual(await api.oidcExtrasGetLastSignInUser(first.userId), null);
+
+        for (const [path, session] of [['signout', first], ['extras/signout', second]] as const) {
+          await fetch(`${baseUrl}/aws-blocks/auth/${path}`, {
+            method: 'POST',
+            headers: { cookie: session.sessionCookies.join('; ') },
+          });
+        }
       });
     });
 
@@ -346,6 +474,13 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const sessionClear = setCookies.find(c => c.includes('session') && c.includes('Max-Age=0'));
         assert.ok(sessionClear, 'Should clear session cookie with Max-Age=0');
       });
+
+      test('GET on the signout route is a 404 (the route is POST-only)', async () => {
+        const baseUrl = getBaseUrl();
+        const resp = await fetch(`${baseUrl}/aws-blocks/auth/signout`, { redirect: 'manual' });
+        await resp.text();
+        assert.strictEqual(resp.status, 404, 'Sign-out is POST-only');
+      });
     });
 
     describe('stub IdP routes', () => {
@@ -415,9 +550,9 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(me.userId);
 
         // Verify onSignIn fired and profile was upserted
-        const lastUser = await api.oidcExtrasGetLastSignInUser();
-        assert.ok(lastUser, 'onSignIn should have fired');
-        assert.strictEqual(lastUser!.provider, 'google-extras');
+        const lastUser = await pollExtrasSignIn(api, me.userId);
+        assert.strictEqual(lastUser.provider, 'google-extras');
+        assert.strictEqual(lastUser.userId, me.userId);
 
         const profile = await api.oidcExtrasGetProfile(me.userId);
         assert.ok(profile, 'Profile should have been upserted');

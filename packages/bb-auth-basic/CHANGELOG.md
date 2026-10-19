@@ -1,5 +1,232 @@
 # @aws-blocks/bb-auth-basic
 
+## 0.1.11
+
+### Patch Changes
+
+- 59c9dde: docs(bb-auth-basic): add the frontend login-UI mount + gate seam
+  
+  The Quick Start documented the backend (`createApi()`, `requireAuth`) but not
+  the frontend half, so builders and agents provisioned `AuthBasic` and assumed a
+  login UI would appear — nothing rendered, leaving every authenticated route
+  unreachable. The README now shows the end-to-end seam: import
+  `Authenticator` / `AuthenticatedContent` from `@aws-blocks/blocks/ui`, mount the
+  login UI in the SPA entrypoint, and gate the app shell behind an authenticated
+  session, with a pointer to the already-shipped testid contract
+  (`authenticator-<field>` / `authenticator-action-<action>`) in
+  `auth-common/CUSTOMIZING-AUTH-UI.md`.
+  
+  Documentation only — no runtime or API change.
+- c20cbfd: docs(bb-agent,bb-auth-basic): document conversation naming and same-origin cookies under Hosting
+  
+  Two documentation gaps a builder had to infer from source:
+  
+  - **bb-agent — conversation records and naming.** The README now documents the
+    `Conversation` shape returned by `listConversations()` and states that
+    `createConversationId()` sets `name` to the conversation's UUID, that the
+    agent does not derive a human-readable title (the first user message does not
+    become one), and that there is no public API to set or rename `name`. Builders
+    who want a readable title should keep that mapping in their own data layer and
+    treat `conversationId` as the stable key.
+  
+  - **bb-auth-basic — same-origin cookies under the Hosting block.** The "Cookies
+    and sessions" section now states plainly that serving the frontend through the
+    Hosting block puts the static site and the API behind one CloudFront origin,
+    so the deployed app is same-origin and the `SameSite=Lax` default works with
+    `crossDomain` left at `false` — `crossDomain: true` is only for genuinely
+    different registrable domains in production.
+  
+  Documentation only — no runtime or API change.
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [9ebda66]
+- Updated dependencies [78f4396]
+- Updated dependencies [440ecce]
+- Updated dependencies [92fa27b]
+- Updated dependencies [1a5c18e]
+- Updated dependencies [4ae500e]
+- Updated dependencies [6d764f7]
+- Updated dependencies [023f02c]
+- Updated dependencies [5d6656a]
+- Updated dependencies [60616b1]
+- Updated dependencies [a50fb46]
+- Updated dependencies [8a1a4a9]
+- Updated dependencies [38ce80c]
+- Updated dependencies [94a914a]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [005c095]
+- Updated dependencies [b8649dc]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [66f4be2]
+- Updated dependencies [32a4b73]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e9241b5]
+- Updated dependencies [f1eb149]
+- Updated dependencies [122c49c]
+- Updated dependencies [8ca3692]
+- Updated dependencies [7c19c4f]
+  - @aws-blocks/core@0.7.0
+  - @aws-blocks/bb-app-setting@0.3.2
+  - @aws-blocks/bb-kv-store@0.3.1
+  - @aws-blocks/auth-common@0.2.0
+  - @aws-blocks/bb-logger@0.2.2
+
+## 0.1.10
+
+### Patch Changes
+
+- ea5f91c: fix(bb-auth-basic): echo the username on the confirm-signup / confirm-reset forms
+  
+  AuthBasic's `confirmingSignUp` and `confirmingPasswordReset` states rendered
+  `username` as an empty, visible text field — so after signing up (or requesting a
+  reset) the user had to **retype** their username on the confirmation step, and a
+  mismatch silently broke the flow. The username is now echoed as a **hidden**
+  field prefilled with the value just entered (mirroring `bb-auth-cognito`), so the
+  confirm form carries it automatically. The `code` / `password` / `newPassword`
+  fields are unchanged.
+- 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
+- Updated dependencies [4456fd7]
+- Updated dependencies [fac0e75]
+- Updated dependencies [0e18d5b]
+- Updated dependencies [20be3f0]
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [5454763]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/auth-common@0.1.9
+  - @aws-blocks/bb-app-setting@0.3.1
+  - @aws-blocks/bb-kv-store@0.3.0
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-logger@0.2.1
+
+## 0.1.9
+
+### Patch Changes
+
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- Updated dependencies [7b86b8e]
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [81609a8]
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/bb-app-setting@0.3.0
+  - @aws-blocks/core@0.5.0
+  - @aws-blocks/bb-kv-store@0.2.0
+  - @aws-blocks/auth-common@0.1.8
+  - @aws-blocks/bb-logger@0.2.0
+
+## 0.1.8
+
+### Patch Changes
+
+- Updated dependencies [df667c5]
+- Updated dependencies [df667c5]
+- Updated dependencies [64ddd74]
+- Updated dependencies [df667c5]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [4a830a6]
+- Updated dependencies [f2f186c]
+- Updated dependencies [46b7c89]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+  - @aws-blocks/bb-app-setting@0.2.1
+  - @aws-blocks/auth-common@0.1.7
+  - @aws-blocks/bb-kv-store@0.1.8
+
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [1ff9d03]
+- Updated dependencies [5798492]
+- Updated dependencies [f00adb0]
+- Updated dependencies [f00adb0]
+- Updated dependencies [309a236]
+- Updated dependencies [08ab129]
+- Updated dependencies [9d4ccea]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [0ac3879]
+- Updated dependencies [e4dac4a]
+  - @aws-blocks/bb-app-setting@0.2.0
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/bb-kv-store@0.1.7
+  - @aws-blocks/auth-common@0.1.6
+  - @aws-blocks/bb-logger@0.1.5
+
+## 0.1.6
+
+### Patch Changes
+
+- Updated dependencies [7b4c62d]
+- Updated dependencies [5262062]
+- Updated dependencies [3614a09]
+- Updated dependencies [5262062]
+- Updated dependencies [5071079]
+- Updated dependencies [8966cfb]
+- Updated dependencies [b11a75b]
+  - @aws-blocks/core@0.2.0
+  - @aws-blocks/bb-kv-store@0.1.6
+  - @aws-blocks/auth-common@0.1.5
+  - @aws-blocks/bb-app-setting@0.1.4
+  - @aws-blocks/bb-logger@0.1.4
+
+## 0.1.5
+
+### Patch Changes
+
+- 3c56267: `AuthBasic` and `Logger` now report `bbName`/`bbVersion` to `Scope`, so they appear in telemetry like every other Building Block.
+
+  Both were listed in the umbrella's `aws-blocks.vendorize` map, so `scripts/generate-bb-names.mjs` had already generated them into `OFFICIAL_BB_NAMES` — but neither passed `bbMeta` to `super()`, and `Scope` only records a block in its registry when `bbName` is set. Their entries in that set were therefore inert: `Scope.getRegisteredBlocks()` could never name either block, so `product.buildingBlocks` under-reported two of the most widely used blocks. Each package now carries the standard `prebuild` (`generate-version.mjs AuthBasic` / `Logger`), which generates the `BB_NAME`/`BB_VERSION` its constructor passes through — the same wiring the other blocks use.
+
+  `Logger` is composed internally by most other blocks (`new Logger(this, 'logger', { level: 'error' })`), so it will now be reported for effectively every application, and `totalCount` rises accordingly. That is the intended reading of the existing `Logger` entry in the vendorize map, not a new disclosure: `getRegisteredBlocks()` still exposes only names already on the official list, and customer-chosen block names remain counted-but-unnamed.
+
+  `@aws-blocks/blocks` takes a `patch` because it re-exports both blocks; sibling releases stay inside its caret range, so `changeset version` would not bump it on its own (#273, #212). `@aws-blocks/core` needs no bump — both names were already present in the generated `OFFICIAL_BB_NAMES`, so that file is byte-identical.
+
+- Updated dependencies [75f5446]
+- Updated dependencies [2ed4177]
+- Updated dependencies [b48aaec]
+- Updated dependencies [ac0966a]
+- Updated dependencies [9de27dd]
+- Updated dependencies [8e96d87]
+- Updated dependencies [58f77dd]
+- Updated dependencies [b83aaba]
+- Updated dependencies [2d3dfdc]
+- Updated dependencies [3c56267]
+  - @aws-blocks/auth-common@0.1.4
+  - @aws-blocks/core@0.1.17
+  - @aws-blocks/bb-kv-store@0.1.5
+  - @aws-blocks/bb-logger@0.1.3
+
 ## 0.1.4
 
 ### Patch Changes

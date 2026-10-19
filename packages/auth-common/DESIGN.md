@@ -190,3 +190,38 @@ All auth BBs manage session cookies via `BlocksContext`:
 - **Clearing cookies:** `signOut` clears the cookie via `Max-Age=0`
 
 The cookie contains a signed JWT. The BB handles token validation internally — customers never touch tokens directly.
+
+## Design-Token Layer (self-injecting theme)
+
+The UI components are vanilla-DOM factories by design, so they drop into
+lit-html, vanilla, React, and Next.js alike. Styling them had to preserve
+that neutrality: a React-only component library (Cloudscape, MUI) cannot
+restyle a vanilla-DOM component, and a separate stylesheet every host must
+import renders unstyled the moment a host forgets the import.
+
+The chosen design is a **framework-neutral token layer that travels with
+the component**. `theme.ts` exports the stylesheet as a string
+(`THEME_CSS`) — CSS custom properties on `:root` plus base `.bb-*`
+classes — and an idempotent `injectTheme()` that appends it to
+`document.head` once (keyed on `THEME_STYLE_ID`). Every UI factory calls
+`injectTheme()` before building its DOM and renders against the classes
+instead of inline styles, so the themed look is present wherever the
+component is mounted, with zero host wiring.
+
+Rationale, versus the alternatives:
+
+- **No new runtime framework dependency.** CSS variables are the most
+  portable, longest-lived styling primitive, and they outlive any
+  component-library major version — the right choice for code shipped for
+  customers to copy and learn from.
+- **Single source of truth.** One token layer backs both the Auth
+  components and the starter templates (which reference the same `--bb-*`
+  variables for their own markup), so a palette or spacing change is one
+  edit.
+- **Mock/host neutral.** `injectTheme()` is SSR-safe (returns silently
+  with no `document`), so server-rendering a host page never throws; the
+  tokens apply once the component paints in the browser.
+
+Light and dark palettes are driven by `prefers-color-scheme`, with a
+`data-bb-theme="light" | "dark"` ancestor attribute as an explicit
+override that wins over the media query.

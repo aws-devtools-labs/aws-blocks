@@ -13,6 +13,7 @@ import crypto from 'crypto';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { AuthBasicErrors } from './errors.js';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 export type { BlocksAuth, AuthUser, AuthState, AuthActionInput } from '@aws-blocks/auth-common';
 export type { AuthAction, AuthField } from '@aws-blocks/auth-common';
@@ -160,7 +161,7 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	protected log: ChildLogger;
 
 	constructor(scope: ScopeParent, id: string, options?: AuthBasicOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.users = new KVStore(this, 'users');
 		this.jwtSecret = new AppSetting(this, 'jwt-secret', { secret: true });
@@ -422,7 +423,7 @@ export class AuthBasic extends Scope implements BlocksAuth {
 						case 'signUp': {
 							await this.signUp(input.username, input.password);
 							if (this.codeDelivery) {
-								return confirmingSignUpState();
+								return confirmingSignUpState(input.username);
 							}
 							const user = await this.signIn(input.username, input.password, context);
 							return signedInState(user);
@@ -444,7 +445,7 @@ export class AuthBasic extends Scope implements BlocksAuth {
 						}
 						case 'resetPassword': {
 							await this.resetPassword(input.username);
-							return confirmingPasswordResetState();
+							return confirmingPasswordResetState(input.username);
 						}
 						case 'confirmResetPassword': {
 							await this.confirmResetPassword(input.username, input.code, input.newPassword);
@@ -529,7 +530,7 @@ function signedInState(user: AuthBasicUser): AuthState {
 	};
 }
 
-function confirmingSignUpState(): AuthState {
+function confirmingSignUpState(username?: string): AuthState {
 	return {
 		state: 'confirmingSignUp',
 		actions: [
@@ -537,7 +538,10 @@ function confirmingSignUpState(): AuthState {
 				name: 'confirmSignUp',
 				label: 'Confirm Account',
 				fields: [
-					{ name: 'username', label: 'Username', type: 'text', required: true },
+					// Echo the just-entered username as a hidden field (mirrors
+					// bb-auth-cognito) so the confirm form carries it on submit
+					// instead of rendering a blank box the user must retype.
+					{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: username },
 					{ name: 'code', label: 'Verification Code', type: 'text', required: true },
 					{ name: 'password', label: 'Password', type: 'password', required: true },
 				],
@@ -546,7 +550,7 @@ function confirmingSignUpState(): AuthState {
 	};
 }
 
-function confirmingPasswordResetState(): AuthState {
+function confirmingPasswordResetState(username?: string): AuthState {
 	return {
 		state: 'confirmingPasswordReset',
 		actions: [
@@ -554,7 +558,9 @@ function confirmingPasswordResetState(): AuthState {
 				name: 'confirmResetPassword',
 				label: 'Reset Password',
 				fields: [
-					{ name: 'username', label: 'Username', type: 'text', required: true },
+					// Echo the just-entered username (hidden) so the reset-confirm
+					// form carries it on submit rather than a blank retype box.
+					{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: username },
 					{ name: 'code', label: 'Reset Code', type: 'text', required: true },
 					{ name: 'newPassword', label: 'New Password', type: 'password', required: true },
 				],

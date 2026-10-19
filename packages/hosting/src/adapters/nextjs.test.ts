@@ -19,6 +19,7 @@ import {
   normalizeTrailingNamedWildcard,
 } from './nextjs.js';
 import { deployManifestSchema } from '../manifest/schema.js';
+import { withComputeTarget } from './shared/compute_target.js';
 import type { DeployManifest } from '../manifest/types.js';
 
 void describe('nextjsAdapter', () => {
@@ -777,7 +778,7 @@ void describe('nextjsAdapter', () => {
           edgeFn1: {
             bundle: '.open-next/server-functions/edgeFn1',
             handler: 'index.handler',
-            runtime: 'nodejs20.x',
+            runtime: 'nodejs24.x',
           },
         },
         behaviors: [
@@ -2153,5 +2154,93 @@ void describe('nextPatternToCloudFront', () => {
   void it('leaves a clean pattern unchanged', () => {
     assert.strictEqual(nextPatternToCloudFront('/api/edge'), '/api/edge');
     assert.strictEqual(nextPatternToCloudFront('/*'), '/*');
+  });
+});
+
+void describe('nextjsAdapter — Lambda Web Functions target (compute.type: web-function)', () => {
+  let tmpDir: string;
+  let lenientBackup: string | undefined;
+  let buildOutputCreator: (() => void) | undefined;
+  let configDuringBuild: string | undefined;
+
+  const writeContainerOutput = (): void => {
+    const openNextDir = path.join(tmpDir, '.open-next');
+    fs.mkdirSync(path.join(openNextDir, 'server-functions', 'default'), { recursive: true });
+    fs.writeFileSync(path.join(openNextDir, 'server-functions', 'default', 'index.mjs'), 'export {};');
+    fs.mkdirSync(path.join(openNextDir, 'assets'), { recursive: true });
+    fs.writeFileSync(
+      path.join(openNextDir, 'open-next.output.json'),
+      JSON.stringify({
+        origins: { default: { type: 'ecs', bundle: '.open-next/server-functions/default' } },
+        behaviors: [{ pattern: '/*', origin: 'default' }],
+        additionalProps: {},
+      }),
+    );
+  };
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nextjs-webfn-'));
+    configDuringBuild = undefined;
+    buildOutputCreator = () => {
+      const cfg = path.join(tmpDir, 'open-next.config.ts');
+      if (fs.existsSync(cfg)) configDuringBuild = fs.readFileSync(cfg, 'utf-8');
+      writeContainerOutput();
+    };
+    mock.method(spawn, 'sync', () => {
+      buildOutputCreator?.();
+    });
+    lenientBackup = process.env.HOSTING_LENIENT_PATCHES;
+    delete process.env.HOSTING_LENIENT_PATCHES;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    mock.restoreAll();
+    if (lenientBackup === undefined) delete process.env.HOSTING_LENIENT_PATCHES;
+    else process.env.HOSTING_LENIENT_PATCHES = lenientBackup;
+  });
+
+  void it('generates a node wrapper/converter container config and maps it to an http-server', () => {
+    // No HOSTING_LENIENT_PATCHES: the API Gateway wrapper patch must be skipped
+    // (there is no aws-lambda-streaming wrapper to patch) rather than throw.
+    const manifest = withComputeTarget('web-function', () => nextjsAdapter({ projectDir: tmpDir }));
+    assert.ok(configDuringBuild, 'generated open-next.config.ts during the build');
+    assert.match(configDuringBuild, /wrapper: 'node'/);
+    assert.match(configDuringBuild, /converter: 'node'/);
+    assert.match(configDuringBuild, /generateDockerfile: true/);
+    assert.doesNotMatch(configDuringBuild, /aws-apigw-v1/);
+    const server = manifest.compute['default'];
+    assert.strictEqual(server.type, 'http-server');
+    assert.strictEqual(server.serverEntry, 'index.mjs');
+  });
+
+  void it('keeps the API Gateway config for the default (lambda) target', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    buildOutputCreator = () => {
+      const cfg = path.join(tmpDir, 'open-next.config.ts');
+      if (fs.existsSync(cfg)) configDuringBuild = fs.readFileSync(cfg, 'utf-8');
+      writeContainerOutput();
+    };
+    nextjsAdapter({ projectDir: tmpDir });
+    assert.match(configDuringBuild ?? '', /converter: 'aws-apigw-v1'/);
+  });
+
+  void it('rejects a user config with API Gateway overrides when targeting Web Functions', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'open-next.config.ts'),
+      `export default { default: { override: { converter: 'aws-apigw-v1', wrapper: 'aws-lambda-streaming' } } };\n`,
+    );
+    assert.throws(() => withComputeTarget('web-function', () => nextjsAdapter({ projectDir: tmpDir })), {
+      code: 'IncompatibleOpenNextConfigError',
+      message: /wrapper: 'node'.*converter: 'node'.*generateDockerfile: true/,
+    });
+  });
+
+  void it('accepts a user config with the node container overrides when targeting Web Functions', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'open-next.config.ts'),
+      `export default { default: { override: { wrapper: 'node', converter: 'node', generateDockerfile: true } } };\n`,
+    );
+    assert.doesNotThrow(() => withComputeTarget('web-function', () => nextjsAdapter({ projectDir: tmpDir })));
   });
 });

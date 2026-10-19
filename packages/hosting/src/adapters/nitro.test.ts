@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { spawn } from './spawn.js';
 import { nitroAdapter } from './nitro.js';
+import { withComputeTarget } from './shared/compute_target.js';
 
 /**
  * Build a minimal `.output/` layout that nitroAdapter accepts. Caller
@@ -492,6 +493,20 @@ void describe('nitroAdapter — preset + feature validation', () => {
     assert.doesNotThrow(() =>
       nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
     );
+  });
+
+  void it('builds with the node-server preset when targeting Lambda Web Functions', () => {
+    writePackageJson(tmpDir);
+    let presetSeen: string | undefined;
+    // The build step runs through spawn; emit the build output from the mock
+    // (the adapter clears stale output before building).
+    mock.method(spawn, 'sync', (_cmd: string, _args: string[], opts: { env?: Record<string, string> }) => {
+      presetSeen = opts?.env?.NITRO_PRESET;
+      writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: presetSeen } });
+    });
+    const manifest = withComputeTarget('web-function', () => nitroAdapter({ projectDir: tmpDir }));
+    assert.strictEqual(presetSeen, 'node-server');
+    assert.strictEqual(manifest.compute.default?.type, 'http-server');
   });
 
   void it('accepts node-server', () => {

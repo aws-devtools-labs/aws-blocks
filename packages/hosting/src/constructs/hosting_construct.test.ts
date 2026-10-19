@@ -6,8 +6,9 @@ import * as os from 'os';
 import { App, CfnResource, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { HostingConstruct } from './hosting_construct.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { generateKvsRouterRequestCode } from './kvs_router.js';
 
@@ -53,7 +54,7 @@ const ssrManifest = (staticDir: string, bundleDir: string): DeployManifest => ({
       handler: 'index.handler',
       placement: 'regional',
       streaming: true,
-      runtime: 'nodejs20.x',
+      runtime: 'nodejs24.x',
     },
   },
   staticAssets: { directory: staticDir },
@@ -148,7 +149,7 @@ void describe('HostingConstruct — SSR mode', () => {
 
     const template = Template.fromStack(stack);
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'nodejs20.x',
+      Runtime: 'nodejs24.x',
       Handler: 'index.handler',
     });
   });
@@ -190,7 +191,7 @@ void describe('HostingConstruct — SSR mode', () => {
           entrypoint: 'server.js',
           port: 3000,
           placement: 'regional',
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
@@ -233,7 +234,7 @@ void describe('HostingConstruct — SSR mode', () => {
           bundle: bundleDir,
           handler: 'index.handler',
           placement: 'regional',
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
@@ -711,6 +712,27 @@ void describe('HostingConstruct — Cache/ISR', () => {
         }),
       }),
     );
+
+    // The seed custom resource must carry DeletionPolicy: Retain. On stack
+    // delete CFN reaps the provider framework Lambda before it sends this
+    // custom resource its Delete; without Retain that delete invoke targets an
+    // already-gone function and hangs to the 30-min timeout -> DELETE_FAILED.
+    // Retain makes CFN drop the resource without a delete invoke, which is
+    // safe because the OpenNext dynamodb-provider remove() path is a no-op.
+    // Match by properties (serviceToken + buildId) to pin the ISR seed
+    // resource specifically, not the DNS/other custom resources in the stack.
+    const seedResources = template.findResources(
+      'AWS::CloudFormation::CustomResource',
+      {
+        Properties: Match.objectLike({ buildId: Match.anyValue() }),
+        DeletionPolicy: 'Retain',
+      },
+    );
+    assert.strictEqual(
+      Object.keys(seedResources).length,
+      1,
+      'ISR tag-table seed custom resource must carry DeletionPolicy: Retain',
+    );
   });
 
   void it('does not seed cache when seedDirectory / initFunction are absent', () => {
@@ -1010,7 +1032,7 @@ void describe('HostingConstruct — Multi-compute', () => {
           handler: 'index.handler',
           placement: 'regional',
           streaming: true,
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
         api: {
           type: 'handler',
@@ -1018,7 +1040,7 @@ void describe('HostingConstruct — Multi-compute', () => {
           handler: 'index.handler',
           placement: 'regional',
           streaming: false,
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
@@ -1914,12 +1936,17 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  // These cases are about the *storage bucket* key, so they turn
+  // monitoring off — the default alarm topic brings its own KMS key
+  // and a stack-wide key count would conflate the two.
+
   void it('creates KMS key when storage.encryption is KMS', () => {
     const staticDir = createStaticDir();
     const stack = createStack();
     new HostingConstruct(stack, 'Hosting', {
       manifest: spaManifest(staticDir),
       storage: { encryption: 'KMS' },
+      monitoring: { enabled: false },
     });
 
     const template = Template.fromStack(stack);
@@ -1932,6 +1959,7 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     new HostingConstruct(stack, 'Hosting', {
       manifest: spaManifest(staticDir),
       storage: { encryption: 'KMS' },
+      monitoring: { enabled: false },
     });
 
     const template = Template.fromStack(stack);
@@ -1948,8 +1976,8 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     >;
     const statements = keyPolicy['Statement'] as Array<Record<string, unknown>>;
 
-    // Find the CloudFront decrypt statement
-    const cfDecryptStatement = statements.find((stmt) => {
+    // Find the CloudFront decrypt statement(s) on the key.
+    const cfDecryptStatements = statements.filter((stmt) => {
       const actions = stmt.Action;
       const principal = stmt.Principal as Record<string, unknown> | undefined;
       const service = principal?.Service;
@@ -1964,9 +1992,24 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     });
 
     assert.ok(
-      cfDecryptStatement,
+      cfDecryptStatements.length > 0,
       'KMS key policy must grant kms:Decrypt to cloudfront.amazonaws.com',
     );
+
+    // Every CloudFront decrypt grant on the key is conditioned on AWS:SourceArn matching a
+    // CloudFront distribution ARN in this account — none applies unconditionally.
+    for (const stmt of cfDecryptStatements) {
+      const conditions = (stmt.Condition ?? {}) as Record<string, Record<string, unknown>>;
+      const sourceArn = Object.values(conditions)
+        .map((op) => op['AWS:SourceArn'] ?? op['aws:SourceArn'])
+        .find((v) => v !== undefined);
+      const sourceArnJson = JSON.stringify(sourceArn);
+      assert.ok(sourceArn, `CloudFront KMS decrypt grant must carry AWS:SourceArn: ${JSON.stringify(stmt)}`);
+      assert.ok(
+        sourceArnJson.includes(':cloudfront::') && sourceArnJson.includes('AWS::AccountId'),
+        `AWS:SourceArn must be an account-scoped CloudFront distribution ARN: ${sourceArnJson}`,
+      );
+    }
   });
 
   void it('does NOT create KMS key when encryption is S3_MANAGED (default)', () => {
@@ -1974,6 +2017,7 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     const stack = createStack();
     new HostingConstruct(stack, 'Hosting', {
       manifest: spaManifest(staticDir),
+      monitoring: { enabled: false },
     });
 
     const template = Template.fromStack(stack);
@@ -1991,6 +2035,7 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     new HostingConstruct(stack, 'Hosting', {
       manifest: spaManifest(staticDir),
       storage: { encryption: 'S3_MANAGED' },
+      monitoring: { enabled: false },
     });
 
     const template = Template.fromStack(stack);
@@ -2000,6 +2045,49 @@ void describe('HostingConstruct — KMS Key Policy', () => {
       0,
       'Should NOT create a KMS key with explicit S3_MANAGED encryption',
     );
+  });
+
+  // ---- Alarm topic encryption through the L3 ----
+
+  void it('encrypts the default alarm topic and grants CloudWatch on its key', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: spaManifest(staticDir),
+    });
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::SNS::Topic', {
+      KmsMasterKeyId: Match.anyValue(),
+    });
+    template.hasResourceProperties('AWS::KMS::Key', {
+      KeyPolicy: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Effect: 'Allow',
+            Principal: { Service: 'cloudwatch.amazonaws.com' },
+            Action: ['kms:Decrypt', 'kms:GenerateDataKey*'],
+          }),
+        ]),
+      },
+    });
+  });
+
+  void it('applies monitoring.subscriptions to the alarm topic', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: spaManifest(staticDir),
+      monitoring: {
+        subscriptions: [new subs.EmailSubscription('oncall@example.com')],
+      },
+    });
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: 'oncall@example.com',
+    });
   });
 
   // ---- cdn.ssrDefaultTtl ----
@@ -2012,7 +2100,12 @@ void describe('HostingConstruct — KMS Key Policy', () => {
 
       new HostingConstruct(stack, 'Hosting', {
         manifest: ssrManifest(staticDir, bundleDir),
-        cdn: { ssrDefaultTtl: Duration.seconds(60) },
+        // ssrDefaultTtl > 0 requires a cache-key credential (fail-closed
+        // guard, CWE-524/525) so cacheable SSR responses are keyed per user.
+        cdn: {
+          ssrDefaultTtl: Duration.seconds(60),
+          cacheKeyCookies: ['session'],
+        },
       });
 
       const template = Template.fromStack(stack);
@@ -2162,7 +2255,7 @@ void describe('HostingConstruct — custom environment variables (M4)', () => {
           handler: 'index.handler',
           placement: 'regional',
           streaming: true,
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
@@ -3281,4 +3374,43 @@ void describe('HostingConstruct — static asset Cache-Control split (G19)', () 
       assert.match(p, /^builds\/cc-test-3\//, `prefix ${p} is under the build id`);
     }
   });
+});
+
+// ================================================================
+// Teardown safety — CDKBucketDeployment CRs must be RETAINed
+// ================================================================
+
+void describe('HostingConstruct — teardown safety', () => {
+	afterEach(() => {
+		if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	// A BucketDeployment custom resource whose delete-time handler fails wedges
+	// the whole stack in DELETE_FAILED, orphaning the CloudFront distribution
+	// (aws-cdk#15891 / #23708). Retaining the CRs removes them from the teardown
+	// path so the stack — and its distribution — delete cleanly.
+	void it('retains every CDKBucketDeployment custom resource (SPA)', () => {
+		const staticDir = createStaticDir();
+		const stack = createStack();
+		new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(staticDir) });
+		const template = Template.fromStack(stack);
+		const deployments = template.findResources('Custom::CDKBucketDeployment');
+		const ids = Object.keys(deployments);
+		assert.ok(ids.length > 0, 'expected at least one CDKBucketDeployment');
+		for (const id of ids) {
+			assert.strictEqual(deployments[id].DeletionPolicy, 'Retain', `${id} must be DeletionPolicy: Retain`);
+		}
+	});
+
+	void it('retains every CDKBucketDeployment custom resource (SSR)', () => {
+		const staticDir = createStaticDir();
+		const bundleDir = createBundleDir();
+		const stack = createStack();
+		new HostingConstruct(stack, 'Hosting', { manifest: ssrManifest(staticDir, bundleDir) });
+		const template = Template.fromStack(stack);
+		const deployments = template.findResources('Custom::CDKBucketDeployment');
+		for (const id of Object.keys(deployments)) {
+			assert.strictEqual(deployments[id].DeletionPolicy, 'Retain', `${id} must be DeletionPolicy: Retain`);
+		}
+	});
 });

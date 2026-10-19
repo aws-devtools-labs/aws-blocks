@@ -1,10 +1,10 @@
 import { Construct } from 'constructs';
-import { Duration, RemovalPolicy, Stack, Token } from 'aws-cdk-lib';
+import { Annotations, Duration, RemovalPolicy, Stack, Token } from 'aws-cdk-lib';
 import {
-  Alias,
+  type Alias,
   Architecture,
   Code,
-  FunctionUrl,
+  type FunctionUrl,
   FunctionUrlAuthType,
   InvokeMode,
   Function as LambdaFunction,
@@ -15,7 +15,7 @@ import { experimental } from 'aws-cdk-lib/aws-cloudfront';
 import { ManagedPolicy, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { HostingError } from '../hosting_error.js';
-import { ComputeResource } from '../manifest/types.js';
+import type { ComputeResource } from '../manifest/types.js';
 import { SSR_DEFAULT_PORT } from '../defaults.js';
 
 // ---- Constants ----
@@ -212,7 +212,7 @@ export class ComputeConstruct extends Construct {
     if (computeResource.type === 'handler') {
       // Native Lambda handler — no Web Adapter needed
       this.function = new LambdaFunction(this, 'Function', {
-        runtime: this.resolveRuntime(computeResource.runtime),
+        runtime: this.resolveRuntime(computeResource.runtime, props.name),
         handler: computeResource.handler ?? 'index.handler',
         code: Code.fromAsset(computeResource.bundle),
         architecture,
@@ -236,7 +236,7 @@ export class ComputeConstruct extends Construct {
       const port = computeResource.port ?? SSR_DEFAULT_PORT;
 
       this.function = new LambdaFunction(this, 'Function', {
-        runtime: this.resolveRuntime(computeResource.runtime),
+        runtime: this.resolveRuntime(computeResource.runtime, props.name),
         handler: computeResource.entrypoint ?? 'run.sh',
         code: Code.fromAsset(computeResource.bundle),
         architecture,
@@ -290,7 +290,7 @@ export class ComputeConstruct extends Construct {
         this,
         `EdgeFunction-${props.name}`,
         {
-          runtime: this.resolveRuntime(computeResource.runtime),
+          runtime: this.resolveRuntime(computeResource.runtime, props.name),
           handler: computeResource.handler ?? 'index.handler',
           code: Code.fromAsset(computeResource.bundle),
           architecture,
@@ -341,17 +341,48 @@ export class ComputeConstruct extends Construct {
     }
   }
 
-  private resolveRuntime(runtime?: string): Runtime {
-    if (!runtime || runtime === 'nodejs20.x') {
-      return Runtime.NODEJS_20_X;
+  private resolveRuntime(runtime: string | undefined, name: string): Runtime {
+    if (!runtime) {
+      return Runtime.NODEJS_24_X;
+    }
+    if (runtime === 'nodejs24.x') {
+      return Runtime.NODEJS_24_X;
     }
     if (runtime === 'nodejs22.x') {
       return Runtime.NODEJS_22_X;
     }
+    // `nodejs20.x` / `nodejs18.x` are still accepted so an explicit pin doesn't
+    // hard-break an existing/deployed function at synth, but both are past their
+    // AWS Lambda deprecation dates (Node 18: Apr 2025; Node 20: Apr 2026). Warn
+    // rather than throw — migrate the pin to a supported runtime when convenient.
+    if (runtime === 'nodejs20.x') {
+      this.warnEolRuntime(runtime, name);
+      return Runtime.NODEJS_20_X;
+    }
     if (runtime === 'nodejs18.x') {
+      this.warnEolRuntime(runtime, name);
       return Runtime.NODEJS_18_X;
     }
-    return Runtime.NODEJS_20_X;
+    throw new HostingError('UnsupportedRuntimeError', {
+      message: `Compute resource '${name}' declares an unsupported runtime '${runtime}'.`,
+      resolution:
+        'Use one of: nodejs24.x, nodejs22.x, nodejs20.x, nodejs18.x. ' +
+        'Omit the runtime to use the default (nodejs24.x).',
+    });
+  }
+
+  /**
+   * Emit a synth-time deprecation warning for an end-of-life Node.js runtime the
+   * user explicitly pinned. Non-fatal: the runtime is still used (so a deployed
+   * function isn't hard-broken), but the warning nudges a migration to a
+   * supported runtime before AWS forces one.
+   */
+  private warnEolRuntime(runtime: string, name: string): void {
+    Annotations.of(this).addWarning(
+      `Compute resource '${name}' pins '${runtime}', which is past its AWS Lambda ` +
+        'deprecation date (Node 18: Apr 2025; Node 20: Apr 2026). Migrate to nodejs22.x ' +
+        'or nodejs24.x, or omit the runtime to use the default (nodejs24.x).',
+    );
   }
 
   private validateWebAdapterRegion(

@@ -3,12 +3,7 @@
 
 import { existsSync, realpathSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
+import { blocksError } from '@aws-blocks/core';
 
 /**
  * Verifies that a resolved file path stays within the given base directory.

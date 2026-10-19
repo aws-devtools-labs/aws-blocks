@@ -135,10 +135,15 @@ test.describe('SvelteKit SSR Hosting', () => {
   test('a hashed _app/immutable asset is served immutable from S3', async ({ request }) => {
     const home = await request.get(hostingUrl);
     const html = await home.text();
-    const m = html.match(/(?:src|href)="([^"]*\/_app\/immutable\/[^"]*\.(?:js|css))"/);
+    // Match the asset path itself, not a src=/href= attribute. SvelteKit 2 loads
+    // its entry chunks with import() specifiers inside an inline bootstrap
+    // script — `import("./_app/immutable/entry/start.<hash>.js")` — so no
+    // attribute carries the URL, and `paths.relative` (the default) emits the
+    // specifier relative to the page. Matching the path keeps this working in
+    // both forms, and mirrors how the astro suite finds its /_astro/ chunk.
+    const m = html.match(/_app\/immutable\/[^"']+?\.(?:js|css)/);
     expect(m, 'home references an _app/immutable asset').toBeTruthy();
-    const url = m![1].startsWith('http') ? m![1] : `${hostingUrl}${m![1]}`;
-    const r = await request.get(url);
+    const r = await request.get(`${hostingUrl}/${m![0]}`);
     expect(r.status()).toBe(200);
     expect(r.headers()['cache-control'] ?? '').toMatch(/immutable|max-age=\d{5,}/);
   });

@@ -18,7 +18,7 @@ sealed class OidcException implements Exception {
 class OidcUnknownProviderException extends OidcException {
   final String provider;
   OidcUnknownProviderException(this.provider)
-      : super('Provider not configured: $provider');
+    : super('Provider not configured: $provider');
 }
 
 /// Token exchange with the backend failed.

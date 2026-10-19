@@ -1,10 +1,12 @@
 package com.aws.blocks.plugin
 
 import org.gradle.api.Action
+import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 
 /**
  * Configuration extension for the AWS Blocks codegen plugin.
@@ -20,10 +22,10 @@ abstract class AwsBlocksExtension(project: Project) {
     abstract val packageName: Property<String>
 
     /**
-     * Visibility of generated types. Set to [GeneratedVisibility.INTERNAL] to prevent
+     * Visibility of generated types. Set to [GeneratedVisibility.Internal] to prevent
      * generated interfaces and data classes from leaking into your module's public API.
      *
-     * Defaults to [GeneratedVisibility.PUBLIC].
+     * Defaults to [GeneratedVisibility.Public].
      */
     abstract val visibility: Property<GeneratedVisibility>
 
@@ -35,16 +37,24 @@ abstract class AwsBlocksExtension(project: Project) {
      */
     abstract val serverOverrides: MapProperty<String, String>
 
+    /**
+     * Logical identities from `x-blocks-native-packages` whose transferable results stay
+     * `UnknownTransferable`. An identity the spec does not declare opts nothing out and is
+     * reported as `AWSBLOCKS-NATIVE-006`.
+     */
+    abstract val excludeNativePackages: SetProperty<String>
+
     internal val oidcDsl = OidcDsl()
 
-    /** The OIDC redirect URL, resolved from the `oidc { }` DSL block. */
-    internal val redirectUrl: String? get() = oidcDsl.redirectUrl
+    /** The OIDC relay target, resolved from the `oidc { }` DSL block. */
+    internal val relayTo: String? get() = oidcDsl.resolve()
 
     init {
         apiSpec.convention(project.rootProject.layout.projectDirectory.file("blocks.spec.json"))
         packageName.convention("com.aws.blocks.generated")
         visibility.convention(GeneratedVisibility.Public)
         serverOverrides.convention(emptyMap())
+        excludeNativePackages.convention(emptySet())
     }
 
     /**
@@ -53,7 +63,7 @@ abstract class AwsBlocksExtension(project: Project) {
      * ```kotlin
      * awsBlocks {
      *     oidc {
-     *         redirectUrl = "com.yourcompany.yourapp://auth/callback"
+     *         relayTo = "com.yourcompany.yourapp://auth/callback"
      *     }
      * }
      * ```
@@ -90,8 +100,60 @@ abstract class AwsBlocksExtension(project: Project) {
  * DSL for configuring OIDC authentication.
  */
 class OidcDsl {
-    /** Custom-scheme URI the app receives after sign-in completes. */
+    /**
+     * URI the backend relays back to once sign-in completes, for example
+     * `"com.yourcompany.yourapp://auth/callback"`. Must match an entry in the backend's
+     * `allowedRelayOrigins`.
+     *
+     * Required on Android and iOS, where the scheme is registered with the operating system.
+     * Unused on JVM, which receives the relay on a loopback address it binds per sign-in.
+     */
+    var relayTo: String? = null
+
+    @Deprecated(
+        message = "Renamed to relayTo, matching the backend's allowedRelayOrigins and the wire field.",
+        replaceWith = ReplaceWith("relayTo"),
+        level = DeprecationLevel.WARNING,
+    )
     var redirectUrl: String? = null
+
+    /**
+     * Returns the configured relay target, accepting either property name.
+     *
+     * Both names write separate fields so that setting them to conflicting values is
+     * detectable rather than resolved by assignment order.
+     */
+    internal fun resolve(): String? {
+        @Suppress("DEPRECATION")
+        val legacy = redirectUrl
+        val current = relayTo
+        if (legacy != null && current != null && legacy != current) {
+            throw GradleException(
+                "awsBlocks.oidc: relayTo (\"$current\") and the deprecated redirectUrl " +
+                    "(\"$legacy\") are set to different values. Remove redirectUrl.",
+            )
+        }
+        return (current ?: legacy)?.also { validate(it) }
+    }
+
+    private fun validate(value: String) {
+        if (value.any { it.isWhitespace() }) {
+            throw GradleException("awsBlocks.oidc.relayTo contains whitespace: \"$value\"")
+        }
+        val scheme = value.substringBefore("://")
+        if (scheme.isEmpty() || scheme == value) {
+            throw GradleException(
+                "awsBlocks.oidc.relayTo is missing a scheme: \"$value\". Expected something " +
+                    "like \"com.yourcompany.yourapp://auth/callback\".",
+            )
+        }
+        if (scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)) {
+            throw GradleException(
+                "awsBlocks.oidc.relayTo uses the $scheme scheme: \"$value\". Android and iOS " +
+                    "sign-in needs a custom scheme the app registers with the operating system.",
+            )
+        }
+    }
 }
 
 /**

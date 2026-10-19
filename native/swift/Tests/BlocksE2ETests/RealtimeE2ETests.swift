@@ -13,6 +13,12 @@ final class RealtimeE2ETests: BlocksE2ETestCase {
     func testGetChannelDescriptor() async throws {
         let channel = try await api.realtimeGetChannel(channel: nil)
         XCTAssertNotNil(channel)
+        // A descriptor with no connect token passes every non-socket assertion
+        // and fails only when a socket opens. Check it here, with no socket.
+        XCTAssertTrue(
+            channel.wsUrl.contains("token="),
+            "hydrated wsUrl carries no connect token: \(channel.wsUrl)"
+        )
     }
 
     func testPublishCursor() async throws {
@@ -25,20 +31,35 @@ final class RealtimeE2ETests: BlocksE2ETestCase {
         let channel = try await api.realtimeGetChannel(channel: "swift-sub-test")
         let stream = channel.subscribe()
 
-        try await Task.sleep(nanoseconds: 500_000_000)
-
-        let published = Cursor(color: "#00ff00", userId: "swift-sub-test", x: 42, y: 99)
-        _ = try await api.realtimePublish(cursor: published, channel: "swift-sub-test")
-
-        let deadline = Date().addingTimeInterval(5)
-        for try await msg in stream {
-            XCTAssertEqual(msg.userId, "swift-sub-test")
-            XCTAssertEqual(msg.x, 42)
-            XCTAssertEqual(msg.y, 99)
-            XCTAssertEqual(msg.color, "#00ff00")
-            break
+        // Consume the stream on its own task. `for try await` blocks until a
+        // message arrives, so an inline loop hangs the test when none comes.
+        let received = XCTestExpectation(description: "cursor received on channel")
+        let consumer = Task {
+            for try await msg in stream {
+                XCTAssertEqual(msg.userId, "swift-sub-test")
+                XCTAssertEqual(msg.x, 42)
+                XCTAssertEqual(msg.y, 99)
+                XCTAssertEqual(msg.color, "#00ff00")
+                received.fulfill()
+                break
+            }
         }
-        XCTAssertTrue(Date() < deadline, "Timed out waiting for message")
+
+        // Publish once a second, not once after a fixed sleep. The subscribe
+        // frame is live only after a DynamoDB write, and a cold sandbox takes
+        // longer than any fixed sleep. The server drops a publish that lands
+        // before the frame is live and does not retry it.
+        let published = Cursor(color: "#00ff00", userId: "swift-sub-test", x: 42, y: 99)
+        let publisher = Task {
+            for _ in 0 ..< 20 {
+                _ = try? await api.realtimePublish(cursor: published, channel: "swift-sub-test")
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+
+        await fulfillment(of: [received], timeout: 25)
+        publisher.cancel()
+        consumer.cancel()
         channel.close()
     }
 

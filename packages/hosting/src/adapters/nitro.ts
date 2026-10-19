@@ -27,6 +27,7 @@ import fg from 'fast-glob';
 import semver from 'semver';
 import { getPackageInfoSync, isPackageExists } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
+import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import type {
   ComputeResource,
   DeployManifest,
@@ -38,6 +39,7 @@ import {
   IPX_LAMBDA_PACKAGE_JSON,
 } from './ipx_lambda_template.js';
 import { normalizeBasePath } from './shared/basepath.js';
+import { targetCompute } from './shared/compute_target.js';
 
 export type NitroAdapterOptions = {
   /** Project root directory (the directory containing the framework config) */
@@ -52,6 +54,10 @@ export type NitroAdapterOptions = {
    * in the user's `nuxt.config.ts` (the adapter reads this from
    * `.output/nitro.json`). `'node-server'` produces a plain Node HTTP
    * server (run via the Lambda Web Adapter).
+   *
+   * When the run targets Lambda Web Functions (`compute.type:
+   * 'web-function'`, see `withComputeTarget`) the default is
+   * `'node-server'` instead — Web Functions run the HTTP server directly.
    */
   preset?: string;
   /**
@@ -248,7 +254,9 @@ type NitroRouteRule = {
  */
 export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   const { projectDir, skipBuild, preset, buildCommand } = options;
-  const effectivePreset = preset ?? 'aws-lambda';
+  // Web Functions run a plain Node.js HTTP server → `node-server`; Lambda
+  // compute (API Gateway) → `aws-lambda`.
+  const effectivePreset = preset ?? (targetCompute() === 'web-function' ? 'node-server' : 'aws-lambda');
 
   const outputDir = path.join(projectDir, '.output');
   const nitroJsonPath = path.join(outputDir, 'nitro.json');
@@ -1378,7 +1386,7 @@ const presetToCompute = (
       entrypoint: 'index.mjs',
       port: 3000,
       placement: 'regional',
-      runtime: 'nodejs20.x',
+      runtime: FRAMEWORK_COMPUTE_RUNTIME,
     };
   }
 
@@ -1392,7 +1400,7 @@ const presetToCompute = (
     handler: 'index.handler',
     placement: 'regional',
     streaming: awsLambdaStreaming,
-    runtime: 'nodejs20.x',
+    runtime: FRAMEWORK_COMPUTE_RUNTIME,
   };
 };
 

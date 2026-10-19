@@ -10,11 +10,13 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, openSync, writeSync, closeSync, constants } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { debuglog } from 'node:util';
+
+import { isCI as ciInfoIsCI } from 'ci-info';
 
 const debug = debuglog('blocks-telemetry');
 
@@ -27,24 +29,32 @@ const blocksVersion: string = JSON.parse(
 
 // ─── Consent ─────────────────────────────────────────────────────────────────
 
-function isCI(): boolean {
-  return !!(
-    process.env.CI ||
-    process.env.CONTINUOUS_INTEGRATION ||
-    process.env.BUILD_NUMBER ||
-    process.env.CODEBUILD_BUILD_ID ||
-    process.env.GITHUB_ACTIONS ||
-    process.env.GITLAB_CI ||
-    process.env.CIRCLECI ||
-    process.env.JENKINS_URL ||
-    process.env.TF_BUILD ||
-    process.env.BITBUCKET_BUILD_NUMBER ||
-    process.env.BUILDKITE
-  );
+// Keep behaviorally identical to packages/core/src/telemetry/environment.ts.
+
+// Checked by the previous implementation; ci-info does not match these alone.
+const EXTRA_CI_ENV_VARS = ['CODEBUILD_BUILD_ID', 'JENKINS_URL', 'BITBUCKET_BUILD_NUMBER', 'TASKCLUSTER_ROOT_URL'];
+
+/** ci-info result (fixed at import) OR per-call extra checks; `CI=false` at startup disables both. */
+export function isCI(): boolean {
+  if (ciInfoIsCI) return true;
+  const env = process.env;
+  if (env.CI === 'false') return false;
+  return EXTRA_CI_ENV_VARS.some((key) => !!env[key]);
+}
+
+/**
+ * Whether an `AWS_BLOCKS_DISABLE_TELEMETRY` value means "disabled".
+ *
+ * Keep behaviorally identical to packages/core/src/telemetry/consent.ts.
+ */
+export function isDisableValue(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
 
 function isTelemetryEnabled(): boolean {
-  if (process.env.AWS_BLOCKS_DISABLE_TELEMETRY === '1') return false;
+  if (isDisableValue(process.env.AWS_BLOCKS_DISABLE_TELEMETRY)) return false;
 
   // Per-project config
   try {
@@ -71,6 +81,7 @@ const FIRST_RUN_NOTICE = `
 AWS Blocks collects anonymous usage data to improve the product.
 No customer content or PII is collected.
 To disable: npx blocks-telemetry --disable (or export AWS_BLOCKS_DISABLE_TELEMETRY=1)
+The env var accepts 1, true, or yes (case-insensitive).
 `;
 
 function getInstallationId(): string {
@@ -143,14 +154,17 @@ export function getTelemetryFilePath(): string | undefined {
   }
   const idx = process.argv.indexOf('--telemetry-file');
   if (idx !== -1 && process.argv[idx + 1] && !process.argv[idx + 1].startsWith('-')) {
-    return process.argv[idx + 1];
+    const path = process.argv[idx + 1];
+    return path.trim() === '' ? undefined : path;
   }
   return undefined;
 }
 
+const ownedTelemetryFiles = new Set<string>();
+
 function writeToTelemetryFile(event: Record<string, unknown>): void {
   const filePath = getTelemetryFilePath();
-  if (!filePath) return;  // getTelemetryFilePath already rejects empty/whitespace
+  if (!filePath) return;
 
   try {
     const dir = dirname(filePath);
@@ -163,9 +177,24 @@ function writeToTelemetryFile(event: Record<string, unknown>): void {
     const content = JSON.stringify([event], null, 2);
     writeSync(fd, content);
     closeSync(fd);
+    ownedTelemetryFiles.add(resolve(filePath));
   } catch (err: any) {
-    // EEXIST = file already existed → skip (protects user data)
+    // Appending only to a path this run created leaves a pre-existing file intact.
+    if (err?.code === 'EEXIST' && ownedTelemetryFiles.has(resolve(filePath))) {
+      appendToTelemetryFile(filePath, event);
+    }
     // All other errors silently ignored — telemetry must never affect commands
+  }
+}
+
+function appendToTelemetryFile(filePath: string, event: Record<string, unknown>): void {
+  try {
+    const events = JSON.parse(readFileSync(filePath, 'utf-8'));
+    if (!Array.isArray(events)) throw new Error('telemetry file is not a JSON array');
+    events.push(event);
+    writeFileSync(filePath, JSON.stringify(events, null, 2));
+  } catch (err) {
+    debug('failed to append telemetry event: %s', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -211,25 +240,22 @@ export interface TrackCommandOptions {
  * Measures wall-clock duration, classifies errors, and sends a single telemetry
  * event after the command completes (success or failure).
  *
- * If telemetry is disabled AND no `--telemetry-file` is set, the wrapped
- * function runs without any telemetry overhead or side effects (no IDs
- * persisted, no first-run notice).
+ * If telemetry is disabled, the wrapped function runs with no telemetry side effects: no
+ * installation ID persisted, no first-run notice, no file, no HTTP.
  *
- * The file sink writes regardless of opt-out status (inspired by CDK CLI's --telemetry-file).
- * The HTTP sink is fire-and-forget with a 500ms timeout and respects consent —
- * it will never delay the command.
+ * When enabled, the file sink writes to `--telemetry-file` (if set) and the HTTP sink is
+ * detached and unref'd, so the command does not wait for it.
  */
 export async function trackCommand(
   commandName: string,
   fn: () => Promise<void>,
   options?: TrackCommandOptions,
 ): Promise<void> {
-  const filePath = getTelemetryFilePath();
-  const enabled = isTelemetryEnabled();
-
-  if (!filePath && !enabled) {
+  if (!isTelemetryEnabled()) {
     return fn();
   }
+
+  const filePath = getTelemetryFilePath();
 
   const startTime = Date.now();
   let state: 'SUCCESS' | 'FAIL' = 'SUCCESS';
@@ -242,30 +268,34 @@ export async function trackCommand(
     errorInfo = classifyError(error);
     throw error;
   } finally {
-    const duration = Date.now() - startTime;
+    // Re-read consent: an opt-out can land while fn() runs. A bare `return` here would
+    // swallow the rethrow above.
+    if (isTelemetryEnabled()) {
+      const duration = Date.now() - startTime;
 
-    const event = {
-      telemetryVersion: TELEMETRY_VERSION,
-      identifiers: {
-        installationId: getInstallationId(),
-        projectId: randomUUID(), // new project each time
-        eventId: randomUUID(),
-        timestamp: new Date().toISOString(),
-      },
-      event: {
-        command: commandName,
-        state,
-        duration,
-        ...(errorInfo && { error: errorInfo }),
-      },
-      environment: collectEnvironment(),
-      product: {
-        blocksVersion,
-        ...(options?.template && { template: { name: options.template, ...(options.templateVersion && { version: options.templateVersion }) } }),
-      },
-    };
+      const event = {
+        telemetryVersion: TELEMETRY_VERSION,
+        identifiers: {
+          installationId: getInstallationId(),
+          projectId: randomUUID(), // new project each time
+          eventId: randomUUID(),
+          timestamp: new Date().toISOString(),
+        },
+        event: {
+          command: commandName,
+          state,
+          duration,
+          ...(errorInfo && { error: errorInfo }),
+        },
+        environment: collectEnvironment(),
+        product: {
+          blocksVersion,
+          ...(options?.template && { template: { name: options.template, ...(options.templateVersion && { version: options.templateVersion }) } }),
+        },
+      };
 
-    if (filePath) writeToTelemetryFile(event);
-    if (enabled) sendEvent(event);
+      if (filePath) writeToTelemetryFile(event);
+      sendEvent(event);
+    }
   }
 }

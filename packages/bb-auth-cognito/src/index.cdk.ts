@@ -19,11 +19,12 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import type * as lambda from 'aws-cdk-lib/aws-lambda';
-import { Scope } from '@aws-blocks/core/cdk';
-import { registerConfig } from '@aws-blocks/core/cdk';
+
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import { registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -35,8 +36,10 @@ import type {
 	UserAttribute,
 } from './types.js';
 import { envVarNames, makeExternalUserPoolRef } from './types.js';
+import { BB_NAME } from './version.js';
 
 export * from './types.js';
+export { SessionStore, type SessionRecord } from './sessions.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthCognito (CDK)
@@ -64,7 +67,7 @@ export * from './types.js';
  * Grants the Lambda `cognito-idp:*` scoped to this pool's ARN; the SSM
  * secret's IAM is granted by AppSetting itself.
  */
-export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> extends Scope {
+export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> extends BuildingBlockScope {
 	public readonly userPool: cognito.IUserPool;
 	public readonly userPoolClient: cognito.IUserPoolClient;
 	private readonly sessions: KVStore;
@@ -72,7 +75,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	private readonly adminOptions?: AdminOptions;
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);
 		this.adminOptions = opts.admin;
@@ -238,6 +241,12 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		this.userPoolClient = new cognito.UserPoolClient(this, 'client', {
 			userPool: this.userPool,
 			generateSecret: false,
+			// Return a uniform error for "user doesn't exist" and "wrong
+			// password" so sign-in / forgot-password responses can't be used to
+			// enumerate which usernames are registered. Without this, Cognito
+			// leaks a distinct UserNotFoundException, which is an account-
+			// enumeration oracle. Amazon's recommended posture is ENABLED.
+			preventUserExistenceErrors: true,
 			// SDK + session-cookie auth only; the hosted UI is never used.
 			// Off by default CDK would enable the implicit grant and a
 			// placeholder example.com callback — unused attack surface.
@@ -270,22 +279,24 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 
 		// 4. Session HMAC secret — SSM SecureString via AppSetting. The
 		// construct generates a random value on first deploy, wires the
-		// custom resource, and grants `this.handler` ssm:GetParameter +
+		// custom resource, and grants the shared execution role ssm:GetParameter +
 		// kms:Decrypt automatically. The runtime (`index.aws.ts`) reads it
 		// by instantiating its own `AppSetting` at the same scope path, so
 		// no env var is needed.
 		new AppSetting(this, 'session-secret', { secret: true });
 
 		// 5. Session store (KVStore). Propagate `removalPolicy` so retain-mode
-		// customers don't lose live sessions on stack delete.
-		this.sessions = new KVStore(this, 'sessions', { removalPolicy: opts.removalPolicy });
+		// customers don't lose live sessions on stack delete. TTL is enabled so
+		// session records — which hold live Cognito refresh tokens — expire with
+		// the session instead of accumulating forever; the runtime stamps each
+		// write with `now + sessionTtlSeconds`.
+		this.sessions = new KVStore(this, 'sessions', { removalPolicy: opts.removalPolicy, ttl: true });
 
 		// 6. Env vars + IAM
-		const fn = this.handler as lambda.Function;
 		registerConfig(this, env.USER_POOL_ID, this.userPool.userPoolId);
 		registerConfig(this, env.CLIENT_ID, this.userPoolClient.userPoolClientId);
 		registerConfig(this, env.REGION, cdk.Stack.of(this).region);
-		this.grantCognitoPermissions(fn);
+		this.grantCognitoPermissions(this.executionRole);
 	}
 
 	/**
@@ -311,11 +322,18 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 
 	// ─── IAM helpers ──────────────────────────────────────────────────────
 
-	private grantCognitoPermissions(fn: lambda.Function): void {
+	private grantCognitoPermissions(role: iam.IRole): void {
 		const poolArn = this.userPool.userPoolArn;
 		// Client-facing actions — work on the signed-in user via their access token.
-		fn.addToRolePolicy(new iam.PolicyStatement({
+		role.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: [
+				// `requireRole` reads live group membership via
+				// AdminListGroupsForUser so admin-driven group changes take
+				// effect (and revocations apply) without a re-login. It is a
+				// client-facing guard available on every pool, so this action is
+				// granted unconditionally — independent of the opt-in `admin`
+				// surface. (The admin slices also list it; IAM dedups.)
+				'cognito-idp:AdminListGroupsForUser',
 				'cognito-idp:SignUp',
 				'cognito-idp:ConfirmSignUp',
 				'cognito-idp:ResendConfirmationCode',
@@ -358,7 +376,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		if (admin) {
 			const adminActions = adminIamActions(admin.actions);
 			if (adminActions.length > 0) {
-				fn.addToRolePolicy(new iam.PolicyStatement({
+				role.addToPrincipalPolicy(new iam.PolicyStatement({
 					actions: adminActions,
 					resources: [poolArn],
 				}));
@@ -366,6 +384,40 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		}
 	}
 
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	signUp(..._args: unknown[]): never { return synthGuard('AuthCognito', 'signUp'); }
+	confirmSignUp(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmSignUp'); }
+	autoSignIn(..._args: unknown[]): never { return synthGuard('AuthCognito', 'autoSignIn'); }
+	resendSignUpCode(..._args: unknown[]): never { return synthGuard('AuthCognito', 'resendSignUpCode'); }
+	signIn(..._args: unknown[]): never { return synthGuard('AuthCognito', 'signIn'); }
+	confirmSignIn(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmSignIn'); }
+	signOut(..._args: unknown[]): never { return synthGuard('AuthCognito', 'signOut'); }
+	requireAuth(..._args: unknown[]): never { return synthGuard('AuthCognito', 'requireAuth'); }
+	checkAuth(..._args: unknown[]): never { return synthGuard('AuthCognito', 'checkAuth'); }
+	getCurrentUser(..._args: unknown[]): never { return synthGuard('AuthCognito', 'getCurrentUser'); }
+	fetchAuthSession(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchAuthSession'); }
+	requireRole(..._args: unknown[]): never { return synthGuard('AuthCognito', 'requireRole'); }
+	fetchUserAttributes(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchUserAttributes'); }
+	updatePassword(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updatePassword'); }
+	updateUserAttributes(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updateUserAttributes'); }
+	updateUserAttribute(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updateUserAttribute'); }
+	confirmUserAttribute(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmUserAttribute'); }
+	sendUserAttributeVerificationCode(..._args: unknown[]): never { return synthGuard('AuthCognito', 'sendUserAttributeVerificationCode'); }
+	deleteUser(..._args: unknown[]): never { return synthGuard('AuthCognito', 'deleteUser'); }
+	resetPassword(..._args: unknown[]): never { return synthGuard('AuthCognito', 'resetPassword'); }
+	confirmResetPassword(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmResetPassword'); }
+	setUpTOTP(..._args: unknown[]): never { return synthGuard('AuthCognito', 'setUpTOTP'); }
+	verifyTOTPSetup(..._args: unknown[]): never { return synthGuard('AuthCognito', 'verifyTOTPSetup'); }
+	updateMFAPreference(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updateMFAPreference'); }
+	fetchMFAPreference(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchMFAPreference'); }
+	fetchDevices(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchDevices'); }
+	rememberDevice(..._args: unknown[]): never { return synthGuard('AuthCognito', 'rememberDevice'); }
+	forgetDevice(..._args: unknown[]): never { return synthGuard('AuthCognito', 'forgetDevice'); }
+	startPasskeyRegistration(..._args: unknown[]): never { return synthGuard('AuthCognito', 'startPasskeyRegistration'); }
+	completePasskeyRegistration(..._args: unknown[]): never { return synthGuard('AuthCognito', 'completePasskeyRegistration'); }
+	listPasskeys(..._args: unknown[]): never { return synthGuard('AuthCognito', 'listPasskeys'); }
+	deletePasskey(..._args: unknown[]): never { return synthGuard('AuthCognito', 'deletePasskey'); }
+	get admin(): never { return synthGuard('AuthCognito', 'admin'); }
 }
 
 /**

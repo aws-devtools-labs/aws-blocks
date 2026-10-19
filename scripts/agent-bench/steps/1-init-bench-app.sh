@@ -24,9 +24,8 @@ export NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT="${NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT:-1
 
 # BUILD-ONCE: the upstream `build-blocks` job packs the monorepo to dist-registry/ once per run and
 # hands it to every cell as an artifact. If present (guard requires an actual *.tgz, since
-# download-artifact creates the dir even on a skipped/partial extract), reuse it and skip the ~150s
+# download-artifact creates the dir even on a skipped/partial extract), reuse it and skip the ~40s
 # per-cell build + pack; otherwise build locally so the cell is self-sufficient.
-# `npm run build` is topology-aware; `build:packages` runs alphabetically and trips over bb-data.
 if [ -d dist-registry ] && [ -n "$(find dist-registry -name '*.tgz' -type f 2>/dev/null)" ]; then
   echo "1. Init: reusing prebuilt dist-registry/ (from the build-blocks job) — skipping monorepo build + pack"
 else

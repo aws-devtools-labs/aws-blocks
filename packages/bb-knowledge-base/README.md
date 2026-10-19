@@ -49,7 +49,7 @@ const kb = new KnowledgeBase(scope, id, options)
 | `chunking` | `ChunkingConfig` | `{ strategy: 'semantic' }` | How documents are split into chunks. |
 | `embeddingDimensions` | `256 \| 512 \| 1024` | `1024` | Embedding model dimensions. |
 | `description` | `string` | — | Human-readable description for the knowledge base. |
-| `removalPolicy` | `'destroy' \| 'retain'` | `'retain'` | CDK removal behavior for BB-created data buckets (imported `s3://` URI sources are unaffected). Defaults to RETAIN (bucket and documents preserved on `cdk destroy`) unless sandbox mode. Pass `'destroy'` for ephemeral stacks — also enables `autoDeleteObjects`. |
+| `removalPolicy` | `'destroy' \| 'retain'` | stack `defaults` | CDK removal behavior for BB-created data buckets (imported `s3://` URI sources are unaffected). When omitted, follows the stack-wide `defaults` (`production` → RETAIN, `sandbox` → DESTROY). Pass `'destroy'` to drop the bucket on teardown for this KB — also enables `autoDeleteObjects`. |
 | `logger` | `ChildLogger` | — | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 
 ### Source Configuration
@@ -149,6 +149,13 @@ const results = await kb.retrieve('pricing', {
 ```
 
 Subfolder paths automatically populate the `folder` metadata key. For example, a file at `./knowledge/faq/billing.md` gets `metadata.folder = 'faq'`.
+
+## Trust Boundary
+
+A knowledge base is one index, not one per user or tenant, and `retrieve()` returns whatever matches. Two consequences:
+
+- **A filter is a query scope, not an access control.** If you keep several users' or tenants' documents in one knowledge base, set the filter in your server code from the authenticated caller (for example `filter: { tenant: { equals: user.tenantId } }`). Never take it from the request body or from an agent tool's input, or a caller can read other tenants' documents by changing it.
+- **Indexed text is untrusted.** If a source can receive content you don't write yourself, for example an `s3://` source that is a `FileBucket` your users upload to, that content reaches anyone who retrieves it. When results go to an agent, they can carry instructions that try to make it misuse its tools (indirect prompt injection). Mark the agent tool that calls `retrieve()` with `untrustedOutput: true`, and see [Retrieved content is untrusted](../bb-agent/README.md#retrieved-content-is-untrusted) in the Agent docs.
 
 ## Error Handling
 

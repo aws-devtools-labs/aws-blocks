@@ -329,7 +329,7 @@ void describe('Cache (ISR) provisioning', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       MemorySize: 256,
       Timeout: 30,
-      Runtime: 'nodejs20.x',
+      Runtime: 'nodejs24.x',
     });
   });
 });

@@ -45,12 +45,13 @@ void main() {
           jsonEncode({
             'accessToken': 'at_123',
             'refreshToken': 'rt_456',
-            'expiresAt':
-                DateTime.now().add(Duration(hours: 1)).millisecondsSinceEpoch,
+            'expiresAt': DateTime.now()
+                .add(Duration(hours: 1))
+                .millisecondsSinceEpoch,
             'user': {
               'userId': 'u1',
               'username': 'alice',
-              'groups': ['admin']
+              'groups': ['admin'],
             },
           }),
           200,
@@ -102,8 +103,9 @@ void main() {
         return http.Response(
           jsonEncode({
             'accessToken': 'at_new',
-            'expiresAt':
-                DateTime.now().add(Duration(hours: 1)).millisecondsSinceEpoch,
+            'expiresAt': DateTime.now()
+                .add(Duration(hours: 1))
+                .millisecondsSinceEpoch,
           }),
           200,
         );
@@ -156,9 +158,10 @@ void main() {
       final store = InMemoryTokenStore();
       await store.set('access_token', 'at_valid');
       await store.set(
-          'expires_at',
-          (DateTime.now().add(Duration(hours: 1)).millisecondsSinceEpoch)
-              .toString());
+        'expires_at',
+        (DateTime.now().add(Duration(hours: 1)).millisecondsSinceEpoch)
+            .toString(),
+      );
 
       final client = OidcClient(
         exchangePath: '/auth/exchange',
@@ -195,14 +198,17 @@ void main() {
       await store.set('access_token', 'at_old');
       await store.set('refresh_token', 'rt_valid');
 
-      final mockClient = MockClient((_) async => http.Response(
-            jsonEncode({
-              'accessToken': 'at_refreshed',
-              'expiresAt':
-                  DateTime.now().add(Duration(hours: 1)).millisecondsSinceEpoch,
-            }),
-            200,
-          ));
+      final mockClient = MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'accessToken': 'at_refreshed',
+            'expiresAt': DateTime.now()
+                .add(Duration(hours: 1))
+                .millisecondsSinceEpoch,
+          }),
+          200,
+        ),
+      );
 
       final client = OidcClient(
         exchangePath: '/auth/exchange',
@@ -244,18 +250,23 @@ void main() {
     test('emits OidcSignedIn when valid JWT token exists', () async {
       final store = InMemoryTokenStore();
       // Create a fake JWT with payload
-      final payload = base64Url.encode(utf8.encode(jsonEncode({
-        'sub': 'user-1',
-        'username': 'bob',
-        'groups': ['dev'],
-      })));
+      final payload = base64Url.encode(
+        utf8.encode(
+          jsonEncode({
+            'sub': 'user-1',
+            'username': 'bob',
+            'groups': ['dev'],
+          }),
+        ),
+      );
       final fakeJwt = 'header.$payload.signature';
       await store.set('access_token', fakeJwt);
       await store.set('refresh_token', 'rt_valid');
       await store.set(
-          'expires_at',
-          (DateTime.now().add(Duration(hours: 1)).millisecondsSinceEpoch)
-              .toString());
+        'expires_at',
+        (DateTime.now().add(Duration(hours: 1)).millisecondsSinceEpoch)
+            .toString(),
+      );
 
       final client = OidcClient(
         exchangePath: '/auth/exchange',

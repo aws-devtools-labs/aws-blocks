@@ -8,12 +8,15 @@ import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { api as apiType } from 'aws-blocks';
+import { ApiError } from '@aws-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
 import { kvStoreTests } from './kv-store.test.js';
 import { distributedTableTests } from './distributed-table.test.js';
+import { distributedTableSecureDefaultsTests } from './distributed-table-secure-defaults.test.js';
 import { realtimeTests } from './realtime.test.js';
 import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
+import { corsPreflightTests } from './cors-preflight.test.js';
 import { authCognitoTests } from './auth-cognito.test.js';
 import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
 import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
@@ -21,10 +24,12 @@ import { oidcAuthTests } from './oidc-auth.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
 import { asyncJobTests } from './async-job.test.js';
+import { asyncJobStatusTests } from './async-job-status.test.js';
 import { agentTests } from './agent.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
 import { appSettingTests } from './app-setting.test.js';
+import { secretTests } from './secret.test.js';
 import { knowledgeBaseTests } from './knowledge-base.test.js';
 import { emailClientTests } from './email-client.test.js';
 import { rawRouteTests } from './raw-route.test.js';
@@ -150,6 +155,32 @@ test.after(async (t) => {
     console.log(`✅ ${ENV} stack destroyed`);
   }
 
+  // Close the realtime client middleware's pooled WebSocket(s) so the event
+  // loop drains and node:test can exit 0 on its own. The realtime client
+  // middleware keeps a module-level connection pool (a shared WS per endpoint,
+  // plus keep-alive/reconnect timers) that nothing else tears down: killing the
+  // server above stops the *server*, but the *client* pool in this test process
+  // stays open and holds the event loop alive, tripping the 15s backstop below
+  // even when every test passed.
+  //
+  // Which module owns that pool is environment-dependent. Under `tsx -C browser`
+  // `import 'aws-blocks'` resolves (via the package's `browser` export) to the
+  // generated client.js, which side-effect-imports the realtime client
+  // middleware — bb-realtime/mock-middleware locally, bb-realtime/aws-middleware
+  // on sandbox/production. We reset BOTH, best-effort: a dynamic import of the
+  // already-loaded module returns the SAME cached instance whose pool holds the
+  // live sockets, and the other module's reset is a harmless no-op over an empty
+  // pool. Doing this as a dynamic (not top-level) import keeps the inactive
+  // module out of the response-hydration chain during the tests themselves.
+  for (const spec of ['@aws-blocks/bb-realtime/mock-middleware', '@aws-blocks/bb-realtime/aws-middleware']) {
+    try {
+      const mw = await import(spec);
+      (mw as { __resetConnectionsForTest?: () => void }).__resetConnectionsForTest?.();
+    } catch {
+      // Best-effort teardown: never let a missing/renamed helper throw here.
+    }
+  }
+
   // Backstop: if open handles prevent node:test from exiting, force-exit
   // after a grace period. This timer is unref'd so it does NOT keep the
   // event loop alive — if all handles close, node:test exits naturally
@@ -190,6 +221,9 @@ kvStoreTests(() => api);
 // DistributedTable tests (separate file)
 distributedTableTests(() => api);
 
+// DistributedTable secure-defaults deploy coverage (separate file)
+distributedTableSecureDefaultsTests(() => api);
+
 // Database tests (separate file)
 databaseTests(() => api);
 
@@ -199,6 +233,9 @@ dsqlTests(() => api);
 // AppSetting tests (separate file)
 appSettingTests(() => api);
 
+// Secret tests (separate file)
+secretTests(() => api);
+
 // Realtime tests (separate file)
 realtimeTests(() => api);
 
@@ -207,6 +244,9 @@ basicAuthTests(() => api);
 
 // AuthBasic cookie-attribute convergence tests (separate file)
 authCookieAttrsTests(() => api);
+
+// CORS preflight allow-list tests (separate file)
+corsPreflightTests(() => api);
 
 // AuthCognito tests (separate file)
 authCognitoTests(() => api);
@@ -225,6 +265,9 @@ databaseTests(() => api);
 
 // AsyncJob tests (separate file)
 asyncJobTests(() => api);
+
+// AsyncJob status tracking tests (separate file)
+asyncJobStatusTests(() => api);
 
 // CronJob tests (separate file)
 cronJobTests(() => api);
@@ -266,7 +309,9 @@ test('Context - access headers', { timeout: 10_000 }, async () => {
 });
 
 test('Error handling - propagates errors', { timeout: 10_000 }, async () => {
-  await assert.rejects(() => api.throwError('test error'), /test error/);
+  // throwError throws a raw Error; the RPC gate sanitizes it to a generic 500,
+  // so the client sees an ApiError with no leaked message (D-003 / #227).
+  await assert.rejects(() => api.throwError('test error'), ApiError);
 });
 
 test('Data types - serialization', { timeout: 10_000 }, async () => {

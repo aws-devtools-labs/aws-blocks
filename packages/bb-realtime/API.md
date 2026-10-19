@@ -32,10 +32,18 @@ export interface RealtimeChannel<T = unknown> {
     subscribe(handler: (message: T) => void): RealtimeSubscription;
     // (undocumented)
     subscribe(options: SubscribeOptions<T>): RealtimeSubscription;
-    // Warning: (ae-forgotten-export) The symbol "RealtimeChannelDescriptor" needs to be exported by the entry point index.aws.d.ts
-    //
     // @internal
     toJSON(): RealtimeChannelDescriptor;
+}
+
+// @public
+export interface RealtimeChannelDescriptor {
+    // (undocumented)
+    __blocks: 'realtime/channel';
+    // (undocumented)
+    [key: string]: unknown;
+    // (undocumented)
+    channel: string;
 }
 
 // @public
@@ -43,6 +51,7 @@ export const RealtimeErrors: {
     readonly PublishFailed: "PublishFailedException";
     readonly ValidationFailed: "ValidationFailedException";
     readonly ConnectionFailed: "ConnectionFailedException";
+    readonly UnsupportedCompute: "UnsupportedComputeException";
 };
 
 // @public (undocumented)
@@ -70,6 +79,8 @@ export interface RealtimeSubscription {
 export interface SubscribeOptions<T = unknown> {
     onDisconnect?: (reason: DisconnectReason) => void;
     onMessage: (message: T) => void;
+    onReconnect?: () => void;
+    refresh?: () => Promise<RealtimeChannelDescriptor>;
 }
 
 // (No @packageDocumentation comment for this package)

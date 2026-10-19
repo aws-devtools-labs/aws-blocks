@@ -89,17 +89,13 @@ export interface KnowledgeBaseOptions {
 	description?: string;
 	/**
 	 * CDK removal behavior for the data bucket (only for BB-created
-	 * buckets; imported S3 URI sources are unaffected). When omitted,
-	 * CDK's default applies (RETAIN — the bucket and its documents are
-	 * preserved on `cdk destroy`).
+	 * buckets; imported S3 URI sources are unaffected). When omitted, the
+	 * stack-wide `defaults` apply (`production` → RETAIN so the bucket and its
+	 * documents are preserved on `cdk destroy`; `sandbox` → DESTROY).
 	 *
-	 * Pass `'destroy'` for sandbox / ephemeral stacks where the data
-	 * bucket should be dropped on teardown. This also enables
-	 * `autoDeleteObjects` so CloudFormation can empty the bucket before
-	 * deletion. Pass `'retain'` to set the policy explicitly.
-	 *
-	 * Templates that apply `RemovalPolicies.of(stack).destroy()` at the
-	 * top level override this setting.
+	 * Pass `'destroy'` to drop the data bucket on teardown for this one
+	 * knowledge base — this also enables `autoDeleteObjects` so CloudFormation
+	 * can empty the bucket before deletion. Pass `'retain'` to keep it.
 	 */
 	removalPolicy?: 'destroy' | 'retain';
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
@@ -134,7 +130,12 @@ export type MetadataFilter = Record<string, { equals: string }>;
  * Options for the `retrieve()` method.
  */
 export interface RetrieveOptions {
-	/** Maximum results to return. Clamped to 1–100. Default: 10. */
+	/**
+	 * Maximum results to return. Must be an integer; a finite integer outside
+	 * 1–100 is clamped to that range. A fractional or non-finite value (`1.5`,
+	 * `NaN`, `Infinity`) is rejected with `KnowledgeBaseErrors.ValidationError`,
+	 * since Bedrock requires an integer here. Default: 10.
+	 */
 	maxResults?: number;
 	/** Metadata filter with AND semantics across all key-value pairs. Only chunks whose metadata matches every condition are returned. */
 	filter?: MetadataFilter;

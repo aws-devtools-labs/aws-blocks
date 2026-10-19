@@ -19,6 +19,9 @@
   "references": [
     {
       "path": "../bb-logger"
+    },
+    {
+      "path": "../bb-lambda-compute"
     }
   ]
 }

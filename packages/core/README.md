@@ -57,6 +57,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 The local mock applies no auth either, so an ungated method passes every local check and still ships callable by anyone. See your auth block's README (e.g. `@aws-blocks/bb-auth-cognito`) for `requireAuth` / `requireRole`.
 
+#### What the RPC endpoint can reach
+
+The RPC endpoint dispatches `<exportName>.<method>` against your backend module's exports. Export **`ApiNamespace` values** for anything the client should call — and keep Building Block instances unexported (or reach them only through a gated method):
+
+- An exported **Building Block instance** (e.g. `export const todos = new DistributedTable(scope, 'todos')`) is **not** callable over RPC — calling `todos.put` returns *method not found*. Its data plane is only reachable through the `ApiNamespace` methods you write, where your `requireAuth` gates run.
+- **`_`-prefixed exports** are private: they get no client proxy and are not dispatched.
+- **`secret()` / `config()` markers** are deferred values, not APIs: they get no client proxy and are not dispatched.
+- Only **callable methods** are dispatched; members inherited from `Object.prototype` (`toString`, `constructor`, `hasOwnProperty`, …) are never reachable.
+
 #### Calling the API over HTTP (JSON-RPC 2.0)
 
 The typed `import { api } from 'aws-blocks'` client is the normal path. The HTTP form below is for manual verification (curl/Postman) and non-JS clients.
@@ -76,6 +85,18 @@ The body is JSON-RPC 2.0:
 - `params` is a POSITIONAL array of the method's arguments. A named object also works (its values are used in order).
 - Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status.
 
+Error responses use these JSON-RPC codes:
+
+| Code | Meaning | When Blocks uses it |
+|------|---------|---------------------|
+| `-32700` | Parse error | Request body is not valid JSON. |
+| `-32600` | Invalid Request | Body is not a valid Blocks JSON-RPC request, such as missing `jsonrpc: "2.0"` or a `method` that is not `namespace.method`. |
+| `-32601` | Method not found | The requested namespace or method is not exported by the backend. |
+| `-32602` | Invalid params | Reserved for JSON-RPC parameter validation failures. Application-level validation should throw an `ApiError` with the appropriate HTTP status instead. |
+| `-32603` | Internal error | Reserved for generic JSON-RPC internal errors. Unhandled application errors currently use code `500`. |
+
+Errors thrown with `ApiError` use the positive HTTP status as the JSON-RPC `error.code` (for example, `401`, `404`, or `409`) and include `error.data.name` when an error name is available. The typed client converts JSON-RPC errors back into `ApiError`.
+
 Working example:
 
 ```bash
@@ -85,9 +106,82 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 # → {"jsonrpc":"2.0","result":{"message":"Hello, World!"},"id":1}
 ```
 
-### ApiError / isBlocksError
+#### How the server reads `params` (and what it rejects)
 
-Typed error handling across the wire.
+The request body is parsed by `parseRpcRequest`, which turns `params` into the positional argument list your method is called with:
+
+| Body `params` | Arguments the method receives |
+|---|---|
+| `["World", 42]` (array) | `('World', 42)`, used as-is |
+| `{"name":"World","times":42}` (object) | `('World', 42)` via `Object.values()`, so **key insertion order decides argument order** |
+| omitted or `null` | `()`, no arguments |
+
+A named object is convenient for `curl`, but it is only safe when the keys are written in the same order as the method signature. Prefer the array form in anything automated.
+
+One shape that looks reasonable and is **not** supported: a top-level JSON **array** as the whole body (a JSON-RPC batch). The parser reads `jsonrpc` and `method` off the body object, so an array body fails validation instead of running anything:
+
+```bash
+curl -X POST http://localhost:3000/aws-blocks/api \
+  -H 'Content-Type: application/json' \
+  -d '[{"jsonrpc":"2.0","method":"api.greet","params":["a"],"id":1}]'
+# → HTTP 200
+# {"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid Request: expected JSON-RPC 2.0 — ...",
+#    "data":{"name":"InvalidRequest"}},"id":null}
+```
+
+`id` is `null` in that response because an array body has no `id` to echo. Send one call per request. Body that isn't valid JSON at all returns `-32700 Parse error`, also with HTTP `200`.
+
+#### Runtime config (`/.blocks-sandbox/config.json`)
+
+The generated client does not hardcode the API URL; it resolves one at first call, in this order:
+
+1. `BLOCKS_API_URL` env var (set by the Hosting construct on SSR compute).
+2. `BLOCKS_CONFIG` env var (the whole config as JSON).
+3. Node only: the file `.blocks-sandbox/config.json`, read from the **process working directory**.
+4. Browser only: `fetch('/.blocks-sandbox/config.json')`.
+
+Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and `npm run sandbox` sets `BLOCKS_API_URL` on the dev server it spawns. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
+
+Two things about that path burn time when debugging:
+
+- The directory is **dotted**: `/.blocks-sandbox/config.json`. `/config.json` is not a route and never was: locally the dev server only answers `GET /.blocks-sandbox/config.json`, and in production the Hosting construct only adds a `/.blocks-sandbox/*` static behaviour. A `404` from `curl http://localhost:3000/config.json` says nothing about your config.
+- `{"_placeholder":true}` is a **valid, expected** body in the frontend build output. The Hosting construct writes that stub into the static assets directory during CDK synth so the file exists as a static route while the real `apiUrl` is still an unresolved CloudFormation token; the deploy then uploads the resolved config over it. Finding the stub in `dist/.blocks-sandbox/config.json` (or on the origin between synth and deploy) is the design working, not a broken config.
+
+What you should see instead, per environment:
+
+```bash
+# Local dev / sandbox: served by the dev server itself, Cache-Control: no-store
+curl http://localhost:3000/.blocks-sandbox/config.json
+# → {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
+
+# After a deploy: written by the deploy script and uploaded to the origin
+cat .blocks-sandbox/config.json
+# → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api", "environment": "production" }
+#   (under apiFrontDoor:'cloudfront' this is the CloudFront domain + /aws-blocks/api instead)
+```
+
+So a real config problem looks like the client throwing `Blocks API URL not configured` (or `... is not configured (source: ...)`), not like a `404` on `/config.json`. If a **deployed** origin keeps serving `{"_placeholder":true}` after a successful deploy, that is a genuine bug: the config upload or the CloudFront invalidation did not land.
+
+### API front door
+
+How the backend's API is exposed to clients is chosen with the `apiFrontDoor` prop on `BlocksStack` / `BlocksBackend` (default `'apigateway'`):
+
+- **`'apigateway'`** (default) — clients call the stack's API Gateway endpoint directly, on its own `execute-api` domain. Nothing extra to deploy.
+- **`'cloudfront'`** — Blocks puts a CloudFront distribution in front of that gateway (and builds the gateway as a regional endpoint, so there is a single CloudFront layer); clients call the distribution's domain instead.
+
+Under either tier, the URL clients should call is `publicApiUrl` on the stack or backend — for a `BlocksStack` that is also the `ApiUrl` stack output. With `'cloudfront'` it is the distribution's URL + `/aws-blocks/api`; otherwise it equals `apiUrl`, the gateway's own URL.
+
+The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
+
+**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, Hosting's distribution takes the front-door role and no second distribution is created.
+
+Neither tier makes CloudFront the only way in: the gateway's own `execute-api` URL stays publicly reachable, so a WebACL on a CloudFront distribution doesn't cover direct calls to it.
+
+> ⚠️ **Switching tiers — or adding or removing `Hosting` under `'cloudfront'` — changes the API's endpoint domain.** Browser auth cookies and sessions are bound to the origin that set them, so the change invalidates every existing cookie/session — users are signed out and must sign in again. Pick a tier, and decide on Hosting, before you have real users, and treat a later change as a breaking migration.
+
+### ApiError / isBlocksError / hasAuthError
+
+Typed error handling across the wire. All three are exported from `@aws-blocks/core`, and re-exported from `@aws-blocks/blocks`.
 
 ```typescript
 import { ApiError, isBlocksError } from '@aws-blocks/core';
@@ -101,32 +195,140 @@ catch (e) {
 }
 ```
 
+#### `new ApiError(message, status, options?)`
+
+```typescript
+new ApiError(
+  message: string,
+  status: number,
+  options?: { name?: string; cause?: unknown; retriable?: boolean },
+)
+```
+
+| Argument | Required | What it does |
+|---|---|---|
+| `message` | yes | Human-facing text. Crosses the wire, so don't put internals in it. |
+| `status` | yes | HTTP status code. Any number; nothing validates it against a known status. |
+| `options.name` | no | The structured error name `isBlocksError` / `hasAuthError` match on (e.g. `'ItemNotFoundException'`). Defaults to `'ApiError'`, which carries no meaning, so treat it as "unnamed". |
+| `options.cause` | no | Underlying error. **Stays server-side**, never serialized. |
+| `options.retriable` | no | `true` when the caller can retry the same action without restarting the flow (wrong MFA code, wrong password on re-prompt). Defaults to `false`. |
+
+The instance exposes `message`, `name`, `status` and `retriable` as readable properties, and it is a real `Error`, so `instanceof Error` and stack traces behave normally.
+
+How `status` reaches the client over JSON-RPC: an uncaught error inside an RPC method is encoded as an error response whose **`code` is the `ApiError`'s `status`** (positive numbers can't collide with the reserved `-32xxx` range). `name` and `retriable` ride along in `error.data`. A non-`ApiError` throw becomes code `500` with no `data.name`.
+
+```jsonc
+// throw new ApiError('Username already taken', 409,
+//   { name: 'ConditionalCheckFailedException', retriable: true })
+{ "jsonrpc": "2.0", "id": 1, "error": {
+  "code": 409,
+  "message": "Username already taken",
+  "data": { "name": "ConditionalCheckFailedException", "retriable": true }
+}}
+```
+
+The client decodes that back into an `ApiError` with the same `status`, `name` and `retriable`, which is why the same `isBlocksError(e, ...)` check works on both sides. Reserved JSON-RPC codes (`-32600`, `-32700`, …) decode to `status: 500`.
+
+#### `hasAuthError(state, name)`
+
+```typescript
+import { hasAuthError } from '@aws-blocks/core';
+
+function hasAuthError<T extends { errorName?: string }, N extends string>(
+  state: T | null | undefined,
+  name: N,
+): state is T & { errorName: N }
+```
+
+The auth blocks' recommended client path (`setAuthState()` / `getAuthState()`) **returns** a failed `AuthState` instead of throwing, so there is no `Error` for `isBlocksError` to inspect. `hasAuthError` is the equivalent guard for that returned object: it compares `state.errorName` to `name` and narrows the type. It's a plain equality check, so a `null` / `undefined` state and a state with no `errorName` both return `false` and no defensive wrapping is needed.
+
+```typescript
+const next = await authApi.setAuthState({ action: 'signIn', username, password });
+if (hasAuthError(next, AuthBasicErrors.InvalidCredentials)) {
+  // unknown user or wrong password → offer sign-up
+}
+```
+
+Rule of thumb: **thrown error → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Match on the block's error constant, never on the human-facing `error` string.
+
 ### RawRoute
 
-Path-based HTTP routing Building Block for endpoints that need full request/response control — webhooks, REST APIs, health checks, file downloads. Use `ApiNamespace` (RPC) for typed function calls; use `RawRoute` when you need raw HTTP semantics.
+Path-based HTTP routing Building Block for endpoints that need full request/response control: webhooks, health checks, redirects, file downloads, anything a browser or third party has to hit with a plain `GET`. Use `ApiNamespace` (RPC) for typed function calls; use `RawRoute` when you need raw HTTP semantics.
+
+```typescript
+new RawRoute(scope: ScopeParent, id: string, options: {
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS';
+  path?: string;
+  handler: (context: BlocksContext) => Promise<void>;
+})
+```
+
+A full `GET` that sets its own status, content type and body:
 
 ```typescript
 import { RawRoute } from '@aws-blocks/blocks';
 
-// Explicit path
-new RawRoute(scope, 'GetUser', {
+new RawRoute(scope, 'status', {
   method: 'GET',
-  path: '/users/{id}',
-  handler: async (context) => {
-    const userId = context.request.params.id;
-    context.response.send({ id: userId });
+  path: '/status',
+  handler: async (ctx) => {
+    ctx.response.status = 200;
+    ctx.response.headers.set('Content-Type', 'text/html; charset=utf-8');
+    ctx.response.send('<h1>ok</h1>');
   },
 });
-
-// Derived path — path omitted, becomes /health from scope chain
-new RawRoute(scope, 'health', { method: 'GET', handler: async (ctx) => {
-  ctx.response.send({ status: 'ok' });
-}});
 ```
 
-Supports exact paths (`/health`), named parameters (`/users/{id}`), and wildcards (`/files/*`). Path can be omitted — it's derived from scope-chain IDs.
+```bash
+curl -i http://localhost:3000/status
+# HTTP/1.1 200 OK
+# content-type: text/html; charset=utf-8
+#
+# <h1>ok</h1>
+```
 
-📖 **Full RawRoute documentation (see source repo)**
+The handler returns nothing; you write the response through `ctx.response`:
+
+| On `ctx.response` | Notes |
+|---|---|
+| `status: number` | Assignable. Defaults to `200`. |
+| `headers: Headers` | Standard `Headers`. Set `Content-Type` yourself; a string body is sent as-is, an object is serialized as JSON. |
+| `send(body)` | Call once with the body. `send('')` for an empty body (redirects, `204`). |
+
+And what you read from `ctx.request`:
+
+| On `ctx.request` | Notes |
+|---|---|
+| `params` | Path parameters, e.g. route `/users/{id}` + request `/users/42` → `{ id: '42' }`. Always `{}` for RPC methods. |
+| `url` | Absolute `URL` of the request. Use `url.searchParams` for the query string. |
+| `headers` | Request `Headers`, including `cookie`. |
+| `json()` / `text()` / `body` | Body as parsed JSON, raw text, or a `ReadableStream`. |
+| `signal` | `AbortSignal` that fires just before the platform's timeout response. Pass it to `fetch`/SDK calls. `undefined` in local dev. |
+
+Reading a path parameter and a query parameter:
+
+```typescript
+new RawRoute(scope, 'user', {
+  method: 'GET',
+  path: '/users/{id}',
+  handler: async (ctx) => {
+    ctx.response.headers.set('Content-Type', 'application/json');
+    ctx.response.send({ id: ctx.request.params.id, q: ctx.request.url.searchParams.get('q') });
+  },
+});
+// GET /users/42?q=hello → {"id":"42","q":"hello"}
+```
+
+Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key.
+
+`path` can be omitted, in which case it is derived from the scope-chain IDs, so `Scope('app') → Scope('v1') → RawRoute('health')` gives `/v1/health`. That means restructuring your construct tree silently changes URLs, so pass an explicit `path` for anything a client depends on.
+
+Registration rules worth knowing before you hit them at runtime:
+
+- Routes must be constructed while the backend module is loading (top level of `aws-blocks/index.ts`, or from a block's constructor). Registering after the handler is created throws.
+- `/aws-blocks` itself and `/aws-blocks/api` (plus anything under it) are reserved for RPC dispatch, and `/` is not routable, so use a sub-path.
+- The same `method` + `path` twice throws `RawRouteErrors.DuplicateRoute`; catch it with `isBlocksError(e, RawRouteErrors.DuplicateRoute)`.
+- No extra AWS resources are created. The existing API Gateway proxy already forwards every path to the same Lambda, which checks the route registry before falling through to RPC.
 
 ### Pipeline
 
@@ -149,6 +351,19 @@ new Hosting(stack, 'Web', {
 ```
 
 The `framework` option selects the frontend type: `'spa' | 'static' | 'nextjs'`. When omitted, the framework is auto-detected by reading your app's OWN `package.json` (not `node_modules`): a `next` dependency → `nextjs`; otherwise `spa`; and `static` when there is no `package.json`. Set `framework: 'spa'` explicitly to override auto-detection — e.g. when a stray `next` dependency would otherwise trigger an unwanted Next.js/OpenNext build. Full reference lives in the source JSDoc.
+
+Old builds are retained for rollback and expired by an S3 lifecycle rule after `buildRetentionDays` (default **30**). The build currently being served is never expired regardless of deploy cadence — only superseded builds are cleaned up. Only builds superseded by a normal `Update` cutover are auto-tagged (and thus auto-expired): pre-existing/orphaned builds and aborted or rolled-back deploys are never tagged and need manual cleanup (e.g. an S3 inventory / Batch Operations sweep). Raise the window with `buildRetentionDays` (it must be ≥ `skewProtection.maxAge` in days):
+
+```typescript
+new Hosting(stack, 'Web', {
+  root: join(__dirname, '..'),
+  api: blocksStack,
+  buildRetentionDays: 90,
+});
+```
+
+Core's top-level `buildRetentionDays` maps to the L3 construct's `storage.buildRetentionDays`.
+
 
 ## Building Blocks
 
@@ -182,18 +397,31 @@ const posts = await withAuth(() => api.listMyPosts(), request.headers.get('cooki
 
 In local dev mode, Building Blocks use mock implementations. No AWS resources needed.
 
+The dev server (`npm run dev`) listens on **`127.0.0.1` (loopback) only**, so nothing on your network can reach it. It serves your whole API against the local mock data, and local auth authenticates nothing. In a container or a remote devbox where you control who can reach the port, opt into a wider interface:
+
+```bash
+BLOCKS_DEV_HOST=0.0.0.0 npm run dev   # prints a warning: anyone who can reach this interface can call your API
+```
+
+You can also pass `host` to `startDevServer({ host })` in `aws-blocks/scripts/server.ts`. The local realtime WebSocket (`/realtime`) accepts upgrades only from loopback origins, or from the host you opted into:
+
+- With a **wildcard** (`BLOCKS_DEV_HOST=0.0.0.0`), open the app **by IP address** (e.g. `http://192.168.1.10:3000`). Same-origin pages reached by IP are accepted; DNS names are not, because a same-origin check against a name can be defeated by DNS rebinding.
+- To open it by **hostname** (e.g. `http://mybox.example.com:3000`), set `BLOCKS_DEV_HOST=mybox.example.com` instead.
+
+Only server-side `Realtime.publish()` can publish. Clients can subscribe, but not publish, exactly as in a deployed app.
+
 ## CORS Configuration
 
-By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. CORS behavior is controlled entirely by the `CORS_ALLOWED_ORIGINS` environment variable.
+By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (regex patterns; every Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the distribution's own domain (registered automatically as `CORS_HOSTING_ORIGINS`).
 
 ### When using Hosting (recommended)
 
 If you use the `Hosting` construct with your API, CORS is handled automatically:
 
 - **Same-origin requests** (frontend fetches through the CloudFront proxy at `/aws-blocks/api`) work without CORS headers since the browser treats them as same-origin.
-- **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct automatically adds the CloudFront distribution's domain to `CORS_ALLOWED_ORIGINS` on the backend Lambda. You do **not** need to configure CORS manually.
+- **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct registers the CloudFront distribution's domain (or your custom domain) as `CORS_HOSTING_ORIGINS` in the backend's S3 config, where it is compiled separately as an escaped literal origin. Your `CORS_ALLOWED_ORIGINS` is left untouched. You do **not** need to configure CORS manually.
 
-In sandbox mode, the localhost pattern is also preserved so your local dev frontend still works.
+With the sandbox preset, the localhost pattern from `defaults.allowedOrigins` is also kept, so your local dev frontend still works.
 
 ### Local development (`npm run dev`)
 
@@ -201,18 +429,29 @@ The dev server automatically allows `localhost` / `127.0.0.1` origins. No config
 
 ### Sandbox deployments
 
-The sandbox CLI automatically sets `CORS_ALLOWED_ORIGINS=^https?://(localhost|127\.0\.0\.1)(:\d+)?$` so your local frontend can reach the deployed sandbox API.
+`BlocksPresets.sandbox` sets `allowedOrigins` to `['^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$']`, so your local frontend can reach the deployed sandbox API. To allow more origins in sandbox, append to the preset's list rather than replacing it:
+
+```typescript
+defaults: {
+  ...BlocksPresets.sandbox,
+  allowedOrigins: [...BlocksPresets.sandbox.allowedOrigins, 'https://preview\\.myapp\\.com'],
+},
+```
 
 ### Production (frontend hosted separately)
 
-If your frontend is hosted on a different domain (e.g., Vercel, Netlify), set the `CORS_ALLOWED_ORIGINS` environment variable on your Lambda:
+If your frontend is hosted on a different domain (e.g., Vercel, Netlify), list its origins in the stack's `defaults.allowedOrigins` — every Blocks compute gets them as `CORS_ALLOWED_ORIGINS`:
 
 ```typescript
 // aws-blocks/index.cdk.ts
-blocksStack.handler.addEnvironment(
-  'CORS_ALLOWED_ORIGINS',
-  'https://myapp\\.com,https://staging\\.myapp\\.com'
-);
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: {
+    ...BlocksPresets.production,
+    allowedOrigins: ['https://myapp\\.com', 'https://staging\\.myapp\\.com'],
+  },
+});
 ```
 
 Each entry is treated as a **regex pattern** (anchored with `^` and `$`). Examples:
@@ -225,5 +464,7 @@ Each entry is treated as a **regex pattern** (anchored with `^` and `$`). Exampl
 | `.*` | All origins (escape hatch — use with caution) |
 
 Multiple patterns are comma-separated. If a pattern is invalid regex, it falls back to literal string match.
+
+> **Escape the dots.** Because each entry is a regex, an unescaped `.` matches *any* character — so `https://app.example.com` also matches unrelated hosts like `https://appXexample.com`. Always escape literal dots: write `https://app\\.example\\.com`, not `https://app.example.com`. Each entry is compiled as `^(?:<entry>)$`, so it must match the whole origin: `^https://app\\.example\\.com` (or just `https://app\\.example\\.com`) matches that exact origin, not `https://app.example.com.extra`. Because the anchors wrap the whole expression, every branch of a top-level `|` alternation is anchored too. Prefer separate comma-separated entries over one `|`-joined entry for readability. The CloudFront origin the `Hosting` construct injects for you is always escaped and anchored automatically.
 
 If an origin doesn't match any pattern, the handler omits the `Access-Control-Allow-Origin` header (browser blocks the response) and logs a `[CORS]` warning to CloudWatch.

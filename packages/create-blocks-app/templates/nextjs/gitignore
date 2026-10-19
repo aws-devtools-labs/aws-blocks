@@ -31,3 +31,4 @@ npm-debug.log*
 
 aws-blocks/client.js
 aws-blocks/blocks.spec.json
+.hosting/

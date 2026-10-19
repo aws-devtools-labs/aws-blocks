@@ -1,0 +1,23 @@
+{
+  "name": "bb-test-infra",
+  "version": "0.1.0",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Persistent test infrastructure for AWS Blocks E2E tests (deploy once, do not tear down)",
+  "scripts": {
+    "build": "tsc --build",
+    "deploy": "npx cdk deploy --app 'npx tsx vpc-test-stack.ts'",
+    "synth": "npx cdk synth --app 'npx tsx vpc-test-stack.ts'",
+    "test": "echo \"no tests for infra stack\""
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.257.0",
+    "constructs": "^10.6.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}

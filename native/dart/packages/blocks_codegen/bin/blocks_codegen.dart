@@ -8,15 +8,27 @@ import 'package:blocks_codegen/src/generator.dart';
 void main(List<String> args) {
   final parser = ArgParser()
     ..addOption('spec', abbr: 's', help: 'Path to the OpenRPC spec file')
-    ..addOption('output',
-        abbr: 'o',
-        help: 'Output path for the generated Dart file (stdout if omitted)')
-    ..addFlag('fail-on-collision',
-        negatable: false,
-        help:
-            'Treat inline-type name collisions that survive qualification as a '
-            'hard error. By default they are auto-disambiguated with a '
-            'deterministic suffix and reported as a warning.')
+    ..addOption(
+      'output',
+      abbr: 'o',
+      help: 'Output path for the generated Dart file (stdout if omitted)',
+    )
+    ..addFlag(
+      'fail-on-collision',
+      negatable: false,
+      help:
+          'Treat inline-type name collisions that survive qualification as a '
+          'hard error. By default they are auto-disambiguated with a '
+          'deterministic suffix and reported as a warning.',
+    )
+    ..addMultiOption(
+      'native-package-opt-out',
+      help:
+          'Logical native package identity whose transferable bindings are '
+          'not applied, so its direct results stay UnknownTransferable. An '
+          'identity the spec does not declare opts nothing out and is '
+          'reported as AWSBLOCKS-NATIVE-006. Repeatable.',
+    )
     ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
 
   final ArgResults results;
@@ -26,14 +38,16 @@ void main(List<String> args) {
     stderr.writeln('Error: ${e.message}');
     stderr.writeln();
     stderr.writeln(
-        'Usage: dart run blocks_codegen --spec <path> [--output <path>]');
+      'Usage: dart run blocks_codegen --spec <path> [--output <path>]',
+    );
     stderr.writeln(parser.usage);
     exit(1);
   }
 
   if (results['help'] as bool) {
     stdout.writeln(
-        'Usage: dart run blocks_codegen --spec <path> [--output <path>]');
+      'Usage: dart run blocks_codegen --spec <path> [--output <path>]',
+    );
     stdout.writeln();
     stdout.writeln(parser.usage);
     exit(0);
@@ -44,7 +58,8 @@ void main(List<String> args) {
     stderr.writeln('Error: --spec is required');
     stderr.writeln();
     stderr.writeln(
-        'Usage: dart run blocks_codegen --spec <path> [--output <path>]');
+      'Usage: dart run blocks_codegen --spec <path> [--output <path>]',
+    );
     stderr.writeln(parser.usage);
     exit(1);
   }
@@ -58,15 +73,29 @@ void main(List<String> args) {
 
   final contents = specFile.readAsStringSync();
   final failOnCollision = results['fail-on-collision'] as bool;
-  final rpcModel = const OpenRpcParser().parse(contents);
+  final optedOutPackages = (results['native-package-opt-out'] as List<String>)
+      .map((s) => s.trim())
+      .toSet();
+  if (optedOutPackages.remove('')) {
+    stderr.writeln(
+      'Error: --native-package-opt-out requires a package identity',
+    );
+    exit(1);
+  }
   final String output;
   try {
-    final codegenModel =
-        CodegenModelBuilder(failOnCollision: failOnCollision).build(rpcModel);
+    final rpcModel = const OpenRpcParser().parse(contents);
+    final codegenModel = CodegenModelBuilder(
+      failOnCollision: failOnCollision,
+      optedOutPackages: optedOutPackages,
+    ).build(rpcModel);
     for (final w in codegenModel.warnings) {
       stderr.writeln('Warning: $w');
     }
     output = const DartCodeGenerator().generate(codegenModel);
+  } on FormatException catch (e) {
+    stderr.writeln('Error: ${e.message}');
+    exit(1);
   } on NamingConflictException catch (e) {
     stderr.writeln('Error: ${e.message}');
     exit(1);

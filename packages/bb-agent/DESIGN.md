@@ -3,30 +3,82 @@
 Design document for the Agent Building Block. For usage, see [README.md](./README.md).
 
 **Package:** `@aws-blocks/bb-agent`
-**Type:** Composite (uses DistributedTable, Realtime, AsyncJob, FileBucket internally)
-**AWS Services:** Bedrock, DynamoDB, S3, SQS, AppSync Events
+**Type:** Composite (uses DistributedTable, Realtime, FileBucket internally) + an AgentCore Runtime
+**AWS Services:** Bedrock AgentCore Runtime, Bedrock, DynamoDB, S3, API Gateway (WebSocket)
 **Agent Framework:** [Strands Agents SDK](https://strandsagents.com/)
 
 ## Architecture
 
-The Agent BB is a composite Building Block — it creates and manages 4 internal BBs:
+The streaming agent loop runs on a **Bedrock AgentCore Runtime** (sessions up to 8h, warm,
+managed) — not the shared Blocks request handler — and streams chunks to the browser over the
+**Realtime** BB. The Agent BB composes these internal BBs plus the runtime:
 
-| Internal BB | Purpose | Created when |
+| Internal BB / resource | Purpose | Created when |
 |-------------|---------|-------------|
 | **FileBucket** | Session persistence (Strands SessionManager) | Always |
 | **DistributedTable** | Frontend message history | `inferenceOnly: false` |
 | **Realtime** | Streaming chunks to caller | Always |
-| **AsyncJob** | Async agent execution (avoids 29s API Gateway timeout) | Always |
+| **AgentCore Runtime** | Hosts the streaming loop (co-bundled backend + `serve()`) | Always (AWS) |
 
 ```
-stream() → AsyncJob.submit() → returns { channelId } immediately
+stream()/resume() → InvokeAgentRuntime (returns immediately)
                 ↓
-         AsyncJob consumer
+     AgentCore Runtime container (agentcore-entry.ts): starts the turn as a BACKGROUND
+     async task and returns an ack immediately
                 ↓
-         runAgent() → Strands agent loop → publishes chunks to Realtime
+         runAgent() → Strands agent loop → publishes chunks to Realtime (as the shared execution role)
                                          → persists messages to DistributedTable
                                          → SessionManager saves state to FileBucket
 ```
+
+The RPC handler (`stream`/`resume`) only kicks off the turn; it does not hold the connection —
+running the loop as a background task lets `InvokeAgentRuntime` return in seconds. The microVM then
+stays alive on AgentCore's own terms: AgentCore polls the container's health endpoint, and the SDK
+reports `HealthyBusy` while a background task is in flight, so AgentCore keeps the runtime running
+(up to the 8h max session) and returns it to `Healthy` — eligible for reclaim — once the task
+completes. The browser subscribes to the Realtime channel by `channelId` and receives chunks as the
+loop runs, so a turn is bounded by the AgentCore session (8h), not by the request handler's
+per-invocation limit or API Gateway's ~29s cap.
+
+**Compute model.** All AgentCore provisioning is kept self-contained in `AgentCoreRuntime`
+(`agentcore-runtime.cdk.ts`) — the co-bundle, the `Runtime`, the shared role's AgentCore trust +
+grants, the container env, and the handler's invoke permission — so it can later fold into a per-BB
+compute abstraction (should one land) without touching call sites.
+
+## Client streaming API (compute-agnostic)
+
+The **client-facing** streaming surface is deliberately independent of *where*
+the agent loop runs. The runtime shows up at exactly one seam — the **transport**
+— so the same client code works over Lambda + Realtime today and other runtimes
+later. (The backend methods below are *not* part of this abstraction — they are
+the current Realtime runtime's implementation, which a different runtime would
+replace, not reuse.)
+
+```
+  CLIENT (browser) — compute-agnostic          BACKEND (Agent BB) — current runtime
+  createChat({ transport, api })               stream() → submit job → { channelId }
+    └─ sendMessage(msg)                         getChannel() → Realtime channel handle
+         fuses subscribe + run                  resume() → submit resume job
+         (no subscribe-before-send race)        runAgent() (private) → publishes chunks
+  transport = the ONE runtime-specific piece
+```
+
+- `ChatTransport` (`transport.ts`) has two primitives: `run(turn)` (produce) and
+  `subscribe(channelId)` (consume, an `AsyncIterable` with an `established`
+  promise). `createChat`'s easy default fuses them; the flexible cases (fan-out,
+  observer-only, decoupled produce/consume) drop to the primitives. This
+  interface is the seam a future runtime implements — the app above it is
+  unchanged.
+- `realtimeTransport(io)` is the Lambda + Realtime implementation of that seam. It
+  bridges the callback-based Realtime channel (`subscribe(handler)` +
+  `established`) into the `AsyncIterable` `ChunkStream` via a small
+  single-consumer push queue (`ChunkQueue`), and maps `run` onto the app's
+  `stream`/`resume` RPCs (which submit the AsyncJob). A new runtime supplies a
+  different transport here; nothing else on the client changes.
+
+The server methods (`stream()`/`getChannel()`/`resume()` and the private
+`runAgent()`) are the Realtime path itself and remain the app's backend contract.
+Only the `useChat` client hook is deprecated — superseded by `createChat`.
 
 ## Session Persistence
 
@@ -34,16 +86,49 @@ Two storage backends, same FileBucket BB:
 - **AWS:** Strands' native `S3Storage` → FileBucket-provisioned S3 bucket
 - **Local:** Custom `FileBucketSnapshotStorage` → FileBucket mock (mirrors S3Storage key layout exactly)
 
+**Missing-snapshot parity (D-002/D-008).** A genuinely missing first-turn snapshot already comes back as `NoSuchKey`/`NoSuchBucket` → `null` (and a missing manifest as an empty one) from `S3Storage` itself, which Strands' `SessionManager` treats as "start fresh" — the same contract the local `FileBucketSnapshotStorage` honours (it returns `null` when `bucket.get` is falsy). So the deployed read paths are delegated to `S3Storage` **unchanged**: no wrapper is needed to start a true first turn fresh. A read that fails for any **other** reason — `AccessDenied`, a 5xx, a corrupt object — means the snapshot may exist and simply was not read, so it **rethrows and surfaces**. It must NOT degrade to a fresh start: `SessionManager` overwrites `snapshot_latest.json` after a fresh start, so swallowing a transient fault on turn N would silently overwrite an established conversation's saved history with a blank one (a local Strands reproduction confirmed a single 503 on turn N erased turns 1..N-1). A read fault cannot be distinguished from a genuine first turn, which is exactly why it must not be treated as one. The diagnostic value is kept where it belongs: a rethrown restore error propagates into `runAgent`'s catch, which logs the deepest cause's `name`, `httpStatusCode` and `requestId` (flattened out of the non-enumerable `.cause` by `errorCauseShape`) at **`error`** level — above the deployed agent's default `error` log level, so the concrete production error shape is captured for the first time, without the data-loss fallback. See the `createDeployedSnapshotStorage` JSDoc in `src/agent.aws.ts`, the `errorCauseShape` guard, and the rethrow regression tests plus the parity tripwire (`SessionManager does not read the manifest on a fresh-session restore`) in `index.test.ts`.
+
+## Runaway-protection caps
+
+`AgentConfig.maxLlmCalls` / `maxToolIterations` (default 20, `false` disables) bound runaway cost. They're enforced in `runAgent` by counting Strands' `BeforeModelCallEvent` / `BeforeToolCallEvent` hooks and calling `agent.cancel()` once a cap is exceeded; cancellation ends the stream normally (`stopReason: 'cancelled'`), which `runAgent` surfaces as an `error` chunk and then skips the final persist + `done`.
+
+**Scope is the whole logical turn, including across HITL resumes.** The counters are stored in the Strands agent's `appState` (keys `__bbAgentModelCallCount` / `__bbAgentToolCallCount`), which the `SessionManager` persists with the session snapshot — the same mechanism the `trusted:<tool>` flags use. A turn that pauses on an interrupt and continues via `resume()` therefore keeps counting on its existing budget. Locals in `runAgent` would reset on every resume, letting an auto-approving or trusted-tool resume loop re-enter itself indefinitely — exactly the runaway these caps exist to stop.
+
+**The reset is lazy, and it has to be.** The `SessionManager` restores the snapshot's `appState` *during* `stream()`, i.e. after `runAgent` has already set up its hooks — so zeroing the counters up front is silently overwritten by the previous turn's values and the budget leaks from turn to turn (a second message on the same conversation would start at the first turn's count and trip immediately). Instead, a fresh turn mints a `turnId` and the first cap hook to fire notices the stored `__bbAgentCapTurnId` is stale, zeroes the counters, and claims the turn; a resume mints no id, so it continues on the restored counts. Strands has no per-turn identifier to reuse here — `invocationState` is a caller-supplied bag, and a per-invocation id would change on every `resume()`, which is the opposite of what's needed.
+
+A tool call cancelled by the tool cap still gets an `AfterToolCallEvent` (Strands reports the cancellation as the call's result), so the `tool-call` row already written to the message table keeps its `tool-result` partner — no dangling `tool_use` is left for the next turn to replay. `runAgent` additionally writes an `assistant` row carrying the stop reason in `metadata.error`, so a reloaded conversation explains why it ended.
+
 ## Infrastructure (CDK)
 
-The CDK class mirrors the runtime's BB creation:
-- **Bedrock IAM:** `InvokeModel` + `InvokeModelWithResponseStream` on all foundation models and inference profiles
-- **FileBucket:** `${id}-sessions` — session snapshot storage
-- **DistributedTable:** `${id}-messages` — conversation history (only when `inferenceOnly: false`)
+The CDK class provisions:
+- **FileBucket:** `${id}-sn` — session snapshot storage
+- **DistributedTable:** `${id}-convos` / `${id}-messages` — conversation metadata + history (only when `inferenceOnly: false`)
 - **Realtime:** `${id}-rt` — streaming namespace `chunks`
-- **AsyncJob:** `${id}-job` — job payload: `{ message, conversationId?, channelId }`
+- **AgentCore Runtime** (`${id}-runtime`, via `AgentCoreRuntime`) — the co-bundled backend + `serve()`
+  harness. It runs **as the shared Blocks execution role** (`Scope.executionRole` / `BlocksRole`) —
+  the same role the Lambda handler runs as — so it **inherits every Building Block's grants**, including
+  **Realtime publish** (`execute-api:ManageConnections` + the connections table, granted to the handler
+  by the `${id}-rt` Realtime child), other BBs an agent's *tools* touch (KVStore, tables, etc.), and
+  this agent's own session bucket (S3) and conversation/message tables (DynamoDB). `AgentCoreRuntime`
+  adds to that shared role only what's AgentCore-specific and not already carried:
+  - **Trust:** the `bedrock-agentcore.amazonaws.com` assume-role statement, so the runtime can assume
+    the shared role. Scoped by `aws:SourceAccount` + `aws:SourceArn` (AWS's recommended AgentCore trust
+    policy). Added here — not in core — so a Realtime-only app never trusts AgentCore.
+  - **Bedrock:** `InvokeModel` + `InvokeModelWithResponseStream` on all foundation models and inference profiles
+- **Handler grant:** the shared role is granted `bedrock-agentcore:InvokeAgentRuntime` (wildcard runtime
+  ARN, to avoid a role↔runtime dependency cycle) so the RPC handler can start the loop.
 
-> **Note:** Internal Building Blocks are created on the parent scope (not `this`) to ensure correct nested-scope resolution on AWS.
+The container gets four environment variables: `BB_AGENT_ID`, `BLOCKS_STACK_NAME`, and the config
+location `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`. `BB_AGENT_ID` + `BLOCKS_STACK_NAME` let the
+co-bundled backend re-derive its resource names in-process (session bucket, conversation/message
+tables) via the SDK-identifier registry — the same derivation the handler uses — so those names aren't
+injected. `BLOCKS_CONFIG_BUCKET`/`BLOCKS_CONFIG_KEY` point the container at the shared config blob
+(from core's `getConfigLocation()`); `loadConfigToProcessEnv()` loads the **same full app config the
+handler does**, which is how the loop gets `BLOCKS_RT_CALLBACK_URL` (registered by the Realtime BB) and
+every other `registerConfig()` value a tool's Building Block may read. IAM to read the blob is inherited
+from the shared execution role.
+
+> **Note:** The runtime (`agent.ts`) and CDK (`index.cdk.ts`) layers both create the internal BBs on the Agent scope (`this`) with the **same child ids** (`sn`, `convos`, `messages`, `rt`). Same id → same `fullId` → same derived physical name, so the deployed loop resolves the exact resources CDK provisioned.
 
 ## Model Providers
 
@@ -61,6 +146,56 @@ Custom Strands model provider for local development. No network, no API keys, no
 
 - Returns instant keyword-based responses (e.g., prompt contains "weather" → weather response, otherwise a default canned response)
 - Streams word by word, matching the same `ModelStreamEvent` protocol as Bedrock/OpenAI
-- Triggers tool calls when the prompt mentions a tool name — splits camelCase names into words (e.g., "weather" matches `getWeather`) and emits Strands `toolUse` events
+- Triggers tool calls when the prompt mentions a tool name (or a `cannedTriggers` keyword) — splits camelCase names into words (e.g., "weather" matches `getWeather`) and emits Strands `toolUse` events. Matching is on word boundaries, not substrings, so "category" does not fire `getCat`.
+- Derives tool input from, in order of preference: the tool's `cannedExamples`, the schema `default` (from Zod `.default()`), the first `enum` value (for enum fields), then a generic placeholder by type (`'sample'` / `1` / `true` / `[]`)
 - After Strands executes the tool and sends the result back, returns a fixed acknowledgment (`"I called the tool and got a result."`)
 - Token usage reports zeros (no real model call)
+
+
+## Reconnect Recovery (createChat & useChat)
+
+The same reconnect-recovery contract is implemented identically on both client surfaces:
+`createChat`/`realtimeTransport` (the **preferred** path) and the deprecated `useChat` hook
+(superseded per #338). Both subscribe to the agent's Realtime chunks channel once per conversation
+and rely on the transport's transparent reconnect (bb-realtime). `createChat` wires it through
+`realtimeTransport`, whose `subscribe` forwards a `{ onMessage, onReconnect?, onDisconnect? }`
+options object to the overloaded `channel.subscribe`; `useChat` wires it through the app's own
+`subscribe` adapter. Because WebSocket pub/sub is not durable, the client treats the
+**persisted conversation as the source of truth** and recovers around the gap:
+
+- **Subscribe adapter must forward verbatim.** The client calls the consumer's `subscribe` with a
+  `ChatSubscribeOptions` *object* (`onMessage`/`onReconnect`/`onDisconnect`), and that argument must
+  reach `channel.subscribe(...)` unchanged. With `createChat`, `realtimeTransport` does this forwarding
+  for you — it passes the options object straight to the overloaded `channel.subscribe`; with `useChat`
+  the app's own `subscribe` adapter must forward it. Both middlewares branch on
+  `typeof arg === 'function'` first, so a callable-with-props hybrid would silently drop the extra
+  callbacks and disable reconnect recovery.
+- **On reconnect (`handleReconnect`)** the client re-reads `getConversation` (recovers a final
+  assistant message if the turn completed during the gap) and `getPendingInterrupts` (recovers a
+  missed interrupt). Two guards protect the eventually-consistent DynamoDB read: `stillSameInFlightTurn`
+  (ignore a read that resolves after a live terminal chunk already resolved the turn) and
+  `extendsStream` (refuse to overwrite the live bubble with a prior-turn row). A re-sync failure is
+  surfaced through `reportError` so the once-per-turn `onError` contract holds.
+- **Bounded failsafe (`RECONNECT_FAILSAFE_MS = 660_000`, ~11 min).** A last-resort timer cleared/re-armed
+  by every received chunk, so it fires only after *complete silence* — never during a long tool-call
+  gap or a slow post-reconnect stream. It must exceed the API Gateway 10-min idle timeout + reconnect
+  budget, otherwise a normal idle→disconnect→reconnect cycle would trip a spurious 'Timed out'. It is
+  the backstop, not the primary recovery (which is the `done` chunk / DB re-sync). It is armed on
+  reconnect AND on a terminal `onDisconnect('error')` while loading — the give-up / all-stale-token
+  paths (past the transport's ~2h connect-token ceiling) surface `onDisconnect('error')` but NOT
+  `onReconnect`, so wiring the failsafe to that reason too is what guarantees the spinner clears even
+  when no channel comes back. The failsafe intentionally arms on **any non-`'client'`** `onDisconnect`
+  reason, not just `'error'`: `'client'` is our own unsubscribe (`newConversation`/`destroy`) and is
+  excluded, but a future terminal `'timeout'`/`'unknown'` drop that fires no `onReconnect` still can't
+  hang the spinner. A spurious arm on a reason that is actually followed by `onReconnect` is harmless —
+  it self-corrects, since the recovered turn re-arms on its next chunk and clears on the terminal chunk /
+  re-sync.
+- **Send-path failsafe.** `sendMessage`/`respondToInterrupt` wrap the RPC in try/catch → `handleSendFailure`,
+  which resets `loading`, drops the empty assistant placeholder, and reports the error once. A 504 may
+  still have started the turn server-side. The send is treated as failed: `handleSendFailure` nulls the
+  turn identity (`assistantId`) and clears `loading`, so the reconnect re-sync guard (`stillSameInFlightTurn`)
+  will NOT auto-adopt that started turn's persisted text into the in-flight bubble. The started turn's
+  result is still persisted and is recovered the next time the app opens the conversation
+  (`loadConversation`) — not automatically on the reconnect that follows the failed send.
+- **onInterrupt may re-fire on reconnect** for a still-pending interrupt (both `loadConversation` and
+  `handleReconnect` surface pending interrupts). Handlers should key/dedupe by interrupt id.

@@ -20,26 +20,31 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "FileUp
 /// // or stream from disk:
 /// try await handle.uploadFrom(fileURL: localPath)
 /// ```
-public class FileUploadHandle {
+public final class FileUploadHandle: Sendable {
     private let url: String
     private let contentType: String?
     private let session: URLSession
 
-    public init(url: String, contentType: String? = nil, session: URLSession = .shared) {
+    public init(url: String, contentType: String? = nil, session: URLSession? = nil) {
         self.url = url
         self.contentType = contentType
-        self.session = session
+        self.session = session ?? BlocksRuntimeSession.shared
     }
 
     /// Hydrates a FileUploadHandle from a JSON descriptor.
     ///
     /// Expected shape: `{ "url": "https://s3.../presigned-url", "contentType": "image/jpeg" }`
     public static func fromJSON(_ json: [String: Any]) throws -> FileUploadHandle {
+        let (url, contentType) = try parts(of: json)
+        return FileUploadHandle(url: url, contentType: contentType)
+    }
+
+    /// The presigned URL and content type a descriptor carries.
+    static func parts(of json: [String: Any]) throws -> (url: String, contentType: String?) {
         guard let url = json["url"] as? String else {
             throw FileBucketError.invalidURL("missing 'url' in descriptor")
         }
-        let contentType = json["contentType"] as? String
-        return FileUploadHandle(url: url, contentType: contentType)
+        return (url, json["contentType"] as? String)
     }
 
     /// Returns the presigned upload URL.
@@ -114,5 +119,20 @@ public class FileUploadHandle {
         } catch {
             throw FileBucketError.uploadFailed(error.localizedDescription, error)
         }
+    }
+}
+
+// MARK: - Codable
+
+extension FileUploadHandle: Codable {
+    /// Hydrates a handle from its descriptor in a generated result, at any depth, as `fromJSON` does.
+    public convenience init(from decoder: Decoder) throws {
+        let (url, contentType) = try Self.parts(of: TransferableCoding.descriptor(from: decoder))
+        self.init(url: url, contentType: contentType)
+    }
+
+    /// Always throws: transferables are read-only.
+    public func encode(to encoder: Encoder) throws {
+        throw TransferableCoding.readOnlyError(self, encoder)
     }
 }

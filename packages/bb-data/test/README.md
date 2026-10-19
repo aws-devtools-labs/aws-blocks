@@ -20,7 +20,7 @@ npm run test -w packages/bb-data
 ### Typecheck snapshot (no setup needed)
 
 ```sh
-npm run build:packages
+npm run build
 npm run test -w test-apps/db-pull-typecheck
 ```
 

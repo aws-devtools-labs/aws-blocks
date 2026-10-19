@@ -19,6 +19,11 @@ import fg from 'fast-glob';
 import semver from 'semver';
 import { getPackageInfoSync } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
+import { targetCompute } from './shared/compute_target.js';
+import {
+  FRAMEWORK_COMPUTE_RUNTIME,
+  FRAMEWORK_EDGE_COMPUTE_RUNTIME,
+} from '../framework_runtime.js';
 import type {
   ComputeResource,
   CustomHeader,
@@ -160,10 +165,15 @@ export const nextjsAdapter = (
 
     // Patch OpenNext's bundled aws-lambda-streaming wrapper for API Gateway
     // STREAM framing. See patchStreamingWrapperForApiGateway for what changes.
-    patchStreamingWrapperForApiGateway(openNextDir);
+    // Web Functions use OpenNext's `node` wrapper (a plain HTTP server, no
+    // API Gateway framing), so there is nothing to patch.
+    if (targetCompute() !== 'web-function') patchStreamingWrapperForApiGateway(openNextDir);
 
     // Patch each edge bundle's process import banner for Lambda@Edge
-    // nodejs20.x compatibility. See patchEdgeBundleForLambdaEdge.
+    // compatibility. See patchEdgeBundleForLambdaEdge for the mechanics, and
+    // the FRAMEWORK_EDGE_COMPUTE_RUNTIME doc comment in framework_runtime.ts
+    // for why this patch is runtime-independent (ES Module namespace exports
+    // are non-writable per spec — it is not a Node-version quirk).
     patchEdgeBundlesForLambdaEdge(openNextDir);
 
     // Patch the image-optimization bundle for the Next.js 16 image-optimizer
@@ -1012,6 +1022,12 @@ const escapeRegex = (s: string): string =>
  * separate edge function — OpenNext refuses to build a project that
  * declares `runtime = 'edge'` without an explicit split function.
  *
+ * When the run targets Lambda Web Functions (`compute.type:
+ * 'web-function'`) the server is a plain Node.js HTTP server instead, so the
+ * required overrides are `wrapper: 'node'`, `converter: 'node'` and
+ * `generateDockerfile: true` (the container origin the adapter maps to
+ * http-server compute).
+ *
  * Why textual scan: the file is TypeScript that may be transpiled at
  * build time; importing it here would require running the TS compiler
  * before OpenNext even starts. We strip comments + look for either a
@@ -1040,19 +1056,32 @@ const validateUserOpenNextConfig = (
   }
   const source = stripCommentsForScan(raw);
   const missing: string[] = [];
-  if (!findOverride(source, 'converter', 'aws-apigw-v1')) {
-    missing.push("converter: 'aws-apigw-v1'");
-  }
-  // Accept either the patched community wrapper (`aws-lambda-streaming`) or
-  // OpenNext's native API Gateway streaming wrapper (`aws-apigw-streaming`,
-  // the upstream PR). Both produce a handler compatible with the REST API
-  // STREAM integration; rejecting the native one would force users onto the
-  // wrapper we monkeypatch even after upstream ships the proper fix.
-  const hasStreamingWrapper =
-    findOverride(source, 'wrapper', 'aws-lambda-streaming') ||
-    findOverride(source, 'wrapper', 'aws-apigw-streaming');
-  if (!hasStreamingWrapper) {
-    missing.push("wrapper: 'aws-lambda-streaming' (or 'aws-apigw-streaming')");
+  if (targetCompute() === 'web-function') {
+    // Lambda Web Functions run the server as a plain Node.js HTTP server:
+    // OpenNext's `node` wrapper + converter, emitted as a container (`ecs`)
+    // origin so the adapter maps it to http-server compute.
+    for (const [key, value] of [
+      ['wrapper', 'node'],
+      ['converter', 'node'],
+    ] as const) {
+      if (!findOverride(source, key, value)) missing.push(`${key}: '${value}'`);
+    }
+    if (!/\bgenerateDockerfile\s*:\s*true\b/.test(source)) missing.push('generateDockerfile: true');
+  } else {
+    if (!findOverride(source, 'converter', 'aws-apigw-v1')) {
+      missing.push("converter: 'aws-apigw-v1'");
+    }
+    // Accept either the patched community wrapper (`aws-lambda-streaming`) or
+    // OpenNext's native API Gateway streaming wrapper (`aws-apigw-streaming`,
+    // the upstream PR). Both produce a handler compatible with the REST API
+    // STREAM integration; rejecting the native one would force users onto the
+    // wrapper we monkeypatch even after upstream ships the proper fix.
+    const hasStreamingWrapper =
+      findOverride(source, 'wrapper', 'aws-lambda-streaming') ||
+      findOverride(source, 'wrapper', 'aws-apigw-streaming');
+    if (!hasStreamingWrapper) {
+      missing.push("wrapper: 'aws-lambda-streaming' (or 'aws-apigw-streaming')");
+    }
   }
   // Edge functions must be split out per OpenNext's build-time
   // requirement. Detect by checking for any `runtime: 'edge'` token in
@@ -1097,13 +1126,23 @@ const installGeneratedOpenNextConfig = (
   // semantically-equivalent fix would be externalizing `@aws-sdk/*`
   // (Lambda runtime ships AWS SDK v3), but OpenNext does not yet expose
   // an `external` knob in its public config.
+  // Lambda Web Functions (compute.type: 'web-function') run the server as a
+  // plain Node.js HTTP server: OpenNext's `node` wrapper/converter, emitted as
+  // a container (`ecs`) origin so it maps to http-server compute. (The
+  // Dockerfile OpenNext writes alongside is unused.)
+  const defaultOverride =
+    targetCompute() === 'web-function'
+      ? `converter: 'node',
+      wrapper: 'node',
+      generateDockerfile: true,`
+      : `converter: 'aws-apigw-v1',
+      wrapper: 'aws-lambda-streaming',`;
   const configBody = `// AUTO-GENERATED by @aws-blocks/hosting — do not edit.
 const config = {
   default: {
     minify: true,
     override: {
-      converter: 'aws-apigw-v1',
-      wrapper: 'aws-lambda-streaming',
+      ${defaultOverride}
     },
   },${edgeBlock}
 };
@@ -1331,18 +1370,20 @@ export const patchStreamingWrapperForApiGateway = (
 };
 
 /**
- * Patch every OpenNext edge bundle so it runs on Lambda@Edge nodejs20.x.
+ * Patch every OpenNext edge bundle so it runs on Lambda@Edge.
  *
  * OpenNext prepends each edge bundle with `import * as process from "node:process";`
- * (banner injected by createEdgeBundle.ts). Under Node 20 ESM the resulting
- * Module namespace's `env` binding is non-writable. The next-emitted Next.js
+ * (banner injected by createEdgeBundle.ts). Per the ECMAScript spec a Module
+ * namespace object's bindings are non-writable, so the next-emitted Next.js
  * shim then runs `process.env = e.g.process.env` and crashes with:
  *
  * TypeError: Cannot assign to read only property 'env' of object '[object Module]'
  *
  * Replace the namespace import with a default import so `process` is the
  * live mutable singleton (default export of `node:process`). Idempotent —
- * re-running on an already-patched file finds no banner to swap.
+ * re-running on an already-patched file finds no banner to swap. Version-
+ * agnostic: it relies only on top-level `await import(...)` and the
+ * `node:process` default export, both stable across Node 18–24.
  *
  * Affects only edge functions (Lambda@Edge); the regional `default` bundle
  * uses a different banner and is unaffected.
@@ -1397,7 +1438,7 @@ export const patchEdgeBundlesForLambdaEdge = (openNextDir: string): void => {
     });
   }
   process.stderr.write(
-    `\u{1F527} Patched ${total} edge bundle(s) for Lambda@Edge nodejs20.x compatibility.\n`,
+    `\u{1F527} Patched ${total} edge bundle(s) for Lambda@Edge compatibility.\n`,
   );
 };
 
@@ -1945,7 +1986,7 @@ const translateOpenNextOutput = (
         handler: fn.handler ?? 'index.handler',
         placement: 'global',
         streaming: false,
-        runtime: 'nodejs20.x',
+        runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
       };
     }
   }
@@ -2076,7 +2117,7 @@ const mapOriginToCompute = (
       handler: origin.handler ?? 'index.handler',
       placement: 'regional',
       streaming: origin.streaming ?? true,
-      runtime: origin.runtime ?? 'nodejs20.x',
+      runtime: origin.runtime ?? FRAMEWORK_COMPUTE_RUNTIME,
       memorySize: origin.memorySize,
       timeout: origin.timeout,
       environment: origin.environment,
@@ -2084,14 +2125,18 @@ const mapOriginToCompute = (
   }
 
   if (origin.type === 'ecs' || origin.type === 'docker') {
+    // OpenNext's container origin (`node` wrapper) starts its HTTP server from
+    // `index.mjs`; a custom entrypoint wins when declared.
+    const openNextServerEntry = fs.existsSync(path.join(effectiveBundle, 'index.mjs')) ? 'index.mjs' : undefined;
     return {
       type: 'http-server',
       bundle: effectiveBundle,
       entrypoint: origin.entrypoint ?? 'server.js',
+      serverEntry: origin.entrypoint ?? openNextServerEntry,
       port: origin.port ?? 3000,
       placement: 'regional',
       streaming: origin.streaming ?? false,
-      runtime: origin.runtime ?? 'nodejs20.x',
+      runtime: origin.runtime ?? FRAMEWORK_COMPUTE_RUNTIME,
       environment: origin.environment,
     };
   }
@@ -2103,7 +2148,7 @@ const mapOriginToCompute = (
       handler: origin.handler ?? 'index.handler',
       placement: 'global',
       streaming: false,
-      runtime: origin.runtime ?? 'nodejs20.x',
+      runtime: origin.runtime ?? FRAMEWORK_EDGE_COMPUTE_RUNTIME,
       environment: origin.environment,
     };
   }
@@ -2115,7 +2160,7 @@ const mapOriginToCompute = (
     handler: 'index.handler',
     placement: 'regional',
     streaming: origin.streaming ?? true,
-    runtime: 'nodejs20.x',
+    runtime: FRAMEWORK_COMPUTE_RUNTIME,
   };
 };
 

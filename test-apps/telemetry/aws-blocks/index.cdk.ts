@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
-import { BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -34,10 +33,11 @@ const stackName = sandboxMode
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
+  // Disposable CI test stack: force the sandbox posture (DESTROY, no deletion
+  // protection) so teardown works in every deploy mode. A real app would use
+  // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
+  defaults: BlocksPresets.sandbox,
 });
-
-RemovalPolicies.of(blocksStack).destroy();
-Mixins.of(blocksStack).apply(new SandboxDisableDeletionProtection());
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'telemetry-e2e');
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');

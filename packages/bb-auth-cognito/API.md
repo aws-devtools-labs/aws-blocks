@@ -469,7 +469,7 @@ export interface SessionRecord {
 //
 // @internal
 export class SessionStore {
-    constructor(scope: ScopeParent, id?: string);
+    constructor(scope: ScopeParent, id?: string, ttlSeconds?: number);
     createSession(record: SessionRecord): Promise<string>;
     deleteByUsername(username: string): Promise<number>;
     deleteSession(sessionId: string): Promise<void>;

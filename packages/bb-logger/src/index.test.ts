@@ -3,9 +3,17 @@
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Scope } from '@aws-blocks/core';
 import { Logger, LoggingErrors } from './index.mock.js';
+import { Logger as AwsLogger } from './index.aws.js';
 import type { LogEntry, ChildLogger } from './types.js';
 import { shouldLog, buildEntry, processValue, safeStringify } from './serializer.js';
+import { BB_NAME, BB_VERSION } from './version.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -27,13 +35,11 @@ beforeEach(() => {
 		stderrLines.push(String(chunk));
 		return true;
 	}) as any;
-	delete process.env.LOG_LEVEL;
 });
 
 afterEach(() => {
 	process.stdout.write = origStdoutWrite;
 	process.stderr.write = origStderrWrite;
-	delete process.env.LOG_LEVEL;
 });
 
 function getStdoutEntry(index = 0): LogEntry {
@@ -150,40 +156,6 @@ describe('level filtering', () => {
 		assert.strictEqual(stdoutLines.length, 3);
 		assert.strictEqual(stderrLines.length, 1);
 	});
-});
-
-// ── LOG_LEVEL Environment Variable ──────────────────────────────────────────
-
-describe('LOG_LEVEL env var', () => {
-	test('reads LOG_LEVEL from environment', () => {
-		process.env.LOG_LEVEL = 'warn';
-		const log = new Logger(fakeScope, 'app');
-		log.info('suppressed');
-		log.warn('emitted');
-		assert.strictEqual(stdoutLines.length, 1);
-		assert.strictEqual(getStdoutEntry().level, 'warn');
-	});
-
-	test('constructor option overrides env var', () => {
-		process.env.LOG_LEVEL = 'error';
-		const log = new Logger(fakeScope, 'app', { level: 'debug' });
-		log.debug('emitted');
-		assert.strictEqual(stdoutLines.length, 1);
-	});
-
-	test('invalid env var falls through to default', () => {
-		process.env.LOG_LEVEL = 'invalid';
-		const log = new Logger(fakeScope, 'app');
-		// 'invalid' won't match any LEVEL_PRIORITY key, so shouldLog returns false for most
-		// Actually the level is set to 'invalid' which has undefined priority
-		// This means shouldLog will return NaN >= NaN which is false
-		// Effectively suppresses all output — acceptable edge case behavior
-		log.info('test');
-		// Since 'invalid' is not in LEVEL_PRIORITY, info priority (1) >= undefined — which is false
-		assert.strictEqual(stdoutLines.length, 0);
-	});
-
-
 });
 
 // ── Context ─────────────────────────────────────────────────────────────────
@@ -536,5 +508,63 @@ describe('scope integration', () => {
 	test('fullId includes parent scope', () => {
 		const log = new Logger(fakeScope, 'child');
 		assert.strictEqual(log.fullId, 'root-child');
+	});
+});
+
+// ── Telemetry Registration ──────────────────────────────────────────────────
+
+/**
+ * `Scope.getRegisteredBlocks()` only names a block whose `bbName` is in
+ * OFFICIAL_BB_NAMES, and that set is generated from the umbrella's
+ * `aws-blocks.vendorize` map. These tests pin the three coupled artifacts to
+ * each other: the block's generated BB_NAME, its vendorize entry, and the
+ * generated name set. A block that omits `bbMeta` still constructs fine and
+ * every other test still passes, so that gap is only visible here.
+ *
+ * Imported through `./index.mock.js`, the package's default entry, which
+ * re-exports the AWS runtime class — so both conditions resolve to the class
+ * asserted here.
+ */
+describe('telemetry registration', () => {
+	beforeEach(() => {
+		Scope._resetRegistry();
+	});
+
+	test('BB_NAME is the name the vendorize map and OFFICIAL_BB_NAMES carry', () => {
+		assert.strictEqual(BB_NAME, 'Logger');
+	});
+
+	test('BB_VERSION tracks the package version', () => {
+		const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
+		assert.strictEqual(BB_VERSION, pkg.version);
+	});
+
+	test('the default entry re-exports the AWS runtime class', () => {
+		assert.strictEqual(Logger, AwsLogger);
+	});
+
+	test('an instance carries bbName and bbVersion', () => {
+		const logger = new Logger(fakeScope, 'logger');
+		assert.strictEqual(logger.bbName, BB_NAME);
+		assert.strictEqual(logger.bbVersion, BB_VERSION);
+	});
+
+	test('registers as an official block, so telemetry is allowed to name it', () => {
+		new Logger(fakeScope, 'logger');
+		const { blocks, customBlocksCount } = Scope.getRegisteredBlocks();
+		assert.deepStrictEqual(
+			blocks.filter(b => b.name === BB_NAME),
+			[{ name: BB_NAME, version: BB_VERSION }],
+		);
+		assert.strictEqual(customBlocksCount, 0, 'must not be filtered out as an unnamed custom block');
+	});
+
+	test('a child logger does not register a second time', () => {
+		const logger = new Logger(fakeScope, 'logger');
+		logger.child({ requestId: 'r-1' });
+		assert.strictEqual(
+			Scope.getRegisteredBlocks().blocks.filter(b => b.name === BB_NAME).length,
+			1,
+		);
 	});
 });

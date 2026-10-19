@@ -14,3 +14,12 @@ export type { Transaction } from './types.js';
 export { DatabaseBase } from './database-base.js';
 export { splitStatements, runMigrations, loadMigrationsFromDir, DOLLAR_QUOTE_TAG_RE } from './migrations.js';
 export { createKyselyAdapter } from './kysely-adapter.js';
+export {
+  initializePgliteWithRetry,
+  isPgliteUnreachableTrap,
+  trackEager,
+  logRecovery,
+  PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL,
+  PGLITE_DATA_LAYER_RECOVERED_SENTINEL,
+} from './pglite-init.js';
+export type { PgliteLike, PgliteInitRetryOptions } from './pglite-init.js';

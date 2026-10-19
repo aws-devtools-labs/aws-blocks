@@ -21,6 +21,23 @@ const SYNTH_DIR = join(APP_ROOT, 'cdk.out');
 
 let template: any;
 
+/**
+ * CDK synthesizes its own helper Lambdas for custom resources — the S3
+ * auto-delete provider and the BucketDeployment runtime, both pulled in by the
+ * config registry's S3 bucket (`autoDeleteObjects` under the sandbox posture).
+ * They are CDK-managed plumbing, not Blocks compute, so exclude them when
+ * counting how many computes Blocks provisions. Their construct path carries a
+ * `Custom::` segment; a real compute's does not
+ * (`.../BlocksApi/DefaultCompute/Handler/Resource`).
+ */
+const isCdkCustomResourceLambda = (r: any) =>
+  String(r.Metadata?.['aws:cdk:path'] ?? '').includes('Custom::');
+
+const blocksComputeLambdas = () =>
+  Object.values(template.Resources).filter(
+    (r: any) => r.Type === 'AWS::Lambda::Function' && !isCdkCustomResourceLambda(r)
+  );
+
 describe('extending-blocks-guide-blocksbackend synth', () => {
   before(() => {
     execSync('npx cdk synth --quiet', { cwd: APP_ROOT, stdio: 'pipe' });
@@ -29,14 +46,13 @@ describe('extending-blocks-guide-blocksbackend synth', () => {
     template = JSON.parse(readFileSync(join(SYNTH_DIR, files[0]), 'utf-8'));
   });
 
-  test('exactly one Lambda function (the BlocksBackend handler)', () => {
-    const lambdas = Object.values(template.Resources).filter(
-      (r: any) => r.Type === 'AWS::Lambda::Function'
-    );
+  test('exactly one Blocks compute Lambda (the BlocksBackend handler)', () => {
+    const lambdas = blocksComputeLambdas();
     assert.strictEqual(
       lambdas.length,
       1,
-      `expected 1 Lambda (BlocksBackend handler); got ${lambdas.length}.`
+      `expected 1 Blocks compute Lambda (BlocksBackend handler); got ${lambdas.length}: ` +
+        `${lambdas.map((r: any) => r.Metadata?.['aws:cdk:path']).join(', ')}`
     );
   });
 

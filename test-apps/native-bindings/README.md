@@ -19,7 +19,7 @@ Test backend for native client bindings (Swift, Kotlin, Dart). Exercises the Bui
 ```bash
 # From the repo root
 npm install
-npm run build:packages
+npm run build
 
 # Start the dev server
 cd test-apps/native-bindings

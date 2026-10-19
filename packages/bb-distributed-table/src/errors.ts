@@ -1,6 +1,34 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { createDefu } from 'defu';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { ApiError, blocksError as coreBlocksError, brandBlocksError } from '@aws-blocks/core';
+import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ReadValidationMode } from './types.js';
+
+/**
+ * @internal Right-biased deep merge for the `'coerce'` read path: overlay the
+ * schema-coerced item onto the raw stored item so schema output (filled defaults,
+ * narrowed types) wins, while keys the schema stripped (e.g. attributes from an
+ * older schema version or another writer) are preserved rather than silently
+ * dropped on a read-modify-write.
+ *
+ * Arrays are treated as **opaque leaves** — the coerced array replaces the raw
+ * array wholesale. defu concatenates arrays by default, which is wrong here: the
+ * coerced array is derived from the same raw array, so concatenation would
+ * duplicate every element. This customizer overrides that one behavior; plain
+ * objects still deep-merge (so nested unknown keys survive), and defu's built-in
+ * `__proto__`/`constructor` guard is retained.
+ */
+const mergeCoercedOverRaw = createDefu((obj, key, value) => {
+	if (Array.isArray(obj[key]) || Array.isArray(value)) {
+		obj[key] = obj[key] ?? value;
+		return true;
+	}
+	return false;
+});
+
 /**
  * Typed error constants for DistributedTable. Use with `isBlocksError()` in catch blocks.
  *
@@ -63,14 +91,47 @@ export const DistributedTableErrors = {
 } as const;
 
 /**
- * @internal Build an Error whose `name` carries the typed error code (so callers
- * can match it with `isBlocksError`). Shared by the mock and AWS runtime so both
- * produce identically shaped errors.
+ * The set of error names this Building Block can produce. Deriving it from the
+ * `DistributedTableErrors` constant lets `blocksError` reject a stray string
+ * name at compile time, so every mint site passes a known code.
  */
-export function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
+export type DistributedTableErrorName = (typeof DistributedTableErrors)[keyof typeof DistributedTableErrors];
+
+/**
+ * @internal Build an Error whose `name` carries the typed error code (so callers
+ * can match it with `isBlocksError`). The `name` param is typed to
+ * `DistributedTableErrorName`, so a stray string is caught at compile time.
+ * Shared by the mock and AWS runtime so both produce identically shaped errors.
+ * Delegates to core's `blocksError` so the minting (prefixing, naming, wire-safe
+ * branding) lives in one place.
+ */
+export function blocksError(name: DistributedTableErrorName, message: string): Error {
+	return coreBlocksError(name, message);
+}
+
+/**
+ * @internal Build the 409 ApiError for a conditional-write conflict. Maps to
+ * HTTP 409 (Conflict) so the JSON-RPC serializer emits code 409 instead of a
+ * generic 500, preserves the `ConditionalCheckFailed` name so `isBlocksError()`
+ * keeps matching on both server and client. Shared by the mock and AWS runtime
+ * so both produce an identically shaped 409; on AWS the caught DynamoDB
+ * `ConditionalCheckFailedException` is passed as `cause` (kept server-side by
+ * ApiError).
+ *
+ * `retriable` is scoped to the assertion kind: `true` only for optimistic-lock
+ * conflicts (`ifFieldEquals`), where a re-read and retry can succeed; `false`
+ * for existence/uniqueness assertions (`ifNotExists` on put, `ifExists` on
+ * delete), where a blind identical retry fails identically. DynamoDB collapses
+ * every conditional failure under one `ConditionalCheckFailedException` with no
+ * sub-reason, so the AWS runtime decides this from the condition the caller set
+ * on that specific put/delete call.
+ */
+export function conditionalCheckFailed(retriable: boolean, cause?: unknown): ApiError {
+	return new ApiError('The conditional request failed', 409, {
+		name: DistributedTableErrors.ConditionalCheckFailed,
+		cause,
+		retriable,
+	});
 }
 
 /**
@@ -132,14 +193,74 @@ export const DistributedTableMessages = {
  * other `ValidationException` causes (malformed expressions, type mismatches) are
  * left untouched and propagate as-is. This mirrors the mock's client-side size
  * check so both layers are catchable with `isBlocksError(e, ItemTooLarge)`. The
- * original DynamoDB error is preserved as `cause` (kept server-side per D-003) so
- * its stack and requestId remain available for debugging.
+ * re-mapped error carries a STABLE BB-authored message (not DynamoDB's raw text):
+ * the branded name AND message now cross the wire (D-003), so the message must not
+ * embed raw driver text. The original DynamoDB error is preserved as `cause` (kept
+ * server-side per D-003) so its stack and requestId remain available for debugging.
  */
 export function remapItemTooLarge(err: unknown): unknown {
 	if (err instanceof Error && err.name === 'ValidationException' && /size has exceeded/i.test(err.message)) {
-		const remapped = new Error(err.message, { cause: err });
+		const remapped = new Error(`${DistributedTableErrors.ItemTooLarge}: Item size has exceeded the maximum allowed size of 400 KB`, { cause: err });
 		remapped.name = DistributedTableErrors.ItemTooLarge;
-		return remapped;
+		return brandBlocksError(remapped);
 	}
 	return err;
+}
+
+/**
+ * @internal Reconcile a stored item with the schema on read, per the
+ * `readValidation` mode. Shared by the mock and AWS runtime so all three modes
+ * behave identically in both. `null` (a missing item) always passes through
+ * untouched, preserving not-found semantics.
+ *
+ * - `'off'` — return the raw item, no validation.
+ * - `'coerce'` — apply the schema (fill defaults / narrow types for
+ *   transform-bearing schemas) **without dropping data**: the coerced output is
+ *   deep-merged over the raw item, so schema output wins per key while attributes
+ *   the schema doesn't declare (from an older schema version or another writer)
+ *   are preserved. Without this merge, returning the bare validator output would
+ *   strip unknown keys (Zod `.strip()` default), and a read-modify-write would
+ *   then persist the stripped item — silently deleting stored data. On validation
+ *   failure, return the **raw** item and `warn` — never throws — so drifted/legacy
+ *   rows stay readable and the "reads return data or `null`" contract holds.
+ * - `'strict'` — throw `ValidationFailed` on any item that doesn't satisfy the
+ *   schema.
+ *
+ * Schemas may validate synchronously or asynchronously; this awaits either.
+ */
+export async function applyReadValidation<T>(
+	mode: ReadValidationMode,
+	schema: StandardSchemaV1<T>,
+	item: T | null,
+	log: Pick<ChildLogger, 'warn'>,
+	context?: Record<string, unknown>,
+): Promise<T | null> {
+	if (item == null || mode === 'off') return item;
+	const result = schema['~standard'].validate(item);
+	const resolved = result instanceof Promise ? await result : result;
+	if (resolved.issues) {
+		if (mode === 'strict') {
+			throw blocksError(DistributedTableErrors.ValidationFailed, resolved.issues[0]?.message ?? 'stored item failed schema validation on read');
+		}
+		log.warn(
+			`readValidation: stored item failed schema validation, returning the raw value. ${resolved.issues[0]?.message ?? ''}`.trim(),
+			context,
+		);
+		return item;
+	}
+	// Merge coerced output over the raw item: schema wins per key, but keys the
+	// schema stripped are preserved (see mergeCoercedOverRaw). Only merge when both
+	// sides are plain objects — a schema whose output is a primitive/array (rare
+	// for a table item) is returned as-is.
+	if (isPlainObject(item) && isPlainObject(resolved.value)) {
+		return mergeCoercedOverRaw(resolved.value as Record<string, unknown>, item as Record<string, unknown>) as T;
+	}
+	return resolved.value as T;
+}
+
+/** True for a plain `{}` object (not null, array, Date, or class instance). */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+	if (v === null || typeof v !== 'object' || Array.isArray(v)) return false;
+	const proto = Object.getPrototypeOf(v);
+	return proto === Object.prototype || proto === null;
 }

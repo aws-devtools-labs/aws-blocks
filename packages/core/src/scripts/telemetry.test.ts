@@ -26,6 +26,8 @@ const NO_CI_ENV: Record<string, string> = {
   TF_BUILD: '',
   BITBUCKET_BUILD_NUMBER: '',
   BUILDKITE: '',
+  RENDER: '',
+  TASKCLUSTER_ROOT_URL: '',
   AWS_BLOCKS_DISABLE_TELEMETRY: '',
 };
 
@@ -71,6 +73,9 @@ describe('telemetry CLI', () => {
       assert.ok(result.stdout.includes('--enable'));
       assert.ok(result.stdout.includes('--disable'));
       assert.ok(result.stdout.includes('--global'));
+      assert.ok(result.stdout.includes('AWS_BLOCKS_DISABLE_TELEMETRY=1|true|yes'));
+      assert.ok(result.stdout.includes('BLOCKS_TELEMETRY_ENDPOINT=<url>'));
+      assert.ok(result.stdout.includes('Send failures are ignored'));
     });
 
     it('-h shows usage', () => {
