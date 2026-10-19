@@ -34,6 +34,14 @@ env:
   # Use the 'spec' reporter for node:test — produces a clean, hierarchical
   # pass/fail summary instead of verbose TAP output with per-test YAML blocks.
   NODE_OPTIONS: '--test-reporter=spec'
+  # Test-environment-only retry tuning. The shared CI AWS account multiplexes
+  # many concurrent PR runs, so AWS APIs (notably Cognito's per-account request
+  # rate quotas) intermittently throttle with retriable 429s. Raise the SDK
+  # retry budget for CI via the standard env vars so a transient throttle is
+  # ridden out here — this is a CI workaround and deliberately NOT baked into
+  # any shipped client's defaults.
+  AWS_RETRY_MODE: adaptive
+  AWS_MAX_ATTEMPTS: '10'
 
 jobs:
   detect-changes:
