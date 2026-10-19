@@ -13,10 +13,11 @@ export { EmailErrors } from './errors.js';
 export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
 
 import type { EmailOptions } from './types.js';
+import { BB_NAME } from './version.js';
 
 export class EmailClient extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: EmailOptions) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SES] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SES] } });
 
 		console.warn(
 			`\n⚠️  [Email] Prerequisite: Domain for "${options.fromAddress}" must be verified in SES.\n` +
