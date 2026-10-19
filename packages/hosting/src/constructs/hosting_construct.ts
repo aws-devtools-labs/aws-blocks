@@ -60,6 +60,7 @@ import { albDoor } from './alb_door.js';
 import { ALB_EVENT_SHIM_FILE, ALB_EVENT_SHIM_HANDLER, generateAlbEventShimCode } from './alb_lambda_event.js';
 import { apiGatewayDoor } from './apigw_door.js';
 import { registerUploads } from './cf_helpers.js';
+import { ALB_LAMBDA_RESPONSE_LIMIT, LAMBDA_SYNC_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
 import { cloudFrontDoor } from './cloudfront_door.js';
 import { buildFrontDoor } from './custom_door.js';
 import { buildDoorInput } from './door_input.js';
@@ -1839,6 +1840,24 @@ export class HostingConstruct extends Construct {
           resolution:
             "Use 'cloudfront' (default), 'none' (S3 website), { kind: 'alb' }, { kind: 'apiGateway' }, or { kind: 'custom', door }.",
         });
+      }
+      // A regional door serves static files through a Lambda asset proxy:
+      // report the files too large for its response limit.
+      if (fd?.kind === 'alb' || fd?.kind === 'apiGateway') {
+        const lockedAlb = fd.kind === 'alb' && fd.restrictToCloudFront === true;
+        // Behind the stacked door's edge, static routes (and everything, for a
+        // site without a server) come from S3, not the proxy.
+        if (!(lockedAlb && !serverName)) {
+          warnOversizedProxyAssets(this, {
+            door: fd.kind === 'alb' ? (lockedAlb ? 'stacked (ALB router)' : 'ALB') : 'API Gateway',
+            ...(fd.kind === 'alb'
+              ? { limitBytes: ALB_LAMBDA_RESPONSE_LIMIT, limitLabel: '1 MB' }
+              : { limitBytes: LAMBDA_SYNC_RESPONSE_LIMIT, limitLabel: "6 MB (Lambda's response limit, under API Gateway's 10 MB)" }),
+            staticDir: manifest.staticAssets.directory,
+            urlPrefix: plan.policies.basePath ?? '',
+            servedElsewhere: lockedAlb ? plan.routes.entries.filter((e) => e.kind === 'static').map((e) => e.pattern) : [],
+          });
+        }
       }
       this.distributionUrl = built.url;
       this.frontDoor = { service, url: built.url, originHandle: built.originHandle };
