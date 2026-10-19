@@ -5,6 +5,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { Scope } from '@aws-blocks/core/cdk';
 import { ChildLoggerImpl, writeLog } from './emitter.js';
 import type { ChildLogger, LoggingOptions, LogLevel } from './types.js';
+import { BB_NAME } from './version.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { LoggingErrors } from './errors.js';
@@ -33,7 +34,7 @@ export class Logger extends Scope implements ChildLogger {
 	private loggerName: string;
 
 	constructor(scope: ScopeParent, id: string, options?: LoggingOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME });
 		this.loggerName = id;
 		this.level = options?.level ?? 'info';
 		this.defaultContext = options?.defaultContext ?? {};

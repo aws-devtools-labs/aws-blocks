@@ -11,6 +11,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { applyXRayTracing, buildHealthWidgets, buildLoggingWidgets, buildTracingWidgets } from './observability.js';
 import type { LambdaComputeProps } from './types.js';
+import { BB_NAME } from './version.js';
 
 export type { LambdaComputeProps } from './types.js';
 
@@ -56,7 +57,7 @@ export class LambdaCompute extends Compute {
 	readonly logGroup: LogGroup;
 
 	constructor(scope: ScopeParent, id: string, options?: LambdaComputeProps) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME });
 
 		// The single CloudWatch log group for the handler. Owning it (a real
 		// LogGroup passed as the function's `logGroup`) makes its retention follow
