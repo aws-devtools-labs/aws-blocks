@@ -13,6 +13,13 @@
  * asked for them. It has no edge: no edge cache, per-route response headers,
  * branded error pages, session pinning or geo restriction.
  *
+ * The app's rules are applied by its proxies instead, with the CloudFront
+ * door's semantics: redirects (each source → the asset proxy), per-pattern
+ * response headers (asset proxy and API forwarder), and error pages (a missing
+ * static file → the 404 page, an S3 failure → the 500 page). Responses the ALB
+ * sends straight to the server or image function bypass them; synth names what
+ * is not applied (`@aws-blocks/hosting:DoorRulesNotApplied`).
+ *
  * Its settings arrive through an internal extra, `alb` — the {@link AlbConstruct}
  * props `HostingConstruct` assembled from the app.
  */

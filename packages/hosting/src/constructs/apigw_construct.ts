@@ -15,9 +15,15 @@
  *     forwarder Lambda needed, unlike ALB — HTTP API can proxy an external
  *     HTTPS URL natively).
  *
+ * The app's redirects (a route per source → the asset proxy), per-pattern
+ * response headers and error pages are applied by the asset proxy with the
+ * CloudFront door's semantics; responses routed straight to the server, the
+ * image function or the backend don't pass through it, which synth reports
+ * (`@aws-blocks/hosting:DoorRulesNotApplied`).
+ *
  * Not provided (an app that asks for these deploys without them — there is no
  * feature check): no global edge cache, no per-route response-header
- * injection, no skew-pin, buffered SSR only (HTTP API can't stream). API Gateway also imposes a ~29 s request timeout and a
+ * injection on server/API responses, no skew-pin, buffered SSR only (HTTP API can't stream). API Gateway also imposes a ~29 s request timeout and a
  * ~10 MB payload / ~6 MB response cap. Stage-level config (WAF, TLS/domain,
  * access logs, throttle) applies to the whole API, not per route.
  */
@@ -31,6 +37,7 @@ import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import type { CapabilityPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
+import { warnRulesNotApplied } from './proxy_rules.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
 import {
   APIGW_DEFAULT_ROUTE_QUOTA,
@@ -56,6 +63,12 @@ export type ApiGatewayConstructProps = {
    * @default ['/aws-blocks/*']
    */
   apiPaths?: readonly string[];
+  /**
+   * The app's error pages, as object keys under the build prefix: the asset
+   * proxy serves `notFound` (404) for a missing file and `serverError` (500)
+   * when S3 fails.
+   */
+  errorPages?: { notFound?: string; serverError?: string };
 };
 
 export class ApiGatewayConstruct extends Construct {
@@ -76,7 +89,16 @@ export class ApiGatewayConstruct extends Construct {
     const assetProxy = new LambdaFunction(this, 'AssetProxy', {
       runtime: DEFAULT_NODE_RUNTIME,
       handler: 'index.handler',
-      code: Code.fromInline(generateApiGwAssetProxyCode({ stripPrefix, spaFallback })),
+      code: Code.fromInline(
+        generateApiGwAssetProxyCode({
+          stripPrefix,
+          spaFallback,
+          // The app's rules, applied as on the CloudFront door (see `asset_proxy_core.ts`).
+          redirects: plan.routes.redirects,
+          headers: plan.routes.headers,
+          errorPages: props.errorPages,
+        }),
+      ),
       timeout: Duration.seconds(15),
       memorySize: 256,
       environment: { ASSET_BUCKET: bucket.bucketName, ASSET_KEY_PREFIX: `builds/${buildId}` },
@@ -137,6 +159,16 @@ export class ApiGatewayConstruct extends Construct {
 
     // Route table → routes (deduped; catch-all handled by defaultIntegration).
     const seen = new Set<string>();
+    // Redirect sources first: each routes to the asset proxy, which answers the
+    // redirect with the CloudFront door's semantics (first match, wildcard tail
+    // spliced). A source with an inner wildcard has no route form.
+    for (const r of plan.routes.redirects) {
+      const path = globToProxyPath(r.source);
+      if (path === null || path.includes('*') || seen.has(path) || backendPaths.has(path)) continue;
+      if (path.startsWith('/aws-blocks/')) continue; // backend owns these
+      seen.add(path);
+      this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: assetIntegration });
+    }
     for (const entry of plan.routes.entries) {
       const path = globToProxyPath(entry.pattern);
       if (path === null || seen.has(path) || backendPaths.has(path)) continue;
@@ -151,6 +183,18 @@ export class ApiGatewayConstruct extends Construct {
           'Request a quota increase, or group raw routes under fewer path prefixes.',
       );
     }
+
+    // The rules the proxies can't apply: responses API Gateway sends straight
+    // to a function or (natively) to the backend.
+    warnRulesNotApplied(this, {
+      door: 'API Gateway',
+      headers: plan.routes.headers,
+      errorPages: Boolean(props.errorPages?.notFound || props.errorPages?.serverError),
+      server: Boolean(serverFn),
+      image: Boolean(imageFn),
+      nativeApi: backendPaths.size > 0,
+      api: (plan.backend?.origins.length ?? 0) > 0,
+    });
 
     this.url = this.api.apiEndpoint; // https://<id>.execute-api.<region>.amazonaws.com
 

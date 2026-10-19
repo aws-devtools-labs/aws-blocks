@@ -12,6 +12,12 @@
  * What ALB does NOT do (it has no edge; an app that asks for these deploys
  * without them — there is no feature check): global edge caching, per-route
  * response-header injection, skew-pin cookies, geo restriction. See `albDoor`.
+ *
+ * The app's redirects, per-pattern response headers and error pages are applied
+ * by the asset proxy (and the headers by the API forwarder) with the CloudFront
+ * door's semantics; responses the ALB sends straight to the server or image
+ * function don't pass through them, which synth reports
+ * (`@aws-blocks/hosting:DoorRulesNotApplied`).
  */
 import { createHash } from 'node:crypto';
 import { CfnOutput, Duration, Fn, RemovalPolicy, Stack } from 'aws-cdk-lib';
@@ -29,6 +35,7 @@ import { HostingError } from '../hosting_error.js';
 import type { CapabilityPlan, RouteKind } from '../plan/types.js';
 import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 import { generateAlbApiProxyCode } from './alb_api_proxy.js';
+import { warnRulesNotApplied } from './proxy_rules.js';
 import type { OriginHandle } from './layer.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
@@ -86,6 +93,12 @@ export type AlbConstructProps = {
    * @default false — a standalone ALB door is public by design.
    */
   restrictToCloudFront?: boolean;
+  /**
+   * The app's error pages, as object keys under the build prefix: the asset
+   * proxy serves `notFound` (404) for a missing file and `serverError` (500)
+   * when S3 fails.
+   */
+  errorPages?: { notFound?: string; serverError?: string };
 };
 
 /**
@@ -149,7 +162,17 @@ export class AlbConstruct extends Construct {
     const assetProxy = new LambdaFunction(this, 'AssetProxy', {
       runtime: DEFAULT_NODE_RUNTIME,
       handler: 'index.handler',
-      code: Code.fromInline(generateAlbAssetProxyCode({ stripPrefix, spaFallback })),
+      // The app's redirects, header rules and error pages, applied as on the
+      // CloudFront door (see `asset_proxy_core.ts`).
+      code: Code.fromInline(
+        generateAlbAssetProxyCode({
+          stripPrefix,
+          spaFallback,
+          redirects: plan.routes.redirects,
+          headers: plan.routes.headers,
+          errorPages: props.errorPages,
+        }),
+      ),
       timeout: Duration.seconds(15),
       memorySize: 256,
       environment: {
@@ -270,7 +293,7 @@ export class AlbConstruct extends Construct {
       const apiProxy = new LambdaFunction(this, `ApiProxy${idSuffix}`, {
         runtime: DEFAULT_NODE_RUNTIME,
         handler: 'index.handler',
-        code: Code.fromInline(generateAlbApiProxyCode()),
+        code: Code.fromInline(generateAlbApiProxyCode({ headers: plan.routes.headers })),
         timeout: Duration.seconds(30),
         memorySize: 256,
         environment: {
@@ -309,16 +332,16 @@ export class AlbConstruct extends Construct {
 
     // ── Listener rules from the plan's RouteTable ──
     // Redirects first (lowest priority numbers = evaluated first), then routes
-    // in the plan's specificity order (already most-specific-first).
+    // in the plan's specificity order (already most-specific-first). A redirect
+    // source routes to the asset proxy, which answers the redirect with the
+    // CloudFront door's semantics (exact status, wildcard tail spliced into the
+    // destination) — a native ALB redirect action can't splice the tail.
     let priority = REDIRECT_PRIORITY_BASE;
     for (const r of plan.routes.redirects) {
-      listener.addAction(`Redirect${priority}`, {
+      listener.addTargetGroups(`Redirect${priority}`, {
         priority: priority++,
         conditions: [...verify, elbv2.ListenerCondition.pathPatterns([r.source])],
-        action: elbv2.ListenerAction.redirect({
-          path: r.destination,
-          permanent: r.statusCode === 301 || r.statusCode === 308,
-        }),
+        targetGroups: [staticTg],
       });
     }
 
@@ -388,6 +411,20 @@ export class AlbConstruct extends Construct {
       this.loadBalancer.metrics
         .targetResponseTime()
         .createAlarm(this, 'AlbLatencyAlarm', { threshold: 5, evaluationPeriods: 3 });
+    }
+
+    // The rules the proxies can't apply (responses the ALB sends straight to a
+    // function). Behind the stacked door's edge, the edge applies them.
+    if (!props.restrictToCloudFront) {
+      warnRulesNotApplied(this, {
+        door: 'ALB',
+        headers: plan.routes.headers,
+        errorPages: Boolean(props.errorPages?.notFound || props.errorPages?.serverError),
+        server: Boolean(serverFn),
+        image: Boolean(imageFn),
+        nativeApi: false,
+        api: (plan.backend?.origins.length ?? 0) > 0,
+      });
     }
 
     this.url = `${httpsCert ? 'https' : 'http'}://${this.loadBalancer.loadBalancerDnsName}`;
