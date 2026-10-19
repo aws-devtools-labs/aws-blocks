@@ -376,8 +376,8 @@ for (const { name, files } of [umbrellaEntry, ...bbEntries]) {
 			assert.deepStrictEqual(
 				missing,
 				[],
-				`${name} "${condition}" entry is missing type exports:\n  ${missing.join(', ')}\n\n` +
-					`Re-export them from the ${condition} entry file with \`export type\`.`,
+				`${name} "${condition}" entry is missing exports:\n  ${missing.join(', ')}\n\n` +
+					`Re-export them from the ${condition} entry file: \`export type\` for types, a plain \`export\` for values.`,
 			);
 		});
 	}
