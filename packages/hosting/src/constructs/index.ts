@@ -155,5 +155,14 @@ export { assertDoorConformance, type DoorConformanceOptions } from './conformanc
 export { buildFrontDoor, type BuildFrontDoorOptions, type FrontDoorBuild } from './custom_door.js';
 export { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 export { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
+// The asset proxies' options (prefix strip, SPA fallback, and the app's
+// redirects, header rules and error pages — `input.app.*`).
+export type { AssetProxyOptions } from './asset_proxy_core.js';
+// The ALB door's same-origin API forwarder (a Lambda target relaying to the
+// backend, multi-value headers, the app's header rules).
+export { generateAlbApiProxyCode } from './alb_api_proxy.js';
+// The origin-verify header a CloudFront-only ALB requires (the stacked door's
+// router); a BYO door that stacks CloudFront over its own ALB can use the same.
+export { CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST, ORIGIN_VERIFY_HEADER } from './alb_construct.js';
 export { backendBaseUrl } from './apigw_routes.js';
 export { coalesceRoutes, routeSpecificity } from '../plan/route-table.js';

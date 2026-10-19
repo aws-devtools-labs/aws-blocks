@@ -527,7 +527,10 @@ export interface HostingProps {
    * thin CloudFront edge (TLS, cache, security headers, a BYO edge web ACL) whose
    * single origin is a full regional ALB router that routes everything (static,
    * SSR, image, and the same-origin API) to the rest of the infra. This is the
-   * composed "CF → ALB → rest of infra" door.
+   * composed "CF → ALB → rest of infra" door. The edge serves the static routes
+   * itself, straight from the private S3 bucket (origin access control); the
+   * API and the dynamic routes go through the ALB, which admits only the edge
+   * (a per-deploy secret header, and a security group open only to CloudFront).
    *
    * Pass `{ kind: 'custom', door }` to bring your own door, written as one
    * function: `defineFrontDoor({ service, build(scope, input) })` from
@@ -567,6 +570,10 @@ export interface HostingProps {
  * (today, an ALB). The edge is a thin distribution whose one origin is the
  * router; the router routes static/SSR/image and the same-origin API to the
  * rest of the infra. See {@link HostingProps.frontDoor}.
+ *
+ * The edge also serves the app's static routes straight from the private
+ * assets bucket (origin access control), so only the API and the dynamic
+ * routes reach the router, and the router admits only the edge.
  */
 export interface CloudFrontOverRouterFrontDoor {
   /** Discriminant — a stacked (edge-over-router) door. */

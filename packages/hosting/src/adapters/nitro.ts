@@ -743,14 +743,14 @@ export const extractJsonObjectAfter = (
   if (open === -1) return undefined;
   let depth = 0;
   let inString = false;
-  let escape = false;
+  let escaped = false;
   for (let i = open; i < source.length; i++) {
     const ch = source[i];
     if (inString) {
-      if (escape) {
-        escape = false;
+      if (escaped) {
+        escaped = false;
       } else if (ch === '\\') {
-        escape = true;
+        escaped = true;
       } else if (ch === '"') {
         inString = false;
       }
