@@ -11,6 +11,13 @@
  * the infra. The internal edge → router hop is HTTP; the viewer hop is HTTPS at
  * the edge.
  *
+ * The router admits only this edge: it hands over (in its `originHandle`) the
+ * origin-verify header every request must carry, which the edge sets as the
+ * origin's custom headers, and — for an internal ALB — the balancer itself,
+ * which the edge reaches through a CloudFront VPC origin and admits into the
+ * balancer's security group (the VPC origin's `CloudFront-VPCOrigins-Service-SG`,
+ * looked up after the distribution, since CloudFormation doesn't return it).
+ *
  * `build` creates:
  *   - a cache policy that HONORS the router's origin `Cache-Control`
  *     (`immutable` hashed assets edge-cached; `no-cache` HTML/API not), with
@@ -32,7 +39,11 @@ import {
   OriginRequestPolicy,
   ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
-import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
+import { HttpOrigin, VpcOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import type { IApplicationLoadBalancer } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
+import type { Construct } from 'constructs';
 import { type DoorInput, type DoorUpstream, defineFrontDoor, type FrontDoorResult } from './front_door.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 
@@ -62,7 +73,15 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
     if (!router) {
       throw new Error('cloudfront-edge door: the stacked edge needs the router door it fronts as `upstream`.');
     }
-    const origin = new HttpOrigin(router.originHandle.domainName, { protocolPolicy: OriginProtocolPolicy.HTTP_ONLY });
+    const handle = router.originHandle;
+    // The headers the router requires on every request (its origin-verify secret).
+    const customHeaders = handle.customHeaders ? { ...handle.customHeaders } : undefined;
+    const origin = handle.privateLoadBalancer
+      ? VpcOrigin.withApplicationLoadBalancer(handle.privateLoadBalancer, {
+          protocolPolicy: OriginProtocolPolicy.HTTP_ONLY,
+          customHeaders,
+        })
+      : new HttpOrigin(handle.domainName, { protocolPolicy: OriginProtocolPolicy.HTTP_ONLY, customHeaders });
     const cachePolicy = new CachePolicy(scope, 'CfAlbCache', {
       defaultTtl: Duration.seconds(0),
       minTtl: Duration.seconds(0),
@@ -88,6 +107,7 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
       },
       webAclId: input.webAclArn,
     });
+    if (handle.privateLoadBalancer) admitVpcOrigin(scope, distribution, handle.privateLoadBalancer);
     return {
       url: `https://${distribution.distributionDomainName}`,
       originHandle: { domainName: distribution.distributionDomainName, protocol: 'https' },
@@ -95,3 +115,51 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
     };
   },
 });
+
+/** The security group CloudFront creates for the VPC origins in a VPC. */
+const VPC_ORIGINS_SERVICE_SG = 'CloudFront-VPCOrigins-Service-SG';
+
+/**
+ * Admit the distribution's VPC origin into a private ALB's security group:
+ * CloudFront reaches the balancer from ENIs in its VPC that carry the
+ * `CloudFront-VPCOrigins-Service-SG` security group. CloudFormation doesn't
+ * return that group's id, so it is looked up (by name, in the balancer's VPC)
+ * once the distribution — and so its VPC origin — exists.
+ *
+ * @throws Error when the balancer has no VPC (an imported balancer without one).
+ */
+const admitVpcOrigin = (scope: Construct, distribution: Distribution, alb: IApplicationLoadBalancer): void => {
+  const vpcId = alb.vpc?.vpcId;
+  if (!vpcId) throw new Error('cloudfront-edge door: the private ALB has no VPC to admit the VPC origin from.');
+  const lookup = new AwsCustomResource(scope, 'CfVpcOriginSg', {
+    onUpdate: {
+      service: 'EC2',
+      action: 'describeSecurityGroups',
+      parameters: {
+        Filters: [
+          { Name: 'vpc-id', Values: [vpcId] },
+          { Name: 'group-name', Values: [VPC_ORIGINS_SERVICE_SG] },
+        ],
+      },
+      physicalResourceId: PhysicalResourceId.of(VPC_ORIGINS_SERVICE_SG),
+      outputPaths: ['SecurityGroups.0.GroupId'],
+    },
+    policy: AwsCustomResourcePolicy.fromSdkCalls({ resources: AwsCustomResourcePolicy.ANY_RESOURCE }),
+    installLatestAwsSdk: false,
+  });
+  // The group appears with the VPC origin, so look it up after the distribution.
+  lookup.node.addDependency(distribution);
+  // A standalone ingress rule (not inline on the group): the group is the
+  // balancer's, which the VPC origin — and so the lookup — waits for.
+  const sourceSecurityGroupId = lookup.getResponseField('SecurityGroups.0.GroupId');
+  alb.connections.securityGroups.forEach((group, i) => {
+    new ec2.CfnSecurityGroupIngress(scope, `CfVpcOriginIngress${i === 0 ? '' : i + 1}`, {
+      groupId: group.securityGroupId,
+      sourceSecurityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 80,
+      toPort: 80,
+      description: 'CloudFront VPC origin only',
+    });
+  });
+};

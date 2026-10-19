@@ -579,7 +579,16 @@ export interface CloudFrontOverRouterFrontDoor {
   router: 'alb';
   /** Bring-your-own VPC for the ALB; a default 2-AZ VPC is created when omitted. */
   vpc?: import('aws-cdk-lib/aws-ec2').IVpc;
-  /** Internal (private) ALB vs internet-facing. Default: internet-facing. */
+  /**
+   * Internal (private) ALB vs internet-facing. Default: internet-facing.
+   *
+   * Either way, the ALB admits only the CloudFront edge: every listener rule
+   * requires a per-deploy origin-verify header the edge sends (anything else
+   * gets a 403). An internet-facing ALB's security group admits only the
+   * CloudFront origin-facing managed prefix list; an internal ALB is reached
+   * through a CloudFront VPC origin, and its security group admits only that
+   * VPC origin's service security group.
+   */
   internal?: boolean;
   /**
    * The settings the app asks each layer for: the CloudFront `edge` (a
@@ -971,6 +980,8 @@ export class Hosting extends Construct {
             kind: 'alb',
             vpc: cfOverRouter.vpc,
             internal: cfOverRouter.internal,
+            // The router admits only the CloudFront edge in front of it.
+            restrictToCloudFront: true,
             backendApiUrl: props.api?.apiUrl,
             ...(props.api ? { backendApiPaths: backendApiPathsFor(this.ownerRootIdFor(props.api)) } : {}),
             // The router layer's settings (a REGIONAL web ACL, access logs, alarms).
@@ -1275,7 +1286,9 @@ export class Hosting extends Construct {
         upstream: {
           service: hosting.frontDoor.service,
           url: hosting.frontDoor.url,
-          originHandle: { domainName: hosting.loadBalancerDnsName, protocol: 'http' },
+          // The ALB's DNS name over HTTP, the origin-verify header it requires,
+          // and — internal — the balancer to reach through a VPC origin.
+          originHandle: { ...hosting.frontDoor.originHandle, protocol: 'http' },
         },
         contentSecurityPolicy: edge?.contentSecurityPolicy,
         webAclArn: edge?.waf?.webAclArn,
