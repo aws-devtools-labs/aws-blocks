@@ -8,7 +8,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 import { validateAppSettingOptions } from './validation.js';
@@ -18,6 +18,7 @@ export type { AppSettingOptions } from './types.js';
 export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 import { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
+import { BB_NAME } from './version.js';
 
 /**
  * CDK construct for AppSetting. Creates a single SSM parameter (String or
@@ -54,7 +55,7 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 	}
 
 	constructor(scope: ScopeParent, id: string, options: AppSettingOptions<T>) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 
 		// `external` is package-internal (set only by fromExisting), not on the
 		// public AppSettingOptions — read it via the internal options type.
@@ -139,6 +140,10 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 		const envKey = `BLOCKS_SSM_PARAM_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 		registerConfig(this, envKey, parameterName);
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	get(..._args: unknown[]): never { return synthGuard('AppSetting', 'get'); }
+	put(..._args: unknown[]): never { return synthGuard('AppSetting', 'put'); }
 }
 
 // ── Bulk Secret Initialization (one CustomResource per stack) ───────────────

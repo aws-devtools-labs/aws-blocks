@@ -1,5 +1,58 @@
 # @aws-blocks/bb-auth-oidc
 
+## 0.2.2
+
+### Patch Changes
+
+- fd10117: Fix `cognitoFederated()` failing at `cdk synth` with `CannotFindAsset`.
+  
+  The published `@aws-blocks/bb-auth-oidc` package was missing the bundled Lambda that registers the identity provider on the user pool (`dist/idp-registration-lambda/index.js`), so any app using `cognitoFederated()` failed to synthesize. This affected both the Cognito-hosted domain prefix and custom domains. The release build now produces the bundle, so it ships with the package again.
+- 32a4b73: Report `AuthOIDC` as the parent block of its session store, and assert the rendered chain on the wire.
+  
+  `AuthOIDC` built its session store with the scope it was given rather than itself, so the store's requests reported only `bb/KVStore` and no owning block. It cannot pass `this`: the store becomes the engine's session store, and the engine is an argument to `super()`. It now passes a parent carrying the block's own name, version and fully-qualified ID, built by the new `buildingBlockParent` helper, and the store's own ID is shortened to `sessions` so the session table name is unchanged.
+  
+  `core` adds two exports: `computeScopeFullId`, the rule `Scope.fullId` already applies, and `buildingBlockParent`, which wraps it for a block that must construct a child before `super()` has run. Both replace a copy of that rule inside `bb-auth-oidc`. The Cognito env var prefix moves into the package's shared `utils.ts` alongside the cookie-secret name, so the CDK writer and the runtime reader derive both names from one function.
+  
+  Two names change, in local and other non-Lambda `aws-runtime` runs only, where `BLOCKS_STACK_NAME` is unset and the app's root is a `Scope`. In that case the old helper walked one scope too far and produced a leading-dash ID, so the cookie-secret and Cognito env var names it looked up were not the ones the CDK side wrote, and session cookies were named `oidc_-my-app-auth`. Both now resolve. A deployed Lambda always has `BLOCKS_STACK_NAME` set and is unaffected. Under the default condition, which is what a scaffolded app's dev server resolves, the cookie prefix also changes to `oidc_my-app-auth`, from `oidc_my-app_auth` under a plain root and `oidc__my-app_auth` under a `Scope` root, because the dev entry now names cookies with the same expression as the AWS runtime instead of its own. Existing sessions in those two setups are signed out once.
+  
+  Nothing covered the chain inside the rendered header, so a change that stopped it reaching the wire would still have passed. `bb-kv-store`'s request-capture helper now takes a parent scope, and `bb-auth-oidc` gains a suite that runs under `--conditions=aws-runtime`, where the session store is the real AWS client, and asserts the captured `user-agent` header carries both blocks root-to-leaf. The CDK suite pins the literal env var names the synth side writes, which nothing checked before, and `core` gains tests for the new helper covering attribution, the official-name gate, and the derived ID.
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [9ebda66]
+- Updated dependencies [78f4396]
+- Updated dependencies [440ecce]
+- Updated dependencies [92fa27b]
+- Updated dependencies [1a5c18e]
+- Updated dependencies [4ae500e]
+- Updated dependencies [6d764f7]
+- Updated dependencies [023f02c]
+- Updated dependencies [5d6656a]
+- Updated dependencies [60616b1]
+- Updated dependencies [a50fb46]
+- Updated dependencies [8a1a4a9]
+- Updated dependencies [38ce80c]
+- Updated dependencies [94a914a]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [005c095]
+- Updated dependencies [b8649dc]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [66f4be2]
+- Updated dependencies [32a4b73]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e9241b5]
+- Updated dependencies [f1eb149]
+- Updated dependencies [122c49c]
+- Updated dependencies [8ca3692]
+- Updated dependencies [7c19c4f]
+  - @aws-blocks/core@0.7.0
+  - @aws-blocks/bb-app-setting@0.3.2
+  - @aws-blocks/bb-kv-store@0.3.1
+  - @aws-blocks/auth-common@0.2.0
+  - @aws-blocks/bb-logger@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes

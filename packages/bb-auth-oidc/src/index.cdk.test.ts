@@ -267,3 +267,27 @@ test('CDK: registers the exact env var names the runtime reads', () => {
 	assert.strictEqual(cookieSecretEnvVar('TestStack-app-auth'), 'BLOCKS_AUTH_OIDC_COOKIE_SECRET_TESTSTACK_APP_AUTH');
 	assert.strictEqual(cognitoEnvPrefix('TestStack-app-auth'), 'BLOCKS_AUTH_OIDC_COGNITO_TESTSTACK_APP_AUTH');
 });
+
+// `signInRoutePath()` is pure (derived from `callbackPath`), so it must work during
+// synth, e.g. to build a link or a `RawRoute` path at module scope.
+test('CDK: signInRoutePath() works during synth and follows callbackPath', () => {
+	const provider = () =>
+		cognitoFederated({
+			name: 'google',
+			identityProvider: 'Google',
+			cognitoDomain: 'myapp-abc123',
+			region: 'us-east-1',
+			clientId: appSettingStub('app-google-client-id'),
+			clientSecret: appSettingStub('app-google-client-secret'),
+		});
+	const { parent } = setup();
+	const auth = new AuthOIDC(parent, 'auth', { providers: [provider()] });
+	assert.strictEqual(auth.signInRoutePath('google'), '/aws-blocks/auth/signin/google');
+
+	const { parent: customParent } = setup();
+	const custom = new AuthOIDC(customParent, 'auth', {
+		providers: [provider()],
+		callbackPath: '/aws-blocks/auth/real/callback',
+	});
+	assert.strictEqual(custom.signInRoutePath('my provider'), '/aws-blocks/auth/real/signin/my%20provider');
+});

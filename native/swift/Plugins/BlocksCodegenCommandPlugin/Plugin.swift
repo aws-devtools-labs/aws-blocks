@@ -43,7 +43,7 @@ struct BlocksCodegenCommandPlugin: CommandPlugin {
 
             // Find blocks.spec.json in the target's source files
             let specFile = sourceTarget.sourceFiles.first { file in
-                file.path.lastComponent == "blocks.spec.json"
+                file.url.lastPathComponent == "blocks.spec.json"
             }
 
             guard let specFile else {
@@ -52,15 +52,15 @@ struct BlocksCodegenCommandPlugin: CommandPlugin {
             }
 
             // Output to a Generated/ folder next to the spec file
-            let outputDir = specFile.path.removingLastComponent().appending(subpath: "Generated")
+            let outputDir = specFile.url.deletingLastPathComponent().appendingPathComponent("Generated")
 
             print("🔄 Generating API for target '\(target.name)'...")
-            print("   Spec: \(specFile.path.string)")
-            print("   Output: \(outputDir.string)")
+            print("   Spec: \(specFile.url.path(percentEncoded: false))")
+            print("   Output: \(outputDir.path(percentEncoded: false))")
 
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: generatorTool.path.string)
-            process.arguments = [specFile.path.string, outputDir.string]
+            process.executableURL = generatorTool.url
+            process.arguments = [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)]
 
             let pipe = Pipe()
             process.standardOutput = pipe
@@ -91,27 +91,27 @@ extension BlocksCodegenCommandPlugin: XcodeCommandPlugin {
         let generatorTool = try context.tool(named: "swift-code-generator")
 
         // Find blocks.spec.json in the project directory
-        let projectDir = context.xcodeProject.directory
+        let projectDir = context.xcodeProject.directoryURL
         let candidates = [
-            projectDir.appending(subpath: "blocks.spec.json"),
-            projectDir.appending(subpath: "aws-blocks/blocks.spec.json"),
+            projectDir.appendingPathComponent("blocks.spec.json"),
+            projectDir.appendingPathComponent("aws-blocks/blocks.spec.json"),
         ]
 
-        guard let specPath = candidates.first(where: { FileManager.default.fileExists(atPath: $0.string) }) else {
+        guard let specPath = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }) else {
             print("⚠️  No blocks.spec.json found in project directory.")
             return
         }
 
         // Output to Generated/ folder in the project
-        let outputDir = projectDir.appending(subpath: "Generated")
+        let outputDir = projectDir.appendingPathComponent("Generated")
 
         print("🔄 Generating API...")
-        print("   Spec: \(specPath.string)")
-        print("   Output: \(outputDir.string)")
+        print("   Spec: \(specPath.path(percentEncoded: false))")
+        print("   Output: \(outputDir.path(percentEncoded: false))")
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: generatorTool.path.string)
-        process.arguments = [specPath.string, outputDir.string]
+        process.executableURL = generatorTool.url
+        process.arguments = [specPath.path(percentEncoded: false), outputDir.path(percentEncoded: false)]
 
         let pipe = Pipe()
         process.standardOutput = pipe

@@ -20,7 +20,7 @@ struct BlocksCodegenBuildPlugin: BuildToolPlugin {
 
         // Find blocks.spec.json in the target's source files
         let specFile = sourceTarget.sourceFiles.first { file in
-            file.path.lastComponent == "blocks.spec.json"
+            file.url.lastPathComponent == "blocks.spec.json"
         }
 
         guard let specFile else {
@@ -28,17 +28,17 @@ struct BlocksCodegenBuildPlugin: BuildToolPlugin {
         }
 
         let generatorTool = try context.tool(named: "swift-code-generator")
-        let outputDir = context.pluginWorkDirectory.appending("Generated")
+        let outputDir = context.pluginWorkDirectoryURL.appendingPathComponent("Generated")
 
-        let modelsOutput = outputDir.appending("Models.swift")
-        let apiOutput = outputDir.appending("API.swift")
+        let modelsOutput = outputDir.appendingPathComponent("Models.swift")
+        let apiOutput = outputDir.appendingPathComponent("API.swift")
 
         return [
             .buildCommand(
-                displayName: "Generate Blocks API from \(specFile.path.lastComponent)",
-                executable: generatorTool.path,
-                arguments: [specFile.path.string, outputDir.string],
-                inputFiles: [specFile.path],
+                displayName: "Generate Blocks API from \(specFile.url.lastPathComponent)",
+                executable: generatorTool.url,
+                arguments: [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)],
+                inputFiles: [specFile.url],
                 outputFiles: [modelsOutput, apiOutput]
             )
         ]
@@ -51,7 +51,7 @@ import XcodeProjectPlugin
 extension BlocksCodegenBuildPlugin: XcodeBuildToolPlugin {
     func createBuildCommands(context: XcodePluginContext, target: XcodeTarget) throws -> [Command] {
         let specFile = target.inputFiles.first { file in
-            file.path.lastComponent == "blocks.spec.json"
+            file.url.lastPathComponent == "blocks.spec.json"
         }
 
         guard let specFile else {
@@ -59,17 +59,17 @@ extension BlocksCodegenBuildPlugin: XcodeBuildToolPlugin {
         }
 
         let generatorTool = try context.tool(named: "swift-code-generator")
-        let outputDir = context.pluginWorkDirectory.appending("Generated")
+        let outputDir = context.pluginWorkDirectoryURL.appendingPathComponent("Generated")
 
-        let modelsOutput = outputDir.appending("Models.swift")
-        let apiOutput = outputDir.appending("API.swift")
+        let modelsOutput = outputDir.appendingPathComponent("Models.swift")
+        let apiOutput = outputDir.appendingPathComponent("API.swift")
 
         return [
             .buildCommand(
-                displayName: "Generate Blocks API from \(specFile.path.lastComponent)",
-                executable: generatorTool.path,
-                arguments: [specFile.path.string, outputDir.string],
-                inputFiles: [specFile.path],
+                displayName: "Generate Blocks API from \(specFile.url.lastPathComponent)",
+                executable: generatorTool.url,
+                arguments: [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)],
+                inputFiles: [specFile.url],
                 outputFiles: [modelsOutput, apiOutput]
             )
         ]

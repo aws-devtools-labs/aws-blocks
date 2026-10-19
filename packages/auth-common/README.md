@@ -9,7 +9,8 @@ Shared interfaces and UI components for all AWS Blocks auth Building Blocks. Use
 | Export Path | What it provides |
 |---|---|
 | `@aws-blocks/auth-common` | Types: `BlocksAuth`, `AuthUser`, `AuthState`, `AuthAction`, `AuthField` |
-| `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `onAuthChange`, `broadcastAuthChange` |
+| `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `onAuthChange`, `broadcastAuthChange`; theme: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
+| `@aws-blocks/auth-common/theme` | Design-token layer: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
 | `@aws-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLoopbackRequest` |
 
 ## Session-cookie security policy (`/cookies`)
@@ -184,6 +185,54 @@ import { broadcastAuthChange, onAuthChange, Authenticator } from '@aws-blocks/bl
 The root `@aws-blocks/blocks` entry point does not export it, because the UI exports live behind the `/ui` subpath so backend bundles don't pull in React. `@aws-blocks/auth-common/ui` and `@aws-blocks/blocks/ui` are the same function; use the umbrella path unless you depend on `auth-common` directly.
 
 The `Authenticator` component does this automatically. You only need `broadcastAuthChange` if you're building custom UI. For a full walkthrough of custom UI, including the `setAuthState` loop and the `AuthActionInput` contract, see [Customizing Auth UI](./CUSTOMIZING-AUTH-UI.md).
+
+## Theming (`injectTheme` + `--bb-*` tokens)
+
+The UI components ship a framework-neutral design-token layer. Each
+component (`Authenticator`, `AccountMenuBar`, `AuthenticatedContent`)
+injects a small stylesheet into `document.head` the first time it
+renders, so the themed look travels with the component into any host —
+lit-html, vanilla DOM, React, Next.js — with no stylesheet to import.
+
+The stylesheet is CSS custom properties on `:root` (`--bb-color-*`,
+`--bb-space-*`, `--bb-radius-*`, `--bb-font-*`, `--bb-shadow-*`) plus the
+base `.bb-*` component classes the components render against. A light and
+a dark palette are provided; dark is selected automatically by
+`prefers-color-scheme`.
+
+Because the tokens are on `:root`, your own markup can consume them for a
+consistent look without importing anything:
+
+```css
+.my-button {
+  background: var(--bb-color-accent);
+  color: var(--bb-color-accent-text);
+  border-radius: var(--bb-radius-sm);
+  padding: var(--bb-space-2) var(--bb-space-4);
+}
+```
+
+Force a specific palette by setting `data-bb-theme` on any ancestor
+(it wins over the media query):
+
+```html
+<body data-bb-theme="dark"> ... </body>
+```
+
+Call `injectTheme()` yourself to make the tokens available before any
+component mounts (for example, to theme your page chrome at startup). It
+is idempotent and SSR-safe — a second call is a no-op, and it returns
+silently when there is no `document`:
+
+```typescript
+import { injectTheme } from '@aws-blocks/blocks/ui';
+
+injectTheme();
+```
+
+`THEME_CSS` (the stylesheet as a string) and `THEME_STYLE_ID` (the
+`<style>` element's id) are also exported for hosts that bundle the CSS
+through a build step or assert against it in tests.
 
 ## Types Reference
 

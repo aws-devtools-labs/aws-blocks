@@ -5,7 +5,9 @@ import com.aws.blocks.kotlin.generator.RelayToRequirement
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.file.Directory
 import org.gradle.api.plugins.JavaPluginExtension
+import org.gradle.api.provider.Provider
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
@@ -88,19 +90,32 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
         project.plugins.hasPlugin("com.android.application") ||
             project.plugins.hasPlugin("com.android.library")
 
+    /**
+     * Every registration path sets every input the task declares; only the relay requirement
+     * differs, and the KMP path passes a placeholder that `afterEvaluate` replaces once targets
+     * are known.
+     */
+    private fun configureCodegenTask(
+        task: AwsBlocksCodegenTask,
+        extension: AwsBlocksExtension,
+        outputDir: Provider<Directory>,
+        relayToRequirement: RelayToRequirement,
+    ) {
+        task.openRpcFile.set(extension.apiSpec)
+        task.packageName.set(extension.packageName)
+        task.serverOverrides.set(extension.serverOverrides)
+        task.excludeNativePackages.set(extension.excludeNativePackages)
+        task.visibility.set(extension.visibility)
+        task.relayTo.set(extension.relayTo)
+        task.relayToRequirement.set(relayToRequirement)
+        task.outputDirectory.set(outputDir)
+    }
+
     private fun configureKmp(project: Project, extension: AwsBlocksExtension) {
         val outputDir = project.layout.buildDirectory.dir("generated/source/aws/blocks/commonMain")
 
         val task = project.tasks.register("awsBlocksCodegen", AwsBlocksCodegenTask::class.java)
-        task.configure {
-            it.openRpcFile.set(extension.apiSpec)
-            it.packageName.set(extension.packageName)
-            it.serverOverrides.set(extension.serverOverrides)
-            it.visibility.set(extension.visibility)
-            it.relayTo.set(extension.relayTo)
-            it.relayToRequirement.set(RelayToRequirement.NotNeeded)
-            it.outputDirectory.set(outputDir)
-        }
+        task.configure { configureCodegenTask(it, extension, outputDir, RelayToRequirement.NotNeeded) }
 
         val kmpExtension = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
         kmpExtension.sourceSets.getByName("commonMain").kotlin.srcDir(task.map { it.outputDirectory })
@@ -144,15 +159,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
             )
 
             val task = project.tasks.register(taskName, AwsBlocksCodegenTask::class.java)
-            task.configure {
-                it.openRpcFile.set(extension.apiSpec)
-                it.packageName.set(extension.packageName)
-                it.serverOverrides.set(extension.serverOverrides)
-                it.visibility.set(extension.visibility)
-                it.relayTo.set(extension.relayTo)
-                it.relayToRequirement.set(RelayToRequirement.Required)
-                it.outputDirectory.set(outputDir)
-            }
+            task.configure { configureCodegenTask(it, extension, outputDir, RelayToRequirement.Required) }
 
             variant.sources.java?.addGeneratedSourceDirectory(task, AwsBlocksCodegenTask::outputDirectory)
         }
@@ -162,15 +169,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
         val outputDir = project.layout.buildDirectory.dir("generated/source/aws/blocks/main")
 
         val task = project.tasks.register("awsBlocksCodegen", AwsBlocksCodegenTask::class.java)
-        task.configure {
-            it.openRpcFile.set(extension.apiSpec)
-            it.packageName.set(extension.packageName)
-            it.serverOverrides.set(extension.serverOverrides)
-            it.visibility.set(extension.visibility)
-            it.relayTo.set(extension.relayTo)
-            it.relayToRequirement.set(RelayToRequirement.NotNeeded)
-            it.outputDirectory.set(outputDir)
-        }
+        task.configure { configureCodegenTask(it, extension, outputDir, RelayToRequirement.NotNeeded) }
 
         project.extensions.getByType(JavaPluginExtension::class.java)
             .sourceSets.getByName("main").java.srcDir(task.map { it.outputDirectory })
