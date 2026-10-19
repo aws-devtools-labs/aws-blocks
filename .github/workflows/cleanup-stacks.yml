@@ -25,7 +25,7 @@ jobs:
     environment: publish
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
@@ -585,14 +585,16 @@ jobs:
             fi
 
             # (a) test-artifact name shape only. These are the prefixes CI apps use.
-            # NOTE: DefaultCompute* / *DefaultComputeAPI* are ALSO the default API
-            # name on live blocks-compute stacks, so a name match is NOT a safety
-            # signal for them — a live DefaultCompute API is protected solely by the
-            # OWNED_IDS id-ownership check above (gate (c), which runs first). Do not
-            # weaken or reorder that id gate on the assumption this name list only
-            # ever matches abandoned artifacts; it does not.
+            # NOTE: DefaultCompute* / *DefaultComputeAPI* / 'Blocks API' are ALSO
+            # default API names on LIVE blocks stacks — 'Blocks API' is the hardcoded
+            # restApiName of the bb-lambda-compute construct, so EVERY blocks-compute
+            # deploy (live or orphaned) creates a REST API with that exact name. So a
+            # name match is NOT a safety signal for these — a live one is protected
+            # SOLELY by the OWNED_IDS id-ownership check above (gate (c), which runs
+            # first). Do not weaken or reorder that id gate on the assumption this
+            # name list only ever matches abandoned artifacts; it does not.
             case "$NAME" in
-              blocks-test-* | blocks-hosting-* | bb-test-* | bb-telemetry-* | bb-vpc-smoke-* | my-app-* | *-e2e-* | DefaultCompute* | *DefaultComputeAPI*) ;;
+              blocks-test-* | blocks-hosting-* | bb-test-* | bb-telemetry-* | bb-vpc-smoke-* | my-app-* | *-e2e-* | DefaultCompute* | *DefaultComputeAPI* | 'Blocks API') ;;
               *)
                 SKIPPED_UNMATCHED=$((SKIPPED_UNMATCHED + 1))
                 continue
@@ -657,6 +659,186 @@ jobs:
           fi
           if [ "$EDGE" != "?" ] && [ "$EDGE" -ge 110 ] 2>/dev/null; then
             echo "::warning::$EDGE/120 EDGE REST APIs in use — approaching the hard quota"
+          fi
+
+      - name: Cleanup orphaned API Gateway CloudWatch IAM roles
+        if: always()
+        run: |
+          # errexit + pipefail (see the e2e step): catch a failure anywhere in a pipe.
+          set -eo pipefail
+          # CDK's RestApi defaults `cloudWatchRole: true` with
+          # `cloudWatchRoleRemovalPolicy: RETAIN`, so every destroyed stack that
+          # carried one left its `*CloudWatchRole*` IAM role behind, owned by no
+          # stack. bb-lambda-compute and hosting now set `cloudWatchRole: false`,
+          # but the backlog (and any app still on an older release) accumulates
+          # until the account hits the 3000 RolesPerAccount quota — at which point
+          # EVERY deploy-dependent E2E lane fails at CREATE with ServiceLimitExceeded.
+          # Nothing else reclaims these, so sweep them here.
+          #
+          # A role is deleted only if ALL of these hold — the scope is deliberately
+          # narrow, since IAM roles are shared, account-level infrastructure:
+          #   (a) name has a CI test-app prefix;
+          #   (b) trust policy is EXACTLY apigateway.amazonaws.com, the only attached
+          #       policy is AmazonAPIGatewayPushToCloudWatchLogs, and there are no
+          #       inline policies (i.e. it is the CDK RestApi CloudWatch role shape);
+          #   (c) created > 6h ago;
+          #   (d) owned by NO live CloudFormation stack in any region (by role
+          #       name — ground truth);
+          #   (e) NOT the role any region's API Gateway account setting currently
+          #       points at (deleting it would break logging for live stages).
+          echo "🔍 Checking for orphaned API Gateway CloudWatch IAM roles..."
+
+          # Every gate below FAILS CLOSED: any error while building the ownership
+          # set or reading the account setting sets OWNERSHIP_INCOMPLETE, and then
+          # nothing is deleted this run (the next scheduled run retries).
+          OWNERSHIP_INCOMPLETE=0
+
+          # (d) Ownership set: PhysicalResourceId of every AWS::IAM::Role owned by a
+          # live stack in ANY region — IAM is account-global, so a stack in another
+          # region can own a prefixed role too.
+          # Paginated list-stack-resources, not describe-stack-resources (which
+          # caps at 100 resources and would miss roles in a large stack).
+          # By stack ID (ARN), not name: a stack that finishes deleting between
+          # list-stacks and the listing still resolves by ID (its roles just read
+          # as owned this run and are swept on the next), whereas a lookup by name
+          # errors and would block the whole sweep on a busy account.
+          if ! REGIONS=$(aws ec2 describe-regions --query 'Regions[].RegionName' --output text 2>/dev/null); then
+            echo "  ⚠️ describe-regions failed — ownership set is incomplete this run"
+            OWNERSHIP_INCOMPLETE=1
+            REGIONS=""
+          fi
+          OWNED_ROLES=""
+          for R in $REGIONS; do
+            if ! LIVE_STACKS=$(aws cloudformation list-stacks --region "$R" \
+              --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS DELETE_FAILED UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE CREATE_FAILED ROLLBACK_FAILED UPDATE_ROLLBACK_FAILED \
+              --query "StackSummaries[].StackId" --output text 2>/dev/null); then
+              echo "  ⚠️ list-stacks failed in $R — ownership set is incomplete this run"
+              OWNERSHIP_INCOMPLETE=1
+              continue
+            fi
+            for S in $(echo "$LIVE_STACKS" | tr '\t' '\n' | sort -u); do
+              [ -z "$S" ] || [ "$S" = "None" ] && continue
+              # Retry a few times before giving up: on a throttled account a single
+              # transient failure would otherwise defer the whole sweep.
+              LISTED=0
+              for ATTEMPT in 1 2 3; do
+                if NAMES=$(aws cloudformation list-stack-resources --region "$R" --stack-name "$S" \
+                  --query "StackResourceSummaries[?ResourceType=='AWS::IAM::Role'].PhysicalResourceId" \
+                  --output text 2>/dev/null); then
+                  LISTED=1
+                  break
+                fi
+                sleep $((ATTEMPT * 5))
+              done
+              if [ "$LISTED" -eq 1 ]; then
+                NAMES=$(echo "$NAMES" | tr '\t' '\n')
+                [ -n "$NAMES" ] && OWNED_ROLES="$OWNED_ROLES"$'\n'"$NAMES"
+              else
+                echo "  ⚠️ list-stack-resources failed for $S — ownership set is incomplete this run"
+                OWNERSHIP_INCOMPLETE=1
+              fi
+            done
+          done
+          OWNED_ROLES=$(echo "$OWNED_ROLES" | sed '/^$/d;/^None$/d' | sort -u)
+
+          # (e) The role the account-level API Gateway setting points at, in every
+          # region (the setting is per region). An empty setting ("None") is fine;
+          # a FAILED read is not — we can't prove the role is unreferenced.
+          ACCOUNT_ROLES=""
+          for R in $REGIONS; do
+            if ARN=$(aws apigateway get-account --region "$R" --query cloudwatchRoleArn --output text 2>/dev/null); then
+              [ -n "$ARN" ] && [ "$ARN" != "None" ] && ACCOUNT_ROLES="$ACCOUNT_ROLES"$'\n'"${ARN##*/}"
+            else
+              echo "  ⚠️ apigateway get-account failed in $R — cannot verify the active CloudWatch role"
+              OWNERSHIP_INCOMPLETE=1
+            fi
+          done
+
+          # (a)+(b)+(c) candidates straight from list-roles: name prefix, trust
+          # principal exactly apigateway.amazonaws.com, and created before the cutoff.
+          # The listing is kept so the summary can count roles without a second scan.
+          CUTOFF_ISO=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%S)
+          if ! ROLES_JSON=$(aws iam list-roles --output json 2>/dev/null); then
+            echo "  ⚠️ iam list-roles failed — nothing to sweep this run"
+            ROLES_JSON='{"Roles":[]}'
+            OWNERSHIP_INCOMPLETE=1
+          fi
+          CANDIDATES=$(echo "$ROLES_JSON" | jq -r --arg cutoff "$CUTOFF_ISO" '
+            .Roles[]
+            | select(.RoleName | test("^(blocks-test-|blocks-hosting-|bb-test-|bb-telemetry-|bb-vpc-smoke-|my-app-)"))
+            | select(.CreateDate[0:19] < $cutoff)
+            | select([.AssumeRolePolicyDocument.Statement[].Principal.Service?] | flatten | map(select(. != null)) | unique == ["apigateway.amazonaws.com"])
+            | .RoleName' || echo "")
+
+          DELETED=0
+          SKIPPED_OWNED=0
+          SKIPPED_SHAPE=0
+          DEFERRED=0
+          FAILED=0
+          # Wall-clock budget so this always-run step can't push the job past its
+          # 60-min timeout on a large backlog; the remainder defers to the next run.
+          SWEEP_DEADLINE=$((SECONDS + 900))
+          CW_POLICY_ARN='arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'
+
+          while read -r ROLE; do
+            [ -z "$ROLE" ] && continue
+
+            # (d) HARD SAFETY: owned by a live stack.
+            if echo "$OWNED_ROLES" | grep -qxF "$ROLE" 2>/dev/null; then
+              SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
+              continue
+            fi
+            # (e) HARD SAFETY: a region's active API Gateway CloudWatch role.
+            if echo "$ACCOUNT_ROLES" | grep -qxF "$ROLE" 2>/dev/null; then
+              echo "  ⏭️ Skipping $ROLE — it is the API Gateway account's active CloudWatch role"
+              SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
+              continue
+            fi
+            # Throttle fail-safe: incomplete ownership set → delete nothing this run.
+            if [ "$OWNERSHIP_INCOMPLETE" -ne 0 ] || [ "$SECONDS" -ge "$SWEEP_DEADLINE" ]; then
+              DEFERRED=$((DEFERRED + 1))
+              continue
+            fi
+
+            # (b) policy shape: the one managed policy (or none — a previous run may
+            # have detached it and then been throttled on delete-role), and no
+            # inline policies.
+            ATTACHED=$(aws iam list-attached-role-policies --role-name "$ROLE" \
+              --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null || echo "ERR")
+            INLINE=$(aws iam list-role-policies --role-name "$ROLE" \
+              --query 'PolicyNames[]' --output text 2>/dev/null || echo "ERR")
+            if { [ "$ATTACHED" != "$CW_POLICY_ARN" ] && [ -n "$ATTACHED" ]; } || [ -n "$INLINE" ]; then
+              SKIPPED_SHAPE=$((SKIPPED_SHAPE + 1))
+              continue
+            fi
+
+            if { [ -z "$ATTACHED" ] || aws iam detach-role-policy --role-name "$ROLE" --policy-arn "$CW_POLICY_ARN" 2>/dev/null; } \
+              && aws iam delete-role --role-name "$ROLE" 2>/dev/null; then
+              DELETED=$((DELETED + 1))
+            else
+              echo "  ⚠️ failed to delete $ROLE (throttled?; will retry next run)"
+              FAILED=$((FAILED + 1))
+            fi
+          done <<< "$CANDIDATES"
+
+          # Count from the listing above (jq on the merged pages — a JMESPath
+          # length() would be applied per page by the CLI paginator).
+          if [ "$(echo "$ROLES_JSON" | jq '.Roles | length')" -gt 0 ]; then
+            TOTAL=$(( $(echo "$ROLES_JSON" | jq '.Roles | length') - DELETED ))
+          else
+            TOTAL="?"
+          fi
+
+          echo ""
+          echo "## API Gateway CloudWatch IAM Role Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Orphaned roles deleted: $DELETED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (owned by live stack / active account role): $SKIPPED_OWNED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (unexpected policy shape): $SKIPPED_SHAPE" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Failed (will retry next run): $FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Deferred to next run (incomplete ownership set or 15-min budget): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- IAM roles in account: $TOTAL (quota 3000)" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$TOTAL" != "?" ] && [ "$TOTAL" -ge 2700 ] 2>/dev/null; then
+            echo "::warning::$TOTAL/3000 IAM roles in use — approaching the RolesPerAccount quota"
           fi
 
       - name: Cleanup orphaned CloudFront Response Headers Policies

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { registerTracer, Scope } from '@aws-blocks/core/cdk';
+import { registerTracer, Scope, synthGuard } from '@aws-blocks/core/cdk';
 import type { TracerOptions } from './types.js';
+import { BB_NAME } from './version.js';
 
 export type { AnnotationValue, Segment, TracerOptions } from './types.js';
 
@@ -19,7 +20,7 @@ export type { AnnotationValue, Segment, TracerOptions } from './types.js';
  */
 export class Tracer extends Scope {
 	constructor(scope: ScopeParent, id: string, options?: TracerOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME });
 
 		if (options?.enabled !== false) {
 			// Tracing is presence-gated: creating a Tracer signals that the app
@@ -28,4 +29,10 @@ export class Tracer extends Scope {
 			registerTracer(this);
 		}
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	startSegment(..._args: unknown[]): never { return synthGuard('Tracer', 'startSegment'); }
+	addAnnotation(..._args: unknown[]): never { return synthGuard('Tracer', 'addAnnotation'); }
+	addMetadata(..._args: unknown[]): never { return synthGuard('Tracer', 'addMetadata'); }
+	getTraceId(..._args: unknown[]): never { return synthGuard('Tracer', 'getTraceId'); }
 }

@@ -8,6 +8,7 @@ import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
+import { getBlocksRoot } from './root-registry.js';
 
 const REGISTRY_KEY = Symbol.for('BLOCKS_CONFIG_REGISTRY');
 
@@ -17,38 +18,55 @@ const CONFIG_KEY = 'blocks-config.json';
 interface ConfigRegistryState {
 	entries: Map<string, unknown>;
 	finalized: boolean;
-	/** The shared config bucket, created once per stack by {@link getConfigLocation}. */
+	/** The shared config bucket, created once per backend root by {@link getConfigLocation}. */
 	bucket?: s3.Bucket;
 }
 
 /**
- * Get or create the config registry for a given stack.
- * The registry collects BB config entries (env var key → CDK token value)
- * and serializes them to an S3 JSON file at synth time.
+ * Get or create the config registry for a given backend root. Stored on the root
+ * object (keyed by a Symbol), so each `BlocksStack`/`BlocksBackend` gets its own —
+ * a config entry never leaks into another backend's registry, even when two
+ * backends share one `cdk.Stack`. The registry collects BB config entries (env var
+ * key → CDK token value) and serializes them to an S3 JSON file at synth time.
  */
-function getRegistry(stack: cdk.Stack): ConfigRegistryState {
-	let state = (stack as any)[REGISTRY_KEY] as ConfigRegistryState | undefined;
+function getRegistry(root: Construct): ConfigRegistryState {
+	let state = (root as any)[REGISTRY_KEY] as ConfigRegistryState | undefined;
 	if (!state) {
 		state = { entries: new Map(), finalized: false };
-		(stack as any)[REGISTRY_KEY] = state;
+		(root as any)[REGISTRY_KEY] = state;
 	}
 	return state;
 }
 
 /**
- * Register a config entry for a Building Block. This replaces
- * `handler.addEnvironment(key, value)` for BB resource mappings.
+ * Register a config entry for a Building Block or an app. This replaces
+ * `handler.addEnvironment(key, value)` for BB resource mappings and app
+ * settings alike.
  *
  * The entry will be serialized into a JSON config file in S3, loaded
  * by the Lambda at cold start. This avoids the 4KB env var limit.
  *
- * @param scope - The CDK construct (used to find the parent stack)
+ * Every compute loads the same config, so at runtime the entry is available as
+ * `process.env[key]` on all of them — before the backend module is imported, so
+ * module-level reads see it. An existing environment variable of the same name
+ * wins; if its value differs, the compute logs a warning at cold start naming
+ * the ignored key. It can be called from a Building Block constructor or from app code
+ * after `BlocksStack.create()` / `BlocksBackend.create()` resolves:
+ *
+ * ```ts
+ * const blocksStack = await BlocksStack.create(app, 'App', { ... });
+ * registerConfig(blocksStack, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
+ * ```
+ *
+ * Config is stored as plain JSON in a private S3 bucket; use `AppSetting` with
+ * `secret: true` for secrets.
+ *
+ * @param scope - The CDK construct (used to find the owning backend root)
  * @param key - The config key (same string the runtime will use to look it up)
  * @param value - The config value (can be a CDK token that resolves at deploy time)
  */
 export function registerConfig(scope: Construct, key: string, value: unknown): void {
-	const stack = cdk.Stack.of(scope);
-	const registry = getRegistry(stack);
+	const registry = getRegistry(getBlocksRoot(scope));
 	registry.entries.set(key, value);
 }
 
@@ -66,41 +84,39 @@ export function registerConfig(scope: Construct, key: string, value: unknown): v
  * does. IAM is not granted here — `finalizeConfigRegistry` grants read on the config
  * object to the shared execution role, which such compute inherits.
  *
- * @param scope - Any construct in the stack; the bucket is created under the stack.
+ * @param scope - Any construct in the backend; the bucket is created under the backend root.
  */
 export function getConfigLocation(scope: Construct): { bucketName: string; key: string } {
 	return { bucketName: ensureConfigBucket(scope).bucketName, key: CONFIG_KEY };
 }
 
 /**
- * Create-or-return the shared config bucket (memoized on the per-stack registry). Created under the
- * owning `BlocksStack`/`BlocksBackend` (`globalThis.CURRENT_BLOCKS_STACK` — the construct finalize
- * historically used), so its logical ID is stable regardless of which caller creates it first: a
+ * Create-or-return the shared config bucket (memoized on the per-backend-root registry). Created
+ * under the owning `BlocksStack`/`BlocksBackend` (resolved by walking the construct tree, see
+ * `getBlocksRoot`), so its logical ID is stable regardless of which caller creates it first: a
  * co-located BB (e.g. the AgentCore Runtime, a deep construct) may be the first to call it, and a
  * `BlocksBackend` embedded in a customer stack must keep `Blocks/BlocksConfigBucket` (no replacement).
- * Falls back to the stack when no owner is registered (isolated unit tests). Returns a concrete
- * `s3.Bucket` so callers don't need a non-null assertion.
+ * Keying on the resolved root (not `cdk.Stack.of`) also keeps two backends in one stack independent —
+ * each gets its own bucket. Returns a concrete `s3.Bucket` so callers don't need a non-null assertion.
  *
  * This bucket holds `blocks-config.json`, which feeds `process.env` (incl. `CORS_HOSTING_ORIGINS`) for
  * every compute in the stack, so it enforces TLS, is versioned (an overwritten config stays recoverable
  * for ~24h — see the versioning note at the props below), and ships S3 server access logs to a
  * dedicated, locked-down log bucket. The per-bucket removal and retention posture is documented inline
  * at the props below: the config bucket is deliberately DESTROY (a per-deploy derived artifact), while
- * the log bucket resolves its posture from the stack `defaults`.
+ * the log bucket resolves its posture from the backend root `defaults`.
  */
 function ensureConfigBucket(scope: Construct): s3.Bucket {
-	const stack = cdk.Stack.of(scope);
-	const registry = getRegistry(stack);
+	const root = getBlocksRoot(scope);
+	const registry = getRegistry(root);
 	if (!registry.bucket) {
-		const owner = ((globalThis as any).CURRENT_BLOCKS_STACK as Construct | undefined) ?? stack;
-
-		// Resolve the log bucket's teardown + retention posture from the stack defaults, the way
-		// Scope.defaults does: `owner` is the owning BlocksStack/BlocksBackend
-		// (globalThis.CURRENT_BLOCKS_STACK), which exposes `.defaults`; fall back to the production
-		// preset when none is registered (isolated unit tests). Access logs are the one artifact here
-		// that is NOT re-derived every deploy, so under production (RETAIN, logRetention ONE_YEAR) they
-		// must not silently expire at a fixed window or be wiped by autoDelete.
-		const defaults = (owner as { defaults?: BlocksDefaults }).defaults ?? BlocksPresets.production;
+		// Resolve the log bucket's teardown + retention posture from the backend root defaults, the
+		// way Scope.defaults does: `root` is the owning BlocksStack/BlocksBackend (resolved by
+		// getBlocksRoot), which exposes `.defaults`; fall back to the production preset when the root
+		// carries none (isolated unit tests whose root is a bare cdk.Stack). Access logs are the one
+		// artifact here that is NOT re-derived every deploy, so under production (RETAIN, logRetention
+		// ONE_YEAR) they must not silently expire at a fixed window or be wiped by autoDelete.
+		const defaults = (root as { defaults?: BlocksDefaults }).defaults ?? BlocksPresets.production;
 		const logDestroy = defaults.removalPolicy === cdk.RemovalPolicy.DESTROY;
 		// Access-log retention follows the framework `logRetention` default (a `RetentionDays` enum
 		// whose member value IS the day count — ONE_WEEK === 7, ONE_YEAR === 365 — so it maps directly
@@ -129,7 +145,7 @@ function ensureConfigBucket(scope: Construct): s3.Bucket {
 		// ObjectWriter); that flag is unset in shipped cdk.json. storage_construct.ts instead keeps ACLs
 		// on via BUCKET_OWNER_PREFERRED because CloudFront log delivery needs them — this bucket has no
 		// such constraint, so the bucket-policy path (ACLs off entirely) is preferred.
-		const logScope = new Construct(owner, 'ConfigLogDelivery');
+		const logScope = new Construct(root, 'ConfigLogDelivery');
 		logScope.node.setContext('@aws-cdk/aws-s3:serverAccessLogsUseBucketPolicy', true);
 		const logBucket = new s3.Bucket(logScope, 'BlocksConfigLogsBucket', {
 			blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
@@ -144,7 +160,7 @@ function ensureConfigBucket(scope: Construct): s3.Bucket {
 			lifecycleRules: logLifecycleRules,
 		});
 
-		registry.bucket = new s3.Bucket(owner, 'BlocksConfigBucket', {
+		registry.bucket = new s3.Bucket(root, 'BlocksConfigBucket', {
 			// removalPolicy DESTROY + autoDeleteObjects are DELIBERATE, NOT preset-driven: the only
 			// object here is blocks-config.json, which `BlocksConfigDeployment` (BucketDeployment, in
 			// finalizeConfigRegistry) regenerates from the CDK app and re-uploads on every deploy. It is
@@ -193,7 +209,7 @@ function ensureConfigBucket(scope: Construct): s3.Bucket {
  * import completes in BlocksStack.create() / BlocksBackend.create()).
  *
  * @param root - The construct to create the config resources under (also used
- *   to locate the owning stack).
+ *   to locate the owning backend root).
  * @param executionRole - The shared role every compute assumes; config read is
  *   granted to it once.
  * @param computes - The computes to stamp `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` on.
@@ -203,17 +219,14 @@ export function finalizeConfigRegistry(
 	executionRole: cdk.aws_iam.IRole,
 	computes: readonly Compute[],
 ): void {
-	const stack = cdk.Stack.of(root);
-	const registry = getRegistry(stack);
+	const registry = getRegistry(getBlocksRoot(root));
 
 	if (registry.finalized) return;
 	registry.finalized = true;
 
-	// Nothing to do only if no config was registered AND no bucket was created (via
-	// getConfigLocation). If a co-located BB created the bucket, still upload (even an empty {}) and
-	// wire the handler so that compute's loadConfigToProcessEnv() resolves instead of 404-ing forever.
-	if (registry.entries.size === 0 && !registry.bucket) return;
-
+	// Always deploy, even with zero entries so far: the JSON is a Lazy read at synth, so config
+	// registered after this point (e.g. by app code after `create()` resolves) is still included —
+	// as long as the deployment exists. An empty registry uploads `{}`.
 	// Ensure the bucket exists (a co-located BB may already have created it via getConfigLocation).
 	const configBucket = ensureConfigBucket(root);
 	const configKey = CONFIG_KEY;

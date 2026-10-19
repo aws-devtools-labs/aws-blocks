@@ -1,6 +1,7 @@
 {
   "name": "@aws-blocks/auth-common",
-  "version": "0.1.9",
+  "version": "0.2.0",
+  "sideEffects": false,
   "keywords": [
     "aws-blocks",
     "authentication",
@@ -35,6 +36,10 @@
       "types": "./dist/ui.d.ts",
       "default": "./dist/ui.js"
     },
+    "./theme": {
+      "types": "./dist/theme.d.ts",
+      "default": "./dist/theme.js"
+    },
     "./cookies": {
       "types": "./dist/cookies.d.ts",
       "default": "./dist/cookies.js"
@@ -45,7 +50,7 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.6.0"
+    "@aws-blocks/core": "^0.7.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

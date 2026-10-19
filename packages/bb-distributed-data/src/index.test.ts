@@ -65,3 +65,12 @@ describe('DistributedDatabase telemetry registration', () => {
 		assert.strictEqual(customBlocksCount, 0, 'must not be filtered out as an unnamed custom block');
 	});
 });
+
+describe('DistributedDatabase mock-only helpers (aws-runtime)', () => {
+	test('simulateConflict() throws instead of silently doing nothing', () => {
+		const db = makeDb();
+		assert.throws(() => db.simulateConflict(), {
+			message: /simulateConflict\(\) is a test helper that is only available in the local mock/,
+		});
+	});
+});

@@ -75,8 +75,8 @@ export interface BlocksDefaults {
 
 	/**
 	 * Request-rate limits applied to every Blocks-managed API Gateway stage: the
-	 * core REST API, the SSR/hosting REST API, and the `bb-realtime` WebSocket
-	 * stage. Protects the backend from runaway clients and caps blast radius.
+	 * core shared REST API stage and the `bb-realtime` WebSocket stage. Protects
+	 * the backend from runaway clients and caps blast radius.
 	 * The sandbox preset caps tighter (200/400) than production (1000/2000) so a
 	 * disposable stack is well-protected without throttling real production
 	 * traffic. See {@link BlocksThrottling}.

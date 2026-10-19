@@ -122,13 +122,52 @@ test('finalize uploads + wires the computes even with zero entries when a bucket
 	});
 });
 
-test('finalize is a no-op with zero entries and no bucket', () => {
+test('finalize deploys + wires the config even with zero entries and no bucket', () => {
+	// The deployment must exist so config registered later (before synth) is still uploaded.
 	const { stack, role, computes } = stackWithCompute('EmptyNoBucket');
 	finalizeConfigRegistry(stack, role, computes);
 
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 0, 'no config bucket created');
-	t.resourceCountIs('Custom::CDKBucketDeployment', 0);
+	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 1, 'one config bucket');
+	t.resourceCountIs('Custom::CDKBucketDeployment', 1);
+	t.hasResourceProperties('AWS::Lambda::Function', {
+		Environment: { Variables: Match.objectLike({ BLOCKS_CONFIG_KEY: 'blocks-config.json' }) },
+	});
+});
+
+/**
+ * Whether the uploaded config JSON contains `text`. The config is a Lazy token, so CDK carries it
+ * as a source marker on the BucketDeployment (resolved at deploy) rather than in the asset file.
+ */
+function configContains(stack: cdk.Stack, text: string): boolean {
+	const deployments = Template.fromStack(stack).findResources('Custom::CDKBucketDeployment');
+	return JSON.stringify(deployments).includes(text);
+}
+
+test('registerConfig after an empty finalize still deploys and wires the config', () => {
+	// App code calls registerConfig after BlocksStack.create() resolves — i.e. after finalize ran.
+	// With no BB config at finalize time, the entry must not be dropped.
+	const { stack, role, computes } = stackWithCompute('LateOnly');
+	finalizeConfigRegistry(stack, role, computes);
+	registerConfig(stack, 'APP_LATE_SETTING', 'late-value');
+
+	const t = Template.fromStack(stack);
+	t.resourceCountIs('Custom::CDKBucketDeployment', 1);
+	t.hasResourceProperties('AWS::Lambda::Function', {
+		Environment: { Variables: Match.objectLike({ BLOCKS_CONFIG_KEY: 'blocks-config.json' }) },
+	});
+	assert.ok(configContains(stack, 'APP_LATE_SETTING'), 'late entry is in the uploaded config');
+});
+
+test('registerConfig after a non-empty finalize is included in the one config deployment', () => {
+	const { stack, role, computes } = stackWithCompute('LateAfterEntries');
+	registerConfig(stack, 'BLOCKS_SOMETHING', 'value');
+	finalizeConfigRegistry(stack, role, computes);
+	registerConfig(stack, 'APP_LATE_SETTING', 'late-value');
+
+	Template.fromStack(stack).resourceCountIs('Custom::CDKBucketDeployment', 1);
+	assert.ok(configContains(stack, 'APP_LATE_SETTING'), 'late entry is in the uploaded config');
+	assert.ok(configContains(stack, 'BLOCKS_SOMETHING'), 'earlier entry is still there');
 });
 
 test('finalize uploads + wires the computes when config was registered (bucket auto-created)', () => {

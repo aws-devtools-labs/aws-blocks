@@ -1,6 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import {
+	type AwsCliVersionReader,
+	classifyCredentialError,
+	credentialErrorLabel,
+	credentialFailureMessage,
+} from './credential-guidance.js';
+import { type DeploymentTargetOptions, resolveDeploymentTarget } from './deployment-target.js';
+
 /**
  * Pre-deploy AWS credential check.
  *
@@ -15,42 +23,18 @@
  * (STS unreachable, throttled, disabled in a region) is not treated as a
  * credential failure — it warns and lets the deploy proceed, since blocking on
  * an unverifiable probe would reject a deploy that might have worked.
+ *
+ * On a credential failure, the message names the credential source (for example
+ * an SSO or `aws login` profile, or access keys in the environment) and the
+ * command that fixes it. The check never prompts, signs in, or changes credentials.
  */
-
-/**
- * Error `name`s that mean the credentials themselves are missing, expired, or
- * invalid — the cases where the "configure your credentials" remediation is
- * correct. Anything else (network, throttling, an explicit `AccessDenied` — which
- * actually proves the identity resolved) is surfaced as itself instead.
- */
-const CREDENTIAL_ERROR_NAMES = new Set([
-	'CredentialsProviderError',
-	'ExpiredToken',
-	'ExpiredTokenException',
-	'InvalidClientTokenId',
-	'UnrecognizedClientException',
-	'SignatureDoesNotMatch',
-	'TokenRefreshRequired',
-]);
-
-/**
- * Resolve the region for the STS probe from the environment. Returns `null`
- * when neither `AWS_REGION` nor `AWS_DEFAULT_REGION` is set — the caller then
- * skips the probe rather than guessing a region, because a hardcoded guess
- * (e.g. `us-east-1`) belongs to a different **partition** than GovCloud
- * (`us-gov-*`) or China (`cn-*`) and would fail against a partition the user
- * isn't even deploying to.
- */
-export function resolveProbeRegion(env: NodeJS.ProcessEnv = process.env): string | null {
-	return env.AWS_REGION || env.AWS_DEFAULT_REGION || null;
-}
 
 /**
  * Probe that resolves when valid AWS credentials are available for `region` and
  * rejects otherwise. Injectable so the guard can be unit-tested without network
  * or real credentials; production callers use the default {@link stsProbe}.
  */
-export type CredentialProbe = (region: string) => Promise<void>;
+export type CredentialProbe = (region: string, profile?: string) => Promise<void>;
 
 /**
  * Default probe: STS GetCallerIdentity via the SDK's standard credential chain
@@ -61,10 +45,11 @@ export type CredentialProbe = (region: string) => Promise<void>;
  * short request timeout and a single attempt (matching `common/config.ts`) so a
  * bad network can't make this hang *longer* than the synth it's replacing.
  */
-const stsProbe: CredentialProbe = async (region) => {
+const stsProbe: CredentialProbe = async (region, profile) => {
 	const { STSClient, GetCallerIdentityCommand } = await import('@aws-sdk/client-sts');
 	const client = new STSClient({
 		region,
+		profile,
 		maxAttempts: 1,
 		requestHandler: { connectionTimeout: 2000, requestTimeout: 3000 },
 	});
@@ -75,57 +60,78 @@ const stsProbe: CredentialProbe = async (region) => {
 	}
 };
 
+/** Options for {@link assertAwsCredentials}. */
+export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
+	/** The npm script name, used in the messages (e.g. `sandbox`, `deploy`). */
+	command: string;
+	/** Credential probe; defaults to STS GetCallerIdentity. Override in tests. */
+	probe?: CredentialProbe;
+	/** Reads `aws --version` when the guidance recommends `aws login`. Override in tests. */
+	readAwsCliVersion?: AwsCliVersionReader;
+}
+
 /**
  * Verify AWS credentials before a deploy command spends time synthesizing, and
  * fail fast with actionable guidance when they're missing, expired, or invalid.
  *
- * Skips silently (with a warning) when no region can be resolved from the
- * environment, and treats network/service errors as non-fatal — see the module
- * doc for the rationale.
+ * The check uses the Region and the profile from {@link resolveDeploymentTarget}.
+ * If no Region is set, the check shows a warning and does not send a request.
+ * Network and service errors are not fatal; see the module doc. The AWS CLI
+ * version is checked only after a credential failure, so it never blocks valid
+ * credentials.
  *
- * @param command - The npm script name, used in the messages (e.g. `sandbox`, `deploy`).
- * @param probe - Credential probe; defaults to STS GetCallerIdentity. Override in tests.
- * @param env - Environment to resolve the region from. Defaults to `process.env`.
- * @throws {Error} With actionable guidance when the probe reports a credential error.
+ * @throws {Error} With actionable guidance when the probe reports a credential error,
+ * or when the CDK configuration cannot be read.
  */
-export async function assertAwsCredentials(
-	command: string,
-	probe: CredentialProbe = stsProbe,
-	env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
-	const region = resolveProbeRegion(env);
+export async function assertAwsCredentials({
+	command,
+	probe = stsProbe,
+	readAwsCliVersion,
+	...options
+}: AssertAwsCredentialsOptions): Promise<void> {
+	const { region, profile } = await resolveDeploymentTarget(options);
 	if (!region) {
 		console.warn(
-			`⚠️  Skipping the AWS credential pre-check for \`npm run ${command}\`: ` +
-				'no region set in AWS_REGION / AWS_DEFAULT_REGION. The deploy will surface any credential error itself.',
+			`⚠️  Skipping the AWS credential pre-check for \`npm run ${command}\`: no Region is set. ` +
+				'Set AWS_REGION, or set region in your AWS profile. The deploy will surface any credential error itself.',
 		);
 		return;
 	}
 
 	try {
-		await probe(region);
+		await probe(region, profile);
 	} catch (error) {
-		// Use the error *name* only — never the raw message, which for an STS
-		// authorization failure embeds the caller ARN and account id (and this
+		// The label is the error name, a Node.js error code, or a known network error
+		// name found in a credential provider's message; never message text, which for
+		// an STS authorization failure embeds the caller ARN and account id (and this
 		// Error propagates through telemetry).
-		const name = error instanceof Error && error.name ? error.name : 'UnknownError';
+		const label = credentialErrorLabel(error);
+		const failure = classifyCredentialError(label);
 
-		if (CREDENTIAL_ERROR_NAMES.has(name)) {
-			throw new Error(
-				`AWS credentials could not be verified for \`npm run ${command}\` (${name}).\n` +
-					'Configure AWS credentials — for example:\n' +
-					'  • run `aws configure` (or `aws sso login`), or\n' +
-					'  • set AWS_PROFILE to a configured profile, or\n' +
-					'  • export AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN for temporary credentials).\n' +
-					`Then re-run \`npm run ${command}\`.`,
+		// Not a credential problem: don't block a deploy that might still work.
+		if (failure === 'network') {
+			console.warn(
+				`⚠️  Could not reach AWS to verify credentials for \`npm run ${command}\` (${label}); ` +
+					'continuing — if the deploy also fails to connect, check your network or proxy settings.',
 			);
+			return;
 		}
-
-		// Not a credential problem (network, throttling, STS disabled in-region, …).
-		// Don't block a deploy that might still work — warn and continue.
-		console.warn(
-			`⚠️  Could not verify AWS credentials for \`npm run ${command}\` (${name}); ` +
-				'continuing — the deploy will report any real error.',
+		if (failure === 'inconclusive') {
+			console.warn(
+				`⚠️  Could not verify AWS credentials for \`npm run ${command}\` (${label}); ` +
+					'continuing — the deploy will report any real error.',
+			);
+			return;
+		}
+		throw new Error(
+			await credentialFailureMessage({
+				command,
+				errorName: label,
+				failure,
+				env: options.env,
+				profile,
+				readAwsCliVersion,
+			}),
 		);
 	}
 }

@@ -71,7 +71,23 @@ export interface BuildingBlockMeta {
 }
 
 // @public
+export function buildingBlockParent(meta: BuildingBlockMeta & {
+    id: string;
+    parent: ScopeParent;
+}): BuildingBlockMeta & {
+    id: string;
+    parent: ScopeParent;
+    fullId: string;
+};
+
+// @public
 export function clearRouteRegistry(): void;
+
+// @public
+export function computeScopeFullId(scope: {
+    id: string;
+    parent?: ScopeParent;
+}): string;
 
 export { config }
 
@@ -171,6 +187,7 @@ export interface RegisteredRoute {
     handler: (context: BlocksContext) => Promise<void>;
     // (undocumented)
     method: string;
+    ownerRootId?: string;
     paramNames: string[];
     path: string;
     pattern: RegExp;
@@ -179,6 +196,7 @@ export interface RegisteredRoute {
 // @public
 export function registerRoute(options: RawRouteOptions & {
     path: string;
+    ownerRootId?: string;
 }): void;
 
 // @public
@@ -196,6 +214,7 @@ export class Scope {
     readonly bbName?: string;
     readonly bbVersion?: string;
     protected buildUserAgentChain(): [string, string][];
+    protected formatUserAgentString(maxBytes?: number): string;
     // (undocumented)
     get fullId(): string;
     // @internal
@@ -215,6 +234,8 @@ export class Scope {
     registerDevAttachment(packageSpecifier: string): void;
     registerLambdaEventHandler(eventSource: string, identifier: string, handler: (record: any) => Promise<void>): void;
     static _resetRegistry(): void;
+    // @internal
+    static _setDefaultBlockForTelemetry(name: string, version: string): void;
 }
 
 // @public (undocumented)
