@@ -311,7 +311,7 @@ jobs:
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: publish
+    environment: e2e
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
@@ -352,7 +352,7 @@ jobs:
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: publish
+    environment: e2e
     # Serialize across PRs: the smoke app provisions private-DNS interface
     # endpoints into the shared persistent test VPC, and AWS permits only one
     # per service per VPC. Without this, two open PRs collide on the endpoints
@@ -409,7 +409,7 @@ jobs:
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    environment: publish
+    environment: e2e
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
@@ -450,7 +450,7 @@ jobs:
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: publish
+    environment: e2e
     env:
       # Pin the Supabase Root 2021 CA (public cert, committed) so every external-DB
       # connection in this suite runs verify-full — exercising the TLS verification
@@ -527,7 +527,7 @@ jobs:
     needs: [build-and-test-local, detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    environment: publish
+    environment: e2e
     strategy:
       fail-fast: false
       matrix:
@@ -620,7 +620,7 @@ jobs:
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: publish
+    environment: e2e
     permissions:
       contents: read
       id-token: write

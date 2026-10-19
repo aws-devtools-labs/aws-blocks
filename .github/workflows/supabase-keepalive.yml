@@ -8,7 +8,7 @@ permissions:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    environment: publish
+    environment: e2e
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0

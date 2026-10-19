@@ -19,10 +19,16 @@ concurrency:
 
 jobs:
   cleanup:
-    name: Delete Stale Stacks
+    name: Delete Stale Stacks (${{ matrix.environment }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: publish
+    # e2e is the dedicated E2E account; publish still holds stacks from runs
+    # before the move. Drop publish once its leftovers are gone.
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [e2e, publish]
+    environment: ${{ matrix.environment }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
