@@ -744,15 +744,6 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		this.client = new CognitoIdentityProviderClient({
 			region: this.region,
 			customUserAgent: this.buildUserAgentChain(),
-			// Cognito returns a retriable `LimitExceededException` (HTTP 429) when a
-			// burst of requests exceeds its per-account, per-category rate quotas.
-			// Adaptive retry adds client-side rate limiting plus exponential backoff
-			// on throttling errors, which is the right default posture for any
-			// client that may issue concurrent admin/auth calls. Attempt count is
-			// intentionally left to the SDK default (overridable by the standard
-			// `AWS_MAX_ATTEMPTS` / `AWS_RETRY_MODE` env vars) — the client should not
-			// bake in an attempt budget tuned for any one environment.
-			retryMode: 'adaptive',
 		});
 		installClientUserAgent(this.client);
 		registerSdkIdentifiers(this.fullId, { userPoolId, clientId });
