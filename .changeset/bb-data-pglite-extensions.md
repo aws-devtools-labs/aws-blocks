@@ -29,3 +29,8 @@ Both extension packages are experimental upstream; the opt-in install keeps that
 risk with the consuming app rather than every `bb-data` consumer. No change to the
 AWS/CDK path. Non-breaking and additive: a `Database` with no `extensions` behaves
 exactly as before.
+
+The two extension packages are pinned to exact versions (`@electric-sql/pglite-postgis`
+`0.2.8`, `@electric-sql/pglite-pgvector` `0.0.9`) to match the exact-pinned
+`@electric-sql/pglite` `0.5.8` they peer-depend on. A caret range let a newer extension
+release (whose `pglite` peer had moved on) float in and produce an unresolvable peer tree.
