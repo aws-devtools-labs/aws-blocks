@@ -1,3 +1,5 @@
+import { type ProxyRules, proxyRulesJs } from './proxy_rules.js';
+
 /**
  * API-proxy Lambda for the ALB front door (same-origin `/aws-blocks/*`).
  *
@@ -22,9 +24,17 @@
  * Gateway origin base WITHOUT the `/aws-blocks/api` suffix (e.g.
  * `https://abc.execute-api.us-west-2.amazonaws.com/prod`); the forwarder appends
  * the request path verbatim.
+ *
+ * It applies the app's per-pattern response headers (`opts.headers`) to a
+ * successful (status below 400) response, matched by the edge router's own
+ * code (see `proxy_rules.ts`) — as the CloudFront door's viewer-response
+ * function does for the API behaviors.
+ *
+ * @param opts.headers the app's header rules. @default none
  */
-export const generateAlbApiProxyCode = (): string => {
+export const generateAlbApiProxyCode = (opts: Pick<ProxyRules, 'headers'> = {}): string => {
   return `const https = require('node:https');
+${proxyRulesJs({ headers: opts.headers })}
 const BASE = (process.env.API_GW_BASE || '').replace(/\\/+$/, ''); // https://<id>.execute-api.<region>.amazonaws.com/prod
 const target = new URL(BASE);
 
@@ -71,6 +81,11 @@ exports.handler = async (event) => {
         for (var h in res.headers) {
           var v = res.headers[h];
           outMv[h] = Array.isArray(v) ? v : [String(v)];
+        }
+        // The app's header rules, on a successful response (as at the edge).
+        if ((res.statusCode || 502) < 400) {
+          var rule = blocksHeaders(path);
+          for (var r in rule) outMv[r] = [rule[r]];
         }
         resolve({
           statusCode: res.statusCode || 502,

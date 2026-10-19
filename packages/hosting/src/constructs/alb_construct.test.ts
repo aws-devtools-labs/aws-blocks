@@ -53,10 +53,24 @@ describe('AlbConstruct — static plan', () => {
     t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 3);
   });
 
-  it('emits a redirect action for the redirect rule', () => {
-    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
-      Actions: [{ Type: 'redirect', RedirectConfig: { Path: '/new', StatusCode: 'HTTP_301' } }],
-    });
+  it('routes the redirect source to the asset proxy, which answers the redirect (wildcard tail spliced, as on CloudFront)', () => {
+    const rules = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::ListenerRule'));
+    const redirectRule = rules.find((r) =>
+      (r.Properties.Conditions as Array<{ PathPatternConfig?: { Values: string[] } }>).some((c) =>
+        c.PathPatternConfig?.Values.includes('/old'),
+      ),
+    );
+    assert.ok(redirectRule, 'a rule for the redirect source');
+    assert.strictEqual(redirectRule.Properties.Actions[0].Type, 'forward');
+    const staticTg = Object.keys(t.findResources('AWS::ElasticLoadBalancingV2::TargetGroup')).find((id) =>
+      id.includes('StaticTg'),
+    );
+    assert.deepStrictEqual(redirectRule.Properties.Actions[0].TargetGroupArn, { Ref: staticTg });
+    // The asset proxy carries the rule, with its exact status (a native ALB redirect only has 301/302).
+    const proxy = Object.values(t.findResources('AWS::Lambda::Function')).find((f) =>
+      String(f.Properties.Code?.ZipFile ?? '').includes('BLOCKS_REDIRECTS'),
+    );
+    assert.match(String(proxy?.Properties.Code.ZipFile), /\["\/old","\/new",308\]/);
   });
 });
 

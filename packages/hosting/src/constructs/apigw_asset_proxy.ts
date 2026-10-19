@@ -1,3 +1,5 @@
+import { type AssetProxyOptions, assetProxyCoreJs } from './asset_proxy_core.js';
+
 /**
  * Static asset-proxy Lambda for API Gateway v2 / Lambda Function URL front doors.
  *
@@ -13,90 +15,28 @@
  *
  * Emitted INLINE (no bundle step) — uses only `@aws-sdk/client-s3` (present in
  * the Node.js Lambda runtime).
+ *
+ * Like the ALB asset proxy, it applies the app's rules as the CloudFront door
+ * does — redirects, per-pattern response headers on a successful response, and
+ * the app's error pages — through the shared serving logic
+ * (`asset_proxy_core.ts`).
  */
-export const generateApiGwAssetProxyCode = (opts: {
-  stripPrefix?: string;
-  spaFallback?: boolean;
-}): string => {
-  const stripPrefix = JSON.stringify(opts.stripPrefix ?? '');
-  const spaFallback = opts.spaFallback ? 'true' : 'false';
-  return `const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
-const s3 = new S3Client({});
-const BUCKET = process.env.ASSET_BUCKET;
-const KEY_PREFIX = process.env.ASSET_KEY_PREFIX || '';
-const STRIP_PREFIX = ${stripPrefix};
-const SPA_FALLBACK = ${spaFallback};
-
-const CONTENT_TYPES = {
-  html: 'text/html; charset=utf-8', js: 'text/javascript', mjs: 'text/javascript',
-  css: 'text/css', json: 'application/json', svg: 'image/svg+xml', png: 'image/png',
-  jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
-  ico: 'image/x-icon', txt: 'text/plain; charset=utf-8', xml: 'application/xml',
-  woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
-  map: 'application/json', webmanifest: 'application/manifest+json',
-};
-function contentTypeFor(key) {
-  const dot = key.lastIndexOf('.');
-  const ext = dot === -1 ? '' : key.substring(dot + 1).toLowerCase();
-  return CONTENT_TYPES[ext] || 'application/octet-stream';
-}
-function stripBasePath(uri) {
-  if (!STRIP_PREFIX) return uri;
-  if (uri === STRIP_PREFIX) return '/';
-  if (uri.indexOf(STRIP_PREFIX + '/') === 0) { const s = uri.substring(STRIP_PREFIX.length); return s.length === 0 ? '/' : s; }
-  return uri;
-}
-// Like the CloudFront static branch: SPA → /index.html for extensionless paths
-// (except under /.well-known/); multi-page → directory index. A path with an
-// extension is looked up as-is, and a miss is a 404.
-function resolveIndex(uri) {
-  const seg = uri.substring(uri.lastIndexOf('/') + 1);
-  if (SPA_FALLBACK) {
-    return seg.indexOf('.') === -1 && uri.indexOf('/.well-known/') !== 0 ? '/index.html' : uri;
-  }
-  if (uri.charAt(uri.length - 1) === '/') return uri + 'index.html';
-  if (seg.indexOf('.') !== -1) return uri;
-  return uri + '/index.html';
-}
-// The object's own Cache-Control (set per file at upload); a default only when
-// it has none (never immutable: an unhashed file must not be pinned for a year).
-function cacheControlFor(stored, isHtml) {
-  if (stored) return stored;
-  return isHtml ? 'no-cache, no-store, must-revalidate' : 'public, max-age=0, must-revalidate';
-}
-async function readStream(body) { const chunks = []; for await (const c of body) chunks.push(c); return Buffer.concat(chunks); }
-async function fetchKey(key) {
-  const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
-  return { buf: await readStream(res.Body), contentType: res.ContentType || contentTypeFor(key), cacheControl: res.CacheControl };
-}
-function keyFor(uri) {
-  return (KEY_PREFIX ? KEY_PREFIX.replace(/\\/+$/, '') + '/' : '') + uri.replace(/^\\/+/, '');
-}
-
+/**
+ * Build the inline handler source for the API Gateway / Function URL asset-proxy Lambda.
+ *
+ * @param opts.stripPrefix   basePath/assetPrefix to strip from the URL before lookup (default '')
+ * @param opts.spaFallback   serve `index.html` on a miss (SPA) vs a real 404
+ * @param opts.redirects     the app's redirects (first match wins), answered before any S3 read
+ * @param opts.headers       the app's per-pattern response headers, applied to a successful response
+ * @param opts.errorPages    the app's error pages (`404.html` / `500.html` keys under the build prefix)
+ */
+export const generateApiGwAssetProxyCode = (opts: AssetProxyOptions): string => `${assetProxyCoreJs(opts)}
 exports.handler = async (event) => {
   // Payload 2.0 (HTTP API / Function URL): rawPath. Payload 1.0 (REST API): path.
   // The REST API front door invokes this Lambda with the v1 envelope, so read
   // both — the response shape below ({statusCode, headers, isBase64Encoded, body})
   // is valid for a v1 and a v2 proxy integration alike.
-  let uri = event.rawPath || (event.requestContext && event.requestContext.http && event.requestContext.http.path) || event.path || '/';
-  uri = resolveIndex(stripBasePath(uri));
-  const key = keyFor(uri);
-  try {
-    const { buf, contentType, cacheControl } = await fetchKey(key);
-    const isHtml = contentType.indexOf('text/html') === 0;
-    return {
-      statusCode: 200,
-      headers: {
-        'content-type': contentType,
-        'cache-control': cacheControlFor(cacheControl, isHtml),
-      },
-      isBase64Encoded: true,
-      body: buf.toString('base64'),
-    };
-  } catch (err) {
-    // A miss is a 404 (extensionless SPA paths already resolved to index.html).
-    return { statusCode: 404, headers: { 'content-type': 'text/plain; charset=utf-8' }, isBase64Encoded: false, body: 'Not Found' };
-  }
+  const uri = event.rawPath || (event.requestContext && event.requestContext.http && event.requestContext.http.path) || event.path || '/';
+  return blocksServe(uri);
 };
 `;
-};

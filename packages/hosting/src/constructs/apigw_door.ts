@@ -18,7 +18,13 @@
  * integration can't stream, so `HostingConstruct` builds the server buffered);
  * the REST API streams them. There are no redirects, error pages, edge cache,
  * response headers, session pinning, WAF, geo restriction, access logs or
- * alarms.
+ * alarms at an edge.
+ *
+ * The app's redirects, per-pattern response headers and error pages are applied
+ * by the asset proxy instead, with the CloudFront door's semantics (each
+ * redirect source gets a route to it). Responses routed straight to the
+ * server, the image function or the backend bypass it; synth names what is not
+ * applied (`@aws-blocks/hosting:DoorRulesNotApplied`).
  */
 import { Fn } from 'aws-cdk-lib';
 import { ApiGatewayConstruct, type ApiGatewayConstructProps } from './apigw_construct.js';

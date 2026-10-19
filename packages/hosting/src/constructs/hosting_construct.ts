@@ -1777,6 +1777,7 @@ export class HostingConstruct extends Construct {
               internal: fd.internal,
               certificate: fd.certificate,
               restrictToCloudFront: fd.restrictToCloudFront,
+              errorPages: proxyErrorPages(this.doorInput, manifest),
               // Native ALB features, from the ALB door's settings
               // (`frontDoor.features`, plus the deprecated top-level aliases).
               accessLogging: f.logging !== undefined && f.logging.enabled !== false,
@@ -1804,6 +1805,7 @@ export class HostingConstruct extends Construct {
             apiType: fd.api ?? 'http',
             apiGateway: {
               ...common,
+              errorPages: proxyErrorPages(this.doorInput, manifest),
               // Custom domain: names come from `domain`; the regional cert is the
               // door's `certificate` (BYO, stack-region) or `domain.certificate`,
               // else DNS-validated against the hosted zone by the construct.
@@ -2449,6 +2451,26 @@ const serverResponseFor = (frontDoor: HostingConstructProps['frontDoor']): 'stre
     default:
       return 'streaming';
   }
+};
+
+/**
+ * The error pages a regional door's asset proxy serves, as object keys under
+ * the build prefix: the app's own (`errorPages`, uploaded as `404.html` /
+ * `500.html`), else the ones the framework build shipped
+ * (`manifest.errorPages`, e.g. a SPA's `404.html`) — the pages the CloudFront
+ * door serves for the same misses.
+ *
+ * @returns the pages, or `undefined` when the app has none.
+ */
+const proxyErrorPages = (
+  input: DoorInput,
+  manifest: DeployManifest,
+): { notFound?: string; serverError?: string } | undefined => {
+  const key = (page: string | undefined) => page?.replace(/^\/+/, '') || undefined;
+  const notFound = input.app.errorPages?.notFound ?? key(manifest.errorPages?.[404]);
+  const serverError = input.app.errorPages?.serverError ?? key(manifest.errorPages?.[500]);
+  if (!notFound && !serverError) return undefined;
+  return { ...(notFound ? { notFound } : {}), ...(serverError ? { serverError } : {}) };
 };
 
 /**
