@@ -647,3 +647,44 @@ describe('create-blocks-app telemetry/opt-out persists no identifiers even with 
     });
   }
 });
+
+describe('create-blocks-app telemetry/consent precedence across project and global config', () => {
+  function runWithConfigs(globalEnabled: boolean | undefined, projectEnabled: boolean | undefined) {
+    const root = join(tmpdir(), `cba-precedence-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const home = join(root, 'home');
+    const project = join(root, 'project');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(project, { recursive: true });
+    for (const [dir, enabled] of [[home, globalEnabled], [project, projectEnabled]] as const) {
+      if (enabled === undefined) continue;
+      mkdirSync(join(dir, '.blocks'), { recursive: true });
+      writeFileSync(join(dir, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled } }));
+    }
+    const telemetryFile = join(root, 'events.json');
+    const result = spawnTelemetryChild(EMIT_CHILD, [moduleUrl, `--telemetry-file=${telemetryFile}`], {
+      home,
+      cwd: project,
+      env: { NODE_DEBUG: 'blocks-telemetry' },
+    });
+    const emitted = existsSync(telemetryFile);
+    rmSync(root, { recursive: true, force: true });
+    assert.strictEqual(result.status, 0, result.stderr);
+    return { emitted, stderr: result.stderr };
+  }
+
+  it('global disable wins over project enable', () => {
+    const { emitted, stderr } = runWithConfigs(false, true);
+    assert.strictEqual(emitted, false, '--telemetry-file must not be written');
+    assert.doesNotMatch(stderr, /sending event to/, 'no event should be sent');
+  });
+
+  it('project disable wins over global enable', () => {
+    const { emitted, stderr } = runWithConfigs(true, false);
+    assert.strictEqual(emitted, false, '--telemetry-file must not be written');
+    assert.doesNotMatch(stderr, /sending event to/, 'no event should be sent');
+  });
+
+  it('emits when project and global both enable', () => {
+    assert.strictEqual(runWithConfigs(true, true).emitted, true);
+  });
+});

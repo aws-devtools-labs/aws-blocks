@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 
 import { getTelemetryStatus, getGlobalConfigPath, getProjectConfigPath } from './consent.js';
 import { writeConfigTelemetry } from './config-writer.js';
@@ -90,15 +91,27 @@ describe('getTelemetryStatus', () => {
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     clearCIVars();
     const tmp = join(tmpdir(), `blocks-status-test-${Date.now()}`);
-    mkdirSync(join(tmp, '.blocks'), { recursive: true });
-    writeFileSync(join(tmp, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled: true } }));
-    process.chdir(tmp);
+    const home = join(tmp, 'home');
+    const project = join(tmp, 'project');
+    mkdirSync(join(home, '.blocks'), { recursive: true });
+    mkdirSync(join(project, '.blocks'), { recursive: true });
+    writeFileSync(join(home, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled: false } }));
+    writeFileSync(join(project, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled: true } }));
 
-    // Simulate global config disabling (via projectRoot override for global path won't work here,
-    // but we can test that project enabled=true alone is fine)
-    const status = getTelemetryStatus();
-    assert.strictEqual(status.enabled, true);
+    // Driven in a child process: afterEach replaces `process.env`, so setting HOME here would not reach homedir().
+    const consentUrl = new URL('./consent.js', import.meta.url).href;
+    const result = spawnSync(
+      process.execPath,
+      ['--input-type=module', '-e', 'const { getTelemetryStatus } = await import(process.argv[1]); process.stdout.write(JSON.stringify(getTelemetryStatus()));', consentUrl],
+      { encoding: 'utf-8', cwd: project, env: { HOME: home, USERPROFILE: home, PATH: process.env.PATH ?? '' } },
+    );
     rmSync(tmp, { recursive: true, force: true });
+
+    assert.strictEqual(result.status, 0, result.stderr);
+    const status = JSON.parse(result.stdout);
+    assert.strictEqual(status.enabled, false);
+    assert.strictEqual(status.globalConfig, false);
+    assert.strictEqual(status.projectConfig, true);
   });
 
   it('env var disables even when project config enables', () => {

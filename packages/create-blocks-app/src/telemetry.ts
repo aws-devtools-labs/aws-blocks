@@ -53,26 +53,24 @@ export function isDisableValue(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
 
+function readTelemetryEnabled(configPath: string): unknown {
+  try {
+    return JSON.parse(readFileSync(configPath, 'utf-8')).telemetry?.enabled;
+  } catch {
+    return undefined; // no config or invalid JSON
+  }
+}
+
+/**
+ * Any opt-out wins — env var, project config or global config — even if another
+ * config sets `telemetry.enabled: true`.
+ *
+ * Keep behaviorally identical to packages/core/src/telemetry/consent.ts.
+ */
 function isTelemetryEnabled(): boolean {
   if (isDisableValue(process.env.AWS_BLOCKS_DISABLE_TELEMETRY)) return false;
-
-  // Per-project config
-  try {
-    const projectConfigPath = join(process.cwd(), '.blocks', 'config.json');
-    const config = JSON.parse(readFileSync(projectConfigPath, 'utf-8'));
-    if (config.telemetry?.enabled === false) return false;
-    if (config.telemetry?.enabled === true) return true;
-  } catch { /* no config */ }
-
-  // Global config
-  try {
-    const globalConfigPath = join(homedir(), '.blocks', 'config.json');
-    const config = JSON.parse(readFileSync(globalConfigPath, 'utf-8'));
-    if (config.telemetry?.enabled === false) return false;
-    if (config.telemetry?.enabled === true) return true;
-  } catch { /* no config */ }
-
-  return true;
+  if (readTelemetryEnabled(join(process.cwd(), '.blocks', 'config.json')) === false) return false;
+  return readTelemetryEnabled(join(homedir(), '.blocks', 'config.json')) !== false;
 }
 
 // ─── Identifiers ─────────────────────────────────────────────────────────────

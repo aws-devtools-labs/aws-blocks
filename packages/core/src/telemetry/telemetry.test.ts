@@ -174,6 +174,56 @@ describe('telemetry/consent', () => {
   });
 });
 
+describe('telemetry/consent precedence across env, project and global config', () => {
+  // Driven in a child process so HOME and cwd are the temp dirs, never the real ones.
+  const PRECEDENCE_CHILD = `
+  const [moduleUrl] = process.argv.slice(1);
+  const { isTelemetryEnabled, getTelemetryStatus } = await import(moduleUrl);
+  process.stdout.write(JSON.stringify({ enabled: isTelemetryEnabled(), status: getTelemetryStatus().enabled }));
+  `;
+  const consentUrl = new URL('./consent.js', import.meta.url).href;
+
+  function resolveConsent(options: { global?: boolean; project?: boolean; disable?: string }) {
+    const root = mkdtempSync(join(tmpdir(), 'blocks-precedence-'));
+    const home = join(root, 'home');
+    const project = join(root, 'project');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(project, { recursive: true });
+    for (const [dir, enabled] of [[home, options.global], [project, options.project]] as const) {
+      if (enabled === undefined) continue;
+      mkdirSync(join(dir, '.blocks'), { recursive: true });
+      writeFileSync(join(dir, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled } }));
+    }
+    try {
+      const result = spawnTelemetryChild(PRECEDENCE_CHILD, [consentUrl], { home, cwd: project, disable: options.disable });
+      assert.strictEqual(result.status, 0, result.stderr);
+      return JSON.parse(result.stdout) as { enabled: boolean; status: boolean };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it('global disable wins over project enable', () => {
+    assert.deepStrictEqual(resolveConsent({ global: false, project: true }), { enabled: false, status: false });
+  });
+
+  it('project disable wins over global enable', () => {
+    assert.deepStrictEqual(resolveConsent({ global: true, project: false }), { enabled: false, status: false });
+  });
+
+  it('env var opt-out wins over project and global enable', () => {
+    assert.deepStrictEqual(resolveConsent({ global: true, project: true, disable: '1' }), { enabled: false, status: false });
+  });
+
+  it('defaults to enabled with no config and no env var', () => {
+    assert.deepStrictEqual(resolveConsent({}), { enabled: true, status: true });
+  });
+
+  it('stays enabled when project and global both enable', () => {
+    assert.deepStrictEqual(resolveConsent({ global: true, project: true }), { enabled: true, status: true });
+  });
+});
+
 describe('telemetry/opt-out persists no identifiers even with --telemetry-file', () => {
   // Driven in a child process: the id helpers write to the real HOME and cwd.
   const EMIT_CHILD = `

@@ -63,7 +63,8 @@ export interface TelemetryStatus {
 /**
  * Get detailed telemetry status showing all mechanism values and the final result.
  *
- * Telemetry is enabled by default. If any mechanism disables it, telemetry is off:
+ * Telemetry is enabled by default. If any mechanism disables it, telemetry is off,
+ * regardless of `telemetry.enabled: true` in another config:
  * - `AWS_BLOCKS_DISABLE_TELEMETRY` env var set to `1`, `true`, or `yes` (case-insensitive, trimmed)
  * - `.blocks/config.json` → `telemetry.enabled: false` (per-project)
  * - `~/.blocks/config.json` → `telemetry.enabled: false` (global)
@@ -92,28 +93,17 @@ export function getTelemetryStatus(projectRoot?: string): TelemetryStatus {
     status.projectConfig = projectEnabled;
   }
 
-  if (isDisableValue(envValue)) {
-    status.enabled = false;
-    return status;
-  }
-
-  if (status.projectConfig === false) {
-    status.enabled = false;
-    return status;
-  }
-
-  if (status.globalConfig === false) {
-    status.enabled = false;
-    return status;
-  }
-
+  // Any explicit opt-out wins: `enabled: true` in one config never overrides a
+  // disable elsewhere (a committed project config must not undo a global opt-out).
+  status.enabled = !isDisableValue(envValue) && status.projectConfig !== false && status.globalConfig !== false;
   return status;
 }
 
 /**
  * Determine whether telemetry collection is enabled.
  *
- * Disable mechanisms (any one disables telemetry):
+ * Disable mechanisms (any one disables telemetry, even if another config sets
+ * `telemetry.enabled: true`):
  * - `AWS_BLOCKS_DISABLE_TELEMETRY` env var set to `1`, `true`, or `yes` (case-insensitive, trimmed)
  * - `.blocks/config.json` → `telemetry.enabled: false` (per-project)
  * - `~/.blocks/config.json` → `telemetry.enabled: false` (global)
@@ -124,40 +114,5 @@ export function getTelemetryStatus(projectRoot?: string): TelemetryStatus {
  * only as metadata in the telemetry payload (environment.ci field).
  */
 export function isTelemetryEnabled(): boolean {
-  if (isDisableValue(process.env[ENV_VAR])) {
-    return false;
-  }
-
-  // Per-project config
-  try {
-    const projectConfigPath = join(process.cwd(), '.blocks', 'config.json');
-    const content = readFileSync(projectConfigPath, 'utf-8');
-    const config: BlocksConfig = JSON.parse(content);
-    if (config.telemetry?.enabled === false) {
-      return false;
-    }
-    if (config.telemetry?.enabled === true) {
-      return true;
-    }
-  } catch {
-    // No project config or invalid JSON
-  }
-
-  // Global config
-  try {
-    const globalConfigPath = join(homedir(), '.blocks', 'config.json');
-    const content = readFileSync(globalConfigPath, 'utf-8');
-    const config: BlocksConfig = JSON.parse(content);
-    if (config.telemetry?.enabled === false) {
-      return false;
-    }
-    if (config.telemetry?.enabled === true) {
-      return true;
-    }
-  } catch {
-    // No global config or invalid JSON
-  }
-
-  // Default: enabled
-  return true;
+  return getTelemetryStatus().enabled;
 }
