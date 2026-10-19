@@ -124,8 +124,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   // ── Public — Secret (credential with rotation history) demo ──────────
   // In a real app a secret is set out-of-band (console/CLI), never returned to
-  // the browser. This demo exposes it only to show the rotation grace window:
-  // after rotating, the previous value stays readable until it ages out.
+  // the browser. This demo exposes it only to show rotation history: after
+  // rotating, the previous value stays readable until the next rotation.
   async rotateApiKey(value: string) {
     await apiKey.put(value);
     return { success: true };

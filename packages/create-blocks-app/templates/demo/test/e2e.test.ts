@@ -119,8 +119,8 @@ test('AppSetting - set and get a flag', async () => {
 // ─── Secret ─────────────────────────────────────────────────────────────────
 // A credential backed by Secrets Manager (local file in dev). Unlike AppSetting
 // it keeps version history: after a rotation the previous value stays readable
-// for a grace window. We set, rotate, then assert current + previous + that two
-// versions are labeled.
+// until the next rotation (history is capped at current + previous, not time-aged).
+// We set, rotate, then assert current + previous + that two versions are labeled.
 test('Secret - rotate keeps the previous value readable', async () => {
   await api.rotateApiKey('key-v1');
   await api.rotateApiKey('key-v2');
@@ -138,7 +138,13 @@ test('Secret - rotate keeps the previous value readable', async () => {
 test('KnowledgeBase - retrieves the relevant doc for a query', async () => {
   const results = await api.searchDocs('how do I get a refund for a payment');
   assert.ok(results.length > 0, 'expected at least one retrieval result');
-  assert.strictEqual(results[0].source, 'billing.md', 'top hit should be the billing doc');
+  // endsWith (not strictEqual): the mock returns `source` relative to the corpus
+  // root (billing.md), while the Bedrock layer returns an s3://<bucket>/billing.md
+  // URI — endsWith matches the filename across both.
+  assert.ok(
+    results[0].source.endsWith('billing.md'),
+    'top hit should be the billing doc',
+  );
   assert.ok(results[0].score > 0, 'top hit should have a positive relevance score');
 });
 
