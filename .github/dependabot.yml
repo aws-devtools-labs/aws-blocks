@@ -18,10 +18,9 @@
 #     project-reference build in one grouped PR). So they are excluded from the
 #     dev-dependencies group (minor/patch arrive as their own PRs) and their
 #     major-version updates are ignored (bump them intentionally, by hand).
-#   - Cooldown: version updates wait until a release is 1 day old (3 days for
-#     majors). Most compromised npm/Actions releases are detected and pulled
-#     within hours, so Dependabot never proposes them. Security updates are not
-#     delayed by cooldown.
+#   - Cooldown: version updates wait until a release is 3 days old. This is
+#     Dependabot's default; it is set explicitly so it can't silently change
+#     and nobody lowers it by accident. Security updates are not delayed.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -29,8 +28,7 @@ updates:
     schedule:
       interval: monthly
     cooldown:
-      default-days: 1
-      semver-major-days: 3
+      default-days: 3
     open-pull-requests-limit: 10
     ignore:
       - dependency-name: "typescript"
@@ -54,8 +52,7 @@ updates:
     schedule:
       interval: weekly
     cooldown:
-      default-days: 1
-      semver-major-days: 3
+      default-days: 3
     groups:
       github-actions:
         patterns:
