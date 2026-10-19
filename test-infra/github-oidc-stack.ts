@@ -29,8 +29,17 @@ const GITHUB_REPO = 'aws-devtools-labs/aws-blocks';
 const GITHUB_ENVIRONMENT = 'e2e';
 // Default `cdk bootstrap` qualifier.
 const CDK_QUALIFIER = 'hnb659fds';
-// Stack/bucket name prefixes the E2E suites deploy and clean up.
-const E2E_PREFIXES = ['bb-hosting-', 'bb-telemetry-', 'bb-test-', 'bb-vpc-smoke-', 'blocks-hosting-', 'blocks-test-'];
+// Stack/bucket name prefixes the E2E suites deploy and cleanup-stacks.yml
+// deletes. `my-app-` is the scaffolded app from windows-template-e2e.mjs.
+const E2E_PREFIXES = [
+  'bb-hosting-',
+  'bb-telemetry-',
+  'bb-test-',
+  'bb-vpc-smoke-',
+  'blocks-hosting-',
+  'blocks-test-',
+  'my-app-',
+];
 
 // Refuse to synthesize unless the caller names the E2E account and the active
 // credentials match it, so the role can't land in another account by mistake.
@@ -58,9 +67,11 @@ const { account, region } = stack;
 
 // ── OIDC provider ───────────────────────────────────────────────────────────
 
-const provider = new iam.CfnOIDCProvider(stack, 'GithubOidcProvider', {
+// Native AWS::IAM::OIDCProvider (no custom-resource Lambda). No thumbprints:
+// IAM validates GitHub's endpoint against its trusted CA library.
+const provider = new iam.OidcProviderNative(stack, 'GithubOidcProvider', {
   url: 'https://token.actions.githubusercontent.com',
-  clientIdList: ['sts.amazonaws.com'],
+  clientIds: ['sts.amazonaws.com'],
 });
 
 // ── Role ────────────────────────────────────────────────────────────────────
@@ -69,7 +80,7 @@ const role = new iam.Role(stack, 'GithubE2eRole', {
   roleName: 'blocks-github-e2e',
   description: `Assumed by ${GITHUB_REPO} jobs in the "${GITHUB_ENVIRONMENT}" GitHub environment`,
   maxSessionDuration: cdk.Duration.hours(2),
-  assumedBy: new iam.WebIdentityPrincipal(provider.attrArn, {
+  assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
     StringEquals: {
       'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
       'token.actions.githubusercontent.com:sub': `repo:${GITHUB_REPO}:environment:${GITHUB_ENVIRONMENT}`,
@@ -132,6 +143,7 @@ role.addToPolicy(
     resources: E2E_PREFIXES.map((p) => `arn:aws:cloudformation:${region}:${account}:stack/${p}*/*`),
   }),
 );
+// ListStacks has no resource-level scoping; '*' is the only valid resource.
 role.addToPolicy(
   new iam.PolicyStatement({
     sid: 'E2eListStacks',
