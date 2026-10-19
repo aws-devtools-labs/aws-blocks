@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, blocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { randomUUID } from 'node:crypto';
@@ -241,19 +241,11 @@ export class AsyncJob<T = unknown> extends Scope {
 	 */
 	async submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult> {
 		if (payloads.length === 0) {
-			const err = new Error(
-				`${AsyncJobErrors.BatchEmpty}: Batch is empty, must contain at least 1 payload`
-			);
-			err.name = AsyncJobErrors.BatchEmpty;
-			throw err;
+			throw blocksError(AsyncJobErrors.BatchEmpty, 'Batch is empty, must contain at least 1 payload');
 		}
 
 		if (payloads.length > MAX_BATCH_PAYLOADS) {
-			const err = new Error(
-				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`
-			);
-			err.name = AsyncJobErrors.BatchTooLarge;
-			throw err;
+			throw blocksError(AsyncJobErrors.BatchTooLarge, `Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`);
 		}
 
 		// Validate every payload before enqueuing any, so one bad payload fails the
@@ -277,9 +269,7 @@ export class AsyncJob<T = unknown> extends Scope {
 			const result = rawResult instanceof Promise ? await rawResult : rawResult;
 			if (result && typeof result === 'object' && 'issues' in result && result.issues) {
 				const msg = result.issues[0]?.message ?? 'Validation failed';
-				const err = new Error(`${AsyncJobErrors.ValidationFailed}: ${msg}`);
-				err.name = AsyncJobErrors.ValidationFailed;
-				throw err;
+				throw blocksError(AsyncJobErrors.ValidationFailed, msg);
 			}
 		}
 
@@ -288,11 +278,7 @@ export class AsyncJob<T = unknown> extends Scope {
 		const bytes = Buffer.byteLength(serialized, 'utf8');
 		if (bytes > MAX_PAYLOAD_BYTES) {
 			const kb = Math.ceil(bytes / 1024);
-			const err = new Error(
-				`${AsyncJobErrors.PayloadTooLarge}: Serialized payload is ${kb} KB, exceeds 256 KB limit`
-			);
-			err.name = AsyncJobErrors.PayloadTooLarge;
-			throw err;
+			throw blocksError(AsyncJobErrors.PayloadTooLarge, `Serialized payload is ${kb} KB, exceeds 256 KB limit`);
 		}
 	}
 

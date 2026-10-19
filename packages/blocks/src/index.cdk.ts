@@ -134,6 +134,7 @@ export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-d
 export type {
 	DeleteOptions as DTDeleteOptions,
 	DistributedTableOptions,
+	ExternalKmsKeyRef as DTExternalKmsKeyRef,
 	PutOptions as DTPutOptions,
 	QueryOptions as DTQueryOptions,
 	ReadValidationMode,
@@ -171,6 +172,7 @@ export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-bas
 export type {
 	ConditionalDeleteOptions,
 	ConditionalWriteOptions,
+	ExternalKmsKeyRef,
 	ExternalTableRef,
 	KVStoreOptions,
 	PutOptions as KVPutOptions,
@@ -189,6 +191,8 @@ export type {
 } from '@aws-blocks/bb-metrics';
 export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
 export { Realtime } from '@aws-blocks/bb-realtime';
+export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-blocks/bb-secret';
+export { Secret, SecretErrors } from '@aws-blocks/bb-secret';
 export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tracer';
 export { Tracer } from '@aws-blocks/bb-tracer';
 // Override core's untyped getSdkIdentifiers with typed overloads

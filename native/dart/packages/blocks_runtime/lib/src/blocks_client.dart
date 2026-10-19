@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth_provider.dart';
 import 'blocks_rpc_exception.dart';
+import 'rpc_user_agent_headers.dart';
 import 'session_store.dart';
 import 'token_store.dart';
 
@@ -54,7 +55,10 @@ class BlocksClient {
       'id': id,
     });
 
-    final headers = <String, String>{'Content-Type': 'application/json'};
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      ...rpcUserAgentHeaders(),
+    };
 
     // Bearer token takes priority
     if (authProvider != null) {

@@ -1,0 +1,18 @@
+{
+  "cases": [
+    { "value": "1", "expected": true },
+    { "value": "true", "expected": true },
+    { "value": "TRUE", "expected": true },
+    { "value": "yes", "expected": true },
+    { "value": "YES", "expected": true },
+    { "value": " true ", "expected": true },
+    { "value": " 1 ", "expected": true },
+    { "value": "0", "expected": false },
+    { "value": "false", "expected": false },
+    { "value": "", "expected": false },
+    { "value": "   ", "expected": false },
+    { "value": "no", "expected": false },
+    { "value": "enabled", "expected": false },
+    { "value": null, "expected": false }
+  ]
+}

@@ -28,17 +28,20 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the string you passed as the **second** argument to `new ApiNamespace(scope, '<name>', …)`. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
 
-### Auth is a Building Block, not hand-rolled
+### Auth on the frontend
 
-Get the current user inside a method with `await auth.requireAuth(context)` (throws if unauthenticated — put it at the top of a protected method). On the frontend, mount the ready-made UI from `@aws-blocks/blocks/ui`:
+An auth Building Block supplies the backend only. The frontend must let a user sign in.
 
-```ts
-import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
-authContainer.appendChild(Authenticator(authApi));
-onAuthChange(authApi, (user) => { /* re-render for signed-in/out */ });
-```
+- On the backend, call `await auth.requireAuth(context)` at the top of each protected method. It throws when the user is not signed in.
+- On the frontend, use these parts from `@aws-blocks/blocks/ui`. Attach them the way your frontend attaches DOM elements.
+  - `Authenticator(authApi)`: an element with the sign-in, sign-up and confirm forms.
+  - `AuthenticatedContent(authApi, render, fallback?)`: shows `render(user)` for a signed-in user and `fallback` for a signed-out user.
+  - `onAuthChange(authApi, callback)`: calls `callback(user)` when the session changes. Use it when you render the content yourself.
+- `AuthBasic` without a `codeDelivery` config signs the user in at sign-up. It has no email confirmation step.
 
-`AuthBasic` without a `codeDelivery` config signs a user in immediately on sign-up (no email confirmation step).
+When the app is complete, a signed-out user reaches the sign-in form from the first page, the protected content appears after sign-in, and it is hidden again after sign-out.
+
+`Authenticator` emits stable testids. For `AuthBasic` and `AuthCognito` the fields are `authenticator-username` / `authenticator-password` and the actions `authenticator-action-signIn` / `authenticator-action-signUp` / `authenticator-submit`. `CUSTOMIZING-AUTH-UI.md` is the full contract; OIDC and federated actions carry a provider suffix, e.g. `authenticator-action-signIn:google`.
 
 ### The deployed frontend finds the backend on its own
 
@@ -65,7 +68,10 @@ const res = await api.ping('world');   // { message: 'hi world' }
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
 2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
-3. For faster iteration: run `npm run dev &` in the background, then run `npm run test:e2e` repeatedly (reuses the running server)
+3. For faster iteration, keep one dev server running and rerun tests against it:
+   - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev &`.
+   - Run `npm run test:e2e` as often as needed; it reuses the running server.
+   - When finished, stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
 4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
 
 ### Calling the API directly (troubleshooting only)
@@ -95,3 +101,13 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 - `npm run sandbox` — deploy backend to AWS, serve frontend locally
 - `npm run deploy` — full production deploy to AWS
 - `npm run sandbox:destroy` — tear down sandbox resources
+
+`npm run deploy` does the whole deploy in one command. A first production deploy can take 10+ minutes — longer than many shell command timeouts — so run it in the background (your harness's background-process feature, or `npm run deploy > deploy.log 2>&1 &`) and let it finish.
+
+If `npm run sandbox` or `npm run deploy` stops with `AWS credentials could not be verified`, the message names the profile and the command that fixes it, such as `aws login --profile <name>` or `aws sso login --profile <name>`. Signing in opens a browser and needs the user: ask the user before you run the command, then re-run the npm script.
+
+On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). Wait for that line — it confirms the deploy finished and gives the URLs, so there's no need to poll CloudFormation or hunt the URL out of the streamed output.
+
+If you will immediately self-test the frontend, add `npm run deploy -- --wait-live`: it holds the `BLOCKS_DEPLOYED` line until the new build is actually being served through CloudFront, so a request issued right after the signal returns the new asset rather than a stale cached bundle. Without it, the signal fires as soon as the deploy process exits, which can be a few seconds before the edge finishes serving the new build. Tune the budget with `--wait-live-timeout=<seconds>` (default 180); if it can't confirm within the budget it says so and exits non-zero instead of printing the signal.
+
+**Stack naming.** The deploy scripts name stacks from `stackId` in `.blocks/config.json` (generated at scaffold time, e.g. `my-app-a3x9kf`): production is `<stackId>-prod`, sandbox is `<stackId>-<username>-<random>`. Use these names when inspecting stacks (e.g. `aws cloudformation describe-stacks --stack-name <stackId>-prod`). To rename, edit `stackId`; for computed names, edit `aws-blocks/index.cdk.ts`.

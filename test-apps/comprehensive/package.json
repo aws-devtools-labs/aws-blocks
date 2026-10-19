@@ -42,6 +42,7 @@
     "@aws-blocks/bb-logger": "*",
     "@aws-blocks/bb-metrics": "*",
     "@aws-blocks/bb-realtime": "*",
+    "@aws-blocks/bb-secret": "*",
     "@aws-blocks/bb-tracer": "*",
     "@aws-blocks/blocks": "*",
     "@aws-blocks/core": "*",
@@ -49,7 +50,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "aws-cdk-lib": "2.257.0",
+    "aws-cdk-lib": "^2.257.0",
     "concurrently": "^8.2.0",
     "constructs": "^10.6.0",
     "tsx": "^4.7.0",

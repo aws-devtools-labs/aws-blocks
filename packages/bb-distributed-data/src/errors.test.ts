@@ -6,10 +6,11 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError, isWireSafeError } from '@aws-blocks/core';
 import {
   translateDsqlError,
   DistributedDatabaseErrors,
+  DSQL_PERMISSION_ERROR_NAME,
   PG_SERIALIZATION_FAILURE,
   PG_UNIQUE_VIOLATION,
   PG_CONNECTION_EXCEPTION_CLASS,
@@ -82,12 +83,36 @@ test('translateDsqlError: connection error (08001) → ConnectionFailed', () => 
   );
 });
 
-test('translateDsqlError: unknown pg error code → QueryFailed', () => {
-  const err = Object.assign(new Error('syntax error'), { code: '42601' });
+test('translateDsqlError: insufficient privilege (42501) → QueryFailed (not Permission)', () => {
+  // On DSQL, SQLSTATE 42501 covers both a genuine grant denial AND the
+  // rejection of an unsupported statement (e.g. a FOREIGN KEY / DDL), which
+  // cannot be told apart by code alone. It must NOT be re-tagged to Permission
+  // — an unsupported FOREIGN KEY is a failed query, not a permission error.
+  const err = Object.assign(new Error('permission denied to create foreign key'), { code: '42501' });
   assert.throws(
     () => translateDsqlError(err),
     (e: Error) => {
       assert.equal(e.name, DistributedDatabaseErrors.QueryFailed);
+      assert.notEqual(e.name, DSQL_PERMISSION_ERROR_NAME);
+      assert.ok(isWireSafeError(e), 'expected the re-tagged error to be branded');
+      assert.equal(e.message, `${DistributedDatabaseErrors.QueryFailed}: The database query failed`);
+      assert.ok(!e.message.includes('foreign key'), 'raw driver text must not leak into the message');
+      assert.equal((e.cause as Error).message, 'permission denied to create foreign key');
+      return true;
+    }
+  );
+});
+
+test('translateDsqlError: unknown pg error code → QueryFailed', () => {
+  const err = Object.assign(new Error('syntax error at or near "SELCT"'), { code: '42601' });
+  assert.throws(
+    () => translateDsqlError(err),
+    (e: Error) => {
+      assert.equal(e.name, DistributedDatabaseErrors.QueryFailed);
+      assert.ok(isWireSafeError(e), 'expected the re-tagged error to be branded');
+      assert.equal(e.message, `${DistributedDatabaseErrors.QueryFailed}: The database query failed`);
+      assert.ok(!e.message.includes('SELCT'), 'raw driver text must not leak into the message');
+      assert.equal((e.cause as Error).message, 'syntax error at or near "SELCT"');
       return true;
     }
   );
@@ -99,7 +124,9 @@ test('translateDsqlError: Error without code → QueryFailed', () => {
     () => translateDsqlError(err),
     (e: Error) => {
       assert.equal(e.name, DistributedDatabaseErrors.QueryFailed);
-      assert.equal(e.message, 'something broke');
+      assert.ok(isWireSafeError(e));
+      assert.equal(e.message, `${DistributedDatabaseErrors.QueryFailed}: The database query failed`);
+      assert.equal((e.cause as Error).message, 'something broke');
       return true;
     }
   );

@@ -22,9 +22,10 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { buildingBlockParent, Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
 import { AuthOIDC, cognitoFederated, google } from './index.cdk.js';
+import { cognitoEnvPrefix, cookieSecretEnvVar } from './utils.js';
 import type { AppSettingLike } from './providers.js';
 
 class StubBlocksStack extends cdk.Stack {
@@ -219,4 +220,74 @@ test('CDK: two providers with the same identityProvider fail fast at synth', () 
 		}),
 		/duplicate cognitoFederated identityProvider 'Google'/,
 	);
+});
+
+// `check:api` reports the default entry only, so nothing else would catch this
+// export being dropped from the CDK entry.
+test('CDK: the cdk entry exports the parent helper the runtime entries use', () => {
+	const self = buildingBlockParent({
+		id: 'auth',
+		parent: { id: 'my-app' },
+		bbName: 'AuthOidc',
+		bbVersion: '0.2.1',
+	});
+
+	assert.strictEqual(self.fullId, 'my-app-auth');
+});
+
+// The runtime reads these names from `process.env`; nothing fails at synth if the
+// writer's name drifts, so pin the literal strings a deployed app looks up.
+test('CDK: registers the exact env var names the runtime reads', () => {
+	const { stack, parent } = setup();
+	new AuthOIDC(parent, 'auth', {
+		providers: [
+			cognitoFederated({
+				name: 'google',
+				identityProvider: 'Google',
+				cognitoDomain: 'myapp-abc123',
+				region: 'us-east-1',
+				clientId: appSettingStub('app-google-client-id'),
+				clientSecret: appSettingStub('app-google-client-secret'),
+			}),
+		],
+	});
+
+	const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as { entries: Map<string, unknown> } | undefined;
+	assert.ok(registry, 'config registry exists on the stack');
+	const keys = [...registry.entries.keys()];
+
+	assert.ok(keys.includes('BLOCKS_AUTH_OIDC_COOKIE_SECRET_TESTSTACK_APP_AUTH'), `cookie-secret key missing: ${keys}`);
+	for (const suffix of ['POOL_ID', 'CLIENT_ID', 'CLIENT_SECRET', 'REGION', 'DOMAIN']) {
+		assert.ok(
+			keys.includes(`BLOCKS_AUTH_OIDC_COGNITO_TESTSTACK_APP_AUTH_${suffix}`),
+			`cognito ${suffix} key missing: ${keys}`,
+		);
+	}
+
+	assert.strictEqual(cookieSecretEnvVar('TestStack-app-auth'), 'BLOCKS_AUTH_OIDC_COOKIE_SECRET_TESTSTACK_APP_AUTH');
+	assert.strictEqual(cognitoEnvPrefix('TestStack-app-auth'), 'BLOCKS_AUTH_OIDC_COGNITO_TESTSTACK_APP_AUTH');
+});
+
+// `signInRoutePath()` is pure (derived from `callbackPath`), so it must work during
+// synth, e.g. to build a link or a `RawRoute` path at module scope.
+test('CDK: signInRoutePath() works during synth and follows callbackPath', () => {
+	const provider = () =>
+		cognitoFederated({
+			name: 'google',
+			identityProvider: 'Google',
+			cognitoDomain: 'myapp-abc123',
+			region: 'us-east-1',
+			clientId: appSettingStub('app-google-client-id'),
+			clientSecret: appSettingStub('app-google-client-secret'),
+		});
+	const { parent } = setup();
+	const auth = new AuthOIDC(parent, 'auth', { providers: [provider()] });
+	assert.strictEqual(auth.signInRoutePath('google'), '/aws-blocks/auth/signin/google');
+
+	const { parent: customParent } = setup();
+	const custom = new AuthOIDC(customParent, 'auth', {
+		providers: [provider()],
+		callbackPath: '/aws-blocks/auth/real/callback',
+	});
+	assert.strictEqual(custom.signInRoutePath('my provider'), '/aws-blocks/auth/real/signin/my%20provider');
 });

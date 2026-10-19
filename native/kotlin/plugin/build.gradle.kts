@@ -36,6 +36,11 @@ dependencies {
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)
     testImplementation(libs.kotest.property)
+
+    // Tests assert over KotlinPlatformType, which main only needs at compile time.
+    testImplementation(libs.plugins.kotlin.multiplatform.get().let {
+        "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}"
+    })
 }
 
 tasks.withType<Test> {

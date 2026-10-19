@@ -16,6 +16,7 @@
     "spec": "blocks-generate-spec",
     "prebuild": "blocks-generate-client",
     "dev": "tsx watch aws-blocks/scripts/server.ts",
+    "dev:stop": "tsx aws-blocks/scripts/stop.ts",
     "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "sandbox:console": "tsx aws-blocks/scripts/console.ts",
@@ -28,8 +29,7 @@
     "vendorize": "blocks-vendorize"
   },
   "dependencies": {
-    "@aws-blocks/blocks": "*",
-    "@aws-blocks/hosting": "*"
+    "@aws-blocks/blocks": "*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
@@ -37,7 +37,7 @@
     "tsx": "^4.7.0",
     "esbuild": "^0.27.1",
     "aws-cdk": "^2.1138.0",
-    "aws-cdk-lib": "2.257.0",
+    "aws-cdk-lib": "^2.257.0",
     "constructs": "^10.6.0"
   }
 }

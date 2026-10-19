@@ -83,6 +83,7 @@ import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableOptions } from '@aws-blocks/bb-distributed-table';
 import { DeleteOptions as DTDeleteOptions } from '@aws-blocks/bb-distributed-table';
+import { ExternalKmsKeyRef as DTExternalKmsKeyRef } from '@aws-blocks/bb-distributed-table';
 import { PutOptions as DTPutOptions } from '@aws-blocks/bb-distributed-table';
 import { QueryOptions as DTQueryOptions } from '@aws-blocks/bb-distributed-table';
 import { ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
@@ -92,6 +93,7 @@ import { EmailMessage } from '@aws-blocks/bb-email-client';
 import { EmailOptions } from '@aws-blocks/bb-email-client';
 import { EmitOptions } from '@aws-blocks/bb-metrics';
 import { ExternalDatabaseRef } from '@aws-blocks/bb-data';
+import { ExternalKmsKeyRef } from '@aws-blocks/bb-kv-store';
 import { ExternalMetricsRef } from '@aws-blocks/bb-metrics';
 import { ExternalTableRef } from '@aws-blocks/bb-kv-store';
 import { ExternalUserPoolRef } from '@aws-blocks/bb-auth-cognito';
@@ -149,6 +151,12 @@ import { relayOrigin } from '@aws-blocks/bb-auth-oidc';
 import { ResetPasswordResult } from '@aws-blocks/bb-auth-cognito';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
+import { Secret } from '@aws-blocks/bb-secret';
+import { SecretErrors } from '@aws-blocks/bb-secret';
+import { SecretOptions } from '@aws-blocks/bb-secret';
+import { SecretReadOptions } from '@aws-blocks/bb-secret';
+import { SecretVersion } from '@aws-blocks/bb-secret';
+import { SecretVersionInfo } from '@aws-blocks/bb-secret';
 import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
@@ -340,6 +348,8 @@ export { DistributedTableOptions }
 
 export { DTDeleteOptions }
 
+export { DTExternalKmsKeyRef }
+
 export { DTPutOptions }
 
 export { DTQueryOptions }
@@ -357,6 +367,8 @@ export { EmailOptions }
 export { EmitOptions }
 
 export { ExternalDatabaseRef }
+
+export { ExternalKmsKeyRef }
 
 export { ExternalMetricsRef }
 
@@ -559,6 +571,18 @@ export { ResetPasswordResult }
 export { RetrieveOptions }
 
 export { RetrieveResult }
+
+export { Secret }
+
+export { SecretErrors }
+
+export { SecretOptions }
+
+export { SecretReadOptions }
+
+export { SecretVersion }
+
+export { SecretVersionInfo }
 
 export { Segment }
 

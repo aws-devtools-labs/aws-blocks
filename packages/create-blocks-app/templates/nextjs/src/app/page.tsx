@@ -11,7 +11,7 @@ async function ServerTime() {
   const serverTime = await api.getServerTime();
   
   return (
-    <pre style={{ background: '#f5f5f5', padding: '1rem', borderRadius: '4px' }}>
+    <pre style={{ background: 'var(--bb-color-surface-alt, #f5f5f5)', color: 'var(--bb-color-text, #333)', padding: '1rem', borderRadius: '4px' }}>
       {JSON.stringify(serverTime, null, 2)}
     </pre>
   );
@@ -20,7 +20,7 @@ async function ServerTime() {
 // Loading fallback for Suspense
 function ServerTimeLoading() {
   return (
-    <pre style={{ background: '#f5f5f5', padding: '1rem', borderRadius: '4px', color: '#888' }}>
+    <pre style={{ background: 'var(--bb-color-surface-alt, #f5f5f5)', padding: '1rem', borderRadius: '4px', color: 'var(--bb-color-text-muted, #888)' }}>
       Loading server time...
     </pre>
   );

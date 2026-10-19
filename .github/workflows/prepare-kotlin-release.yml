@@ -19,14 +19,11 @@ jobs:
       run:
         working-directory: native/kotlin
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          # Use a PAT (not the default GITHUB_TOKEN) so the pushed branch and the
-          # PR it opens trigger downstream CI on the release PR.
-          token: ${{ secrets.OPS_GITHUB_TOKEN }}
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -68,7 +65,7 @@ jobs:
 
       - name: Guard against existing release branch
         env:
-          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="release/kotlin-${{ steps.ver.outputs.version }}"
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
@@ -78,7 +75,7 @@ jobs:
 
       - name: Create branch, commit, push
         env:
-          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           BRANCH="release/kotlin-${VERSION}"
@@ -91,7 +88,7 @@ jobs:
 
       - name: Open release PR
         env:
-          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           NOTES="$(./scripts/extract-changelog.sh CHANGELOG.md "$VERSION")"

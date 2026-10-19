@@ -28,11 +28,12 @@ function getEndpoint(): string {
  * @returns The file path if the flag is present, undefined otherwise.
  *
  * @example
- * // Capture telemetry to file (also sends HTTP when enabled):
+ * // Capture telemetry to file and send it, with telemetry enabled:
  * // npx tsx aws-blocks/scripts/server.ts --telemetry-file=/tmp/events.json
  *
- * // Capture WITHOUT sending (disable HTTP, file still writes):
- * // AWS_BLOCKS_DISABLE_TELEMETRY=1 npx tsx aws-blocks/scripts/server.ts --telemetry-file=/tmp/events.json
+ * // Capture without sending — redirect the endpoint instead of opting out:
+ * // BLOCKS_TELEMETRY_ENDPOINT=http://127.0.0.1:1 npx tsx aws-blocks/scripts/server.ts \
+ * //   --telemetry-file=/tmp/events.json
  */
 export function getTelemetryFilePath(): string | undefined {
   const arg = process.argv.find(a => a.startsWith('--telemetry-file='));
@@ -42,15 +43,18 @@ export function getTelemetryFilePath(): string | undefined {
   }
   const idx = process.argv.indexOf('--telemetry-file');
   if (idx !== -1 && process.argv[idx + 1] && !process.argv[idx + 1].startsWith('-')) {
-    return process.argv[idx + 1];
+    const p = process.argv[idx + 1];
+    return p.trim() === '' ? undefined : p;
   }
   return undefined;
 }
 
+const ownedTelemetryFiles = new Set<string>();
+
 // File sink: writes to --telemetry-file path (user-facing, for debugging/testing)
 function writeToTelemetryFile(event: BlocksTelemetryEvent): void {
   const filePath = getTelemetryFilePath();
-  if (!filePath) return;  // getTelemetryFilePath already rejects empty/whitespace
+  if (!filePath) return;
 
   try {
     const dir = path.dirname(filePath);
@@ -63,15 +67,31 @@ function writeToTelemetryFile(event: BlocksTelemetryEvent): void {
     const content = JSON.stringify([event], null, 2);
     writeSync(fd, content);
     closeSync(fd);
+    ownedTelemetryFiles.add(path.resolve(filePath));
   } catch (err: any) {
-    // EEXIST = file already existed → skip (protects user data)
+    // Appending only to a path this run created leaves a pre-existing file intact.
+    if (err?.code === 'EEXIST' && ownedTelemetryFiles.has(path.resolve(filePath))) {
+      appendToTelemetryFile(filePath, event);
+    }
     // All other errors silently ignored — telemetry must never affect commands
+  }
+}
+
+function appendToTelemetryFile(filePath: string, event: BlocksTelemetryEvent): void {
+  try {
+    const events = JSON.parse(readFileSync(filePath, 'utf-8'));
+    if (!Array.isArray(events)) throw new Error('telemetry file is not a JSON array');
+    events.push(event);
+    writeFileSync(filePath, JSON.stringify(events, null, 2));
+  } catch (err) {
+    debug('failed to append telemetry event: %s', err instanceof Error ? err.message : String(err));
   }
 }
 
 /**
  * Constructs a telemetry event without sending it.
- * Useful for testing event structure without I/O side effects.
+ * Not side-effect free: it mints and persists the installation and project IDs and may
+ * print the first-run notice, so callers must check consent first.
  * @internal
  */
 export function buildEvent(opts: BuildAndSendEventOptions): BlocksTelemetryEvent {
@@ -136,17 +156,14 @@ export function buildEvent(opts: BuildAndSendEventOptions): BlocksTelemetryEvent
  * Build a complete telemetry event and send it to the collection endpoint.
  *
  * This is the single entry point for all telemetry emission. It handles:
- * 1. Early exit — if telemetry is disabled AND no `--telemetry-file` is set,
- *    returns immediately with no side effects (no IDs persisted, no notice)
+ * 1. Early exit — when telemetry is disabled: no identifiers persisted, no first-run
+ *    notice, no file, no HTTP
  * 2. Full payload construction (identifiers, environment, product info)
- * 3. File sink — writes to the file specified by `--telemetry-file` (if set),
- *    regardless of opt-out status (inspired by CDK CLI's --telemetry-file)
+ * 3. File sink — writes to the file specified by `--telemetry-file` (if set)
  * 4. Privacy filtering — custom BB names are NEVER sent, only counted
- * 5. HTTP sink — fire-and-forget POST (only when telemetry is enabled)
+ * 5. HTTP sink — fire-and-forget POST
  *
- * The file sink fires unconditionally when `--telemetry-file` is set.
- * The HTTP sink only fires when telemetry is enabled. Callers never need to
- * import consent, identifier, or environment utilities directly.
+ * Callers never need to import consent, identifier, or environment utilities directly.
  *
  * @param opts - Event metadata (command, state, duration, optional error/product/counters)
  *
@@ -162,14 +179,13 @@ export function buildEvent(opts: BuildAndSendEventOptions): BlocksTelemetryEvent
  */
 export function buildAndSendEvent(opts: BuildAndSendEventOptions): void {
   try {
-    const filePath = getTelemetryFilePath();
-    const enabled = isTelemetryEnabled();
-    if (!filePath && !enabled) return;
+    if (!isTelemetryEnabled()) return;
 
+    const filePath = getTelemetryFilePath();
     const event = buildEvent(opts);
 
     if (filePath) writeToTelemetryFile(event);
-    if (enabled) sendEvent(event);
+    sendEvent(event);
   } catch {
     // Telemetry must never throw or affect the user's command
   }

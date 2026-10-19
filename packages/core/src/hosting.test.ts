@@ -9,10 +9,13 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { config, secret } from '@aws-blocks/hosting';
 import { _setSynthExistsChecker } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
-import { App, Duration, Stack } from 'aws-cdk-lib';
+import { App, Duration, Stack, Token } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Construct } from 'constructs';
+import { claimApiFrontDoor, scheduleApiFrontDoor } from './cdk/api-front-door.js';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
-import { type BlocksStackApi, Hosting } from './hosting.js';
+import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
+import { type BlocksStackApi, buildConfigJson, Hosting } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
 
 // ================================================================
@@ -514,6 +517,70 @@ describe('Hosting', () => {
     });
   });
 
+  // ── cloudfront front door + Hosting coexistence (P2) ─────────────────
+  //
+  // When the app sets apiFrontDoor: 'cloudfront' AND fronts its frontend with Hosting in
+  // the same stack, the API belongs on Hosting's distribution — the standalone
+  // managed cloudfront distribution must stand down so there is exactly one.
+  describe('cloudfront front door + Hosting claim', () => {
+    it('leaves exactly one distribution (Hosting’s) when Hosting fronts the API under cloudfront', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'CloudFrontHostingClaimStack');
+
+      // Simulate what BlocksStack.create() does under cloudfront: schedule the managed
+      // front door over the shared gateway, then build Hosting in the same stack.
+      // In production `props.api` IS the owner the aspect is scheduled on (the
+      // BlocksStack), so its `claimApiFrontDoor` records the claim on that same
+      // object; the aspect reads it back and stands down. Mirror that here by
+      // backing the api's claim with the scheduled owner (`stack`).
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        claimApiFrontDoor: (url) => claimApiFrontDoor(stack, url),
+      };
+      scheduleApiFrontDoor(stack, true, api.apiUrl);
+      new Hosting(stack, 'Hosting', { root: tmpDir, api });
+
+      const template = Template.fromStack(stack);
+      // The managed front door stood down — only Hosting's single distribution remains.
+      template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    });
+
+    it('the claim is recorded on the backend instance, not in its stack’s state', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const backendStack = new Stack(app, 'BackendStack');
+      const frontendStack = new Stack(app, 'FrontendStack');
+
+      // The managed cloudfront front door is scheduled on the backend stack; a Hosting
+      // built in a SEPARATE stack claims the role on the backend object (a live
+      // reference), so the aspect — scheduled on that same object — reads the claim
+      // and stands the managed distribution down. This pins the claim mechanism only:
+      // a real BlocksStack with Hosting in another stack doesn't synthesize today
+      // (Hosting registers its domain back into the backend's config, a
+      // cross-stack cycle).
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        claimApiFrontDoor: (url) => claimApiFrontDoor(backendStack, url),
+      };
+      scheduleApiFrontDoor(backendStack, true, api.apiUrl);
+      new Hosting(frontendStack, 'Hosting', { root: tmpDir, api });
+
+      // Managed cloudfront distribution stood down in the backend stack (the claim reached it through the backend object)...
+      Template.fromStack(backendStack).resourceCountIs('AWS::CloudFront::Distribution', 0);
+      // ...and only Hosting's distribution exists, in the frontend stack — carrying
+      // the API behaviors, so the API is actually served from it.
+      const frontend = Template.fromStack(frontendStack);
+      frontend.resourceCountIs('AWS::CloudFront::Distribution', 1);
+      const distConfig = Object.values(frontend.findResources('AWS::CloudFront::Distribution'))[0].Properties
+        .DistributionConfig;
+      const patterns = (distConfig.CacheBehaviors ?? []).map((b: { PathPattern: string }) => b.PathPattern);
+      assert.ok(patterns.includes(BLOCKS_RPC_PREFIX), 'Hosting distribution carries the RPC behavior');
+    });
+  });
+
   // ── API integration tests ────────────────────────────────────
 
   describe('API integration', () => {
@@ -670,6 +737,75 @@ describe('Hosting', () => {
       assert.ok(Object.keys(customResources).length >= 1, 'Should have BucketDeployment even without api');
     });
 
+    it('emits a HostingBuildId output so a post-deploy liveness poll can match the served build', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'HostingBuildIdOutputStack');
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const template = Template.fromStack(stack);
+      // CDK suffixes a nested construct's CfnOutput logical id with a hash
+      // (e.g. `HostingHostingBuildId8EDD8441`), and deploy.ts matches it by the
+      // same `Hosting`+`BuildId` substring it uses on outputs.json — so match
+      // by substring here too rather than an exact logical id.
+      const outputs = template.toJSON().Outputs ?? {};
+      const buildIdKeys = Object.keys(outputs).filter(
+        (k) => k.includes('Hosting') && k.includes('BuildId'),
+      );
+      assert.equal(buildIdKeys.length, 1, 'exactly one HostingBuildId output should be emitted');
+      // The value is the generated build id — a non-empty literal string.
+      const value: unknown = outputs[buildIdKeys[0]].Value;
+      if (typeof value !== 'string' || value.length === 0) {
+        assert.fail('HostingBuildId output value should be a non-empty build id');
+      }
+
+      // Guard the PRODUCER half of the --wait-live contract: the config this
+      // deploy serves must stamp the SAME build id under BLOCKS_BUILD_ID_CONFIG_KEY
+      // that the HostingBuildId output advertises. Renaming/dropping either side
+      // silently breaks every --wait-live deploy (the poll never matches), so
+      // assert the stamp directly against the output value via the pure seam.
+      const stamp = buildConfigJson({ root: tmpDir, api: MOCK_API }, value)[BLOCKS_BUILD_ID_CONFIG_KEY];
+      assert.equal(stamp, value, 'config stamp must equal the HostingBuildId output value');
+    });
+
+    it('emits no HostingInvalidationId output for a pure-static deploy (no invalidation issued)', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'StaticNoInvalidationOutputStack');
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const outputs = Template.fromStack(stack).toJSON().Outputs ?? {};
+      const invKeys = Object.keys(outputs).filter((k) => k.includes('InvalidationId'));
+      assert.equal(invKeys.length, 0, 'a pure-static deploy issues no invalidation, so no output');
+    });
+
+    it('emits a HostingInvalidationId output for a compute deploy so the liveness poll can wait on it', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'ComputeInvalidationOutputStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+      });
+
+      const outputs = Template.fromStack(stack).toJSON().Outputs ?? {};
+      const invKeys = Object.keys(outputs).filter(
+        (k) => k.includes('Hosting') && k.includes('InvalidationId'),
+      );
+      assert.equal(invKeys.length, 1, 'exactly one HostingInvalidationId output should be emitted');
+      // The value carries `<distributionId>/<invalidationId>` as CDK tokens, so
+      // it resolves to a Fn::Join rather than a plain string — assert it is
+      // present and non-trivial rather than a literal.
+      assert.ok(outputs[invKeys[0]].Value !== undefined, 'HostingInvalidationId output should have a value');
+    });
+
     it('does not inject BLOCKS_API_URL into SSR Lambda when api is omitted', () => {
       createNextjsBuildOutput(tmpDir);
 
@@ -734,6 +870,41 @@ describe('Hosting', () => {
       assert.ok(patterns.includes('/aws-blocks/api/*'), 'Should have /aws-blocks/api/* behavior');
       assert.ok(patterns.includes('/health'), 'Should have /health behavior for RawRoute');
       assert.ok(patterns.includes('/users/*'), 'Should have /users/* behavior for parameterized RawRoute');
+    });
+
+    it('only adds RawRoute behaviors owned by the backend this distribution fronts', () => {
+      createSpaBuildOutput(tmpDir);
+
+      // The route registry is a process-global shared by every backend in a
+      // multi-stack synth. Three routes: one owned by THIS distribution's
+      // backend root, one owned by a DIFFERENT backend, and one owner-less
+      // (a framework built-in / the runtime path). Only the first and the
+      // owner-less one may reach this distribution — before ownership tagging,
+      // every stack's CloudFront picked up every other stack's routes.
+      const thisBackendId = 'OwnerFilterStack'; // a top-level stack's node.path == its id
+      registerRoute({ method: 'GET', path: '/mine', handler: async () => {}, ownerRootId: thisBackendId });
+      registerRoute({ method: 'GET', path: '/theirs', handler: async () => {}, ownerRootId: 'OtherBackend' });
+      registerRoute({ method: 'GET', path: '/builtin', handler: async () => {} }); // owner-less → matches all
+
+      const app = new App();
+      const stack = new Stack(app, thisBackendId);
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+      });
+
+      const template = Template.fromStack(stack);
+      const distributions = template.findResources('AWS::CloudFront::Distribution');
+      const distConfig = (distributions[Object.keys(distributions)[0]] as any).Properties.DistributionConfig;
+      const patterns = (distConfig.CacheBehaviors ?? []).map((b: any) => b.PathPattern);
+
+      assert.ok(patterns.includes('/mine'), 'own backend route must get a behavior');
+      assert.ok(patterns.includes('/builtin'), 'owner-less (built-in) route must get a behavior');
+      assert.ok(
+        !patterns.includes('/theirs'),
+        `a foreign backend's route must NOT leak into this distribution, got: ${JSON.stringify(patterns)}`,
+      );
     });
 
     it('adds a CloudFront behavior for a route another core copy registered', () => {
@@ -924,7 +1095,9 @@ describe('Hosting', () => {
 
       const template = Template.fromStack(stack);
 
-      // The L3 construct should create an SsrCachePolicy with these values
+      // The L3 construct should create an SsrCachePolicy with these values.
+      // maxTtl is 1 year (31536000s): it clamps wild origin Cache-Control
+      // values to at most a year.
       template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
         CachePolicyConfig: Match.objectLike({
           MinTTL: 0,
@@ -978,6 +1151,36 @@ describe('Hosting', () => {
         typeof cachePolicyId === 'object' && cachePolicyId !== null,
         'CachePolicyId should be a CDK reference (object), not a literal string',
       );
+    });
+
+    it('forwards ssrDefaultTtl + cacheKeyCookies to the SSR cache policy', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'SsrCacheKeyForwardStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        api: MOCK_API,
+        ssrDefaultTtl: Duration.seconds(60),
+        cacheKeyCookies: ['session'],
+      });
+
+      const template = Template.fromStack(stack);
+
+      // DefaultTTL comes through as 60, and the session cookie lands in the
+      // SSR cache-key cookie allowList alongside the reserved preview cookies.
+      template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
+        CachePolicyConfig: Match.objectLike({
+          DefaultTTL: 60,
+          ParametersInCacheKeyAndForwardedToOrigin: Match.objectLike({
+            CookiesConfig: Match.objectLike({
+              Cookies: Match.arrayWith(['session']),
+            }),
+          }),
+        }),
+      });
     });
   });
 
@@ -1081,6 +1284,118 @@ describe('Hosting', () => {
         },
       });
       assert.strictEqual(Object.keys(lambdas).length, 0, 'Should NOT create a CORS merge Lambda');
+    });
+
+    it('registers the RAW CloudFront domain token (not an escaped dead literal)', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'CorsTokenRoundTripStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+      });
+
+      // Read the registered value straight from the per-stack config registry,
+      // matching how other synth-state tests inspect registerConfig() entries.
+      const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
+        | { entries: Map<string, unknown> }
+        | undefined;
+      assert.ok(registry, 'config registry exists on the stack');
+      const value = registry.entries.get('CORS_HOSTING_ORIGINS');
+      assert.ok(value !== undefined, 'CORS_HOSTING_ORIGINS is registered');
+
+      // The default-domain origin is `https://<distributionDomainName>`, so the
+      // registered value stays an unresolved token that resolves to the
+      // distribution DomainName intrinsic — never a plain escaped string.
+      assert.ok(Token.isUnresolved(value), 'CORS_HOSTING_ORIGINS must stay an unresolved token');
+      assert.ok(
+        JSON.stringify(stack.resolve(value)).includes('Fn::GetAtt'),
+        'must resolve to the distribution DomainName intrinsic',
+      );
+    });
+
+    it('routes origin config to the backend named by props.api, not the last-created backend', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'TwoBackendHostingStack');
+
+      // Two branded backend roots sharing one stack. `A` is what the distribution
+      // fronts; `B` is created last, so it is the ambient CURRENT_BLOCKS_STACK that
+      // the previous `registerConfig(this, …)` path would have resolved to — the
+      // bug this test guards against (both keys landing in B, A getting neither).
+      const BRAND = Symbol.for('blocks:BackendRoot');
+      const makeBackend = (id: string): BlocksStackApi => {
+        const backend = new Construct(stack, id);
+        (backend as unknown as Record<symbol, unknown>)[BRAND] = true;
+        (backend as unknown as { apiUrl: string }).apiUrl =
+          `https://${id}.execute-api.us-east-1.amazonaws.com/prod/aws-blocks`;
+        return backend as unknown as BlocksStackApi;
+      };
+      const backendA = makeBackend('BackendA');
+      const backendB = makeBackend('BackendB');
+
+      const prevAmbient = (globalThis as { CURRENT_BLOCKS_STACK?: unknown }).CURRENT_BLOCKS_STACK;
+      (globalThis as { CURRENT_BLOCKS_STACK?: unknown }).CURRENT_BLOCKS_STACK = backendB;
+      try {
+        new Hosting(stack, 'WebA', { root: tmpDir, api: backendA });
+      } finally {
+        (globalThis as { CURRENT_BLOCKS_STACK?: unknown }).CURRENT_BLOCKS_STACK = prevAmbient;
+      }
+
+      const entriesOf = (owner: unknown) =>
+        (owner as Record<symbol, unknown>)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
+          | { entries: Map<string, unknown> }
+          | undefined;
+
+      const aEntries = entriesOf(backendA)?.entries;
+      assert.ok(aEntries, 'the fronted backend A has a config registry');
+      assert.ok(aEntries.has('BLOCKS_PUBLIC_ORIGIN'), 'BLOCKS_PUBLIC_ORIGIN lands in backend A');
+      assert.ok(aEntries.has('CORS_HOSTING_ORIGINS'), 'CORS_HOSTING_ORIGINS lands in backend A');
+
+      const bEntries = entriesOf(backendB)?.entries;
+      const bGotOrigin = Boolean(
+        bEntries?.has('BLOCKS_PUBLIC_ORIGIN') || bEntries?.has('CORS_HOSTING_ORIGINS'),
+      );
+      assert.strictEqual(bGotOrigin, false, 'the last-created backend B must NOT receive the origin config');
+    });
+
+    it('registers the raw custom-domain origin (not escaped, not anchored)', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'CorsCustomDomainStack', {
+        env: { account: '123456789012', region: 'us-east-1' },
+      });
+
+      // A custom domain requires a certificate when no hostedZone is given
+      // (mirrors the BYO-domain tests above).
+      const cert = cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+        stack,
+        'ImportedCert',
+        'arn:aws:acm:us-east-1:123456789012:certificate/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      );
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        domain: {
+          domainName: 'custom.example.com',
+          certificate: cert,
+        },
+      });
+
+      const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
+        | { entries: Map<string, unknown> }
+        | undefined;
+      assert.ok(registry, 'config registry exists on the stack');
+      const value = registry.entries.get('CORS_HOSTING_ORIGINS');
+      // A custom domain resolves distributionUrl to a plain string at synth, so
+      // Hosting registers the RAW origin. Escaping/anchoring is deferred to
+      // runtime by getCorsPatterns(); the registered value must be untouched.
+      assert.strictEqual(value, 'https://custom.example.com');
     });
 
     it('does not register CORS_HOSTING_ORIGINS when api prop is missing', () => {

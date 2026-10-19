@@ -106,9 +106,15 @@ test('injection: integer column with string payload is rejected as invalid type,
   const malicious = "1 OR 1=1";
   // Postgres rejects "1 OR 1=1" as invalid integer — proving it's treated as
   // a parameter value, not interpreted as SQL. If it were executed as SQL,
-  // it would return all rows instead of throwing a type error.
+  // it would return all rows instead of throwing a type error. The engine
+  // re-tags the driver error to a branded QueryFailed with a stable BB message
+  // (raw driver text never crosses the wire), keeping the original Postgres
+  // error as `cause` — so the invalid-integer proof is read off the cause.
   await assert.rejects(
     () => db.query(sql`SELECT * FROM orders WHERE amount = ${malicious}`),
-    (err: Error) => err.message.includes('invalid input syntax for type integer')
+    (err: Error) => {
+      const raw = err.cause instanceof Error ? err.cause : err;
+      return raw.message.includes('invalid input syntax for type integer');
+    }
   );
 });

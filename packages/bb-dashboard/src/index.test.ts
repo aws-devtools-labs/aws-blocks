@@ -3,6 +3,9 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import * as assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
 	buildDashboardWidgets,
 	buildMetricsWidgets,
@@ -13,6 +16,9 @@ import type { DashboardOptions } from './types.js';
 import { DashboardErrors } from './errors.js';
 import { GraphWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import { BB_NAME, BB_VERSION } from './version.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Stand-ins for a compute's self-reported widget rows (`Compute.dashboardWidgets`
@@ -46,7 +52,7 @@ function stubComputeSections(
 		},
 	];
 }
-import { getRegisteredRoutes, clearRouteRegistry } from '@aws-blocks/core';
+import { Scope, getRegisteredRoutes, clearRouteRegistry } from '@aws-blocks/core';
 import { mountDashboardRoute, BB_DASHBOARD_URL_ENV } from './routes.js';
 import type { BlocksContext } from '@aws-blocks/core';
 
@@ -729,4 +735,80 @@ describe('mountDashboardRoute', () => {
 			}
 		}
 	});
+});
+
+describe('telemetry registration', () => {
+	beforeEach(() => {
+		Scope._resetRegistry();
+		clearRouteRegistry();
+	});
+
+	it('BB_NAME is Dashboard', () => {
+		assert.strictEqual(BB_NAME, 'Dashboard');
+	});
+
+	it('BB_VERSION matches package.json', () => {
+		const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
+		assert.strictEqual(BB_VERSION, pkg.version);
+	});
+
+	for (const entry of ['./index.mock.js', './index.aws.js'] as const) {
+		it(`${entry}: sets bbName/bbVersion`, async () => {
+			const { Dashboard } = await import(entry);
+			const dash = new Dashboard({ id: 'root' }, 'dashboard', { routePath: false });
+			assert.strictEqual(dash.bbName, BB_NAME);
+			assert.strictEqual(dash.bbVersion, BB_VERSION);
+		});
+
+		it(`${entry}: registers as official block`, async () => {
+			const { Dashboard } = await import(entry);
+			new Dashboard({ id: 'root' }, 'dashboard', { routePath: false });
+			const { blocks, customBlocksCount } = Scope.getRegisteredBlocks();
+			assert.deepStrictEqual(
+				blocks.filter(b => b.name === BB_NAME),
+				[{ name: BB_NAME, version: BB_VERSION }],
+			);
+			assert.strictEqual(customBlocksCount, 0);
+		});
+	}
+});
+
+describe('fullId parity with pre-Scope derivation', () => {
+	beforeEach(() => {
+		delete process.env.BLOCKS_STACK_NAME;
+		delete (globalThis as any).CURRENT_BLOCKS_STACK;
+		clearRouteRegistry();
+	});
+
+	const cases: Array<[string, () => any, string]> = [
+		['nested Scope parent', () => new Scope('child', { parent: new Scope('root') }), 'root-child-dashboard'],
+		['parent with only id', () => ({ id: 'app' }), 'app-dashboard'],
+		['parent with empty fullId and id', () => ({ id: '', fullId: '' }), 'dashboard'],
+		['parent with undefined fullId and id', () => ({ id: undefined, fullId: undefined }), 'dashboard'],
+		['top-level Scope parent', () => new Scope('app'), 'app-dashboard'],
+	];
+
+	for (const [entry, nameFrom] of [['./index.mock.js', 'fullId'], ['./index.aws.js', 'id']] as const) {
+		for (const [label, parent, expected] of cases) {
+			it(`${entry}: ${label}`, async () => {
+				const { Dashboard } = await import(entry);
+				const dash = new Dashboard(parent(), 'dashboard', { routePath: false });
+				assert.strictEqual(dash.fullId, expected);
+				assert.strictEqual(dash.dashboardName, nameFrom === 'fullId' ? expected : 'dashboard');
+			});
+		}
+
+		it(`${entry}: ignores BLOCKS_STACK_NAME and CURRENT_BLOCKS_STACK for an explicit parent`, async () => {
+			const { Dashboard } = await import(entry);
+			process.env.BLOCKS_STACK_NAME = 'env-stack';
+			(globalThis as any).CURRENT_BLOCKS_STACK = { id: 'global-stack', fullId: 'global-stack' };
+			try {
+				const dash = new Dashboard({ id: 'app' }, 'dashboard', { routePath: false });
+				assert.strictEqual(dash.fullId, 'app-dashboard');
+			} finally {
+				delete process.env.BLOCKS_STACK_NAME;
+				delete (globalThis as any).CURRENT_BLOCKS_STACK;
+			}
+		});
+	}
 });

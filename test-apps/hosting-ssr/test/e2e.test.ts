@@ -331,6 +331,84 @@ test.describe('SSR origin regression coverage', () => {
   });
 });
 
+test.describe('SSR cache isolation (per-session cache key)', () => {
+  // /cache-isolation is an SSR route that echoes the `bb_session` cookie and
+  // emits `Cache-Control: public, s-maxage=300`, so CloudFront caches it. The
+  // app sets cdn.cacheKeyCookies=['bb_session'], putting the session cookie in
+  // the CDN cache key — so each session keys a separate cache entry. Without
+  // the cookie in the key, this s-maxage response would be a single shared
+  // cache entry.
+
+  test('each session cookie gets its own rendered body', async ({ request }) => {
+    // Functional check that runs in every env (no CDN required): the route
+    // renders per-session content, so distinct session cookies produce
+    // distinct bodies.
+    const isolationUrl = `${hostingUrl}/cache-isolation`;
+    const userA = `alice-${randomBytes(6).toString('hex')}`;
+    const userB = `bob-${randomBytes(6).toString('hex')}`;
+
+    const a = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userA}` } });
+    expect(a.status()).toBe(200);
+    expect(await a.text()).toContain(`user=${userA}`);
+
+    const b = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userB}` } });
+    expect(b.status()).toBe(200);
+    const bBody = await b.text();
+    expect(bBody).toContain(`user=${userB}`);
+    expect(bBody).not.toContain(userA);
+  });
+
+  test('per-session cache key: a warmed edge HIT for one session is not reused for a different session (sandbox)', async ({ request }) => {
+    // Only CloudFront (in front only in sandbox) sets `x-cache: Hit from
+    // cloudfront`; local/dev mode has no CDN and cannot exercise a real edge
+    // HIT, so this per-session cache-key proof runs in sandbox only.
+    if (ENV !== 'sandbox') {
+      test.skip();
+      return;
+    }
+
+    const isolationUrl = `${hostingUrl}/cache-isolation`;
+    const userA = `alice-${randomBytes(6).toString('hex')}`;
+    const userB = `bob-${randomBytes(6).toString('hex')}`;
+
+    // Warm the edge for user A: the first request is a MISS that populates the
+    // cache; a repeat is a HIT of A's body.
+    const a1 = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userA}` } });
+    expect(a1.status()).toBe(200);
+    expect(await a1.text()).toContain(`user=${userA}`);
+
+    const a2 = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userA}` } });
+    expect(a2.status()).toBe(200);
+    expect(await a2.text()).toContain(`user=${userA}`);
+
+    // Confirm A's repeat was actually served from the CloudFront cache — a real
+    // HIT is what makes the per-session check below meaningful (otherwise B
+    // could pass simply by MISSing and rendering its own body).
+    expect(a2.headers()['x-cache'] || '').toContain('Hit from cloudfront');
+
+    // User B hits the SAME URL with a different session cookie. Because the
+    // session cookie is in the cache key, B gets its own cache entry and its
+    // own body, not A's warmed entry.
+    const b1 = await request.get(isolationUrl, { headers: { Cookie: `bb_session=${userB}` } });
+    expect(b1.status()).toBe(200);
+    const bBody = await b1.text();
+    expect(bBody).toContain(`user=${userB}`);
+    expect(bBody).not.toContain(userA);
+  });
+
+  test('the isolation route is edge-cacheable (origin emits s-maxage)', async ({ request }) => {
+    const isolationUrl = `${hostingUrl}/cache-isolation`;
+    const resp = await request.get(isolationUrl, {
+      headers: { Cookie: `bb_session=probe-${randomBytes(4).toString('hex')}` },
+    });
+    expect(resp.status()).toBe(200);
+    // The origin's Cache-Control (honored by the SSR cache policy) makes the
+    // response cacheable; if this were absent the isolation test above would
+    // never exercise a cache entry.
+    expect(resp.headers()['cache-control'] || '').toMatch(/s-maxage=300/);
+  });
+});
+
 test.describe('Build cache infrastructure', () => {
   test('BuildCacheBucketName output exists when deployed', async () => {
     if (ENV !== 'sandbox') {

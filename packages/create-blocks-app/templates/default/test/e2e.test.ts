@@ -15,10 +15,13 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as ApiType, authApi as AuthApiType } from 'aws-blocks';
+
+// npm is npm.cmd on Windows, which spawn won't resolve without a shell.
+const isWin = process.platform === 'win32';
 
 // Install cookie jar before importing the API client — Node's fetch doesn't
 // persist cookies between requests, which breaks authenticated API calls.
@@ -39,7 +42,8 @@ test.before(async () => {
     server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
+      detached: !isWin,
+      shell: isWin,
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     server.unref();
@@ -65,7 +69,10 @@ test.before(async () => {
 
 test.after(() => {
   if (server?.pid) {
-    try { process.kill(-server.pid, 'SIGTERM'); } catch {}
+    try {
+      if (isWin) spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+      else process.kill(-server.pid, 'SIGTERM');
+    } catch {}
   }
 });
 
@@ -127,7 +134,7 @@ test('todos: list (only own)', async () => {
   assert.ok(list.every(t => t.userId === 'testuser@example.com'));
 });
 
-test('todos: list sorted by priority (secondary index)', async () => {
+test('todos: list sorted by priority (client-side sort)', async () => {
   // Create todos with different priorities
   await api.createTodo('Low priority task', 3);
   await api.createTodo('High priority task', 1);
@@ -141,7 +148,7 @@ test('todos: list sorted by priority (secondary index)', async () => {
   }
 });
 
-test('todos: list sorted by title (secondary index)', async () => {
+test('todos: list sorted by title (client-side sort)', async () => {
   const sorted = await api.listTodos('title');
   assert.ok(sorted.length >= 2);
   const titles = sorted.map(t => t.title);
@@ -193,7 +200,75 @@ test('todos: concurrent toggle → conflict → retry succeeds', async () => {
 });
 
 // ─── Realtime ─────────────────────────────────────────────────────────────────
-// Note: Realtime subscription tests require the middleware to be loaded,
-// which happens automatically when the dev server regenerates client.js.
-// For a manual test: run `npm run dev`, open two browser tabs, and create
-// a todo in one — it should appear in the other immediately.
+// `subscribeTodos()` returns a channel the client hydrates into a live
+// WebSocket subscription (dev server runs a local WS server — no AWS). We
+// subscribe, mutate over the API, and assert the broadcast arrives.
+
+/**
+ * Subscribe to `channel` and return a promise for the NEXT message, plus an
+ * `established` promise that resolves once the server confirms the subscription.
+ * Awaiting `established` before triggering a mutation closes the race where a
+ * publish could fire before the subscribe is confirmed. Rejects after
+ * `timeoutMs` so a dropped broadcast fails loudly instead of hanging.
+ */
+function nextMessage<T>(
+  channel: {
+    subscribe(handler: (message: T) => void): { unsubscribe(): void; established: Promise<void> };
+  },
+  timeoutMs = 5000,
+): { received: Promise<T>; established: Promise<void>; unsubscribe(): void } {
+  let unsubscribe = () => {};
+  let established: Promise<void> = Promise.resolve();
+  const received = new Promise<T>((resolve, reject) => {
+    // Use globalThis to avoid the timers/promises setTimeout shadow (the
+    // template imports { setTimeout } from 'node:timers/promises' at the top).
+    const timer = globalThis.setTimeout(() => reject(new Error('timed out waiting for Realtime message')), timeoutMs);
+    const sub = channel.subscribe((message: T) => {
+      globalThis.clearTimeout(timer);
+      resolve(message);
+    });
+    established = sub.established;
+    unsubscribe = () => { globalThis.clearTimeout(timer); sub.unsubscribe(); };
+  });
+  return { received, established, unsubscribe };
+}
+
+test('realtime: a created todo broadcasts to a subscriber', async (t) => {
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<{ action: string; todoId: string }>(channel);
+  try {
+    await established;
+    const todo = await api.createTodo('Realtime create');
+    const message = await received;
+    assert.strictEqual(message.action, 'created');
+    assert.strictEqual(message.todoId, todo.todoId);
+    await api.deleteTodo(todo.todoId);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test('realtime: an updated todo broadcasts an updated event', async (t) => {
+  const todo = await api.createTodo('Realtime update');
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    await api.deleteTodo(todo.todoId);
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<{ action: string; todoId: string }>(channel);
+  try {
+    await established;
+    await api.toggleTodo(todo.todoId);
+    const message = await received;
+    assert.strictEqual(message.action, 'updated');
+    assert.strictEqual(message.todoId, todo.todoId);
+  } finally {
+    unsubscribe();
+    await api.deleteTodo(todo.todoId);
+  }
+});

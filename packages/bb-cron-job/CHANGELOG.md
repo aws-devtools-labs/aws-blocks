@@ -1,5 +1,106 @@
 # @aws-blocks/bb-cron-job
 
+## 0.3.0
+
+### Minor Changes
+
+- da6d4c7: Scope shared Blocks synth state to the owning backend root (`BlocksStack`/`BlocksBackend`) instead of the enclosing `cdk.Stack`, so two `BlocksBackend`s in one stack — and multiple stacks in one synth — stay independent.
+  
+  - **Registries** (config, compute, dashboard, tracer, VPC requirements) now key on the backend root, resolved by walking the construct tree (`getBlocksRoot`), not on `cdk.Stack.of(scope)`.
+  - **Shared-infra Building Blocks** now provision and dedup their per-backend resources under the backend root: the realtime WebSocket API, the cron scheduler role, and the agent AgentCore runtime grants. Previously a second backend in the same stack could attach to the first's shared infra — most seriously, the agent's Bedrock grants could land on the wrong backend's execution role.
+  - **RawRoute** registrations are tagged with their owning backend root; `Hosting` now adds CloudFront behaviors only for routes owned by the backend its distribution fronts, instead of every route in the process-global registry. The per-owner tag also scopes duplicate-route detection, so two backends may register the same method+path.
+  - **`Hosting` now registers its origin config against the backend it fronts.** `BLOCKS_PUBLIC_ORIGIN` and `CORS_HOSTING_ORIGINS` are written to the backend named by `props.api`, matching the route-behavior owner — not to `this`, which (when two backends share a stack) resolved via the ambient pointer to the last-created backend and left the fronted backend without its origin config.
+  - The config bucket is parented under the resolved backend root rather than read from an ambient process-global, removing a construction-order hazard.
+  - **Stack-scoped exceptions — these deliberately keep a stable logical ID.** The app-setting secret bulk-init (`BlocksSecretsBulk`) and the distributed-table GSI manager provider (`BlocksGsiProvider`) stay direct stack children. Both are referenced by existing resources through immutable fields (a SecureString's physical name; a custom resource's `ServiceToken`), so a logical-ID change would force a replacement that CloudFormation either rejects (`ServiceToken` is immutable → failed upgrade) or that silently deletes the SecureString. Keeping them stack-scoped preserves the logical ID; their deploy-time IAM is still scoped (lazily) to only the parameters/tables that register. (Joins the API Gateway account resource as a documented stack-scoped exception.)
+  
+  **Compatibility.** Single-`BlocksStack` apps (the common case) are byte-identical — no resource replacement. Apps that embed a `BlocksBackend` inside a customer `cdk.Stack` and use **realtime** or **cron** will see those resources re-parent from the stack to the backend construct, which CloudFormation treats as a replacement on upgrade; neither carries persistent data. For realtime specifically, the WebSocket API URL changes and its stack output key changes from `RealtimeWsUrl` to `BlocksRealtimeWsUrl<hash>` — scripts that read that output by name must update. Secret AppSettings and GSI-backed tables are **not** affected (their shared resources stay stack-scoped).
+
+### Patch Changes
+
+- 023f02c: Internal: route the remaining per-package error mint sites through core's `blocksError`, and tighten the brand-coverage guard to per-site. No behavior change; two latent unbranded realtime timeout rejects are now wire-safe.
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [9ebda66]
+- Updated dependencies [78f4396]
+- Updated dependencies [440ecce]
+- Updated dependencies [1a5c18e]
+- Updated dependencies [4ae500e]
+- Updated dependencies [6d764f7]
+- Updated dependencies [5d6656a]
+- Updated dependencies [60616b1]
+- Updated dependencies [a50fb46]
+- Updated dependencies [8a1a4a9]
+- Updated dependencies [38ce80c]
+- Updated dependencies [94a914a]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [005c095]
+- Updated dependencies [b8649dc]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [66f4be2]
+- Updated dependencies [32a4b73]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [e9241b5]
+- Updated dependencies [f1eb149]
+- Updated dependencies [122c49c]
+- Updated dependencies [7c19c4f]
+  - @aws-blocks/core@0.7.0
+  - @aws-blocks/bb-lambda-compute@0.6.0
+  - @aws-blocks/bb-logger@0.2.2
+
+## 0.2.2
+
+### Patch Changes
+
+- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
+  
+  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
+  
+  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
+  
+  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
+  
+  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
+  
+  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
+  
+  ## Breaking change (why `@aws-blocks/core` is a minor)
+  
+  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
+  
+  ```ts
+  // before — message collapses to "Internal error" on the client
+  throw new Error('Todo not found');
+  
+  // after — status, message, and name all reach the client
+  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  ```
+  
+  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+- 7b7a59f: fix(bb-cron-job,hosting): scope service-principal grants to the deploying account
+  
+  - **bb-cron-job**: the EventBridge Scheduler role's trust policy is now limited to
+    schedules in the stack's account and region (`aws:SourceAccount` and an `aws:SourceArn`
+    schedule-group pattern).
+  - **hosting**: removed a redundant CloudFront `kms:Decrypt` statement from the SSE-KMS key
+    policy. The Origin Access Control wiring already grants CloudFront decrypt on the bucket key,
+    conditioned on `AWS:SourceArn` matching the account's CloudFront distributions.
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-lambda-compute@0.5.1
+  - @aws-blocks/bb-logger@0.2.1
+
 ## 0.2.1
 
 ### Patch Changes

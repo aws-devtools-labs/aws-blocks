@@ -38,6 +38,7 @@ import blocks.testapp.Api
 import blocks.testapp.Api.ListTodos
 import blocks.testapp.Api.UpdateTodo
 import blocks.testapp.AuthApi
+import blocks.testapp.AuthState
 import blocks.testapp.Todo
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcClient
@@ -82,9 +83,15 @@ class MainActivity : ComponentActivity() {
 fun OidcAuth(auth: AuthApi) {
     var oidcClient by remember { mutableStateOf<OidcClient?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+
+    // A client that has not signed in this launch reports no user, so the starting point comes
+    // from the server, which verifies the session cookie and answers for earlier launches too.
+    var restoredState by remember { mutableStateOf<AuthState?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
+        // A failure here only means no session to restore, so the screen falls back to sign-in.
+        runCatching { auth.getAuthState() }.onSuccess { restoredState = it }
         oidcClient = runCatching { auth.getClient() }.getOrElse {
             error = it.message
             null
@@ -105,31 +112,39 @@ fun OidcAuth(auth: AuthApi) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(text = "Auth", style = MaterialTheme.typography.headlineMedium)
 
-        when (val state = authState) {
-            is OidcAuthState.SignedIn -> {
-                Text(text = "Signed in as: ${state.user.username}")
-                Button(onClick = {
-                    scope.launch {
-                        error = runCatching { client.signOut() }.exceptionOrNull()?.message
-                    }
-                }) {
-                    Text("Sign Out")
+        // Loading means the client has not signed in or out yet, so it has no opinion and the
+        // restored session stands in. Signing in or out gives it one, and it wins.
+        val username = when (val state = authState) {
+            is OidcAuthState.SignedIn -> state.user.username
+            OidcAuthState.SignedOut -> null
+            OidcAuthState.Loading -> restoredState
+                ?.takeIf { it.state == AuthState.State.SignedIn }
+                ?.user
+                ?.username
+        }
+
+        if (username != null) {
+            Text(text = "Signed in as: $username")
+            Button(onClick = {
+                scope.launch {
+                    error = runCatching { client.signOut() }.exceptionOrNull()?.message
                 }
+            }) {
+                Text("Sign Out")
             }
-            else -> {
-                client.providers.forEach { provider ->
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                error = runCatching { client.signIn(provider) }.exceptionOrNull()?.message
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Sign in with $provider")
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
+        } else {
+            client.providers.forEach { provider ->
+                Button(
+                    onClick = {
+                        scope.launch {
+                            error = runCatching { client.signIn(provider) }.exceptionOrNull()?.message
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Sign in with $provider")
                 }
+                Spacer(modifier = Modifier.height(8.dp))
             }
         }
 

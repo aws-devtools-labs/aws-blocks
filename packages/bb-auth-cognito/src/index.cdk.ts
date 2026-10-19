@@ -24,7 +24,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
 
 import { BuildingBlockScope } from '@aws-blocks/core/cdk';
-import { registerConfig } from '@aws-blocks/core/cdk';
+import { registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -36,8 +36,10 @@ import type {
 	UserAttribute,
 } from './types.js';
 import { envVarNames, makeExternalUserPoolRef } from './types.js';
+import { BB_NAME } from './version.js';
 
 export * from './types.js';
+export { SessionStore, type SessionRecord } from './sessions.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthCognito (CDK)
@@ -73,7 +75,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	private readonly adminOptions?: AdminOptions;
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);
 		this.adminOptions = opts.admin;
@@ -277,7 +279,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 
 		// 4. Session HMAC secret — SSM SecureString via AppSetting. The
 		// construct generates a random value on first deploy, wires the
-		// custom resource, and grants `this.handler` ssm:GetParameter +
+		// custom resource, and grants the shared execution role ssm:GetParameter +
 		// kms:Decrypt automatically. The runtime (`index.aws.ts`) reads it
 		// by instantiating its own `AppSetting` at the same scope path, so
 		// no env var is needed.
@@ -325,6 +327,13 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		// Client-facing actions — work on the signed-in user via their access token.
 		role.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: [
+				// `requireRole` reads live group membership via
+				// AdminListGroupsForUser so admin-driven group changes take
+				// effect (and revocations apply) without a re-login. It is a
+				// client-facing guard available on every pool, so this action is
+				// granted unconditionally — independent of the opt-in `admin`
+				// surface. (The admin slices also list it; IAM dedups.)
+				'cognito-idp:AdminListGroupsForUser',
 				'cognito-idp:SignUp',
 				'cognito-idp:ConfirmSignUp',
 				'cognito-idp:ResendConfirmationCode',
@@ -375,6 +384,40 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		}
 	}
 
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	signUp(..._args: unknown[]): never { return synthGuard('AuthCognito', 'signUp'); }
+	confirmSignUp(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmSignUp'); }
+	autoSignIn(..._args: unknown[]): never { return synthGuard('AuthCognito', 'autoSignIn'); }
+	resendSignUpCode(..._args: unknown[]): never { return synthGuard('AuthCognito', 'resendSignUpCode'); }
+	signIn(..._args: unknown[]): never { return synthGuard('AuthCognito', 'signIn'); }
+	confirmSignIn(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmSignIn'); }
+	signOut(..._args: unknown[]): never { return synthGuard('AuthCognito', 'signOut'); }
+	requireAuth(..._args: unknown[]): never { return synthGuard('AuthCognito', 'requireAuth'); }
+	checkAuth(..._args: unknown[]): never { return synthGuard('AuthCognito', 'checkAuth'); }
+	getCurrentUser(..._args: unknown[]): never { return synthGuard('AuthCognito', 'getCurrentUser'); }
+	fetchAuthSession(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchAuthSession'); }
+	requireRole(..._args: unknown[]): never { return synthGuard('AuthCognito', 'requireRole'); }
+	fetchUserAttributes(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchUserAttributes'); }
+	updatePassword(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updatePassword'); }
+	updateUserAttributes(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updateUserAttributes'); }
+	updateUserAttribute(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updateUserAttribute'); }
+	confirmUserAttribute(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmUserAttribute'); }
+	sendUserAttributeVerificationCode(..._args: unknown[]): never { return synthGuard('AuthCognito', 'sendUserAttributeVerificationCode'); }
+	deleteUser(..._args: unknown[]): never { return synthGuard('AuthCognito', 'deleteUser'); }
+	resetPassword(..._args: unknown[]): never { return synthGuard('AuthCognito', 'resetPassword'); }
+	confirmResetPassword(..._args: unknown[]): never { return synthGuard('AuthCognito', 'confirmResetPassword'); }
+	setUpTOTP(..._args: unknown[]): never { return synthGuard('AuthCognito', 'setUpTOTP'); }
+	verifyTOTPSetup(..._args: unknown[]): never { return synthGuard('AuthCognito', 'verifyTOTPSetup'); }
+	updateMFAPreference(..._args: unknown[]): never { return synthGuard('AuthCognito', 'updateMFAPreference'); }
+	fetchMFAPreference(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchMFAPreference'); }
+	fetchDevices(..._args: unknown[]): never { return synthGuard('AuthCognito', 'fetchDevices'); }
+	rememberDevice(..._args: unknown[]): never { return synthGuard('AuthCognito', 'rememberDevice'); }
+	forgetDevice(..._args: unknown[]): never { return synthGuard('AuthCognito', 'forgetDevice'); }
+	startPasskeyRegistration(..._args: unknown[]): never { return synthGuard('AuthCognito', 'startPasskeyRegistration'); }
+	completePasskeyRegistration(..._args: unknown[]): never { return synthGuard('AuthCognito', 'completePasskeyRegistration'); }
+	listPasskeys(..._args: unknown[]): never { return synthGuard('AuthCognito', 'listPasskeys'); }
+	deletePasskey(..._args: unknown[]): never { return synthGuard('AuthCognito', 'deletePasskey'); }
+	get admin(): never { return synthGuard('AuthCognito', 'admin'); }
 }
 
 /**

@@ -7,6 +7,7 @@
  * so an invalid `rate()`/`cron()` fails fast instead of being rejected by
  * EventBridge minutes into a deploy).
  */
+import { blocksError } from '@aws-blocks/core';
 import { CronJobErrors } from './errors.js';
 
 /** Parsed rate expression. */
@@ -38,9 +39,7 @@ function scheduleError(expr: string): Error {
 	const detail = /^rate\s*\(/.test(expr)
 		? 'a rate must be "rate(<n> minute|minutes|hour|hours|day|days)" with n ≥ 1 (EventBridge’s minimum is 1 minute; seconds are not supported)'
 		: 'expected "rate(<n> minutes|hours|days)" or a 6-field "cron(...)" expression';
-	const err = new Error(`${CronJobErrors.InvalidSchedule}: "${expr}" is not a valid schedule — ${detail}`);
-	err.name = CronJobErrors.InvalidSchedule;
-	return err;
+	return blocksError(CronJobErrors.InvalidSchedule, `"${expr}" is not a valid schedule — ${detail}`);
 }
 
 /**
@@ -90,13 +89,12 @@ export function parseScheduleForMock(expr: string): ParsedSchedule {
 		} catch {
 			throw err; // a non-marker field is also invalid → keep InvalidSchedule
 		}
-		const e = new Error(
-			`${CronJobErrors.ScheduleNotSupported}: "${expr}" is valid for EventBridge and will deploy, ` +
+		throw blocksError(
+			CronJobErrors.ScheduleNotSupported,
+			`"${expr}" is valid for EventBridge and will deploy, ` +
 				'but the local mock cannot simulate it (advanced cron forms like L/W/#, or a year field). ' +
 				'Deploy to a sandbox to exercise it.',
 		);
-		e.name = CronJobErrors.ScheduleNotSupported;
-		throw e;
 	}
 }
 
@@ -173,9 +171,7 @@ export function validateTimezone(tz: string): void {
 	try {
 		Intl.DateTimeFormat('en-US', { timeZone: tz });
 	} catch {
-		const err = new Error(`${CronJobErrors.InvalidTimezone}: "${tz}" is not a valid IANA timezone`);
-		err.name = CronJobErrors.InvalidTimezone;
-		throw err;
+		throw blocksError(CronJobErrors.InvalidTimezone, `"${tz}" is not a valid IANA timezone`);
 	}
 }
 

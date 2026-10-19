@@ -13,5 +13,5 @@ class OidcExchangeException(message: String, cause: Throwable? = null) :
 class OidcCallbackException(message: String) :
     OidcException(message)
 
-class OidcCancelledException :
-    OidcException("Sign-in cancelled")
+class OidcCancelledException(message: String = "Sign-in cancelled") :
+    OidcException(message)

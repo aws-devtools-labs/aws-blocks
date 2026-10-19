@@ -319,9 +319,18 @@ function createChatForConvo(conversationId: string) {
 	activeConvoId = conversationId;
 	activeChat = createChat({
 		transport: realtimeTransport({
-			subscribe: async (channelId, handler) => {
+			subscribe: async (channelId, handlerOrOptions) => {
 				const { channel } = await api.agentGetChannel(channelId);
-				return channel.subscribe(handler);
+				// channel.subscribe is overloaded (bare handler | options object). Branch on
+				// the shape so each arm narrows to one overload and the options form
+				// (onReconnect/onDisconnect) reaches the channel intact.
+				// NOTE: both arms pass the SAME value (`handlerOrOptions`) — the branch is NOT
+				// a transform, it exists ONLY to select a distinct overload. The union arg
+				// matches NEITHER overload, so a single direct `channel.subscribe(handlerOrOptions)`
+				// does not type-check; narrowing via `typeof` first is required.
+				return typeof handlerOrOptions === 'function'
+					? channel.subscribe(handlerOrOptions)
+					: channel.subscribe(handlerOrOptions);
 			},
 			sendMessage: async (channelId, message, convId) => {
 				await api.agentStream(message, convId ?? undefined, channelId);
@@ -330,6 +339,14 @@ function createChatForConvo(conversationId: string) {
 				await api.agentResume(channelId, responses.map(r => ({ interruptId: r.interruptId, approved: r.approved ?? false, trust: r.trust, toolName: r.toolName, input: r.input })), convId ?? undefined);
 			},
 		}),
+		// Re-mint a fresh channel descriptor on reconnect so long turns outlive the channel
+		// (~1h) / connect (~2h) token TTLs. createChat binds this to the turn's resolved
+		// channelId and forwards the bound form to the transport, which the Realtime channel
+		// invokes before each reconnect. Resolves to the RAW descriptor (wire object with
+		// token fields) for the channel actually in use — spread cast-free, and DO NOT
+		// override its `channel` key (agentGetRawDescriptor already carries the concrete full
+		// channel path).
+		refresh: async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' }),
 		api: {
 			createConversation: async () => ({ conversationId }),
 			getConversation: async (id) => await api.agentGetConversation(id),

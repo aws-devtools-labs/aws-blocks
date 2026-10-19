@@ -1,5 +1,12 @@
+import 'package:blocks_codegen/src/dart_source.dart';
+import 'package:blocks_codegen/src/diagnostics.dart';
+
 import 'builder.dart';
 import 'model.dart';
+
+final _namespaceSegments = RegExp(
+  r'^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$',
+);
 
 /// Generates Dart source code from a [CodegenModel].
 class DartCodeGenerator {
@@ -8,15 +15,23 @@ class DartCodeGenerator {
   /// Emits the complete contents of one generated `.blocks.dart` library.
   ///
   /// Output is deterministic for a given [model], so it is safe to check in
-  /// and diff.
+  /// and diff. Throws a [FormatException] when two namespaces normalise to one
+  /// Dart name, or when a bound package type name is also declared by the
+  /// emitted library.
   String generate(CodegenModel model) {
+    _checkNamespacesDistinct(model);
     final buf = StringBuffer();
     buf.writeln('// GENERATED CODE — DO NOT MODIFY BY HAND');
     buf.writeln('// Generator: blocks-codegen');
-    buf.writeln('// Source: ${model.title} v${model.version}');
+    buf.writeln(
+      '// Source: ${escapeForDiagnostic(model.title)} '
+      'v${escapeForDiagnostic(model.version)}',
+    );
     buf.writeln('// ignore_for_file: constant_identifier_names');
     buf.writeln();
-    buf.writeln("import 'package:blocks_runtime/blocks_runtime.dart';");
+    for (final directive in _imports(model)) {
+      buf.writeln(directive);
+    }
     buf.writeln(
       "export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;",
     );
@@ -47,6 +62,19 @@ class DartCodeGenerator {
     if (hasOidc) {
       buf.writeln(
         "export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;",
+      );
+    }
+
+    // Re-export UnknownTransferable for unbound top-level types and operation
+    // results.
+    final hasUnknownTransferable =
+        model.types.values.any(_isUnboundTransferable) ||
+        model.namespaces.any(
+          (ns) => ns.operations.any((op) => _isUnboundTransferable(op.result)),
+        );
+    if (hasUnknownTransferable) {
+      buf.writeln(
+        "export 'package:blocks_runtime/blocks_runtime.dart' show UnknownTransferable;",
       );
     }
     buf.writeln();
@@ -127,7 +155,9 @@ class DartCodeGenerator {
     // Emit Blocks facade
     buf.writeln(_emitBlocksFacade(model.namespaces, model.servers));
 
-    return buf.toString();
+    final output = buf.toString();
+    _checkBoundTypesNotShadowed(model, output);
+    return output;
   }
 
   String _emitType(
@@ -452,8 +482,40 @@ class DartCodeGenerator {
     return buf.toString();
   }
 
+  void _checkBoundTypesNotShadowed(CodegenModel model, String output) {
+    final declared = declaredTypeNames(output);
+    for (final ns in model.namespaces) {
+      for (final op in ns.operations) {
+        final bound = _boundTransferable(op.result);
+        final typeName = bound?.binding?.typeName;
+        if (typeName == null || !declared.contains(typeName)) continue;
+        throw FormatException(
+          "Binding for tag '${escapeForDiagnostic(bound!.blocksType)}' exports "
+          "'$typeName', but the generated client also declares $typeName",
+        );
+      }
+    }
+  }
+
+  List<String> _imports(CodegenModel model) {
+    final shown = <String, Set<String>>{};
+    for (final ns in model.namespaces) {
+      for (final op in ns.operations) {
+        final binding = _boundTransferable(op.result)?.binding;
+        if (binding == null) continue;
+        (shown[binding.importUri] ??= <String>{}).add(binding.typeName);
+      }
+    }
+    final directives = ["import 'package:blocks_runtime/blocks_runtime.dart';"];
+    for (final entry in shown.entries) {
+      final names = entry.value.toList()..sort();
+      directives.add("import '${entry.key}' show ${names.join(', ')};");
+    }
+    return directives..sort();
+  }
+
   String _emitNamespace(Namespace ns, Map<String, ResolvedType> allTypes) {
-    final className = '${_capitalize(ns.name)}Api';
+    final className = _namespaceClass(ns.name);
     final buf = StringBuffer();
     buf.writeln('class $className {');
     buf.writeln('  final BlocksClient _client;');
@@ -461,7 +523,15 @@ class DartCodeGenerator {
 
     for (final op in ns.operations) {
       buf.writeln();
-      final returnType = _dartTypeStr(op.result, allTypes);
+      final unboundResult = _isUnboundTransferable(op.result)
+          ? op.result as TransferableType
+          : null;
+      final boundResult = _boundTransferable(op.result);
+      final returnType = switch ((unboundResult, boundResult)) {
+        (final TransferableType _, _) => 'UnknownTransferable',
+        (_, final TransferableType bound) => _bindingDartType(bound, allTypes),
+        _ => _dartTypeStr(op.result, allTypes),
+      };
       final isVoid = returnType == 'void';
       final asyncReturn = isVoid ? 'Future<void>' : 'Future<$returnType>';
       final methodName = _escapeIdentifier(op.name);
@@ -511,9 +581,17 @@ class DartCodeGenerator {
         buf.writeln(
           "    final result = await _client.call('${op.fullName}', $paramsArg);",
         );
-        buf.writeln(
-          '    return ${_deserializeExpr('result', op.result, allTypes)};',
-        );
+        final deserExpr = switch ((unboundResult, boundResult)) {
+          (final TransferableType unbound, _) =>
+            'UnknownTransferable.fromJson(result, expectedTag: '
+                '${_dartStringLiteral(unbound.blocksType)})',
+          (_, final TransferableType bound) => _bindingFactoryCall(
+            bound,
+            allTypes,
+          ),
+          _ => _deserializeExpr('result', op.result, allTypes),
+        };
+        buf.writeln('    return $deserExpr;');
       }
       buf.writeln('  }');
     }
@@ -542,7 +620,7 @@ class DartCodeGenerator {
     buf.writeln('class Blocks {');
     for (final ns in namespaces) {
       final ident = _escapeIdentifier(ns.name);
-      buf.writeln('  late final ${_capitalize(ns.name)}Api $ident;');
+      buf.writeln('  late final ${_namespaceClass(ns.name)} $ident;');
     }
     buf.writeln();
     final hasDefault = servers.isNotEmpty;
@@ -564,7 +642,7 @@ class DartCodeGenerator {
     }
     for (final ns in namespaces) {
       final ident = _escapeIdentifier(ns.name);
-      buf.writeln('    $ident = ${_capitalize(ns.name)}Api(client);');
+      buf.writeln('    $ident = ${_namespaceClass(ns.name)}(client);');
     }
     buf.writeln('  }');
     buf.writeln('}');
@@ -619,9 +697,10 @@ class DartCodeGenerator {
       );
     }
     if (c.pattern != null) {
+      final literal = _regExpLiteral(c.pattern!);
       final cond = optional
-          ? "$ident == null || RegExp(r'${c.pattern}').hasMatch($ident)"
-          : "RegExp(r'${c.pattern}').hasMatch($ident)";
+          ? '$ident == null || RegExp($literal).hasMatch($ident)'
+          : 'RegExp($literal).hasMatch($ident)';
       stmts.add(
         "if (!($cond)) throw ArgumentError('$ident must match pattern');",
       );
@@ -710,6 +789,8 @@ class DartCodeGenerator {
     List<ResolvedType> typeArgs,
     Map<String, ResolvedType> allTypes,
   ) {
+    // Tags outside the registry stay dynamic even if a switch arm exists.
+    if (!knownTransferableTags.contains(blocksType)) return 'dynamic';
     return switch (blocksType) {
       'realtime/channel' =>
         'RealtimeChannel<${typeArgs.isNotEmpty ? _dartTypeStr(typeArgs[0], allTypes) : 'dynamic'}>',
@@ -718,6 +799,32 @@ class DartCodeGenerator {
       'oidc/client' => 'OidcClient',
       _ => 'dynamic',
     };
+  }
+
+  /// The object message type carried by [t] (a record or sealed class, named
+  /// directly or via `$ref`, including the nullable `T?` form) unwrapped to
+  /// its non-nullable form; or null when [t] is not an object the runtime's
+  /// `Map`-only deserializer can decode. Shared by [_channelMessageType] and
+  /// [_mapValueFromJson] so the "unwrap nullable, resolve `$ref`, is it
+  /// record/sealed" logic cannot drift between them.
+  ResolvedType? _objectMessageType(
+    ResolvedType t,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    final arg = t is NullableType ? t.inner : t;
+    final resolved = arg is SchemaReference ? allTypes[arg.name] : arg;
+    return resolved is RecordType || resolved is SealedClassType ? arg : null;
+  }
+
+  /// The channel message type to hydrate, or null to leave the value raw. Only
+  /// an object type (record/sealed, incl. via `$ref`, and nullable `T?`) is
+  /// decodable by the runtime's `Map`-only deserializer.
+  ResolvedType? _channelMessageType(
+    List<ResolvedType> typeArgs,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    if (typeArgs.isEmpty) return null;
+    return _objectMessageType(typeArgs[0], allTypes);
   }
 
   // --- fromJson expression helpers ---
@@ -1031,8 +1138,34 @@ class DartCodeGenerator {
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
       SealedClassType(name: final name) =>
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
+      // Transferable result: `_nullableTransferable` wraps a hydrating
+      // deserializer with the `== null` guard, and collapses to a bare accessor
+      // when the value stays raw (a non-hydratable channel, or an unbound tag),
+      // avoiding a redundant `result == null ? null : result`.
+      TransferableType(blocksType: final kt, typeArgs: final args) =>
+        _nullableTransferable(accessor, kt, args, allTypes),
       _ => accessor,
     };
+  }
+
+  /// Wraps a bound transferable's deserializer with the `== null` guard, but
+  /// collapses `x == null ? null : x` to `x` when the transferable itself stays
+  /// raw (a non-hydratable channel message), so the nullable arm emits a bare
+  /// accessor rather than a redundant throwing ternary.
+  String _nullableTransferable(
+    String accessor,
+    String blocksType,
+    List<ResolvedType> typeArgs,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    final inner = _deserializeTransferable(
+      accessor,
+      blocksType,
+      typeArgs,
+      allTypes,
+    );
+    if (inner == accessor) return accessor;
+    return '$accessor == null ? null : $inner';
   }
 
   /// Per-value deserialization for a `Map<String, V>` entry value `v` (dynamic).
@@ -1058,18 +1191,10 @@ class DartCodeGenerator {
           return '$n.fromJson($v as String)';
         }
         return '$v as $n';
-      case NullableType(inner: final inner):
-        final innerName = switch (inner) {
-          SealedClassType(name: final n) => n,
-          RecordType(name: final n) => n,
-          SchemaReference(name: final n)
-              when allTypes[n] is RecordType ||
-                  allTypes[n] is SealedClassType =>
-            n,
-          _ => null,
-        };
-        if (innerName != null) {
-          return '$v == null ? null : $innerName.fromJson($v as Map<String, dynamic>)';
+      case NullableType():
+        final obj = _objectMessageType(valueType, allTypes);
+        if (obj != null) {
+          return '$v == null ? null : ${_dartTypeStr(obj, allTypes)}.fromJson($v as Map<String, dynamic>)';
         }
         return '$v as ${_dartTypeStr(valueType, allTypes)}';
       default:
@@ -1106,20 +1231,45 @@ class DartCodeGenerator {
     return '$name.fromJson($accessor as Map<String, dynamic>)';
   }
 
+  /// A null return and the builder's `AWSBLOCKS-NATIVE-002` diagnostic both
+  /// derive from [channelMessageHydratable], so the two cannot disagree.
+  String? _messageDecoder(
+    List<ResolvedType> typeArgs,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    if (!channelMessageHydratable(typeArgs, allTypes)) return null;
+    final msg = _channelMessageType(typeArgs, allTypes);
+    if (msg != null) {
+      return '(json) => ${_dartTypeStr(msg, allTypes)}.fromJson(json)';
+    }
+    final arg = typeArgs.isEmpty ? null : typeArgs[0];
+    final unwrapped = arg is NullableType ? arg.inner : arg;
+    // A `Map` message is decodable by the `Map`-only runtime: rebuild it
+    // per-value through the shared map decoder.
+    if (unwrapped is MapType) {
+      return '(json) => json.map((k, v) => MapEntry(k, '
+          "${_mapValueFromJson('v', unwrapped.valueType, allTypes)}))";
+    }
+    // A `dynamic` message (incl. `dynamic?` and the absent arg), so an
+    // identity decoder type-checks.
+    return '(json) => json';
+  }
+
   String _deserializeTransferable(
     String accessor,
     String blocksType,
     List<ResolvedType> typeArgs,
     Map<String, ResolvedType> allTypes,
   ) {
+    // Same registry gate as _transferableDartType: an unknown tag isn't
+    // hydrated to a concrete factory.
+    if (!knownTransferableTags.contains(blocksType)) return accessor;
     final cast = '$accessor as Map<String, dynamic>';
     return switch (blocksType) {
       'realtime/channel' => () {
-        if (typeArgs.isEmpty) {
-          return 'RealtimeChannel.fromJson($cast, (json) => json)';
-        }
-        final argType = _dartTypeStr(typeArgs[0], allTypes);
-        return 'RealtimeChannel.fromJson($cast, (json) => $argType.fromJson(json))';
+        final decoder = _messageDecoder(typeArgs, allTypes);
+        if (decoder == null) return accessor;
+        return 'RealtimeChannel.fromJson($cast, $decoder)';
       }(),
       'file-bucket/download' => 'FileDownloadHandle.fromJson($cast)',
       'file-bucket/upload' => 'FileUploadHandle.fromJson($cast)',
@@ -1127,6 +1277,92 @@ class DartCodeGenerator {
         'OidcClient.fromJson($cast, baseUrl: _client.baseUrl, tokenStore: _client.tokenStore, sessionStore: _client.sessionStore)',
       _ => accessor,
     };
+  }
+
+  TransferableType? _boundTransferable(ResolvedType type) =>
+      type is TransferableType && type.binding != null ? type : null;
+
+  String _bindingDartType(
+    TransferableType type,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    final binding = type.binding!;
+    if (binding.genericArity == 0) return binding.typeName;
+    return '${binding.typeName}<${_dartTypeStr(type.typeArgs[0], allTypes)}>';
+  }
+
+  /// `Type.fromBlocksDescriptor(validated[, decoder])`, the call fixed by the
+  /// `blocks-transferable-v1` ABI. `_withDecodableBinding` already dropped any
+  /// arity-one binding whose payload has no decoder, over the same type map
+  /// this receives as `allTypes`, so the `!` holds.
+  String _bindingFactoryCall(
+    TransferableType type,
+    Map<String, ResolvedType> allTypes,
+  ) {
+    final binding = type.binding!;
+    final descriptor =
+        'validateTransferableDescriptor(result, expectedTag: '
+        '${_dartStringLiteral(type.blocksType)})';
+    if (binding.genericArity == 0) {
+      return '${binding.typeName}.fromBlocksDescriptor($descriptor)';
+    }
+    final decoder = _messageDecoder(type.typeArgs, allTypes)!;
+    return '${_bindingDartType(type, allTypes)}'
+        '.fromBlocksDescriptor($descriptor, $decoder)';
+  }
+
+  /// A bare transferable whose tag has no runtime binding (the fallback case).
+  /// A nullable or list-wrapped one is out of scope: `dynamic?` and
+  /// `List<dynamic>`.
+  bool _isUnboundTransferable(ResolvedType type) =>
+      type is TransferableType && transferableIsUnbound(type);
+
+  /// Throws a [FormatException] when two namespaces normalise to one Dart
+  /// name. `api.foo` and `apiFoo` both yield `ApiFooApi`. Only the spec author
+  /// can repair it; auto-suffixing would silently rename their API surface.
+  void _checkNamespacesDistinct(CodegenModel model) {
+    final claimed = <String, String>{};
+    for (final ns in model.namespaces) {
+      if (!_namespaceSegments.hasMatch(ns.name)) {
+        throw FormatException(
+          "Namespace '${escapeForDiagnostic(ns.name)}' cannot name the Dart "
+          'class and field it emits; this generator derives those from '
+          'dot-separated ASCII segments',
+        );
+      }
+      final className = _namespaceClass(ns.name);
+      final prior = claimed[className];
+      if (prior != null) {
+        throw FormatException(
+          "Namespaces '${escapeForDiagnostic(prior)}' and "
+          "'${escapeForDiagnostic(ns.name)}' both generate $className; "
+          'rename a method so they differ by more than punctuation',
+        );
+      }
+      claimed[className] = ns.name;
+    }
+  }
+
+  /// A quote or line terminator would end a raw literal and let the rest of the
+  /// value become code. Those fall back to an escaped literal, where doubling
+  /// the backslashes leaves the regex identical.
+  String _regExpLiteral(String pattern) => RegExp(r"['\n\r]").hasMatch(pattern)
+      ? _dartStringLiteral(pattern)
+      : "r'$pattern'";
+
+  String _namespaceClass(String name) =>
+      '${name.split('.').map(_capitalize).join()}Api';
+
+  /// Single-quoted Dart string literal for [value], escaping `\`, `$`, `'`,
+  /// `\n`, and `\r`.
+  String _dartStringLiteral(String value) {
+    final escaped = value
+        .replaceAll(r'\', r'\\')
+        .replaceAll(r'$', r'\$')
+        .replaceAll("'", r"\'")
+        .replaceAll('\n', r'\n')
+        .replaceAll('\r', r'\r');
+    return "'$escaped'";
   }
 
   String _tupleFromJson(
@@ -1279,8 +1515,13 @@ class DartCodeGenerator {
     'yield',
   };
 
-  String _escapeIdentifier(String name) =>
-      _dartKeywords.contains(name) ? '$name\$' : name;
+  String _escapeIdentifier(String name) {
+    final parts = name.split('.');
+    final ident = parts.length == 1
+        ? name
+        : parts.first + parts.skip(1).map(_capitalize).join();
+    return _dartKeywords.contains(ident) ? '$ident\$' : ident;
+  }
 
   String _capitalize(String s) =>
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
