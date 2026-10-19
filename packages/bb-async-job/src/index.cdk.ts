@@ -35,6 +35,7 @@ export type {
 	AsyncJobTransition,
 	WaitUntilCompleteOptions,
 } from './types.js';
+import { BB_NAME } from './version.js';
 
 /** SQS event source limits: a batch may exceed 10 only when a batching window is set. */
 const MAX_BATCH_SIZE_WITHOUT_WINDOW = 10;
@@ -81,7 +82,7 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 	public readonly dlq: Queue;
 
 	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
 
 		// Assign the requested compute (if any) before anything reads `this.compute`
 		// below. The public option is a `ComputeProvider` — either the `Compute`
@@ -243,4 +244,8 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 	waitUntilComplete(_jobId: string, _options?: WaitUntilCompleteOptions): Promise<AsyncJobStatus> {
 		return synthGuard('AsyncJob', 'waitUntilComplete');
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	submit(..._args: unknown[]): never { return synthGuard('AsyncJob', 'submit'); }
+	submitBatch(..._args: unknown[]): never { return synthGuard('AsyncJob', 'submitBatch'); }
 }

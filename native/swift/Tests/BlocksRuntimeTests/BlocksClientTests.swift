@@ -199,4 +199,25 @@ final class BlocksClientTests: XCTestCase {
         // (We can't easily verify the cookie header without another request,
         // but at least verify it doesn't crash)
     }
+
+    // MARK: - Base Host
+
+    func testBaseHostCanBeSetAndReadFromConcurrentTasks() async {
+        XCTAssertEqual(BlocksClient.baseHost, "localhost")
+        defer { BlocksClient.baseHost = "localhost" }
+        let hosts = (0 ..< 100).map { "192.168.1.\($0)" }
+
+        let reads = await withTaskGroup(of: String.self) { group in
+            for host in hosts {
+                group.addTask {
+                    BlocksClient.baseHost = host
+                    return BlocksClient.baseHost
+                }
+            }
+            return await group.reduce(into: [String]()) { $0.append($1) }
+        }
+
+        XCTAssertEqual(reads.filter { !hosts.contains($0) }, [])
+        XCTAssertTrue(hosts.contains(BlocksClient.baseHost))
+    }
 }

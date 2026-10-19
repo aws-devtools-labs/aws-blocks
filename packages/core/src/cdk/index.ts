@@ -35,7 +35,7 @@ import { finalizeConfigRegistry } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
 import type { SharedGateway } from './shared-gateway.js';
-import { addBlocksStackMetadata } from './stack-metadata.js';
+import { addBlocksStackMetadata, recordBuildingBlock } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import { registerVpcRequirements } from './vpc-requirements-registry.js';
@@ -318,6 +318,11 @@ export class Scope extends Construct {
 		this.id = id;
 		this.parent = parent;
 		this.root = this.resolveRoot();
+		if (options?.bbName) {
+			this.bbName = options.bbName;
+			this.bbVersion = options.bbVersion;
+			recordBuildingBlock(this, options.bbName);
+		}
 	}
 
 	/**

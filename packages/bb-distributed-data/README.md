@@ -178,7 +178,8 @@ try {
 
 ## Testing OCC Conflicts
 
-The mock provides a `simulateConflict()` helper for unit testing:
+The mock provides a `simulateConflict()` helper for unit testing. It only works against the local mock: in the
+deployed AWS runtime it throws, and during `cdk synth` it throws the usual synth-time error.
 
 ```typescript
 db.simulateConflict(); // next commit will fail with SerializationFailureException
