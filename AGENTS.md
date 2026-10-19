@@ -147,7 +147,7 @@ async get(key: string): Promise<T | null> {
 import { Scope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 static fromExisting(tableName: string): ExternalTableRef { return { __brand: 'ExternalTableRef', tableName }; }
 constructor(...) {
-  super(id, { parent: scope });                                          // no bbName/bbVersion here
+  super(id, { parent: scope, bbName: BB_NAME });                         // bbName records the block on the stack
   this.table = new Table(this, 'table', { tableName: this.fullId.substring(0, 255) /* … */ });
   this.table.grantReadWriteData(this.executionRole);                     // grant on the SHARED execution role
   registerConfig(this, 'BLOCKS_THING_FLAG', '…');                        // extra config only (not addEnvironment)

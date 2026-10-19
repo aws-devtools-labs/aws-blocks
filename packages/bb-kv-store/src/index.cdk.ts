@@ -9,6 +9,7 @@ import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 import { TTL_ATTRIBUTE } from './ttl.js';
+import { BB_NAME } from './version.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { KVStoreErrors } from './errors.js';
@@ -47,7 +48,7 @@ export class KVStore extends BuildingBlockScope {
 	}
 
 	constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<unknown>) {
-		super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
 
 		if (options?.table) {
 			// `fromExisting`: don't provision; bind to the pre-existing table by name

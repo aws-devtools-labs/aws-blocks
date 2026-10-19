@@ -16,6 +16,7 @@ export type {
 	ExternalMetricsRef,
 	MetricsEmitter,
 } from './types.js';
+import { BB_NAME } from './version.js';
 
 /**
  * CDK construct for Metrics.
@@ -32,7 +33,7 @@ export class Metrics extends Scope {
 	readonly defaultDimensions: Readonly<Record<string, string>>;
 
 	constructor(scope: ScopeParent, id: string, options?: MetricsOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME });
 		this.namespace = options?.metrics?.namespace
 			?? options?.namespace
 			?? this.fullId;
