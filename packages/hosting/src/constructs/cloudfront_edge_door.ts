@@ -11,6 +11,12 @@
  * the infra. The internal edge → router hop is HTTP; the viewer hop is HTTPS at
  * the edge.
  *
+ * Except the static routes: the edge serves those itself, straight from the
+ * private assets bucket (origin access control, the `cf` helpers' S3 origin
+ * and asset behavior), so only the API and the dynamic routes reach the
+ * router (see `planEdgeBehaviors`). A site without a server is served from S3
+ * entirely, but for its API.
+ *
  * The router admits only this edge: it hands over (in its `originHandle`) the
  * origin-verify header every request must carry, which the edge sets as the
  * origin's custom headers, and — for an internal ALB — the balancer itself,
@@ -36,7 +42,7 @@ import {
   CachePolicy,
   CacheQueryStringBehavior,
   Distribution,
-  Function as CloudFrontFunction,
+  type Function as CloudFrontFunction,
   FunctionEventType,
   OriginProtocolPolicy,
   OriginRequestPolicy,

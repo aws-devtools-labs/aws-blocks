@@ -21,7 +21,13 @@ distribution as before.
   root-relative links miss, so synth fails without one
   (`RestFrontDoorNeedsDomainError`).
 - `{ kind: 'stacked', edge: 'cloudfront', router: 'alb', vpc?, internal? }`: a
-  thin CloudFront edge in front of a full ALB router.
+  CloudFront edge in front of a full ALB router. The edge serves the app's
+  static routes straight from the private S3 bucket (origin access control);
+  the API and the dynamic routes go through the ALB. The ALB admits only the
+  edge: every listener rule requires a per-deploy secret header the edge sends
+  (otherwise 403), and its security group admits only the CloudFront
+  origin-facing managed prefix list, or, with `internal: true`, only the
+  CloudFront VPC origin the edge reaches it through.
 - `'none'`: no front door. A static site or SPA is served straight from an S3
   website bucket over HTTP. An app with a server fails synth.
 - `{ kind: 'custom', door, wiringCheck? }`: your own door.
@@ -67,13 +73,30 @@ the kind and the prop.
 The ALB and API Gateway doors serve static files through an asset-proxy Lambda
 that answers like the CloudFront door: a missing file returns 404 (the SPA
 fallback applies only to paths without an extension), and each file is served
-with the `Cache-Control` it was uploaded with.
+with the `Cache-Control` it was uploaded with. The proxies apply the app's
+redirects (wildcard tail spliced, exact status), per-pattern response headers
+and error pages with the CloudFront door's semantics; synth names what they
+can't reach (server-rendered and image responses, and API Gateway's natively
+proxied API) with the warning `@aws-blocks/hosting:DoorRulesNotApplied`. A file
+is returned base64-encoded in the Lambda response, so it is capped at about
+750 KB behind the ALB (1 MB response) and 4.5 MB behind API Gateway (Lambda's
+6 MB response); synth lists every larger build asset
+(`@aws-blocks/hosting:AssetExceedsProxyLimit`). Past CloudFront's 25 cache
+behaviors, the stacked door's edge serves the remaining static routes through
+the ALB and warns (`@aws-blocks/hosting:StackedEdgeBehaviorLimit`).
+
+`compute: { type: 'web-function' }` works with the CloudFront door only; synth
+fails with `UnsupportedComputeFrontDoorError` for any other door.
 
 The server is built for the door in front of it. Behind a door that invokes it
 without streaming (the ALB, the stacked door's ALB router, the API Gateway HTTP
 API), a Lambda Web Adapter server (Astro, Nuxt, SvelteKit) answers buffered.
 Next.js builds target a streaming API Gateway REST integration, so serve
-Next.js through CloudFront, the `'rest'` door, or a door that streams.
+Next.js through CloudFront, the `'rest'` door, or a door that streams. Behind
+the ALB, the server answers with multi-value headers (so every `Set-Cookie`
+survives), and a native handler server (Nitro's `aws-lambda` preset) runs
+behind a small ALB event shim that maps the ALB event to the API Gateway REST
+shape (method, decoded query, base64 body) and the response back.
 
 A bring-your-own door is one function:
 `defineFrontDoor({ service, serverResponse?, build(scope, input) })` from
@@ -103,7 +126,8 @@ The door returns `{ url, originHandle?, publicBucket?, onUpload? }`.
   with `MissingFrontDoorUrlError`.
 - `originHandle` is derived from `url` when the door doesn't return one.
 - `onUpload` runs after the asset uploads are declared, so the door can add
-  something that runs after them, such as a cache invalidation.
+  something that runs after them, such as a cache invalidation. What it adds
+  also waits for the runtime `config.json` upload.
 
 The `cf.*` helpers (`cf.origin`, `cf.behaviors`, `cf.apiBehaviors`,
 `cf.redirects`, `cf.headers`, `cf.errorPages`, `cf.invalidate`) build
@@ -121,9 +145,12 @@ door's own tests.
 
 The built-in doors (`cloudFrontDoor`, `albDoor`, `apiGatewayDoor`,
 `s3WebsiteDoor`, `cloudFrontEdgeDoor`) are written the same way. The pieces they
-share are exported for your own doors: `generateAlbAssetProxyCode`,
-`generateApiGwAssetProxyCode`, `backendBaseUrl`, `coalesceRoutes`,
-`routeSpecificity` and `createSecurityHeadersPolicy`.
+share are exported for your own doors: `generateAlbAssetProxyCode` and
+`generateApiGwAssetProxyCode` (with `AssetProxyOptions`: the app's redirects,
+headers and error pages), `generateAlbApiProxyCode`, `backendBaseUrl`,
+`coalesceRoutes`, `routeSpecificity`, `createSecurityHeadersPolicy`, and
+`ORIGIN_VERIFY_HEADER` / `CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST` for a door that
+stacks CloudFront over its own ALB.
 
 Auth works behind every door. CORS origin matching is case-insensitive, and the
 session cookie drops `Secure` when the deployed front door serves over plain

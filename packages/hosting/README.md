@@ -431,12 +431,18 @@ prop (on `HostingConstruct`, or on `Hosting` from `@aws-blocks/core`):
 | omitted / `'cloudfront'` / `{ features }` | The global CloudFront CDN (default): edge cache, WAF, custom domain, streaming, skew protection. |
 | `{ kind: 'alb' }` | A regional Application Load Balancer (no CDN): asset-proxy Lambda, SSR/image Lambda targets, same-origin API forwarder; regional WAF, access logs and alarms. SSR responses are buffered. |
 | `{ kind: 'apiGateway', api?: 'http' \| 'rest' }` | Amazon API Gateway (no CDN, no VPC, scale-to-zero). `'http'` (default) buffers SSR responses. `'rest'` streams them, but needs a custom `domain`: its own URL carries the `/prod` stage, which the app's root-relative links miss, so synth fails without one (`RestFrontDoorNeedsDomainError`). |
-| `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` | A thin CloudFront edge in front of a full ALB router (`Hosting` from `@aws-blocks/core` only). |
+| `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` | A CloudFront edge in front of a full ALB router (`Hosting` from `@aws-blocks/core` only): static routes come straight from S3 at the edge, the API and dynamic routes go through the ALB, which admits only the edge. |
 | `'none'` | No front door: a public S3 website bucket (HTTP only, static sites only; the client calls the API cross-origin). |
 | `{ kind: 'custom', door }` | Your own door (see below). |
 
 `'none'` fails synth for an app with a server, because a website bucket only
 serves static files.
+
+`compute: { type: 'web-function' }` (AWS Lambda Web Functions) works with the
+CloudFront door only: every other door routes to Lambda functions, so a Web
+Function behind it would get no traffic. Synth fails with
+`UnsupportedComputeFrontDoorError` for any other door (ALB, API Gateway,
+stacked, custom, `'none'`).
 
 ### Settings per door kind
 
@@ -492,6 +498,75 @@ ALB router, the API Gateway HTTP API) gets a server built in buffered mode. Next
 is the exception: its OpenNext build targets a streaming API Gateway REST
 integration, so serve Next.js through CloudFront, the `'rest'` door, or a door
 that streams.
+
+Behind the ALB, the server's target group sends and expects multi-value
+headers, so several `Set-Cookie` headers survive. A Lambda Web Adapter server
+(Astro, SvelteKit, Nitro `node-server`) reads the ALB event as is; a native
+handler server (Nitro's default `aws-lambda` preset) runs behind a small ALB
+event shim (`blocks_alb_event.mjs`, written next to the handler at synth) that
+maps the ALB event to the API Gateway REST shape and the response back.
+
+### The ALB and API Gateway doors: rules and limits
+
+**Redirects, headers and error pages.** The app's redirects, per-pattern
+response headers and error pages are applied by the door's asset proxy (and,
+on the ALB, the headers also by the API forwarder) with the CloudFront door's
+semantics, using the same matching code:
+
+- redirects: first match wins, a wildcard destination gets the matched tail
+  (`/old/*` → `/new/*`), and the status is kept exactly (301, 302, 307, 308).
+  Every redirect source is routed to the asset proxy (an ALB listener rule, an
+  HTTP API route, a REST resource);
+- header rules: every matching rule is added to a successful response (not to
+  a redirect or an error, as at the CloudFront edge);
+- error pages: a missing static file answers with the 404 page (status 404),
+  an S3 failure with the 500 page (status 500).
+
+Responses the door sends straight to a function or the backend don't pass
+through those proxies: server-rendered (SSR) and image-optimization responses,
+and on API Gateway the API (proxied natively). Synth names exactly what is not
+applied (`@aws-blocks/hosting:DoorRulesNotApplied`). The CloudFront door and
+the stacked door's edge apply the rules to every response.
+
+**Response size.** The asset proxy returns each file base64-encoded (a third
+larger) in its Lambda response, so a file is capped by that response's limit:
+
+| Door | Limit on the base64-encoded response | Largest file, about |
+|---|---|---|
+| ALB (Lambda target) | 1 MB | 750 KB |
+| API Gateway (Lambda proxy integration) | 6 MB (Lambda's response limit, below API Gateway's 10 MB payload limit) | 4.5 MB |
+
+Synth lists every build asset over the limit
+(`@aws-blocks/hosting:AssetExceedsProxyLimit`). Serve large files from the
+CloudFront door or the stacked door (static files come straight from S3), or
+from a file bucket.
+
+### The stacked door
+
+`{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` puts a CloudFront edge
+(TLS, cache, security headers, your edge web ACL) in front of the ALB router.
+
+- **Static routes come from S3.** The edge serves the app's static routes
+  straight from the private assets bucket (origin access control); only the
+  API and the dynamic routes (server rendering, image optimization) go to the
+  ALB. Its behaviors follow the router's precedence (the API first, then the
+  routes most-specific first), and a viewer-request function resolves the path
+  as the router would (basePath, directory index, single-page-app fallback),
+  answers the app's redirects, and prefixes the build (`/builds/<buildId>`), so
+  a new build never hits the previous build's cached files. The cutover waits
+  for the build's uploads. The app's header rules and error pages apply at the
+  edge to every response. Past CloudFront's default of 25 cache behaviors, the
+  edge keeps a correct prefix and the rest goes through the ALB
+  (`@aws-blocks/hosting:StackedEdgeBehaviorLimit`).
+- **The ALB admits only the edge.** Every listener rule requires a per-deploy
+  secret header (`x-blocks-origin-verify`) that the edge sends; without it the
+  ALB answers 403. An internet-facing ALB's security group admits only the
+  CloudFront origin-facing managed prefix list
+  (`com.amazonaws.global.cloudfront.origin-facing`, looked up per region at
+  deploy). With `internal: true`, the edge reaches the ALB through a CloudFront
+  VPC origin, and the ALB's security group admits only that VPC origin's
+  service security group (`CloudFront-VPCOrigins-Service-SG`). The standalone
+  `{ kind: 'alb' }` door stays public by design.
 
 ### Bring your own front door
 
@@ -586,7 +661,9 @@ URL with IAM auth (reach it with origin access control, as `cf.origin` does).
 - `publicBucket`: a public bucket the door serves from. The runtime
   `config.json` is published there.
 - `onUpload({ uploads, buildId })`: called after the asset uploads are declared,
-  to declare resources that must run after them.
+  to declare resources that must run after them. What it declares also runs
+  after the runtime `config.json` upload that `Hosting` adds later, so a
+  `cf.invalidate` never caches the placeholder config.
 
 **The wiring check.** AWS Blocks checks one thing about a bring-your-own door:
 its routing, from what the `cf.*` helpers recorded.
@@ -625,9 +702,49 @@ non-empty `url`, and the wiring.
 
 The built-in doors (`cloudFrontDoor`, `albDoor`, `apiGatewayDoor`,
 `s3WebsiteDoor`, `cloudFrontEdgeDoor`) are written the same way, and the pieces
-they share are exported for your own doors: `generateAlbAssetProxyCode`,
-`generateApiGwAssetProxyCode`, `backendBaseUrl`, `coalesceRoutes`,
-`routeSpecificity`, `createSecurityHeadersPolicy`.
+they share are exported for your own doors: `generateAlbAssetProxyCode` and
+`generateApiGwAssetProxyCode` (pass `app.redirects`, `app.headers` and the
+error pages to apply the app's rules; see `AssetProxyOptions`),
+`generateAlbApiProxyCode` (the ALB's same-origin API forwarder),
+`backendBaseUrl`, `coalesceRoutes`, `routeSpecificity`,
+`createSecurityHeadersPolicy`, and `ORIGIN_VERIFY_HEADER` /
+`CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST`.
+
+**A door that stacks CloudFront over its own ALB.** Lock the ALB to the
+distribution the same way the stacked door does: admit only CloudFront in the
+ALB's security group, and require a secret header that only the distribution
+sends.
+
+```ts
+import { createHash } from 'node:crypto';
+import { Stack } from 'aws-cdk-lib';
+import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import { CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST, ORIGIN_VERIFY_HEADER } from '@aws-blocks/hosting/constructs';
+
+// In build(scope, input): `alb` is your ApplicationLoadBalancer, `target` its target group.
+const secret = createHash('sha256').update(Stack.of(scope).stackName).update(scope.node.path).digest('hex');
+const listener = alb.addListener('Http', {
+  port: 80,
+  open: false, // no 0.0.0.0/0 ingress
+  defaultAction: elbv2.ListenerAction.fixedResponse(403, { contentType: 'text/plain', messageBody: 'Forbidden' }),
+});
+listener.addTargetGroups('FromCloudFront', {
+  priority: 1,
+  conditions: [elbv2.ListenerCondition.httpHeader(ORIGIN_VERIFY_HEADER, [secret])],
+  targetGroups: [target],
+});
+const cloudFront = ec2.PrefixList.fromLookup(scope, 'CloudFront', { prefixListName: CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST });
+alb.connections.allowFrom(ec2.Peer.prefixList(cloudFront.prefixListId), ec2.Port.tcp(80));
+const origin = new HttpOrigin(alb.loadBalancerDnsName, { customHeaders: { [ORIGIN_VERIFY_HEADER]: secret } });
+```
+
+`PrefixList.fromLookup` needs the stack's `env` (account and region); the
+built-in door looks the list up at deploy time instead. For an internal ALB,
+use `VpcOrigin.withApplicationLoadBalancer(alb)` and admit the VPC origin's
+`CloudFront-VPCOrigins-Service-SG` security group (see the CDK
+`aws-cloudfront-origins` documentation).
 
 ## Build retention & rollback
 
