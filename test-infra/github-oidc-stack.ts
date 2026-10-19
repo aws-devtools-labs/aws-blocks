@@ -32,7 +32,6 @@ const CDK_QUALIFIER = 'hnb659fds';
 // Stack/bucket name prefixes the E2E suites deploy and cleanup-stacks.yml
 // deletes. `my-app-` is the scaffolded app from windows-template-e2e.mjs.
 const E2E_PREFIXES = [
-  'bb-hosting-',
   'bb-telemetry-',
   'bb-test-',
   'bb-vpc-smoke-',
