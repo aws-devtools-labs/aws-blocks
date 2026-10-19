@@ -48,10 +48,9 @@ export const albDoor = defineFrontDoor<AlbDoorInput, AlbDoorResult>({
     });
     return {
       url: alb.url,
-      originHandle: {
-        domainName: alb.loadBalancer.loadBalancerDnsName,
-        protocol: input.alb.certificate ? 'https' : 'http',
-      },
+      // The ALB's DNS name, plus the origin-verify header (and, internal, the
+      // balancer for a VPC origin) when it admits only a CloudFront door in front.
+      originHandle: alb.originHandle,
       construct: alb,
     };
   },

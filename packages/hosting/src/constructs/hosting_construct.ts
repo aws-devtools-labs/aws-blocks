@@ -674,7 +674,14 @@ export class HostingConstruct extends Construct {
     const cdnWebAclArn = resolved.cdnWebAclArn;
 
     assertRestDoorAddressable(props.frontDoor, f.domain);
-    assertComputeReachableByDoor(props.compute?.type, resolved.kind);
+    assertComputeReachableByDoor(
+      props.compute?.type,
+      resolved.kind,
+      // The stacked door's router reaches the L3 as a CloudFront-only ALB.
+      typeof props.frontDoor === 'object' && props.frontDoor.kind === 'alb' && props.frontDoor.restrictToCloudFront
+        ? 'stacked'
+        : resolved.kind,
+    );
 
     // Skew-protection cookie must not outlive the build artifacts it pins
     // to. A `maxAge` longer than `buildRetentionDays` lets a returning
@@ -1769,6 +1776,7 @@ export class HostingConstruct extends Construct {
               vpc: fd.vpc,
               internal: fd.internal,
               certificate: fd.certificate,
+              restrictToCloudFront: fd.restrictToCloudFront,
               // Native ALB features, from the ALB door's settings
               // (`frontDoor.features`, plus the deprecated top-level aliases).
               accessLogging: f.logging !== undefined && f.logging.enabled !== false,

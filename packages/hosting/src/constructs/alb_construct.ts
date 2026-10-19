@@ -13,7 +13,8 @@
  * without them — there is no feature check): global edge caching, per-route
  * response-header injection, skew-pin cookies, geo restriction. See `albDoor`.
  */
-import { CfnOutput, Duration, Fn, RemovalPolicy } from 'aws-cdk-lib';
+import { createHash } from 'node:crypto';
+import { CfnOutput, Duration, Fn, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
@@ -22,11 +23,13 @@ import { Code, Function as LambdaFunction, type IFunction } from 'aws-cdk-lib/aw
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { CfnWebACL, CfnWebACLAssociation } from 'aws-cdk-lib/aws-wafv2';
+import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { HostingError } from '../hosting_error.js';
 import type { CapabilityPlan, RouteKind } from '../plan/types.js';
 import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 import { generateAlbApiProxyCode } from './alb_api_proxy.js';
+import type { OriginHandle } from './layer.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 export type AlbConstructProps = {
@@ -71,20 +74,49 @@ export type AlbConstructProps = {
    * @default ['/aws-blocks/*']
    */
   apiPaths?: readonly string[];
+  /**
+   * Admit only a CloudFront door in front of this ALB (the stacked door's
+   * router). Every listener rule then also requires the per-deploy
+   * {@link ORIGIN_VERIFY_HEADER} secret, and the default action is a 403. A
+   * public ALB's security group admits only the CloudFront origin-facing
+   * managed prefix list; an internal ALB is reached through a CloudFront VPC
+   * origin, which the door in front admits into the security group (see
+   * {@link OriginHandle.privateLoadBalancer}). The secret travels to that door
+   * as {@link OriginHandle.customHeaders}.
+   * @default false — a standalone ALB door is public by design.
+   */
+  restrictToCloudFront?: boolean;
 };
+
+/**
+ * The header a CloudFront door in front of a locked ALB sends with the
+ * per-deploy secret (see {@link AlbConstructProps.restrictToCloudFront}).
+ */
+export const ORIGIN_VERIFY_HEADER = 'x-blocks-origin-verify';
+
+/** The AWS-managed prefix list of CloudFront's origin-facing addresses (one per region, same name). */
+export const CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST = 'com.amazonaws.global.cloudfront.origin-facing';
 
 /** ALB listener rule priority bands (lower number = evaluated first). */
 const API_PRIORITY_BASE = 1;
 const REDIRECT_PRIORITY_BASE = 100;
 const ROUTE_PRIORITY_BASE = 1000;
-/** An ALB listener rule holds at most 5 condition values (a hard limit). */
-const MAX_PATHS_PER_RULE = 5;
+/** An ALB listener rule holds at most 5 condition values (a hard limit), the header check included. */
+const MAX_CONDITION_VALUES = 5;
+/** The last listener rule priority: the header-checked catch-all of a locked ALB. */
+const CATCH_ALL_PRIORITY = 50000;
 
 export class AlbConstruct extends Construct {
   readonly loadBalancer: elbv2.ApplicationLoadBalancer;
   readonly vpc: ec2.IVpc;
   /** Public URL of the deploy (`http[s]://<alb-dns>`). */
   readonly url: string;
+  /**
+   * How a door in front reaches this ALB: its DNS name, plus — when
+   * {@link AlbConstructProps.restrictToCloudFront} — the origin-verify header
+   * to send and, for an internal ALB, the balancer for a VPC origin.
+   */
+  readonly originHandle: OriginHandle;
 
   constructor(scope: Construct, id: string, props: AlbConstructProps) {
     super(scope, id);
@@ -166,12 +198,58 @@ export class AlbConstruct extends Construct {
     // Default target: the server (SSR catch-all) if present, else static.
     const defaultTg = serverTg ?? staticTg;
     const httpsCert = props.certificate;
+    const port = httpsCert ? 443 : 80;
+
+    // Locked to a CloudFront door in front (the stacked door's router): a
+    // per-deploy secret the door sends as a header, required by every rule;
+    // without it the default action answers 403. Deterministic per stack and
+    // construct path (like the CloudFront door's origin-verify secret for its
+    // REST origin) so it doesn't churn on every deploy; bump the suffix to rotate.
+    const originSecret = props.restrictToCloudFront
+      ? createHash('sha256').update(Stack.of(this).stackName).update(this.node.path).update('alb-origin-verify-v1').digest('hex')
+      : undefined;
+    const verify = originSecret ? [elbv2.ListenerCondition.httpHeader(ORIGIN_VERIFY_HEADER, [originSecret])] : [];
+    const pathsPerRule = MAX_CONDITION_VALUES - verify.length;
+
     const listener = this.loadBalancer.addListener('Listener', {
-      port: httpsCert ? 443 : 80,
+      port,
       protocol: httpsCert ? elbv2.ApplicationProtocol.HTTPS : elbv2.ApplicationProtocol.HTTP,
       certificates: httpsCert ? [httpsCert] : undefined,
-      defaultTargetGroups: [defaultTg],
+      ...(originSecret
+        ? {
+            // Not open to the world: the ingress below admits CloudFront only.
+            open: false,
+            defaultAction: elbv2.ListenerAction.fixedResponse(403, {
+              contentType: 'text/plain',
+              messageBody: 'Forbidden',
+            }),
+          }
+        : { defaultTargetGroups: [defaultTg] }),
     });
+
+    // Only CloudFront reaches a locked ALB. A public one admits the
+    // origin-facing managed prefix list, looked up per region at deploy time
+    // (its id differs by region; a custom resource needs no synth-time
+    // context). An internal one is reached through a CloudFront VPC origin —
+    // the door in front admits it (see `OriginHandle.privateLoadBalancer`).
+    if (originSecret && !props.internal) {
+      const prefixList = new AwsCustomResource(this, 'CloudFrontOriginFacing', {
+        onUpdate: {
+          service: 'EC2',
+          action: 'describeManagedPrefixLists',
+          parameters: { Filters: [{ Name: 'prefix-list-name', Values: [CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST] }] },
+          physicalResourceId: PhysicalResourceId.of(CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST),
+          outputPaths: ['PrefixLists.0.PrefixListId'],
+        },
+        policy: AwsCustomResourcePolicy.fromSdkCalls({ resources: AwsCustomResourcePolicy.ANY_RESOURCE }),
+        installLatestAwsSdk: false,
+      });
+      this.loadBalancer.connections.allowFrom(
+        ec2.Peer.prefixList(prefixList.getResponseField('PrefixLists.0.PrefixListId')),
+        ec2.Port.tcp(port),
+        'CloudFront origin-facing addresses only',
+      );
+    }
 
     // ── Same-origin backend routing (highest precedence) ──
     // Each backend origin path-routes its namespace to that compute's ingress via
@@ -182,7 +260,8 @@ export class AlbConstruct extends Construct {
     // which covers sign-in at `/aws-blocks/auth/*`, plus the backend's raw routes)
     // → one backend; a named namespace routes `/aws-blocks/api/{ns}/*`. These
     // rules win over the route/catch-all rules (lowest priority numbers). A rule
-    // holds at most 5 path values, so the paths are packed 5 to a rule.
+    // holds at most 5 condition values, so the paths are packed 5 to a rule (4
+    // beside the origin-verify header of a locked ALB).
     let apiPriority = API_PRIORITY_BASE;
     for (const origin of plan.backend?.origins ?? []) {
       const ns = origin.namespace;
@@ -209,12 +288,12 @@ export class AlbConstruct extends Construct {
         // Requires the LAMBDA target type (set explicitly above for the validator).
         multiValueHeadersEnabled: true,
       });
-      for (let i = 0; i < paths.length; i += MAX_PATHS_PER_RULE) {
+      for (let i = 0; i < paths.length; i += pathsPerRule) {
         if (apiPriority >= REDIRECT_PRIORITY_BASE) {
           throw new HostingError('TooManyApiPathsError', {
             message:
               `The ALB front door needs more than ${REDIRECT_PRIORITY_BASE - API_PRIORITY_BASE} listener rules ` +
-              `for the backend's API paths (${paths.length} paths, ${MAX_PATHS_PER_RULE} per rule).`,
+              `for the backend's API paths (${paths.length} paths, ${pathsPerRule} per rule).`,
             resolution:
               'Group the raw routes under fewer path prefixes (a parameterized route `/hooks/{id}` is one `/hooks/*` ' +
               'pattern), or move them under `/aws-blocks/`.',
@@ -222,7 +301,7 @@ export class AlbConstruct extends Construct {
         }
         listener.addTargetGroups(`ApiRoute${apiPriority}`, {
           priority: apiPriority++,
-          conditions: [elbv2.ListenerCondition.pathPatterns(paths.slice(i, i + MAX_PATHS_PER_RULE))],
+          conditions: [...verify, elbv2.ListenerCondition.pathPatterns(paths.slice(i, i + pathsPerRule))],
           targetGroups: [apiTg],
         });
       }
@@ -235,7 +314,7 @@ export class AlbConstruct extends Construct {
     for (const r of plan.routes.redirects) {
       listener.addAction(`Redirect${priority}`, {
         priority: priority++,
-        conditions: [elbv2.ListenerCondition.pathPatterns([r.source])],
+        conditions: [...verify, elbv2.ListenerCondition.pathPatterns([r.source])],
         action: elbv2.ListenerAction.redirect({
           path: r.destination,
           permanent: r.statusCode === 301 || r.statusCode === 308,
@@ -251,9 +330,13 @@ export class AlbConstruct extends Construct {
       // glob patterns map directly.
       listener.addTargetGroups(`Route${priority}`, {
         priority: priority++,
-        conditions: [elbv2.ListenerCondition.pathPatterns([entry.pattern])],
+        conditions: [...verify, elbv2.ListenerCondition.pathPatterns([entry.pattern])],
         targetGroups: [tgForKind(entry.kind)],
       });
+    }
+    // A locked ALB's catch-all: the default target, for requests carrying the secret.
+    if (originSecret) {
+      listener.addTargetGroups('CatchAll', { priority: CATCH_ALL_PRIORITY, conditions: verify, targetGroups: [defaultTg] });
     }
 
     // ── Native ALB cross-cutting features (NOT CloudFront imitations) ──
@@ -308,6 +391,12 @@ export class AlbConstruct extends Construct {
     }
 
     this.url = `${httpsCert ? 'https' : 'http'}://${this.loadBalancer.loadBalancerDnsName}`;
+    this.originHandle = {
+      domainName: this.loadBalancer.loadBalancerDnsName,
+      protocol: httpsCert ? 'https' : 'http',
+      ...(originSecret ? { customHeaders: { [ORIGIN_VERIFY_HEADER]: originSecret } } : {}),
+      ...(originSecret && props.internal ? { privateLoadBalancer: this.loadBalancer } : {}),
+    };
     new CfnOutput(this, 'AlbUrl', { value: this.url, description: 'ALB front-door URL' });
     new CfnOutput(this, 'AlbDnsName', {
       value: this.loadBalancer.loadBalancerDnsName,

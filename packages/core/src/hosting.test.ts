@@ -2622,6 +2622,148 @@ describe('Hosting', () => {
       });
     });
 
+    // ── The router is reachable only through the edge ──────────────────────
+    const ORIGIN_VERIFY = 'x-blocks-origin-verify';
+    const stackedSynth = (name: string, internal?: boolean) => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), name, { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb', ...(internal ? { internal } : {}) },
+      });
+      return Template.fromStack(stack);
+    };
+    /** Every ingress rule on the ALB's security group (inline and standalone). */
+    const albIngress = (t: Template): Array<Record<string, unknown>> => {
+      const lbSgRefs = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::LoadBalancer')).flatMap(
+        (r) => r.Properties.SecurityGroups as Array<{ 'Fn::GetAtt': [string, string] }>,
+      );
+      const sgIds = lbSgRefs.map((ref) => ref['Fn::GetAtt'][0]);
+      const sgs = t.findResources('AWS::EC2::SecurityGroup');
+      const inline = sgIds.flatMap((id) => (sgs[id]?.Properties.SecurityGroupIngress as Array<Record<string, unknown>>) ?? []);
+      const standalone = Object.values(t.findResources('AWS::EC2::SecurityGroupIngress'))
+        .map((r) => r.Properties as Record<string, unknown>)
+        .filter((p) => sgIds.includes((p.GroupId as { 'Fn::GetAtt': [string, string] })?.['Fn::GetAtt']?.[0]));
+      return [...inline, ...standalone];
+    };
+    const secretOf = (t: Template): string => {
+      const dist = Object.values(t.findResources('AWS::CloudFront::Distribution'))[0];
+      const origins = dist.Properties.DistributionConfig.Origins as Array<{
+        OriginCustomHeaders?: Array<{ HeaderName: string; HeaderValue: string }>;
+      }>;
+      const header = origins.flatMap((o) => o.OriginCustomHeaders ?? []).find((h) => h.HeaderName === ORIGIN_VERIFY);
+      assert.ok(header, 'the edge sends the origin-verify header to the ALB');
+      assert.match(header.HeaderValue, /^[0-9a-f]{64}$/, 'a 256-bit hex secret');
+      return header.HeaderValue;
+    };
+    const assertListenerRequiresSecret = (t: Template, secret: string) => {
+      const listeners = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::Listener'));
+      assert.strictEqual(listeners.length, 1);
+      assert.deepStrictEqual(listeners[0].Properties.DefaultActions, [
+        {
+          Type: 'fixed-response',
+          FixedResponseConfig: { ContentType: 'text/plain', MessageBody: 'Forbidden', StatusCode: '403' },
+        },
+      ]);
+      const rules = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::ListenerRule'));
+      assert.ok(rules.length > 0);
+      for (const rule of rules) {
+        const conditions = rule.Properties.Conditions as Array<{
+          Field: string;
+          HttpHeaderConfig?: { HttpHeaderName: string; Values: string[] };
+          PathPatternConfig?: { Values: string[] };
+        }>;
+        const header = conditions.find((c) => c.Field === 'http-header');
+        assert.deepStrictEqual(header?.HttpHeaderConfig, { HttpHeaderName: ORIGIN_VERIFY, Values: [secret] });
+        // ALB: at most 5 condition values per rule, the header included.
+        const values = conditions.reduce(
+          (n, c) => n + (c.PathPatternConfig?.Values.length ?? 0) + (c.HttpHeaderConfig?.Values.length ?? 0),
+          0,
+        );
+        assert.ok(values <= 5, `at most 5 condition values per rule (got ${values})`);
+      }
+      // The catch-all forward is a rule too (the default action is the 403).
+      assert.ok(
+        rules.some((r) => (r.Properties.Conditions as Array<{ Field: string }>).every((c) => c.Field === 'http-header')),
+        'a header-only catch-all rule forwards to the default target',
+      );
+    };
+
+    it('public router: the ALB security group admits only the CloudFront origin-facing prefix list', () => {
+      const t = stackedSynth('CfOverAlbLockedPublic');
+      const ingress = albIngress(t);
+      assert.ok(ingress.length > 0, 'the listener port is open to something');
+      for (const rule of ingress) {
+        assert.strictEqual(rule.CidrIp, undefined, `no CIDR ingress (got ${JSON.stringify(rule)})`);
+        assert.strictEqual(rule.CidrIpv6, undefined);
+        assert.ok(rule.SourcePrefixListId, 'ingress from a prefix list');
+      }
+      // The prefix list id is looked up per region at deploy time (no synth context).
+      const lookups = Object.values(t.findResources('Custom::AWS')).filter((r) =>
+        JSON.stringify(r.Properties).includes('com.amazonaws.global.cloudfront.origin-facing'),
+      );
+      assert.strictEqual(lookups.length, 1, 'one prefix-list lookup');
+      assert.match(JSON.stringify(lookups[0].Properties), /describeManagedPrefixLists/i);
+      t.resourceCountIs('AWS::CloudFront::VpcOrigin', 0);
+    });
+
+    it('public router: the listener answers 403 unless the edge sent the per-deploy origin-verify secret', () => {
+      const t = stackedSynth('CfOverAlbLockedHeader');
+      assertListenerRequiresSecret(t, secretOf(t));
+    });
+
+    it('internal router: CloudFront reaches the internal ALB through a VPC origin, admitted by its service security group', () => {
+      const t = stackedSynth('CfOverAlbInternal', true);
+      t.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', { Scheme: 'internal' });
+      t.resourceCountIs('AWS::CloudFront::VpcOrigin', 1);
+      const dist = Object.entries(t.findResources('AWS::CloudFront::Distribution'));
+      assert.strictEqual(dist.length, 1);
+      const origins = dist[0][1].Properties.DistributionConfig.Origins as Array<Record<string, unknown>>;
+      assert.ok(origins.some((o) => o.VpcOriginConfig), 'the ALB is a VPC origin');
+      assert.ok(origins.every((o) => !o.CustomOriginConfig), 'no internet (custom) origin for the ALB');
+      // The VPC origin's service security group (named by CloudFront, looked up
+      // after the distribution) is the only source the ALB admits.
+      const lookup = Object.entries(t.findResources('Custom::AWS')).find(([, r]) =>
+        JSON.stringify(r.Properties).includes('CloudFront-VPCOrigins-Service-SG'),
+      );
+      assert.ok(lookup, 'the VPC origins service security group is looked up');
+      assert.ok([lookup[1].DependsOn ?? []].flat().includes(dist[0][0]), 'looked up after the distribution');
+      const ingress = albIngress(t);
+      assert.ok(ingress.length > 0);
+      for (const rule of ingress) {
+        assert.strictEqual(rule.CidrIp, undefined);
+        assert.match(JSON.stringify(rule.SourceSecurityGroupId), new RegExp(lookup[0]));
+      }
+      assertListenerRequiresSecret(t, secretOf(t));
+    });
+
+    it('the standalone ALB door stays public by design (open listener, plain forward)', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'AlbStaysPublic', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } });
+      const t = Template.fromStack(stack);
+      assert.ok(albIngress(t).some((r) => r.CidrIp === '0.0.0.0/0'));
+      const listener = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::Listener'))[0];
+      assert.strictEqual((listener.Properties.DefaultActions as Array<{ Type: string }>)[0].Type, 'forward');
+      assert.ok(!JSON.stringify(t.toJSON()).includes(ORIGIN_VERIFY));
+    });
+
+    it("stacked + compute.type 'web-function' fails synth naming the stacked door", () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'StackedWebFunction', { env: { account: '111111111111', region: 'us-east-1' } });
+      assert.throws(
+        () =>
+          new Hosting(stack, 'Hosting', {
+            root: tmpDir,
+            api: MOCK_API,
+            compute: { type: 'web-function' },
+            frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+          }),
+        (e: Error) => e.name === 'UnsupportedComputeFrontDoorError' && e.message.includes("'stacked'"),
+      );
+    });
+
     it('the default CloudFront door still fronts API Gateway directly (no ALB)', () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();

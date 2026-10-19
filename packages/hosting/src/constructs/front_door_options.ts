@@ -231,6 +231,17 @@ export type AlbDoorOptions = {
    * each gets a listener rule to the API forwarder.
    */
   backendApiPaths?: string[];
+  /**
+   * Admit only a CloudFront door in front of this ALB. Set by the Blocks
+   * integration layer for the stacked door's router: every listener rule then
+   * requires a per-deploy origin-verify header (the default action is a 403),
+   * and the security group admits only CloudFront — the origin-facing managed
+   * prefix list for a public ALB, a CloudFront VPC origin for an `internal`
+   * one. The door in front reads the header and the private balancer from the
+   * door's `originHandle`.
+   * @default false — a standalone ALB door is public by design.
+   */
+  restrictToCloudFront?: boolean;
   /** The settings the app asks the ALB door for. */
   features?: AlbDoorFeatures;
 };
