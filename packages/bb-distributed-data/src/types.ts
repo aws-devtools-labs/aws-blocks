@@ -12,7 +12,8 @@ export interface DistributedDatabaseOptions {
    * CloudFormation removal policy for the DSQL cluster. When omitted, the
    * stack-wide `defaults` apply (`production` → RETAIN, `sandbox` → DESTROY).
    * Pass `'destroy'`/`'retain'` to override for this one database. Deletion
-   * protection follows: on unless the cluster is being destroyed.
+   * protection comes from the stack-wide `defaults` (`production` → on,
+   * `sandbox` → off), independently of this option.
    */
   removalPolicy?: 'destroy' | 'retain';
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */

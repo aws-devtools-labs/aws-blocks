@@ -142,7 +142,7 @@ const users = await kysely
   .execute();
 ```
 
-Do not use Kysely's `.addForeignKeyConstraint()` — it will fail on DSQL.
+Use the Kysely adapter for queries and data changes. Define schema, including foreign keys, in migration files.
 
 ## Error Handling
 
@@ -216,7 +216,7 @@ Migration SQL is also checked with `dsql-lint` during CDK synthesis, before it i
 interface DistributedDatabaseOptions {
   /** Path to directory containing numbered .sql migration files. */
   migrationsPath?: string;
-  /** Removal policy. @default 'retain' */
+  /** Removal policy. When omitted, the stack-wide `defaults` apply (`production` → `'retain'`, `sandbox` → `'destroy'`). */
   removalPolicy?: 'destroy' | 'retain';
   /** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
   logger?: ChildLogger;

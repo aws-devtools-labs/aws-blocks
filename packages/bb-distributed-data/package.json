@@ -49,7 +49,7 @@
     "@aws-blocks/data-common": "^0.1.6",
     "@aws-blocks/bb-logger": "^0.2.2",
     "@aws-sdk/dsql-signer": "^3.700.0",
-    "@aws/dsql-lint": "0.2.x",
+    "@aws/dsql-lint": ">=0.2.22",
     "@electric-sql/pglite": "^0.5.8",
     "pg": "^8.13.0"
   },

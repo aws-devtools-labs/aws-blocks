@@ -27,8 +27,8 @@ interface MockTxHandle { active: boolean; tracker: TransactionTracker; }
  *    unsupported features like TRUNCATE, SERIAL, etc.).
  * 2. Rejects DDL statements — in production the app Lambda only has
  *    dsql:DbConnect (DML-only). DDL must go in migration files.
- * 3. Normalizes DSQL-only syntax that PGlite doesn't understand — currently
- *    just `CREATE [UNIQUE] INDEX ASYNC` (stripped to a synchronous CREATE INDEX).
+ * 3. Normalizes DSQL's asynchronous DDL for PGlite: `CREATE [UNIQUE] INDEX ASYNC`
+ *    and `ALTER TABLE ASYNC` run as their synchronous PostgreSQL forms.
  *
  * Returns the normalized SQL ready for PGlite execution.
  */
@@ -43,7 +43,61 @@ function preprocessSqlForDsqlMock(sql: string, { allowDdl = false } = {}): strin
     // so forwarding it is safe (D-003).
     throw brandBlocksError(err);
   }
-  return sql.replace(/\b(CREATE\s+(?:UNIQUE\s+)?INDEX)\s+ASYNC\b/gi, '$1');
+  return stripAsyncDdlKeyword(sql);
+}
+
+/** PostgreSQL lexer whitespace (space, tab, newline, carriage return, form feed, vertical tab). */
+const SQL_WHITESPACE = /[ \t\n\r\f\v]/;
+/** PostgreSQL identifier characters: ASCII letters, digits, `_`, `$`, and any non-ASCII character. */
+const SQL_IDENTIFIER_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
+
+/** Index of the first character at or after `start` that is not whitespace or a comment. */
+function skipWhitespaceAndComments(sql: string, start: number): number {
+  let i = start;
+  for (;;) {
+    while (i < sql.length && SQL_WHITESPACE.test(sql[i])) i++;
+    if (sql.startsWith('--', i)) {
+      // A line comment ends at the next newline or carriage return.
+      while (i < sql.length && sql[i] !== '\n' && sql[i] !== '\r') i++;
+    } else if (sql.startsWith('/*', i)) {
+      // PostgreSQL block comments nest.
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql.startsWith('/*', i)) { depth++; i += 2; }
+        else if (sql.startsWith('*/', i)) { depth--; i += 2; }
+        else i++;
+      }
+    } else {
+      return i;
+    }
+  }
+}
+
+/**
+ * Drop the `ASYNC` keyword from a statement that starts with
+ * `CREATE [UNIQUE] INDEX ASYNC` or `ALTER TABLE ASYNC`, so PGlite runs it
+ * synchronously. Only the statement's leading keywords are read, so string
+ * literals and later clauses keep their text. Keywords match case-insensitively
+ * on ASCII letters only, as in PostgreSQL.
+ */
+function stripAsyncDdlKeyword(sql: string): string {
+  const words: string[] = [];
+  let i = skipWhitespaceAndComments(sql, 0);
+  while (words.length < 4) {
+    let end = i;
+    while (end < sql.length && SQL_IDENTIFIER_CHAR.test(sql[end])) end++;
+    const word = sql.slice(i, end).replace(/[a-z]/g, c => c.toUpperCase());
+    if (!word) return sql;
+    words.push(word);
+    if (word === 'ASYNC') {
+      const lead = words.slice(0, -1).join(' ');
+      const isAsyncDdl = lead === 'CREATE INDEX' || lead === 'CREATE UNIQUE INDEX' || lead === 'ALTER TABLE';
+      return isAsyncDdl ? sql.slice(0, i) + sql.slice(end) : sql;
+    }
+    i = skipWhitespaceAndComments(sql, end);
+  }
+  return sql;
 }
 
 export class DsqlMockEngine implements DatabaseEngine {

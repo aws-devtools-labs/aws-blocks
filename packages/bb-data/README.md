@@ -4,7 +4,7 @@ Full PostgreSQL database — provisions Aurora Serverless v2 by default, or conn
 
 **When to use:** Complex multi-table JOINs, ACID transactions, foreign key constraints, aggregations, Row Level Security, or connecting to an existing PostgreSQL database. Use when you need the full power of PostgreSQL.
 
-**When NOT to use:** For simple key-value lookups, use `KVStore`. For NoSQL with secondary indexes, use `DistributedTable`. For serverless SQL without FK/RLS/triggers (multi-region, instant provisioning), use `DistributedDatabase`.
+**When NOT to use:** For simple key-value lookups, use `KVStore`. For NoSQL with secondary indexes, use `DistributedTable`. For serverless SQL (multi-region, instant provisioning), use `DistributedDatabase`.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 

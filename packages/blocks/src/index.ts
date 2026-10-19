@@ -252,10 +252,10 @@ export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks
  * **Serverless SQL database backed by Aurora DSQL.**
  *
  * Use for zero-ops SQL with instant provisioning, scale-to-zero, and
- * optionally multi-region active-active writes. DSQL is a strict PostgreSQL
- * subset — no foreign keys, RLS, triggers, or views. Transactions use
- * optimistic concurrency control (OCC) and may conflict at commit.
- * For full PostgreSQL with FK/RLS/triggers, use `Database`.
+ * optionally multi-region active-active writes. DSQL is PostgreSQL-compatible,
+ * including foreign keys. Transactions use optimistic concurrency control (OCC)
+ * and may conflict at commit.
+ * For full PostgreSQL with RLS/triggers, use `Database`.
  *
  * Package: `@aws-blocks/bb-distributed-data`
  * Full docs: `README.md` in the package directory above.
