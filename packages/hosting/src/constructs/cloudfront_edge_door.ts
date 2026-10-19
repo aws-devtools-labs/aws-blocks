@@ -170,10 +170,23 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
     const distribution = new Distribution(scope, 'CfOverAlb', {
       comment: 'Blocks composed CF → ALB edge (static from S3, the rest through the ALB router)',
       defaultBehavior: behaviorFor(plan.defaultTarget),
+      // The S3 default (a site without a server) is listable; the function
+      // turns every path into a file key (a trailing `/` gets `index.html`), and
+      // the root object keeps the bare `/` off the bucket listing too.
+      ...(plan.defaultTarget === 's3' ? { defaultRootObject: 'index.html' } : {}),
       ...(Object.keys(additionalBehaviors).length > 0 ? { additionalBehaviors } : {}),
       ...(errorResponses.length > 0 ? { errorResponses } : {}),
       webAclId: input.webAclArn,
     });
+    if (s3Behavior) {
+      // LIST only turns a missing file into a 404: the static function maps
+      // every request to a file key under the build prefix, so no request
+      // reaches a bucket listing.
+      Annotations.of(distribution).acknowledgeWarning(
+        '@aws-cdk/aws-cloudfront-origins:listBucketSecurityRisk',
+        "The stacked edge's viewer-request function maps every path to a file key under /builds/<buildId>/.",
+      );
+    }
     if (handle.privateLoadBalancer) admitVpcOrigin(scope, distribution, handle.privateLoadBalancer);
     return {
       url: `https://${distribution.distributionDomainName}`,
