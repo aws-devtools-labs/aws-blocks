@@ -661,6 +661,7 @@ export class HostingConstruct extends Construct {
     const cdnWebAclArn = resolved.cdnWebAclArn;
 
     assertRestDoorAddressable(props.frontDoor, f.domain);
+    assertComputeReachableByDoor(props.compute?.type, resolved.kind);
 
     // Skew-protection cookie must not outlive the build artifacts it pins
     // to. A `maxAge` longer than `buildRetentionDays` lets a returning
@@ -2414,6 +2415,35 @@ const serverResponseFor = (frontDoor: HostingConstructProps['frontDoor']): 'stre
     default:
       return 'streaming';
   }
+};
+
+/**
+ * Fail synth when the server compute can't be reached through the door. A Web
+ * Function (`compute.type: 'web-function'`) is wired only as the CloudFront
+ * door's server origin; every other door routes to Lambda functions (an ALB
+ * target, an API Gateway integration, a `DoorInput` server origin), so behind
+ * one the Web Function would deploy with no traffic reaching it.
+ *
+ * @param computeType the app's `compute.type`.
+ * @param kind the resolved door kind (the stacked door's router is `'alb'` here).
+ * @param label the door as the app wrote it, for the message. @default kind
+ * @throws HostingError('UnsupportedComputeFrontDoorError') for a Web Function behind a door other than CloudFront.
+ * @internal Framework-only.
+ */
+const assertComputeReachableByDoor = (
+  computeType: 'lambda' | 'web-function' | undefined,
+  kind: string,
+  label: string = kind,
+): void => {
+  if (computeType !== 'web-function' || kind === 'cloudfront') return;
+  throw new HostingError('UnsupportedComputeFrontDoorError', {
+    message:
+      `compute.type 'web-function' is not supported by the '${label}' front door. A Web Function is served only ` +
+      "through the CloudFront door; this door routes to Lambda functions, so no request would reach it.",
+    resolution:
+      "Use the CloudFront door (omit `frontDoor`, or `'cloudfront'`), or remove `compute.type: 'web-function'` " +
+      "(the default `'lambda'` works with every door).",
+  });
 };
 
 /**
