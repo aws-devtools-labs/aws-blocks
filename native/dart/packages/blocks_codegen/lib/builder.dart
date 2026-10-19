@@ -18,7 +18,8 @@ class _BlocksCodegenBuilder extends Builder {
   /// When true, collisions are a hard error instead of auto-suffixed + warned.
   final bool failOnCollision;
 
-  /// Logical package identities, as keyed in `x-blocks-native-packages`.
+  /// Logical package identities, as keyed in `x-blocks-native-packages`. An
+  /// undeclared identity opts nothing out and reports `AWSBLOCKS-NATIVE-006`.
   final Set<String> optedOutPackages;
 
   _BlocksCodegenBuilder(this.failOnCollision, this.optedOutPackages);
