@@ -14,6 +14,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
 import { claimApiFrontDoor, scheduleApiFrontDoor } from './cdk/api-front-door.js';
 import { BlocksPresets } from './cdk/blocks-defaults.js';
+import { coverBlocksRoot, forEachBlocksRole } from './cdk/blocks-roles.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
@@ -2209,30 +2210,26 @@ describe('Hosting', () => {
   describe('defaults.permissionsBoundary of the fronted backend', () => {
     const BOUNDARY_ARN = 'arn:aws:iam::123456789012:policy/app-ceiling';
 
-    /** A branded backend root (stand-in for BlocksBackend) that applied `permissionsBoundary`. */
-    const makeBoundedBackend = (stack: Stack, id: string): BlocksStackApi => {
+    /**
+     * A branded backend root (stand-in for BlocksBackend) wired the way
+     * `setupBlocksInfra` wires one: role coverage on, then the boundary (if any).
+     */
+    const makeBackend = (stack: Stack, id: string, permissionsBoundary?: string): BlocksStackApi => {
       const backend = new Construct(stack, id);
       (backend as unknown as Record<symbol, unknown>)[Symbol.for('blocks:BackendRoot')] = true;
       (backend as unknown as { apiUrl: string }).apiUrl = `https://${id}.execute-api.eu-west-1.amazonaws.com/prod/aws-blocks`;
-      applyBlocksPermissionsBoundary(backend, { ...BlocksPresets.production, permissionsBoundary: BOUNDARY_ARN });
+      (backend as unknown as { defaults: unknown }).defaults = { ...BlocksPresets.production, permissionsBoundary };
+      coverBlocksRoot(backend);
+      applyBlocksPermissionsBoundary(backend);
       return backend as unknown as BlocksStackApi;
     };
 
-    const unboundedRoles = (stack: Stack) =>
-      Object.entries(Template.fromStack(stack).findResources('AWS::IAM::Role'))
-        .filter(([, r]) => r.Properties?.PermissionsBoundary !== BOUNDARY_ARN)
-        .map(([id]) => id);
-
-    it('caps SSR + Lambda@Edge roles, including the separate us-east-1 edge stack', () => {
+    /** Off-region Hosting with one Lambda@Edge route, beside (not under) `backend`. Returns every stack in the app. */
+    const buildOffRegionEdgeHosting = (app: App, stack: Stack, backend: BlocksStackApi): Stack[] => {
       createNextjsBuildOutput(tmpDir);
       const edgeDir = path.join(tmpDir, '.hosting', 'compute', 'edge1');
       fs.mkdirSync(edgeDir, { recursive: true });
       fs.writeFileSync(path.join(edgeDir, 'index.mjs'), 'export const handler = async (e) => e.Records[0].cf.request;');
-
-      const app = new App();
-      // Hosting sits beside (not under) the backend, as with an embedded BlocksBackend.
-      const stack = new Stack(app, 'EdgeBoundaryStack', { env: { account: '123456789012', region: 'eu-west-1' } });
-      const backend = makeBoundedBackend(stack, 'Blocks');
       const base = createNextjsFixtureAdapter(tmpDir);
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
@@ -2249,10 +2246,22 @@ describe('Hosting', () => {
           };
         },
       });
+      return app.node.children.filter((c): c is Stack => Stack.isStack(c));
+    };
 
+    const unboundedRoles = (stack: Stack) =>
+      Object.entries(Template.fromStack(stack).findResources('AWS::IAM::Role'))
+        .filter(([, r]) => r.Properties?.PermissionsBoundary !== BOUNDARY_ARN)
+        .map(([id]) => id);
+
+    it('caps SSR + Lambda@Edge roles, including the separate us-east-1 edge stack', () => {
+      const app = new App();
+      // Hosting sits beside (not under) the backend, as with an embedded BlocksBackend.
+      const stack = new Stack(app, 'EdgeBoundaryStack', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks', BOUNDARY_ARN);
       // Outside us-east-1, Hosting adds two separate stacks: the Lambda@Edge
       // stack and the CloudFront monitoring stack (wired with cross-region refs).
-      const stacks = app.node.children.filter((c): c is Stack => Stack.isStack(c));
+      const stacks = buildOffRegionEdgeHosting(app, stack, backend);
       const edgeStack = stacks.find((c) => c.node.id.startsWith('edge-lambda-stack'));
       const monitoringStack = stacks.find((c) => c.node.id.includes('CfMonitoring'));
       assert.ok(edgeStack, 'cross-region Lambda@Edge should synthesize a separate edge stack');
@@ -2270,6 +2279,36 @@ describe('Hosting', () => {
           id.startsWith('CustomCrossRegionExportWriter'),
         ),
         'the cross-region export writer role is among the checked roles',
+      );
+    });
+
+    it('a second role visitor (e.g. tenant tagging) reaches exactly the same roles, prepare-time ones included', () => {
+      const app = new App();
+      const stack = new Stack(app, 'EdgeVisitorStack', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks');
+      // A test-only consumer of the shared role visitor: stamp a tag on every Blocks role.
+      const visited = new Set<string>();
+      forEachBlocksRole(backend as unknown as Construct, (role) => {
+        visited.add(`${Stack.of(role).node.id}/${Stack.of(role).resolve(role.logicalId)}`);
+        role.addPropertyOverride('Tags', [{ Key: 'app', Value: 'app-a' }]);
+      });
+      const stacks = buildOffRegionEdgeHosting(app, stack, backend);
+
+      const inTemplates = new Set<string>();
+      const untagged: string[] = [];
+      for (const s of stacks) {
+        for (const [id, r] of Object.entries(Template.fromStack(s).findResources('AWS::IAM::Role'))) {
+          inTemplates.add(`${s.node.id}/${id}`);
+          if (JSON.stringify(r.Properties?.Tags) !== JSON.stringify([{ Key: 'app', Value: 'app-a' }])) {
+            untagged.push(`${s.node.id}/${id}`);
+          }
+        }
+      }
+      assert.deepStrictEqual(untagged, [], 'every role in every stack carries the visitor-applied tag');
+      assert.deepStrictEqual([...visited].sort(), [...inTemplates].sort(), 'the visitor saw exactly the synthesized roles');
+      assert.ok(
+        [...visited].some((r) => r.includes('CustomCrossRegionExportWriter')),
+        'the prepare-time cross-region provider role was visited',
       );
     });
 

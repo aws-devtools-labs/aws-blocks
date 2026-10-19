@@ -3,13 +3,15 @@
 
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import type { Construct, IConstruct } from 'constructs';
+import type { Construct } from 'constructs';
 import type { BlocksDefaults } from './blocks-defaults.js';
+import { forEachBlocksRole } from './blocks-roles.js';
+import { findBackendRoot } from './root-registry.js';
 
 /** CDK's own stack-wide boundary context key (see the CDK guide "Permissions boundaries"). */
 const CDK_BOUNDARY_CONTEXT_KEY = '@aws-cdk/core:permissionsBoundary';
 
-/** Per-root slot holding the resolved boundary, so other constructs (e.g. Hosting) can apply the same one. */
+/** Per-root memo of the resolved boundary (`null` = unset), so the policy is imported once per root. */
 const ROOT_BOUNDARY = Symbol.for('blocks:PermissionsBoundary');
 
 /** Per-stack record of which backend applied which boundary — detects a mixed-boundary stack. */
@@ -29,13 +31,7 @@ function invalid(detail: string): Error {
 	);
 }
 
-/**
- * Validate `defaults.permissionsBoundary` and resolve it to an `IManagedPolicy`
- * imported under `root`. Returns `undefined` when the option is unset.
- *
- * @internal
- */
-export function resolvePermissionsBoundary(
+function validateAndImport(
 	root: Construct,
 	input: BlocksDefaults['permissionsBoundary'],
 ): iam.IManagedPolicy | undefined {
@@ -63,25 +59,44 @@ export function resolvePermissionsBoundary(
 }
 
 /**
- * Resolve `defaults.permissionsBoundary` and apply it (CDK's own
- * `PermissionsBoundary` aspect) to every IAM role and user under `root`,
- * including ones a block adds later. Records the boundary on `root` for
- * {@link getRootPermissionsBoundary}. No-op when unset.
+ * The permissions boundary in force for the backend root that owns `scope`, as
+ * an `IManagedPolicy`, or `undefined` when none is set. **The single resolution
+ * point** — nothing else reads `defaults.permissionsBoundary`, so a later source
+ * (e.g. per-tenant configuration) plugs in here.
  *
- * Warns when the stack also carries CDK's `@aws-cdk/core:permissionsBoundary`
- * context: for constructs under `root` the Blocks option wins (it is the more
- * specific aspect, so it runs last), which is rarely what a platform expects.
+ * Validates the input (throwing an actionable error) and imports the policy once
+ * per root. A name resolves in the deploying account and partition; an ARN — with
+ * a path, or naming a shared policy whose document uses policy variables such as
+ * `${aws:PrincipalTag/app}` — is passed through untouched.
  *
  * @internal
  */
-export function applyBlocksPermissionsBoundary(
-	root: Construct,
-	defaults: BlocksDefaults,
-): iam.IManagedPolicy | undefined {
-	const boundary = resolvePermissionsBoundary(root, defaults.permissionsBoundary);
+export function resolvePermissionsBoundary(scope: Construct): iam.IManagedPolicy | undefined {
+	const root = findBackendRoot(scope);
+	if (!root) return undefined;
+	const store = root as unknown as Record<symbol, iam.IManagedPolicy | null | undefined>;
+	const memo = store[ROOT_BOUNDARY];
+	if (memo !== undefined) return memo ?? undefined;
+	const defaults = (root as { defaults?: BlocksDefaults }).defaults;
+	const boundary = validateAndImport(root, defaults?.permissionsBoundary);
+	store[ROOT_BOUNDARY] = boundary ?? null;
+	return boundary;
+}
+
+/**
+ * Apply the root's permissions boundary (see {@link resolvePermissionsBoundary})
+ * to every IAM role AWS Blocks creates for it, through the shared role visitor
+ * ({@link forEachBlocksRole}). No-op when unset.
+ *
+ * Warns when CDK's `@aws-cdk/core:permissionsBoundary` context is also set: for
+ * Blocks roles this option wins (its override runs after the context's).
+ *
+ * @internal
+ */
+export function applyBlocksPermissionsBoundary(root: Construct): iam.IManagedPolicy | undefined {
+	const boundary = resolvePermissionsBoundary(root);
 	if (!boundary) return undefined;
-	(root as unknown as Record<symbol, unknown>)[ROOT_BOUNDARY] = boundary;
-	iam.PermissionsBoundary.of(root).apply(boundary);
+	forEachBlocksRole(root, (role) => role.addPropertyOverride('PermissionsBoundary', boundary.managedPolicyArn));
 
 	if (root.node.tryGetContext(CDK_BOUNDARY_CONTEXT_KEY) !== undefined) {
 		cdk.Annotations.of(root).addWarningV2(
@@ -95,47 +110,16 @@ export function applyBlocksPermissionsBoundary(
 }
 
 /**
- * The boundary {@link applyBlocksPermissionsBoundary} resolved for `root`, or
- * `undefined` when `defaults.permissionsBoundary` is unset.
+ * Warn when backends in one stack disagree on the boundary: roles inside each
+ * backend get their own, but per-stack CDK singleton roles are shared and keep
+ * the boundary of the backend that created them first. Call once per embedded
+ * `BlocksBackend`, after it's created.
  *
  * @internal
  */
-export function getRootPermissionsBoundary(root: Construct): iam.IManagedPolicy | undefined {
-	return (root as unknown as Record<symbol, iam.IManagedPolicy | undefined>)[ROOT_BOUNDARY];
-}
-
-/**
- * Snapshot `scope`'s direct children — call before a backend is built, then pass
- * the result to {@link applyBoundaryToStackLevelAdditions}.
- *
- * @internal
- */
-export function snapshotChildren(scope: Construct): ReadonlySet<IConstruct> {
-	return new Set(scope.node.children);
-}
-
-/**
- * Apply `backend`'s boundary to the constructs added **directly at stack scope**
- * while it was being created (`before` = {@link snapshotChildren} taken first).
- *
- * An embedded `BlocksBackend` is one subtree of a stack it doesn't own, so the
- * aspect {@link applyBlocksPermissionsBoundary} adds on the backend doesn't
- * reach roles CDK hoists to the stack on a block's behalf — the per-stack
- * singletons such as the `Custom::S3AutoDeleteObjects` provider, the
- * `BucketDeployment` handler and the log-retention function. Those exist only
- * because a block asked for them, so they're capped too; roles the stack already
- * had (the customer's own) are left alone.
- *
- * A singleton is created once per stack, so with several backends it carries
- * the boundary of the backend that created it first. When backends in one stack
- * disagree on the boundary this warns, since the shared singletons can only take
- * one of them.
- *
- * @internal
- */
-export function applyBoundaryToStackLevelAdditions(backend: Construct, before: ReadonlySet<IConstruct>): void {
+export function warnOnMixedBoundaries(backend: Construct): void {
 	const stack = cdk.Stack.of(backend);
-	const boundary = getRootPermissionsBoundary(backend);
+	const boundary = resolvePermissionsBoundary(backend);
 	const key = boundary ? JSON.stringify(stack.resolve(boundary.managedPolicyArn)) : 'none';
 
 	const store = stack as unknown as Record<symbol, Map<string, string> | undefined>;
@@ -153,100 +137,4 @@ export function applyBoundaryToStackLevelAdditions(backend: Construct, before: R
 				'iam.PermissionsBoundary.of(stack).apply(...).',
 		);
 	}
-
-	if (boundary) applyToNewChildren(stack, before, backend, boundary);
-}
-
-function applyToNewChildren(
-	parent: Construct,
-	before: ReadonlySet<IConstruct>,
-	exclude: IConstruct,
-	boundary: iam.IManagedPolicy,
-): void {
-	for (const child of parent.node.children) {
-		if (child === exclude || before.has(child)) continue;
-		iam.PermissionsBoundary.of(child).apply(boundary);
-	}
-}
-
-/** Construct ids of the per-stack providers CDK adds for cross-region references (`crossRegionReferences`). */
-const CROSS_REGION_PROVIDER = /^Custom::CrossRegionExport(Writer|Reader)CustomResourceProvider$/;
-
-/** Constructs added to the stack and to the stage (separate helper stacks) while `Hosting` was built. */
-export interface HostingSnapshot {
-	readonly stack: ReadonlySet<IConstruct>;
-	readonly stage: ReadonlySet<IConstruct>;
-}
-
-/**
- * Snapshot the stack's and stage's children before `Hosting` builds anything —
- * pass the result to {@link applyBoundaryToHosting}.
- *
- * @internal
- */
-export function snapshotForHosting(hosting: Construct): HostingSnapshot {
-	const stage = cdk.Stage.of(hosting);
-	return { stack: snapshotChildren(cdk.Stack.of(hosting)), stage: stage ? snapshotChildren(stage) : new Set() };
-}
-
-/**
- * Cap a `Hosting` construct's roles with the boundary of the backend it fronts
- * (`owner`). No-op when the owner has no boundary. Covers:
- *
- * - its own subtree, and the stack-level CDK singletons added while it was built;
- * - the helper stacks it created (e.g. the `us-east-1` CloudFront monitoring
- *   stack) — separate stacks no aspect on the app's stack reaches;
- * - its Lambda@Edge functions: on a stack outside `us-east-1`,
- *   `experimental.EdgeFunction` builds the real function (and its role) in a
- *   shared `edge-lambda-stack-*` under the same construct id, and doesn't expose
- *   that role, so it's found there by id;
- * - the cross-region export writer/reader provider roles those helper stacks
- *   cause. CDK adds them while *preparing* the app — after every aspect has run —
- *   so neither an aspect nor CDK's own `@aws-cdk/core:permissionsBoundary`
- *   context reaches them. A custom-synthesis hook on `hosting` (which CDK runs
- *   after prepare, before any of these stacks' templates are written) caps them.
- *
- * @internal
- */
-export function applyBoundaryToHosting(
-	hosting: Construct,
-	owner: Construct | undefined,
-	before: HostingSnapshot,
-	edgeFunctions: readonly IConstruct[],
-): void {
-	const boundary = owner ? getRootPermissionsBoundary(owner) : undefined;
-	if (!boundary) return;
-	const stack = cdk.Stack.of(hosting);
-	iam.PermissionsBoundary.of(hosting).apply(boundary);
-	applyToNewChildren(stack, before.stack, hosting, boundary);
-
-	const stage = cdk.Stage.of(hosting);
-	const helperStacks = (stage?.node.children ?? []).filter(
-		(c): c is cdk.Stack => cdk.Stack.isStack(c) && !before.stage.has(c),
-	);
-	for (const helper of helperStacks) iam.PermissionsBoundary.of(helper).apply(boundary);
-
-	const edgeStacks = stack.dependencies.filter((s) => s.node.id.startsWith('edge-lambda-stack-'));
-	for (const fn of edgeFunctions) {
-		for (const edgeStack of edgeStacks) {
-			const peer = edgeStack.node.tryFindChild(fn.node.id);
-			if (peer) iam.PermissionsBoundary.of(peer).apply(boundary);
-		}
-	}
-
-	const touched = [stack, ...helperStacks, ...edgeStacks];
-	cdk.attachCustomSynthesis(hosting, {
-		onSynthesize() {
-			for (const target of touched) {
-				for (const provider of target.node.children) {
-					if (!CROSS_REGION_PROVIDER.test(provider.node.id)) continue;
-					for (const node of provider.node.findAll()) {
-						if (cdk.CfnResource.isCfnResource(node) && node.cfnResourceType === 'AWS::IAM::Role') {
-							node.addPropertyOverride('PermissionsBoundary', boundary.managedPolicyArn);
-						}
-					}
-				}
-			}
-		},
-	});
 }

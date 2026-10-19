@@ -16,6 +16,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
 import { BlocksBackend } from './blocks-backend.js';
+import { forEachBlocksRole } from './blocks-roles.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
@@ -197,6 +198,67 @@ describe('defaults.permissionsBoundary — BlocksBackend', () => {
 		assertEveryRoleBounded(Template.fromStack(stack), 'arn:aws:iam::123456789012:policy/app-ceiling');
 	});
 
+	test('passes a shared boundary with a path, and one whose document uses policy variables, through untouched', async () => {
+		// One central policy for many apps: an ARN with a path, by reference…
+		const pathArn = 'arn:aws:iam::123456789012:policy/platform/tenants/app-boundary';
+		const byArn = new cdk.App();
+		const arnStack = new cdk.Stack(byArn, 'PathArnStack');
+		await makeBackend(arnStack, 'Blocks', withBoundary(pathArn));
+		assertEveryRoleBounded(Template.fromStack(arnStack), pathArn);
+
+		// …and a policy document keyed on ${aws:PrincipalTag/app}: CDK must not treat
+		// the IAM policy variable as a token, or escape/mangle it.
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: an IAM policy variable, which must reach the policy verbatim
+		const OWN_APP_PARAMETERS = 'arn:aws:ssm:*:*:parameter/apps/${aws:PrincipalTag/app}/*';
+		const byPolicy = new cdk.App();
+		const policyStack = new cdk.Stack(byPolicy, 'PolicyVariableStack');
+		const shared = new iam.ManagedPolicy(policyStack, 'SharedBoundary', {
+			statements: [
+				new iam.PolicyStatement({ actions: ['*'], resources: ['*'] }),
+				new iam.PolicyStatement({
+					effect: iam.Effect.DENY,
+					actions: ['ssm:GetParameter*'],
+					notResources: [OWN_APP_PARAMETERS],
+				}),
+			],
+		});
+		await makeBackend(policyStack, 'Blocks', withBoundary(shared));
+		const template = Template.fromStack(policyStack);
+		const policyId = Object.keys(template.findResources('AWS::IAM::ManagedPolicy'))[0];
+		assertEveryRoleBounded(template, { Ref: policyId });
+		template.hasResourceProperties('AWS::IAM::ManagedPolicy', {
+			PolicyDocument: {
+				Statement: Match.arrayWith([
+					Match.objectLike({ NotResource: OWN_APP_PARAMETERS }),
+				]),
+			},
+		});
+	});
+
+	test('a second role visitor reaches the same roles as the boundary, stack-level singletons included', async () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'SecondVisitorStack');
+		new iam.Role(stack, 'CustomerOwnedRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
+		const backend = await makeBackend(stack, 'Blocks', withBoundary('blocks-test-boundary'));
+		const visited = new Set<string>();
+		forEachBlocksRole(backend, (role) => {
+			visited.add(stack.resolve(role.logicalId) as string);
+			role.addPropertyOverride('Tags', [{ Key: 'app', Value: 'app-a' }]);
+		});
+
+		const roles = rolesOf(Template.fromStack(stack));
+		const bounded = roles.filter(([, r]) => r.Properties?.PermissionsBoundary !== undefined).map(([id]) => id);
+		assert.deepStrictEqual([...visited].sort(), bounded.sort(), 'visitor and boundary cover the same set');
+		assert.ok(
+			bounded.some((id) => id.startsWith('CustomS3AutoDeleteObjects')),
+			'includes the stack-scoped singleton',
+		);
+		assert.ok(
+			!visited.has(roles.find(([id]) => id.startsWith('CustomerOwnedRole'))?.[0] ?? ''),
+			'not the customer role',
+		);
+	});
+
 	test('unset (both presets): no role gets a PermissionsBoundary', async () => {
 		for (const preset of [BlocksPresets.production, BlocksPresets.sandbox]) {
 			const app = new cdk.App();
@@ -306,7 +368,7 @@ describe('synth-time IAM report', () => {
 			managedPolicyArns: unknown[];
 			statements: ReportStatement[];
 		};
-		otherRoles: { logicalId: string; path: string }[];
+		roles: { logicalId: string; stack: string; path: string; permissionsBoundary: unknown; tags: unknown[] }[];
 	};
 	const readReport = (dir: string, file: string): Report => JSON.parse(readFileSync(join(dir, file), 'utf8'));
 
@@ -332,9 +394,39 @@ describe('synth-time IAM report', () => {
 			`dynamodb grant should be attributed to the kv block: ${dynamo.blocks}`,
 		);
 		assert.ok(
-			report.otherRoles.some((r) => r.path.includes('HelperRole')),
+			report.roles.some((r) => r.path.includes('HelperRole')),
 			'block-owned helper roles are inventoried',
 		);
+	});
+
+	test("role inventory carries each role's boundary and tags exactly as the template does", async () => {
+		const dir = outdir();
+		const app = new cdk.App({ outdir: dir });
+		const stack = await makeStack(app, 'InventoryStack', withBoundary('blocks-test-boundary'));
+		cdk.Tags.of(stack).add('app', 'app-a');
+		app.synth();
+
+		const report = readReport(dir, `${stack.artifactId}.blocks-iam.json`);
+		const template = Template.fromStack(stack);
+		const fromTemplate = rolesOf(template)
+			.map(([id, r]) => {
+				const props = (r as { Properties?: { PermissionsBoundary?: unknown; Tags?: unknown[] } }).Properties;
+				return {
+					logicalId: id,
+					permissionsBoundary: props?.PermissionsBoundary ?? null,
+					tags: props?.Tags ?? [],
+				};
+			})
+			.sort((a, b) => a.logicalId.localeCompare(b.logicalId));
+		const fromReport = report.roles
+			.map(({ logicalId, permissionsBoundary, tags }) => ({ logicalId, permissionsBoundary, tags }))
+			.sort((a, b) => a.logicalId.localeCompare(b.logicalId));
+		assert.deepStrictEqual(fromReport, fromTemplate);
+		assert.ok(
+			report.roles.some((r) => JSON.stringify(r.tags).includes('"app-a"')),
+			'aspect-applied tags appear in the inventory',
+		);
+		assert.ok(report.roles.every((r) => r.stack === stack.artifactId));
 	});
 
 	test('is deterministic across synths (diffable in CI)', async () => {

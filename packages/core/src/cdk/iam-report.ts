@@ -6,7 +6,7 @@ import { join, relative } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct, IConstruct } from 'constructs';
-import { getRootPermissionsBoundary } from './permissions-boundary.js';
+import { finalizeBlocksRoles } from './blocks-roles.js';
 
 /** One statement on the shared execution role, normalized for diffing. */
 interface ReportStatement {
@@ -25,6 +25,38 @@ interface ReportStatement {
 	 * literal ARNs or `*`.
 	 */
 	blocks: string[];
+}
+
+/** One IAM role AWS Blocks created for the root, with its boundary and tags as rendered for the template. */
+interface ReportRole {
+	logicalId: string;
+	/** Cloud-assembly artifact id of the stack the role is in (helper stacks, e.g. us-east-1, appear separately). */
+	stack: string;
+	path: string;
+	/** `PermissionsBoundary` exactly as the template carries it, or `null` when the role has none. */
+	permissionsBoundary: unknown;
+	/** `Tags` exactly as the template carries them (empty when the role has none). */
+	tags: unknown[];
+}
+
+/**
+ * A role's CloudFormation `Properties` as they will be written to the template —
+ * property overrides (the boundary aspect, CDK's boundary context, escape hatches)
+ * and aspect-applied tags included — resolved to CloudFormation intrinsics.
+ *
+ * CDK exposes this rendering only through `CfnElement._toCloudFormation()`, which
+ * its stack synthesizer calls; there's no public equivalent. The IAM report's
+ * tests compare these values against the synthesized template, so a CDK change
+ * that alters this method fails CI rather than skewing the report.
+ */
+function renderedProperties(role: cdk.CfnResource): Record<string, unknown> {
+	const rendered = (role as unknown as { _toCloudFormation(): unknown })._toCloudFormation();
+	// The entry is a post-resolve token (that's where overrides are merged in), so
+	// resolve the whole rendering before reading it.
+	const resolved = cdk.Stack.of(role).resolve(rendered) as {
+		Resources?: Record<string, { Properties?: Record<string, unknown> }>;
+	};
+	return Object.values(resolved.Resources ?? {})[0]?.Properties ?? {};
 }
 
 const asArray = <T>(v: T | T[] | undefined): T[] | undefined =>
@@ -58,8 +90,9 @@ function referencedLogicalIds(value: unknown, out = new Set<string>()): Set<stri
 /**
  * Build the composed-policy report for `root`'s shared execution role: every
  * statement on every inline/managed policy attached to it, the managed policy
- * ARNs, the boundary AWS Blocks applied, and an inventory of the other roles
- * under `root`. Values are CloudFormation-resolved (`Ref` / `Fn::GetAtt` stay
+ * ARNs and the boundary as the template carries them, and an inventory of every
+ * role AWS Blocks created for `root` (each with its boundary and tags as
+ * rendered), so a pipeline can verify both from this one file. Values are CloudFormation-resolved (`Ref` / `Fn::GetAtt` stay
  * as objects) and sorted, so the output is stable across synths.
  *
  * Must run after aspects and before the template is final — i.e. from a custom
@@ -72,7 +105,6 @@ function buildReport(root: Construct, role: iam.Role) {
 
 	const owners = new Map<string, string>();
 	const policies: { id: string; document: unknown }[] = [];
-	const otherRoles: { logicalId: string; path: string }[] = [];
 	const attachedToRole = (roles: unknown) =>
 		(asArray(stack.resolve(roles)) ?? []).some((r) => JSON.stringify(r) === JSON.stringify({ Ref: roleId }));
 
@@ -86,13 +118,6 @@ function buildReport(root: Construct, role: iam.Role) {
 			policies.push({ id: logicalId, document: node.policyDocument });
 		} else if (node instanceof iam.CfnManagedPolicy && attachedToRole(node.roles)) {
 			policies.push({ id: logicalId, document: node.policyDocument });
-		} else if (
-			cdk.CfnResource.isCfnResource(node) &&
-			node.cfnResourceType === 'AWS::IAM::Role' &&
-			node !== roleCfn &&
-			node.node.path.startsWith(`${root.node.path}/`)
-		) {
-			otherRoles.push({ logicalId, path: node.node.path });
 		}
 	}
 	for (const inline of asArray(stack.resolve(roleCfn.policies)) ?? []) {
@@ -125,7 +150,20 @@ function buildReport(root: Construct, role: iam.Role) {
 		}
 	}
 
-	const boundary = getRootPermissionsBoundary(root);
+	// Every role AWS Blocks created for this root — the same set the permissions
+	// boundary is applied to (blocks-roles.ts), including other stacks' roles.
+	const roles: ReportRole[] = finalizeBlocksRoles(root).map((r) => {
+		const props = renderedProperties(r);
+		const roleStack = cdk.Stack.of(r);
+		return {
+			logicalId: roleStack.resolve(r.logicalId) as string,
+			stack: roleStack.artifactId,
+			path: r.node.path,
+			permissionsBoundary: props.PermissionsBoundary ?? null,
+			tags: asArray(props.Tags as unknown[] | undefined) ?? [],
+		};
+	});
+	const executionRoleProps = renderedProperties(roleCfn);
 	return {
 		schemaVersion: 1,
 		description:
@@ -134,11 +172,11 @@ function buildReport(root: Construct, role: iam.Role) {
 		root: root.node.path,
 		executionRole: {
 			logicalId: roleId,
-			permissionsBoundary: boundary ? stack.resolve(boundary.managedPolicyArn) : null,
+			permissionsBoundary: executionRoleProps.PermissionsBoundary ?? null,
 			managedPolicyArns: sortJson(asArray(stack.resolve(roleCfn.managedPolicyArns)) ?? []),
 			statements: sortJson(statements),
 		},
-		otherRoles: [...otherRoles].sort((a, b) => a.path.localeCompare(b.path)),
+		roles: roles.sort((a, b) => a.stack.localeCompare(b.stack) || a.logicalId.localeCompare(b.logicalId)),
 	};
 }
 

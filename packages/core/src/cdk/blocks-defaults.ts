@@ -175,6 +175,15 @@ export interface BlocksDefaults {
 	 * context still applies everywhere else), and synth emits a warning. Either
 	 * one alone bounds every Blocks role.
 	 *
+	 * **One policy for many apps.** A platform can share a single boundary policy
+	 * across every app in an account by writing it with policy variables, e.g.
+	 * `arn:aws:ssm:*:*:parameter/apps/${aws:PrincipalTag/app}/*`, and tagging each
+	 * app's stack with its `app` name. The policy (by name, ARN or
+	 * `IManagedPolicy`) is referenced as-is; Blocks never rewrites its document.
+	 * The synth-time IAM report lists every Blocks role with its boundary and tags,
+	 * so a pipeline can check both. See the core README section "Running many apps
+	 * in one AWS account".
+	 *
 	 * It caps the blast radius of the shared role; it doesn't split it — every
 	 * Blocks handler still runs as the same role, under the same boundary.
 	 *

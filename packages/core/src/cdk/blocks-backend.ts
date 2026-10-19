@@ -23,11 +23,8 @@ import {
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
-import {
-	applyBlocksPermissionsBoundary,
-	applyBoundaryToStackLevelAdditions,
-	snapshotChildren,
-} from './permissions-boundary.js';
+import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
+import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
 import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
@@ -205,11 +202,13 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	});
 
 	// ── Permissions boundary + IAM report ─────────────────────────────────
-	// Opt-in ceiling on every role under this root (`defaults.permissionsBoundary`):
-	// an aspect, so it also caps roles blocks add after this point. Unset → no-op,
+	// Cover every role AWS Blocks creates for this root (blocks-roles.ts — an
+	// aspect, so roles blocks add later are covered too), then apply the opt-in
+	// ceiling (`defaults.permissionsBoundary`) to that set. Unset → no-op,
 	// templates unchanged. The report lists what the shared role accumulated; it is
 	// written at synth (after every block has granted) beside the template.
-	applyBlocksPermissionsBoundary(scope, props.defaults);
+	coverBlocksRoot(scope);
+	applyBlocksPermissionsBoundary(scope);
 	const owningStack = cdk.Stack.of(scope);
 	attachIamReport(
 		scope,
@@ -612,7 +611,8 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		ensureVpcAccessPolicyWhenVpcActive(backend);
 
 		// Last, so every role a block or finalizer hoisted to stack scope exists.
-		applyBoundaryToStackLevelAdditions(backend, stackChildrenBefore);
+		coverStackLevelAdditions(backend, stackChildrenBefore);
+		warnOnMixedBoundaries(backend);
 
 		return backend;
 	}
