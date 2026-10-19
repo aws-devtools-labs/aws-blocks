@@ -85,8 +85,7 @@ final class OIDCE2ETests: BlocksE2ETestCase {
     }
 
     private func getOidcClient() async throws -> OIDCClient {
-        let oidcAuthApi = OidcAuthApi(server: Self.server)
-        return try await oidcAuthApi.getClient()
+        try await blocks.oidcAuthApi.getClient()
     }
 
     func testSignInRelayAndAuthenticatedRPC() async throws {

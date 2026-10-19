@@ -18,6 +18,7 @@ export type {
 	MetricsSource,
 	ResolvedDashboardConfig,
 } from './types.js';
+import { BB_NAME } from './version.js';
 
 /**
  * Auto-generated CloudWatch Dashboard for application observability.
@@ -69,7 +70,7 @@ export class Dashboard extends Scope {
 	readonly dashboardName: string;
 
 	constructor(scope: ScopeParent, id: string, options?: DashboardOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME });
 
 		const config = resolveConfig(id, options, this.fullId);
 		this.dashboardName = config.dashboardName;
