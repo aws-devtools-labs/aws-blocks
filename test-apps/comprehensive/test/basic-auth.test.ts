@@ -580,6 +580,38 @@ export function basicAuthTests(getApi: () => typeof apiType) {
       });
     });
 
+    // ── setAuthState error redaction ─────────────────────────────────────
+    //
+    // `auth-delivery-fails` has a codeDelivery hook that throws, so signUp
+    // fails after the user record is written. The state machine reports the
+    // failure in `AuthState.error`, which reaches unauthenticated clients.
+
+    describe('setAuthState error redaction', () => {
+      // Dynamic import, not static: `aws-blocks` resolves to the generated
+      // client.js, which only exists once e2e.test.ts has started the server
+      // (it imports the client the same way). Destructure the namespace from the
+      // module; awaiting the namespace proxy itself would probe it as a thenable.
+
+      test('an unbranded backend error reaches the client only as a generic message', async () => {
+        const { authDeliveryFailsApi } = await import('aws-blocks');
+        const state = await authDeliveryFailsApi.setAuthState({ action: 'signUp', username: `raw-${uniqueUser()}`, password: 'password123' });
+
+        assert.strictEqual(state.state, 'signedOut');
+        assert.strictEqual(state.error, 'Internal error');
+        assert.strictEqual(state.errorName, undefined);
+        assert.ok(!JSON.stringify(state).includes('111122223333'), `AuthState must not carry backend detail: ${JSON.stringify(state)}`);
+      });
+
+      test('an ApiError message and name reach the client unchanged', async () => {
+        const { authDeliveryFailsApi } = await import('aws-blocks');
+        const state = await authDeliveryFailsApi.setAuthState({ action: 'signUp', username: `api-${uniqueUser()}`, password: 'password123' });
+
+        assert.strictEqual(state.state, 'signedOut');
+        assert.strictEqual(state.error, 'That address cannot receive email');
+        assert.strictEqual(state.errorName, 'UndeliverableAddressException');
+      });
+    });
+
   });
 
 }
