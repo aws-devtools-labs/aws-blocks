@@ -14,8 +14,23 @@ interface BuildingBlockCensus {
 }
 
 /**
- * Adds `Metadata.AWSToolsMetrics.AWSBlocks` (`1;core=…;mode=…;bb=…;custom=…`) to the top-level stack
- * and tags `stack` with `blocks:deployment-type`.
+ * Adds AWS Blocks identification metadata and a deployment-type tag to a CloudFormation stack.
+ *
+ * Writes `Metadata.AWSToolsMetrics.AWSBlocks` into the template of the top-level
+ * (non-nested) stack containing `stack`, with the value
+ * `1;core=<core version>;mode=<sandbox|production>;bb=<names>;custom=<count>`. Other `Metadata` entries and
+ * sibling keys of an object-valued `AWSToolsMetrics` are preserved; a non-object
+ * `AWSToolsMetrics` value is replaced. Nested stacks never receive the entry.
+ *
+ * `bb` lists the official Building Blocks in the app (sorted, deduplicated, comma-separated;
+ * empty if none) and `custom` counts all other Building Block instances. Both are resolved at
+ * synth, so they include blocks constructed later and blocks in nested stacks.
+ *
+ * Also applies a `blocks:deployment-type` tag (`sandbox` or `production`) to `stack`.
+ * The mode is derived from the CDK context key `sandboxMode`.
+ *
+ * @param stack - The CDK stack to annotate. May be a nested stack; the metadata is
+ *   then written to its root stack.
  */
 export function addBlocksStackMetadata(stack: cdk.Stack): void {
 	const isSandbox =
