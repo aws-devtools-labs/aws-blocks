@@ -312,6 +312,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: publish
+    # Serialize across PRs (and against e2e-production, which deploys the same
+    # comprehensive app). The AuthCognito admin suite drives Cognito admin APIs
+    # (AdminCreateUser / AdminGetUser / AdminAddUserToGroup …), whose rate quota
+    # (~5 RPS for the admin-read category) is enforced PER ACCOUNT PER REGION,
+    # aggregated across every user pool. Concurrent PR runs each hammer their own
+    # pool but sum against that one budget, so the suite intermittently fails with
+    # `LimitExceededException: Limit exceeded, try again later` (HTTP 429). A shared
+    # concurrency group lets only one Cognito-admin e2e run at a time account-wide;
+    # queue rather than cancel so an in-flight deploy/destroy isn't interrupted.
+    # Mirrors the existing blocks-test-vpc / e2e-supabase serialization.
+    concurrency:
+      group: blocks-cognito-admin-e2e
+      cancel-in-progress: false
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
@@ -410,6 +423,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: publish
+    # Shares the blocks-cognito-admin-e2e group with e2e-sandbox: both deploy the
+    # comprehensive app and run the AuthCognito admin suite, so they contend for
+    # the same account-wide Cognito admin rate quota. Serializing them (across PRs
+    # and against each other) is what removes the LimitExceededException flakiness.
+    # See the note on e2e-sandbox. Queue rather than cancel.
+    concurrency:
+      group: blocks-cognito-admin-e2e
+      cancel-in-progress: false
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
