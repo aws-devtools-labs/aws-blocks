@@ -28,7 +28,8 @@ feat(core): opt-in permissions boundary on every role AWS Blocks creates, plus a
   an inventory of every IAM role AWS Blocks created with its boundary and tags as
   the template carries them. The file is sorted and deterministic, so CI
   (continuous integration) can diff it between builds or check every role's
-  boundary and tags. It doesn't change the CloudFormation template.
+  boundary and tags. It doesn't change the CloudFormation template. The file is
+  written on every synth, whether or not a permissions boundary is set.
 - **Shared multi-app accounts:** the core README has a new section on running
   many apps in one AWS account: an example boundary policy that uses
   attribute-based access control (`${aws:PrincipalTag/app}`) so one policy

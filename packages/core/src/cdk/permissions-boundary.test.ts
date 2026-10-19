@@ -228,9 +228,7 @@ describe('defaults.permissionsBoundary — BlocksBackend', () => {
 		assertEveryRoleBounded(template, { Ref: policyId });
 		template.hasResourceProperties('AWS::IAM::ManagedPolicy', {
 			PolicyDocument: {
-				Statement: Match.arrayWith([
-					Match.objectLike({ NotResource: OWN_APP_PARAMETERS }),
-				]),
+				Statement: Match.arrayWith([Match.objectLike({ NotResource: OWN_APP_PARAMETERS })]),
 			},
 		});
 	});
@@ -315,6 +313,11 @@ describe('defaults.permissionsBoundary — BlocksBackend', () => {
 		['a name with a path', 'platform/ceiling', /permissionsBoundary.*full ARN/s],
 		['a non-policy ARN', 'arn:aws:s3:::my-bucket', /permissionsBoundary.*IAM managed policy ARN/s],
 		['a non-policy object', { managedPolicyArn: 42 }, /permissionsBoundary.*IManagedPolicy/s],
+		[
+			'an IManagedPolicy-shaped object with a non-ARN',
+			{ managedPolicyArn: 'not-an-arn' },
+			/permissionsBoundary.*IAM managed policy ARN/s,
+		],
 	] as const) {
 		test(`rejects ${label} with an actionable error`, async () => {
 			const app = new cdk.App();
@@ -406,6 +409,9 @@ describe('synth-time IAM report', () => {
 		cdk.Tags.of(stack).add('app', 'app-a');
 		app.synth();
 
+		// Guards the report's coupling to CDK's internal CfnElement._toCloudFormation()
+		// (iam-report.ts renderedProperties): if a CDK upgrade changes what that method
+		// renders, the inventory stops matching the synthesized template and this fails.
 		const report = readReport(dir, `${stack.artifactId}.blocks-iam.json`);
 		const template = Template.fromStack(stack);
 		const fromTemplate = rolesOf(template)
@@ -427,6 +433,63 @@ describe('synth-time IAM report', () => {
 			'aspect-applied tags appear in the inventory',
 		);
 		assert.ok(report.roles.every((r) => r.stack === stack.artifactId));
+	});
+
+	describe("fails loudly when CDK's internal CfnElement._toCloudFormation() changes", () => {
+		// Test plumbing: break the internal method on the shared execution role, the way
+		// a CDK upgrade that renamed or changed it would. CDK itself calls it while
+		// preparing the app (reference resolution), so swap it in from a synthesis hook
+		// on the CfnRole — synthesis visits children first, so this runs after prepare
+		// and just before the report's hook on the parent iam.Role.
+		const breakRole = (stack: cdk.Stack, replacement: unknown) => {
+			const role = stack.node
+				.findAll()
+				.find(
+					(c): c is iam.CfnRole =>
+						c instanceof iam.CfnRole && (stack.resolve(c.logicalId) as string).startsWith('BlocksRole'),
+				);
+			assert.ok(role, 'expected the shared execution role');
+			cdk.attachCustomSynthesis(role, {
+				onSynthesize() {
+					(role as unknown as Record<string, unknown>)._toCloudFormation = replacement;
+				},
+			});
+			return role.node.path;
+		};
+		const original = new Error('internal CDK failure');
+		for (const [label, replacement, expectedCause] of [
+			['is missing', undefined, undefined],
+			[
+				'throws',
+				() => {
+					throw original;
+				},
+				original,
+			],
+			['renders no Resources entry', () => ({}), undefined],
+		] as const) {
+			test(`when it ${label}`, async () => {
+				const app = new cdk.App({ outdir: outdir() });
+				const stack = await makeStack(app, 'BrokenRenderStack', withBoundary('blocks-test-boundary'));
+				const path = breakRole(stack, replacement);
+				let thrown: unknown;
+				try {
+					app.synth();
+				} catch (e) {
+					thrown = e;
+				}
+				assert.ok(thrown instanceof Error, 'synth should throw');
+				assert.match(thrown.message, /AWS Blocks IAM report/);
+				assert.match(thrown.message, /_toCloudFormation\(\)/);
+				assert.ok(
+					thrown.message.includes(path),
+					`message should name the role path ${path}: ${thrown.message}`,
+				);
+				assert.strictEqual(thrown.cause, expectedCause);
+				assert.ok(!Object.keys(thrown).includes('cause'), 'cause must not be enumerable');
+				assert.ok(!JSON.stringify(thrown).includes('internal CDK failure'), 'cause must not serialize');
+			});
+		}
 	});
 
 	test('is deterministic across synths (diffable in CI)', async () => {

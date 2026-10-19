@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, relative } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -48,15 +49,51 @@ interface ReportRole {
  * its stack synthesizer calls; there's no public equivalent. The IAM report's
  * tests compare these values against the synthesized template, so a CDK change
  * that alters this method fails CI rather than skewing the report.
+ *
+ * At synth, the coupling is guarded too: if `_toCloudFormation` is missing, throws,
+ * or renders no `Resources` entry, this throws an AWS Blocks error naming the role
+ * path, the internal method, and the installed aws-cdk-lib version (with the
+ * original error, if any, as a non-enumerable `cause`) — so synth fails loudly
+ * instead of writing a report with missing boundaries or tags.
  */
 function renderedProperties(role: cdk.CfnResource): Record<string, unknown> {
-	const rendered = (role as unknown as { _toCloudFormation(): unknown })._toCloudFormation();
-	// The entry is a post-resolve token (that's where overrides are merged in), so
-	// resolve the whole rendering before reading it.
-	const resolved = cdk.Stack.of(role).resolve(rendered) as {
-		Resources?: Record<string, { Properties?: Record<string, unknown> }>;
-	};
-	return Object.values(resolved.Resources ?? {})[0]?.Properties ?? {};
+	const toCloudFormation = (role as unknown as { _toCloudFormation?: unknown })._toCloudFormation;
+	if (typeof toCloudFormation !== 'function') throw cdkCouplingError(role, 'the method no longer exists');
+	let resolved: { Resources?: Record<string, { Properties?: Record<string, unknown> }> } | undefined;
+	try {
+		// The entry is a post-resolve token (that's where overrides are merged in), so
+		// resolve the whole rendering before reading it.
+		resolved = cdk.Stack.of(role).resolve(toCloudFormation.call(role));
+	} catch (original) {
+		throw cdkCouplingError(role, 'calling it threw', original);
+	}
+	const entry = Object.values(resolved?.Resources ?? {})[0];
+	if (!entry) throw cdkCouplingError(role, 'it returned no Resources entry');
+	return entry.Properties ?? {};
+}
+
+/** The installed aws-cdk-lib version, or `undefined` if it can't be read. */
+function cdkVersion(): string | undefined {
+	try {
+		return (createRequire(import.meta.url)('aws-cdk-lib/package.json') as { version?: string }).version;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The error {@link renderedProperties} throws when CDK's internal rendering
+ * changed. The original error, if any, is kept as a non-enumerable `cause`
+ * (native `Error` options), so it's available to debuggers but never serialized.
+ */
+function cdkCouplingError(role: cdk.CfnResource, what: string, original?: unknown): Error {
+	const version = cdkVersion();
+	return new Error(
+		`AWS Blocks IAM report: could not render ${role.node.path} through aws-cdk-lib's internal ` +
+			`CfnElement._toCloudFormation() (${what}) — this aws-cdk-lib version${version ? ` (${version})` : ''} ` +
+			'changed it. Pin aws-cdk-lib to a supported version or report this to AWS Blocks.',
+		original === undefined ? undefined : { cause: original },
+	);
 }
 
 const asArray = <T>(v: T | T[] | undefined): T[] | undefined =>

@@ -53,6 +53,12 @@ function validateAndImport(
 		return iam.ManagedPolicy.fromManagedPolicyName(root, 'BlocksPermissionsBoundary', value);
 	}
 	if (typeof input === 'object' && input !== null && typeof input.managedPolicyArn === 'string') {
+		// Real IManagedPolicy objects carry a token (Ref / Fn::Join) or a valid ARN;
+		// a concrete non-ARN means a hand-built object with the wrong value.
+		const arn = input.managedPolicyArn;
+		if (!cdk.Token.isUnresolved(arn) && !POLICY_ARN.test(arn)) {
+			throw invalid(`managedPolicyArn "${arn}" is not an IAM managed policy ARN.`);
+		}
 		return input;
 	}
 	throw invalid('expected a string or an iam.IManagedPolicy.');

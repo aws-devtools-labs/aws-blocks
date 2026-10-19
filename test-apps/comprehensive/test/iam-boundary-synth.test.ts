@@ -12,6 +12,13 @@
  * compute, that creates a role outside the boundary's reach fails here.
  *
  * Also checks the synth-time IAM report (`<stack>.blocks-iam.json`) is written.
+ *
+ * Scope: this guard covers every Building Block's roles in one VPC-free
+ * `BlocksStack` with no Hosting. The other topologies are covered elsewhere:
+ * off-region Hosting, Lambda@Edge and the cross-region-reference provider in
+ * `packages/core/src/hosting.test.ts` (describe block
+ * "defaults.permissionsBoundary of the fronted backend"), and embedded
+ * `BlocksBackend` topologies in `packages/core/src/cdk/permissions-boundary.test.ts`.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
