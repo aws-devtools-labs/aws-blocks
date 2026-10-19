@@ -42,13 +42,22 @@ describe('defaults.permissionsBoundary covers every role in the comprehensive ap
 
   before(() => {
     outdir = mkdtempSync(join(tmpdir(), 'blocks-iam-boundary-'));
+    // AGENTS.md Core rule 1: synth needs `--conditions=cdk`. Set it explicitly so the test doesn't depend on the caller's NODE_OPTIONS or on tsx's `-C`.
+    const nodeOptions = process.env.NODE_OPTIONS ?? '';
     execFileSync(
       'npx',
       [
         'cdk', 'synth', '--app', 'npx tsx -C cdk aws-blocks/index.cdk.ts', '--output', outdir, '--quiet',
         '--context', 'sandboxMode=true', '--context', `blocksPermissionsBoundary=${BOUNDARY}`,
       ],
-      { cwd: APP_ROOT, stdio: 'pipe' },
+      {
+        cwd: APP_ROOT,
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          NODE_OPTIONS: nodeOptions.includes('--conditions=cdk') ? nodeOptions : `${nodeOptions} --conditions=cdk`.trim(),
+        },
+      },
     );
   });
 
