@@ -1231,6 +1231,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const u = await authC.admin.createUser(username, {
       temporaryPassword,
       attributes: { department, email: `${username}@example.com` },
+      // Without SUPPRESS, Cognito emails an invite via its default sender, whose
+      // account-wide daily cap turns repeat CI runs into LimitExceededException.
+      suppressInvite: true,
     });
     return { username: u.username, enabled: u.enabled };
   },

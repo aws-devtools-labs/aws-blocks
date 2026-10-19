@@ -9,6 +9,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type { ExternalSecretRef, SecretOptions } from './types.js';
+import { BB_NAME } from './version.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { SecretErrors } from './errors.js';
@@ -46,7 +47,7 @@ export class Secret extends BuildingBlockScope {
 	}
 
 	constructor(scope: ScopeParent, id: string, options?: SecretOptions<unknown>) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER] } });
 
 		if (options?.secret) {
 			// `fromExisting`: bind to the pre-existing secret by ARN; do not

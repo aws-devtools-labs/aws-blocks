@@ -33,7 +33,11 @@ internal object NativeCatalogParser {
         val kotlinPackages = packagesCatalog?.let { parsePackages(it) } ?: emptyMap()
         val referenced = mutableSetOf<String>()
         val bindings = bindingsCatalog?.let { parseBindings(it, kotlinPackages, referenced) } ?: emptyList()
-        return NativeCatalogs(bindings = bindings, unreferencedPackages = kotlinPackages.keys - referenced)
+        return NativeCatalogs(
+            bindings = bindings,
+            unreferencedPackages = kotlinPackages.keys - referenced,
+            declaredPackages = kotlinPackages.keys,
+        )
     }
 
     /** Identity to its `android.package.kotlinPackage`, or null where none is declared. */
