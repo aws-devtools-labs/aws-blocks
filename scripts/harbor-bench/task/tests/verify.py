@@ -81,8 +81,9 @@ try:
     stop()
     if server_log:
         server_log.close()
-    # A successful POST plus restart survival also fits a raw-file backend; Blocks mocks
-    # persist under .bb-data, so every verifier-created record must be stored there.
+    # Heuristic: Blocks mocks persist under .bb-data, so verifier records stored anywhere else
+    # (own files, browser storage) fail here. A backend writing its own files inside .bb-data
+    # would still pass; the ApiNamespace import check and the prompt cover the rest.
     stage = 'blocks_persistence'
     titles = [item['title'] for item in json.loads(Path('/var/lib/harbor-verifier/state.json').read_text())['items']]
     assert titles and not stored_in_blocks(Path('/app/todo-app'), titles), 'records missing from .bb-data'

@@ -111,7 +111,7 @@ class ProvenanceTests(unittest.TestCase):
             app = Path(temp)
             (app / '.bb-data/app-todos').mkdir(parents=True)
             (app / '.bb-data/app-todos/store.json').write_text('{"1":{"title":"survival-a"}}')
-            (app / 'data.json').write_text('["survival-b"]')  # Raw-file backend, not Blocks.
+            (app / 'data.json').write_text('["survival-b"]')  # Stored outside the Blocks mock directory.
             (app / 'node_modules/x/.bb-data').mkdir(parents=True)
             (app / 'node_modules/x/.bb-data/f').write_text('survival-b')
             self.assertEqual(stored_in_blocks(app, ['survival-a']), [])
@@ -185,6 +185,26 @@ class ReportTests(unittest.TestCase):
             del data['checks']['blocks_persistence']
             verification.write_text(json.dumps(data))
             self.assertEqual(collect(root, identity, 0, None)['phases'][2]['status'], 'failed')
+            verification.write_text(json.dumps(dict(data, checks={**data['checks'], 'blocks_persistence': True})))
+
+            # Harbor stops after a failed gated phase: the earlier passing pair stays comparable.
+            stopped = root / 'jobs/candidate/trial'
+            stopped.mkdir(parents=True)
+            (stopped / 'result.json').write_text(json.dumps({'step_results': steps[:2]}))
+            for name, status in (('create', 'passed'), ('due-dates', 'failed')):
+                (stopped / 'steps' / name / 'verifier').mkdir(parents=True)
+                checks = {key: status == 'passed' for key in ('package_provenance', 'build', 'all_phases_and_reload',
+                                                             'blocks_persistence', 'server_restart_fresh_browser')}
+                (stopped / 'steps' / name / 'verifier/verification.json').write_text(
+                    json.dumps({'status': status, 'checks': checks}))
+            candidate = collect(root, dict(identity, arm='candidate'), 0, None)
+            self.assertTrue(candidate['same_session'])
+            self.assertEqual(candidate['status'], 'failed')
+            self.assertEqual([p['status'] for p in candidate['phases']], ['passed', 'failed', 'not_run'])
+            (root / 'harbor-result-candidate/result.json').write_text(json.dumps(candidate))
+            report = render(root)
+            self.assertIn('| create | passed, skill: skill_tool | passed, skill: skill_tool | yes (n=1) |', report)
+            self.assertIn('| due-dates | passed, skill: skill_tool | failed, skill: skill_tool | no |', report)
 
 
 if __name__ == '__main__':

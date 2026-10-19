@@ -19,8 +19,9 @@ claim. Nothing is deployed.
 5. After each phase the root-owned verifier (`task/tests/verify.py`) kills agent servers,
    checks package provenance, runs `npm run build`, starts `npm run dev` as `node` and drives
    Chromium (`ui.mjs`) through every behavior added so far. It then checks that the records it
-   created are stored in the app's Blocks mock data (`.bb-data`), restarts the server and checks
-   the records again in a fresh browser context.
+   created appear under the app's Blocks mock data directory (`.bb-data`), a heuristic that catches
+   storage outside Blocks but not a backend writing its own files there. Finally it restarts the
+   server and checks the records again in a fresh browser context.
 6. A separate job renders `report.py` into the run summary and one advisory PR comment.
 
 A phase passes only when the agent finished, same-session accounting is complete and every

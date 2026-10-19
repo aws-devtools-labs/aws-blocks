@@ -38,7 +38,7 @@ def collect(work, identity, exit_code, error):
     trial_path = trials[0]
     trial = load(trial_path) or {}
     steps = {step['step_name']: step for step in trial.get('step_results') or []}
-    session_ids = set()
+    session_ids = []  # One entry per executed step; Harbor stops after a failed gated phase.
     for name in PHASES:
         step = steps.get(name)
         if not step:
@@ -46,8 +46,7 @@ def collect(work, identity, exit_code, error):
             continue
         agent = step.get('agent_result') or {}
         metrics = (agent.get('metadata') or {}).get('harbor_bench') or {}
-        if metrics.get('session_id'):
-            session_ids.add(metrics['session_id'])
+        session_ids.append(metrics.get('session_id'))
         step_dir = trial_path.parent / 'steps' / name
         verification = load(step_dir / 'verifier' / 'verification.json') or {}
         ui_results = {mode: data for mode in ('exercise', 'survival')
@@ -86,7 +85,8 @@ def collect(work, identity, exit_code, error):
                  'files': numeric(p.get('files'))}
                 for p in provenance.get('packages', [])
                 if (p.get('name'), p.get('version'), p.get('integrity')) in expected], indent=2))
-    result['same_session'] = len(session_ids) == 1 and len(steps) == 3
+    # Continuity covers the steps that ran; not_run phases already keep the run from passing.
+    result['same_session'] = bool(session_ids) and None not in session_ids and len(set(session_ids)) == 1
     result['status'] = 'passed' if (exit_code == 0 and not error and not trial.get('exception_info')
                                    and result['same_session']
                                    and all(p['status'] == 'passed' for p in result['phases'])) else 'failed'
