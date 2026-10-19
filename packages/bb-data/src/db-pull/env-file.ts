@@ -14,9 +14,7 @@
  *
  * @module
  */
-import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { parseEnv } from 'node:util';
 
 const QUOTES = ['"', "'", '`'] as const;
@@ -77,9 +75,15 @@ function closingQuoteLine(lines: string[], from: number, quote: string): number 
  *
  * - Every existing assignment of `key` (including `export KEY=` forms and quoted,
  *   multi-line values) is rewritten in place, keeping its indentation, `export`
- *   prefix, spacing around `=`, trailing `# comment`, and line ending.
+ *   prefix, spacing around `=`, trailing `# comment`, and line ending. A line
+ *   counts as an assignment of `key` only when Node's parser reads it as one:
+ *   `export KEY=` with an empty value is read as the separate key `export KEY`,
+ *   so it is left alone.
  * - When `key` is absent, `KEY=value` is appended using the file's line ending
  *   (CRLF if the file uses it), first terminating a final line that lacks a newline.
+ *   If the file ends with an assignment whose value is only whitespace (`A= `),
+ *   Node would read the appended line as that value, so a `#` comment line is
+ *   inserted first to end it.
  * - Comments, blank lines, other keys (duplicates included) and untouched line
  *   endings are preserved byte-for-byte. A leading BOM is kept as-is; Node's
  *   parser does not strip it, so it is treated as part of the first line's key,
@@ -108,7 +112,9 @@ export function upsertEnvContent(content: string, key: string, value: string): s
 		let last = i;
 		if (quoted && !quoted[2].includes(quoted[1])) last = closingQuoteLine(lines, i, quoted[1]);
 
-		if (!mine) {
+		// The regex is a quick filter; Node's parser decides whether the line (or the
+		// quoted value it opens) really assigns `key`.
+		if (!mine || !Object.hasOwn(parseEnv(lines.slice(i, last + 1).join('')), key)) {
 			for (let j = i; j <= last; j++) out.push(lines[j]);
 			i = last;
 			continue;
@@ -143,7 +149,9 @@ export function upsertEnvContent(content: string, key: string, value: string): s
 		const eol = content.includes('\r\n') ? '\r\n' : '\n';
 		const last = out.length > 0 ? out[out.length - 1] : '';
 		if (last !== '' && !last.endsWith('\n')) out[out.length - 1] = last + eol;
-		out.push(`${key}=${formatted}${eol}`);
+		const line = `${key}=${formatted}${eol}`;
+		if (parseEnv(out.join('') + line)[key] !== value) out.push(`#${eol}`);
+		out.push(line);
 	}
 
 	const result = out.join('');
@@ -168,24 +176,20 @@ function assertOnlyKeyChanged(before: string, after: string, key: string, value:
 
 /**
  * Set `key` to `value` in the env file at `filePath`, preserving everything else
- * in it (see {@link upsertEnvContent}). Creates the file when missing. The write
- * is atomic — a temp file in the same directory is renamed over the target, so an
- * interrupted write never leaves a truncated file — and keeps the existing file's
- * permission bits (e.g. `0600`). A symlinked env file is updated at its target.
- * Returns whether the file was created.
+ * in it (see {@link upsertEnvContent}). Creates the file when missing. The file is
+ * rewritten in place, so it keeps its inode and with it its permission bits (e.g.
+ * `0600`), owner, group and ACLs; a read-only file is refused (`EACCES`) rather
+ * than replaced. A symlinked env file is updated at its target (a dangling link's
+ * target is created). Returns whether the file was created.
  */
 export function upsertEnvFile(filePath: string, key: string, value: string): { created: boolean } {
-	let target = filePath;
 	let original: string | null = null;
-	let mode: number | undefined;
 	try {
-		target = fs.realpathSync(filePath);
-		const raw = fs.readFileSync(target);
+		const raw = fs.readFileSync(filePath);
 		original = raw.toString('utf-8');
 		if (!Buffer.from(original, 'utf-8').equals(raw)) {
 			throw new Error(`${filePath} is not valid UTF-8. Set ${key} in it by hand.`);
 		}
-		mode = fs.statSync(target).mode & 0o7777;
 	} catch (e: unknown) {
 		if (!(e instanceof Error && 'code' in e && e.code === 'ENOENT')) throw e;
 	}
@@ -196,39 +200,6 @@ export function upsertEnvFile(filePath: string, key: string, value: string): { c
 	} catch (e: unknown) {
 		throw new Error(`${filePath}: ${e instanceof Error ? e.message : String(e)}`);
 	}
-	if (next !== original) writeFileAtomic(target, next, mode);
+	if (next !== original) fs.writeFileSync(filePath, next);
 	return { created: original === null };
-}
-
-/**
- * Write `data` to a temp file beside `target`, then rename it into place. `mode`
- * (the replaced file's permission bits) is applied explicitly so the umask can't
- * widen or narrow it; a new file gets the same default as `fs.writeFileSync`.
- * The temp file is removed if any step fails.
- */
-function writeFileAtomic(target: string, data: string, mode: number | undefined): void {
-	const tmp = path.join(
-		path.dirname(target),
-		`.${path.basename(target)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`,
-	);
-	let fd: number | undefined;
-	try {
-		fd = fs.openSync(tmp, 'wx', mode ?? 0o666);
-		fs.writeFileSync(fd, data);
-		if (mode !== undefined) fs.fchmodSync(fd, mode);
-		fs.fsyncSync(fd);
-		fs.closeSync(fd);
-		fd = undefined;
-		fs.renameSync(tmp, target);
-	} catch (e) {
-		if (fd !== undefined) {
-			try {
-				fs.closeSync(fd);
-			} catch {
-				// Already failing; the original error is the one worth reporting.
-			}
-		}
-		fs.rmSync(tmp, { force: true });
-		throw e;
-	}
 }

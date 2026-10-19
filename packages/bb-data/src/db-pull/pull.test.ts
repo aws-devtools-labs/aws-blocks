@@ -68,6 +68,26 @@ describe('hasDevConnection (production prerequisite gate)', () => {
     }
   });
 
+  test('true when .env.local holds a non-empty `export SUPABASE_DB_URL=` entry', () => {
+    const dir = tmpProject();
+    try {
+      fs.writeFileSync(path.join(dir, '.env.local'), `# dev\nexport SUPABASE_DB_URL=${SUPA_DEV} # dev db\n`);
+      assert.equal(hasDevConnection(dir), true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('reads the value as core\'s loader does (a commented-out or empty export does not count)', () => {
+    const dir = tmpProject();
+    try {
+      fs.writeFileSync(path.join(dir, '.env.local'), `# SUPABASE_DB_URL=${SUPA_DEV}\nexport SUPABASE_DB_URL=\n`);
+      assert.equal(hasDevConnection(dir), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('false when the connection var is present but empty', () => {
     const dir = tmpProject();
     try {
@@ -175,7 +195,7 @@ describe('writeProductionEnv', () => {
     }
   });
 
-  test('keeps the permissions of an existing .env.production and leaves no temp file', { skip: process.platform === 'win32' }, () => {
+  test('keeps the permissions of an existing .env.production', { skip: process.platform === 'win32' }, () => {
     const dir = tmpProject();
     try {
       const envProdPath = path.join(dir, '.env.production');
@@ -183,7 +203,7 @@ describe('writeProductionEnv', () => {
       fs.chmodSync(envProdPath, 0o600);
       writeProductionEnv(dir, SUPA_PROD);
       assert.equal(fs.statSync(envProdPath).mode & 0o777, 0o600);
-      assert.deepEqual(fs.readdirSync(dir).sort(), ['.env.production', '.gitignore']);
+      assert.equal(fs.readFileSync(envProdPath, 'utf-8'), `OTHER_SECRET=value\nSUPABASE_DB_URL=${SUPA_PROD}\n`);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -356,6 +376,20 @@ describe('dbPull .env.local handling', () => {
       const seen = runDbPull(dir, SUPA_DEV);
       assert.equal(fs.readFileSync(path.join(dir, '.env.local'), 'utf-8'), `SUPABASE_DB_URL=${SUPA_DEV}\n`);
       assert.equal(seen.SUPABASE_DB_URL, SUPA_DEV);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('production is eligible after a dev pull updates an exported SUPABASE_DB_URL', () => {
+    const dir = tmpProject();
+    try {
+      const envPath = path.join(dir, '.env.local');
+      fs.writeFileSync(envPath, 'export SUPABASE_DB_URL=postgresql://old\nAWS_PROFILE=deployment\n');
+      const seen = runDbPull(dir, SUPA_DEV);
+      assert.equal(fs.readFileSync(envPath, 'utf-8'), `export SUPABASE_DB_URL=${SUPA_DEV}\nAWS_PROFILE=deployment\n`);
+      assert.equal(seen.SUPABASE_DB_URL, SUPA_DEV);
+      assert.equal(hasDevConnection(dir), true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

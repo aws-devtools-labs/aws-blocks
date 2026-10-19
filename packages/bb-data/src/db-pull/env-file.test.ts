@@ -3,7 +3,6 @@
 
 import assert from 'node:assert';
 import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 /**
@@ -11,7 +10,7 @@ import * as path from 'node:path';
  * Node's dotenv parser (`util.parseEnv`, the one behind `process.loadEnvFile`
  * that `@aws-blocks/core` uses to load `.env.local` / `.env.production`).
  */
-import { afterEach, describe, mock, test } from 'node:test';
+import { afterEach, describe, test } from 'node:test';
 import { parseEnv } from 'node:util';
 import { formatEnvValue, upsertEnvContent, upsertEnvFile } from './env-file.js';
 
@@ -88,6 +87,19 @@ describe('upsertEnvContent', () => {
 		const before = `# ${KEY}=commented\n`;
 		assert.equal(upsertAndCheck(before), `${before}${KEY}=${URL1}\n`);
 	});
+
+	test('separates the appended line from a trailing assignment with a whitespace-only value', () => {
+		// Node reads the next line as the value of `A=<whitespace>`; a comment line ends it.
+		assert.equal(upsertAndCheck('A=\t\n'), `A=\t\n#\n${KEY}=${URL1}\n`);
+		assert.equal(upsertAndCheck('A = \r\n'), `A = \r\n#\r\n${KEY}=${URL1}\r\n`);
+		assert.equal(upsertAndCheck('B=1\nA= '), `B=1\nA= \n#\n${KEY}=${URL1}\n`);
+	});
+
+	test('leaves `export KEY=` with an empty value alone, since Node reads it as a different key', () => {
+		// Node keeps the `export ` prefix in the key name when the value is empty.
+		assert.equal(upsertAndCheck(`export ${KEY}=\n`), `export ${KEY}=\n${KEY}=${URL1}\n`);
+		assert.equal(upsertAndCheck(`export ${KEY} = \nA=1\n`), `export ${KEY} = \nA=1\n${KEY}=${URL1}\n`);
+	});
 });
 
 describe('formatEnvValue', () => {
@@ -124,8 +136,6 @@ describe('upsertEnvFile', () => {
 		return d;
 	};
 	afterEach(() => {
-		mock.restoreAll();
-		syncBuiltinESMExports();
 		for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 	});
 
@@ -135,14 +145,26 @@ describe('upsertEnvFile', () => {
 		assert.equal(fs.readFileSync(file, 'utf-8'), `${KEY}=${URL1}\n`);
 	});
 
-	test('preserves the file mode and leaves no temp file', { skip: process.platform === 'win32' }, () => {
-		const dir = tmp();
-		const file = path.join(dir, '.env.local');
+	test('preserves the file mode', { skip: process.platform === 'win32' }, () => {
+		const file = path.join(tmp(), '.env.local');
 		fs.writeFileSync(file, 'A=1\n');
 		fs.chmodSync(file, 0o600);
 		assert.deepEqual(upsertEnvFile(file, KEY, URL1), { created: false });
 		assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 		assert.equal(fs.readFileSync(file, 'utf-8'), `A=1\n${KEY}=${URL1}\n`);
+	});
+
+	test('writes the existing file in place, keeping its inode (and so its owner, group and ACLs)', {
+		skip: process.platform === 'win32',
+	}, () => {
+		const dir = tmp();
+		const file = path.join(dir, '.env.local');
+		fs.writeFileSync(file, 'A=1\n');
+		const before = fs.statSync(file);
+		upsertEnvFile(file, KEY, URL1);
+		const after = fs.statSync(file);
+		assert.equal(after.ino, before.ino);
+		assert.equal(after.gid, before.gid);
 		assert.deepEqual(fs.readdirSync(dir), ['.env.local']);
 	});
 
@@ -157,17 +179,25 @@ describe('upsertEnvFile', () => {
 		assert.equal(fs.readFileSync(real, 'utf-8'), `A=1\n${KEY}=${URL1}\n`);
 	});
 
-	test('leaves the original untouched and removes the temp file when the write fails', () => {
+	test('creates the target of a dangling symlink, keeping the link', { skip: process.platform === 'win32' }, () => {
 		const dir = tmp();
-		const file = path.join(dir, '.env.local');
+		const real = path.join(dir, 'shared.env');
+		const link = path.join(dir, '.env.local');
+		fs.symlinkSync(real, link);
+		assert.deepEqual(upsertEnvFile(link, KEY, URL1), { created: true });
+		assert.ok(fs.lstatSync(link).isSymbolicLink());
+		assert.equal(fs.readFileSync(real, 'utf-8'), `${KEY}=${URL1}\n`);
+	});
+
+	test('refuses to modify a read-only file', {
+		skip: process.platform === 'win32' || process.getuid?.() === 0,
+	}, () => {
+		const file = path.join(tmp(), '.env.local');
 		fs.writeFileSync(file, 'A=1\n');
-		mock.method(fs, 'renameSync', () => {
-			throw new Error('disk full');
-		});
-		syncBuiltinESMExports();
-		assert.throws(() => upsertEnvFile(file, KEY, URL1), /disk full/);
+		fs.chmodSync(file, 0o400);
+		assert.throws(() => upsertEnvFile(file, KEY, URL1), { code: 'EACCES' });
 		assert.equal(fs.readFileSync(file, 'utf-8'), 'A=1\n');
-		assert.deepEqual(fs.readdirSync(dir), ['.env.local']);
+		assert.equal(fs.statSync(file).mode & 0o777, 0o400);
 	});
 
 	test('refuses (without writing) a file that is not valid UTF-8', () => {

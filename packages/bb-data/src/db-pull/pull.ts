@@ -11,6 +11,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
+import { parseEnv } from 'node:util';
 import type { DbPullOptions, TableInfo } from './types.js';
 import { introspect } from './introspect.js';
 import {
@@ -420,6 +421,10 @@ function promptPassword(question: string): Promise<string> {
  * production: production mirrors a working dev setup, so we refuse to bootstrap an
  * app straight from a production database (the unsafe path).
  *
+ * The file is read with Node's dotenv parser (`util.parseEnv`, the one behind the
+ * `process.loadEnvFile` core loads it with), so `export`-prefixed, quoted and
+ * commented entries count exactly as the app would see them.
+ *
  * Pure/fs-only and exported so the dev-vs-prod gate is unit-testable without a TTY.
  */
 export function hasDevConnection(projectDir: string): boolean {
@@ -431,8 +436,8 @@ export function hasDevConnection(projectDir: string): boolean {
   } catch {
     return false;
   }
-  const match = content.match(new RegExp(`^\\s*${SUPABASE.connStringEnvVar}\\s*=\\s*(.+)$`, 'm'));
-  return match !== null && match[1].trim().length > 0;
+  const value = parseEnv(content)[SUPABASE.connStringEnvVar];
+  return value !== undefined && value.trim().length > 0;
 }
 
 /**
