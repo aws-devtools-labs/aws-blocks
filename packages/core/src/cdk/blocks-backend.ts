@@ -227,9 +227,6 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  * deployments keep their REST API and `execute-api` URL. The default compute is always a Lambda compute today, so
  * `apiHandler()` is defined; a worker-only default fails with a clear error.
  *
- * @param backendModule the imported backend module (`backendCDKPath`) — the
- *   exports the typed client calls and the runtime dispatches against
- *
  * Also schedules the API front door now that its origin exists. That decision is
  * deferred to synth via an aspect: a `Hosting` built after `create()` resolves
  * may claim the front-door role, in which case no managed distribution is
@@ -237,6 +234,8 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  * which is then built as a `REGIONAL` endpoint; `apigateway` (the default) ⇒
  * clients call the gateway directly.
  *
+ * @param backendModule the imported backend module (`backendCDKPath`) — the
+ *   exports the typed client calls and the runtime dispatches against
  * @internal
  */
 export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: object): SharedGateway {
@@ -248,7 +247,7 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
 	const cloudfront = resolveApiFrontDoor(owner._apiFrontDoorTier) === 'cloudfront';
 	const sharedGateway = createSharedGateway(defaultCompute, {
 		// Keyed by export name, resolved from the imported backend module.
-		namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute),
+		namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(owner)),
 		defaultCompute,
 		defaults: owner.defaults,
 		regionalEndpoint: cloudfront,

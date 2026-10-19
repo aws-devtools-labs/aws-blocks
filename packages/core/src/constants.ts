@@ -43,7 +43,7 @@ export function isRpcPath(pathname: string): boolean {
  * each namespace to the compute that hosts it; this reads that `{namespace}`
  * segment back out on the server, where it is checked against the body's
  * `namespace.method` prefix. Only the first segment after the prefix is the
- * namespace — anything deeper is ignored. Returns `undefined` for the bare
+ * namespace; `parseRpcRequest` rejects a path that goes any deeper. Returns `undefined` for the bare
  * `/aws-blocks/api` path (and a trailing-slash-only variant), where the body's
  * prefix alone names the namespace.
  *

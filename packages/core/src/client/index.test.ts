@@ -163,4 +163,31 @@ describe('ApiNamespaceClient — per-namespace request path', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it('builds the path from the namespace after middleware, so path and body stay in step', async () => {
+    // A middleware may rewrite `apiNamespace`; the server rejects a path that
+    // names a different namespace than the body, so both must carry the new one.
+    const { ApiNamespaceClient, registerMiddleware } = await import('./index.js');
+    // The middleware registry is process-global: rewrite only this test's namespace.
+    registerMiddleware({
+      onRequest: (request) =>
+        request.apiNamespace === 'rewriteMe' ? { ...request, apiNamespace: 'rewritten' } : request,
+    });
+    const calls: Array<{ url: string; method: string }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      calls.push({ url: String(input), method: JSON.parse(String(init?.body)).method });
+      return new Response(JSON.stringify({ jsonrpc: '2.0', result: 'ok', id: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const api = ApiNamespaceClient<{ ping(): Promise<string> }>('rewriteMe', { url: '/aws-blocks/api' });
+      await api.ping();
+      assert.deepStrictEqual(calls, [{ url: '/aws-blocks/api/rewritten', method: 'rewritten.ping' }]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

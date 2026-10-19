@@ -533,9 +533,10 @@ function createHandler(backend: any) {
       requestClientUserAgent.run(clientUserAgent, async () => {
     // RawRoute dispatch — check path-based routes before falling through to RPC.
     // The whole `/aws-blocks/api` subtree (the bare path and every per-namespace
-    // `/aws-blocks/api/{ns}` path) is RPC: dispatch resolves the namespace from
-    // the path or (back-compat) the JSON-RPC body, so skip RawRoute matching for
-    // it and fall through to RPC handling below.
+    // `/aws-blocks/api/{ns}` path) is RPC: dispatch takes the namespace from the
+    // JSON-RPC body, and a per-namespace path must name the same one (see
+    // parseRpcRequest), so skip RawRoute matching for it and fall through to RPC
+    // handling below.
     const requestPath = getRequestPath(event);
     if (!isRpcPath(requestPath)) {
       const matched = matchRoute(httpMethod, requestPath);

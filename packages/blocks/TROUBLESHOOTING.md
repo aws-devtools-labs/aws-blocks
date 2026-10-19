@@ -76,7 +76,8 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | 404 on `/api/...` or `/authApi/...` | Wrong URL — every call goes under `/aws-blocks/api` | Use `POST /aws-blocks/api` with method in the body |
-| `-32600` `Invalid Request: the path addresses namespace "…" but method "…"` | The namespace after `/aws-blocks/api/` differs from the one in `method` | Use the same export name in both, or post to the bare `/aws-blocks/api` |
+| `-32600` `Invalid Request: the path addresses namespace "…" but the method is in namespace "…"` | The namespace after `/aws-blocks/api/` differs from the one in `method` (names are case-sensitive) | Use the same export name in both, or post to the bare `/aws-blocks/api` |
+| `-32600` `Invalid Request: an RPC call goes to /aws-blocks/api or /aws-blocks/api/<namespace>, not a deeper path` | Extra path segments after the namespace | Post to `/aws-blocks/api/<namespace>` exactly |
 | HTTP 200 but `{"error":...}` in body | Normal JSON-RPC error response | Read `error.message` — not a routing problem |
 | `API 'foo' not found` | Namespace doesn't match any export name | Check your `export const` names in `aws-blocks/index.ts` |
 | `config.json` not found | Server not started or not deployed yet | Run `npm run dev` or `npm run sandbox` first |

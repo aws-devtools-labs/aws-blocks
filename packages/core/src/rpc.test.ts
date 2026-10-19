@@ -90,6 +90,35 @@ describe('parseRpcRequest — per-namespace path', () => {
     }
   });
 
+  it('accepts a trailing slash after the namespace', () => {
+    assert.ok(parseRpcRequest(body, { pathname: '/aws-blocks/api/orders/' }).ok);
+  });
+
+  it('compares namespaces case-sensitively', () => {
+    // Export names are case-sensitive, and so is API Gateway routing: accepting
+    // `/Orders` for `orders.list` would let a request reach the default compute's
+    // catch-all for a namespace routed elsewhere.
+    const result = parseRpcRequest(body, { pathname: '/aws-blocks/api/Orders' });
+    assert.strictEqual(result.ok, false);
+  });
+
+  it('rejects a per-namespace path deeper than one segment', () => {
+    for (const pathname of ['/aws-blocks/api/orders/list', '/aws-blocks/api//orders', '/aws-blocks/api/orders//']) {
+      const result = parseRpcRequest(body, { pathname });
+      assert.strictEqual(result.ok, false, pathname);
+      if (!result.ok) assert.match(JSON.parse(result.response).error.message, /not a deeper path/, pathname);
+    }
+  });
+
+  it('clips caller-supplied names it echoes in the error', () => {
+    const long = 'x'.repeat(10_000);
+    const result = parseRpcRequest(JSON.stringify({ jsonrpc: '2.0', method: `${long}.list`, id: 4 }), {
+      pathname: `/aws-blocks/api/${long}y`,
+    });
+    assert.strictEqual(result.ok, false);
+    if (!result.ok) assert.ok(result.response.length < 400, `response stays small: ${result.response.length} chars`);
+  });
+
   it('rejects a path whose namespace differs from the body prefix', () => {
     const result = parseRpcRequest(body, { pathname: '/aws-blocks/api/reports' });
     assert.strictEqual(result.ok, false);

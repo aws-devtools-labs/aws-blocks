@@ -343,7 +343,7 @@ describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
     const body = JSON.parse(result.body);
     assert.strictEqual(body.error?.code, -32600);
     assert.strictEqual(body.error?.data?.name, 'InvalidRequest');
-    assert.match(body.error?.message, /path addresses namespace "reports" but method "api\.generate"/);
+    assert.match(body.error?.message, /path addresses namespace "reports" but the method is in namespace "api"/);
     assert.strictEqual(body.id, 2);
     assert.strictEqual(called, false, 'neither namespace is dispatched');
   });

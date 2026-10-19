@@ -47,9 +47,11 @@ export abstract class Compute extends Scope {
 
 	constructor(id: string, options?: ScopeOptions) {
 		super(id, options);
-		// Self-register on the owning stack so finalize steps (tracing, routing,
+		// Self-register on the owning stack so finalize steps (config, tracing,
 		// dashboards) can enumerate every compute without a separate discovery
-		// pass. Scoped per stack, so a multi-stack synth keeps lists isolated.
+		// pass. Scoped per stack, so a multi-stack synth keeps lists isolated —
+		// routing uses it to ignore computes another backend owns (see
+		// resolveNamespaceRoutes).
 		registerCompute(this);
 	}
 

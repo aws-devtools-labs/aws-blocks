@@ -79,6 +79,7 @@ const sideEffectBackendPath = join(__dirname, '__fixtures__', 'side-effect-backe
 const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js');
 const gatewayReadingBackendPath = join(__dirname, '__fixtures__', 'gateway-reading-backend.js');
 const namespaceRoutingBackendPath = join(__dirname, '__fixtures__', 'namespace-routing-backend.js');
+const reexportBackendPath = join(__dirname, '__fixtures__', 'reexport-backend.js');
 
 // Wrap create(), injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
@@ -323,11 +324,11 @@ describe('shared gateway routes namespaces by export name (create())', () => {
 		const pathParts = Object.entries(resources)
 			.filter(([, r]) => r.Type === 'AWS::ApiGateway::Resource')
 			.map(([id, r]) => [id, r.Properties.PathPart as string] as const);
-		const parts = pathParts.map(([, part]) => part);
-		assert.ok(parts.includes('shop'), `routed by export name: ${parts.join(', ')}`);
-		assert.ok(!parts.includes('orders'), 'not by the ApiNamespace constructor name');
-		// `/aws-blocks/api` is the only 'api' part: the default-compute `api` namespace adds none.
-		assert.strictEqual(parts.filter((part) => part === 'api').length, 1, 'a default-compute namespace adds no resource');
+		// Exactly the catch-all tree plus `shop`: routed by export name (not the
+		// constructor name 'orders'), and the default-compute `api` namespace adds
+		// no resource of its own.
+		const parts = pathParts.map(([, part]) => part).sort();
+		assert.deepStrictEqual(parts, ['aws-blocks', 'api', 'shop', '{proxy+}', '{proxy+}', '{proxy+}'].sort());
 
 		const orders = getComputes(owner).find((c) => c.node.id === 'OrdersCompute') as StubLambdaCompute;
 		const ordersFnId = stackOfGateway.getLogicalId(orders.fn.node.defaultChild as cdk.CfnElement);
@@ -347,5 +348,36 @@ describe('shared gateway routes namespaces by export name (create())', () => {
 		const parent = new cdk.Stack(new cdk.App(), 'NamespaceRoutingParent');
 		const backend = await makeBackend(parent, 'Blocks', namespaceRoutingBackendPath);
 		assertRoutedByExportName(parent, backend);
+	});
+});
+
+describe('a namespace bound to another backend is not routed (multi-backend synth)', () => {
+	// create() re-runs only the top-level backend module per backend; a namespace
+	// from a cached sub-module stays bound to the first backend. A second backend
+	// must serve it from its own catch-all — never route its path to the first
+	// backend's Lambda (that would be a cross-stack reference and a silent misroute).
+	const routedPathParts = (template: Template) =>
+		Object.values(template.findResources('AWS::ApiGateway::Resource')).map((r) => r.Properties.PathPart as string);
+
+	// One app, so a misroute would synthesize silently (CDK wires a cross-stack
+	// Export/Fn::ImportValue) rather than fail.
+	test('two BlocksStacks in one app', async () => {
+		const app = new cdk.App();
+		const first = await makeStack(app, 'ReexportStackOne', reexportBackendPath);
+		const second = await makeStack(app, 'ReexportStackTwo', reexportBackendPath);
+		for (const stack of [first, second]) {
+			const template = Template.fromStack(stack);
+			assert.ok(!routedPathParts(template).includes('reports'), `${stack.stackName}: no route for 'reports'`);
+			assert.ok(!JSON.stringify(template.toJSON()).includes('Fn::ImportValue'), `${stack.stackName}: no cross-stack import`);
+		}
+	});
+
+	// The sub-module is cached for the whole process, so here the namespace is
+	// still bound to the first test's stack — foreign to both backends below.
+	test('two BlocksBackends in one stack', async () => {
+		const parent = new cdk.Stack(new cdk.App(), 'ReexportParent');
+		await makeBackend(parent, 'BackendOne', reexportBackendPath);
+		await makeBackend(parent, 'BackendTwo', reexportBackendPath);
+		assert.ok(!routedPathParts(Template.fromStack(parent)).includes('reports'), "no route for 'reports'");
 	});
 });

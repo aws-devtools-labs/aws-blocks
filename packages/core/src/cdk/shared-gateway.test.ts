@@ -21,6 +21,7 @@ import type { Construct } from 'constructs';
 import { API_NAMESPACE_COMPUTE, ApiNamespace } from '../api.js';
 import { BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
+import { getComputes } from './compute/compute-registry.js';
 import { Scope } from './index.js';
 import { createSharedGateway, resolveNamespaceRoutes } from './shared-gateway.js';
 
@@ -217,7 +218,7 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 		const backendModule = { shop: namespaceOn(stack, ordersCompute, 'orders') };
 
 		createSharedGateway(stack, {
-			namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute),
+			namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(stack)),
 			defaultCompute,
 			defaults: BlocksPresets.production,
 		});
@@ -254,7 +255,7 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 		};
 
 		createSharedGateway(stack, {
-			namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute),
+			namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(stack)),
 			defaultCompute,
 			defaults: BlocksPresets.production,
 		});
@@ -265,6 +266,11 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 			(p) => JSON.stringify(p.Properties.FunctionName).includes(ordersFnId),
 		);
 		assert.strictEqual(ordersPermissions.length, 1, 'one API-scoped permission, not one per method');
+		// …and all three namespaces are still routed to that function.
+		const fnIds = [stack.getLogicalId(defaultCompute.fn.node.defaultChild as cdk.CfnElement), ordersFnId];
+		for (const name of ['orders', 'invoices', 'refunds']) {
+			assert.strictEqual(methodTargetFnId(stack, `/aws-blocks/api/${name}`, 'ANY', fnIds), ordersFnId, name);
+		}
 		assert.match(JSON.stringify(ordersPermissions[0].Properties.SourceArn), /\/\*\/\*\/\*/);
 	});
 
@@ -272,7 +278,7 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 		const { stack, defaultCompute } = fanOut('FanOutIdle');
 
 		createSharedGateway(stack, {
-			namespaceRoutes: resolveNamespaceRoutes({}, defaultCompute),
+			namespaceRoutes: resolveNamespaceRoutes({}, defaultCompute, getComputes(stack)),
 			defaultCompute,
 			defaults: BlocksPresets.production,
 		});
@@ -289,7 +295,7 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 		assert.throws(
 			() =>
 				createSharedGateway(stack, {
-					namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute),
+					namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(stack)),
 					defaultCompute,
 					defaults: BlocksPresets.production,
 				}),
@@ -304,7 +310,7 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 		assert.throws(
 			() =>
 				createSharedGateway(stack, {
-					namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute),
+					namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(stack)),
 					defaultCompute,
 					defaults: BlocksPresets.production,
 				}),
@@ -324,14 +330,14 @@ describe('resolveNamespaceRoutes', () => {
 	test('keys on the export name, not the ApiNamespace constructor name', () => {
 		const { stack, defaultCompute, ordersCompute } = computes('RoutesExportName');
 		// Like `export const authApi = auth.createApi()`, constructed as 'auth'.
-		const routes = resolveNamespaceRoutes({ authApi: namespaceOn(stack, ordersCompute, 'auth') }, defaultCompute);
+		const routes = resolveNamespaceRoutes({ authApi: namespaceOn(stack, ordersCompute, 'auth') }, defaultCompute, getComputes(stack));
 		assert.deepStrictEqual([...routes], [[ordersCompute, ['authApi']]]);
 	});
 
 	test('routes a namespace exported under several names under each', () => {
 		const { stack, defaultCompute, ordersCompute } = computes('RoutesReExport');
 		const orders = namespaceOn(stack, ordersCompute, 'orders');
-		const routes = resolveNamespaceRoutes({ orders, shop: orders }, defaultCompute);
+		const routes = resolveNamespaceRoutes({ orders, shop: orders }, defaultCompute, getComputes(stack));
 		assert.deepStrictEqual(routes.get(ordersCompute), ['orders', 'shop']);
 	});
 
@@ -340,7 +346,7 @@ describe('resolveNamespaceRoutes', () => {
 	// create()-level test in blocks-stack.test.ts.
 	test('skips namespaces on the default compute', () => {
 		const { stack, defaultCompute } = computes('RoutesDefault');
-		const routes = resolveNamespaceRoutes({ api: namespaceOn(stack, defaultCompute, 'api') }, defaultCompute);
+		const routes = resolveNamespaceRoutes({ api: namespaceOn(stack, defaultCompute, 'api') }, defaultCompute, getComputes(stack));
 		assert.strictEqual(routes.size, 0);
 	});
 
@@ -354,6 +360,7 @@ describe('resolveNamespaceRoutes', () => {
 				_private: namespaceOn(stack, ordersCompute, 'private'),
 			},
 			defaultCompute,
+			getComputes(stack),
 		);
 		assert.strictEqual(routes.size, 0);
 	});
@@ -364,7 +371,7 @@ describe('resolveNamespaceRoutes', () => {
 		parent._compute = ordersCompute;
 		const child = new Scope('child', { parent });
 		const orders = new ApiNamespace(child, 'orders', () => ({ async ping() {} }));
-		assert.deepStrictEqual(resolveNamespaceRoutes({ orders }, defaultCompute).get(ordersCompute), ['orders']);
+		assert.deepStrictEqual(resolveNamespaceRoutes({ orders }, defaultCompute, getComputes(stack)).get(ordersCompute), ['orders']);
 	});
 
 	test("uses the namespace's own compute resolver, not its scope's compute", () => {
@@ -374,7 +381,19 @@ describe('resolveNamespaceRoutes', () => {
 		const { stack, defaultCompute, ordersCompute } = computes('RoutesOwnResolver');
 		const orders = namespaceOn(stack, defaultCompute, 'orders') as Record<symbol, unknown>;
 		orders[API_NAMESPACE_COMPUTE] = () => ordersCompute;
-		assert.deepStrictEqual(resolveNamespaceRoutes({ orders }, defaultCompute).get(ordersCompute), ['orders']);
+		assert.deepStrictEqual(resolveNamespaceRoutes({ orders }, defaultCompute, getComputes(stack)).get(ordersCompute), ['orders']);
+	});
+
+	test("skips a compute that isn't one of the owner's — another backend's", () => {
+		const { stack, defaultCompute } = computes('RoutesForeign');
+		const otherStack = new cdk.Stack(new cdk.App(), 'RoutesForeignOther');
+		const foreignCompute = new StubCompute(otherStack, 'ForeignCompute', makeFn(otherStack, 'ForeignFn'));
+		const routes = resolveNamespaceRoutes(
+			{ reports: namespaceOn(otherStack, foreignCompute, 'reports') },
+			defaultCompute,
+			getComputes(stack),
+		);
+		assert.strictEqual(routes.size, 0);
 	});
 
 	test('resolves the compute when called, not when the namespace was constructed', () => {
@@ -382,7 +401,7 @@ describe('resolveNamespaceRoutes', () => {
 		const scope = new Scope('late', { parent: stack as never });
 		const orders = new ApiNamespace(scope, 'orders', () => ({ async ping() {} }));
 		scope._compute = ordersCompute; // assigned after the namespace exists
-		assert.deepStrictEqual(resolveNamespaceRoutes({ orders }, defaultCompute).get(ordersCompute), ['orders']);
+		assert.deepStrictEqual(resolveNamespaceRoutes({ orders }, defaultCompute, getComputes(stack)).get(ordersCompute), ['orders']);
 	});
 });
 

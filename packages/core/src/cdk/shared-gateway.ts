@@ -12,7 +12,11 @@ import { ensureApiGatewayAccount } from './apigateway-account.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 
-/** Characters API Gateway allows in a literal resource path part. */
+/**
+ * Characters API Gateway allows in a literal resource path part — the same set
+ * CDK's `validateResourcePathPart` enforces. Checked here first so the error can
+ * name the export and its compute instead of CDK's generic one.
+ */
 const API_GATEWAY_PATH_PART = /^[A-Za-z0-9:._$-]+$/;
 
 /** Inputs the shared REST API gateway is built from. @internal */
@@ -233,21 +237,34 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
  *
  * Contributes no route — leaving the request to the default compute's catch-all
  * resources — for a namespace on the default compute, a plain exported
- * function/object (not an `ApiNamespace`), and a namespace that isn't exported
- * (no client can call it, and dispatch couldn't resolve it).
+ * function/object (not an `ApiNamespace`), a namespace that isn't exported (no
+ * client can call it, and dispatch couldn't resolve it), and a namespace whose
+ * compute belongs to a different backend. The last happens when one process
+ * synthesizes several backends from the same backend module: `create()`
+ * re-runs only the top-level module per backend, so a namespace from a cached
+ * sub-module stays bound to the first backend that imported it. Routing it here
+ * would wire this backend's path to that backend's Lambda.
  *
  * @param backendModule the imported backend module (`backendCDKPath`)
  * @param defaultCompute the owner's default compute
+ * @param ownedComputes every compute registered on the owner (`getComputes(owner)`)
  * @internal
  */
-export function resolveNamespaceRoutes(backendModule: object, defaultCompute: Compute): Map<Compute, string[]> {
+export function resolveNamespaceRoutes(
+	backendModule: object,
+	defaultCompute: Compute,
+	ownedComputes: readonly Compute[],
+): Map<Compute, string[]> {
+	const owned = new Set(ownedComputes);
 	const routes = new Map<Compute, string[]>();
 	for (const [exportName, value] of Object.entries(backendModule)) {
 		if (!isDispatchableExport(exportName, value)) continue;
 		const resolveCompute = (value as Record<symbol, (() => Compute | undefined) | undefined>)[API_NAMESPACE_COMPUTE];
 		const compute = resolveCompute?.();
-		if (!compute || compute === defaultCompute) continue;
-		routes.set(compute, [...(routes.get(compute) ?? []), exportName]);
+		if (!compute || compute === defaultCompute || !owned.has(compute)) continue;
+		const names = routes.get(compute);
+		if (names) names.push(exportName);
+		else routes.set(compute, [exportName]);
 	}
 	return routes;
 }

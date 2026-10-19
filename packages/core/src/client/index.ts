@@ -145,7 +145,13 @@ async function resolveApiUrl(): Promise<string> {
  * request is dispatched to the server.
  */
 export interface BlocksRequest {
-  /** The namespace name this call targets (e.g., 'api', 'auth'). Corresponds to the second argument of `new ApiNamespace(scope, name, handler)` in the backend. */
+  /**
+   * The namespace this call targets: the backend **export** name (e.g. `'api'`,
+   * `'authApi'` for `export const authApi = auth.createApi()`), not the
+   * `ApiNamespace` constructor's `name` argument. The request URL's
+   * `/{namespace}` segment is built from this value after middleware runs, so a
+   * middleware that changes it changes both the path and the body.
+   */
   apiNamespace: string;
   /** The method being called on the namespace (e.g., 'getUser', 'kvSet'). */
   method: string;
@@ -291,7 +297,6 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
       if (typeof method === 'symbol') return undefined;
       return async (...args: any[]) => {
         const baseUrl = urlOverride ?? await getApiUrl();
-        const requestUrl = namespaceRequestUrl(baseUrl, name);
 
         let request: BlocksRequest = {
           apiNamespace: name,
@@ -300,6 +305,10 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
           headers: { 'Content-Type': 'application/json' },
         };
         request = await processRequest(request);
+        // Built after middleware, from the same `apiNamespace` the body carries,
+        // so a middleware that changes the namespace keeps path and body in step
+        // (the server rejects a mismatch) and the gateway routes the new one.
+        const requestUrl = namespaceRequestUrl(baseUrl, request.apiNamespace);
 
         // SSR cookie forwarding: when running server-side, forward the
         // inbound request cookies so auth sessions propagate to API calls.

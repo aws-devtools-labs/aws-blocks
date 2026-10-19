@@ -26,7 +26,7 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 ### Methods are namespaced
 
-A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the string you passed as the **second** argument to `new ApiNamespace(scope, '<name>', …)`. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
+A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`; `export const authApi = auth.createApi()` → `authApi`), not the 2nd `ApiNamespace` argument. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
 
 ### Auth is a Building Block, not hand-rolled
 
