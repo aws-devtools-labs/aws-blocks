@@ -58,3 +58,31 @@ Interface/gateway endpoints are **not** here — they are created per-run in the
 ## Do NOT Delete
 
 This stack is tagged with `blocks:do-not-delete=true`. Deleting it will break all VPC smoke tests in CI until redeployed.
+
+# GitHub OIDC role for E2E (`github-oidc-stack.ts`)
+
+PR E2E jobs, including Dependabot PRs, run third-party code with AWS
+credentials. They therefore run in a **dedicated E2E account** that holds only
+test stacks.
+
+This stack creates, in that account:
+
+| Resource | Purpose |
+|----------|---------|
+| GitHub OIDC identity provider | Lets GitHub Actions exchange its OIDC token for AWS credentials |
+| `blocks-github-e2e` role | Assumable only by jobs in this repo's `e2e` GitHub environment; CDK deploys, E2E stack/bucket cleanup, Cognito admin calls, Supabase test secret |
+
+It is deployed **by hand, once per account**, not by CI:
+
+```bash
+cd test-infra
+npx cdk bootstrap        # once per account/region
+E2E_ACCOUNT_ID=<e2e-account-id> npm run deploy:oidc
+```
+
+The stack refuses to synthesize unless `E2E_ACCOUNT_ID` is set and matches the
+account of the active credentials.
+
+Set the `RoleArn` output as the `AWS_ROLE_ARN` secret of the `e2e` GitHub
+environment and as a Dependabot secret. Deploy this stack only into the
+dedicated E2E account.
