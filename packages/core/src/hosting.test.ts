@@ -2327,6 +2327,47 @@ describe('Hosting', () => {
       assert.doesNotThrow(() => synth('CustomDoorUnwiredOff', false));
     });
 
+    it("onUpload's invalidation runs after the resolved config.json upload (BlocksConfigDeployment), not just the assets", () => {
+      createSpaBuildOutput(tmpDir);
+      const invalidatingDoor = defineFrontDoor({
+        service: 'my-invalidating-cdn',
+        build(scope, input) {
+          const dist = new cdk.aws_cloudfront.Distribution(scope, 'Cdn', {
+            defaultBehavior: { origin: cf.origin(input.origins.assets) },
+            additionalBehaviors: cf.apiBehaviors(input.origins.api),
+          });
+          return {
+            url: `https://${dist.distributionDomainName}`,
+            onUpload: ({ uploads }) => {
+              cf.invalidate(dist, { after: uploads });
+            },
+          };
+        },
+      });
+      const stack = new Stack(new App(), 'CustomDoorInvalidationOrder', {
+        env: { account: '111111111111', region: 'us-east-1' },
+      });
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'custom', door: invalidatingDoor } });
+      const t = Template.fromStack(stack);
+      const configIds = Object.keys(t.findResources('Custom::CDKBucketDeployment')).filter((id) =>
+        id.includes('BlocksConfigDeployment'),
+      );
+      assert.strictEqual(configIds.length, 1, 'one resolved-config upload');
+      const invalidations = Object.entries(t.findResources('Custom::AWS')).filter(([id]) => id.includes('BlocksInvalidation'));
+      assert.strictEqual(invalidations.length, 1, 'one invalidation');
+      const dependsOn = [invalidations[0][1].DependsOn ?? []].flat() as string[];
+      assert.ok(
+        dependsOn.includes(configIds[0]),
+        `the invalidation depends on ${configIds[0]} (DependsOn: ${dependsOn.join(', ')})`,
+      );
+      // ...and still on every asset upload.
+      const assetUploads = Object.keys(t.findResources('Custom::CDKBucketDeployment')).filter(
+        (id) => !id.includes('BlocksConfigDeployment'),
+      );
+      assert.ok(assetUploads.length > 0);
+      for (const id of assetUploads) assert.ok(dependsOn.includes(id), `the invalidation depends on ${id}`);
+    });
+
     it('fails at synth when the door returns no url', () => {
       createSpaBuildOutput(tmpDir);
       const noUrl = defineFrontDoor({ service: 'no-url', build: () => ({ url: '' }) });

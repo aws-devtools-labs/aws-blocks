@@ -41,7 +41,7 @@ import type { Alarm } from 'aws-cdk-lib/aws-cloudwatch';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { Provider } from 'aws-cdk-lib/custom-resources';
-import { Construct, type IDependable } from 'constructs';
+import { Construct, type IConstruct, type IDependable } from 'constructs';
 import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -616,11 +616,23 @@ export class HostingConstruct extends Construct {
   /**
    * Registers a dependency that must finish before the new build becomes
    * reachable through the KVS route table.
+   *
+   * On every door, the resources the door's `onUpload` declared (e.g. a
+   * `cf.invalidate`) also wait for it, as they wait for the asset uploads —
+   * the `@aws-blocks/core` `Hosting` registers its resolved runtime-config
+   * upload here, so an invalidation never runs before the real
+   * `config.json` is in place.
    */
   addBuildAssetDependency(dependency: IDependable): void {
-    // No-op for non-CloudFront doors — there's no KVS route table to gate.
+    // CloudFront: gate the KVS route table on it. Every door: whatever its
+    // `onUpload` declared (e.g. a `cf.invalidate`) runs after it, as after the
+    // asset uploads.
     this.cdn?.addBuildAssetDependency(dependency);
+    for (const c of this.postUploadConstructs) c.node.addDependency(dependency);
   }
+
+  /** The constructs the door's `onUpload` declared; each runs after every upload (see {@link addBuildAssetDependency}). */
+  private readonly postUploadConstructs: IConstruct[] = [];
 
   /**
    * Creates the hosting infrastructure from a framework-agnostic deploy manifest.
@@ -2182,10 +2194,23 @@ export class HostingConstruct extends Construct {
     // Every asset upload for this build is declared now, so a door can declare
     // resources that must run after them (e.g. a CloudFront invalidation via
     // `cf.invalidate`). Like the door itself, it only declares resources.
+    // What it declares is recorded, so an upload declared after this construct
+    // (the `@aws-blocks/core` `Hosting` uploads the resolved runtime config
+    // later, via `addBuildAssetDependency`) is ordered before it too.
     if (onUpload) {
       const uploads: readonly BucketDeployment[] = [...buildAssetDeployments];
       registerUploads(uploads, buildId);
+      const root = this.node.root;
+      const before = new Set<IConstruct>(root.node.findAll());
       onUpload({ uploads, buildId });
+      for (const c of root.node.findAll()) {
+        // The top-most constructs it declared (their parent existed before),
+        // except a stack-level singleton (e.g. a shared custom-resource
+        // provider) — that may also serve resources the later upload waits on.
+        const parent = c.node.scope;
+        if (before.has(c) || !parent || !before.has(parent) || Stack.isStack(parent)) continue;
+        this.postUploadConstructs.push(c);
+      }
     }
 
     // ---- CloudFormation resource-count guard ----
