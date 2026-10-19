@@ -11,11 +11,33 @@ import type { api as apiType } from 'aws-blocks';
  * BLOCKS_TEST_ENV. These represent real customer usage — no type casts.
  */
 export function secretTests(getApi: () => typeof apiType) {
+  // AWS Secrets Manager is NOT strongly read-after-write consistent: a
+  // GetSecretValue immediately after a PutSecretValue can still return a prior
+  // value until the write propagates. These tests write then read the same
+  // secret back-to-back, so a single immediate get() flakes on real AWS
+  // (observed: a `grace window` read returning a value from two tests earlier).
+  // Poll the read until it converges on the expected value (bounded); locally
+  // the mock is instant so this returns on the first attempt. The read itself is
+  // ordinary customer usage — only the retry loop is test plumbing.
+  async function pollUntil<T>(
+    read: () => Promise<T>,
+    predicate: (value: T) => boolean,
+    { timeoutMs = 15000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {},
+  ): Promise<T> {
+    const deadline = Date.now() + timeoutMs;
+    let last = await read();
+    while (!predicate(last) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, intervalMs));
+      last = await read();
+    }
+    return last;
+  }
+
   describe('Secret BB', () => {
     test('Secret - opaque string put then get round-trips', async () => {
       const api = getApi();
       await api.secretPutApiKey('sk-test-abc123');
-      const { value } = await api.secretGetApiKey();
+      const { value } = await pollUntil(() => api.secretGetApiKey(), (r) => r.value === 'sk-test-abc123');
       assert.strictEqual(value, 'sk-test-abc123');
     });
 
@@ -23,14 +45,17 @@ export function secretTests(getApi: () => typeof apiType) {
       const api = getApi();
       await api.secretPutApiKey('sk-test-first');
       await api.secretPutApiKey('sk-test-second');
-      const { value } = await api.secretGetApiKey();
+      const { value } = await pollUntil(() => api.secretGetApiKey(), (r) => r.value === 'sk-test-second');
       assert.strictEqual(value, 'sk-test-second');
     });
 
     test('Secret - typed JSON secret put then get returns the typed object', async () => {
       const api = getApi();
       await api.secretPutDbCredentials({ host: 'db.internal', port: 5432 });
-      const { value } = await api.secretGetDbCredentials();
+      const { value } = await pollUntil(
+        () => api.secretGetDbCredentials(),
+        (r) => r.value?.host === 'db.internal' && r.value?.port === 5432,
+      );
       assert.deepStrictEqual(value, { host: 'db.internal', port: 5432 });
     });
 
@@ -64,7 +89,7 @@ export function secretTests(getApi: () => typeof apiType) {
     test('Secret - named secret put then get round-trips', async () => {
       const api = getApi();
       await api.secretPutNamed('whsec_abc123');
-      const { value } = await api.secretGetNamed();
+      const { value } = await pollUntil(() => api.secretGetNamed(), (r) => r.value === 'whsec_abc123');
       assert.strictEqual(value, 'whsec_abc123');
     });
 
@@ -72,8 +97,10 @@ export function secretTests(getApi: () => typeof apiType) {
       const api = getApi();
       await api.secretPutApiKey('sk-old');
       await api.secretPutApiKey('sk-new');
-      const current = (await api.secretGetApiKey()).value;
-      const previous = (await api.secretGetApiKeyPrevious()).value;
+      // Poll for Secrets Manager to converge on the post-rotation state before
+      // asserting the current/previous pair.
+      const current = (await pollUntil(() => api.secretGetApiKey(), (r) => r.value === 'sk-new')).value;
+      const previous = (await pollUntil(() => api.secretGetApiKeyPrevious(), (r) => r.value === 'sk-old')).value;
       assert.strictEqual(current, 'sk-new');
       assert.strictEqual(previous, 'sk-old');
     });
@@ -82,7 +109,12 @@ export function secretTests(getApi: () => typeof apiType) {
       const api = getApi();
       await api.secretPutApiKey('sk-1');
       await api.secretPutApiKey('sk-2');
-      const versions = await api.secretListApiKeyVersions();
+      // Wait for both labeled versions to be present before asserting the labels.
+      const versions = await pollUntil(
+        () => api.secretListApiKeyVersions(),
+        (vs) =>
+          vs.some((v) => v.stages.includes('AWSCURRENT')) && vs.some((v) => v.stages.includes('AWSPREVIOUS')),
+      );
       assert.ok(versions.length >= 2);
       // Newest-first: first is current, includes a previous.
       assert.ok(versions.some((v) => v.stages.includes('AWSCURRENT')));
@@ -116,7 +148,12 @@ export function secretTests(getApi: () => typeof apiType) {
 
     test('Secret (allowRuntimeWrite: true) - put present, callable, round-trips', async () => {
       const api = getApi();
-      const { hasPut, readBack } = await api.secretWriteProbeTrue('write-enabled-value');
+      // The probe does put→get server-side; poll it so a Secrets Manager
+      // read-after-write lag resolves (re-writing the same value is idempotent).
+      const { hasPut, readBack } = await pollUntil(
+        () => api.secretWriteProbeTrue('write-enabled-value'),
+        (r) => r.readBack === 'write-enabled-value',
+      );
       assert.strictEqual(hasPut, true, 'put must be present when allowRuntimeWrite is true');
       assert.strictEqual(readBack, 'write-enabled-value', 'the written value must read back');
     });

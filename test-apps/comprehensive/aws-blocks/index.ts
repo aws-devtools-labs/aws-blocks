@@ -647,6 +647,9 @@ const writeFalseSecret = new Secret(scope, 'secret-write-false', {
 const writeTrueSecret = new Secret(scope, 'secret-write-true', {
   removalPolicy: 'destroy',
   allowRuntimeWrite: true,
+  // Disable the read cache so the write probe's put→get reflects the write
+  // deterministically (matches the other written e2e secrets).
+  cacheTtlSeconds: 0,
 });
 
 // Build-level proof that `put` is ABSENT from the type when writes aren't
