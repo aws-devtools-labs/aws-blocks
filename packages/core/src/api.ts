@@ -60,23 +60,29 @@ export const API_NAMESPACE_MARKER = Symbol.for('blocks:ApiNamespace');
 import type { ScopeParent } from './common/index.js';
 
 /**
- * Symbol under which an `ApiNamespace` keeps the scope it was constructed in.
+ * Symbol under which an `ApiNamespace` exposes a resolver for the compute that
+ * hosts it: a function returning that compute, or `undefined` outside CDK synth
+ * (the mock/runtime `Scope` has no `compute`).
  *
- * The shared API gateway routes each exported namespace to the compute that
- * hosts it. It resolves that compute at synth, after the backend module has
- * been imported: it walks the module's exports and reads `scope.compute` (the
- * nearest compute assigned up the scope chain, else the default) through this
- * property. Resolving then — not at construction — keeps routing right whatever
- * order computes, scope assignments and namespaces are created in. Routes key
- * on the **export** name (what the client sends and dispatch resolves), not the
- * constructor's `name`.
+ * The shared API gateway routes each exported namespace to its compute. It calls
+ * the resolver at synth, after the backend module has been imported — not at
+ * construction — so routing reflects compute assignments made in any order. The
+ * precedence lives here, with the options that define it, so the gateway never
+ * needs to know where a namespace's compute comes from: today that is the
+ * scope's compute (`scope.compute` — the nearest compute assigned up the scope
+ * chain, else the default); a per-namespace compute option, once it exists,
+ * takes precedence over it. Routes key on the **export** name (what the client
+ * sends and dispatch resolves), not the constructor's `name`.
  *
  * A symbol key, like {@link API_NAMESPACE_MARKER}, so `Object.entries`,
  * `JSON.stringify` and the client/spec generators never see it.
  *
  * @internal
  */
-export const API_NAMESPACE_SCOPE = Symbol.for('blocks:ApiNamespaceScope');
+export const API_NAMESPACE_COMPUTE = Symbol.for('blocks:ApiNamespaceCompute');
+
+/** Structural view of a scope that may resolve a compute (only the CDK `Scope` does). */
+type ComputeResolvingScope = { compute?: unknown };
 
 /**
  * Define a type-safe API namespace that works seamlessly between frontend and backend.
@@ -176,10 +182,13 @@ export interface ApiNamespaceConstructor {
 export const ApiNamespace: ApiNamespaceConstructor = class ApiNamespace {
   constructor(scope: ScopeParent, name: string, handler: any) {
     handler[API_NAMESPACE_MARKER] = name;
-    // Keep the scope so synth-time routing can resolve this namespace's compute
-    // (see API_NAMESPACE_SCOPE); a scopeless namespace routes to the default
-    // compute. Signature and returned handler are unchanged.
-    if (scope && typeof scope === 'object') handler[API_NAMESPACE_SCOPE] = scope;
+    // How synth-time routing finds this namespace's compute (see
+    // API_NAMESPACE_COMPUTE): resolved when called, never here. A scopeless
+    // namespace resolves to undefined and routes to the default compute.
+    // Signature and returned handler are unchanged.
+    handler[API_NAMESPACE_COMPUTE] = () =>
+      scope && typeof scope === 'object' ? (scope as ComputeResolvingScope).compute : undefined;
+    // biome-ignore lint/correctness/noConstructorReturn: the export IS the tagged handler — dispatch, codegen and routing read it directly.
     return handler;
   }
 } as any;

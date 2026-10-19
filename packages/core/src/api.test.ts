@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { ApiNamespace, API_NAMESPACE_MARKER, API_NAMESPACE_SCOPE } from './api.js';
+import { ApiNamespace, API_NAMESPACE_COMPUTE, API_NAMESPACE_MARKER } from './api.js';
 import { Scope } from './common/index.js';
 
 const scope = new Scope('test');
@@ -24,25 +24,37 @@ test('Different ApiNamespace names should not collide', () => {
   assert.strictEqual((api2 as any)[API_NAMESPACE_MARKER], 'api2');
 });
 
-// ApiNamespace keeps the scope it was built in, so the shared gateway can
-// resolve the namespace's compute at synth — after the backend module is
-// imported — rather than at construction.
-test('ApiNamespace keeps its scope for synth-time routing', () => {
-  const scopeLike = { id: 'app' };
-  const handler = new ApiNamespace(scopeLike as never, 'myapi', () => ({ ping: () => 'ok' }));
-  assert.strictEqual((handler as any)[API_NAMESPACE_SCOPE], scopeLike);
+// ApiNamespace exposes a resolver for its compute, so the shared gateway can
+// resolve it at synth — after the backend module is imported — rather than at
+// construction.
+test('ApiNamespace resolves its compute from its scope when asked', () => {
+  const compute = { id: 'orders-compute' };
+  const handler = new ApiNamespace({ id: 'app', compute } as never, 'myapi', () => ({ ping: () => 'ok' }));
+  assert.strictEqual((handler as any)[API_NAMESPACE_COMPUTE](), compute);
+});
+
+test('ApiNamespace resolves no compute without a scope that has one', () => {
+  const scopeless = new ApiNamespace(undefined as never, 'scopeless', () => ({ ping: () => 'ok' }));
+  assert.strictEqual((scopeless as any)[API_NAMESPACE_COMPUTE](), undefined);
+  const mockScope = new ApiNamespace(new Scope('mock'), 'mockapi', () => ({ ping: () => 'ok' }));
+  assert.strictEqual((mockScope as any)[API_NAMESPACE_COMPUTE](), undefined);
 });
 
 test('ApiNamespace does not resolve the compute at construction', () => {
   // Reading `scope.compute` here would freeze routing at construction time and
   // throw before create() has built the default compute.
+  let reads = 0;
   const scopeLike = {
     id: 'app',
-    get compute(): never {
-      throw new Error('compute read at construction');
+    get compute() {
+      reads += 1;
+      return { id: 'late-compute' };
     },
   };
-  assert.doesNotThrow(() => new ApiNamespace(scopeLike as never, 'late', () => ({ ping: () => 'ok' })));
+  const handler = new ApiNamespace(scopeLike as never, 'late', () => ({ ping: () => 'ok' }));
+  assert.strictEqual(reads, 0, 'not read at construction');
+  (handler as any)[API_NAMESPACE_COMPUTE]();
+  assert.strictEqual(reads, 1, 'read when resolved');
 });
 
 test('ApiNamespace is still tagged and returned unchanged in the mock/runtime Scope', () => {

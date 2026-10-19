@@ -5,7 +5,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
-import { API_NAMESPACE_SCOPE } from '../api.js';
+import { API_NAMESPACE_COMPUTE } from '../api.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { isDispatchableExport } from '../rpc-dispatch.js';
 import { ensureApiGatewayAccount } from './apigateway-account.js';
@@ -226,13 +226,14 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
  * namespace exported under several names is routed under each.
  *
  * Each namespace's compute is resolved here — after the backend module has been
- * imported — from the scope it was constructed in (`scope.compute`: the nearest
- * compute assigned up the scope chain, else the default), so the result doesn't
- * depend on the order computes, assignments and namespaces were created in.
+ * imported — by calling the namespace's own resolver (`API_NAMESPACE_COMPUTE`),
+ * so the result doesn't depend on the order computes, assignments and namespaces
+ * were created in, and the precedence rule (today: the scope's compute) lives
+ * with `ApiNamespace`, not here.
  *
  * Contributes no route — leaving the request to the default compute's catch-all
  * resources — for a namespace on the default compute, a plain exported
- * function/object (no `ApiNamespace` scope), and a namespace that isn't exported
+ * function/object (not an `ApiNamespace`), and a namespace that isn't exported
  * (no client can call it, and dispatch couldn't resolve it).
  *
  * @param backendModule the imported backend module (`backendCDKPath`)
@@ -243,8 +244,8 @@ export function resolveNamespaceRoutes(backendModule: object, defaultCompute: Co
 	const routes = new Map<Compute, string[]>();
 	for (const [exportName, value] of Object.entries(backendModule)) {
 		if (!isDispatchableExport(exportName, value)) continue;
-		const scope = (value as Record<symbol, { compute?: Compute } | undefined>)[API_NAMESPACE_SCOPE];
-		const compute = scope?.compute;
+		const resolveCompute = (value as Record<symbol, (() => Compute | undefined) | undefined>)[API_NAMESPACE_COMPUTE];
+		const compute = resolveCompute?.();
 		if (!compute || compute === defaultCompute) continue;
 		routes.set(compute, [...(routes.get(compute) ?? []), exportName]);
 	}

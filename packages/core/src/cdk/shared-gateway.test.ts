@@ -18,7 +18,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Code, type IFunction, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import type { Construct } from 'constructs';
-import { ApiNamespace } from '../api.js';
+import { API_NAMESPACE_COMPUTE, ApiNamespace } from '../api.js';
 import { BlocksPresets } from './blocks-defaults.js';
 import { Compute } from './compute/compute.js';
 import { Scope } from './index.js';
@@ -364,6 +364,16 @@ describe('resolveNamespaceRoutes', () => {
 		parent._compute = ordersCompute;
 		const child = new Scope('child', { parent });
 		const orders = new ApiNamespace(child, 'orders', () => ({ async ping() {} }));
+		assert.deepStrictEqual(resolveNamespaceRoutes({ orders }, defaultCompute).get(ordersCompute), ['orders']);
+	});
+
+	test("uses the namespace's own compute resolver, not its scope's compute", () => {
+		// Stands in for the future per-namespace compute option: the namespace
+		// resolves to a different compute than its scope does, and routing follows
+		// the namespace.
+		const { stack, defaultCompute, ordersCompute } = computes('RoutesOwnResolver');
+		const orders = namespaceOn(stack, defaultCompute, 'orders') as Record<symbol, unknown>;
+		orders[API_NAMESPACE_COMPUTE] = () => ordersCompute;
 		assert.deepStrictEqual(resolveNamespaceRoutes({ orders }, defaultCompute).get(ordersCompute), ['orders']);
 	});
 
