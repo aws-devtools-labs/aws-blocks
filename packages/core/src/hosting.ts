@@ -1295,6 +1295,15 @@ export class Hosting extends Construct {
       },
       { wiringCheck: false },
     );
+    // The edge's build cutover (its static function carries the build id) waits
+    // for every asset upload of the build, so it never points at a prefix that
+    // isn't there yet. (Not the resolved config upload: that one invalidates
+    // the distribution, which already waits for the function.)
+    if (result.staticFunction) {
+      for (const upload of hosting.node.findAll().filter((c): c is s3deploy.BucketDeployment => c instanceof s3deploy.BucketDeployment)) {
+        result.staticFunction.node.addDependency(upload);
+      }
+    }
     return { distribution: result.distribution, url: result.url };
   }
 

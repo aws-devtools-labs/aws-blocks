@@ -7,10 +7,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { config, secret } from '@aws-blocks/hosting';
-import { _setSynthExistsChecker, cf, type DoorInput, defineFrontDoor } from '@aws-blocks/hosting/constructs';
+import { _setSynthExistsChecker, cf, type DoorInput, defineFrontDoor, type RouteBehavior } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack, Token } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
 import { claimApiFrontDoor, scheduleApiFrontDoor } from './cdk/api-front-door.js';
 import { BlocksPresets } from './cdk/blocks-defaults.js';
@@ -2735,30 +2735,159 @@ describe('Hosting', () => {
       t.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', { TargetType: 'lambda' });
     });
 
-    it("CloudFront's single default origin IS the ALB (http-only), with no per-path API behaviors (ALB routes everything)", () => {
-      createSpaBuildOutput(tmpDir);
-      const app = new App();
-      const stack = new Stack(app, 'CfOverAlbOriginStack', { env: { account: '111111111111', region: 'us-east-1' } });
+    // ── Static routes from S3, dynamic ones through the ALB ──────────────────
+    /** A manifest with the given routes over the Next.js fixture build (server compute `default`). */
+    const routedAdapter =
+      (root: string, routes: RouteBehavior[], extra: { redirects?: Array<{ source: string; destination: string; statusCode: 301 }> } = {}) =>
+      (projectDir: string) => ({ ...createNextjsFixtureAdapter(root)(projectDir), routes, ...extra });
+    const edgeOf = (t: Template) => {
+      const dist = Object.values(t.findResources('AWS::CloudFront::Distribution'))[0];
+      const config = dist.Properties.DistributionConfig as {
+        Origins: Array<{ Id: string; S3OriginConfig?: unknown; OriginAccessControlId?: unknown; CustomOriginConfig?: unknown }>;
+        DefaultCacheBehavior: { TargetOriginId: string; FunctionAssociations?: Array<{ EventType: string }> };
+        CacheBehaviors?: Array<{ PathPattern: string; TargetOriginId: string; FunctionAssociations?: Array<{ EventType: string }> }>;
+      };
+      const s3 = config.Origins.find((o) => o.S3OriginConfig);
+      const alb = config.Origins.find((o) => o.CustomOriginConfig);
+      const target = (id: string) => (id === s3?.Id ? 's3' : id === alb?.Id ? 'alb' : id);
+      return {
+        config,
+        s3,
+        alb,
+        defaultTarget: target(config.DefaultCacheBehavior.TargetOriginId),
+        behaviors: (config.CacheBehaviors ?? []).map((b) => [b.PathPattern, target(b.TargetOriginId)] as const),
+      };
+    };
+    /** The edge's static viewer-request function, as a callable `handler(event)`. */
+    const staticFunction = (t: Template): ((event: unknown) => { uri?: string; statusCode?: number; headers?: Record<string, { value: string }> }) => {
+      const fns = Object.values(t.findResources('AWS::CloudFront::Function')).filter((f) =>
+        String(f.Properties.FunctionCode).includes('resolveIndex'),
+      );
+      assert.strictEqual(fns.length, 1, 'one static viewer-request function');
+      return new Function(`${String(fns[0].Properties.FunctionCode)}\nreturn handler;`)();
+    };
 
+    it('static SPA: the edge serves everything but the API straight from the private S3 bucket (OAC), the API through the ALB', () => {
+      const t = stackedSynth('CfOverAlbS3Spa');
+      const edge = edgeOf(t);
+      assert.ok(edge.s3?.OriginAccessControlId, 'an S3 origin with origin access control');
+      assert.strictEqual(edge.defaultTarget, 's3', 'the static catch-all is the S3 default behavior');
+      assert.ok(
+        edge.config.DefaultCacheBehavior.FunctionAssociations?.some((f) => f.EventType === 'viewer-request'),
+        'the static path resolution runs at the edge',
+      );
+      assert.deepStrictEqual(
+        edge.behaviors.find(([p]) => p === '/aws-blocks/*'),
+        ['/aws-blocks/*', 'alb'],
+        'the API goes through the ALB router',
+      );
+      // The edge distribution may read (and list, so a miss is a 404) the bucket.
+      const policy = JSON.stringify(t.findResources('AWS::S3::BucketPolicy'));
+      assert.match(policy, /s3:GetObject/);
+      assert.match(policy, /s3:ListBucket/);
+      assert.match(policy, /cloudfront\.amazonaws\.com/);
+      // SPA fallback at the edge, as in the ALB asset proxy.
+      const fn = staticFunction(t);
+      // The build id is in the rewritten URI — the edge cache key — so a new
+      // build is never served from the previous build's cached objects.
+      assert.match(String(fn({ request: { uri: '/dashboard/settings' } }).uri), /^\/builds\/[^/]+\/index\.html$/);
+      assert.match(String(fn({ request: { uri: '/assets/app-1.js' } }).uri), /^\/builds\/[^/]+\/assets\/app-1\.js$/);
+      assert.match(String(fn({ request: { uri: '/.well-known/x' } }).uri), /^\/builds\/[^/]+\/\.well-known\/x$/);
+      assert.ok(!('OriginPath' in (edge.s3 as Record<string, unknown>)) || (edge.s3 as Record<string, unknown>).OriginPath === '');
+    });
+
+    it('the static function (the build cutover at the edge) runs only after every asset upload of the build', () => {
+      const t = stackedSynth('CfOverAlbS3Gate');
+      const fnId = Object.entries(t.findResources('AWS::CloudFront::Function')).find(([, f]) =>
+        String(f.Properties.FunctionCode).includes('resolveIndex'),
+      )?.[0];
+      assert.ok(fnId);
+      const dependsOn = [t.findResources('AWS::CloudFront::Function')[fnId].DependsOn ?? []].flat() as string[];
+      const uploads = Object.keys(t.findResources('Custom::CDKBucketDeployment')).filter(
+        (id) => !id.includes('BlocksConfigDeployment'),
+      );
+      assert.ok(uploads.length > 0);
+      for (const id of uploads) assert.ok(dependsOn.includes(id), `the function waits for ${id}`);
+    });
+
+    it('SSR: a static route is an S3 behavior; the server catch-all and the API stay on the ALB', () => {
+      createNextjsBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'CfOverAlbS3Ssr', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
         frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
       });
+      const edge = edgeOf(Template.fromStack(stack));
+      assert.strictEqual(edge.defaultTarget, 'alb');
+      const order = edge.behaviors.map(([p, to]) => `${p}→${to}`);
+      assert.ok(order.includes('/_next/static/*→s3'), order.join(', '));
+      assert.ok(order.includes('/aws-blocks/*→alb'), order.join(', '));
+      assert.ok(order.indexOf('/aws-blocks/*→alb') < order.indexOf('/_next/static/*→s3'), 'the API keeps precedence');
+    });
 
-      const t = Template.fromStack(stack);
-      // Design B: ONE origin — the ALB, reached HTTP-only on the internal edge→ALB
-      // hop — and a single default behavior forwarding everything to it. There are
-      // NO additional per-path (API) cache behaviors: the ALB does all the routing.
-      t.hasResourceProperties('AWS::CloudFront::Distribution', {
-        DistributionConfig: Match.objectLike({
-          DefaultCacheBehavior: Match.objectLike({ ViewerProtocolPolicy: 'redirect-to-https' }),
-          CacheBehaviors: Match.absent(),
-          Origins: Match.arrayWith([
-            Match.objectLike({ CustomOriginConfig: Match.objectLike({ OriginProtocolPolicy: 'http-only' }) }),
-          ]),
-        }),
+    it("keeps the router's precedence: a dynamic route listed before an overlapping static one shadows it at the edge", () => {
+      createNextjsBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'CfOverAlbS3Order', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        customAdapter: routedAdapter(tmpDir, [
+          { pattern: '/blog/admin', target: 'default' },
+          { pattern: '/blog/*', target: 'static' },
+          { pattern: '/*', target: 'default' },
+        ]),
+        frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
       });
+      const order = edgeOf(Template.fromStack(stack)).behaviors.map(([p, to]) => `${p}→${to}`);
+      const admin = order.indexOf('/blog/admin→alb');
+      const blog = order.indexOf('/blog/*→s3');
+      assert.ok(admin >= 0 && blog > admin, `the dynamic /blog/admin precedes the static /blog/* (got ${order.join(', ')})`);
+    });
+
+    it('the static function resolves the directory index and answers redirects the S3 behaviors would otherwise swallow', () => {
+      createNextjsBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'CfOverAlbS3Fn', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        customAdapter: routedAdapter(
+          tmpDir,
+          [
+            { pattern: '/docs/*', target: 'static' },
+            { pattern: '/*', target: 'default' },
+          ],
+          { redirects: [{ source: '/docs/old/*', destination: '/docs/new/*', statusCode: 301 }] },
+        ),
+        frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+      });
+      const fn = staticFunction(Template.fromStack(stack));
+      assert.match(String(fn({ request: { uri: '/docs/intro' } }).uri), /^\/builds\/[^/]+\/docs\/intro\/index\.html$/);
+      assert.match(String(fn({ request: { uri: '/docs/' } }).uri), /^\/builds\/[^/]+\/docs\/index\.html$/);
+      const redirect = fn({ request: { uri: '/docs/old/a/b' } });
+      assert.strictEqual(redirect.statusCode, 301);
+      assert.strictEqual(redirect.headers?.location.value, '/docs/new/a/b');
+    });
+
+    it("more routes than CloudFront's 25 behaviors: the edge keeps a correct prefix and warns; the rest go through the ALB", () => {
+      createNextjsBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'CfOverAlbS3Cap', { env: { account: '111111111111', region: 'us-east-1' } });
+      const routes: RouteBehavior[] = [
+        ...Array.from({ length: 40 }, (_, i) => ({ pattern: `/static${i}/*`, target: 'static' as const })),
+        { pattern: '/*', target: 'default' },
+      ];
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        customAdapter: routedAdapter(tmpDir, routes),
+        frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+      });
+      const edge = edgeOf(Template.fromStack(stack));
+      assert.ok(edge.behaviors.length <= 25, `at most 25 behaviors (got ${edge.behaviors.length})`);
+      assert.strictEqual(edge.behaviors[0][0], '/aws-blocks/*');
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('StackedEdgeBehaviorLimit'));
+      assert.strictEqual(warnings.length, 1);
     });
 
     it('the thin edge stamps security headers (HSTS / frame / content-type) — parity with the default CloudFront door', () => {
