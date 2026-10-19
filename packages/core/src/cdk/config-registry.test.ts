@@ -128,7 +128,7 @@ test('finalize deploys + wires the config even with zero entries and no bucket',
 	finalizeConfigRegistry(stack, role, computes);
 
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 1, 'one config bucket');
+	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + its access-log bucket');
 	t.resourceCountIs('Custom::CDKBucketDeployment', 1);
 	t.hasResourceProperties('AWS::Lambda::Function', {
 		Environment: { Variables: Match.objectLike({ BLOCKS_CONFIG_KEY: 'blocks-config.json' }) },
