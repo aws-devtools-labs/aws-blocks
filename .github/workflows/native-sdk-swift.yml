@@ -43,7 +43,7 @@ jobs:
 
   build-and-test-macos:
     name: Build & Test (macOS)
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     defaults:
       run:
@@ -57,11 +57,11 @@ jobs:
         run: swift build
 
       - name: Run unit tests
-        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests"
+        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests|BlocksGeneratedCodeTests|BlocksGeneratedMainActorTests"
 
   build-and-test-ios:
     name: Build & Test (iOS)
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     defaults:
       run:
@@ -72,10 +72,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Build for iOS
-        run: xcodebuild build -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 16'
+        run: xcodebuild build -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
       - name: Run unit tests on iOS
-        run: xcodebuild test -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
+        run: xcodebuild test -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
 
   swiftlint:
     name: SwiftLint

@@ -28,17 +28,20 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the string you passed as the **second** argument to `new ApiNamespace(scope, '<name>', …)`. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
 
-### Auth is a Building Block, not hand-rolled
+### Auth on the frontend
 
-Get the current user inside a method with `await auth.requireAuth(context)` (throws if unauthenticated — put it at the top of a protected method). On the frontend, mount the ready-made UI from `@aws-blocks/blocks/ui`:
+An auth Building Block supplies the backend only. The frontend must let a user sign in.
 
-```ts
-import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
-authContainer.appendChild(Authenticator(authApi));
-onAuthChange(authApi, (user) => { /* re-render for signed-in/out */ });
-```
+- On the backend, call `await auth.requireAuth(context)` at the top of each protected method. It throws when the user is not signed in.
+- On the frontend, use these parts from `@aws-blocks/blocks/ui`. Attach them the way your frontend attaches DOM elements.
+  - `Authenticator(authApi)`: an element with the sign-in, sign-up and confirm forms.
+  - `AuthenticatedContent(authApi, render, fallback?)`: shows `render(user)` for a signed-in user and `fallback` for a signed-out user.
+  - `onAuthChange(authApi, callback)`: calls `callback(user)` when the session changes. Use it when you render the content yourself.
+- `AuthBasic` without a `codeDelivery` config signs the user in at sign-up. It has no email confirmation step.
 
-`AuthBasic` without a `codeDelivery` config signs a user in immediately on sign-up (no email confirmation step).
+When the app is complete, a signed-out user reaches the sign-in form from the first page, the protected content appears after sign-in, and it is hidden again after sign-out.
+
+`Authenticator` emits stable testids. For `AuthBasic` and `AuthCognito` the fields are `authenticator-username` / `authenticator-password` and the actions `authenticator-action-signIn` / `authenticator-action-signUp` / `authenticator-submit`. `CUSTOMIZING-AUTH-UI.md` is the full contract; OIDC and federated actions carry a provider suffix, e.g. `authenticator-action-signIn:google`.
 
 ### The deployed frontend finds the backend on its own
 

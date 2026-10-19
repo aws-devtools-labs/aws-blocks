@@ -147,7 +147,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """)
 
-        XCTAssertTrue(output.api.contains("public class Api"))
+        XCTAssertTrue(output.api.contains("public final nonisolated class Api: Sendable {"))
         XCTAssertTrue(output.api.contains("func greet(name: String)"))
         XCTAssertTrue(output.api.contains("async throws"))
     }
@@ -191,11 +191,9 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         XCTAssertTrue(output.api.contains("RealtimeChannel<"))
     }
 
-    /// Ensures the realtime closure passes raw bytes to the decoder:
-    /// the realtime closure should hand the raw payload bytes straight to
-    /// the typed decoder. Eliminates the redundant String round-trip we
-    /// previously emitted (`{ text in try JSONDecoder().decode(_, from: Data(text.utf8)) }`).
-    func testRealtimeClosurePassesPayloadDataDirectlyToDecoder() throws {
+    /// A realtime result decodes through `RealtimeChannel`'s `Decodable`, so BlocksRuntime forms the message
+    /// decoder: one formed here inherits MainActor default isolation and traps when the socket task calls it.
+    func testRealtimeResultDecodesThroughTheRuntime() throws {
         let output = try generate(from: """
         {
             "openrpc": "1.3.2",
@@ -214,21 +212,11 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         """)
 
         XCTAssertTrue(
-            output.api.contains("{ data in"),
-            "expected emitted closure to bind `data in`, got:\n\(output.api)"
+            output.api.contains("return try JSONDecoder().decode(RealtimeChannel<GetChannel.ResultMessage>.self, from: result)"),
+            "expected the channel to decode through Decodable, got:\n\(output.api)"
         )
-        XCTAssertTrue(
-            output.api.contains("from: data)"),
-            "expected emitted closure to decode straight from data, got:\n\(output.api)"
-        )
-        XCTAssertFalse(
-            output.api.contains("Data(text.utf8)"),
-            "expected the String→Data round-trip to be removed, got:\n\(output.api)"
-        )
-        XCTAssertFalse(
-            output.api.contains("{ text in"),
-            "expected the closure to no longer bind `text in`, got:\n\(output.api)"
-        )
+        XCTAssertFalse(output.api.contains("{ data in"), "expected no message decoder in generated code, got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("Invalid channel descriptor"), "expected Decodable to own descriptor errors, got:\n\(output.api)")
     }
 
     func testGeneratesFileDownloadHandle() throws {
@@ -298,8 +286,8 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """)
 
-        XCTAssertTrue(output.api.contains("public class Posts"), "Should emit Posts class")
-        XCTAssertTrue(output.api.contains("public class Users"), "Should emit Users class")
+        XCTAssertTrue(output.api.contains("public final nonisolated class Posts: Sendable {"), "Should emit Posts class")
+        XCTAssertTrue(output.api.contains("public final nonisolated class Users: Sendable {"), "Should emit Users class")
         XCTAssertTrue(output.api.contains("func list()"), "Each class has its own list() — no prefix needed")
     }
 
@@ -450,7 +438,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         )
         // The emitted code must declare the type the diagnostic names (Api.ConnectDevice.ResultMessage),
         // or that name would not resolve in the generated client.
-        XCTAssertTrue(output.api.contains("public class Api {"), "namespace class Api not emitted, got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("public final nonisolated class Api: Sendable {"), "namespace class Api not emitted, got:\n\(output.api)")
         guard let opEnum = output.api.range(of: "public enum ConnectDevice {") else {
             return XCTFail("operation enum ConnectDevice not emitted, got:\n\(output.api)")
         }
@@ -603,10 +591,11 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         )
         XCTAssertTrue(output.api.contains("guard let result else { return nil }"), "a nullable result returns nil for a null body, got:\n\(output.api)")
         XCTAssertTrue(
-            output.api.contains("RealtimeChannel<MaybeChannel.ResultMessage>.fromJSON(descriptor"),
-            "a nullable bound transferable hydrates via fromJSON, got:\n\(output.api)"
+            output.api.contains("return try JSONDecoder().decode(RealtimeChannel<MaybeChannel.ResultMessage>.self, from: result)"),
+            "a nullable bound channel hydrates through RealtimeChannel's Decodable, got:\n\(output.api)"
         )
-        XCTAssertFalse(output.api.contains("JSONDecoder().decode(RealtimeChannel"), "must not decode a live RealtimeChannel directly, got:\n\(output.api)")
+        // A message decoder formed in generated code inherits MainActor default isolation and traps when the socket task calls it.
+        XCTAssertFalse(output.api.contains("{ data in"), "generated code must not form the message decoder, got:\n\(output.api)")
     }
 
     func testEveryKnownTagResolvesToConcreteType() throws {
@@ -771,6 +760,26 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         XCTAssertTrue(output.api.contains("-> RealtimeChannel<GetChannel.ResultMessage>"), "return type must qualify the nested type-arg, got:\n\(output.api)")
     }
 
+    func testNestedOIDCClientDecodesAsItsDescriptorWithAWarning() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [
+                { "name": "auth.getSetup", "params": [], "result": { "name": "R", "schema": {
+                    "type": "object", "properties": { "client": { "x-blocks-transferable": "oidc/client" } }, "required": ["client"]
+                }}},
+                { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": { "x-blocks-transferable": "oidc/client" } } }
+            ]
+        }
+        """)
+        XCTAssertTrue(output.api.contains("public let client: JSONValue"), "a nested oidc/client decodes as its descriptor, got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("-> OIDCClient {"), "a direct oidc/client still hydrates, got:\n\(output.api)")
+        XCTAssertEqual(output.warnings.filter { $0.contains("oidc/client") }, [
+            "swift: auth.getSetup returns an oidc/client below the top level, which decodes as JSONValue; return it directly to get an OIDCClient."
+        ])
+    }
+
     func testUnboundTransferableDiagnosticQualifiesDefaultNamespace() throws {
         // A non-namespaced method nests under `_Default`; the diagnostic must
         // name that class, or the printed type is unusable from app scope.
@@ -790,7 +799,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         """
         let model = try build(from: spec)
         let output = generator.generate(from: model)
-        XCTAssertTrue(output.api.contains("public class _Default {"), "expected _Default class, got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("public final nonisolated class _Default: Sendable {"), "expected _Default class, got:\n\(output.api)")
         let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
         XCTAssertEqual(
             diagnostic,
@@ -821,7 +830,10 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             }
         }
         """)
-        XCTAssertTrue(output.models.contains("public struct Telemetry"), "the $ref type-arg must be a resolvable top-level type, got:\n\(output.models)")
+        XCTAssertTrue(
+            output.models.contains("public nonisolated struct Telemetry"),
+            "the $ref type-arg must be a resolvable top-level type, got:\n\(output.models)"
+        )
         let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
         XCTAssertEqual(
             diagnostic,

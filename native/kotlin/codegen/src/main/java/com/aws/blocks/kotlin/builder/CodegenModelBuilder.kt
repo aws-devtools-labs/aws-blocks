@@ -58,6 +58,7 @@ class CodegenModelBuilder {
             typeDefinitions = collector.typeDefinitions(),
             servers = servers,
             endpoint = model.endpoint,
+            nativeCatalogs = model.nativeCatalogs,
         )
     }
 

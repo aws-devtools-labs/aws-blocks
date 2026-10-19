@@ -69,6 +69,19 @@ export class DistributedDatabase extends Scope {
     return transactionWithRetry(this.base, fn, options);
   }
 
+  /**
+   * Test helper from the local mock, which simulates an OCC conflict on the next
+   * commit. There is no deployed equivalent, so this throws instead of silently
+   * doing nothing (which would let a retry test pass without exercising a retry).
+   * Declared `void` (not `never`) so the signature matches the mock entry consumers type-check against.
+   */
+  simulateConflict(): void {
+    throw new Error(
+      'DistributedDatabase.simulateConflict() is a test helper that is only available in the local mock, ' +
+      'not in the deployed AWS runtime. Call it from tests that run against the mock.',
+    );
+  }
+
   /** @internal */
   getEngine() { return this.base.getEngine(); }
 }
