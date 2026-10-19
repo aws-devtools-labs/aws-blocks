@@ -33,7 +33,6 @@ def run(image):
         else:
             assert process.returncode != 0
             assert diagnostics[-1]['failure']['check'] == expected, diagnostics
-            assert diagnostics[-1]['failure']['reason'] == 'value_mismatch', diagnostics
         print(f'{bug or "clean delayed-checkbox app"}: verified')
 
 

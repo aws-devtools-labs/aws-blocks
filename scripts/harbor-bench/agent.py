@@ -1,15 +1,13 @@
-"""Small installed-Claude adapter: Bedrock-only auth, pinned skill, resumed accounting."""
+"""Small installed-Claude adapter: Bedrock-only auth and resumed-session accounting."""
 import json
 import os
 
 from harbor.agents.installed.claude_code import ClaudeCode
 from harbor.models.agent.context import ModelUsage
 
-from accounting import events, summarize
-from discovery import summarize_discovery
+from accounting import skill_use, summarize
+from pins import CLAUDE_VERSION, MODEL
 
-MODEL = 'global.anthropic.claude-opus-5-5'
-CLAUDE_VERSION = '2.1.296'
 CREDENTIALS = ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN')
 
 
@@ -43,10 +41,9 @@ class HarborBlocksClaude(ClaudeCode):
 
     async def setup(self, environment):
         await super().setup(environment)
+        # The skill arrives through Harbor's `skills` injection, not a fixed path.
         await self.exec_as_root(environment, command=(
-            'mkdir -p /home/node/.claude/skills/aws-blocks /logs/agent; '
-            'cp /opt/bench/SKILL.md /home/node/.claude/skills/aws-blocks/SKILL.md; '
-            'chown -R node:node /home/node/.claude /logs/agent; '
+            'mkdir -p /logs/agent; chown -R node:node /logs/agent; '
             'nohup node /opt/bench/registry.mjs </dev/null '
             '>/var/lib/harbor-verifier/registry.log 2>&1 &'
         ))
@@ -79,22 +76,6 @@ class HarborBlocksClaude(ClaudeCode):
                 n_input_tokens=context.n_input_tokens, n_cache_tokens=context.n_cache_tokens or 0,
                 n_output_tokens=context.n_output_tokens, cost_usd=context.cost_usd)
         metrics['phase'] = self.phase
-        metrics['discovery'] = summarize_discovery(stream)
-        tool_inputs = [
-            block.get('input') or {}
-            for event in events(stream) if event.get('type') == 'assistant'
-            for block in (event.get('message') or {}).get('content') or []
-            if block.get('type') == 'tool_use'
-        ]
-        commands = [value.get('command', '') for value in tool_inputs]
-        observed = '\n'.join(json.dumps(value) for value in tool_inputs)
-        metrics['scaffolder_command_observed'] = any(
-            '/app/bootstrap/node_modules/@aws-blocks/create-blocks-app/dist/index.js' in command
-            and '--template bare' in command for command in commands
-        ) if self.phase == 1 else None
-        metrics['instructions_read_observed'] = (
-            'SKILL.md' in observed and 'AGENTS.md' in observed
-            and '@aws-blocks/blocks/README.md' in observed
-        ) if self.phase == 1 else None
+        metrics['skill_use'] = skill_use(stream)
         context.metadata = {'harbor_bench': metrics}
         (self.logs_dir / 'phase-metrics.json').write_text(json.dumps(metrics, indent=2) + '\n')

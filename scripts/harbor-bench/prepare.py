@@ -7,10 +7,9 @@ from pathlib import Path
 import shutil
 import urllib.request
 
+from pins import CLAUDE_VERSION, MODEL, SKILL_REVISION, SKILL_SHA256, SKILL_URL
+
 ROOT = Path(__file__).resolve().parent
-SKILL_REVISION = '2cb0fa1c2e668e1bb075028800b6b27efb95779e'
-SKILL_SHA256 = '5ccde623192be25a059a4bd20fc054a8a7577ecbfd8658f3b53d8717b8b83ea1'
-SKILL_URL = f'https://raw.githubusercontent.com/aws/agent-toolkit-for-aws/{SKILL_REVISION}/skills/core-skills/aws-blocks/SKILL.md'
 
 
 def prepare(registry, output, arm, commit, harness_commit=None):
@@ -33,7 +32,11 @@ def prepare(registry, output, arm, commit, harness_commit=None):
     with urllib.request.urlopen(SKILL_URL, timeout=30) as response:
         skill = response.read()
     assert hashlib.sha256(skill).hexdigest() == SKILL_SHA256, 'skill content does not match pin'
-    (bench / 'SKILL.md').write_bytes(skill)
+    # Harbor injects this directory into Claude's skills config; the prompt never names it,
+    # so whether the skill triggers is part of the measurement.
+    skills = output / 'skills'
+    (skills / 'aws-blocks').mkdir(parents=True)
+    (skills / 'aws-blocks' / 'SKILL.md').write_bytes(skill)
     image = f'harbor-blocks-{arm}:{commit[:12]}'
     config = {
         'job_name': arm, 'jobs_dir': str(output / 'jobs'), 'n_attempts': 1,
@@ -43,9 +46,9 @@ def prepare(registry, output, arm, commit, harness_commit=None):
                         'extra_docker_compose': [str(output / 'hardening.yaml')]},
         'agents': [{
             'import_path': 'agent:HarborBlocksClaude',
-            'model_name': 'global.anthropic.claude-opus-5-5', 'resume_trajectory': True,
-            'override_setup_timeout_sec': 120,
-            'kwargs': {'version': '2.1.296', 'max_turns': 200,
+            'model_name': MODEL, 'resume_trajectory': True,
+            'override_setup_timeout_sec': 120, 'skills': [str(skills)],
+            'kwargs': {'version': CLAUDE_VERSION, 'max_turns': 200,
                        'disallowed_tools': 'Agent,Task', 'disable_web_search': True},
         }],
     }
@@ -55,6 +58,9 @@ def prepare(registry, output, arm, commit, harness_commit=None):
     # Prebuilt image means installing the toolchain costs no credential lifetime.
     text = (task / 'task.toml').read_text().replace('[environment]\n', f'[environment]\ndocker_image = "{image}"\n')
     (task / 'task.toml').write_text(text)
+    dockerfile = task / 'environment' / 'Dockerfile'
+    dockerfile.write_text(dockerfile.read_text().replace(
+        'ARG CLAUDE_CODE_VERSION\n', f'ARG CLAUDE_CODE_VERSION={CLAUDE_VERSION}\n'))
     (output / 'job.json').write_text(json.dumps(config, indent=2))
     (output / 'identity.json').write_text(json.dumps({
         'arm': arm, 'commit': commit, 'image': image, 'skill_revision': SKILL_REVISION,

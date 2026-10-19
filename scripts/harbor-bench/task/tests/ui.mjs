@@ -4,14 +4,13 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { chromium } from '/opt/verifier/node_modules/playwright/index.mjs';
-import { classifyBrowserFailure } from './browser-diagnostic.mjs';
 
 const phase = Number(process.env.BENCH_PHASE);
 const mode = process.argv[2];
 assert.ok(['exercise', 'survival'].includes(mode));
 const statePath = '/var/lib/harbor-verifier/state.json';
 const checks = JSON.parse(await readFile('/tests/checks.json', 'utf8'));
-const diagnostic = { mode, checks: [], browser_errors: 0, http_errors: 0 };
+const diagnostic = { mode, checks: [] };
 let state;
 try { state = JSON.parse(await readFile(statePath, 'utf8')); }
 catch (error) { if (error.code !== 'ENOENT') throw error; state = { items: [] }; }
@@ -58,8 +57,6 @@ try {
 	const context = await browser.newContext();
 	page = await context.newPage();
 	page.setDefaultTimeout(10000);
-	page.on('pageerror', () => { diagnostic.browser_errors++; });
-	page.on('response', response => { if (response.status() >= 400) diagnostic.http_errors++; });
 	await check('app_ready', async () => {
 		await page.goto('http://localhost:3000', { waitUntil: 'networkidle' });
 		await page.getByRole('button', { name: 'Add todo', exact: true }).waitFor();
@@ -151,7 +148,7 @@ try {
 	diagnostic.status = 'passed';
 } catch (error) {
 	diagnostic.status = 'failed';
-	diagnostic.failure = { check: activeCheck, kind: error.name === 'TimeoutError' ? 'timeout' : error.code === 'ERR_ASSERTION' ? 'assertion' : 'runtime', reason: classifyBrowserFailure(error) };
+	diagnostic.failure = { check: activeCheck, kind: error.name === 'TimeoutError' ? 'timeout' : error.code === 'ERR_ASSERTION' ? 'assertion' : 'runtime' };
 	// Preserve details only in the private runner log. Public JSON carries fixed identifiers.
 	console.error(error);
 	process.exitCode = 1;

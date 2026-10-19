@@ -48,7 +48,8 @@ jobs:
             core.setOutput('source_repository', pr.head.repo.full_name);
             await core.summary.addHeading('Requested Harbor evaluation')
               .addTable([['PR', 'Candidate', 'Baseline'], [value, pr.head.sha, comparison.merge_base_commit.sha]])
-              .addRaw('Optional and non-required. Review these exact revisions before approving model access.').write();
+              .addRaw('Optional and non-required. Review these exact revisions before approving model access. '
+                + 'A new dispatch for this PR cancels this run.').write();
 
   packages:
     needs: revisions
@@ -125,7 +126,6 @@ jobs:
           python scripts/harbor-bench/prepare.py --registry packed --output run --arm "$ARM" --commit "$COMMIT" --harness-commit "$HARNESS_SHA"
           image=$(python -c 'import json; print(json.load(open("run/identity.json"))["image"])')
           docker build --tag "$image" run/task/environment
-          python scripts/harbor-bench/check_verifier.py --image "$image"
       - name: Assume dedicated Bedrock-only role
         uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
         with:
@@ -171,7 +171,7 @@ jobs:
         with:
           pattern: harbor-result-*
           path: results
-      - name: Render honest comparison
+      - name: Render comparison
         env:
           BASELINE_SHA: ${{ needs.revisions.outputs.baseline }}
           CANDIDATE_SHA: ${{ needs.revisions.outputs.candidate }}

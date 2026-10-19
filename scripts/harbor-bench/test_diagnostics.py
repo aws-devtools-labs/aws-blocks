@@ -2,45 +2,45 @@
 import json
 import unittest
 
-from diagnostics import public_diagnostics
-from discovery import summarize_discovery
+from accounting import skill_use
+from diagnostics import public_failure
+
+
+def stream(*blocks):
+    return '\n'.join(json.dumps({'type': 'assistant', 'message': {'content': [
+        {'type': 'tool_use', 'id': str(index), 'name': name, 'input': inputs}]}})
+        for index, (name, inputs) in enumerate(blocks))
 
 
 class DiagnosticsTests(unittest.TestCase):
-    def test_failure_identifies_contract_without_publishing_runtime_text(self):
-        detail = {'status': 'failed', 'checks': ['app_ready', 'prior_data'],
-                  'browser_errors': 1, 'http_errors': 2,
-                  'failure': {'check': 'normalize_labels', 'kind': 'assertion', 'reason': 'value_mismatch',
-                              'actual': 'secret-from-app', 'message': 'token=private'}}
-        result = public_diagnostics({'failure': {'stage': 'ui_exercise', 'kind': 'runtime'}}, {'exercise': detail})
-        self.assertEqual(result['failure'], {'stage': 'ui_exercise', 'check': 'normalize_labels', 'kind': 'assertion', 'reason': 'value_mismatch'})
-        self.assertEqual(result['checks_passed'], 2)
-        self.assertEqual(result['browser_errors'], 1)
+    def test_browser_failure_names_check_without_publishing_runtime_text(self):
+        detail = {'status': 'failed', 'failure': {'check': 'normalize_labels', 'kind': 'assertion',
+                                                  'actual': 'secret-from-app', 'message': 'token=private'}}
+        result = public_failure({'failure': {'stage': 'ui_exercise', 'kind': 'runtime'}}, {'exercise': detail})
+        self.assertEqual(result, {'stage': 'ui_exercise', 'check': 'normalize_labels', 'kind': 'assertion'})
         self.assertNotIn('secret', json.dumps(result))
         self.assertNotIn('private', json.dumps(result))
 
-    def test_unknown_diagnostic_strings_never_escape_and_missing_is_unknown(self):
-        result = public_diagnostics({'failure': {'stage': 'SECRET', 'kind': 'TOKEN'}}, {})
-        self.assertEqual(result['failure']['stage'], 'unknown')
-        self.assertIsNone(result['checks_passed'])
-        self.assertNotIn('SECRET', json.dumps(result))
-        self.assertNotIn('TOKEN', json.dumps(result))
+    def test_unknown_strings_never_escape(self):
+        result = public_failure({'failure': {'stage': 'ui_survival', 'kind': 'TOKEN'}},
+                                {'survival': {'failure': {'check': 'SECRET', 'kind': 'SECRET'}}})
+        self.assertEqual(result, {'stage': 'ui_survival', 'check': None, 'kind': 'runtime'})
+        self.assertEqual(public_failure({'failure': {'stage': 'SECRET'}}, {})['stage'], 'unknown')
+        self.assertIsNone(public_failure({'status': 'passed'}, {}))
 
-    def test_discovery_deduplicates_reads_and_ignores_embedded_source(self):
-        def call(id, name, inputs):
-            return {'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'id': id, 'name': name, 'input': inputs}]}}
-        read = call('a', 'Read', {'file_path': '/app/AGENTS.md'})
-        values = [read, read,
-                  call('b', 'Bash', {'command': 'cat /home/node/.claude/skills/aws-blocks/SKILL.md && head -40 node_modules/@aws-blocks/blocks/README.md'}),
-                  call('c', 'Bash', {'command': "cat <<'EOF'\nnode_modules/@aws-blocks/core/dist/index.js\nEOF"}),
-                  call('d', 'Grep', {'path': 'node_modules/@aws-blocks/core/dist/index.js'}),
-                  {'type': 'user', 'message': {'content': [{'type': 'tool_result', 'tool_use_id': 'd', 'is_error': True}]}},
-                  {'type': 'user', 'message': {'content': [{'type': 'tool_result', 'tool_use_id': 'd', 'is_error': True}]}}]
-        result = summarize_discovery('\n'.join(json.dumps(v) for v in values))
-        self.assertEqual(result, {'skill': 1, 'app_instructions': 1, 'block_docs': 1,
-                                 'framework_source': 1, 'failed_tools': 1, 'observed_tools': 4})
-        self.assertIsNone(summarize_discovery(''))
-        self.assertNotIn('node_modules', json.dumps(result))
+    def test_non_browser_stage_ignores_stale_browser_results(self):
+        passed = {'exercise': {'status': 'passed'}}
+        result = public_failure({'failure': {'stage': 'blocks_persistence', 'kind': 'assertion'}}, passed)
+        self.assertEqual(result, {'stage': 'blocks_persistence', 'check': None, 'kind': 'assertion'})
+
+    def test_skill_use_prefers_skill_tool_and_ignores_other_skills(self):
+        self.assertEqual(skill_use(stream(('Read', {'file_path': '/x/aws-blocks/SKILL.md'}),
+                                          ('Skill', {'skill': 'aws-blocks'}))), 'skill_tool')
+        self.assertEqual(skill_use(stream(('Bash', {'command': 'cat ~/.claude/skills/aws-blocks/SKILL.md'}))),
+                         'file_read')
+        self.assertEqual(skill_use(stream(('Skill', {'skill': 'other'}), ('Read', {'file_path': '/app/AGENTS.md'}))),
+                         'none')
+        self.assertEqual(skill_use(''), 'none')
 
 
 if __name__ == '__main__':

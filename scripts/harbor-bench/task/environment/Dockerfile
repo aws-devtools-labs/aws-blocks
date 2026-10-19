@@ -4,7 +4,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 curl git procps util-linux tmux \
     && rm -rf /var/lib/apt/lists/*
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
-RUN npm install --global @anthropic-ai/claude-code@2.1.296 \
+# prepare.py fills this from pins.py; an unprepared build fails instead of installing latest.
+ARG CLAUDE_CODE_VERSION
+RUN test -n "$CLAUDE_CODE_VERSION" \
+    && npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && mkdir -p /opt/verifier \
     && npm install --prefix /opt/verifier playwright@1.58.2 \
     && /opt/verifier/node_modules/.bin/playwright install --with-deps chromium

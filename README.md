@@ -85,10 +85,6 @@ npm test
 
 Contributions, feedback, and questions are welcome.
 
-The optional [Harbor agent check](scripts/harbor-bench/README.md) compares a three-phase
-local app-building trajectory against the PR merge-base after team approval. It is
-advisory, not a required CI check or a statistical performance benchmark.
-
 ## License
 
 Apache-2.0

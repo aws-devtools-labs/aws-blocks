@@ -21,6 +21,22 @@ def events(text):
     return result
 
 
+def tool_uses(text):
+    return [block for event in events(text) if event.get('type') == 'assistant'
+            for block in (event.get('message') or {}).get('content') or []
+            if isinstance(block, dict) and block.get('type') == 'tool_use']
+
+
+def skill_use(text):
+    """How the installed aws-blocks skill was reached this phase: skill_tool, file_read or none."""
+    uses = [(block.get('name'), json.dumps(block.get('input') or {})) for block in tool_uses(text)]
+    if any(name == 'Skill' and 'aws-blocks' in inputs for name, inputs in uses):
+        return 'skill_tool'
+    if any('aws-blocks/SKILL.md' in inputs for _, inputs in uses):
+        return 'file_read'
+    return 'none'
+
+
 def summarize(text, previous=None):
     stream = events(text)
     results = [event for event in stream if event.get('type') == 'result']

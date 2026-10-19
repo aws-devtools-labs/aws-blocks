@@ -9,7 +9,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, '/opt/bench')
-from provenance import verify
+from provenance import stored_in_blocks, verify
 
 OUT = Path('/logs/verifier')
 OUT.mkdir(parents=True, exist_ok=True)
@@ -81,6 +81,12 @@ try:
     stop()
     if server_log:
         server_log.close()
+    # A successful POST plus restart survival also fits a raw-file backend; Blocks mocks
+    # persist under .bb-data, so every verifier-created record must be stored there.
+    stage = 'blocks_persistence'
+    titles = [item['title'] for item in json.loads(Path('/var/lib/harbor-verifier/state.json').read_text())['items']]
+    assert titles and not stored_in_blocks(Path('/app/todo-app'), titles), 'records missing from .bb-data'
+    result['checks']['blocks_persistence'] = True
     stage = 'server_restart'
     start()
     stage = 'ui_survival'
@@ -90,7 +96,9 @@ try:
 except Exception as error:
     # Details remain in local logs, never copied wholesale into public summary.
     result['error_type'] = type(error).__name__
-    result['failure'] = {'stage': stage, 'kind': 'timeout' if isinstance(error, subprocess.TimeoutExpired) else 'runtime'}
+    kind = 'timeout' if isinstance(error, subprocess.TimeoutExpired) else (
+        'assertion' if isinstance(error, AssertionError) else 'runtime')
+    result['failure'] = {'stage': stage, 'kind': kind}
     print(f'verifier failure: {error}', file=sys.stderr)
 finally:
     stop()

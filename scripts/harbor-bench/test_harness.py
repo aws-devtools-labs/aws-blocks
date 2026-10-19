@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from accounting import summarize
-from provenance import verify
+from provenance import stored_in_blocks, verify
 from public_result import collect
 from report import difference, eligible_pair, render
 
@@ -53,42 +53,44 @@ class AccountingTests(unittest.TestCase):
 
 
 class ProvenanceTests(unittest.TestCase):
-    def test_real_tarball_bytes_lock_origin_and_scaffolder_are_required(self):
+    def test_real_tarball_bytes_lock_origin_and_served_scaffolder_are_required(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            registry, app = root / 'registry', root / 'app'
+            registry, app = root / 'registry', root / 'todo-app'
             registry.mkdir()
-            manifest, served = [], []
-            for project, names in [('bootstrap', ['create-blocks-app']), ('todo-app', ['blocks', 'core'])]:
-                entries = {}
-                for short in names:
-                    name = '@aws-blocks/' + short
-                    key = f'registry/{name}/-/{short}-1.0.0.tgz'
-                    tarball = registry / key
-                    tarball.parent.mkdir(parents=True)
-                    content = json.dumps({'name': name, 'version': '1.0.0'}).encode()
-                    with tarfile.open(tarball, 'w:gz') as archive:
-                        member = tarfile.TarInfo('package/package.json')
-                        member.size = len(content)
-                        archive.addfile(member, io.BytesIO(content))
-                    info = {'name': name, 'version': '1.0.0', 'integrity': 'sha512-test', 'tarballS3Key': key}
-                    manifest.append(info)
-                    location = f'node_modules/{name}'
-                    directory = app / project / location
-                    directory.mkdir(parents=True)
-                    (directory / 'package.json').write_bytes(content)
-                    entries[location] = {'version': '1.0.0', 'integrity': 'sha512-test', 'resolved': 'http://localhost:4873/' + key}
-                    served.append(json.dumps({'path': '/' + key}))
-                entries['node_modules/@aws-blocks/core/node_modules/zod'] = {'version': '3.0.0'}
-                (app / project / 'package-lock.json').write_text(json.dumps({'packages': entries}))
+            manifest, served, entries = [], [], {}
+            for short in ('create-blocks-app', 'blocks', 'core'):
+                name = '@aws-blocks/' + short
+                key = f'registry/{name}/-/{short}-1.0.0.tgz'
+                tarball = registry / key
+                tarball.parent.mkdir(parents=True)
+                content = json.dumps({'name': name, 'version': '1.0.0'}).encode()
+                with tarfile.open(tarball, 'w:gz') as archive:
+                    member = tarfile.TarInfo('package/package.json')
+                    member.size = len(content)
+                    archive.addfile(member, io.BytesIO(content))
+                manifest.append({'name': name, 'version': '1.0.0', 'integrity': 'sha512-test', 'tarballS3Key': key})
+                served.append(json.dumps({'path': '/' + key}))
+                if short == 'create-blocks-app':
+                    continue  # Run through npm create; not an app dependency.
+                location = f'node_modules/{name}'
+                (app / location).mkdir(parents=True)
+                (app / location / 'package.json').write_bytes(content)
+                entries[location] = {'version': '1.0.0', 'integrity': 'sha512-test', 'resolved': 'http://localhost:4873/' + key}
+            entries['node_modules/@aws-blocks/core/node_modules/zod'] = {'version': '3.0.0'}
+            (app / 'package-lock.json').write_text(json.dumps({'packages': entries}))
             (registry / 'publish-manifest.json').write_text(json.dumps({'packages': manifest}))
-            backend = app / 'todo-app/aws-blocks'
-            backend.mkdir()
-            (backend / 'index.ts').write_text('import { ApiNamespace, KVStore } from "@aws-blocks/blocks";')
+            (app / 'aws-blocks').mkdir()
+            (app / 'aws-blocks/index.ts').write_text('import { ApiNamespace, KVStore } from "@aws-blocks/blocks";')
             ledger = root / 'ledger.jsonl'
             ledger.write_text('\n'.join(served))
-            self.assertEqual(len(verify(registry, app, ledger)['packages']), 3)
-            lock_path = app / 'todo-app/package-lock.json'
+            self.assertEqual([p['name'] for p in verify(registry, app, ledger)['packages']],
+                             ['@aws-blocks/blocks', '@aws-blocks/core'])
+            ledger.write_text('\n'.join(served[1:]))
+            with self.assertRaisesRegex(AssertionError, 'scaffolder was not served'):
+                verify(registry, app, ledger)
+            ledger.write_text('\n'.join(served))
+            lock_path = app / 'package-lock.json'
             original = lock_path.read_text()
             lock = json.loads(original)
             lock['packages']['node_modules/@aws-blocks/core']['resolved'] = 'https://registry.npmjs.org/core.tgz'
@@ -100,10 +102,20 @@ class ProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, 'workspace link'):
                 verify(registry, app, ledger)
             lock_path.write_text(original)
-            core = app / 'todo-app/node_modules/@aws-blocks/core/package.json'
-            core.write_text('modified')
+            (app / 'node_modules/@aws-blocks/core/package.json').write_text('modified')
             with self.assertRaisesRegex(AssertionError, 'modified package'):
                 verify(registry, app, ledger)
+
+    def test_records_must_be_in_blocks_mock_data_not_elsewhere(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app = Path(temp)
+            (app / '.bb-data/app-todos').mkdir(parents=True)
+            (app / '.bb-data/app-todos/store.json').write_text('{"1":{"title":"survival-a"}}')
+            (app / 'data.json').write_text('["survival-b"]')  # Raw-file backend, not Blocks.
+            (app / 'node_modules/x/.bb-data').mkdir(parents=True)
+            (app / 'node_modules/x/.bb-data/f').write_text('survival-b')
+            self.assertEqual(stored_in_blocks(app, ['survival-a']), [])
+            self.assertEqual(stored_in_blocks(app, ['survival-a', 'survival-b']), ['survival-b'])
 
 
 class ReportTests(unittest.TestCase):
@@ -143,18 +155,20 @@ class ReportTests(unittest.TestCase):
             steps = []
             for name in ('create', 'due-dates', 'labels'):
                 metrics = summarize(stream([10, 20, 30, 40, 1.0]))
-                metrics.update(scaffolder_command_observed=True, instructions_read_observed=True)
+                metrics['skill_use'] = 'skill_tool'
                 steps.append({'step_name': name, 'agent_result': {'metadata': {'harbor_bench': metrics}}})
                 phase = trial / 'steps' / name
                 (phase / 'agent').mkdir(parents=True)
                 (phase / 'verifier').mkdir()
                 (phase / 'agent/claude-code.txt').write_text(stream([10, 20, 30, 40, 1.0]))
                 (phase / 'verifier/verification.json').write_text(json.dumps({'status': 'passed', 'checks': {
-                    key: True for key in ('package_provenance', 'build', 'all_phases_and_reload', 'server_restart_fresh_browser')
+                    key: True for key in ('package_provenance', 'build', 'all_phases_and_reload',
+                                          'blocks_persistence', 'server_restart_fresh_browser')
                 }}))
             (trial / 'result.json').write_text(json.dumps({'step_results': steps}))
             result = collect(root, identity, 0, None)
             self.assertEqual(result['status'], 'passed')
+            self.assertEqual({p['skill_use'] for p in result['phases']}, {'skill_tool'})
             for path in (root / 'public').iterdir():
                 self.assertNotIn('private-string', path.read_text())
             for arm in ('baseline', 'candidate'):
@@ -164,7 +178,13 @@ class ReportTests(unittest.TestCase):
             self.assertIn('A/A infrastructure demonstration', render(root))
             failed = dict(result, status='failed', harbor_exit_code=1, same_session=False)
             (root / 'harbor-result-candidate/result.json').write_text(json.dumps(failed))
-            report = render(root)
+            self.assertIn('| **total** | passed | failed | no |', render(root))
+            # Without the .bb-data check the phase is not a pass, whatever else succeeded.
+            verification = trial / 'steps/labels/verifier/verification.json'
+            data = json.loads(verification.read_text())
+            del data['checks']['blocks_persistence']
+            verification.write_text(json.dumps(data))
+            self.assertEqual(collect(root, identity, 0, None)['phases'][2]['status'], 'failed')
 
 
 if __name__ == '__main__':
