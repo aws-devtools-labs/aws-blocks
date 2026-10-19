@@ -13,6 +13,8 @@
 #     and dev-dependencies (build/test only, low blast radius). Production deps
 #     and security fixes land as their own PRs so each shipped bump stays
 #     reviewable and mergeable on its own.
+#   - versioning-strategy: increase raises the minimum version in package.json
+#     to the new release (^3.2.0 -> ^3.3.1), not only the lockfile.
 #   - typescript and @types/node are toolchain foundations: a major bump is a
 #     deliberate migration, not routine hygiene (TS 7 / @types/node 26 broke the
 #     project-reference build in one grouped PR). So they are excluded from the
@@ -30,6 +32,7 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+    versioning-strategy: increase
     groups:
       aws-sdk:
         patterns:
