@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { cellCost, compositeBand, isCountedFailKlass, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
 import { buildAggregate, cellComposite, diffAgainstBaseline, renderDetailed, renderPreword } from './lib/overview.mjs';
 import { evaluateGates } from './lib/gates.mjs';
+import { redactDeep, redactSecrets } from './lib/secrets.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
 
@@ -48,11 +49,12 @@ if (process.env.COMMENT_MD_PATH && shouldComment) {
 	}
 }
 
-// One row per cell, read from the single result.json the cell artifact holds.
+// One row per cell, read from the single result.json the cell artifact holds. Redacted on load, so
+// every sink below (step summary, PR comment, S3 aggregate, Athena NDJSON) only sees scrubbed data.
 const cells = dirs.map((d) => {
 	const file = join(RESULTS_DIR, d, 'result.json');
 	try {
-		return JSON.parse(readFileSync(file, 'utf-8'));
+		return redactDeep(JSON.parse(readFileSync(file, 'utf-8')));
 	} catch {
 		// No parseable result.json — surface the raw artifact suffix (names can't be split reliably).
 		return { task: d.replace('bench-result-', ''), template: '', error: 'unreadable' };
@@ -365,7 +367,7 @@ if (process.env.ATHENA_NDJSON_PATH) {
 }
 
 // ── Emit ──────────────────────────────────────────────────────────────────────
-const out = `${md.join('\n')}\n`;
+const out = redactSecrets(`${md.join('\n')}\n`);
 if (process.env.GITHUB_STEP_SUMMARY) {
 	// A >1MB step summary or any IO error must NOT turn the check red — fall back to stdout.
 	try {
