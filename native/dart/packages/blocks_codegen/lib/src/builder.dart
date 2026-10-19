@@ -1095,10 +1095,9 @@ class CodegenModelBuilder {
         '(or pass --fail-on-collision to make this an error).';
   }
 
-  /// An opt-out is build configuration, not spec metadata, so one that matches
-  /// nothing is the caller's own typo rather than a malformed catalog: warn and
-  /// generate. Keyed on declaration, not on the `dart` platform field, so a
-  /// package offered only to Swift or Android is not flagged here.
+  /// Because opt-outs are build configuration, an identity absent from the
+  /// package catalog produces a warning instead of an error. Platform
+  /// availability does not affect this check.
   void _warnUnmatchedOptOuts(RpcModel rpc) {
     for (final identity in optedOutPackages.toList()..sort()) {
       if (rpc.nativePackages.containsKey(identity)) continue;
