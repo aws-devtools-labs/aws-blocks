@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers, ApiError, brandBlocksError } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, ApiError, blocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -33,12 +33,6 @@ import { isExpired, nowEpochSeconds, resolveTtlEpochSeconds } from './ttl.js';
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const MAX_ITEM_BYTES = 400 * 1024; // DynamoDB 400 KB limit
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return brandBlocksError(err);
-}
 
 /**
  * Build the 409 ApiError for a conditional-write conflict. Maps to HTTP 409

@@ -789,6 +789,7 @@ const buildManifest = (input: {
       type: 'http-server',
       bundle: buildDir,
       entrypoint: RUN_SH_FILENAME,
+      serverEntry: 'index.js',
       port: SVELTEKIT_SERVER_PORT,
       placement: 'regional',
       runtime: FRAMEWORK_COMPUTE_RUNTIME,

@@ -77,8 +77,8 @@ export function escapeOriginToPattern(origin: string): string {
  *
  * Computed on first access (not at module load) so that S3 config values
  * injected by `loadConfigToProcessEnv()` are available. Combines two channels:
- * - `CORS_ALLOWED_ORIGINS` — user-supplied regex patterns (set as Lambda env var
- *   by blocks-backend in sandbox mode)
+ * - `CORS_ALLOWED_ORIGINS` — user-supplied regex patterns (set as an env var on
+ *   every compute from the stack's `defaults.allowedOrigins`)
  * - `CORS_HOSTING_ORIGINS` — framework-injected literal origins (set from S3
  *   config by the Hosting construct, e.g. the resolved CloudFront domain)
  *
@@ -142,9 +142,12 @@ const WARNED_ORIGINS_LIMIT = 100;
 function warnDisallowedOriginOnce(origin: string): void {
   if (warnedOrigins.has(origin)) return;
   if (warnedOrigins.size < WARNED_ORIGINS_LIMIT) warnedOrigins.add(origin);
-  const example = 'CORS_ALLOWED_ORIGINS=https://myapp\\.com,^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$';
+  // Preset-agnostic on purpose: this fires mostly on sandbox stacks, so an
+  // example tied to one preset would swap the app's other defaults (or, copied
+  // into production, carry the sandbox localhost pattern there).
+  const example = "defaults: { ...yourPreset, allowedOrigins: [...yourPreset.allowedOrigins, 'https://myapp\\\\.com'] }";
   console.warn(
-    `[CORS] Origin "${origin}" is not allowed. Set the CORS_ALLOWED_ORIGINS environment variable to allow this origin. Example: ${example}`
+    `[CORS] Origin "${origin}" is not allowed. Add it to the stack's defaults.allowedOrigins (regex patterns), keeping the preset's existing entries. Example: ${example}`
   );
 }
 

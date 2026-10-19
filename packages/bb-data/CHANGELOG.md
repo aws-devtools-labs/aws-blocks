@@ -1,5 +1,154 @@
 # @aws-blocks/bb-data
 
+## 0.4.0
+
+### Minor Changes
+
+- 8f725b6: fix(bb-data): enable Aurora storage encryption, backup retention, and log export
+  
+  Hardens the Aurora Serverless v2 cluster synthesized by `Database`:
+  
+  - **Storage encryption at rest** is opt-in via the
+    `@aws-blocks/bb-data:encryptStorageByDefault` context flag — set in the new
+    `create-blocks-app` cdk.json templates, so new projects encrypt by default with
+    the AWS-managed `aws/rds` key. A new optional `storageEncryptionKeyArn` (the ARN
+    of a customer-managed KMS key) turns encryption on regardless of the flag and
+    also encrypts the auto-generated credentials secret. When neither is set, the
+    `StorageEncrypted` property is left unset (so an existing cluster is untouched)
+    and a synth warning explains how to opt in.
+  - **Automated backups** are on by default and retained **15 days**; this is also
+    the point-in-time-recovery window. A single `pointInTimeRecovery` option
+    controls it (mirroring every other Blocks block): `true` enables the 15-day
+    window, `{ retentionDays: n }` pins a 1–35-day window, and `false` clamps to the
+    1-day minimum (Aurora cannot disable automated backups). When omitted it follows
+    the stack-wide `defaults.pointInTimeRecovery` (on under `production`, off under
+    `sandbox`).
+  - **CloudWatch log export** — the PostgreSQL engine log is exported to CloudWatch
+    Logs, with retention following the stack-wide `defaults.logRetention`.
+  - `iamAuthentication` remains intentionally off (access is exclusively via the RDS
+    Data API), and automatic secret rotation is documented as a follow-up.
+  
+  `@aws-blocks/create-blocks-app` scaffolds this default into new projects: every
+  template's `cdk.json` now sets the `@aws-blocks/bb-data:encryptStorageByDefault`
+  context flag, and the Amplify overlay sets the same flag via `setContext`. As a
+  result, a `Database` created in a newly scaffolded project encrypts its storage at
+  rest by default.
+  
+  **Breaking for existing stacks (0.x minor = breaking channel):** the
+  backup-retention and CloudWatch log-export changes alter synthesized cluster
+  properties, so existing stacks will show a CloudFormation diff.
+  
+  Storage encryption is **opt-in** specifically so it does **not** silently replace
+  existing clusters: with neither the context flag nor a `storageEncryptionKeyArn`
+  set, the `StorageEncrypted` property is left unset and the existing cluster is
+  untouched. Opting in (setting the flag, or supplying a key) on an
+  already-provisioned, unencrypted cluster requires a **replacement**, and the
+  replacement is destructive: RDS cannot encrypt an existing cluster in place, so
+  CloudFormation creates a **new, empty** encrypted cluster and repoints the stack.
+  There is no in-place path. The migration CustomResource does **not** re-run on a
+  cluster swap — its only CloudFormation properties are the service token and the
+  migrations hash, neither of which changes when the cluster is replaced — so the new
+  cluster comes up with **no schema**; migrations run only when a migration file
+  changes (which changes the migrations hash). Under production (RETAIN) the old
+  cluster is orphaned/unreferenced; under sandbox (DESTROY) it and its data are
+  deleted; under `removalPolicy: 'snapshot'` it is snapshotted as it is replaced
+  (though under production's `deletionProtection: true` the follow-up delete may fail
+  and leave it in place, unverified on a real deploy). The only safe route is to
+  snapshot the existing cluster, restore it with encryption enabled, then cut over.
+  Review the diff and snapshot before deploying. The replacement is symmetric:
+  turning encryption back off — removing the flag (or `storageEncryptionKeyArn`) from
+  a project that already deployed encrypted, e.g. deleting the cdk.json line or a
+  merge dropping it — also changes `StorageEncrypted` and so likewise replaces the
+  cluster (back to unencrypted), with the same new-empty-cluster / no-schema outcome.
+- b8649dc: feat(core): report the BB user-agent chain as the Postgres `application_name`
+  
+  The two pg-based Building Blocks now report the block's user-agent chain as the
+  Postgres `application_name` (`aws-blocks/<core> bb/Database/<version>`), so the
+  origin of a connection is visible to the server — in `pg_stat_activity` where
+  the server exposes it, and in provider dashboards. `bb-data` does this on its
+  `connectionString` path; the RDS Data API path is HTTP and unaffected.
+  `bb-distributed-data` does it on the DSQL path.
+  
+  The chain is supplied as pg's `fallback_application_name`, which libpq
+  documents for a library setting a default name "but allow it to be overridden by
+  the user" — so an `application_name` already set in the caller's connection
+  string, or their `PGAPPNAME`, is used instead and never replaced.
+  
+  `Scope.formatUserAgentString()` renders the chain for any string-typed sink and
+  applies the two Postgres constraints on `application_name` itself: it keeps the
+  value within the 63-**byte** `NAMEDATALEN - 1` limit by dropping whole parent
+  entries from inside the chain rather than letting the server clip mid-token
+  (omitting the value outright if it will not fit as whole entries), and it emits
+  only printable ASCII, which is all Postgres preserves. Only official BB names
+  enter the chain, so a custom block's name is never exposed.
+
+### Patch Changes
+
+- 3a7eb9e: fix: export runtime values missing from the `cdk` entry points
+  
+  Some values exported by a Building Block's default and `aws-runtime` entry points were missing from its `cdk` entry,
+  so a backend file importing them crashed `cdk synth` at load time — for example, the `InterruptError` import shown in
+  the `bb-agent` README failed with `does not provide an export named 'InterruptError'`. The `cdk` entries now also
+  export:
+  
+  - `@aws-blocks/bb-agent`: `InterruptError`
+  - `@aws-blocks/bb-async-job`: `BatchSubmitFailedError`
+  - `@aws-blocks/bb-auth-cognito`: `SessionStore`; standalone session tables also enable DynamoDB TTL when a positive
+    session lifetime is configured.
+  - `@aws-blocks/bb-data`: `RLSEnabledDatabase`, `PgClientEngine`
+  
+  `@aws-blocks/blocks`: picks up the fixed `cdk` entries of the Building Blocks above. The conditional-export parity
+  test now also checks every Building Block's `cdk` entry.
+- 03ce866: Keep the local dev server alive when a PGlite init trap aborts constructor-time migrations, and recover from it
+  
+  A `Database` / `DistributedDatabase` configured with `migrationsPath` runs its
+  migrations eagerly in the constructor, before any query awaits them. If PGlite's
+  WASM `_pg_initdb` aborts (notably under memory pressure, where the WASM linear
+  heap can't grow), that eager, unawaited promise rejected with no handler — an
+  unhandled rejection that terminated the whole `npm run dev` process. A shared
+  `trackEager` helper (in `@aws-blocks/data-common`) now attaches a logging handler
+  so the dev server survives; the same rejection still reaches callers via the
+  ready-gate, so a query after a failed init surfaces a branded
+  `QueryFailedException` rather than being swallowed.
+  
+  A transient trap no longer wedges the data layer: on an init trap the cached
+  rejected promise is cleared, so the next query re-runs the idempotent migrations
+  once memory eases (matching the engine's own recover-on-retry behaviour).
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [9ebda66]
+- Updated dependencies [78f4396]
+- Updated dependencies [440ecce]
+- Updated dependencies [92fa27b]
+- Updated dependencies [1a5c18e]
+- Updated dependencies [4ae500e]
+- Updated dependencies [6d764f7]
+- Updated dependencies [5d6656a]
+- Updated dependencies [60616b1]
+- Updated dependencies [a50fb46]
+- Updated dependencies [8a1a4a9]
+- Updated dependencies [38ce80c]
+- Updated dependencies [94a914a]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [005c095]
+- Updated dependencies [b8649dc]
+- Updated dependencies [03ce866]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [66f4be2]
+- Updated dependencies [32a4b73]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e9241b5]
+- Updated dependencies [f1eb149]
+- Updated dependencies [122c49c]
+- Updated dependencies [7c19c4f]
+  - @aws-blocks/core@0.7.0
+  - @aws-blocks/bb-app-setting@0.3.2
+  - @aws-blocks/data-common@0.1.6
+  - @aws-blocks/bb-logger@0.2.2
+
 ## 0.3.1
 
 ### Patch Changes

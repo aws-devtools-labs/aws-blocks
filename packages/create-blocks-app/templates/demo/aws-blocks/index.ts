@@ -1,4 +1,4 @@
-import { ApiNamespace, ApiError, Scope, KVStore, AuthBasic, DistributedTable } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, KVStore, AuthBasic, DistributedTable, FileBucket, AppSetting, AsyncJob, EmailClient, Secret, KnowledgeBase } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
@@ -20,10 +20,36 @@ const scope = new Scope('my-app');
 // Building Blocks: Use these instead of creating custom storage
 const store = new KVStore(scope, 'app-store', {});
 
+// FileBucket: object storage for binary files (uploads, reports, images).
+// Non-versioned here to keep the demo simple; versioning is on by default.
+const files = new FileBucket(scope, 'app-files', { versioned: false });
 
-const auth = new AuthBasic(scope, 'auth', {
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
+// AppSetting: a single runtime config value (feature flag, threshold, URL).
+const featureFlag = new AppSetting<string>(scope, 'feature-flag', { value: 'off' });
+
+// Secret: a single credential (API key, token). Like AppSetting but with
+// version history for rotation. The mock stores it in .bb-data (no AWS).
+const apiKey = new Secret<string>(scope, 'api-key');
+
+// KnowledgeBase: semantic search over a folder of docs. Backed by Bedrock
+// Knowledge Bases on deploy; locally the mock indexes ./knowledge in-process
+// (no AWS). The `knowledge/` folder ships with the template.
+const docs = new KnowledgeBase(scope, 'docs', { source: './knowledge' });
+
+// EmailClient: transactional email. The mock captures sent mail (no SES).
+const email = new EmailClient(scope, 'mailer', { fromAddress: 'noreply@example.com' });
+
+// AsyncJob: background processing. The handler runs locally (no SQS/Lambda).
+// trackStatus lets a caller await completion. This demo handler records that it
+// ran by writing a marker into the KVStore, so a caller can confirm the effect.
+const greetingJob = new AsyncJob<{ name: string }>(scope, 'greeting-job', {
+  trackStatus: true,
+  handler: async (payload) => {
+    await store.put(`job-ran:${payload.name}`, 'done');
+  },
 });
+
+const auth = new AuthBasic(scope, 'auth');
 
 // DistributedTable: Use Zod schemas for type-safe tables
 const todoSchema = z.object({
@@ -72,6 +98,80 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async setValue(key: string, value: string) {
     await store.put(key, value);
     return { success: true };
+  },
+
+  // ── Public — FileBucket upload/download demo ─────────────────────────
+  // Return Transferable handles the client middleware hydrates into
+  // live `.upload(body)` / `.download()` objects, so the browser transfers
+  // bytes directly to/from storage without managing presigned URLs by hand.
+  async getUploadSlot(path: string, contentType: string) {
+    return files.createUploadHandle(path, { contentType });
+  },
+
+  async getFileHandle(path: string) {
+    return files.getFileHandle(path);
+  },
+
+  // ── Public — AppSetting (runtime config) demo ────────────────────────
+  async getFlag() {
+    return await featureFlag.get();
+  },
+
+  async setFlag(value: string) {
+    await featureFlag.put(value);
+    return { success: true };
+  },
+
+  // ── Public — Secret (credential with rotation history) demo ──────────
+  // In a real app a secret is set out-of-band (console/CLI), never returned to
+  // the browser. This demo exposes it only to show rotation history: after
+  // rotating, the previous value stays readable until the next rotation.
+  async rotateApiKey(value: string) {
+    await apiKey.put(value);
+    return { success: true };
+  },
+
+  async getApiKey() {
+    return await apiKey.get();
+  },
+
+  async getPreviousApiKey() {
+    return await apiKey.get({ version: 'previous' });
+  },
+
+  async apiKeyVersionCount() {
+    return (await apiKey.listVersions()).length;
+  },
+
+  // ── Public — KnowledgeBase (semantic doc search) demo ────────────────
+  // Retrieve the most relevant chunks for a query from the ./knowledge corpus.
+  // Returns text + relevance score + source path for each hit.
+  async searchDocs(query: string, maxResults: number = 3) {
+    const results = await docs.retrieve(query, { maxResults });
+    return results.map((r) => ({ text: r.text, score: r.score, source: r.source }));
+  },
+
+  // ── Public — AsyncJob (background processing) demo ───────────────────
+  // Submit a job and wait for it to complete. The handler writes a marker
+  // into the store; `jobRan` confirms the effect landed.
+  async runGreetingJob(name: string) {
+    const { jobId } = await greetingJob.submit({ name });
+    const status = await greetingJob.waitUntilComplete(jobId, { timeoutMs: 10000 });
+    return { jobId, state: status.state };
+  },
+
+  async jobRan(name: string) {
+    return (await store.get(`job-ran:${name}`)) === 'done';
+  },
+
+  // ── Public — EmailClient (transactional email) demo ──────────────────
+  async sendWelcome(to: string) {
+    const result = await email.send({
+      to,
+      subject: 'Welcome',
+      body: 'Thanks for trying the demo app.',
+    });
+    return { messageId: result.messageId };
   },
   
   // ── Public — cookie round-trip demo ──────────────────────────────────

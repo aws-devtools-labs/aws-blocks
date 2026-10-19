@@ -8,7 +8,7 @@
 
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
-import { DatabaseBase, type SqlQuery, type Transaction } from '@aws-blocks/data-common';
+import { DatabaseBase, type SqlQuery, type Transaction, trackEager, logRecovery } from '@aws-blocks/data-common';
 import { DsqlMockEngine } from './engines/dsql-mock-engine.js';
 import { runMigrations, loadMigrationsFromDir } from './migrations.js';
 import { transactionWithRetry } from './transaction.js';
@@ -21,6 +21,8 @@ export class DistributedDatabase extends Scope {
   private base: DatabaseBase;
   private mockEngine: DsqlMockEngine;
   private migrationsRun: Promise<void> | null = null;
+  /** Restart the eager migration run after a transient PGlite init trap cleared the cache. */
+  private startMigrations?: () => Promise<void>;
 
   /** @internal Logger for internal operations. Defaults to error-level when not provided. */
   protected log: ChildLogger;
@@ -34,13 +36,40 @@ export class DistributedDatabase extends Scope {
 
     if (options?.migrationsPath) {
       const path = options.migrationsPath;
-      this.migrationsRun = loadMigrationsFromDir(path)
-        .then(m => this.mockEngine.withDdl(() => runMigrations(this.mockEngine, m)))
-        .then(() => {});
+      // See bb-data's index.mock.ts for the full rationale. Two concerns:
+      //  1. keep the dev server alive — an unhandled rejection on this eager
+      //     promise (notably a PGlite WASM init trap) would kill `npm run dev`;
+      //  2. don't cache the failure forever — the DsqlMockEngine recovers, so on
+      //     an init trap onTrap clears `migrationsRun` and ready() re-runs the
+      //     idempotent migrations on the next query.
+      let trapped = false;
+      const startMigrations = () => {
+        const retry = trapped;
+        const run = loadMigrationsFromDir(path)
+          .then(m => this.mockEngine.withDdl(() => runMigrations(this.mockEngine, m)))
+          .then(() => {
+            if (retry) {
+              trapped = false;
+              try {
+                logRecovery(this.log, 'Migrations re-ran');
+              } catch {}
+            }
+          });
+        this.migrationsRun = trackEager(run, this.log, 'Migrations failed', () => {
+          trapped = true;
+          this.migrationsRun = null;
+        });
+        return run;
+      };
+      this.startMigrations = startMigrations;
+      startMigrations();
     }
   }
 
-  private async ready(): Promise<void> { if (this.migrationsRun) await this.migrationsRun; }
+  private async ready(): Promise<void> {
+    if (!this.migrationsRun && this.startMigrations) this.startMigrations();
+    if (this.migrationsRun) await this.migrationsRun;
+  }
 
   query<T>(query: SqlQuery): Promise<T[]> { return this.ready().then(() => this.base.query<T>(query)); }
   queryOne<T>(query: SqlQuery): Promise<T | null> { return this.ready().then(() => this.base.queryOne<T>(query)); }

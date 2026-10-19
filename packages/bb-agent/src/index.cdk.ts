@@ -1,17 +1,20 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
+import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { AgentCoreRuntime } from './agentcore-runtime.cdk.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig } from './types.js';
+import { BB_NAME } from './version.js';
 
-export { AgentErrors } from './errors.js';
+export { AgentErrors, InterruptError } from './errors.js';
 export { BedrockModels, OllamaModels } from './models.js';
 
 export class Agent extends BuildingBlockScope {
@@ -28,7 +31,7 @@ export class Agent extends BuildingBlockScope {
 	 * handler no longer needs Bedrock access — the runtime's own role gets it (see AgentCoreRuntime).
 	 */
 	constructor(scope: ScopeParent, id: string, config?: AgentConfig) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
 
 		// Session-snapshot bucket. Provisioned here (and granted to the shared execution role that the
 		// AgentCore Runtime runs as); the deployed loop re-derives its name from this bucket's `fullId`
@@ -67,5 +70,29 @@ export class Agent extends BuildingBlockScope {
 			agentFullId: this.fullId,
 			agentcoreAssetPath: config?.agentcoreAssetPath,
 		});
+
+		// Bedrock evaluates `ModelConfig.guardrail` on each model call, which needs ApplyGuardrail on
+		// that guardrail. Granted per guardrail (never a wildcard) to the role the loop runs as.
+		const deployed = config?.model?.deployed;
+		const guardrailArns = [...new Set(
+			(Array.isArray(deployed) ? deployed : deployed ? [deployed] : [])
+				.flatMap((m) => (m.provider === 'bedrock' && m.guardrail ? [m.guardrail.identifier] : []))
+				.map((id) => (id.startsWith('arn:') ? id : cdk.Stack.of(this).formatArn({ service: 'bedrock', resource: 'guardrail', resourceName: id }))),
+		)];
+		if (guardrailArns.length > 0) {
+			this.executionRole.addToPrincipalPolicy(
+				new iam.PolicyStatement({ actions: ['bedrock:ApplyGuardrail'], resources: guardrailArns }),
+			);
+		}
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	stream(..._args: unknown[]): never { return synthGuard('Agent', 'stream'); }
+	resume(..._args: unknown[]): never { return synthGuard('Agent', 'resume'); }
+	createConversationId(..._args: unknown[]): never { return synthGuard('Agent', 'createConversationId'); }
+	getChannel(..._args: unknown[]): never { return synthGuard('Agent', 'getChannel'); }
+	getPendingInterrupts(..._args: unknown[]): never { return synthGuard('Agent', 'getPendingInterrupts'); }
+	listConversations(..._args: unknown[]): never { return synthGuard('Agent', 'listConversations'); }
+	getConversation(..._args: unknown[]): never { return synthGuard('Agent', 'getConversation'); }
+	deleteConversation(..._args: unknown[]): never { return synthGuard('Agent', 'deleteConversation'); }
 }

@@ -16,6 +16,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { BB_NAME } from './version.js';
 
 export { DistributedTableErrors } from './errors.js';
 export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions, DeleteOptions, QueryOptions, ScanOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
@@ -48,7 +49,7 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 	}
 
 	constructor(scope: ScopeParent, id: string, public options: any) {
-		super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
 
 		const config = options;
 
@@ -230,6 +231,27 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 			// key lets CDK provision a dedicated one.
 			encryptionKey,
 		});
+
+		// An auto-created CMK (`CUSTOMER_MANAGED` with no imported key) defaults
+		// to `RemovalPolicy.RETAIN`, so a table marked DESTROY would tear down but
+		// leave its dedicated key behind as an orphaned, billed, rotating key.
+		// Align the minted key's removal policy with the table's resolved policy
+		// so the key is never less durable than the table — it's only destroyed
+		// when the table is (sandbox DESTROY → DESTROY; production RETAIN stays
+		// RETAIN). An imported key (`encryptionKey` set via `fromKmsKey`) is owned
+		// by the caller and left untouched.
+		//
+		// Tradeoff when PITR is on (production + `protection: 'disposable'`, or
+		// sandbox + `pointInTimeRecovery: true`): CloudFormation keeps DynamoDB's
+		// system backup for 35 days and any on-demand/AWS Backup copies outlive
+		// the table, all encrypted under this CMK. A DESTROY key goes into
+		// `PendingDeletion` in the same stack delete, so those backups can't be
+		// restored once the 30-day KMS window elapses. This is intentional — a
+		// `disposable` table opts out of durable backups by definition — and
+		// mirrors `bb-kv-store`. See DESIGN.md D-DT-11.
+		if (encryption === TableEncryption.CUSTOMER_MANAGED && !encryptionKey) {
+			this.table.encryptionKey?.applyRemovalPolicy(removalPolicy);
+		}
 
 		this.table.grantReadWriteData(this.executionRole);
 

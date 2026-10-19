@@ -37,6 +37,42 @@ export const authApi = auth.createApi();
 
 > The client namespace is taken from the **export name** you choose here (so `import { authApi } from 'aws-blocks'` matches); the `'auth'` label inside `createApi()` is internal and does not affect the wire namespace.
 
+## Frontend: render the login UI and gate the app
+
+Exporting `authApi` provisions the backend, but **it does not render a login screen** — your SPA still shows nothing until you mount an auth component. If you stop at the backend, an authenticated app opens to a blank/landing page and every signed-in route is unreachable. Mount the shipped `Authenticator` UI in your SPA entrypoint and gate the app shell behind it:
+
+```typescript
+// src/index.ts — the SPA entrypoint
+import { api, authApi } from 'aws-blocks';
+import { AccountMenuBar, AuthenticatedContent } from '@aws-blocks/blocks/ui';
+
+// A Sign In / account control that opens the Authenticator (sign-up / sign-in /
+// confirm-code / reset) when clicked. No testids to wire by hand — the shipped
+// components already carry them (see auth-common/CUSTOMIZING-AUTH-UI.md).
+document.getElementById('menu-bar')!.appendChild(AccountMenuBar(authApi));
+
+// Gate the app shell: the render callback runs only when a session exists;
+// the fallback shows while signed out.
+const signInMessage = document.createElement('p');
+signInMessage.textContent = 'Sign in to get started.';
+
+document.getElementById('app')!.appendChild(
+  AuthenticatedContent(authApi, (user) => {
+    const el = document.createElement('div');
+    el.textContent = `Welcome, ${user.username}`;
+    // ...build the authenticated app here, calling your `api` methods...
+    return el;
+  }, signInMessage),
+);
+```
+
+- `AccountMenuBar(authApi)` renders the entry point that pops the `Authenticator`. To embed the form inline instead, use `Authenticator(authApi)` directly.
+- `AuthenticatedContent(authApi, render, fallback)` subscribes to the session and swaps between `render(user)` and `fallback` on sign-in/out — this is what gates the shell.
+- Both come from `@aws-blocks/blocks/ui` (re-exported from `@aws-blocks/auth-common/ui`).
+- The sign-up/sign-in fields and buttons ship stable testids an e2e suite can target directly — `authenticator-username`, `authenticator-password`, `authenticator-code`, and `authenticator-action-signUp` / `authenticator-action-signIn` (one `authenticator-<field>` per input, one `authenticator-action-<action>` per action). The full selector contract is in [`auth-common/CUSTOMIZING-AUTH-UI.md`](../auth-common/CUSTOMIZING-AUTH-UI.md); don't fork the component to add your own.
+
+See the scaffolded `default` template's `src/index.ts` for a complete working app built on this seam.
+
 ## API
 
 ```typescript
@@ -188,6 +224,8 @@ import type {
 ## Cookies and sessions
 
 The session is an `HttpOnly` cookie holding a signed JWT. By default the cookie is `SameSite=Lax` (plus `Secure` off localhost), which is correct for same-origin apps and the local dev proxy — the common case.
+
+When you serve the frontend through the Hosting block, CloudFront puts the static site and the API behind **one origin** (the API is a path on the same distribution), so the deployed app is same-origin and the `SameSite=Lax` default works without any configuration — leave `crossDomain` at its default `false`.
 
 Set `crossDomain: true` only when the frontend and API are served from **different registrable domains** in production (e.g. frontend on Vercel, API on AWS). That switches the cookie to `SameSite=None; Secure; Partitioned` so it survives the cross-site request:
 
