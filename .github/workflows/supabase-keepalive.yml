@@ -2,6 +2,7 @@ name: Supabase Keep-Alive
 on:
   schedule:
     - cron: '0 0 */3 * *' # Every 3 days
+  workflow_dispatch: # run by hand to check the e2e account wiring
 permissions:
   id-token: write
   contents: read
