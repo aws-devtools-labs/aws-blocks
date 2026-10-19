@@ -3,6 +3,7 @@
 "@aws-blocks/core": minor
 "@aws-blocks/auth-common": minor
 "@aws-blocks/bb-auth-basic": patch
+"@aws-blocks/blocks": patch
 ---
 
 feat(hosting): swappable front doors, and bring-your-own doors written as one function
