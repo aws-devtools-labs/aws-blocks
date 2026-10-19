@@ -94,12 +94,21 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
     const handle = router.originHandle;
     // The headers the router requires on every request (its origin-verify secret).
     const customHeaders = handle.customHeaders ? { ...handle.customHeaders } : undefined;
+    // The edge → router hop uses the router listener's protocol and port: HTTP
+    // :80, or HTTPS :443 when the router has a certificate. (For HTTPS, the
+    // certificate must cover the name CloudFront connects to.)
+    const https = handle.protocol === 'https';
+    const protocolPolicy = https ? OriginProtocolPolicy.HTTPS_ONLY : OriginProtocolPolicy.HTTP_ONLY;
+    const routerPort = https ? 443 : 80;
     const origin = handle.privateLoadBalancer
       ? VpcOrigin.withApplicationLoadBalancer(handle.privateLoadBalancer, {
-          protocolPolicy: OriginProtocolPolicy.HTTP_ONLY,
+          protocolPolicy,
           customHeaders,
         })
-      : new HttpOrigin(handle.domainName, { protocolPolicy: OriginProtocolPolicy.HTTP_ONLY, customHeaders });
+      : new HttpOrigin(handle.domainName, {
+          protocolPolicy,
+          customHeaders,
+        });
     const cachePolicy = new CachePolicy(scope, 'CfAlbCache', {
       defaultTtl: Duration.seconds(0),
       minTtl: Duration.seconds(0),
@@ -187,7 +196,7 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
         "The stacked edge's viewer-request function maps every path to a file key under /builds/<buildId>/.",
       );
     }
-    if (handle.privateLoadBalancer) admitVpcOrigin(scope, distribution, handle.privateLoadBalancer);
+    if (handle.privateLoadBalancer) admitVpcOrigin(scope, distribution, handle.privateLoadBalancer, routerPort);
     return {
       url: `https://${distribution.distributionDomainName}`,
       originHandle: { domainName: distribution.distributionDomainName, protocol: 'https' },
@@ -206,10 +215,16 @@ const VPC_ORIGINS_SERVICE_SG = 'CloudFront-VPCOrigins-Service-SG';
  * `CloudFront-VPCOrigins-Service-SG` security group. CloudFormation doesn't
  * return that group's id, so it is looked up (by name, in the balancer's VPC)
  * once the distribution — and so its VPC origin — exists.
+ * The ingress opens `port`, the router listener's port (80, or 443 with a certificate).
  *
  * @throws Error when the balancer has no VPC (an imported balancer without one).
  */
-const admitVpcOrigin = (scope: Construct, distribution: Distribution, alb: IApplicationLoadBalancer): void => {
+const admitVpcOrigin = (
+  scope: Construct,
+  distribution: Distribution,
+  alb: IApplicationLoadBalancer,
+  port: number,
+): void => {
   const vpcId = alb.vpc?.vpcId;
   if (!vpcId) throw new Error('cloudfront-edge door: the private ALB has no VPC to admit the VPC origin from.');
   const lookup = new AwsCustomResource(scope, 'CfVpcOriginSg', {
@@ -238,8 +253,8 @@ const admitVpcOrigin = (scope: Construct, distribution: Distribution, alb: IAppl
       groupId: group.securityGroupId,
       sourceSecurityGroupId,
       ipProtocol: 'tcp',
-      fromPort: 80,
-      toPort: 80,
+      fromPort: port,
+      toPort: port,
       description: 'CloudFront VPC origin only',
     });
   });
