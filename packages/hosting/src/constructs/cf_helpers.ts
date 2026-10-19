@@ -24,6 +24,7 @@
  * it wired by hand, or opts out with `frontDoor: { kind: 'custom', door, wiringCheck: false }`.
  */
 import {
+  AccessLevel,
   AllowedMethods,
   type BehaviorOptions,
   CachePolicy,
@@ -47,6 +48,7 @@ import { HostingError } from '../hosting_error.js';
 import { customErrorResponses } from './error_responses.js';
 import type {
   ApiOrigin,
+  AssetsOrigin,
   DoorApp,
   DoorHeaderRule,
   DoorInput,
@@ -116,8 +118,12 @@ const markRule = (rules: object): void => {
 /** CloudFront's limit on a function's code size (10 KB). */
 const MAX_FUNCTION_CODE_BYTES = 10_240;
 
-/** A uniquely named CloudFront Function (JS 2.0) under `scope`, failing synth when its code is over the limit. */
-const inlineFunction = (scope: Construct, baseId: string, helper: string, code: string): CloudFrontFunction => {
+/**
+ * A uniquely named CloudFront Function (JS 2.0) under `scope`, failing synth when its code is over the limit.
+ *
+ * @internal Framework-only (the `cf.*` helpers, the stacked door's edge).
+ */
+export const inlineFunction = (scope: Construct, baseId: string, helper: string, code: string): CloudFrontFunction => {
   const bytes = Buffer.byteLength(code, 'utf8');
   if (bytes > MAX_FUNCTION_CODE_BYTES) {
     throw new HostingError('InvalidPropsError', {
@@ -292,12 +298,36 @@ const behaviorFor = (origin: DoorOrigin): BehaviorOptions => ({
   ...(origin.kind === 'assets' ? ASSET_BEHAVIOR : DYNAMIC_BEHAVIOR),
 });
 
+/**
+ * The CloudFront origin for the assets bucket: Origin Access Control, at the
+ * build prefix. `listable` also grants the distribution `s3:ListBucket`, so a
+ * missing file is a 404 rather than S3's 403; `bucketRoot` puts the origin at
+ * the bucket root, for a door whose viewer-request function writes the build
+ * prefix into the URI (so the build id is in the edge cache key). The
+ * stacked door's edge uses both.
+ *
+ * @internal Framework-only (`cf.origin`, the stacked door's edge).
+ */
+export const assetsS3Origin = (
+  origin: AssetsOrigin,
+  opts: { listable?: boolean; bucketRoot?: boolean } = {},
+): IOrigin =>
+  S3BucketOrigin.withOriginAccessControl(origin.bucket, {
+    ...(opts.bucketRoot ? {} : { originPath: `/${origin.prefix.replace(/^\/+|\/+$/g, '')}` }),
+    ...(opts.listable ? { originAccessLevels: [AccessLevel.READ, AccessLevel.LIST] } : {}),
+  });
+
+/**
+ * The behavior settings for static assets (`cf.behaviors` for an assets route).
+ *
+ * @internal Framework-only.
+ */
+export const ASSET_BEHAVIOR_OPTIONS: Omit<BehaviorOptions, 'origin'> = ASSET_BEHAVIOR;
+
 const buildOrigin = (origin: DoorOrigin | ApiOrigin): IOrigin => {
   switch (origin.kind) {
     case 'assets':
-      return S3BucketOrigin.withOriginAccessControl(origin.bucket, {
-        originPath: `/${origin.prefix.replace(/^\/+|\/+$/g, '')}`,
-      });
+      return assetsS3Origin(origin);
     case 'server':
     case 'image':
       return FunctionUrlOrigin.withOriginAccessControl(origin.url);
