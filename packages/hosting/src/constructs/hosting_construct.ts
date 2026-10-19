@@ -57,6 +57,7 @@ import type { HostingResources } from '../types.js';
 import type { CdnConstruct, CdnConstructProps } from './cdn_construct.js';
 import { buildCapabilityPlan } from '../plan/capability-plan.js';
 import { albDoor } from './alb_door.js';
+import { ALB_EVENT_SHIM_FILE, ALB_EVENT_SHIM_HANDLER, generateAlbEventShimCode } from './alb_lambda_event.js';
 import { apiGatewayDoor } from './apigw_door.js';
 import { registerUploads } from './cf_helpers.js';
 import { cloudFrontDoor } from './cloudfront_door.js';
@@ -772,7 +773,7 @@ export class HostingConstruct extends Construct {
 
       const computeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
         name,
-        computeResource: resource,
+        computeResource: isSsrCompute ? withAlbEventShim(resource, props.frontDoor) : resource,
         memorySize: props.compute?.memorySize,
         timeout: computeTimeout,
         reservedConcurrency: props.compute?.reservedConcurrency,
@@ -2415,6 +2416,41 @@ const serverResponseFor = (frontDoor: HostingConstructProps['frontDoor']): 'stre
     default:
       return 'streaming';
   }
+};
+
+/**
+ * Put the ALB event shim in front of a native Lambda handler server behind the
+ * ALB door (also the stacked door's router): the shim turns the ALB
+ * Lambda-target event (multi-value headers, top-level method) into the API
+ * Gateway REST shape the handler reads, and its response back into the ALB
+ * shape, so every `Set-Cookie` survives (see `alb_lambda_event.ts`). Only a
+ * buffered `handler` server whose module is found in the bundle is wrapped; a
+ * Lambda Web Adapter server reads ALB events natively, and every other door
+ * keeps the handler as built.
+ *
+ * @param resource the server compute resource.
+ * @param frontDoor the door.
+ * @returns the resource to build (with the shim as its handler when wrapped).
+ */
+const withAlbEventShim = (
+  resource: DeployManifest['compute'][string],
+  frontDoor: HostingConstructProps['frontDoor'],
+): DeployManifest['compute'][string] => {
+  if (typeof frontDoor !== 'object' || frontDoor.kind !== 'alb') return resource;
+  if (resource.type !== 'handler' || resource.streaming === true) return resource;
+  const handler = resource.handler ?? 'index.handler';
+  const dot = handler.lastIndexOf('.');
+  if (dot <= 0) return resource;
+  const moduleBase = handler.substring(0, dot);
+  const exportName = handler.substring(dot + 1);
+  const moduleFile = ['.mjs', '.js', '.cjs']
+    .map((ext) => `${moduleBase}${ext}`)
+    .find((file) => fs.existsSync(path.join(resource.bundle, file)));
+  if (!moduleFile) return resource;
+  const shimPath = path.join(resource.bundle, ALB_EVENT_SHIM_FILE);
+  const code = generateAlbEventShimCode(`./${moduleFile}`, exportName);
+  if (!fs.existsSync(shimPath) || fs.readFileSync(shimPath, 'utf-8') !== code) fs.writeFileSync(shimPath, code);
+  return { ...resource, handler: ALB_EVENT_SHIM_HANDLER };
 };
 
 /**

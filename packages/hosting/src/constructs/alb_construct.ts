@@ -132,10 +132,16 @@ export class AlbConstruct extends Construct {
       targets: [new targets.LambdaTarget(assetProxy)],
       healthCheck: { enabled: false },
     });
+    // The server answers with multi-value headers so several `Set-Cookie`
+    // headers survive (a Lambda Web Adapter server reads and answers both
+    // shapes; a native handler gets the ALB event shim, see
+    // `alb_lambda_event.ts`).
     const serverTg = serverFn
       ? new elbv2.ApplicationTargetGroup(this, 'ServerTg', {
+          targetType: elbv2.TargetType.LAMBDA,
           targets: [new targets.LambdaTarget(serverFn)],
           healthCheck: { enabled: false },
+          multiValueHeadersEnabled: true,
         })
       : undefined;
     const imageTg = imageFn
