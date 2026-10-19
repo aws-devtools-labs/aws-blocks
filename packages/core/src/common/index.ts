@@ -149,8 +149,7 @@ export class Scope {
   /** Deferred default block, folded in by {@link getRegisteredBlocks}. */
   private static _defaultBlock: { name: string; version: string } | undefined;
 
-  // One telemetry event per process, so one stored value suffices.
-  /** Hosting framework the orchestrator read from the synth sink; read back by buildEvent. */
+  /** Framework read from the synth sink for the process's telemetry event. */
   private static _framework: string | undefined;
 
   constructor(id: string, options?: ScopeOptions) {
