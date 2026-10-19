@@ -24,7 +24,9 @@ jobs:
             --query SecretString --output text)
           PROJECT_REF=$(echo "$SECRET" | jq -r .SUPABASE_PROJECT_REF)
           ANON_KEY=$(echo "$SECRET" | jq -r .SUPABASE_ANON_KEY)
-          curl -sf "https://${PROJECT_REF}.supabase.co/rest/v1/" \
+          # /rest/v1/ (the schema root) now returns 401 for the anon key, so
+          # ping the auth health endpoint instead.
+          curl -sf "https://${PROJECT_REF}.supabase.co/auth/v1/health" \
             -H "apikey: ${ANON_KEY}" \
             -H "Authorization: Bearer ${ANON_KEY}" \
             > /dev/null
