@@ -4,6 +4,8 @@
 # under test-apps/* is installed from the single root package-lock.json (npm
 # workspaces). One npm entry rooted at "/" therefore covers the whole workspace;
 # there is no per-package or per-test-app lockfile to configure separately.
+# The create-blocks-app templates are the exception: each has its own
+# package.json and no lockfile, so they get a second npm entry.
 #
 # What this file controls: it does NOT generate or clear Dependabot *alerts*
 # (those come from the dependency graph). It configures the *pull requests*
@@ -40,6 +42,32 @@ updates:
         exclude-patterns:
           - "typescript"
           - "@types/node"
+
+  # create-blocks-app templates. No lockfile: Dependabot updates the ranges in
+  # each template's package.json, which is what scaffolded apps install from.
+  # Minor and patch bumps for all templates arrive as one grouped PR.
+  - package-ecosystem: npm
+    directories:
+      - /packages/create-blocks-app/templates/*
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    versioning-strategy: increase
+    ignore:
+      # Published from this repo; the templates track them with "*".
+      - dependency-name: "@aws-blocks/*"
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      templates:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
 
   # Keep the GitHub Actions used by CI patched. Low volume, batch into one PR.
   - package-ecosystem: github-actions
