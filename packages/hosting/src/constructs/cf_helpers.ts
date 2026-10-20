@@ -299,6 +299,20 @@ const behaviorFor = (origin: DoorOrigin): BehaviorOptions => ({
 });
 
 /**
+ * `value` without leading or trailing `/`. A linear scan rather than a
+ * `^\/+|\/+$` regex, which backtracks quadratically on long runs of `/`.
+ *
+ * @internal Exported for tests.
+ */
+export const trimSlashes = (value: string): string => {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === 47) start++;
+  while (end > start && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(start, end);
+};
+
+/**
  * The CloudFront origin for the assets bucket: Origin Access Control, at the
  * build prefix. `listable` also grants the distribution `s3:ListBucket`, so a
  * missing file is a 404 rather than S3's 403; `bucketRoot` puts the origin at
@@ -313,7 +327,7 @@ export const assetsS3Origin = (
   opts: { listable?: boolean; bucketRoot?: boolean } = {},
 ): IOrigin =>
   S3BucketOrigin.withOriginAccessControl(origin.bucket, {
-    ...(opts.bucketRoot ? {} : { originPath: `/${origin.prefix.replace(/^\/+|\/+$/g, '')}` }),
+    ...(opts.bucketRoot ? {} : { originPath: `/${trimSlashes(origin.prefix)}` }),
     ...(opts.listable ? { originAccessLevels: [AccessLevel.READ, AccessLevel.LIST] } : {}),
   });
 

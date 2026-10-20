@@ -6,7 +6,7 @@ import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import type { CapabilityPlan } from '../plan/types.js';
-import { cf, registerUploads } from './cf_helpers.js';
+import { cf, registerUploads, trimSlashes } from './cf_helpers.js';
 import { buildDoorInput } from './door_input.js';
 
 const plan: CapabilityPlan = {
@@ -92,5 +92,21 @@ describe('cf.invalidate', () => {
     const { stack, input } = setup();
     const dist = new Distribution(stack, 'Cdn', { defaultBehavior: { origin: cf.origin(input.origins.assets) } });
     assert.throws(() => cf.invalidate(dist, { after: [] }), (err: Error) => err.name === 'InvalidPropsError');
+  });
+});
+
+describe('trimSlashes', () => {
+  it('strips leading and trailing slashes and keeps inner ones', () => {
+    assert.equal(trimSlashes('//builds/abc//'), 'builds/abc');
+    assert.equal(trimSlashes('builds/abc'), 'builds/abc');
+    assert.equal(trimSlashes('///'), '');
+    assert.equal(trimSlashes(''), '');
+  });
+
+  it('runs in linear time on a long run of slashes', () => {
+    const input = `${'/'.repeat(200_000)}x`;
+    const started = performance.now();
+    assert.equal(trimSlashes(input), 'x');
+    assert.ok(performance.now() - started < 100, 'trimSlashes must not backtrack');
   });
 });
