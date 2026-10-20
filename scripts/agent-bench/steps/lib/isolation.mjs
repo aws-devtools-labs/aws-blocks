@@ -217,8 +217,9 @@ export function trustedExecPaths(env = process.env, agentDirs = []) {
 /**
  * As the agent user, list what it could write or replace: writable flat dirs/entries, any writable
  * path in a deep tree (first hit per tree), and any writable non-sticky ancestor (a writable parent
- * lets it rename the child away). Empty = nothing trusted is writable. A probe that could not run
- * is reported as a problem.
+ * lets it rename the child away). Sticky shared dirs (e.g. /tmp) inside a tree are skipped: the agent
+ * can't replace other users' entries there. Empty = nothing trusted is writable. A probe that could
+ * not run is reported as a problem.
  * @param {{flat: string[], deep: string[], exclude: string[]}} targets
  * @returns {{writable: string[], deepRoots: string[], problems: string[]}}
  */
@@ -227,7 +228,7 @@ export function findAgentWritable({ flat, deep, exclude }) {
 		'prune=(); for a in "$@"; do case "$a" in X:*) prune+=(-path "${a#X:}" -prune -o);; esac; done',
 		'for a in "$@"; do case "$a" in',
 		'  F:*) find "${a#F:}" -maxdepth 1 -writable -printf "F\\t%p\\n" 2>/dev/null;;',
-		'  D:*) d="${a#D:}"; hit=$(find "$d" "${prune[@]}" -writable -print -quit 2>/dev/null); [ -n "$hit" ] && printf "D\\t%s\\t%s\\n" "$d" "$hit";;',
+		'  D:*) d="${a#D:}"; hit=$(find "$d" "${prune[@]}" -type d -perm -1000 -prune -o -writable -print -quit 2>/dev/null); [ -n "$hit" ] && printf "D\\t%s\\t%s\\n" "$d" "$hit";;',
 		'esac; done',
 		'for a in "$@"; do case "$a" in F:*|D:*) p="${a#?:}"; while [ "$p" != / ]; do p=$(dirname "$p");',
 		'  if [ -w "$p" ] && [ ! -k "$p" ]; then printf "A\\t%s\\n" "$p"; fi; done;; esac; done',
@@ -257,48 +258,88 @@ export function findAgentWritable({ flat, deep, exclude }) {
 	};
 }
 
+// A symlink's target tree is adopted for the lockdown only if it is a specific install tree: at
+// least three levels deep, not sticky, and not an ancestor of a trusted root (never `/`, /usr, /tmp…).
+function adoptableLinkTarget(real, trustedRoots) {
+	if (real.split('/').filter(Boolean).length < 3) return false;
+	if (trustedRoots.some((r) => r === real || r.startsWith(`${real}/`))) return false;
+	try {
+		const st = statSync(real);
+		return st.isDirectory() && (st.mode & 0o1000) === 0;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Remove group/other write from every trusted executable path the agent user can write (under CI;
- * locally only verify), then verify again as the agent user, until nothing is left (bounded
- * rounds). A writable hit that is a symlink (e.g. a tool-cache entry linking into /usr/lib/jvm) is
- * fixed through the link and its real target tree joins the deep set. Anything still writable
- * (e.g. owned by the agent user, or granted by an ACL) is a problem: the caller must fail closed.
+ * locally only verify), then verify again as the agent user. Round 1 scans everything; up to two
+ * more rounds rescan only the trees that had hits (plus adopted link targets), and a final pass
+ * verifies everything. A writable hit that is a symlink (e.g. a tool-cache entry linking into
+ * /usr/lib/jvm) is fixed through the link, and its target tree is adopted when that is safe (see
+ * adoptableLinkTarget). Sticky shared dirs are never chmodded. Anything still writable (owned by the
+ * agent user, granted by an ACL, a non-adoptable link target) is a problem: the caller must fail
+ * closed. Progress goes to stderr under CI.
  * @param {{flat: string[], deep: string[], exclude: string[]}} targets
  * @param {{fix?: boolean}} [options] default: fix only under CI
  * @returns {string[]} problems (empty = locked)
  */
 export function lockDownExecPaths(targets, options = {}) {
 	const fix = options.fix ?? isCI();
+	const log = (msg) => isCI() && process.stderr.write(`[isolation] exec lockdown: ${msg}\n`);
 	const deep = new Set(targets.deep);
 	const prune = targets.exclude.flatMap((p) => ['-path', p, '-prune', '-o']);
 	const fixedTrees = new Set();
-	for (let round = 0; round < 10; round++) {
-		const found = findAgentWritable({ ...targets, deep: [...deep] });
-		if (found.problems.length === 0 || !fix) return found.problems;
-		// Deep trees (once each): every non-link entry with group/other write, skipping agent dirs.
+	let scan = targets;
+	for (let round = 1; round <= 3; round++) {
+		const started = Date.now();
+		const found = findAgentWritable(scan);
+		log(`round ${round}: ${scan.flat.length} dir(s) + ${scan.deep.length} tree(s), ${found.writable.length} hit(s) in ${Date.now() - started}ms`);
+		if (found.problems.length === 0) break;
+		if (!fix) return found.problems;
 		for (const root of found.deepRoots) {
 			if (fixedTrees.has(root)) continue;
 			fixedTrees.add(root);
-			spawnSync(BIN.sudo, ['-n', BIN.find, root, ...prune, '!', '-type', 'l', '-perm', '/022', '-exec', BIN.chmod, 'go-w', '{}', '+'], {
-				stdio: 'ignore',
-				timeout: 600_000,
-			});
+			// Every non-link entry with group/other write, skipping the agent's dirs and sticky dirs.
+			spawnSync(
+				BIN.sudo,
+				['-n', BIN.find, root, ...prune, '-type', 'd', '-perm', '-1000', '-prune', '-o', '!', '-type', 'l', '-perm', '/022', '-exec', BIN.chmod, 'go-w', '{}', '+'],
+				{ stdio: 'ignore', timeout: 600_000 },
+			);
 		}
-		// Every reported path explicitly (chmod follows a symlink to its target); a symlinked hit's
-		// real target tree is checked (and fixed) as a whole from the next round on.
-		for (let i = 0; i < found.writable.length; i += 500) {
-			spawnSync(BIN.sudo, ['-n', BIN.chmod, 'go-w', '--', ...found.writable.slice(i, i + 500)], { stdio: 'ignore', timeout: 60_000 });
-		}
+		const adopted = [];
+		const explicit = [];
 		for (const p of found.writable) {
+			let st;
+			try {
+				st = statSync(p);
+			} catch {
+				continue; // vanished
+			}
+			if (st.isDirectory() && (st.mode & 0o1000) !== 0) continue; // sticky: never chmod
+			explicit.push(p); // chmod follows a symlink to its target
 			try {
 				const real = realpathSync(p);
-				if (real !== p && statSync(real).isDirectory() && !targets.exclude.some((x) => real === x || real.startsWith(`${x}/`))) deep.add(real);
+				if (real !== p && !deep.has(real) && adoptableLinkTarget(real, [...deep, ...targets.flat])) {
+					deep.add(real);
+					adopted.push(real);
+				}
 			} catch {
-				/* vanished */
+				/* dangling */
 			}
 		}
+		for (let i = 0; i < explicit.length; i += 500) {
+			spawnSync(BIN.sudo, ['-n', BIN.chmod, 'go-w', '--', ...explicit.slice(i, i + 500)], { stdio: 'ignore', timeout: 60_000 });
+		}
+		if (adopted.length) log(`adopted link target tree(s): ${adopted.join(', ')}`);
+		// Next round: only the flat dirs and trees that had hits, plus adopted targets.
+		const hitFlat = targets.flat.filter((d) => found.writable.some((p) => p === d || dirname(p) === d));
+		scan = { flat: hitFlat, deep: [...new Set([...found.deepRoots, ...adopted])], exclude: targets.exclude };
 	}
-	return findAgentWritable({ ...targets, deep: [...deep] }).problems;
+	const started = Date.now();
+	const final = findAgentWritable({ ...targets, deep: [...deep] });
+	log(`final verification: ${final.writable.length} hit(s) in ${Date.now() - started}ms`);
+	return final.problems;
 }
 
 // ── Runner temp ──────────────────────────────────────────────────────────────────────────────
