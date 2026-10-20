@@ -2015,3 +2015,72 @@ describe('telemetry/buildAndSendEvent with Scope registry', () => {
     }
   });
 });
+
+describe('telemetry framework from hosting registry', () => {
+  afterEach(() => {
+    Scope._resetRegistry();
+  });
+
+  it('attaches the registered hosting framework to the event', () => {
+    Scope._setFrameworkForTelemetry('nextjs');
+
+    const event = buildEvent({ command: 'deploy', state: 'SUCCESS', duration: 100 });
+
+    assert.strictEqual(event.product!.framework, 'nextjs');
+  });
+
+  it('omits framework when hosting registered none (backend-only project)', () => {
+    const event = buildEvent({ command: 'deploy', state: 'SUCCESS', duration: 100 });
+
+    assert.strictEqual(event.product!.framework, undefined);
+  });
+
+  it('an explicit caller framework takes precedence over the registered one', () => {
+    Scope._setFrameworkForTelemetry('spa');
+
+    const event = buildEvent({
+      command: 'deploy',
+      state: 'SUCCESS',
+      duration: 100,
+      product: { framework: 'nextjs' },
+    });
+
+    assert.strictEqual(event.product!.framework, 'nextjs');
+  });
+
+  it('omits a hosting framework outside the ingestion schema enum (keeps the event valid)', () => {
+    // A customAdapter lets any string reach the registry, so the gate must drop
+    // whatever the ingestion enum does not list.
+    Scope._setFrameworkForTelemetry('remix');
+
+    const event = buildEvent({ command: 'deploy', state: 'SUCCESS', duration: 100 });
+
+    assert.strictEqual(event.product!.framework, undefined);
+  });
+
+  it('attaches every framework the hosting adapters can resolve', () => {
+    for (const framework of ['nitro', 'nuxt', 'astro', 'sveltekit'] as const) {
+      Scope._resetRegistry();
+      Scope._setFrameworkForTelemetry(framework);
+
+      const event = buildEvent({ command: 'deploy', state: 'SUCCESS', duration: 100 });
+
+      assert.strictEqual(event.product!.framework, framework);
+    }
+  });
+
+  it('attaches static, the third accepted framework', () => {
+    Scope._setFrameworkForTelemetry('static');
+
+    const event = buildEvent({ command: 'deploy', state: 'SUCCESS', duration: 100 });
+
+    assert.strictEqual(event.product!.framework, 'static');
+  });
+
+  it('_resetRegistry clears the registered framework', () => {
+    Scope._setFrameworkForTelemetry('nextjs');
+    Scope._resetRegistry();
+
+    assert.strictEqual(Scope._getRegisteredFramework(), undefined);
+  });
+});

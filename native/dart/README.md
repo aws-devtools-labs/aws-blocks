@@ -65,6 +65,11 @@ targets:
       blocks_codegen|blocks_codegen:
         options:
           spec: lib/blocks.spec.json
+          # Logical identities from x-blocks-native-packages that keep the
+          # UnknownTransferable fallback instead of a declared type (optional).
+          # An identity the spec does not declare only warns, as AWSBLOCKS-NATIVE-006
+          native_package_opt_out:
+            - example-iot-native
 ```
 
 ### 3. Generate your client
@@ -97,6 +102,8 @@ print(greeting.message); // "Hello, World!"
 **File transfers** — presigned upload/download URLs are wrapped in handle objects with simple `.upload(bytes)` / `.download()` methods.
 
 **Unbound transferables** — a direct result with an unbound transferable tag returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of untyped `dynamic`. Only bare direct results are covered.
+
+**Declared native packages** — when `x-blocks-native-bindings` binds the tag and its package has a `dart` field, the client imports the declared library and returns that type via `<Type>.fromBlocksDescriptor`. See [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
 
 **No Flutter dependency** — `blocks_runtime` is pure Dart. Works in CLI apps, server-side Dart, or Flutter.
 

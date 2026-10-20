@@ -149,6 +149,9 @@ export class Scope {
   /** Deferred default block, folded in by {@link getRegisteredBlocks}. */
   private static _defaultBlock: { name: string; version: string } | undefined;
 
+  /** Framework read from the synth sink for the process's telemetry event. */
+  private static _framework: string | undefined;
+
   constructor(id: string, options?: ScopeOptions) {
     this.id = id;
     this.parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK || {
@@ -206,10 +209,25 @@ export class Scope {
     Scope._defaultBlock = { name, version };
   }
 
+  /**
+   * @internal Set by the deploy/sandbox orchestrator from the synth sink. Holds the
+   * resolved framework name unvalidated, including a customAdapter name; buildEvent
+   * gates it against REPORTED_FRAMEWORKS.
+   */
+  static _setFrameworkForTelemetry(framework: string): void {
+    Scope._framework = framework;
+  }
+
+  /** @internal */
+  static _getRegisteredFramework(): string | undefined {
+    return Scope._framework;
+  }
+
   /** Reset registry (useful for testing). */
   static _resetRegistry(): void {
     Scope._bbRegistry.clear();
     Scope._defaultBlock = undefined;
+    Scope._framework = undefined;
   }
 
   get fullId(): string {
