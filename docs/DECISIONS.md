@@ -774,3 +774,68 @@ This adopts D-010's rejected Alternative 2, "File gated by consent (same as HTTP
 - Task 7 in Task-Phase-1; PR #607 (closed unmerged, the first attempt at this change)
 - `packages/core/src/telemetry/client.ts` (`buildAndSendEvent`), `packages/core/src/telemetry/identifiers.ts`
 - `packages/create-blocks-app/src/telemetry.ts` (`trackCommand`)
+
+## D-019: Native declarations are read from every resolvable manifest, not only declared dependencies
+
+**Date**: 2026-10-08
+**Authors:** varshpam
+
+### Context
+A Building Block declares its native packages and transferable bindings under an `aws-blocks.native` key in its own `package.json`. `blocks-generate-spec` finds those declarations by walking every `node_modules` level from the spec project to the filesystem root. From this repo's own test app that is 1804 installed manifests, nearly all of them hoisted transitive dependencies rather than packages the app declares. Any one of them can claim a custom tag, and once a generator consumes the catalogs the client it emits will import the declared package and hand it a descriptor that may carry a signed URL or a short-lived credential.
+
+### Decision
+The scan reads every manifest the spec project can resolve. It is not restricted to the project's own `dependencies`. Generation-time rules bound what a declaration can do, and the authoring guide below specifies them. Publisher trust is bounded by none of them.
+
+Reading every manifest costs one open per installed package — 1804 files from this repo's test app. Only a narrower scan would reduce that, which is the deferred alternative below. A manifest that will not parse is fatal only when its text carries `aws-blocks` as a JSON key, decoding `\uXXXX` first, so a corrupt unrelated dependency cannot stop generation — matching the namespace anywhere in the text would make every `@aws-blocks/*` dependency string and the `aws-blocks` keyword that `create-block` scaffolds fatal when corrupt. A manifest that cannot be read at all is warned and skipped, because that test cannot be run on bytes the walk never obtained, and D-016 already settled that a hard throw is too blunt for a condition the project cannot fix.
+
+### Rationale
+The decision that moved declarations out of a `Scope` call and into `package.json` did so on the grounds that they *are* dependencies: build-related configuration belongs where a node or web app already declares its dependencies. Reading them with Node's own resolution follows from that framing. A direct-dependency filter would treat a declaration as something narrower than a dependency, which is the one thing the carrier decision ruled out.
+
+Resolution parity is also the property that makes the feature predictable: a block contributes its declarations by being installed where the app can import it, and nothing else. A filter would introduce a second, different notion of which packages count, so a block reachable by `import` could still be ignored by the generator — the silent-omission failure shape, which is worse than a visible one.
+
+Publisher trust is out of scope by design, not by omission. The native-client design doc states that digests establish byte identity rather than publisher trust, and places signing, attestation, revocation, SBOM, license and vulnerability policy with release controls. A dependency that can declare a binding is already a dependency whose code the app executes.
+
+The carrier decision settled where declarations live and how they are shaped; it did not discuss scan breadth directly. The breadth recorded here is the reading consistent with it.
+
+### Alternatives Considered
+- **Restrict the scan to the spec project's own `dependencies`:** deferred, not rejected. It narrows the surface to packages the app named, and is the natural follow-up if the trust posture tightens. It is a breaking change for any block that reaches an app transitively, so it wants its own decision rather than riding along here.
+- **Require an allowlist of declaring packages in the app's own `package.json`:** rejected for v1. It puts a second declaration of the same fact in a second place, and an app that forgets to update it sees a tag silently degrade to `UnknownTransferable`.
+- **Treat a cross-block package reference as an error** (a binding naming a native package another block registered): rejected. The design doc makes it an error only when no catalog declares the package, and sharing one native package across blocks is a legitimate shape.
+
+### References
+- The native client codegen design — digests establish byte identity, not publisher trust
+- The carrier decision that put declarations in `package.json` because they are build-time dependencies. Its authoring API discussion questioned the API's platform-awareness; the carrier itself is recorded only here
+- `docs/native-clients/schema-generation-guide-for-devs.md` — the authoring surface and the three bounding rules
+- `packages/core/src/scripts/read-native-declarations.ts` — the walk
+- `packages/core/src/scripts/validate-native-catalogs.ts` — tag uniqueness, built-in tag protection, ABI allowlist
+
+## D-020: A native generator validates only what its own emission depends on
+
+**Date**: 2026-10-15
+**Authors:** varshpam
+
+### Context
+`validateNativeCatalogs` runs inside `generateSpec` and rejects a malformed catalog before `blocks.spec.json` is written. The Swift generator validates the catalogs again when it resolves bindings, which raised the question of how much of that second pass is re-validation that has to be kept in lockstep with the producer by hand.
+
+Auditing the overlap found one check that was: binding-`id` uniqueness. `binding.id` is read nowhere in the Swift generator except its own guard and error-message interpolation, so two bindings sharing an id but carrying different tags produced a named error even though the emitted client was correct and compiled. The producer already owns that rule, with cross-block reporting the generator cannot do.
+
+### Decision
+A native generator validates a catalog rule only when its own emission depends on it. The binding-`id` check is removed from the Swift generator; the producer's `seenIds` remains the single enforcement point.
+
+Six rules still coincide with producer checks, and each is load-bearing for Swift rather than a second opinion. A duplicate `tag` would make `resolved[binding.tag]` silently last-write-wins. A negative `genericArity` clears `isGeneric` and drops the trailing decoder; an arity above one cannot be expressed, since `isGeneric` is a flag and only the first type argument is emitted. A blank `tag` becomes the `expectedTag` literal, which `validateTransferableDescriptor` can never satisfy. A binding naming an undeclared package cannot reach `platforms.swift.package` to resolve a module. A built-in `tag` is routed to the hard-coded path rather than rejected. An unknown `abi` has no entry in `transferableFactoriesByABI`, so there is no factory name to emit. Removing most of them produces wrong or non-compiling generated source. The package and ABI references are the exceptions: dropping either degrades silently to `UnknownTransferable`, which the design doc requires be a generation error before any mutation instead.
+
+### Rationale
+The distinction that matters is not "does the producer also check this" but "does this generator need the answer". A check of the first kind is duplication, and duplication across two languages drifts silently. A check of the second kind is the generator doing its own job, and it stays correct whether or not a producer ran — which matters because `swift-code-generator` is a standalone executable that reads whatever JSON path it is given, and nothing in a spec records which producer wrote it.
+
+Applying that test shrank the overlap rather than documenting it, and it gives the next generator a rule to apply instead of a precedent to copy.
+
+### Alternatives Considered
+**Keep the binding-`id` check and document the lockstep.** Rejected: it records a maintenance cost instead of removing one, and the check earns nothing — the emitted client is correct with or without it.
+
+**Drop the remaining six and trust the producer.** Rejected: each one guards an emission decision, so dropping them converts a named configuration error into generated source that does not compile, or compiles and misbehaves. Before the iteration-0 fallback an unbound tag failed differently in each language: a `Data?` that did not type-check on Swift, `dynamic` on Dart, and a code-generation failure on Kotlin.
+
+**A cross-language drift guard over the overlap.** Rejected: drift guards in this repo are per-language, and a guard spanning TypeScript and Swift would have to parse one language from the other. With the overlap reduced to checks Swift needs anyway, there is nothing left for such a guard to protect.
+
+### References
+- `packages/core/src/scripts/validate-native-catalogs.ts` — `seenIds`, now the single enforcement point for binding-`id` uniqueness, with cross-block reporting
+- `native/swift/Sources/BlocksCodegen/CodegenModel.swift` — `resolveDeclaredTransferableBindings`, the six rules Swift keeps because its emission reads them

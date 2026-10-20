@@ -4,6 +4,20 @@
 **Type:** Primitive (new infrastructure)
 **AWS Service:** SSM Parameter Store (String + SecureString)
 
+## When a value is sensitive: `AppSetting(secret: true)` vs `Secret`
+
+`AppSetting(secret: true)` stores an SSM Parameter Store **SecureString** — KMS-
+encrypted at rest, free for standard parameters, but with no per-secret resource
+policy, no cross-region replication, and no rotation. For a credential that
+protects a production app, the **`Secret`** block (AWS Secrets Manager) is the
+recommended choice, matching AWS's own guidance that credentials belong in
+Secrets Manager
+([*Where should I store my application data?*](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html)).
+Treat `AppSetting(secret: true)` as a free, encrypted fallback for a low-value
+secret only. See [`bb-secret/DESIGN.md`](../bb-secret/DESIGN.md#when-to-use-secret-vs-appsettingsecret-true)
+for the full comparison. The user-facing docs phrase this in Blocks terms and
+link to the AWS page rather than naming the services inline.
+
 ## Infrastructure (CDK)
 
 ### String Parameters (`secret` not set or `false`)

@@ -3,7 +3,7 @@
 
 import { createDefu } from 'defu';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { ApiError, brandBlocksError } from '@aws-blocks/core';
+import { ApiError, blocksError as coreBlocksError, brandBlocksError } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { ReadValidationMode } from './types.js';
 
@@ -91,14 +91,22 @@ export const DistributedTableErrors = {
 } as const;
 
 /**
- * @internal Build an Error whose `name` carries the typed error code (so callers
- * can match it with `isBlocksError`). Shared by the mock and AWS runtime so both
- * produce identically shaped errors.
+ * The set of error names this Building Block can produce. Deriving it from the
+ * `DistributedTableErrors` constant lets `blocksError` reject a stray string
+ * name at compile time, so every mint site passes a known code.
  */
-export function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return brandBlocksError(err);
+export type DistributedTableErrorName = (typeof DistributedTableErrors)[keyof typeof DistributedTableErrors];
+
+/**
+ * @internal Build an Error whose `name` carries the typed error code (so callers
+ * can match it with `isBlocksError`). The `name` param is typed to
+ * `DistributedTableErrorName`, so a stray string is caught at compile time.
+ * Shared by the mock and AWS runtime so both produce identically shaped errors.
+ * Delegates to core's `blocksError` so the minting (prefixing, naming, wire-safe
+ * branding) lives in one place.
+ */
+export function blocksError(name: DistributedTableErrorName, message: string): Error {
+	return coreBlocksError(name, message);
 }
 
 /**

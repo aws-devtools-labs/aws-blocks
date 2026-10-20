@@ -22,6 +22,7 @@ export type {
 	RetrieveOptions, RetrieveResult,
 	MetadataFilter, WaitUntilSyncedOptions,
 } from './types.js';
+import { BB_NAME } from './version.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
 // ── Env var helpers ────────────────────────────────────────────────────────
@@ -189,7 +190,7 @@ function generateMetadataSidecars(sourceDir: string): string | undefined {
  */
 export class KnowledgeBase extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: KnowledgeBaseOptions) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
 
 		const dimensions = options.embeddingDimensions ?? 1024;
 

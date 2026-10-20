@@ -21,7 +21,7 @@ import type {
 import { AsyncJobErrors, blocksError } from './errors.js';
 import { STATUS_TABLE_ID, statusTableOptions } from './status.js';
 
-export { AsyncJobErrors } from './errors.js';
+export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
 	AsyncJobContext,
 	AsyncJobOptions,
@@ -32,6 +32,7 @@ export type {
 	AsyncJobTransition,
 	WaitUntilCompleteOptions,
 } from './types.js';
+import { BB_NAME } from './version.js';
 
 /** SQS event source limits: a batch may exceed 10 only when a batching window is set. */
 const MAX_BATCH_SIZE_WITHOUT_WINDOW = 10;
@@ -78,7 +79,7 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 	public readonly dlq: Queue;
 
 	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
 
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 10;
@@ -174,4 +175,8 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 	waitUntilComplete(_jobId: string, _options?: WaitUntilCompleteOptions): Promise<AsyncJobStatus> {
 		return synthGuard('AsyncJob', 'waitUntilComplete');
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	submit(..._args: unknown[]): never { return synthGuard('AsyncJob', 'submit'); }
+	submitBatch(..._args: unknown[]): never { return synthGuard('AsyncJob', 'submitBatch'); }
 }

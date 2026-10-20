@@ -28,6 +28,16 @@ export const DEFAULT_CALLBACK_PATH = `${BLOCKS_AUTH_PREFIX}/callback`;
 export const DEFAULT_SIGNOUT_PATH = `${BLOCKS_AUTH_PREFIX}/signout`;
 export const DEFAULT_POST_SIGNIN_PATH = '/';
 
+/** Sign-in kickoff base for a callback path: its parent with `/signin` appended. */
+export function signInBasePathFor(callbackPath: string): string {
+	return `${callbackPath.slice(0, callbackPath.lastIndexOf('/'))}/signin`;
+}
+
+/** Sign-in kickoff route for one provider. Pure, so the CDK entry can call it during synth. */
+export function signInRoutePathFor(callbackPath: string, providerName: string): string {
+	return `${signInBasePathFor(callbackPath)}/${encodeURIComponent(providerName)}`;
+}
+
 /**
  * OIDC sign-in gate. Turns an OIDC authorization-code flow into an
  * authenticated `BlocksContext` that the rest of your IFC consumes.
@@ -493,7 +503,7 @@ export class AuthOIDC<
 
 	/** The absolute-within-host path for a provider's sign-in kickoff route. */
 	signInRoutePath(providerName: string): string {
-		return `${this.signInBasePath}/${encodeURIComponent(providerName)}`;
+		return signInRoutePathFor(this.callbackPath, providerName);
 	}
 
 	/**
@@ -504,8 +514,7 @@ export class AuthOIDC<
 	 * callback/exchange/authorize-params routes are mounted).
 	 */
 	get signInBasePath(): string {
-		const base = this.callbackPath.slice(0, this.callbackPath.lastIndexOf('/'));
-		return `${base}/signin`;
+		return signInBasePathFor(this.callbackPath);
 	}
 }
 

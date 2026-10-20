@@ -14,7 +14,8 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
 import { claimApiFrontDoor, scheduleApiFrontDoor } from './cdk/api-front-door.js';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
-import { type BlocksStackApi, Hosting } from './hosting.js';
+import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
+import { type BlocksStackApi, buildConfigJson, Hosting } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
 
 // ================================================================
@@ -734,6 +735,75 @@ describe('Hosting', () => {
       const template = Template.fromStack(stack);
       const customResources = template.findResources('Custom::CDKBucketDeployment');
       assert.ok(Object.keys(customResources).length >= 1, 'Should have BucketDeployment even without api');
+    });
+
+    it('emits a HostingBuildId output so a post-deploy liveness poll can match the served build', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'HostingBuildIdOutputStack');
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const template = Template.fromStack(stack);
+      // CDK suffixes a nested construct's CfnOutput logical id with a hash
+      // (e.g. `HostingHostingBuildId8EDD8441`), and deploy.ts matches it by the
+      // same `Hosting`+`BuildId` substring it uses on outputs.json — so match
+      // by substring here too rather than an exact logical id.
+      const outputs = template.toJSON().Outputs ?? {};
+      const buildIdKeys = Object.keys(outputs).filter(
+        (k) => k.includes('Hosting') && k.includes('BuildId'),
+      );
+      assert.equal(buildIdKeys.length, 1, 'exactly one HostingBuildId output should be emitted');
+      // The value is the generated build id — a non-empty literal string.
+      const value: unknown = outputs[buildIdKeys[0]].Value;
+      if (typeof value !== 'string' || value.length === 0) {
+        assert.fail('HostingBuildId output value should be a non-empty build id');
+      }
+
+      // Guard the PRODUCER half of the --wait-live contract: the config this
+      // deploy serves must stamp the SAME build id under BLOCKS_BUILD_ID_CONFIG_KEY
+      // that the HostingBuildId output advertises. Renaming/dropping either side
+      // silently breaks every --wait-live deploy (the poll never matches), so
+      // assert the stamp directly against the output value via the pure seam.
+      const stamp = buildConfigJson({ root: tmpDir, api: MOCK_API }, value)[BLOCKS_BUILD_ID_CONFIG_KEY];
+      assert.equal(stamp, value, 'config stamp must equal the HostingBuildId output value');
+    });
+
+    it('emits no HostingInvalidationId output for a pure-static deploy (no invalidation issued)', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'StaticNoInvalidationOutputStack');
+
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const outputs = Template.fromStack(stack).toJSON().Outputs ?? {};
+      const invKeys = Object.keys(outputs).filter((k) => k.includes('InvalidationId'));
+      assert.equal(invKeys.length, 0, 'a pure-static deploy issues no invalidation, so no output');
+    });
+
+    it('emits a HostingInvalidationId output for a compute deploy so the liveness poll can wait on it', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'ComputeInvalidationOutputStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+      });
+
+      const outputs = Template.fromStack(stack).toJSON().Outputs ?? {};
+      const invKeys = Object.keys(outputs).filter(
+        (k) => k.includes('Hosting') && k.includes('InvalidationId'),
+      );
+      assert.equal(invKeys.length, 1, 'exactly one HostingInvalidationId output should be emitted');
+      // The value carries `<distributionId>/<invalidationId>` as CDK tokens, so
+      // it resolves to a Fn::Join rather than a plain string — assert it is
+      // present and non-trivial rather than a literal.
+      assert.ok(outputs[invKeys[0]].Value !== undefined, 'HostingInvalidationId output should have a value');
     });
 
     it('does not inject BLOCKS_API_URL into SSR Lambda when api is omitted', () => {
