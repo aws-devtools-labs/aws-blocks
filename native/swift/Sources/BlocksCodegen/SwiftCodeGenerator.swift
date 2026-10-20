@@ -145,13 +145,20 @@ public struct SwiftCodeGenerator {
             }
 
             // Emit nested types as operation enums inside the class
-            for operation in namespace.operations where !operation.nestedTypes.isEmpty {
+            for operation in namespace.operations where !operation.nestedTypes.isEmpty || oidcProviderEnum(operation) != nil {
                 apiLines.append("")
-                emitOperationEnum(operation: operation, indent: "    ", lines: &apiLines)
+                emitOperationEnum(operation: operation, namespace: namespace.name, indent: "    ", lines: &apiLines)
             }
 
             apiLines.append("}")
             apiLines.append("")
+
+            for operation in namespace.operations {
+                emitOIDCProviderSignIn(operation, namespace: namespace.name, className: names.className, lines: &apiLines)
+                if let warning = oidcProviderRenameWarning(operation, namespace: namespace.name, className: names.className) {
+                    warnings.append(warning)
+                }
+            }
         }
 
         emitBlocksEntryPoint(entryPoint.names, defaultServer: defaultServerName, lines: &apiLines)
@@ -166,12 +173,13 @@ public struct SwiftCodeGenerator {
 
     // MARK: - Nested Type Emission
 
-    private func emitOperationEnum(operation: Operation, indent: String, lines: inout [String]) {
+    private func emitOperationEnum(operation: Operation, namespace: String, indent: String, lines: inout [String]) {
         let opName = pascalCase(operation.name)
         emitDeclaration(opName, line: "\(indent)public enum \(opName) {", lines: &lines)
         for node in operation.nestedTypes {
             emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
         }
+        emitOIDCProviderEnum(operation, namespace: namespace, indent: indent + "    ", lines: &lines)
         lines.append("\(indent)}")
     }
 

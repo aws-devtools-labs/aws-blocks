@@ -391,20 +391,53 @@ public struct CodegenModelBuilder {
             return .typeReference(name: refName)
 
         case .transferable(let blocksType, let typeArgs):
-            let resolvedArgs = typeArgs.map { arg in
-                resolveType(
-                    arg,
-                    name: "\(name)Message",
-                    parentSchemaName: parentSchemaName,
-                    componentSchemas: componentSchemas,
-                    typeDefinitions: &typeDefinitions,
-                    declaredNames: &declaredNames,
-                    inlineTypes: &inlineTypes,
-                    currentParentId: currentParentId
+            // An oidc/client's argument is its provider enum, which the generator emits, not an inline type.
+            let resolvedArgs = blocksType == "oidc/client"
+                ? oidcProviderArgs(
+                    typeArgs, name: name, operationLevel: parentSchemaName == nil && currentParentId == nil,
+                    inlineTypes: inlineTypes, declaredNames: declaredNames
                 )
-            }
+                : typeArgs.map { arg in
+                    resolveType(
+                        arg,
+                        name: "\(name)Message",
+                        parentSchemaName: parentSchemaName,
+                        componentSchemas: componentSchemas,
+                        typeDefinitions: &typeDefinitions,
+                        declaredNames: &declaredNames,
+                        inlineTypes: &inlineTypes,
+                        currentParentId: currentParentId
+                    )
+                }
             return .transferable(blocksType: blocksType, typeArgs: resolvedArgs)
         }
+    }
+
+    /// A string-enum type argument names the providers an `oidc/client` signs in with; any other
+    /// argument is dropped. Only an operation's own client hydrates, so a nested one keeps none.
+    private func oidcProviderArgs(
+        _ typeArgs: [TypeRef],
+        name: String,
+        operationLevel: Bool,
+        inlineTypes: [InlineTypeEntry],
+        declaredNames: Set<String>
+    ) -> [ResolvedType] {
+        guard operationLevel, case .unionLiteral(let values)? = typeArgs.first else { return [] }
+        // The operation enum's types, which a root union's variant structs join. With any of them, also the
+        // models they may name, which the enum would shadow.
+        let roots = inlineTypes.filter { $0.parentId == nil }
+        var taken = roots.isEmpty ? [] : declaredNames
+        for entry in roots {
+            taken.insert(entry.shortName)
+            if case .union(_, let variants, _) = entry.type {
+                taken.formUnion(variants.map(\.name))
+            }
+        }
+        var enumName = "Provider"
+        while taken.contains(enumName) {
+            enumName = pascalCase(name) + enumName
+        }
+        return [.enum(name: enumName, values: values)]
     }
 
     // Overload for component-schema resolution (Step 1) which doesn't track inline nesting
