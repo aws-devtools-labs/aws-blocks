@@ -266,7 +266,8 @@ export class PGliteEngine implements DatabaseEngine {
     // initializing, so let init settle (or fail) before closing. Fixed upstream
     // in electric-sql/pglite#1149 (issue #1148), unreleased as of 0.5.10; remove
     // this once the dependency requires a release that includes it.
-    await this.db.waitReady.catch(() => {});
+    // Promise.resolve: injected test clients may not expose waitReady.
+    await Promise.resolve(this.db.waitReady).catch(() => {});
     await this.db.close();
   }
 }
