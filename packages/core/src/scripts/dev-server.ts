@@ -932,7 +932,7 @@ export async function startDevServer(options: DevServerOptions) {
   // against the execute-api host instead of this localhost front door, breaking
   // redirect-based auth in sandbox. We forward the real front-door host via
   // `X-Forwarded-Host`; the Lambda honors it only because it is loopback (see
-  // `isLoopbackForwardedHost` in lambda-handler.ts).
+  // `isLoopbackForwardedHost` in request-context.ts).
   const apiProxy = apiTarget
     ? httpProxy.createProxyServer({
         target: apiTarget,
