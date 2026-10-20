@@ -14,7 +14,7 @@ import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
-import { runSync, spawnCommand } from './run-command.js';
+import { runCapture, runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
@@ -592,17 +592,26 @@ export async function emptySandboxBuckets(stackNames: string[]): Promise<void> {
 	}
 }
 
+/**
+ * Quote `backendPath` for the `--app` command string. CDK runs that string
+ * through a shell, so an unquoted path containing a space would split. cmd.exe
+ * (Windows) does not treat single quotes as quoting and would keep them in the
+ * path, so Windows gets double quotes; POSIX shells get single quotes.
+ */
+export function quoteCdkAppPath(backendPath: string, platform: NodeJS.Platform = process.platform): string {
+	if (platform === 'win32') return `"${backendPath}"`;
+	return `'${backendPath.replace(/'/g, `'\\''`)}'`;
+}
+
 /** Resolve the sandbox app's stack names via `cdk ls` (best-effort; [] on error). */
 function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): string[] {
 	try {
-		const out = execFileSync(
+		const out = runCapture(
 			'npm',
-			// Single-quote backendPath: CDK re-runs the --app string through a shell,
-			// so an unquoted path containing a space would split.
-			['exec', 'cdk', '--', 'ls', '--context', 'sandboxMode=true', '--app', `npm exec tsx -- -C cdk '${backendPath}'`],
-			// Capture stderr so a genuine synth/`cdk ls` failure can be logged below
-			// rather than being indistinguishable from "app has zero stacks".
-			{ env: cdkEnv, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
+			['exec', 'cdk', '--', 'ls', '--context', 'sandboxMode=true', '--app', `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`],
+			// runCapture captures stderr so a genuine synth/`cdk ls` failure can be
+			// logged below rather than being indistinguishable from "app has zero stacks".
+			{ env: cdkEnv },
 		);
 		return out
 			.split('\n')
@@ -693,9 +702,7 @@ export async function destroySandbox(backendPath: string) {
       "exec", "cdk", "--", "destroy",
       "--force",
       "--context", "sandboxMode=true",
-      // Single-quote backendPath: CDK re-runs the --app string through a shell,
-      // so an unquoted path containing a space would split.
-      "--app", `npm exec tsx -- -C cdk '${backendPath}'`,
+      "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
     ];
     const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
     await runDestroyWithRetries({

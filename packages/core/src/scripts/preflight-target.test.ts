@@ -74,6 +74,7 @@ mock.module(moduleUrl('deploy-stream'), {
 mock.module(moduleUrl('run-command'), {
   namedExports: {
     runSync: (_command, _args, options) => reachedCdk(options.env),
+    runCapture: () => '',
     spawnCommand: () => { throw new Error('unexpected watch process'); },
   },
 });
