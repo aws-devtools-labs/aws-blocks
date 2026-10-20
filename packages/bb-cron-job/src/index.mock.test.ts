@@ -60,3 +60,37 @@ describe('CronJob mock – schedules far in the future', () => {
 		assert.deepStrictEqual(fired, ['2027-01-01T00:00:00.000Z']);
 	});
 });
+
+describe('CronJob mock – schedules that cannot match', () => {
+	beforeEach(() => {
+		mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-03-01T00:00:00Z') });
+	});
+
+	afterEach(() => {
+		mock.timers.reset();
+		mock.restoreAll();
+	});
+
+	test('a schedule with no real date warns that it will never fire', () => {
+		const warn = mock.method(console, 'warn', () => {});
+		mock.method(console, 'log', () => {});
+		new CronJob(fakeScope, 'feb-30', {
+			schedule: 'cron(0 0 30 2 ? *)',
+			handler: async () => {},
+		});
+
+		assert.strictEqual(warn.mock.callCount(), 1);
+		assert.match(String(warn.mock.calls[0].arguments[0]), /never fire/);
+	});
+
+	test('a leap-day schedule only logs that it is checking again later', () => {
+		const warn = mock.method(console, 'warn', () => {});
+		mock.method(console, 'log', () => {});
+		new CronJob(fakeScope, 'leap-day', {
+			schedule: 'cron(0 0 29 2 ? *)',
+			handler: async () => {},
+		});
+
+		assert.strictEqual(warn.mock.callCount(), 0);
+	});
+});

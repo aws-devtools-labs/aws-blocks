@@ -99,7 +99,11 @@ export class CronJob<T = void> extends Scope {
 		if (next === null) {
 			// Nothing matches within the search window (e.g. a leap day years away):
 			// search again later instead of firing on a date the schedule doesn't match.
-			console.log(`[CronJob:${this.id}] no fire time within a year, checking again later`);
+			if (canNeverMatch(sched.fields)) {
+				console.warn(`[CronJob:${this.id}] schedule can never match a real date (e.g. day 30 of February), so it will never fire. In AWS this would fail, check the day and month fields.`);
+			} else {
+				console.log(`[CronJob:${this.id}] no fire time within a year, checking again later`);
+			}
 			this._timer = setTimeout(() => this._scheduleCronTick(), MAX_TIMEOUT_MS);
 			(this._timer as NodeJS.Timeout).unref();
 			return;
@@ -139,6 +143,15 @@ export class CronJob<T = void> extends Scope {
 
 /** Largest delay `setTimeout` accepts; longer delays fire immediately. */
 const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/** Longest each month can be, with February at its leap-year length. */
+const MAX_DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** True when no listed day of month exists in any listed month, so the schedule can never fire. */
+function canNeverMatch(fields: CronFields): boolean {
+	if (fields.dayOfMonth.length === 0) return false;
+	return !fields.month.some(m => fields.dayOfMonth.some(d => d <= MAX_DAYS_IN_MONTH[m - 1]));
+}
 
 /** Returns the next matching minute within a year after `after`, or `null` if there is none. */
 function nextCronTime(fields: CronFields, after: Date, timezone?: string): Date | null {
