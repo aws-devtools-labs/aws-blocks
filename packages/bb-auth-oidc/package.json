@@ -51,7 +51,7 @@
     "build": "tsc --build && npm run build:lambda",
     "build:lambda": "esbuild src/idp-registration-lambda.ts --bundle --platform=node --target=node22 --outfile=dist/idp-registration-lambda/index.js --format=cjs --external:@aws-sdk/*",
     "pretest": "npm run build:lambda",
-    "test": "node --test --test-concurrency=1 dist/engines/oidc-client-engine.test.js dist/idp-registration-lambda.test.js dist/index.browser.test.js dist/index.cdk.test.js dist/index.test.js dist/relay.test.js dist/state.test.js dist/user-agent.test.js && node --conditions=aws-runtime --test --test-concurrency=1 dist/user-agent.aws.test.js"
+    "test": "node --test --test-concurrency=1 dist/engines/oidc-client-engine.test.js dist/idp-registration-lambda.test.js dist/index.browser.test.js dist/index.cdk.test.js dist/index.test.js dist/relay.test.js dist/session-cookie.test.js dist/state.test.js dist/user-agent.test.js && node --conditions=aws-runtime --test --test-concurrency=1 dist/user-agent.aws.test.js"
   },
   "dependencies": {
     "@aws-blocks/auth-common": "^0.2.0",
