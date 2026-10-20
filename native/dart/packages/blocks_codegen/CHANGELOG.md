@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Ignore an `oidc/client` result's `x-blocks-type-args`, which
+  `blocks-generate-spec` now fills with the app's provider names, so the
+  generated `OidcClient` result is unchanged. Turning those names into an unused
+  enum emits constants such as `default` or `okta:corp` that don't compile.
 - Resolve a direct result's transferable tag through the spec's
   `x-blocks-native-packages` and `x-blocks-native-bindings` catalogs, emitting
   the declared import, its export in upper camel case, and
