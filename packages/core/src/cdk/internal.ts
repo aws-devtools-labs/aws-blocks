@@ -13,12 +13,17 @@
  * Planned removal: once a customer can assign a compute and have it actually
  * take effect — i.e. `this.compute` resolution and request routing to the
  * chosen compute both exist, plus a synth-time guard that rejects an assignment
- * with no route — these exports move to the public CDK entry point
- * (`@aws-blocks/core/cdk`, re-exported from `index.cdk.ts`) and this file is
- * deleted. It must NOT be made public before then: a compute a customer can
- * declare but that is silently ignored is a worse experience than not having
- * the feature. Until that flip, treat everything here as unstable — no
- * backward-compatibility guarantee.
+ * with no route — the COMPUTE exports move to the public CDK entry point
+ * (`@aws-blocks/core/cdk`, re-exported from `index.cdk.ts`). It must NOT be made
+ * public before then: a compute a customer can declare but that is silently
+ * ignored is a worse experience than not having the feature. Until that flip,
+ * treat everything here as unstable — no backward-compatibility guarantee.
+ *
+ * Not everything here is temporary: this file also holds permanently-internal
+ * framework seams (e.g. the shared DynamoDB protection resolver) that are NOT
+ * destined for the public barrel. The compute flip moves only the compute
+ * exports; the permanently-internal seams stay here, and the file is deleted
+ * only once nothing permanently-internal remains.
  *
  * @internal
  */
@@ -51,3 +56,15 @@ export { anyRequirementNeedsVpc, getOrCreateVpc, getVpcContext, initializeVpc, i
 // compute can create the shared VPC + ECS cluster once per backend at a fixed id
 // rather than once per compute or per stack.
 export { getBlocksRoot, getOrCreateOnRoot } from './root-registry.js';
+
+// Shared DynamoDB protection resolver for the two Blocks-provisioned DynamoDB
+// tables (bb-kv-store, bb-distributed-table). Framework-internal: a refactor
+// seam, not a customer-facing surface, so it lives here rather than on the
+// public `@aws-blocks/core/cdk` barrel (which `@aws-blocks/blocks` re-exports).
+export {
+	type DynamoDbBlockIdentity,
+	type DynamoDbProtectionOptions,
+	type ExternalKmsKeyRef,
+	type ResolvedDynamoDbProtection,
+	resolveDynamoDbProtection,
+} from './dynamodb-protection.js';
