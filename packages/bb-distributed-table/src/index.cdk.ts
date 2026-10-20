@@ -17,6 +17,7 @@ import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { BB_NAME } from './version.js';
+import { keepProviderLogGroupsOwned } from './owned-log-groups.js';
 
 export { DistributedTableErrors } from './errors.js';
 export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions, DeleteOptions, QueryOptions, ScanOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
@@ -370,7 +371,16 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 		isCompleteHandler: gsiIsCompleteLambda,
 		queryInterval: Duration.seconds(10),
 		totalTimeout: Duration.hours(2),
+		// The framework functions' own log group, owned like the handlers' above
+		// (otherwise Lambda creates one per function outside the stack).
+		logGroup: new LogGroup(stack, 'BlocksGsiProviderLogs', {
+			retention: logRetention,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		}),
 	});
+	// No Lambda here may create a log group: a late flush during destroy() would
+	// otherwise recreate a deleted group outside the stack.
+	keepProviderLogGroupsOwned([gsiManagerLambda, gsiIsCompleteLambda], provider);
 
 	const shared: SharedGsiProvider = {
 		serviceToken: provider.serviceToken,

@@ -27,11 +27,14 @@ jobs:
       - name: Run unit tests
         run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests|BlocksGeneratedCodeTests|BlocksGeneratedMainActorTests"
 
+      - name: Pick an available iOS simulator
+        uses: ./.github/actions/pick-ios-simulator
+
       - name: Build for iOS
-        run: xcodebuild build -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+        run: xcodebuild build -scheme aws-blocks-swift-Package -destination "platform=iOS Simulator,id=$SIM_UDID"
 
       - name: Run unit tests on iOS
-        run: xcodebuild test -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
+        run: xcodebuild test -scheme aws-blocks-swift-Package -destination "platform=iOS Simulator,id=$SIM_UDID" -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
 
   create-release-prs:
     name: Create Release PRs
