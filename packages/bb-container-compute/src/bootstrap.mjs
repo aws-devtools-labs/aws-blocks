@@ -28,9 +28,11 @@
  *   https://containersonaws.com/pattern/ecs-entrypoint-command-task-definition/
  *
  * CONTRACT (env vars set by the CDK task definition):
- *   BLOCKS_CODE_BUCKET   S3 bucket holding the asset
- *   BLOCKS_CODE_PREFIX   key prefix of the uploaded asset (dir), bundles live under it
- *   AWS_REGION           region of the bucket (set by ECS)
+ *   BLOCKS_CODE_BUCKET       S3 bucket holding the asset files
+ *   BLOCKS_CODE_MAIN_KEY     S3 key of main.js (the parent bundle)
+ *   BLOCKS_CODE_WORKER_KEY   S3 key of worker.js (the per-job worker bundle)
+ *   BLOCKS_CODE_PKG_KEY      S3 key of package.json ({"type":"commonjs"})
+ *   AWS_REGION               region of the bucket (set by ECS)
  *   AWS_CONTAINER_CREDENTIALS_RELATIVE_URI   task-role creds endpoint (set by ECS)
  */
 import { createHash, createHmac } from 'node:crypto';
@@ -166,21 +168,26 @@ function s3Get(bucket, key, region, creds) {
 
 async function main() {
 	const bucket = process.env.BLOCKS_CODE_BUCKET;
-	const prefix = process.env.BLOCKS_CODE_PREFIX;
 	const region = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
-	if (!bucket || !prefix || !region) {
+	// Each app bundle is its own individually-keyed S3 asset (not a zip).
+	const files = [
+		{ name: 'main.js', key: process.env.BLOCKS_CODE_MAIN_KEY },
+		{ name: 'worker.js', key: process.env.BLOCKS_CODE_WORKER_KEY },
+		{ name: 'package.json', key: process.env.BLOCKS_CODE_PKG_KEY },
+	];
+	if (!bucket || !region || files.some((f) => !f.key)) {
 		throw new Error(
-			`[Blocks bootstrap] missing config: BLOCKS_CODE_BUCKET=${bucket} BLOCKS_CODE_PREFIX=${prefix} AWS_REGION=${region}`,
+			`[Blocks bootstrap] missing config: BLOCKS_CODE_BUCKET=${bucket} AWS_REGION=${region} ` +
+				`MAIN_KEY=${files[0].key} WORKER_KEY=${files[1].key} PKG_KEY=${files[2].key}`,
 		);
 	}
 
 	const creds = await getTaskCredentials();
 	mkdirSync(APP_DIR, { recursive: true });
 
-	// Fetch the three asset files the parent/worker need. package.json pins CJS
-	// mode for the .js bundles.
-	for (const name of ['main.js', 'worker.js', 'package.json']) {
-		const key = `${prefix.replace(/\/$/, '')}/${name}`;
+	// Fetch each bundle by its exact S3 key and write it under /app with the name
+	// main.js runtime expects (BLOCKS_JOB_WORKER_ENTRY points at /app/worker.js).
+	for (const { name, key } of files) {
 		const body = await s3Get(bucket, key, region, creds);
 		writeFileSync(`${APP_DIR}/${name}`, body);
 	}

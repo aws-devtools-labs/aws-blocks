@@ -184,14 +184,24 @@ export class ContainerCompute extends ComputeBase {
 
 		const { bucketName: configBucketName, key: configKey } = getConfigLocation(this);
 
-		// Upload the co-bundled app code as an S3 asset (zip + upload — NO Docker).
-		// The container pulls a stock Node image and fetches these bundles at boot
-		// via bootstrap.mjs, so there is no local image build. CDK asset-hashing
-		// tracks code changes and re-uploads on change automatically.
-		const codeAsset = new s3assets.Asset(this, 'CodeAsset', { path: assetPath });
+		// Upload the co-bundled app code as S3 assets (plain file upload — NO
+		// Docker). The container pulls a stock Node image and fetches these bundles
+		// at boot via bootstrap.mjs, so there is no local image build. CDK
+		// asset-hashing tracks code changes and re-uploads on change automatically.
+		//
+		// IMPORTANT: each file is its OWN Asset. A directory Asset is archived into
+		// a single `.zip` object (not individually-keyed files), and the stock Node
+		// image has no `unzip`/zip reader — so the dependency-free bootstrap could
+		// not extract it. Uploading each file as a regular-file Asset keys them
+		// individually (`<hash>.js`), so the bootstrap can GET each one directly.
+		const mainAsset = new s3assets.Asset(this, 'CodeMain', { path: join(assetPath, 'main.js') });
+		const workerAsset = new s3assets.Asset(this, 'CodeWorker', { path: join(assetPath, 'worker.js') });
+		const pkgAsset = new s3assets.Asset(this, 'CodePackageJson', { path: join(assetPath, 'package.json') });
 		// The task runs as the execution role (= task role here); grant it read on
 		// the asset objects so bootstrap.mjs can download them with the task role.
-		codeAsset.grantRead(taskRole);
+		mainAsset.grantRead(taskRole);
+		workerAsset.grantRead(taskRole);
+		pkgAsset.grantRead(taskRole);
 
 		this.container = this.taskDefinition.addContainer('Backend', {
 			// Stock public Node image by default, or the customer's image verbatim —
@@ -201,9 +211,10 @@ export class ContainerCompute extends ComputeBase {
 			image: ecs.ContainerImage.fromRegistry(options?.image ?? DEFAULT_CONTAINER_IMAGE),
 			// Override the image's entrypoint/command: write the bootstrap to disk
 			// from a base64 arg (so no extra object to fetch), then run it. The
-			// bootstrap fetches main.js/worker.js from the code asset's S3 location
-			// using the task role and execs the parent. This is the sanctioned ECS
-			// "generic image + command override" pattern; see bootstrap.mjs.
+			// bootstrap fetches main.js/worker.js/package.json from the S3 assets'
+			// exact keys using the task role and execs the parent. This is the
+			// sanctioned ECS "generic image + command override" pattern; see
+			// bootstrap.mjs.
 			entryPoint: ['node', '-e'],
 			command: [this.buildBootstrapLauncher(assetPath)],
 			logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'blocks', logGroup: this.logGroup }),
@@ -214,9 +225,12 @@ export class ContainerCompute extends ComputeBase {
 				BLOCKS_CONFIG_KEY: configKey,
 				BLOCKS_COMPUTE_ID: this.fullId,
 				BLOCKS_SERVICE_MODE: 'worker',
-				// Where bootstrap.mjs fetches the app bundles from (the S3 asset).
-				BLOCKS_CODE_BUCKET: codeAsset.s3BucketName,
-				BLOCKS_CODE_PREFIX: cdk.Fn.select(0, cdk.Fn.split('.zip', codeAsset.s3ObjectKey)),
+				// Where bootstrap.mjs fetches each app bundle from (same bucket; the
+				// three files are individually-keyed S3 assets).
+				BLOCKS_CODE_BUCKET: mainAsset.s3BucketName,
+				BLOCKS_CODE_MAIN_KEY: mainAsset.s3ObjectKey,
+				BLOCKS_CODE_WORKER_KEY: workerAsset.s3ObjectKey,
+				BLOCKS_CODE_PKG_KEY: pkgAsset.s3ObjectKey,
 			},
 			portMappings: [{ containerPort: CONTAINER_PORT }],
 		});
