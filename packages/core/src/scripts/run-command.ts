@@ -35,6 +35,30 @@ export function runSync(
   }
 }
 
+/**
+ * Run a command to completion and return its stdout — a cross-platform drop-in
+ * for `execFileSync(command, args, { encoding: 'utf-8' })`. On failure it
+ * throws with the captured stderr on `error.stderr`, as `execFileSync` does.
+ */
+export function runCapture(
+  command: string,
+  args: string[],
+  options: SpawnSyncOptions = {},
+): string {
+  const result = spawn.sync(command, args, { stdio: ['ignore', 'pipe', 'pipe'], ...options, encoding: 'utf-8' });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.signal || (typeof result.status === 'number' && result.status !== 0)) {
+    const reason = result.signal ? `was terminated by signal ${result.signal}` : `exited with code ${result.status}`;
+    const error: Error & { stderr?: string } = new Error(`${command} ${args.join(' ')} ${reason}`);
+    error.stderr = String(result.stderr ?? '');
+    throw error;
+  }
+  return String(result.stdout ?? '');
+}
+
 /** Spawn a long-running command and return the `ChildProcess` (e.g. `cdk watch`). */
 export function spawnCommand(
   command: string,

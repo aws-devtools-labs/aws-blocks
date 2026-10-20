@@ -12,6 +12,7 @@ import {
   buildSandboxDeployArgs,
   buildSandboxSynthArgs,
   findExpressUnsafeStacks,
+  quoteCdkAppPath,
   sandboxFailureRecoveryHint,
   stacksWithExpressUnsafeResources,
 } from './sandbox.js';
@@ -205,5 +206,22 @@ describe('buildSandboxCdkEnv — framework sink reaches the synth child, and hon
     const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink');
 
     assert.ok(!(FRAMEWORK_SINK_ENV in env), `opted-out run must not set ${FRAMEWORK_SINK_ENV}`);
+  });
+});
+
+describe('quoteCdkAppPath', () => {
+  it('double-quotes on Windows, where cmd.exe keeps single quotes as part of the path', () => {
+    assert.strictEqual(
+      quoteCdkAppPath('D:\\a\\my app\\aws-blocks\\index.cdk.ts', 'win32'),
+      '"D:\\a\\my app\\aws-blocks\\index.cdk.ts"',
+    );
+  });
+
+  it('single-quotes on POSIX so a path with a space stays one argument', () => {
+    assert.strictEqual(quoteCdkAppPath('/tmp/my app/index.cdk.ts', 'linux'), "'/tmp/my app/index.cdk.ts'");
+  });
+
+  it('escapes a single quote inside a POSIX path', () => {
+    assert.strictEqual(quoteCdkAppPath("/tmp/bob's app/index.cdk.ts", 'darwin'), "'/tmp/bob'\\''s app/index.cdk.ts'");
   });
 });
