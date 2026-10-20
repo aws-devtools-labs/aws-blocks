@@ -95,19 +95,23 @@ export class Secret extends BuildingBlockScope {
 			cdk.Tags.of(this.secret).add('aws-blocks-stack', tagStack.stackName);
 		}
 
-		// Grant the shared execution role read + write on this specific secret
-		// (not a wildcard). Reads use secretsmanager:GetSecretValue; writes use
-		// PutSecretValue (plus the KMS grants Secrets Manager attaches).
+		// Grant the shared execution role read on this specific secret (not a
+		// wildcard): secretsmanager:GetSecretValue + ListSecretVersionIds (the
+		// latter for listVersions(), which grantRead does NOT include).
 		this.secret.grantRead(this.executionRole);
-		this.secret.grantWrite(this.executionRole);
-		// `listVersions()` calls ListSecretVersionIds, which grantRead does NOT
-		// include — add it explicitly, scoped to this secret's ARN.
 		this.executionRole.addToPrincipalPolicy(
 			new iam.PolicyStatement({
 				actions: ['secretsmanager:ListSecretVersionIds'],
 				resources: [this.secret.secretArn],
 			}),
 		);
+		// Writes are opt-in and least-privilege: grant PutSecretValue (plus the KMS
+		// grants Secrets Manager attaches) ONLY when the app will write at runtime.
+		// By default the role has read-only access, matching the runtime object,
+		// which has no `put()` unless `allowRuntimeWrite: true`.
+		if (options?.allowRuntimeWrite === true) {
+			this.secret.grantWrite(this.executionRole);
+		}
 
 		this.secretArn = this.secret.secretArn;
 
