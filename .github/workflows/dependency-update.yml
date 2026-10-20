@@ -49,9 +49,26 @@ jobs:
       - name: Verify with local e2e
         run: npm run test:e2e:local
 
+      # Generate a changeset covering any published @aws-blocks/* package whose
+      # package.json the bump changed, so the `Require changeset` gate passes.
+      # A dependency bump is non-breaking, so the entries are `patch`; the
+      # umbrella is bumped alongside its siblings. Writes nothing when only
+      # test-apps/templates/private tooling changed.
+      - name: Generate changeset for bumped packages
+        env:
+          # 'scheduled' on the cron, 'manual' on a workflow_dispatch run — so the
+          # changeset prose reflects how this run was actually triggered.
+          TRIGGER: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
+        run: |
+          git fetch origin "$GITHUB_REF_NAME" --depth=1 || true
+          node --experimental-strip-types scripts/generate-dependency-changeset.ts "origin/$GITHUB_REF_NAME" "$TRIGGER"
+
       - name: Create PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # See the changeset step: label the PR by how it was triggered, since
+          # workflow_dispatch runs are not "weekly".
+          TRIGGER: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
         run: |
           # Target the branch this run was triggered on: on the schedule that's
           # main; a manual run from the Actions menu against a feature branch bumps
@@ -63,21 +80,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          # Stage only dependency manifests + the lockfile, so a run from a feature
-          # branch can't sweep that branch's unrelated changes into the bump PR.
-          git add -- ':(glob)**/package.json' package-lock.json
+          # Stage only dependency manifests + the lockfile + the generated
+          # changeset, so a run from a feature branch can't sweep that branch's
+          # unrelated changes into the bump PR.
+          git add -- ':(glob)**/package.json' package-lock.json .changeset
           if git diff --cached --quiet; then
             echo "No dependency changes found."
             exit 0
           fi
-          git commit -m "chore: weekly dependency bump for ${TARGET} (${DATE})"
+          git commit -m "chore: ${TRIGGER} dependency bump for ${TARGET} (${DATE})"
           git push -u origin "$BRANCH"
           gh pr create \
-            --title "chore: weekly dependency bump for ${TARGET} (${DATE})" \
-            --body "Automated dependency bump via \`npm-check-updates\` (\`--target minor\`).
+            --title "chore: ${TRIGGER} dependency bump for ${TARGET} (${DATE})" \
+            --body "Automated ${TRIGGER} dependency bump via \`npm-check-updates\` (\`--target minor\`).
 
           Target branch: \`${TARGET}\`
           Scope: root, all workspace packages, and templates.
 
+          A changeset for the bumped published packages is included (patch).
           Build and local e2e passed. Please review and merge." \
             --base "$TARGET"

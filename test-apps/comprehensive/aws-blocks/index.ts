@@ -584,14 +584,19 @@ const secretSetting = new AppSetting(scope, 'secret-setting', {
 });
 
 // Secret - Single high-value credential backed by AWS Secrets Manager
-// Opaque string secret (e.g. a third-party API key). `cacheTtlSeconds: 0`
-// disables the read cache for this instance so the read-after-write e2e tests
-// below (round-trip, overwrite, grace window, listVersions) are deterministic:
-// with the default 5-min cache and warm-Lambda reuse, a get() could be served a
-// value cached by an earlier test on the same warm instance. The default TTL is
+// Opaque string secret (e.g. a third-party API key). `allowRuntimeWrite: true`
+// because the e2e sets the value via put(); `cacheTtlSeconds: 0` disables the
+// read cache for this instance so the read-after-write e2e tests below
+// (round-trip, overwrite, grace window, listVersions) are deterministic: with
+// the default 5-min cache and warm-Lambda reuse, a get() could be served a value
+// cached by an earlier test on the same warm instance. The default TTL is
 // covered by the unit tests; here 0 both fixes isolation and exercises the
 // cache-disabled path end to end.
-const apiKeySecret = new Secret(scope, 'secret-api-key', { removalPolicy: 'destroy', cacheTtlSeconds: 0 });
+const apiKeySecret = new Secret(scope, 'secret-api-key', {
+  removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
+});
 
 // Typed JSON secret with schema validation (e.g. a set of related credentials).
 const dbSecretSchema = z.object({ host: z.string(), port: z.number() });
@@ -600,6 +605,7 @@ const dbCredentialsSecret = new Secret(scope, 'secret-db-credentials', {
   schema: dbSecretSchema,
   removalPolicy: 'destroy',
   cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
 });
 
 // Secret with an explicit well-known name (for CI/CD-driven management via the
@@ -609,6 +615,7 @@ const namedSecret = new Secret(scope, 'secret-named', {
   name: `${scope.fullId}/webhook-signing-key`,
   removalPolicy: 'destroy',
   cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
 });
 
 // Unset secret: created empty (no `generate`), so get() returns null until a
@@ -623,6 +630,43 @@ const generatedSecret = new Secret(scope, 'secret-generated', {
   generate: true,
   removalPolicy: 'destroy',
 });
+
+// allowRuntimeWrite matrix — three secrets covering the write-gating contract so
+// the e2e can assert build + runtime behavior for each case:
+//   - omitted  → read-only (no put() on the object or type; read-only IAM)
+//   - false    → read-only (explicit)
+//   - true     → writable  (put() present, callable, correctly typed; write IAM)
+// The build-level assertions live inline here (this backend module is compiled
+// by the e2e build/synth, so a wrong type fails the suite); the runtime
+// assertions are exposed via the secretWrite* RPC methods below.
+const writeOmittedSecret = new Secret(scope, 'secret-write-omitted', { removalPolicy: 'destroy' });
+const writeFalseSecret = new Secret(scope, 'secret-write-false', {
+  removalPolicy: 'destroy',
+  allowRuntimeWrite: false,
+});
+const writeTrueSecret = new Secret(scope, 'secret-write-true', {
+  removalPolicy: 'destroy',
+  allowRuntimeWrite: true,
+  // Disable the read cache so the write probe's put→get reflects the write
+  // deterministically (matches the other written e2e secrets).
+  cacheTtlSeconds: 0,
+});
+
+// Build-level proof that `put` is ABSENT from the type when writes aren't
+// allowed. If the read-only type ever regained `put`, `@ts-expect-error` would
+// itself become an unused-directive error and fail the e2e build — a meaningful,
+// non-silent failure. (These are never executed; see secretWrite* for runtime.)
+function _secretWriteTypeAssertions(): void {
+  // @ts-expect-error — put must be absent on a secret with allowRuntimeWrite omitted
+  void writeOmittedSecret.put;
+  // @ts-expect-error — put must be absent on a secret with allowRuntimeWrite: false
+  void writeFalseSecret.put;
+  // Writable: put IS present and typed (string value). No ts-expect-error here.
+  void writeTrueSecret.put('ok');
+  // @ts-expect-error — a writable string secret rejects a non-string value
+  void writeTrueSecret.put(123);
+}
+void _secretWriteTypeAssertions;
 
 // CronJob - Scheduled task execution
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
@@ -2251,6 +2295,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // Generated secret: get() before any put() returns the seeded random value.
   async secretGetGenerated() {
     return { value: await generatedSecret.get() };
+  },
+
+  // allowRuntimeWrite matrix — runtime behavior probes. Each reports whether
+  // `put` exists on the object, and what happens when it's invoked. For the
+  // read-only secrets we force the call through a minimal callable view (the
+  // only cast — representing a customer who bypasses the types with `as`/ignore)
+  // and expect a meaningful "not a function" TypeError. The writable one is
+  // called normally and must round-trip.
+  async secretWriteProbeOmitted() {
+    const hasPut = typeof (writeOmittedSecret as { put?: unknown }).put === 'function';
+    let callError: string | null = null;
+    try {
+      await (writeOmittedSecret as unknown as { put: (v: string) => Promise<void> }).put('x');
+    } catch (e) {
+      callError = e instanceof Error ? e.constructor.name : String(e);
+    }
+    return { hasPut, callError };
+  },
+
+  async secretWriteProbeFalse() {
+    const hasPut = typeof (writeFalseSecret as { put?: unknown }).put === 'function';
+    let callError: string | null = null;
+    try {
+      await (writeFalseSecret as unknown as { put: (v: string) => Promise<void> }).put('x');
+    } catch (e) {
+      callError = e instanceof Error ? e.constructor.name : String(e);
+    }
+    return { hasPut, callError };
+  },
+
+  async secretWriteProbeTrue(value: string) {
+    const hasPut = typeof writeTrueSecret.put === 'function';
+    await writeTrueSecret.put(value);
+    const readBack = await writeTrueSecret.get();
+    return { hasPut, readBack };
   },
   // CronJob Tests
   // ------------------------------------------------------------------------
