@@ -20,6 +20,7 @@ import semver from 'semver';
 import { getPackageInfoSync } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
 import { targetCompute } from './shared/compute_target.js';
+import { SHARP_VERSION_RANGE, hasPatchedLinuxSharp } from './shared/sharp.js';
 import {
   FRAMEWORK_COMPUTE_RUNTIME,
   FRAMEWORK_EDGE_COMPUTE_RUNTIME,
@@ -1663,7 +1664,10 @@ export const patchImageOptimizerSvgStatus = (openNextDir: string): void => {
  * Best-effort + idempotent: skips when the image fn dir is absent (image
  * optimization disabled) or a linux sharp is already present; warns (not fatal)
  * if the install fails, since the crash-level bug is already fixed and the app
- * still serves originals.
+ * still serves originals. "Already present" means a linux-x64 sharp within
+ * {@link SHARP_VERSION_RANGE}: a bundled sharp below that floor is vulnerable
+ * (GHSA-wq5f-xc86-pv6w) and an arm64-only one can't load, so both are
+ * reinstalled.
  * @internal
  */
 export const installLinuxSharpForImageOptimizer = (
@@ -1672,16 +1676,8 @@ export const installLinuxSharpForImageOptimizer = (
   const imgDir = path.join(openNextDir, 'image-optimization-function');
   if (!fs.existsSync(imgDir)) return; // image optimization disabled
 
-  // Already has a linux sharp binary? (idempotent — avoid reinstalling.)
-  const linuxSharp = fg.sync(
-    'node_modules/@img/sharp-linux*/**/*.node',
-    { cwd: imgDir, absolute: true },
-  );
-  const linuxSharpLegacy = fg.sync(
-    'node_modules/sharp/**/linux-x64*/**/*.node',
-    { cwd: imgDir, absolute: true },
-  );
-  if (linuxSharp.length > 0 || linuxSharpLegacy.length > 0) return;
+  // Already has a patched linux-x64 sharp? (idempotent — avoid reinstalling.)
+  if (hasPatchedLinuxSharp(imgDir, 'x64')) return;
 
   // Pin a MODERN sharp (>=0.33). The `--os/--cpu/--libc` cross-install flags
   // (which fetch the `@img/sharp-linux-x64` prebuilt) only exist on sharp
@@ -1689,8 +1685,8 @@ export const installLinuxSharpForImageOptimizer = (
   // sits in `node_modules/sharp/build/Release/*.node` and is NOT replaced by
   // those flags (0.32 used `prebuild-install`/SHARP_* env, not npm os/cpu) —
   // so reinstalling `^0.32` would leave the darwin binary in place and the
-  // optimizer would keep serving unoptimized originals. Force 0.34.x.
-  const SHARP_RANGE = '^0.34.0';
+  // optimizer would keep serving unoptimized originals. Force the shared
+  // patched range (see SHARP_VERSION_RANGE for the security floor).
   const sharpDir = path.join(imgDir, 'node_modules', 'sharp');
   // Remove the wrong-platform / old bundled sharp so the reinstall is clean and
   // the fresh linux binary is unambiguously what loads at runtime.
@@ -1701,7 +1697,7 @@ export const installLinuxSharpForImageOptimizer = (
       /* best-effort — npm install below still overwrites */
     }
   }
-  const sharpVersion = SHARP_RANGE;
+  const sharpVersion = SHARP_VERSION_RANGE;
 
   // Minimal package.json so `npm install` only pulls sharp (+ its platform
   // optionalDependencies), not the whole app tree.
