@@ -96,3 +96,27 @@ export const BLOCKS_SANDBOX_PREFIX = '/.blocks-sandbox';
  * @internal Read by the Lambda handler and both CORS preflight responders; not public API.
  */
 export const CLIENT_USER_AGENT_HEADER = 'x-blocks-user-agent';
+
+/**
+ * Header the shared API gateway stamps with its public host (`context.domainName`)
+ * on every request it forwards to a container compute. The container builds
+ * `ctx.request.url` from it.
+ *
+ * Trusted only because every front door controls it: the gateway's integration
+ * mapping overwrites any client-sent value, and a CloudFront behavior that routes
+ * straight to the container's (internal) load balancer must strip it — together
+ * with {@link FORWARDED_STAGE_HEADER} — from viewer requests with an origin request
+ * policy deny list.
+ *
+ * @internal Read by the container HTTP server, written by the shared gateway; not public API.
+ */
+export const FORWARDED_HOST_HEADER = 'x-blocks-forwarded-host';
+
+/**
+ * Companion to {@link FORWARDED_HOST_HEADER}: the API Gateway stage that prefixes
+ * public paths (`context.stage`). Same trust requirements: overwritten by the
+ * gateway, stripped by any CloudFront behavior that reaches the container directly.
+ *
+ * @internal Read by the container HTTP server, written by the shared gateway; not public API.
+ */
+export const FORWARDED_STAGE_HEADER = 'x-blocks-forwarded-stage';
