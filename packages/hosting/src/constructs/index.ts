@@ -166,3 +166,14 @@ export { generateAlbApiProxyCode } from './alb_api_proxy.js';
 export { CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST, ORIGIN_VERIFY_HEADER } from './alb_construct.js';
 export { backendBaseUrl } from './apigw_routes.js';
 export { coalesceRoutes, routeSpecificity } from '../plan/route-table.js';
+// ── EXPERIMENTAL: shared multi-tenant front doors (POC) ────────────────────────
+// One door fronting N tenant apps; each app opts in with
+// `frontDoor: { kind: 'custom', door: shared.forTenant('a') }`.
+export {
+	SharedAlbDoor,
+	type SharedAlbDoorProps,
+	SharedApiGatewayDoor,
+	SharedCloudFrontDoor,
+	type SharedDoorProps,
+	type TenantRouting,
+} from './mt_shared_door.js';
