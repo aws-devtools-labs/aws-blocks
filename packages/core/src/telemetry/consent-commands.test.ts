@@ -86,7 +86,9 @@ describe('getTelemetryStatus', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('any disable wins — global disabled even if project enables', () => {
+  // The global leg needs a redirected HOME, which `os.homedir()` only reads at process
+  // start; it is covered by the shared precedence table in telemetry.test.ts.
+  it('stays enabled when the project config enables and no global config exists', () => {
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     clearCIVars();
     const tmp = join(tmpdir(), `blocks-status-test-${Date.now()}`);
@@ -94,8 +96,6 @@ describe('getTelemetryStatus', () => {
     writeFileSync(join(tmp, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled: true } }));
     process.chdir(tmp);
 
-    // Simulate global config disabling (via projectRoot override for global path won't work here,
-    // but we can test that project enabled=true alone is fine)
     const status = getTelemetryStatus();
     assert.strictEqual(status.enabled, true);
     rmSync(tmp, { recursive: true, force: true });
