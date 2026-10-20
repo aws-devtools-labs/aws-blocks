@@ -85,7 +85,10 @@ describe('AWS runtime read cache', () => {
 			return { SecretString: current };
 		});
 		try {
-			const secret = new Secret(new Scope('app'), 'cache-put', { secret: Secret.fromExisting(TEST_ARN) });
+			const secret = new Secret(new Scope('app'), 'cache-put', {
+				secret: Secret.fromExisting(TEST_ARN),
+				allowRuntimeWrite: true,
+			});
 			assert.strictEqual(await secret.get(), 'sk-before'); // call 1 (cached)
 			assert.strictEqual(await secret.get(), 'sk-before'); // cache hit
 			await secret.put('sk-after'); // clears the cache

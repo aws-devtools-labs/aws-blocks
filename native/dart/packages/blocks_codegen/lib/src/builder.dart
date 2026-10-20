@@ -361,6 +361,7 @@ class CodegenModelBuilder {
     _warnings.clear();
     _bindings.clear();
     _anonCounter = 0;
+    _warnUnmatchedOptOuts(rpc);
     _resolveBindings(rpc);
     // Pass 1: Resolve all named schemas (skip reserved names from blocks_runtime)
     for (final entry in rpc.schemas.entries) {
@@ -1092,6 +1093,20 @@ class CodegenModelBuilder {
         '`$base`. Auto-disambiguated to: $mapping. '
         'Rename one of these in your spec to avoid a generated suffix '
         '(or pass --fail-on-collision to make this an error).';
+  }
+
+  /// Because opt-outs are build configuration, an identity absent from the
+  /// package catalog produces a warning instead of an error. Platform
+  /// availability does not affect this check.
+  void _warnUnmatchedOptOuts(RpcModel rpc) {
+    for (final identity in optedOutPackages.toList()..sort()) {
+      if (rpc.nativePackages.containsKey(identity)) continue;
+      _warnings.add(
+        'AWSBLOCKS-NATIVE-006: opted-out package '
+        "'${escapeForDiagnostic(identity)}' is not declared by "
+        '$_packagesExtension; nothing was opted out for it on dart.',
+      );
+    }
   }
 
   void _resolveBindings(RpcModel rpc) {
