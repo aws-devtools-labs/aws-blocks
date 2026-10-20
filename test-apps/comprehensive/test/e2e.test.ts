@@ -23,6 +23,7 @@ import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
+import { databaseBlockTests } from './database-block.test.js';
 import { asyncJobTests } from './async-job.test.js';
 import { asyncJobStatusTests } from './async-job-status.test.js';
 import { agentTests } from './agent.test.js';
@@ -229,6 +230,8 @@ databaseTests(() => api);
 
 // DSQL Database tests (separate file)
 dsqlTests(() => api);
+
+databaseBlockTests(() => api);
 
 // AppSetting tests (separate file)
 appSettingTests(() => api);

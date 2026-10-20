@@ -33,6 +33,7 @@
     "@aws-blocks/bb-cron-job": "*",
     "@aws-blocks/bb-dashboard": "*",
     "@aws-blocks/bb-data": "*",
+    "@aws-blocks/bb-database": "*",
     "@aws-blocks/bb-distributed-data": "*",
     "@aws-blocks/bb-distributed-table": "*",
     "@aws-blocks/bb-email-client": "*",
