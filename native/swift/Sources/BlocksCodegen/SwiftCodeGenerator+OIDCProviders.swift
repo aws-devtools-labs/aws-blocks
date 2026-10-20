@@ -26,7 +26,7 @@ extension SwiftCodeGenerator {
         guard let provider = oidcProviderEnum(operation) else { return }
         lines.append("")
         lines.append("\(indent)/// The providers `\(fullMethodName(operation, namespace: namespace))` signs in with.")
-        lines.append("\(indent)public enum \(provider.name): String, CaseIterable, Codable, Sendable {")
+        emitDeclaration(provider.name, line: "\(indent)public enum \(provider.name): String, CaseIterable, Codable, Sendable {", lines: &lines)
         for (caseName, value) in providerCases(provider.values) {
             let unescaped = caseName.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
             lines.append(unescaped == value

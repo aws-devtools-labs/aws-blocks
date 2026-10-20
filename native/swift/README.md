@@ -72,6 +72,7 @@ Create one `Blocks` in app-scoped state, such as the Demo's `AppState`, not in a
 - **Default values** from the spec become Swift initializer defaults.
 - **Schema-ref reuse.** A `oneOf` variant referencing a component schema reuses that named type instead of inventing a duplicate struct.
 - **Unbound transferables.** A direct result with an unbound transferable tag returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of a raw `Data?` that did not type-check. Only bare direct results are covered.
+- **Declared native packages.** When `x-blocks-native-bindings` binds the tag and its package has a `swift` field, generated source imports the declared module and returns that type via `<Type>.fromBlocksDescriptor`. See [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
 - **Typed OIDC providers.** When the spec names an OIDC client's providers, the method's namespace gets a `CaseIterable` `Provider` enum, and `OIDCClient` gets a `signIn` overload that takes it: `let user = try await client.signIn(provider: .google, relayTo: "myapp://auth", launcher: launcher)`. The `String` overload stays. With two typed `getClient` methods whose providers share a name, `.google` is ambiguous; name the enum, such as `OidcAuthApi.GetClient.Provider.google`. When the method's own types already use the name `Provider`, the enum is `ResultProvider` and codegen prints a `swift:` warning that names it.
 
 ## Configuration
@@ -83,6 +84,16 @@ swift run swift-code-generator path/to/blocks.spec.json path/to/output-dir
 ```
 
 This emits two files into the output directory: `Models.swift` (shared types) and `API.swift` (one class per API namespace with typed `async throws` methods, the `Blocks` entry point that holds them, and `Servers`).
+
+A `blocks.codegen.json` beside the spec is picked up by the build plugin, or passed to the CLI as a third argument. In an Xcode project it must be a member of the target, like the spec; otherwise generation stops and names the file:
+
+```json
+{
+  "optOutNativePackages": ["example-iot-native"]
+}
+```
+
+Logical identities listed there keep the `UnknownTransferable` fallback instead of a declared type. An identity the spec does not declare only warns, as `AWSBLOCKS-NATIVE-006`.
 
 ## Targets
 
